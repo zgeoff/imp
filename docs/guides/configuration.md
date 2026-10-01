@@ -46,13 +46,11 @@ The host container's scripts in `host/` read these before impd starts.
 | `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: no tailnet.                                     |
 | `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                     |
 | `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                     |
-| `IMP_DNS`                 | `1.1.1.1 8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet. |
+| `IMP_DNS`                 | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet. |
 | `IMP_DAEMON`              | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd entry point the supervisor runs.                                 |
 
-**NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, but impd splits it on commas and
-`tailscale-up.sh` on spaces. One address works for both. Two or more break one of them: a space list
-stops impd at start, and a comma list writes a bad `nameserver` line. `dev.sh` does not pass
-`IMP_DNS`, so the dev instance uses the defaults.
+**NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
+not pass `IMP_DNS`, so the dev instance uses the defaults.
 
 ## Dev instance
 
