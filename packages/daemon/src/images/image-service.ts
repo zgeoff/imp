@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { NameSchema } from '@imp/api';
+import { ImageRefSchema, NameSchema } from '@imp/api';
+import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';
@@ -150,6 +151,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   const createImageFromRef = async (ref: string, name?: string): Promise<ImageRecord> => {
+    assertImageRef(ref);
+
     const imageName = NameSchema.parse(name ?? deriveImageName(ref));
 
     const inspect = await readInspect(ref);
@@ -198,6 +201,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   return {
     addImage: createImageFromRef,
     buildImage: async (contextDir, name, dockerfile) => {
+      if (!contextDir.startsWith('/')) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `build context ${JSON.stringify(contextDir)} is not an absolute path`,
+        });
+      }
+
       const tag = `imp/${NameSchema.parse(name)}:latest`;
       const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
 
@@ -232,6 +241,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     },
     getRootfsPath: (image) => buildImagePaths(deps.config.dataDir, image.digest).rootfs,
   };
+}
+
+// The contract validates refs already; this guards every other caller, since
+// the ref goes into docker's argv and a leading `-` would read as a flag.
+function assertImageRef(ref: string): void {
+  if (!ImageRefSchema.safeParse(ref).success) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `invalid image reference ${JSON.stringify(ref)}`,
+    });
+  }
 }
 
 function readDiskUsage(path: string): number {

@@ -104,8 +104,8 @@ This file records the decisions and the reasons. `STATUS.md` records progress.
 - The OCI config (Env, WorkingDir, User) goes to `/etc/imp/image.json` in the rootfs. The agent uses
   it as the default environment for exec.
 - Services an image wants on boot go in `/etc/imp/services.d/<name>.json`. `images/base` ships
-  `dockerd` this way. Services the user adds through the API are written to the same place, so they
-  persist with the disk.
+  `dockerd` this way. A user adds a service by writing a file there with `imp exec`; it persists
+  with the disk. An API to manage services is future work.
 - `images/base`: Ubuntu 24.04 minimal, Docker engine, ca-certificates. `images/dev`: FROM base plus
   Node, Bun, Go, Python and Claude Code.
 

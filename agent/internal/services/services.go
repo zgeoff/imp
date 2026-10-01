@@ -146,7 +146,7 @@ func (s *Supervisor) run(svc *service) {
 		}
 		stopped := isClosed(svc.stop)
 		failed := err != nil || st.Code != 0 || st.Signal != 0
-		if stopped || svc.def.Restart == "never" || (svc.def.Restart == "on-failure" && !failed) {
+		if stopped || !shouldRestart(svc.def.Restart, failed) {
 			svc.state = "exited"
 			if stopped {
 				svc.state = "stopped"
@@ -158,17 +158,37 @@ func (s *Supervisor) run(svc *service) {
 		svc.restarts++
 		s.mu.Unlock()
 
-		if ran >= stableAfter {
-			backoff = minBackoff
-		}
+		var wait time.Duration
+		wait, backoff = nextBackoff(backoff, ran)
 		select {
-		case <-time.After(backoff):
+		case <-time.After(wait):
 		case <-svc.stop:
 			s.setState(svc, "stopped")
 			return
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
+}
+
+// shouldRestart applies a restart policy to a run that ended by itself.
+func shouldRestart(policy string, failed bool) bool {
+	switch policy {
+	case "never":
+		return false
+	case "on-failure":
+		return failed
+	default:
+		return true
+	}
+}
+
+// nextBackoff returns how long to wait before the next start, and the
+// backoff after that, given the current backoff and how long the run
+// lasted. A stable run resets the backoff.
+func nextBackoff(cur, ran time.Duration) (wait, next time.Duration) {
+	if ran >= stableAfter {
+		cur = minBackoff
+	}
+	return cur, min(cur*2, maxBackoff)
 }
 
 // once runs the service a single time and waits for it to exit.

@@ -32,6 +32,9 @@ type Server struct {
 
 	freezeMu  sync.Mutex
 	thawTimer *time.Timer
+	// freezeGen counts freezes and thaws. An auto-thaw timer only acts if
+	// no freeze or thaw happened since it was armed.
+	freezeGen uint64
 }
 
 // Listen backoff bounds. A snapshot restore resets the vsock transport; the

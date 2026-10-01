@@ -187,5 +187,7 @@ Details:
   the process group, as a terminal hangup would. If the process is still running 1 s later (it
   ignores SIGHUP), the guest closes its stdio and ends the session without an EXIT frame; the
   process keeps running and no longer counts in `exec_sessions`.
-- **Flow control.** There is none beyond the stream itself. A process that does not read stdin
-  blocks further host frames on that connection.
+- **Flow control.** There is none beyond the stream itself. The guest queues STDIN that the process
+  has not read yet (up to 1024 frames or 4 MiB), and keeps applying RESIZE and SIGNAL frames
+  meanwhile. Past that it stops reading the connection until the process reads stdin or exits, so
+  later frames of any type wait.

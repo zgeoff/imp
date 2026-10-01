@@ -1,6 +1,7 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
 import { CheckpointSchema } from './checkpoint-schema';
+import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
@@ -88,14 +89,15 @@ export const impContract = {
 
     // from an image ref the host's docker already has or can pull
     add: base
-      .input(z.object({ ref: z.string().min(1), name: NameSchema.optional() }))
+      .input(z.object({ ref: ImageRefSchema, name: NameSchema.optional() }))
       .output(ImageSchema),
 
     // contextDir is a path on the imp host, handed to `docker build`
     build: base
       .input(
         z.object({
-          contextDir: z.string().min(1),
+          // absolute, so docker build cannot read it as a flag
+          contextDir: z.string().startsWith('/'),
           name: NameSchema,
           dockerfile: z.string().min(1).optional(),
         }),
