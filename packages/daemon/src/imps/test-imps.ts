@@ -155,3 +155,28 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     },
   };
 }
+
+// 'done' or 'failed' once the promise settles, 'hung' after `ms`
+export async function waitForOutcome(promise: Promise<unknown>, ms: number): Promise<string> {
+  const timer = Promise.withResolvers<string>();
+
+  const timeout = setTimeout(() => {
+    timer.resolve('hung');
+  }, ms);
+
+  const settled = (async () => {
+    try {
+      await promise;
+
+      return 'done';
+    } catch {
+      return 'failed';
+    }
+  })();
+
+  try {
+    return await Promise.race([settled, timer.promise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}

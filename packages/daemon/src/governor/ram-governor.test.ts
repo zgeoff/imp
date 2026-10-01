@@ -25,11 +25,11 @@ test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
       ),
     readRamMib: () => 300,
     isBusy: (id) => id === 'pinned',
-    sleepImp: (id) => {
+    trySleepImp: (id) => {
       slept.push(id);
       awake.delete(id);
 
-      return Promise.resolve(true);
+      return Promise.resolve('slept');
     },
     log: () => {
       // quiet
@@ -61,10 +61,10 @@ test('it never admits an imp whose memory is larger than the whole budget', asyn
       ]),
     readRamMib: () => 300,
     isBusy: () => false,
-    sleepImp: (id) => {
+    trySleepImp: (id) => {
       slept.push(id);
 
-      return Promise.resolve(true);
+      return Promise.resolve('slept');
     },
     log: () => {
       // quiet
@@ -81,4 +81,58 @@ test('it never admits an imp whose memory is larger than the whole budget', asyn
   });
 
   expect(slept).toEqual([]);
+});
+
+test('it picks again without a victim that was skipped, and fails once none is left', async () => {
+  const awake = new Map([
+    ['old', { pid: 1, lastActiveAt: 100 }],
+    ['mid', { pid: 2, lastActiveAt: 200 }],
+    ['new', { pid: 3, lastActiveAt: 300 }],
+  ]);
+
+  // `old` turns out locked when its turn comes; `mid` sleeps
+  const tried: string[] = [];
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () =>
+      Promise.resolve(
+        [...awake].map(([id, imp]) => ({
+          id,
+          name: id,
+          pid: imp.pid,
+          apiSocket: '',
+          lastActiveAt: imp.lastActiveAt,
+          holdUntil: null,
+        })),
+      ),
+    readRamMib: () => 300,
+    isBusy: () => false,
+    trySleepImp: (id) => {
+      tried.push(id);
+
+      if (id === 'old') {
+        return Promise.resolve('skipped');
+      }
+
+      awake.delete(id);
+
+      return Promise.resolve('slept');
+    },
+    log: () => {
+      // quiet
+    },
+  });
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 300, memoryMib: 300 });
+
+  expect(tried).toEqual(['old', 'mid']);
+
+  // 300 awake in `old` + 300 reserved for x: 700 more needs `old` again,
+  // which is skipped every time
+  const rejection = await governor
+    .admit({ id: 'y', name: 'y', reserveMib: 700, memoryMib: 700 })
+    .catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 });

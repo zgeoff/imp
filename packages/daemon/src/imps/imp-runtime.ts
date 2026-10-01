@@ -5,8 +5,11 @@ import type { ImpRecord } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import type { ActivityTracker } from './activity-tracker';
 import type { ImpContext } from './imp-context';
-import type { ImpLock } from './imp-lock';
+import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps } from './imp-vm-ops';
+
+// 'skipped' when the imp's lock is taken or it no longer qualifies
+export type SleepOutcome = 'slept' | 'skipped' | 'failed';
 
 // What the wake proxy, the idle loop, the governor and impd's start and stop
 // need: imps woken on demand, put to sleep in the background, and the
@@ -25,9 +28,10 @@ export interface ImpRuntime {
     onFound?: (imp: ImpRecord) => void,
   ) => Promise<{ readonly imp: ImpRecord; readonly wokeMs: number | null }>;
 
-  // for the idle loop and the governor: sleeps the imp if it still runs (and,
-  // with `onlyIdle`, has no open connection); false when it did not sleep
-  readonly sleepImpById: (id: string, reason: string, onlyIdle: boolean) => Promise<boolean>;
+  // for the idle loop and the governor: sleeps the imp if it still runs and
+  // has no open connection. It never waits for the imp's lock: the governor
+  // calls it while it holds admission, which a locked boot may be waiting for.
+  readonly trySleepImp: (id: string, reason: string) => Promise<SleepOutcome>;
 
   // on SIGTERM: every running imp to sleep, a few at a time
   readonly sleepAllImps: () => Promise<void>;
@@ -73,22 +77,25 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     });
   };
 
-  const sleepImpById: ImpRuntime['sleepImpById'] = (id, reason, onlyIdle) =>
-    lock.withImpId(id, async (imp) => {
-      if (imp?.state !== 'running' || (onlyIdle && context.tracker.count(id) > 0)) {
-        return false;
-      }
+  // the caller holds the lock; a failure leaves the imp as sleepImpVm left it
+  const sleepIfRunning = async (
+    imp: LockedImp | undefined,
+    reason: string,
+  ): Promise<SleepOutcome> => {
+    if (imp?.state !== 'running') {
+      return 'skipped';
+    }
 
-      try {
-        await ops.sleepImpVm(imp, reason);
+    try {
+      await ops.sleepImpVm(imp, reason);
 
-        return true;
-      } catch (error) {
-        context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
+      return 'slept';
+    } catch (error) {
+      context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
-        return false;
-      }
-    });
+      return 'failed';
+    }
+  };
 
   return {
     // a sleeping imp wakes and a stopped one boots, as for an HTTP request
@@ -127,14 +134,28 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     },
 
     requireRunning,
-    sleepImpById,
 
+    trySleepImp: async (id, reason) => {
+      const result = await lock.tryWithImpId(id, (imp) =>
+        context.tracker.count(id) > 0
+          ? Promise.resolve('skipped' as const)
+          : sleepIfRunning(imp, reason),
+      );
+
+      return result.ran ? result.value : 'skipped';
+    },
+
+    // open connections do not count: impd is going away
     sleepAllImps: async () => {
       const imps = await listImps(context.db);
 
       const running = imps.filter((imp) => imp.state === 'running');
 
-      await Promise.all(running.map((imp) => sleepImpById(imp.id, 'impd is stopping', false)));
+      await Promise.all(
+        running.map((imp) =>
+          lock.withImpId(imp.id, (fresh) => sleepIfRunning(fresh, 'impd is stopping')),
+        ),
+      );
     },
 
     // the lock's liveness check marks an imp whose VM died with impd stopped

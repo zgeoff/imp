@@ -16,7 +16,7 @@ export function createGovernedImps(deps: GovernedDeps): {
   readonly imps: Imps;
   readonly governor: RamGovernor;
 } {
-  const holder: { imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'sleepImpById'> | null } = {
+  const holder: { imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'trySleepImp'> | null } = {
     imps: null,
   };
 
@@ -50,8 +50,8 @@ export function createGovernedImps(deps: GovernedDeps): {
     // an open exec session or proxied request pins the imp, like a hold
     isBusy: (id) =>
       holder.imps !== null && (holder.imps.isImpBusy(id) || holder.imps.tracker.count(id) > 0),
-    sleepImp: (id, reason) =>
-      holder.imps === null ? Promise.resolve(false) : holder.imps.sleepImpById(id, reason, true),
+    trySleepImp: (id, reason) =>
+      holder.imps === null ? Promise.resolve('skipped') : holder.imps.trySleepImp(id, reason),
     log,
   });
 
