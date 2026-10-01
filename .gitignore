@@ -1,5 +1,5 @@
 /.cache/
-/.data/
+/.data*/
 /build/
 node_modules/
 *.img
