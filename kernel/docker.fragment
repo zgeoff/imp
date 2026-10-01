@@ -116,6 +116,9 @@ CONFIG_CUSE=y
 CONFIG_OVERLAY_FS=y
 CONFIG_BTRFS_FS=y
 CONFIG_BTRFS_FS_POSIX_ACL=y
+# BTRFS pulls in RAID6_PQ. Its boot-time benchmark of the RAID6 and xor
+# routines costs about 480 ms per boot; pick the algorithm without it.
+# CONFIG_RAID6_PQ_BENCHMARK is not set
 
 # --- Firecracker essentials (already in config-base; pinned here so a base
 # change cannot drop them silently) ---

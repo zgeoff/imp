@@ -1,0 +1,3 @@
+{
+  "argv": ["busybox", "httpd", "-f", "-v", "-p", "8080", "-h", "/srv/hello"]
+}

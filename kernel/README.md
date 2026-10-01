@@ -49,6 +49,8 @@ Every fragment entry is `=y`. Do not add `=m`: nothing loads modules.
 - Network drivers: `VLAN_8021Q` + `BRIDGE_VLAN_FILTERING`, `VXLAN`, `IPVLAN`, `MACVLAN`, `DUMMY`,
   `TUN`, `WIREGUARD`, `NET_CLS_CGROUP`, `IP_SCTP`, ESP/GCM for encrypted overlay.
 - `CGROUP_MISC`, `FUSE_FS` + `CUSE`, `BTRFS_FS`.
+- Turns off `RAID6_PQ_BENCHMARK` (BTRFS pulls in RAID6). The boot-time benchmark cost about 480 ms;
+  without it, InstanceStart → agent ping is the same as on the CI kernel (about 450 ms).
 - Pins the Firecracker essentials already in the base (virtio mmio/blk/net, virtio-balloon +
   `PAGE_REPORTING`, vsock, squashfs xz/zstd, ext4, `IKCONFIG_PROC`) so a base change cannot drop
   them.

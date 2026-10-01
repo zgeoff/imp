@@ -1,0 +1,10 @@
+#!/bin/sh
+# Start dockerd under imp-agent (no systemd). dockerd starts its own
+# containerd. imp-agent does not mount a tmpfs on /run, so state from the
+# last boot is still on disk; stale pid files and shim sockets there make
+# dockerd and containerd refuse to start.
+set -e
+if [ "$(stat -f -c %T /run)" != tmpfs ]; then
+  rm -rf /run/docker /run/docker.pid /run/docker.sock /run/containerd
+fi
+exec /usr/bin/dockerd "$@"
