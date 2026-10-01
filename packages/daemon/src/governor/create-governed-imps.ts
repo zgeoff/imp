@@ -51,7 +51,9 @@ export function createGovernedImps(deps: GovernedDeps): {
     isBusy: (id) =>
       holder.imps !== null && (holder.imps.isImpBusy(id) || holder.imps.tracker.count(id) > 0),
     trySleepImp: (id, reason) =>
-      holder.imps === null ? Promise.resolve('skipped') : holder.imps.trySleepImp(id, reason),
+      holder.imps === null
+        ? Promise.resolve('skipped')
+        : holder.imps.trySleepImp(id, reason, { by: 'governor' }),
     log,
   });
 

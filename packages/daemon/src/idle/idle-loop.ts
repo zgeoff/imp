@@ -97,7 +97,10 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
       const idleS = Math.round((now - imp.lastActiveAt.getTime()) / 1000);
       const cpu = cpuPercent === null ? '?' : cpuPercent.toFixed(1);
 
-      await deps.imps.trySleepImp(imp.id, `idle ${String(idleS)}s, cpu ${cpu}%`);
+      await deps.imps.trySleepImp(imp.id, `idle ${String(idleS)}s, cpu ${cpu}%`, {
+        by: 'idle',
+        seenActiveAt: imp.lastActiveAt.getTime(),
+      });
     }
   };
 

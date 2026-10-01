@@ -11,6 +11,13 @@ import type { ImpVmOps } from './imp-vm-ops';
 // 'skipped' when the imp's lock is taken or it no longer qualifies
 export type SleepOutcome = 'slept' | 'skipped' | 'failed';
 
+// What a background sleep checks again under the lock. The governor sleeps
+// the least recently active imp, idle or not; the idle loop also needs the
+// imp no more active than when it looked.
+export type SleepPolicy =
+  | { readonly by: 'governor' }
+  | { readonly by: 'idle'; readonly seenActiveAt: number };
+
 // What the wake proxy, the idle loop, the governor and impd's start and stop
 // need: imps woken on demand, put to sleep in the background, and the
 // connections that keep them awake.
@@ -29,9 +36,9 @@ export interface ImpRuntime {
   ) => Promise<{ readonly imp: ImpRecord; readonly wokeMs: number | null }>;
 
   // for the idle loop and the governor: sleeps the imp if it still runs and
-  // has no open connection. It never waits for the imp's lock: the governor
+  // `policy` still allows it. It never waits for the imp's lock: the governor
   // calls it while it holds admission, which a locked boot may be waiting for.
-  readonly trySleepImp: (id: string, reason: string) => Promise<SleepOutcome>;
+  readonly trySleepImp: (id: string, reason: string, policy: SleepPolicy) => Promise<SleepOutcome>;
 
   // on SIGTERM: every running imp to sleep, a few at a time
   readonly sleepAllImps: () => Promise<void>;
@@ -75,6 +82,18 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       return { imp: running, wokeMs: Math.round(performance.now() - started) };
     });
+  };
+
+  const isSleepAllowed = (imp: ImpRecord, policy: SleepPolicy): boolean => {
+    if (context.tracker.count(imp.id) > 0) {
+      return false;
+    }
+
+    if (imp.holdUntil !== null && imp.holdUntil.getTime() > Date.now()) {
+      return false;
+    }
+
+    return policy.by === 'governor' || imp.lastActiveAt.getTime() <= policy.seenActiveAt;
   };
 
   // the caller holds the lock; a failure leaves the imp as sleepImpVm left it
@@ -135,11 +154,11 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     requireRunning,
 
-    trySleepImp: async (id, reason) => {
+    trySleepImp: async (id, reason, policy) => {
       const result = await lock.tryWithImpId(id, (imp) =>
-        context.tracker.count(id) > 0
-          ? Promise.resolve('skipped' as const)
-          : sleepIfRunning(imp, reason),
+        imp !== undefined && isSleepAllowed(imp, policy)
+          ? sleepIfRunning(imp, reason)
+          : Promise.resolve<SleepOutcome>('skipped'),
       );
 
       return result.ran ? result.value : 'skipped';
