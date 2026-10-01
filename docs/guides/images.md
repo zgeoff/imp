@@ -66,7 +66,9 @@ when it exits.
 | `user`    | the image user | `name`, `uid`, `name:group` or `uid:gid`               |
 | `restart` | `always`       | `always`, `on-failure` or `never`                      |
 
-- Output (stdout and stderr) goes to `/var/log/imp/<name>.log`. stdin is `/dev/null`.
+- Output (stdout and stderr) goes to `/var/log/imp/<name>.log`. stdin is `/dev/null`. The agent
+  checks the log every 60 s and at each start; past 10 MiB it moves to `<name>.log.1`, replacing the
+  previous one. A log can grow by up to 60 s of output past the cap between checks.
 - Restarts back off from 1 s, doubling to 60 s. A run of 30 s or more resets the backoff.
 - Run the service in the foreground. A process that forks into the background looks like an exit.
 - There is no ordering between services and no readiness check. A service that needs another one
