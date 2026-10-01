@@ -9,14 +9,14 @@ Updated at each milestone. Newest state at the top of each section.
 | M0  | Firecracker boots under nested KVM inside a privileged container                | done        |
 | M1  | Walking skeleton: agent as PID 1 from a read-only system drive, exec over vsock | done        |
 | M2  | Workspace, API contract, db, addressing                                         | done        |
-| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | in progress |
-| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | in progress |
-| M5  | Checkpoint, restore, fork (XFS reflink)                                         | todo        |
-| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | todo        |
-| M7  | RAM governor (budget, LRU sleep), scale test                                    | todo        |
-| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | todo        |
-| M9  | Tailscale                                                                       | todo        |
-| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | todo        |
+| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done        |
+| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done        |
+| M5  | Checkpoint, restore, fork (XFS reflink)                                         | in progress |
+| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | in progress |
+| M7  | RAM governor (budget, LRU sleep), scale test                                    | in progress |
+| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | in progress |
+| M9  | Tailscale                                                                       | done        |
+| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | in progress |
 
 ## Measured
 
@@ -26,6 +26,10 @@ Updated at each milestone. Newest state at the top of each section.
 | XFS reflink of a 500 MB file         | 321 ms     | includes `cp` process start in an Alpine container                                    |
 | InstanceStart → agent ping           | 412–464 ms | agent as PID 1 from squashfs, switch_root to ext4; kernel ~275 ms, init→listen ~60 ms |
 | Reflink clone of a 32G sparse rootfs | 3 ms       | in the host container                                                                 |
+
+## Next
+
+- Merge wip/checkpoints (M5) and wip/runtime (M6–M8), then finish `scripts/acceptance.sh` (M10).
 
 ## Blockers
 
