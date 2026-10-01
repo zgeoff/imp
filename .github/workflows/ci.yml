@@ -1,0 +1,157 @@
+name: CI
+
+# The gates every change to main must pass. Each job is one required status
+# check in .github/rulesets/main.json, so a job's name is part of that
+# contract: rename both together.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions: {}
+
+# a new push to a PR supersedes its older run; main runs always finish so
+# every commit on main gets a verdict
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # CI never commits, but skip hook install/execution regardless
+  LEFTHOOK: 0
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # the action comments findings on the PR, which needs write on pull-requests
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # the action's hard-coded default (8.24.3) predates the root-level
+          # [[allowlists]] syntax .gitleaks.toml relies on and silently ignores it
+          GITLEAKS_VERSION: 8.30.1
+
+  checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # a hung step (a script that never exits, a wedged process) must fail the
+    # run, not burn runner hours
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      # setup-bun caches only the bun binary; this keeps the package tarballs
+      # so an unchanged lockfile installs without the registry
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Audit Dependencies
+        run: bun run audit
+
+      - name: Dead Code
+        run: bun run deadcode
+
+      - name: Format
+        run: bun run format:check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+  go:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # go.mod lives in agent/, so the version and the module cache key both
+      # need pointing there
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      # gofmt -l lists unformatted files and exits 0 either way
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt wants to reformat:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    env:
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # the runner's apt shellcheck is older and reports a different set of
+      # findings, so pin the release the hooks run locally
+      - name: Install ShellCheck
+        run: |
+          cd "$RUNNER_TEMP"
+          tarball="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$tarball"
+          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
+          tar -xJf "$tarball"
+          echo "$PWD/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          scripts/shellcheck.sh
+
+  # Main-only jobs (the release, the KVM end-to-end suite) go below with
+  # `if: github.event_name == 'push'` and `needs:` on the gates above.
