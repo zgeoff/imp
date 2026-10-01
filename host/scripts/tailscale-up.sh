@@ -1,12 +1,12 @@
 #!/bin/bash
-# Join the tailnet as tag:imp (DESIGN.md 2.11). Idempotent.
+# Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
 # Runs inside the host container. Does nothing without TAILSCALE_AUTHKEY.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
 #      IMP_TAILSCALE_STATE_DIR   node state (default /var/lib/imp/tailscale); "mem" keeps it in memory
-#      IMP_DNS                   resolvers used if resolv.conf points into the tailnet
-#                                (default "1.1.1.1 8.8.8.8")
+#      IMP_DNS                   resolvers used if resolv.conf points into the tailnet,
+#                                comma-separated as impd reads it (default "1.1.1.1,8.8.8.8")
 set -euo pipefail
 
 if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
@@ -20,6 +20,8 @@ sock=/var/run/tailscale/tailscaled.sock
 
 ts() { timeout 90 tailscale --socket="$sock" "$@"; }
 # alive: tailscaled runs. A zombie does not count: PID 1 may not reap it.
+# pgrep matches zombies too, so read the process state from ps instead.
+# shellcheck disable=SC2009
 alive() { ps -C tailscaled -o stat= | grep -qv '^Z'; }
 backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq -r '.BackendState // empty'; }
 
@@ -27,8 +29,11 @@ backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq 
 # MagicDNS, that is 100.100.100.100, which our own tailscaled captures; with
 # --accept-dns=false it has no upstream, and all lookups (ACME too) fail.
 if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' /etc/resolv.conf; then
-  printf 'nameserver %s\n' ${IMP_DNS:-1.1.1.1 8.8.8.8} >/etc/resolv.conf
-  echo "tailscale-up: resolv.conf pointed into the tailnet; now ${IMP_DNS:-1.1.1.1 8.8.8.8}"
+  dns=${IMP_DNS:-1.1.1.1,8.8.8.8}
+  # Commas are the impd form; spaces still work.
+  read -ra resolvers <<<"${dns//,/ }"
+  printf 'nameserver %s\n' "${resolvers[@]}" >/etc/resolv.conf
+  echo "tailscale-up: resolv.conf pointed into the tailnet; now ${resolvers[*]}"
 fi
 
 if ! alive; then

@@ -38,10 +38,12 @@ type Request struct {
 
 // Error codes.
 const (
-	ErrBadRequest = "BAD_REQUEST"
-	ErrUnknownOp  = "UNKNOWN_OP"
-	ErrExecFailed = "EXEC_FAILED"
-	ErrInternal   = "INTERNAL"
+	ErrBadRequest  = "BAD_REQUEST"
+	ErrUnknownOp   = "UNKNOWN_OP"
+	ErrExecFailed  = "EXEC_FAILED"
+	ErrFrozen      = "FROZEN"
+	ErrPoweringOff = "POWERING_OFF"
+	ErrInternal    = "INTERNAL"
 )
 
 type Error struct {

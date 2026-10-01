@@ -7,9 +7,13 @@ root=$(git rev-parse --show-toplevel)
 wt="$root/.cache/push-wt"
 [[ -d $wt ]] || git -C "$root" worktree add -q --detach "$wt" main
 git -C "$wt" checkout -q --detach main
+if ! command -v shellcheck > /dev/null; then
+  echo "push-checked: shellcheck is not on PATH; install 0.11.0, the version CI pins" >&2
+  exit 1
+fi
 cd "$wt"
 bun install --frozen-lockfile > /dev/null
-for gate in format:check lint typecheck deadcode test; do
+for gate in format:check lint lint:shell typecheck deadcode test; do
   if ! bun run "$gate" > "$root/.cache/push-$gate.log" 2>&1; then
     echo "push-checked: $gate failed; see .cache/push-$gate.log" >&2
     exit 1

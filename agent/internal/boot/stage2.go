@@ -8,6 +8,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/mdlayher/vsock"
@@ -18,6 +21,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
 	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
 )
@@ -67,8 +71,19 @@ func Stage2() error {
 	srv := &server.Server{
 		Exec:     exec.NewManager(r, image),
 		Services: sup,
-		Shutdown: func() { Poweroff(sup) },
 	}
+	// A shutdown request and a signal can race; only the first powers off.
+	// A panic on the way must still end the guest, so it falls back to a
+	// thaw (sync would block on a frozen /), sync and reboot.
+	powerOff := sync.OnceFunc(func() {
+		defer safe.Recover("poweroff", func() {
+			safe.Call("poweroff: thaw", func() { srv.ThawForPoweroff() })
+			unix.Sync()
+			reboot()
+		})
+		Poweroff(sup, srv.ThawForPoweroff)
+	})
+	srv.Shutdown = powerOff
 
 	// Ctrl-Alt-Del (Firecracker's SendCtrlAltDel) arrives as SIGINT once
 	// CAD is off; SIGTERM is the conventional "stop" for init.
@@ -77,11 +92,11 @@ func Stage2() error {
 	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
+	safe.Go("signals", func() {
 		sig := <-sigs
 		log.Printf("%v: shutting down", sig)
-		Poweroff(sup)
-	}()
+		powerOff()
+	}, nil)
 
 	return srv.Serve(listen)
 }
@@ -128,11 +143,87 @@ func setHostname(name string) error {
 	if err := os.WriteFile("/etc/hostname", []byte(name+"\n"), 0o644); err != nil {
 		return err
 	}
-	// OCI exports leave /etc/hosts empty (Docker bind-mounts it at run
-	// time). Only fill it in if the image did not ship one.
-	if fi, err := os.Stat("/etc/hosts"); err == nil && fi.Size() > 0 {
+	return updateHosts("/etc/hosts", name)
+}
+
+// updateHosts points the 127.0.1.1 line of the hosts file at name. It runs
+// every boot, because a fork or rename gives the imp a new hostname on the
+// same disk. OCI exports leave /etc/hosts empty (Docker bind-mounts it at
+// run time), so an empty or missing file gets a default one. A symlinked
+// hosts file is updated at its target; the rename must not replace the link.
+func updateHosts(path, name string) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("%s is a symlink that does not resolve: %w", path, err)
+		}
+		path = target
+	}
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	out := hostsWithName(string(b), name)
+	if out == string(b) {
 		return nil
 	}
-	hosts := "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n127.0.1.1\t" + name + "\n"
-	return os.WriteFile("/etc/hosts", []byte(hosts), 0o644)
+	return writeFileAtomic(path, []byte(out), 0o644)
+}
+
+// writeFileAtomic replaces path through a temporary file and a rename, so a
+// crash mid-write cannot leave it truncated.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(mode)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
+// hostsWithName returns hosts with its first 127.0.1.1 line mapping to
+// name, or with such a line appended if there is none. A line that already
+// names it first keeps its aliases; later 127.0.1.1 lines are dropped.
+func hostsWithName(hosts, name string) string {
+	line := "127.0.1.1\t" + name
+	if strings.TrimSpace(hosts) == "" {
+		return "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost ip6-loopback\n" + line + "\n"
+	}
+	lines := strings.Split(strings.TrimSuffix(hosts, "\n"), "\n")
+	out := make([]string, 0, len(lines)+1)
+	replaced := false
+	for _, l := range lines {
+		if f := strings.Fields(l); len(f) > 0 && f[0] == "127.0.1.1" {
+			if !replaced {
+				if len(f) > 1 && f[1] == name {
+					out = append(out, l)
+				} else {
+					out = append(out, line)
+				}
+				replaced = true
+			}
+			continue
+		}
+		out = append(out, l)
+	}
+	if !replaced {
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n") + "\n"
 }

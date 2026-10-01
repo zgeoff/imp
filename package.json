@@ -38,6 +38,7 @@
     "deadcode": "knip",
     "lint": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",
+    "lint:shell": "./scripts/shellcheck.sh",
     "test": "bun test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "oxfmt . && format-codemod --quiet .",

@@ -1,12 +1,16 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/safe"
 )
 
 // defaultFreezeTimeout auto-thaws / if the host never sends thaw, so a host
@@ -22,25 +26,41 @@ const (
 // rootIoctl is a variable so tests can run without root.
 var rootIoctl = ioctlRoot
 
-// freeze syncs and FIFREEZEs the root filesystem.
+var (
+	errFrozen      = &proto.Error{Code: proto.ErrFrozen, Message: "the root filesystem is already frozen"}
+	errPoweringOff = &proto.Error{Code: proto.ErrPoweringOff, Message: "the guest is powering off"}
+)
+
+// freeze FIFREEZEs the root filesystem; the kernel syncs it first. A second
+// freeze fails with FROZEN; it does not extend the first one's auto-thaw.
 func (s *Server) freeze(timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = defaultFreezeTimeout
 	}
 	s.freezeMu.Lock()
 	defer s.freezeMu.Unlock()
-	unix.Sync()
+	if s.poweringOff {
+		return errPoweringOff
+	}
+	if s.frozen {
+		return errFrozen
+	}
+	// No unix.Sync first: freeze_super syncs the filesystem itself, and a
+	// global sync would block on another frozen filesystem.
 	if err := rootIoctl(fiFreeze); err != nil {
+		// EBUSY: frozen by someone else, such as fsfreeze in the guest.
+		if errors.Is(err, unix.EBUSY) {
+			return errFrozen
+		}
 		return fmt.Errorf("FIFREEZE: %w", err)
 	}
-	if s.thawTimer != nil {
-		s.thawTimer.Stop()
-	}
+	s.frozen = true
 	s.freezeGen++
 	gen := s.freezeGen
 	// Stop cannot cancel a callback that already fired and waits on
 	// freezeMu, so the callback checks that its freeze is still current.
 	s.thawTimer = time.AfterFunc(timeout, func() {
+		defer safe.Recover("auto-thaw", nil)
 		s.freezeMu.Lock()
 		defer s.freezeMu.Unlock()
 		if gen != s.freezeGen {
@@ -61,6 +81,15 @@ func (s *Server) thaw() error {
 	return s.thawLocked()
 }
 
+// ThawForPoweroff thaws the root filesystem and refuses later freezes, so
+// poweroff can stop processes, sync and remount without blocking on it.
+func (s *Server) ThawForPoweroff() error {
+	s.freezeMu.Lock()
+	defer s.freezeMu.Unlock()
+	s.poweringOff = true
+	return s.thawLocked()
+}
+
 func (s *Server) thawLocked() error {
 	s.freezeGen++
 	if s.thawTimer != nil {
@@ -70,6 +99,7 @@ func (s *Server) thawLocked() error {
 	if err := rootIoctl(fiThaw); err != nil && err != unix.EINVAL {
 		return fmt.Errorf("FITHAW: %w", err)
 	}
+	s.frozen = false
 	return nil
 }
 
