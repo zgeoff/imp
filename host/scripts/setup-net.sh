@@ -35,4 +35,17 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
 
-echo "setup-net: forwarding imp+ via $out"
+# Clamp the TCP MSS of guest connections to the real uplink MTU. Behind a
+# smaller-MTU uplink (WSL eth0 is 1360) frag-needed ICMP never reaches the
+# guests, so large TLS records stall. IMP_UPLINK_MTU is the MTU outside this
+# container; unset, fall back to the path MTU this namespace knows.
+if [ -n "${IMP_UPLINK_MTU:-}" ]; then
+  clamp=(--set-mss $((IMP_UPLINK_MTU - 40)))
+else
+  clamp=(--clamp-mss-to-pmtu)
+fi
+for dir in -i -o; do
+  rule mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp[@]}"
+done
+
+echo "setup-net: forwarding imp+ via $out (mss: ${clamp[*]})"

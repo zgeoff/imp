@@ -14,6 +14,8 @@ daemon=${IMP_DAEMON:-/src/packages/daemon/src/main.ts}
 
 "$lib/setup-storage.sh"
 "$lib/setup-net.sh"
+# no-op without TAILSCALE_AUTHKEY; a tailnet failure must not keep impd down
+"$lib/tailscale-up.sh" || echo "entrypoint: tailscale-up failed; continuing without the tailnet" >&2
 
 child=
 stopping=
