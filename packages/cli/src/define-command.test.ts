@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { runCommand } from 'citty';
 import { defineCommand } from './define-command';
 
@@ -20,9 +20,14 @@ const forkCommand = defineCommand({
 
 const main = defineCommand({ meta: { name: 'imp' }, subCommands: { fork: forkCommand } });
 
+// bun keeps a non-zero exitCode set by a test unless it is reset to 0
+beforeEach(() => {
+  process.exitCode = 0;
+});
+
 afterEach(() => {
   ran.length = 0;
-  process.exitCode = undefined;
+  process.exitCode = 0;
 });
 
 test('it runs with declared flags in any spelling citty accepts', async () => {
@@ -35,7 +40,7 @@ test('it runs with declared flags in any spelling citty accepts', async () => {
   }
 
   expect(ran).toEqual(['cp1', undefined, undefined]);
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
 });
 
 test('it rejects a flag the command does not declare and does not run', async () => {
