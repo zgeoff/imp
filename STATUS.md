@@ -1,20 +1,15 @@
 # imp — status
 
+Measurements, known gaps and notes for the current build. The [docs](./docs/README.md) describe how
+it works.
+
 ## Milestones
 
-| #   | Milestone                                                                       | State |
-| --- | ------------------------------------------------------------------------------- | ----- |
-| M0  | Firecracker boots under nested KVM inside a privileged container                | done  |
-| M1  | Walking skeleton: agent as PID 1 from a read-only system drive, exec over vsock | done  |
-| M2  | Workspace, API contract, db, addressing                                         | done  |
-| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done  |
-| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done  |
-| M5  | Checkpoint, restore, fork (XFS reflink)                                         | done  |
-| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | done  |
-| M7  | RAM governor (budget, LRU sleep), scale test                                    | done  |
-| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | done  |
-| M9  | Tailscale                                                                       | done  |
-| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | done  |
+The first build reached every milestone by 2026-10-02: Firecracker under nested KVM (M0), the
+walking skeleton (M1), the workspace and API (M2), the lifecycle (M3), images (M4), checkpoints and
+forks (M5), sleep and wake (M6), the RAM governor (M7), restart survival (M8), Tailscale (M9), and
+two clean acceptance runs (M10). The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what
+comes next.
 
 ## Acceptance
 
@@ -76,23 +71,16 @@ From the milestone work:
 
 ## Known gaps
 
-- A wake right after another wake or exec (under ~1 s apart) takes 650–850 ms instead of ~80 ms. See
-  `docs/sleep-findings.md`. Normal idle timeouts never hit it.
-- The WebSocket relay through the wake proxy was tested by hand, not in an e2e script.
-- No jailer and no inner container in the guest yet (DESIGN.md section 4).
+- A wake right after another wake or exec (under about 1 s apart) takes 650–850 ms instead of about
+  80 ms. Normal idle timeouts never hit it ([#33](https://github.com/zgeoff/imp/issues/33)).
+- The WebSocket relay through the wake proxy was tested by hand, not in an end-to-end script
+  ([#3](https://github.com/zgeoff/imp/issues/3)).
+- No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
+  [#28](https://github.com/zgeoff/imp/issues/28)).
 - `scripts/e2e-*.sh` and the prototype `smoke-*.sh` / `proto-sleep.sh` scripts overlap with
-  `scripts/acceptance.sh`. Fold or retire them.
+  `scripts/acceptance.sh` ([#3](https://github.com/zgeoff/imp/issues/3)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents. Remove it.
-
-## Next
-
-- Deploy to bare metal: a server with KVM, XFS on a real partition, and a non-ephemeral tagged
-  Tailscale key.
-
-## Blockers
-
-None.
 
 ## Notes
 

@@ -2,10 +2,9 @@
   <h1>imp</h1>
 
   <p>
-    <a href="./DESIGN.md">Design</a> •
-    <a href="./images/README.md">Images</a> •
-    <a href="./agent/PROTOCOL.md">Agent protocol</a> •
-    <a href="./STATUS.md">Status</a>
+    <a href="./docs/README.md">Documentation</a> •
+    <a href="./docs/guides/configuration.md">Configuration</a> •
+    <a href="./docs/architecture/overview.md">Architecture</a>
   </p>
 </div>
 
@@ -35,6 +34,8 @@ To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
 ```sh
 TAILSCALE_AUTHKEY=tskey-auth-…
 ```
+
+The [install guide](./docs/guides/install.md) has the details.
 
 ## Use
 
@@ -87,10 +88,11 @@ Every imp serves its port 8080 at two URLs:
 
 ## The RAM budget
 
-impd keeps the total RAM of awake imps under a budget, 16 GiB by default (`IMP_RAM_BUDGET_MIB`).
-When a new or waking imp would go over, the least recently active imps go to sleep to make room. An
-imp with an open session or a request in flight is never picked. When nothing can make room, the
-request fails with `RAM_BUDGET_EXCEEDED`.
+impd keeps the total RAM of awake imps under a budget, 16 GiB by default (`IMP_RAM_BUDGET_MIB`; the
+[configuration guide](./docs/guides/configuration.md) lists every setting). When a new or waking imp
+would go over, the least recently active imps go to sleep to make room. An imp with an open session
+or a request in flight is never picked. When nothing can make room, the request fails with
+`RAM_BUDGET_EXCEEDED`.
 
 ## Images
 
@@ -99,7 +101,7 @@ agent boots from a separate read-only drive, so your image needs nothing from im
 should start with the imp are small JSON files in `/etc/imp/services.d`.
 
 `images/base` is Ubuntu with Docker. `images/dev` adds Node, Bun, Go, Python and Claude Code. The
-[images guide](./images/README.md) covers the rest.
+[images guide](./docs/guides/images.md) covers the rest.
 
 ## How it works
 
@@ -108,7 +110,9 @@ a Firecracker process for each awake imp, gives each imp its own tap device and 
 keeps imp disks as copy-on-write clones on XFS. Inside each guest, a small Go agent runs as PID 1
 and serves commands, terminals and freeze requests over vsock.
 
-[DESIGN.md](./DESIGN.md) has the architecture and the reasoning behind each decision.
+The [architecture overview](./docs/architecture/overview.md) has the design and the reasoning behind
+each decision. [docs/](./docs/README.md) covers the daemon, the agent protocol, storage, networking,
+and sleep and wake.
 
 ## Development
 
