@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, statSync } from 'node:fs';
 import type { Imp } from '@imp/api';
 import { openExecStream } from '../agent-client/exec-stream';
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
-import { buildConflictError, buildNotFoundError } from '../api-errors';
+import { buildConflictError, buildNotFoundError, isRamBudgetError } from '../api-errors';
 import type { Config } from '../config';
 import type { ImageRecord } from '../db/images';
 import { findImageById, listImages } from '../db/images';
@@ -294,6 +294,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       id: imp.id,
       name: imp.name,
       reserveMib: Math.ceil((imp.memoryMib * deps.config.bootReservePercent) / 100),
+      memoryMib: imp.memoryMib,
     });
 
     try {
@@ -449,6 +450,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       id: imp.id,
       name: imp.name,
       reserveMib: Math.max(meta.ramMib, deps.config.wakeReserveMib),
+      memoryMib: imp.memoryMib,
     });
 
     const started = performance.now();
@@ -601,9 +603,23 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
         log(`impd: ${name}: disk cloned in ${String(cloneMs)}ms`);
 
-        const running = await startImpVm(created);
+        try {
+          const running = await startImpVm(created);
 
-        return toApiImp(running, image.name);
+          return toApiImp(running, image.name);
+        } catch (error) {
+          // the governor turned the boot away before any tap or VM existed: a
+          // create that cannot run leaves no imp behind
+          if (isRamBudgetError(error)) {
+            rmSync(paths.dir, { recursive: true, force: true });
+
+            await removeImp(deps.db, created.id);
+
+            emitChanged();
+          }
+
+          throw error;
+        }
       });
     },
 

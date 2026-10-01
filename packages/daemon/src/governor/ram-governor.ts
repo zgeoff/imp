@@ -1,4 +1,4 @@
-import { buildRamBudgetError } from '../api-errors';
+import { buildImpOverBudgetError, buildRamBudgetError } from '../api-errors';
 import { createKeyedMutex } from '../imps/keyed-mutex';
 import { pickSleepVictims } from './pick-sleep-victims';
 
@@ -19,6 +19,10 @@ interface AdmissionRequest {
   readonly id: string;
   readonly name: string;
   readonly reserveMib: number;
+
+  // the imp's configured memory: a guest that can grow past the whole budget
+  // is never admitted
+  readonly memoryMib: number;
 }
 
 interface UsageTotals {
@@ -174,6 +178,12 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   return {
     admit: (request) =>
       lock.runExclusive('admission', async () => {
+        if (request.memoryMib > deps.budgetMib) {
+          const usage = await readEffectiveUsage(request.id);
+
+          throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
+        }
+
         const fits = await makeRoom(
           request.id,
           `to make room for ${request.name}`,

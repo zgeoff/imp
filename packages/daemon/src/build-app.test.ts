@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
@@ -391,6 +391,27 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
     code: 'RAM_BUDGET_EXCEEDED',
     data: { budgetMib: 800, requestedMib: 300 },
   });
+});
+
+test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
+  await using ctx = await setupTest(TOKEN, { IMP_RAM_BUDGET_MIB: '800' });
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  const rejection = await ctx.client.imps
+    .create({ name: 'huge', memoryMib: 900 })
+    .catch((error: unknown) => error);
+
+  const imps = await ctx.client.imps.list();
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED', data: { requestedMib: 900 } });
+  expect(imps).toEqual([]);
+  expect(readdirSync(`${ctx.dataDir}/imps`)).toEqual([]);
+
+  // the name and the slot are free again
+  const created = await ctx.client.imps.create({ name: 'huge', memoryMib: 512 });
+
+  expect(created).toMatchObject({ state: 'running', slot: 0 });
 });
 
 test('it records a boot failure as the error state with its first line', async () => {

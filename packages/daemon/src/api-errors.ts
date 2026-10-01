@@ -32,6 +32,19 @@ export function buildInvalidStateError(
   });
 }
 
+export function isRamBudgetError(error: unknown): boolean {
+  return error instanceof ORPCError && error.code === 'RAM_BUDGET_EXCEEDED';
+}
+
+// sleeping every other imp would not help: the guest can grow past the budget
+export function buildImpOverBudgetError(budgetMib: number, usedMib: number, memoryMib: number) {
+  return new ORPCError('RAM_BUDGET_EXCEEDED', {
+    status: 503,
+    message: `the imp's memory (${String(memoryMib)} MiB) is larger than the whole RAM budget (${String(budgetMib)} MiB)`,
+    data: { budgetMib, usedMib, requestedMib: memoryMib },
+  });
+}
+
 export function buildRamBudgetError(budgetMib: number, usedMib: number, requestedMib: number) {
   return new ORPCError('RAM_BUDGET_EXCEEDED', {
     status: 503,
