@@ -9,6 +9,8 @@ set -euo pipefail
 sock=/var/run/tailscale/tailscaled.sock
 
 # alive: tailscaled runs. A zombie does not count: PID 1 may not reap it.
+# pgrep matches zombies too, so read the process state from ps instead.
+# shellcheck disable=SC2009
 alive() { ps -C tailscaled -o stat= | grep -qv '^Z'; }
 
 if alive; then

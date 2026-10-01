@@ -149,10 +149,11 @@ case ${1:-} in
     # Wait for the old pid to go, so /health answers from the new impd.
     old=$(docker exec "$name" pgrep -f 'bun .*/daemon/src/main.ts' || true)
     if [ -n "$old" ]; then
-      docker exec "$name" kill -HUP $old
+      mapfile -t pids <<<"$old"
+      docker exec "$name" kill -HUP "${pids[@]}"
       deadline=$((SECONDS + 30))
-      while docker exec "$name" kill -0 $old 2>/dev/null; do
-        [ $SECONDS -lt $deadline ] || { echo "dev.sh: impd $old did not exit" >&2; exit 1; }
+      while docker exec "$name" kill -0 "${pids[@]}" 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || { echo "dev.sh: impd ${pids[*]} did not exit" >&2; exit 1; }
         sleep 0.2
       done
     fi
