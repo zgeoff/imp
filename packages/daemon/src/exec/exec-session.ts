@@ -11,6 +11,9 @@ export interface ExecPeer {
   readonly sendText: (text: string) => void;
   readonly sendBinary: (data: Uint8Array) => void;
   readonly close: (code?: number, reason?: string) => void;
+
+  // bytes queued for the client and not yet sent
+  readonly readBufferedAmount: () => number;
 }
 
 export interface ExecBackend {
@@ -22,7 +25,15 @@ export interface ExecSession {
   // a text message parsed as JSON, or a binary message as bytes
   readonly handleMessage: (message: unknown) => void;
   readonly handleClose: () => void;
+
+  // the peer's send buffer drained: output may flow again
+  readonly handleDrain: () => void;
 }
+
+// above this many queued bytes, output waits; the agent connection then stops
+// reading, so a slow client slows the guest process instead of growing memory
+const HIGH_WATER_BYTES = 1_048_576;
+const DRAIN_POLL_MS = 100;
 
 // One `/exec` WebSocket (packages/api exec-protocol): `start` opens an agent
 // exec stream, then stdin and control go to the agent and output and the
@@ -65,13 +76,42 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     peer.sendBinary(encodeExecFrame(channel, event.data));
   };
 
+  const drainWaiter: { wake: (() => void) | null } = { wake: null };
+
+  const waitForPeerDrain = async (): Promise<void> => {
+    while (!state.closed && peer.readBufferedAmount() > HIGH_WATER_BYTES) {
+      const drained = Promise.withResolvers<void>();
+
+      drainWaiter.wake = drained.resolve;
+
+      const timer = setTimeout(drained.resolve, DRAIN_POLL_MS);
+
+      await drained.promise;
+
+      clearTimeout(timer);
+
+      drainWaiter.wake = null;
+    }
+  };
+
   const drainOutput = async (stream: ExecStream): Promise<void> => {
     try {
+      let exited = false;
+
       for await (const event of stream.events()) {
         sendEvent(event);
+
+        exited ||= event.type === 'exit';
+
+        await waitForPeerDrain();
       }
 
-      peer.close(1000, 'exited');
+      // a stream that ends without an exit frame lost the agent connection
+      if (exited) {
+        peer.close(1000, 'exited');
+      } else {
+        sendFailure(new Error('the agent connection closed before the process exited'));
+      }
     } catch (error) {
       sendFailure(error);
     } finally {
@@ -175,7 +215,15 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     }
 
     if (message instanceof Uint8Array) {
-      const frame = decodeExecFrame(message);
+      let frame: ReturnType<typeof decodeExecFrame>;
+
+      try {
+        frame = decodeExecFrame(message);
+      } catch (error) {
+        sendFailure(error);
+
+        return;
+      }
 
       if (frame.channel === EXEC_CHANNELS.stdin) {
         state.stream?.writeStdin(frame.data);
@@ -192,6 +240,9 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     handleClose: () => {
       state.closed = true;
       state.stream?.close();
+    },
+    handleDrain: () => {
+      drainWaiter.wake?.();
     },
   };
 }
