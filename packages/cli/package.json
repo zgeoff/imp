@@ -1,0 +1,16 @@
+{
+  "name": "@imp/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "imp: the command-line client for impd",
+  "bin": {
+    "imp": "src/main.ts"
+  },
+  "type": "module",
+  "dependencies": {
+    "@imp/api": "workspace:*",
+    "@orpc/client": "catalog:",
+    "@orpc/contract": "catalog:",
+    "citty": "catalog:"
+  }
+}

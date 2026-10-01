@@ -1,0 +1,8 @@
+# build output
+**/dist/**
+**/coverage/**
+
+# guest kernel build tree and downloaded artifacts
+kernel/out/**
+.cache/**
+.claude/**

@@ -1,0 +1,77 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "extends": ["./node_modules/@zgeoff/oxlint-config/oxlintrc.json"],
+  "env": {
+    "node": true,
+    "es2024": true
+  },
+  "rules": {
+    // every file that tripped this needed an exemption rather than a change,
+    // so the count was never the thing worth holding down
+    "import/max-dependencies": "off",
+    "zgeoff/function-verb": [
+      "error",
+      {
+        // imp's domain verbs: the lifecycle an imp moves through
+        "verbs": ["allocate", "list", "open"],
+        "exemptNames": [
+          "main",
+          // kysely's Driver interface: BunSqliteDriver implements it, so
+          // these method names are fixed by the library contract
+          "init",
+          "acquireConnection",
+          "beginTransaction",
+          "commitTransaction",
+          "rollbackTransaction",
+          "releaseConnection",
+          "destroy",
+          // kysely's Migration interface
+          "up"
+        ]
+      }
+    ],
+    "typescript/prefer-readonly-parameter-types": [
+      "error",
+      {
+        "ignoreInferredTypes": true,
+        "allow": [
+          // wraps a live db connection; not meaningfully freezable
+          { "from": "package", "name": "Database", "package": "bun:sqlite" },
+          // query builders bound to a live connection; not meaningfully
+          // freezable
+          { "from": "package", "name": ["Kysely", "Transaction"], "package": "kysely" },
+          // every field is already readonly; the type itself has no
+          // readonly form to wrap it in
+          { "from": "package", "name": "CompiledQuery", "package": "kysely" },
+          // a kysely connection bound to a live driver; not meaningfully freezable
+          { "from": "package", "name": "DatabaseConnection", "package": "kysely" },
+          // a migrator result read once for its error field, never mutated
+          { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
+          // the Kysely handle above under its schema-bound alias
+          { "from": "file", "name": "ImpDatabase" },
+          // dependency bags that carry the live db handle
+          { "from": "file", "name": ["RouterDeps", "AppDeps"] },
+          // already the readonly form, or a value type with no readonly form,
+          // that the rule doesn't recognize as such
+          {
+            "from": "lib",
+            "name": ["ReadonlySet", "ReadonlyMap", "Uint8Array", "Request", "Date", "Promise"]
+          }
+        ]
+      }
+    ],
+    // zod's documented import form is `import * as z from 'zod'`
+    "import/no-namespace": "off",
+    "max-statements": "off",
+    "max-lines-per-function": "off",
+    "max-lines": "off",
+    "max-params": "off",
+    "no-inline-comments": "off",
+    "no-continue": "off",
+    "init-declarations": "off",
+    "no-await-in-loop": "off",
+    "promise/avoid-new": "off",
+    "require-unicode-regexp": "off"
+  },
+  "ignorePatterns": [".claude/**", ".cache/**", "kernel/**", "agent/**", "host/**"]
+}

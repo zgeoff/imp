@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["@stylistic/eslint-plugin", "@zgeoff/oxlint-config"],
+  "workspaces": {
+    ".": {},
+    "packages/*": {
+      "project": ["src/**/*.ts"]
+    }
+  }
+}

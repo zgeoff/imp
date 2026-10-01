@@ -1,0 +1,64 @@
+{
+  "name": "@zgeoff/imp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Persistent Linux microVMs that sleep when idle and wake on request",
+  "license": "MIT",
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "@commitlint/cli": "21.2.0",
+      "@orpc/client": "1.14.15",
+      "@orpc/contract": "1.14.15",
+      "@orpc/server": "1.14.15",
+      "@stylistic/eslint-plugin": "5.10.0",
+      "@tsconfig/strictest": "2.0.8",
+      "@types/bun": "1.4.2",
+      "@zgeoff/bun-test-extended": "0.1.0",
+      "@zgeoff/format-codemod": "0.1.0",
+      "@zgeoff/oxlint-config": "0.1.0",
+      "citty": "0.2.2",
+      "elysia": "1.4.29",
+      "knip": "6.24.0",
+      "kysely": "0.29.5",
+      "lefthook": "2.1.10",
+      "oxfmt": "0.57.0",
+      "oxlint": "1.73.0",
+      "oxlint-tsgolint": "0.24.0",
+      "tslib": "2.8.1",
+      "typescript": "7.0.2",
+      "zod": "4.4.3"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "audit": "bun audit",
+    "deadcode": "knip",
+    "lint": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
+    "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",
+    "test": "bun test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "oxfmt . && format-codemod --quiet .",
+    "format:check": "oxfmt --check . && format-codemod --check --quiet .",
+    "prepare": "command -v git > /dev/null 2>&1 && lefthook install --force || true"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "catalog:",
+    "@stylistic/eslint-plugin": "catalog:",
+    "@tsconfig/strictest": "catalog:",
+    "@types/bun": "catalog:",
+    "@zgeoff/bun-test-extended": "catalog:",
+    "@zgeoff/format-codemod": "catalog:",
+    "@zgeoff/oxlint-config": "catalog:",
+    "knip": "catalog:",
+    "lefthook": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "tslib": "catalog:",
+    "typescript": "catalog:"
+  },
+  "packageManager": "bun@1.4.2"
+}

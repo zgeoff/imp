@@ -1,4 +1,6 @@
-.cache/
+/.cache/
+/.data/
+/build/
 node_modules/
 *.img
 *.ext4

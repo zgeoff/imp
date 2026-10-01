@@ -1,0 +1,104 @@
+import { oc } from '@orpc/contract';
+import * as z from 'zod';
+import { CheckpointSchema } from './checkpoint-schema';
+import { ImageSchema } from './image-schema';
+import { IMP_ERRORS } from './imp-errors';
+import { ImpSchema } from './imp-schema';
+import { NameSchema } from './name-schema';
+import { SystemInfoSchema } from './system-info-schema';
+
+const base = oc.errors(IMP_ERRORS);
+const NameInputSchema = z.object({ name: NameSchema });
+
+// a checkpoint is addressed by its id or by its label
+const CheckpointRefSchema = z.string().min(1);
+const EmptySchema = z.object({});
+
+export const impContract = {
+  imps: {
+    create: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          image: NameSchema.optional(),
+          vcpus: z.int().min(1).max(32).optional(),
+          memoryMib: z.int().min(128).optional(),
+        }),
+      )
+      .output(ImpSchema),
+
+    list: base.output(z.array(ImpSchema)),
+
+    get: base.input(NameInputSchema).output(ImpSchema),
+
+    destroy: base.input(NameInputSchema).output(EmptySchema),
+
+    sleep: base.input(NameInputSchema).output(ImpSchema),
+
+    wake: base.input(NameInputSchema).output(ImpSchema),
+
+    // seconds = 0 releases a hold
+    hold: base
+      .input(z.object({ name: NameSchema, seconds: z.int().nonnegative() }))
+      .output(ImpSchema),
+
+    url: base
+      .input(NameInputSchema)
+      .output(z.object({ local: z.url(), tailnet: z.url().nullable() })),
+
+    // disk only: a memory fork would duplicate entropy and IDs across clones
+    fork: base
+      .input(
+        z.object({
+          source: NameSchema,
+          name: NameSchema,
+          checkpoint: CheckpointRefSchema.optional(),
+        }),
+      )
+      .output(ImpSchema),
+  },
+
+  checkpoints: {
+    create: base
+      .input(z.object({ name: NameSchema, label: z.string().min(1).max(64).optional() }))
+      .output(CheckpointSchema),
+
+    list: base.input(NameInputSchema).output(z.array(CheckpointSchema)),
+
+    restore: base
+      .input(z.object({ name: NameSchema, checkpoint: CheckpointRefSchema }))
+      .output(ImpSchema),
+
+    delete: base
+      .input(z.object({ name: NameSchema, checkpoint: CheckpointRefSchema }))
+      .output(EmptySchema),
+  },
+
+  images: {
+    list: base.output(z.array(ImageSchema)),
+
+    // from an image ref the host's docker already has or can pull
+    add: base
+      .input(z.object({ ref: z.string().min(1), name: NameSchema.optional() }))
+      .output(ImageSchema),
+
+    // contextDir is a path on the imp host, handed to `docker build`
+    build: base
+      .input(
+        z.object({
+          contextDir: z.string().min(1),
+          name: NameSchema,
+          dockerfile: z.string().min(1).optional(),
+        }),
+      )
+      .output(ImageSchema),
+
+    delete: base.input(NameInputSchema).output(EmptySchema),
+  },
+
+  system: {
+    info: base.output(SystemInfoSchema),
+  },
+};
+
+export type ImpContract = typeof impContract;
