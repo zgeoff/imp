@@ -74,6 +74,9 @@ jobs:
       - name: Audit Dependencies
         run: bun run audit
 
+      - name: Bun Pin
+        run: scripts/check-bun-pin.sh
+
       - name: Dead Code
         run: bun run deadcode
 

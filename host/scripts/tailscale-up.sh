@@ -5,8 +5,8 @@
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
 #      IMP_TAILSCALE_STATE_DIR   node state (default /var/lib/imp/tailscale); "mem" keeps it in memory
-#      IMP_DNS                   resolvers used if resolv.conf points into the tailnet
-#                                (default "1.1.1.1 8.8.8.8")
+#      IMP_DNS                   resolvers used if resolv.conf points into the tailnet,
+#                                comma-separated as impd reads it (default "1.1.1.1,8.8.8.8")
 set -euo pipefail
 
 if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
@@ -29,9 +29,11 @@ backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq 
 # MagicDNS, that is 100.100.100.100, which our own tailscaled captures; with
 # --accept-dns=false it has no upstream, and all lookups (ACME too) fail.
 if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' /etc/resolv.conf; then
-  read -ra resolvers <<<"${IMP_DNS:-1.1.1.1 8.8.8.8}"
+  dns=${IMP_DNS:-1.1.1.1,8.8.8.8}
+  # Commas are the impd form; spaces still work.
+  read -ra resolvers <<<"${dns//,/ }"
   printf 'nameserver %s\n' "${resolvers[@]}" >/etc/resolv.conf
-  echo "tailscale-up: resolv.conf pointed into the tailnet; now ${IMP_DNS:-1.1.1.1 8.8.8.8}"
+  echo "tailscale-up: resolv.conf pointed into the tailnet; now ${resolvers[*]}"
 fi
 
 if ! alive; then

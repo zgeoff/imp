@@ -1,6 +1,7 @@
 // Package services supervises the long-running processes declared in
 // /etc/imp/services.d/*.json. Each service restarts with exponential
-// backoff (1s doubling to 60s) and logs to /var/log/imp/<name>.log.
+// backoff (1s doubling to 60s) and logs to /var/log/imp/<name>.log, which
+// rotates to <name>.log.1 past 10 MiB.
 package services
 
 import (
@@ -19,6 +20,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/imp/agent/internal/safe"
 )
 
 const (
@@ -47,11 +49,14 @@ type Def struct {
 type Supervisor struct {
 	reaper *reaper.Reaper
 	image  imagecfg.Config
+	logDir string
 
 	mu       sync.Mutex
 	services map[string]*service
 	stopping bool
 	wg       sync.WaitGroup
+	// quit stops the log rotator.
+	quit chan struct{}
 }
 
 type service struct {
@@ -62,19 +67,23 @@ type service struct {
 	restarts int
 	lastExit *proto.Exit
 	stop     chan struct{}
+	// logMu serializes rotating the log with opening it for a start.
+	logMu sync.Mutex
 }
 
 func New(r *reaper.Reaper, image imagecfg.Config) *Supervisor {
-	return &Supervisor{reaper: r, image: image, services: make(map[string]*service)}
+	return &Supervisor{reaper: r, image: image, logDir: LogDir,
+		services: make(map[string]*service), quit: make(chan struct{})}
 }
 
-// Load reads Dir and starts every service in it. A bad file is logged and
-// skipped so one typo cannot keep the rest from starting.
+// Load reads Dir and starts every service in it, and the log rotator. A bad
+// file is logged and skipped so one typo cannot keep the rest from starting.
 func (s *Supervisor) Load() error {
 	paths, err := filepath.Glob(filepath.Join(Dir, "*.json"))
 	if err != nil {
 		return err
 	}
+	safe.Go("services: log rotator", func() { s.rotateLogs(s.quit) }, nil)
 	for _, p := range paths {
 		def, err := readDef(p)
 		if err != nil {
@@ -121,7 +130,9 @@ func (s *Supervisor) Start(def Def) {
 	svc := &service{def: def, state: "starting", stop: make(chan struct{})}
 	s.services[def.Name] = svc
 	s.wg.Add(1)
-	go s.run(svc)
+	// A panic in the supervisor loop leaves the service unsupervised, not
+	// the agent dead.
+	safe.Go("services: "+def.Name, func() { s.run(svc) }, func() { s.setState(svc, "exited") })
 }
 
 func (s *Supervisor) run(svc *service) {
@@ -138,9 +149,9 @@ func (s *Supervisor) run(svc *service) {
 
 		s.mu.Lock()
 		svc.pid, svc.proc = 0, nil
+		// A failed start is not an exit: last_exit keeps the previous one.
 		if err != nil {
 			log.Printf("services: %s: %v", svc.def.Name, err)
-			svc.lastExit = nil
 		} else {
 			svc.lastExit = &proto.Exit{Code: st.Code, Signal: int(st.Signal)}
 		}
@@ -193,11 +204,7 @@ func nextBackoff(cur, ran time.Duration) (wait, next time.Duration) {
 
 // once runs the service a single time and waits for it to exit.
 func (s *Supervisor) once(svc *service) (reaper.Status, error) {
-	if err := os.MkdirAll(LogDir, 0o755); err != nil {
-		return reaper.Status{}, err
-	}
-	logf, err := os.OpenFile(filepath.Join(LogDir, svc.def.Name+".log"),
-		os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	logf, err := s.openLog(svc)
 	if err != nil {
 		return reaper.Status{}, err
 	}
@@ -235,8 +242,32 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 
 	s.mu.Lock()
 	svc.state, svc.pid, svc.proc = "running", p.Pid, p
+	// StopAll may have run between proc.Start and here, when svc.proc was
+	// still nil, so its SIGTERM missed this process. Send it now.
+	if isClosed(svc.stop) {
+		p.Signal(syscall.SIGTERM)
+	}
 	s.mu.Unlock()
 	return <-p.Done, nil
+}
+
+func (s *Supervisor) logPath(svc *service) string {
+	return filepath.Join(s.logDir, svc.def.Name+".log")
+}
+
+// openLog rotates the service's log if it is too big, then opens it for
+// appending.
+func (s *Supervisor) openLog(svc *service) (*os.File, error) {
+	if err := os.MkdirAll(s.logDir, 0o755); err != nil {
+		return nil, err
+	}
+	svc.logMu.Lock()
+	defer svc.logMu.Unlock()
+	path := s.logPath(svc)
+	if err := rotateLog(path); err != nil {
+		log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
+	}
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 }
 
 func (s *Supervisor) setState(svc *service, state string) {
@@ -264,6 +295,9 @@ func (s *Supervisor) List() []proto.ServiceStatus {
 // after stopGrace, and waits for the supervisors to finish.
 func (s *Supervisor) StopAll() {
 	s.mu.Lock()
+	if !s.stopping {
+		close(s.quit)
+	}
 	s.stopping = true
 	for _, svc := range s.services {
 		if !isClosed(svc.stop) {

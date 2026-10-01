@@ -9,7 +9,7 @@ that node on its own port. [Networking](../architecture/networking.md#urls) cove
 `host/scripts/tailscale-up.sh` runs inside the host container. It does nothing unless
 `TAILSCALE_AUTHKEY` is set. Otherwise it:
 
-1. Replaces `/etc/resolv.conf` with public resolvers (`IMP_DNS`, default `1.1.1.1 8.8.8.8`) if it
+1. Replaces `/etc/resolv.conf` with public resolvers (`IMP_DNS`, default `1.1.1.1,8.8.8.8`) if it
    points at `100.100.100.100`. See [DNS](#dns).
 2. Starts `tailscaled` in kernel TUN mode (`tailscale0`) unless one already runs. The container is
    privileged and has its own netns, so the TUN device and routes never touch the host.

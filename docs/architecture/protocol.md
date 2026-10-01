@@ -65,12 +65,14 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 { "error": { "code": "EXEC_FAILED", "message": "start foo: no such file or directory" } }
 ```
 
-| Code          | Meaning                                                                       |
-| ------------- | ----------------------------------------------------------------------------- |
-| `BAD_REQUEST` | The first frame is not a REQUEST, its JSON is invalid, or a field is missing. |
-| `UNKNOWN_OP`  | The `op` is not known to this agent.                                          |
-| `EXEC_FAILED` | `exec` could not start the process (bad argv, cwd, or user).                  |
-| `INTERNAL`    | A system call failed (for example `FIFREEZE`).                                |
+| Code           | Meaning                                                                       |
+| -------------- | ----------------------------------------------------------------------------- |
+| `BAD_REQUEST`  | The first frame is not a REQUEST, its JSON is invalid, or a field is missing. |
+| `UNKNOWN_OP`   | The `op` is not known to this agent.                                          |
+| `EXEC_FAILED`  | `exec` could not start the process (bad argv, cwd, or user).                  |
+| `FROZEN`       | `freeze` found the root filesystem already frozen.                            |
+| `POWERING_OFF` | `freeze` arrived after a poweroff started.                                    |
+| `INTERNAL`     | A system call failed (for example `FIFREEZE`).                                |
 
 A successful RESPONSE never has an `error` key.
 
@@ -96,9 +98,12 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 ← {"ok":true}
 ```
 
-`freeze` runs `sync`, then `FIFREEZE` on `/`. The host then takes the reflink checkpoint and sends
-`thaw` (`FITHAW`). If no `thaw` arrives within `timeout_ms` (default 30000), the agent thaws by
-itself, so a host crash cannot leave the guest frozen. `thaw` on an unfrozen filesystem succeeds.
+`freeze` runs `FIFREEZE` on `/`, which syncs the filesystem first. The host then takes the reflink
+checkpoint and sends `thaw` (`FITHAW`). If no `thaw` arrives within `timeout_ms` (default 30000),
+the agent thaws by itself, so a host crash cannot leave the guest frozen. `thaw` on an unfrozen
+filesystem succeeds. `freeze` on a frozen filesystem fails with `FROZEN` and leaves the first
+freeze's auto-thaw as it was. Once `shutdown` (or a signal) starts a poweroff, the agent thaws, and
+`freeze` fails with `POWERING_OFF`.
 
 ### `activity`
 
