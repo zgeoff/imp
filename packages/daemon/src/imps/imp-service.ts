@@ -32,6 +32,9 @@ interface CreateImpInput {
   readonly image?: string | undefined;
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
+
+  // fills the new imp's disk; a reflink clone of the image rootfs by default
+  readonly prepareDisk?: (target: string) => Promise<void>;
 }
 
 interface ImpUrls {
@@ -55,6 +58,14 @@ export interface ImpService {
 
   // after an impd start: re-adopt live VMs, mark the rest stopped
   readonly reconcileImps: () => Promise<void>;
+
+  // Hooks for checkpoints/checkpoint-service.ts. `lockImp` runs `action` under
+  // the imp's lifecycle lock with a fresh record; `haltImp` and `bootImp`
+  // expect the caller to hold that lock.
+  readonly lockImp: <T>(name: string, action: (imp: ImpRecord) => Promise<T>) => Promise<T>;
+  readonly haltImp: (imp: ImpRecord) => Promise<ImpRecord>;
+  readonly bootImp: (imp: ImpRecord) => Promise<ImpRecord>;
+  readonly toApi: (imp: ImpRecord) => Promise<Imp>;
 }
 
 export interface ImpServiceDeps {
@@ -259,7 +270,9 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         try {
           mkdirSync(paths.runDir, { recursive: true });
 
-          await cloneDisk(deps.images.getRootfsPath(image), paths.disk);
+          await (
+            input.prepareDisk ?? ((disk) => cloneDisk(deps.images.getRootfsPath(image), disk))
+          )(paths.disk);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
 
@@ -440,6 +453,32 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
           await updateState(imp, { state: 'stopped', pid: null });
         }),
       );
+    },
+
+    lockImp: async (name, action) => {
+      const found = await findOrThrow(name);
+
+      return mutex.runExclusive(found.id, async () => {
+        const imp = await findOrThrow(name);
+
+        return action(imp);
+      });
+    },
+
+    haltImp: async (imp) => {
+      if (imp.pid !== null) {
+        await deps.vms.stopVm(imp.pid, buildImpPaths(deps.config.dataDir, imp.id), true);
+      }
+
+      return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
+    },
+
+    bootImp: (imp) => startImpVm(imp),
+
+    toApi: async (imp) => {
+      const imageName = await readImageName(imp.imageId);
+
+      return toApiImp(imp, imageName);
     },
   };
 }
