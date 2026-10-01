@@ -69,9 +69,9 @@ The agent starts every file in this directory at boot and restarts each service 
 
 ## Docker in the guest (`imp/base`)
 
-- `services.d/docker.json` runs `/usr/local/libexec/imp/dockerd`, a wrapper that clears stale `/run`
-  state from the last boot (the agent does not mount a tmpfs on `/run`) and then execs `dockerd`.
-  dockerd starts its own containerd; there is no separate containerd service.
+- `services.d/docker.json` runs `dockerd` directly. The agent mounts a fresh tmpfs on `/run` every
+  boot, so no stale pid file or socket from the last boot is left to clear. dockerd starts its own
+  containerd; there is no separate containerd service.
 - `/etc/docker/daemon.json` sets the `cgroupfs` cgroup driver (there is no systemd; the agent mounts
   cgroup v2 at `/sys/fs/cgroup`) and the `local` log driver (compressed, rotated).
 - iptables is the Ubuntu default nf_tables variant. The imp guest kernel (`kernel/`) has nftables
