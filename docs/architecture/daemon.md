@@ -60,9 +60,9 @@ works from every state.
 
 The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a boot or a wake, the
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
-would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp whose
-lock is taken, or that has an open exec session or proxied request, is never picked. Every 5 s it
-also sleeps imps while the measured use is over the budget.
+would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
+a hold, a taken lock, an open exec session or a proxied request is never picked. Every 5 s it also
+sleeps imps while the measured use is over the budget.
 [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
 ### idle: the idle loop

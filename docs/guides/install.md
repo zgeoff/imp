@@ -54,12 +54,15 @@ server bootstrap are on the [roadmap](https://github.com/zgeoff/imp/issues/41)
 6. Check it:
 
    ```sh
-   scripts/imp info
-   scripts/imp new box && scripts/imp exec box -- uname -a
+   imp info
+   imp new box && imp exec box -- uname -a
    ```
 
-`scripts/imp` runs the CLI from the repo. [Configuration](./configuration.md) lists every variable,
-and [operations](./operations.md) covers restarts and day-to-day care.
+**NOTE:** The guides write `imp` for the CLI. From the repo, `scripts/imp` runs it; link it onto
+your `PATH` as `imp`, or use `scripts/imp` in its place.
+
+[Configuration](./configuration.md) lists every variable, and [operations](./operations.md) covers
+restarts and day-to-day care.
 
 ## What `dev.sh up` does
 

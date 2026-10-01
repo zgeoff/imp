@@ -123,7 +123,5 @@ bun run lint:shell                # shellcheck over scripts/, host/ and test/
 scripts/acceptance.sh --clean     # end to end, from a clean state
 ```
 
-CI (`.github/workflows/ci.yml`) runs the gates on every push to `main` and every pull request:
-gitleaks, the Bun checks, the Go checks and shellcheck. `bun run lint:shell` needs shellcheck 0.11.0
-on `PATH`. The [development guide](./docs/guides/development.md) covers the hooks, CI and the branch
-rules.
+CI runs the gates on every push and pull request; the
+[development guide](./docs/guides/development.md) covers it.

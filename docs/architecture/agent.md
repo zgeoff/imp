@@ -26,8 +26,8 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 
 **Stage 2** runs in the user's root:
 
-1. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
-2. Mount cgroup2, `/dev/pts` and `/dev/shm`.
+1. Mount cgroup2, `/dev/pts` and `/dev/shm`.
+2. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
 3. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
 4. Listen on vsock port 1024.
 

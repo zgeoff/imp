@@ -80,7 +80,7 @@ From the milestone work:
 - `scripts/e2e-*.sh` and the prototype `smoke-*.sh` / `proto-sleep.sh` scripts overlap with
   `scripts/acceptance.sh` ([#3](https://github.com/zgeoff/imp/issues/3)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
-  already prevents. Remove it.
+  already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 
 ## Notes
 

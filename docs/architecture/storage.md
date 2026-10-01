@@ -35,9 +35,9 @@ memory of a sleeping imp ([sleep and wake](./sleep-and-wake.md)).
 ## Checkpoints, restores and forks
 
 - **Checkpoint.** The agent runs `sync` and `FIFREEZE` on `/`, impd takes a reflink clone of the imp
-  disk, and the agent thaws. impd asks the agent to thaw by itself if no thaw arrives in 10 s. A
-  sleeping imp wakes first, because its memory holds page cache that is not on the disk yet. A
-  stopped imp needs no freeze.
+  disk, and the agent thaws. The freeze carries a 10 s timeout, so the agent thaws by itself if impd
+  never sends thaw. A sleeping imp wakes first, because its memory holds page cache that is not on
+  the disk yet. A stopped imp needs no freeze.
 - **Restore.** impd stops the VM, clones the checkpoint to a new file, renames it over the disk,
   drops any memory snapshot, and boots again if the imp was awake. Memory and disk always belong
   together: a snapshot never wakes on a different disk.

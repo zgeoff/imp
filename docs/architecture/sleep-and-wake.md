@@ -12,20 +12,20 @@ Every VM gets a balloon before `InstanceStart`:
 With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
 snapshot is smaller.
 
-To sleep an imp, impd takes the imp's lock and a slot of a host-wide semaphore (2 sleeps at a time,
-[gotcha 8](#4-gotchas)), then:
+To sleep an imp, impd takes the imp's lock and reads the RAM the VM owns now, for the next wake's
+reservation. Then it waits for a slot of a host-wide semaphore (2 sleeps at a time,
+[gotcha 8](#4-gotchas)) and:
 
-1. Reads the RAM the VM owns now, for the next wake's reservation.
-2. Pauses the VM (`PATCH /vm`).
-3. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If that fails,
+1. Pauses the VM (`PATCH /vm`).
+2. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If that fails,
    impd deletes the `.new` files and resumes the VM; the imp stays awake.
-4. Kills Firecracker with SIGKILL and waits for it to exit. The VM is paused and its snapshot is on
+3. Kills Firecracker with SIGKILL and waits for it to exit. The VM is paused and its snapshot is on
    disk, so nothing needs a clean shutdown.
-5. Renames the `.new` files over `vmstate` and `mem`. It never writes into the old mem file: a woken
+4. Renames the `.new` files over `vmstate` and `mem`. It never writes into the old mem file: a woken
    VM maps it `MAP_PRIVATE` ([gotcha 3](#4-gotchas)).
-6. Deletes `api.sock` and `vsock.sock`, and runs `fallocate --dig-holes` on the mem file. A 2 GiB
+5. Deletes `api.sock` and `vsock.sock`, and runs `fallocate --dig-holes` on the mem file. A 2 GiB
    file with 300 MiB in use becomes 381 MiB. A failure here only costs disk.
-7. Writes `meta.json` and sets the state to `sleeping`. The tap stays.
+6. Writes `meta.json` and sets the state to `sleeping`. The tap stays.
 
 If Firecracker is gone after a failed sleep, impd drops the snapshot and marks the imp `stopped`.
 
@@ -297,5 +297,18 @@ check sees nothing.
 
 ### Open: slow wakes after back-to-back cycles
 
-A wake right after another wake or exec takes 650–850 ms instead of about 80 ms. Normal idle
-timeouts never hit it. [#33](https://github.com/zgeoff/imp/issues/33) tracks it.
+A wake normally takes about 80 ms. When an imp is slept again within about a second of a wake or an
+exec, the next wake takes 650–850 ms, and the delay grows with each back-to-back cycle. A snapshot
+taken at least 3 s after a wake restores fast again. Normal idle timeouts never hit it.
+[#33](https://github.com/zgeoff/imp/issues/33) tracks it.
+
+What was measured during a slow wake:
+
+- The agent accepts the vsock `CONNECT` at once but answers about 700 ms later.
+- Both vCPU threads are busy, mostly in kernel time, with only about 300 minor faults. Lazy page
+  loading is not the cause.
+- Disabling free page reporting does not help. Skipping the `resumed` clock set does not help.
+
+Working theory: the guest does about 0.7 s of kernel work after each resume (for example clock and
+timer catch-up, or deferred work queued while paused). A snapshot taken while that work still runs
+captures it, so the next resume repeats it and adds more.
