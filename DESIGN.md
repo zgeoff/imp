@@ -204,5 +204,5 @@ scripts/          acceptance.sh and dev helpers
 
 ## 4. Not yet
 
-- Jailer, inner container, diff snapshots, memory forks, balloon/free page reporting, multi-host,
-  S3-backed storage, credential connectors.
+- Jailer, inner container, diff snapshots, memory forks, multi-host, S3-backed storage, credential
+  connectors.
