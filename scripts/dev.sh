@@ -8,7 +8,10 @@
 #   scripts/dev.sh shell     open a shell in the container
 #   scripts/dev.sh token     print the API token (for IMP_TOKEN)
 #
-# Env: IMP_DEV_DATA (default <repo>/.data/dev) holds the sparse XFS file.
+# Env: IMP_DEV_NAME (default imp-dev) names the container; IMP_DEV_PORT_OFFSET
+#      (default 0) shifts every published port, so parallel dev instances (one
+#      per git worktree) can run side by side.
+#      IMP_DEV_DATA (default <repo>/.data/dev) holds the sparse XFS file.
 #      IMP_KERNEL (default kernel/out/vmlinux, else .cache/vmlinux-ci) is the guest kernel.
 #      IMP_SYSTEM_DRIVE (default build/imp-system.squashfs) is the system drive.
 #      Both are repo-relative or absolute paths under the repo.
@@ -16,9 +19,10 @@ set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-name=imp-dev
+name=${IMP_DEV_NAME:-imp-dev}
+offset=${IMP_DEV_PORT_OFFSET:-0}
 data=${IMP_DEV_DATA:-$IMP_ROOT/.data/dev}
-api=http://localhost:7070
+api=http://localhost:$((7070 + offset))
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -38,6 +42,14 @@ pick_kernel() {
   else
     echo "$IMP_ROOT/.cache/vmlinux-ci"
   fi
+}
+
+# read_uplink_mtu prints the MTU of this machine's default-route interface;
+# the container's own eth0 claims 1500 whatever the real path allows.
+read_uplink_mtu() {
+  local dev
+  dev=$(ip route show default | awk '{print $5; exit}')
+  cat "/sys/class/net/$dev/mtu" 2>/dev/null || echo 1500
 }
 
 is_running() {
@@ -78,13 +90,21 @@ up() {
   else
     docker rm -f "$name" >/dev/null 2>&1 || true
     mkdir -p "$data"
+    # .env holds TAILSCALE_AUTHKEY; docker reads it, so it is never echoed
+    local env_file=()
+    [ -f "$IMP_ROOT/.env" ] && env_file=(--env-file "$IMP_ROOT/.env")
     # The repo is also mounted at its own path, so `imp image build <dir>`
     # paths the CLI resolves on this machine exist in the container.
+    # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
+    # container's own tailscaled starts.
     docker run -d --name "$name" --init --privileged --device /dev/kvm \
+      --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -p 7070:7070 -p 7080:7080 -p 20000-20063:20000-20063 \
+      -p $((7070 + offset)):7070 -p $((7080 + offset)):7080 \
+      -p $((20000 + offset))-$((20063 + offset)):20000-20063 \
       -e IMP_STORAGE_GIB="${IMP_STORAGE_GIB:-200}" \
+      -e IMP_UPLINK_MTU="$(read_uplink_mtu)" \
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" \
