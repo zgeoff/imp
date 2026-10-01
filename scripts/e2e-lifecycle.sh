@@ -5,11 +5,14 @@
 #
 # Starts the dev container (scripts/dev.sh up) if needed and leaves it running.
 # Env: IMP_E2E_MAX_NEW_MS (default 3000) bounds `imp new`, command to usable.
+#      IMP_DEV_NAME and IMP_DEV_PORT_OFFSET pick the dev instance (scripts/dev.sh).
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 max_new_ms=${IMP_E2E_MAX_NEW_MS:-3000}
+container=${IMP_DEV_NAME:-imp-dev}
+export IMP_URL=${IMP_URL:-http://localhost:$((7070 + ${IMP_DEV_PORT_OFFSET:-0}))}
 name=e2e-$$
 cli=(bun "$IMP_ROOT/packages/cli/src/main.ts")
 
@@ -40,7 +43,7 @@ cleanup() {
   rm -rf "$build_dir"
   if [ $rc -ne 0 ]; then
     echo "== impd log tail"
-    docker logs --tail 30 imp-dev 2>&1 || true
+    docker logs --tail 30 "$container" 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -111,9 +114,10 @@ step "stop, start, data persisted"
 imp exec "$name" -- sh -c "echo $name-data > /root/persist && sync"
 imp stop "$name"
 imp ls | grep -q "^$name  *stopped" || fail "ls does not show $name stopped"
-rc=0
-imp exec "$name" -- true 2>/dev/null || rc=$?
-[ "$rc" -ne 0 ] || fail "exec in a stopped imp succeeded"
+# exec boots a stopped imp, as an HTTP request does (DESIGN 2.8)
+expect_eq "$(imp exec "$name" -- cat /root/persist)" "$name-data" "exec in a stopped imp"
+imp ls | grep -q "^$name  *running" || fail "exec did not boot the stopped imp"
+imp stop "$name"
 t0=$(now_ms)
 imp start "$name"
 expect_eq "$(imp exec "$name" -- cat /root/persist)" "$name-data" "data after stop and start"
@@ -127,7 +131,7 @@ expect_eq "$(imp exec "$name" -- cat /root/persist)" "$name-data" "exec after an
 step "rm"
 imp rm "$name"
 if imp ls | grep -q "^$name "; then fail "$name still listed after rm"; fi
-if docker exec imp-dev ip link show "imp$slot" >/dev/null 2>&1; then
+if docker exec "$container" ip link show "imp$slot" >/dev/null 2>&1; then
   fail "tap imp$slot left behind"
 fi
 
