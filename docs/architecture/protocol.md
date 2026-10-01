@@ -1,7 +1,12 @@
-# imp agent protocol
+# Agent protocol
 
-Version `0.1.0`. The guest agent (`imp-agent`, PID 1) and the host speak this protocol over vsock.
-The Go implementation is `internal/proto`. The host implementation is TypeScript (impd).
+impd and the guest agent (`imp-agent`, PID 1) talk over vsock. Firecracker exposes the guest vsock
+as a unix socket; the host connects to it, sends `CONNECT 1024`, and then speaks this protocol. Each
+connection carries one request. The first frame is a JSON request; exec connections then carry
+binary frames for stdin, output, resizes, signals and the exit.
+
+Version `0.1.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
+([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 

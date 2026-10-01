@@ -1,7 +1,112 @@
-# Sleep and wake: prototype findings
+# Sleep and wake
 
-Prototype for DESIGN.md 2.8 (sleep/wake) and 2.9 (RAM governor). Script: `scripts/proto-sleep.sh`
-(phases `sleep`, `big`, `balloon`). Measured 2026-10-02.
+An idle imp goes to sleep: impd writes its memory to disk, stops its Firecracker process and gives
+the RAM back to the host. A request, an `exec` or a `console` wakes it in about 50–100 ms, with
+every process where it was. This page describes what impd does, then the prototype findings the
+design rests on.
+
+## Sleep
+
+Every VM gets a balloon before `InstanceStart`:
+`{"amount_mib":0,"deflate_on_oom":true,"stats_polling_interval_s":1,"free_page_reporting":true}`.
+With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
+snapshot is smaller.
+
+To sleep an imp, impd takes the imp's lock and a slot of a host-wide semaphore (2 sleeps at a time,
+[gotcha 8](#4-gotchas)), then:
+
+1. Reads the RAM the VM owns now, for the next wake's reservation.
+2. Pauses the VM (`PATCH /vm`).
+3. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If that fails,
+   impd deletes the `.new` files and resumes the VM; the imp stays awake.
+4. Kills Firecracker with SIGKILL and waits for it to exit. The VM is paused and its snapshot is on
+   disk, so nothing needs a clean shutdown.
+5. Renames the `.new` files over `vmstate` and `mem`. It never writes into the old mem file: a woken
+   VM maps it `MAP_PRIVATE` ([gotcha 3](#4-gotchas)).
+6. Deletes `api.sock` and `vsock.sock`, and runs `fallocate --dig-holes` on the mem file. A 2 GiB
+   file with 300 MiB in use becomes 381 MiB. A failure here only costs disk.
+7. Writes `meta.json` and sets the state to `sleeping`. The tap stays.
+
+If Firecracker is gone after a failed sleep, impd drops the snapshot and marks the imp `stopped`.
+
+## Wake
+
+1. impd reads `meta.json` and compares it with this host. On no snapshot or any difference, it boots
+   the disk cold instead.
+2. It reserves RAM: the larger of what the VM owned at sleep and `IMP_WAKE_RESERVE_MIB`.
+3. It creates the tap if it is gone (a container restart removes taps).
+4. It starts Firecracker, which first removes a stale `vsock.sock` ([gotcha 1](#4-gotchas)), and
+   makes `PUT /snapshot/load` with `resume_vm: true` the first API call.
+5. It pings the agent for up to 10 s, then sends `resumed` with the host time. Without it the guest
+   clock is behind by the time asleep.
+6. It sets the state to `running`. Pages then fault in lazily from the mem file.
+
+If the load or the agent fails, impd kills the new Firecracker and boots the disk cold. The disk is
+always the truth.
+
+Snapshot files stay until the next sleep renames over them, a stop, a restore or a cold boot.
+
+### Snapshot identity
+
+`meta.json` records the Firecracker version, the snapshot format, the host kernel (`uname -r`), and
+hashes of the guest kernel and the system drive. The snapshot holds the guest kernel in memory and
+the guest's page cache of the system drive, so either change means a cold boot. It also records the
+imp's memory size and the RAM the VM owned at sleep.
+
+## What survives a sleep
+
+- In-memory processes, tmpfs contents and everything else in RAM survive.
+- TCP connections reset.
+- On wake the guest closes every vsock connection. An exec whose host side hangs up gets SIGHUP and
+  is detached after 1 s, so it does not keep the imp awake.
+
+Anything that needs a VM wakes a sleeping imp and cold-boots a stopped one: `exec`, `console`, the
+proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the imp off.
+
+## Restarts
+
+- On SIGTERM or SIGINT, impd sleeps every awake imp, so a container restart keeps memory.
+  `scripts/dev.sh down` gives it 120 s.
+- On SIGHUP, impd exits without sleeping anything. Firecracker processes are detached (`setsid`), so
+  the next impd re-adopts every live VM by pid and API socket, even one whose agent answers late.
+- After a crash, an imp with no live VM is marked `stopped` and boots cold. Sleeping imps stay
+  asleep and wake on demand.
+
+## Idle detection
+
+Every 2 s, an imp counts as active when it has any of these:
+
+- an open exec session or proxied connection, counted on the host;
+- established guest TCP connections, from the agent's `activity` (loopback does not count);
+- Firecracker CPU above `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about
+  0.4);
+- a hold: `imp hold <name> <duration>` keeps an imp awake and wakes it; `0` releases.
+
+A headless agent that waits on an LLM API keeps a TCP connection open, so it stays awake. An imp
+with none of these for `IMP_IDLE_TIMEOUT_S` (default 60 s) goes to sleep.
+
+## The RAM governor
+
+impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
+
+- **Measure.** Usage is the sum of Firecracker `Pss_Anon` + `Pss_Shmem` from `smaps_rollup`. Pages a
+  woken guest only read are clean pages of the mem file, which the host can drop
+  ([section 5](#5-ram-what-the-governor-measures)). `imp info` also reports the committed memory of
+  awake imps.
+- **Reserve.** Before a boot or a wake, impd reserves RAM under one global lock: a cold boot
+  reserves `IMP_BOOT_RESERVE_PERCENT` (default 50) of the imp's memory, a wake the larger of what it
+  owned at sleep and `IMP_WAKE_RESERVE_MIB` (default 256). A reservation counts until the
+  measurement passes it, for at most 20 s.
+- **Make room.** If the sum would pass the budget, impd sleeps the least recently active imps that
+  are not held and not busy, until it fits. If it still cannot fit, or the imp's memory alone is
+  larger than the budget, the request fails with `RAM_BUDGET_EXCEEDED`.
+- **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget.
+
+## Findings
+
+The design above comes from a prototype for sleep, wake and the governor, measured 2026-10-02. The
+numbers are from a nested-virtualization dev box; treat them as the order of magnitude. The
+measurements of the finished system are in [STATUS.md](../../STATUS.md#measured).
 
 **Test host.** WSL2 (host kernel 6.6.87.2-microsoft-standard-WSL2), nested KVM on an AMD CPU, 16
 threads. `/var/lib/imp` is a loop-mounted XFS file on the WSL ext4 disk. Firecracker v1.17.0,
@@ -9,7 +114,7 @@ snapshot format v12.0.0. Guests: 2 vCPUs, the ubuntu:24.04 rootfs, the CI kernel
 (`.cache/vmlinux-ci`) and the custom kernel (`kernel/out/vmlinux`). Both kernels give the same
 results. Bare metal timings will differ; treat these as the order of magnitude.
 
-## 1. Result
+### 1. Result
 
 Sleep and wake work. A process that holds a random value only in its memory keeps the value, its
 pid, its start time and the boot id across three sleep/wake cycles. A cold boot of the same disk
@@ -17,7 +122,7 @@ afterwards does not have the value (negative control). Wake to first agent `ping
 The restored VM starts with about 20 MiB RSS and faults guest memory in from the memory file on
 demand.
 
-## 2. Measurements
+### 2. Measurements
 
 | Measurement                                           | 1 GiB guest, idle |                 2 GiB guest, 300 MiB in tmpfs |
 | ----------------------------------------------------- | ----------------: | --------------------------------------------: |
@@ -46,7 +151,7 @@ Notes:
   never touched most of its memory. Zero pages compress to holes with `fallocate --dig-holes`; the
   restore after that is correct (the in-memory proof passed after it).
 
-### Guest clock
+#### Guest clock
 
 | Measurement                                   | Result                                 |
 | --------------------------------------------- | -------------------------------------- |
@@ -60,9 +165,9 @@ Notes:
 mechanism to use. It sets only `CLOCK_REALTIME`, so guest timers on `CLOCK_MONOTONIC` do not all
 fire at once after a long sleep.
 
-## 3. Procedure and exact API calls
+### 3. Firecracker API calls
 
-### Sleep
+#### Sleep calls
 
 ```sh
 # 1. Pause the vCPUs.
@@ -76,7 +181,7 @@ PUT   /snapshot/create   {"snapshot_type":"Full",
 # 4. rename vmstate.new -> vmstate, mem.new -> mem. Optionally: fallocate --dig-holes mem.
 ```
 
-### Wake
+#### Wake calls
 
 ```sh
 # 1. Check: tap <imp-tap> exists, run/vsock.sock does NOT exist, the disk files are at the same
@@ -100,7 +205,7 @@ Optional load fields that work in 1.17 (tested):
 With both overrides, the VM woke on a different tap and vsock path, the proof held, and TCP egress
 through the new tap worked. The guest keeps its IP, so the new tap needs the same host-side /30.
 
-## 4. Gotchas
+### 4. Gotchas
 
 1. **Stale vsock socket kills the load.** If `run/vsock.sock` exists, the load fails with
    `VsockUnixBackend: Error binding to the host-side Unix socket: Address in use (os error 98)` and
@@ -116,11 +221,11 @@ through the new tap worked. The guest keeps its IP, so the new tap needs the sam
 4. **Disk and memory belong together.** The snapshot holds the guest page cache for the disk. Do not
    change the disk (restore a checkpoint, fsck, mount it) while the imp sleeps. A checkpoint of a
    sleeping imp must copy the mem and vmstate files with the disk, or the daemon must wake the imp
-   and use `freeze` first.
+   and use `freeze` first. impd wakes it first.
 5. **Exec sessions do not survive.** On resume the guest closes every vsock connection. Agent
    behavior: the process group of a foreground exec gets SIGHUP; a process that ignores SIGHUP keeps
    running and stops counting as a session after 1 s. Background work must use `setsid`/`nohup`. TCP
-   connections in the guest also reset (DESIGN.md 2.8).
+   connections in the guest also reset ([what survives](#what-survives-a-sleep)).
 6. **Version checks.** `firecracker --snapshot-version` prints the format this binary writes
    (`v12.0.0`); `firecracker --describe-snapshot <vmstate>` prints the format of a file. The
    snapshot is also tied to the host kernel and CPU (Firecracker docs: "Snapshots must be resumed on
@@ -132,18 +237,18 @@ through the new tap worked. The guest keeps its IP, so the new tap needs the sam
    sleep). Many imps that sleep at once cause a write burst. Serialize sleeps, or limit them to 2-3
    at a time.
 
-## 5. RAM: what the governor should measure
+### 5. RAM: what the governor measures
 
 After a wake, guest pages that were only read are clean, file-backed pages of the mem file
 (`RssFile`, `Private_Clean`). The host can drop them and read them again from the file. Pages the
 guest writes become anonymous (`RssAnon`, `Private_Dirty`). Example: after the guest read its 300
 MiB blob, Firecracker had 341 MiB RSS, of which 326 MiB was clean `RssFile`.
 
-Recommendation: the governor counts Firecracker PSS (as DESIGN.md 2.9 says), but reads
-`/proc/<pid>/smaps_rollup` and also records `Private_Dirty` and `Pss_Anon`. Under pressure, a woken
-imp with mostly clean pages costs less than its PSS. A cold-booted imp has only anonymous pages.
+So the governor counts `Pss_Anon` + `Pss_Shmem` from `/proc/<pid>/smaps_rollup`, not the full PSS. A
+woken imp with mostly clean pages costs less than its PSS. A cold-booted imp has only anonymous
+pages.
 
-## 6. RAM reclamation for awake VMs: the balloon
+### 6. RAM reclamation for awake VMs: the balloon
 
 Kernel config needed in the guest: `CONFIG_VIRTIO_BALLOON=y` and `CONFIG_PAGE_REPORTING=y`. Both
 kernels have them. The guest reports `page_reporting_order=9` (2 MiB blocks).
@@ -181,7 +286,7 @@ Balloon config for every VM, before `InstanceStart`:
 PUT /balloon {"amount_mib":0,"deflate_on_oom":true,"stats_polling_interval_s":1,"free_page_reporting":true}
 ```
 
-## 7. Resume detection inside the guest
+### 7. Resume detection inside the guest
 
 The guest can see a resume without the host: the VMGenID device changes and the kernel logs
 `random: crng reseeded due to virtual machine fork`. The CI kernel also has `/dev/vmclock0`
@@ -190,51 +295,7 @@ agent does not use either: the host already knows when it woke the VM, and the a
 the correct time without the host. The clocks do not jump at resume, so a monotonic-against-realtime
 check sees nothing.
 
-## 8. Recommendations for packages/daemon
+### Open: slow wakes after back-to-back cycles
 
-`sleep(imp)`, in order:
-
-1. Refuse if a sleep or wake is already running for this imp (a per-imp lock).
-2. `PATCH /vm {"state":"Paused"}`.
-3. `PUT /snapshot/create` to `vmstate.new` and `mem.new` (Full, `sync_snapshot_files: true`). On
-   failure: `PATCH /vm {"state":"Resumed"}`, delete the `.new` files, report the error.
-4. SIGKILL Firecracker and wait for the pid to exit.
-5. Rename the `.new` files over `vmstate` and `mem`. Then `fallocate --dig-holes mem` (optional,
-   about 100-250 ms per GiB).
-6. Store in the DB: state `sleeping`, Firecracker version, snapshot format, `uname -r`, mem size.
-7. Delete `run/api.sock` and `run/vsock.sock`. Keep the tap.
-
-`wake(imp)`, in order:
-
-1. Reserve RAM in the governor. Expect a small start (about 20-40 MiB RSS) that grows to the working
-   set.
-2. Compare the stored versions with the current ones. On a mismatch: delete the snapshot and boot
-   cold.
-3. Check that the tap exists; create it if not (same name and /30). Delete `run/vsock.sock` and
-   `run/api.sock`.
-4. Start Firecracker detached (`setsid`). Wait for `api.sock`.
-5. `PUT /snapshot/load` with the File backend and `resume_vm: true` as the first call. If it fails
-   or Firecracker exits: boot cold.
-6. `ping` with retry, 10 s budget.
-7. Send `resumed` with `Date.now()`.
-8. Set the state to `running`. Keep the snapshot files until the next sleep or a stop (gotcha 3).
-
-Cold boot (all VMs): add the balloon config in section 6 before `InstanceStart`.
-
-## Open: slow wakes after back-to-back cycles
-
-A wake normally takes about 80 ms. When an imp is slept again within about a second of a wake or an
-exec, the next wake takes 650–850 ms, and the delay grows with each back-to-back cycle. A snapshot
-taken at least 3 s after a wake restores fast again.
-
-What was measured during a slow wake:
-
-- The agent accepts the vsock `CONNECT` at once but answers about 700 ms later.
-- Both vCPU threads are busy, mostly in kernel time, with only about 300 minor faults. Lazy page
-  loading is not the cause.
-- Disabling free page reporting does not help. Skipping the `resumed` clock set does not help.
-
-Working theory: the guest does about 0.7 s of kernel work after each resume (for example clock and
-timer catch-up, or deferred work queued while paused). A snapshot taken while that work is still
-running captures it, so the next resume repeats it and adds more. A minimum awake time of 3 s before
-an idle sleep avoids the problem in normal use; the idle timeout is far longer.
+A wake right after another wake or exec takes 650–850 ms instead of about 80 ms. Normal idle
+timeouts never hit it. [#33](https://github.com/zgeoff/imp/issues/33) tracks it.

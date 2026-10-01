@@ -1,0 +1,100 @@
+# Architecture overview
+
+imp is a self-hosted take on Fly.io Sprites: persistent Linux microVMs that boot in about a second,
+sleep when idle with their memory intact, wake on an HTTP request, and checkpoint, restore and fork
+their disks instantly. One host runs everything. The control plane, impd, lives in one privileged
+container next to the Firecracker processes it starts. Inside each guest, a small Go agent runs as
+PID 1 and talks to impd over vsock.
+
+This page gives the shape and the main decisions. The other architecture pages go deeper:
+
+- [Daemon](./daemon.md): the modules inside impd.
+- [Guest agent and kernel](./agent.md): how a guest boots, and the custom kernel.
+- [Agent protocol](./protocol.md): the host ↔ guest wire format.
+- [Storage and images](./storage.md): XFS reflinks, the data layout, OCI images to ext4.
+- [Networking](./networking.md): taps, /30s, iptables, the wake proxy and the URLs.
+- [Sleep and wake](./sleep-and-wake.md): memory snapshots, idle detection and the RAM governor.
+
+## Shape
+
+```text
+ CLI (bun)  ──oRPC/HTTP──┐
+ browser/curl ──HTTP─────┤
+                         ▼
+ ┌──────────── imp host container (privileged, own netns) ────────────┐
+ │  impd (bun)                                                        │
+ │   ├─ rpc        oRPC router (control) + WebSocket (exec streams)   │
+ │   ├─ proxy      wake-on-request HTTP/WebSocket proxy               │
+ │   ├─ imps       lifecycle service, one state machine per imp       │
+ │   ├─ governor   RAM budget; idle loop sleeps quiet imps            │
+ │   ├─ vmm        Firecracker API client (HTTP over unix socket)     │
+ │   ├─ agent      host side of the vsock agent protocol              │
+ │   ├─ images     OCI image → ext4 builder                           │
+ │   ├─ storage    XFS reflink clones, the data layout                │
+ │   ├─ net        tap devices, routes, iptables                      │
+ │   └─ db         Kysely + bun:sqlite                                │
+ │                                                                    │
+ │  firecracker ×N (detached; survive an impd restart)                │
+ │  tailscaled (optional)                                             │
+ └────────────────────────────────────────────────────────────────────┘
+                         │ virtio-blk / virtio-net / vsock
+                         ▼
+ ┌──────────────── guest (one per imp) ────────────────┐
+ │ /dev/vda  user rootfs (ext4, rw) from any OCI image  │
+ │ /dev/vdb  imp system drive (ro): imp-agent           │
+ │ PID 1 = imp-agent: mounts, network, service          │
+ │   supervisor, zombie reaper, exec/PTY over vsock     │
+ └──────────────────────────────────────────────────────┘
+```
+
+## Isolation: Firecracker microVMs
+
+- One Firecracker microVM per imp gives a hardware (KVM) boundary per tenant.
+- Firecracker over QEMU: about 5 MB of VMM overhead against 50–150 MB, fast snapshot and restore,
+  and a minimal device model. The cost: no GPU and no virtiofs.
+- The jailer is not used yet. The host container is the outer boundary. Add the jailer before
+  multi-tenant use ([#27](https://github.com/zgeoff/imp/issues/27)).
+- The guest has no inner container yet. Fly runs user code in a container inside the VM, so the
+  agent survives a user who breaks PID 1 or runs `rm -rf /`. imp runs user code next to the agent.
+  That risk is accepted for a personal platform ([#28](https://github.com/zgeoff/imp/issues/28)).
+
+## Host: one privileged container
+
+- impd, Firecracker and tailscaled run in one container, started with
+  `--privileged --device /dev/kvm` and its **own** network namespace. Taps, routes and iptables
+  never touch the host's network. The same image runs on bare metal.
+- The host Docker socket is mounted, so impd can build and export OCI images.
+- Data lives in `/var/lib/imp`, backed by a host bind mount
+  ([storage](./storage.md#the-data-directory)).
+- The container entrypoint (`host/entrypoint`) sets up storage, the network and Tailscale, then runs
+  impd under a small supervisor that restarts it when it exits on its own.
+
+## Control plane and API
+
+- Bun workspaces: `packages/api` (the oRPC contract and zod schemas), `packages/daemon` (impd) and
+  `packages/cli` (the `imp` CLI).
+- Control calls are oRPC procedures over HTTP at `/rpc`. Exec and console use a WebSocket at
+  `/exec`, because they need two-way streams. `/health` answers without auth.
+- Auth: impd makes a bearer token on first start and stores it in `/var/lib/imp/token`. The proxy is
+  open to anything that can reach it; the tailnet ACL is the boundary.
+- State is in SQLite through Kysely on `bun:sqlite`. Migrations live in code.
+
+## Repo layout
+
+```text
+agent/            Go guest agent (PID 1, vsock server)
+packages/api      oRPC contract and shared types
+packages/daemon   impd
+packages/cli      imp CLI
+images/base       thin base image
+images/dev        example dev image
+host/             host container Dockerfile, entrypoint, storage, network and tailnet setup
+kernel/           guest kernel config and build
+scripts/          acceptance.sh and dev helpers
+docs/             this documentation
+```
+
+## Not yet
+
+The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what is left: the jailer, an inner
+container, memory forks, more than one host, off-host backups and more.

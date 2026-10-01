@@ -1,5 +1,5 @@
 // Package server accepts host connections on vsock and dispatches requests.
-// One request per connection; see PROTOCOL.md.
+// One request per connection; see docs/architecture/protocol.md.
 package server
 
 import (
