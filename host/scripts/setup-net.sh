@@ -25,7 +25,10 @@ rule() {
   iptables -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -t "$table" -A "$chain" "$@"
 }
 
-rule nat POSTROUTING -s 10.66.0.0/16 -o "$out" -j MASQUERADE
+# IMP_SUBNET is the pool impd carves guest /30s from; keep the default in
+# step with packages/daemon/src/config.ts.
+subnet=${IMP_SUBNET:-10.66.0.0/16}
+rule nat POSTROUTING -s "$subnet" -o "$out" -j MASQUERADE
 # No imp-to-imp traffic.
 rule filter FORWARD -i imp+ -o imp+ -j DROP
 rule filter FORWARD -i imp+ -o "$out" -j ACCEPT
@@ -48,4 +51,4 @@ for dir in -i -o; do
   rule mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp[@]}"
 done
 
-echo "setup-net: forwarding imp+ via $out (mss: ${clamp[*]})"
+echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]})"
