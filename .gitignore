@@ -1,0 +1,7 @@
+.cache/
+node_modules/
+*.img
+*.ext4
+.env
+.env.*
+!.env.example
