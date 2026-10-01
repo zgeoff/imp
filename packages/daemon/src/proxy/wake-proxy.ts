@@ -5,6 +5,7 @@ import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpRuntime } from '../imps/imp-runtime';
+import { createSemaphore } from '../imps/semaphore';
 import { deriveSlotAddress } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
@@ -55,6 +56,8 @@ export interface WakeProxy {
 export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   const listeners = new Map<string, { readonly slot: number; readonly server: ProxyServer }>();
   const failedSlots = new Set<number>();
+
+  const syncSlot = createSemaphore(1);
 
   const websocket: WebSocketHandler<SocketData> = {
     open: (ws) => {
@@ -241,8 +244,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
 
   deps.log(`impd: proxy on :${String(deps.config.proxyPort)}`);
 
-  return {
-    syncListeners: async () => {
+  // one at a time: a pass that read the imps before a destroy must not
+  // re-add a listener after a later pass removed it
+  const runListenerSync = (): Promise<void> =>
+    syncSlot.run(async () => {
       const imps = await listImps(deps.db);
 
       const wanted = new Map(imps.map((imp) => [imp.id, imp]));
@@ -275,7 +280,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
           }
         }
       }
-    },
+    });
+
+  return {
+    syncListeners: runListenerSync,
     stop: async () => {
       await Promise.all([
         main.stop(true),
