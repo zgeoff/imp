@@ -2,9 +2,11 @@
 # Run impd in one long-lived dev host container (imp-dev).
 #
 #   scripts/dev.sh up        build what is missing, start the container, wait for impd
-#   scripts/dev.sh down      remove the container (VMs stop; data stays in .data/dev)
+#   scripts/dev.sh down      stop the container (impd sleeps every imp first, so
+#                            memory survives) and remove it; data stays in .data/dev
+#   scripts/dev.sh reboot    down, then up: imps come back asleep and wake on demand
 #   scripts/dev.sh logs      follow the container log
-#   scripts/dev.sh restart   restart impd only; running VMs survive and are re-adopted
+#   scripts/dev.sh restart   restart impd only (SIGHUP); running VMs survive and are re-adopted
 #   scripts/dev.sh shell     open a shell in the container
 #   scripts/dev.sh token     print the API token (for IMP_TOKEN)
 #
@@ -15,6 +17,9 @@
 #      IMP_KERNEL (default kernel/out/vmlinux, else .cache/vmlinux-ci) is the guest kernel.
 #      IMP_SYSTEM_DRIVE (default build/imp-system.squashfs) is the system drive.
 #      Both are repo-relative or absolute paths under the repo.
+#      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
+#      IMP_IDLE_CPU_PERCENT, IMP_RAM_BUDGET_MIB, IMP_BOOT_RESERVE_PERCENT,
+#      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -23,6 +28,10 @@ name=${IMP_DEV_NAME:-imp-dev}
 offset=${IMP_DEV_PORT_OFFSET:-0}
 data=${IMP_DEV_DATA:-$IMP_ROOT/.data/dev}
 api=http://localhost:$((7070 + offset))
+
+# an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
+tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
+  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -91,8 +100,11 @@ up() {
     docker rm -f "$name" >/dev/null 2>&1 || true
     mkdir -p "$data"
     # .env holds TAILSCALE_AUTHKEY; docker reads it, so it is never echoed
-    local env_file=()
+    local env_file=() tuning=() var
     [ -f "$IMP_ROOT/.env" ] && env_file=(--env-file "$IMP_ROOT/.env")
+    for var in "${tuning_vars[@]}"; do
+      [ -n "${!var:-}" ] && tuning+=(-e "$var=${!var}")
+    done
     # The repo is also mounted at its own path, so `imp image build <dir>`
     # paths the CLI resolves on this machine exist in the container.
     # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
@@ -107,7 +119,7 @@ up() {
       -e IMP_UPLINK_MTU="$(read_uplink_mtu)" \
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
-      -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" \
+      -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
       "$IMP_HOST_IMAGE" >/dev/null
     echo "dev.sh: started $name"
   fi
@@ -115,19 +127,33 @@ up() {
   echo "dev.sh: impd ready on $api (token: scripts/dev.sh token)"
 }
 
+# down gives impd time to sleep every imp (SIGTERM), so memory survives
+down() {
+  if is_running; then
+    docker stop -t 120 "$name" >/dev/null
+    docker logs --tail 5 "$name" 2>&1 | grep 'every imp asleep' || true
+  fi
+  docker rm -f "$name" >/dev/null 2>&1 || true
+}
+
 case ${1:-} in
   up) up ;;
-  down) docker rm -f "$name" >/dev/null 2>&1 || true ;;
+  down) down ;;
+  reboot)
+    down
+    up
+    ;;
   logs) docker logs -f "$name" ;;
   restart)
-    docker exec "$name" pkill -TERM -f 'bun .*/daemon/src/main.ts' || true
+    # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it
+    docker exec "$name" pkill -HUP -f 'bun .*/daemon/src/main.ts' || true
     sleep 1
     wait_ready 60
     ;;
   shell) docker exec -it "$name" bash ;;
   token) docker exec "$name" cat /var/lib/imp/token ;;
   *)
-    echo "usage: $0 up|down|logs|restart|shell|token" >&2
+    echo "usage: $0 up|down|reboot|logs|restart|shell|token" >&2
     exit 2
     ;;
 esac
