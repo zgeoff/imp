@@ -25,6 +25,9 @@ import (
 // session open forever.
 const drainGrace = 500 * time.Millisecond
 
+// exitLinger bounds how long a session waits for the host to close after EXIT.
+const exitLinger = 2 * time.Second
+
 // hangupGrace bounds how long a session waits for its process after the host
 // connection drops (for example a vsock reset on snapshot restore). A process
 // that ignores SIGHUP keeps running, but no longer counts as a session.
@@ -97,7 +100,15 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	if st.Signal != 0 {
 		exit = proto.Exit{Code: 128 + int(st.Signal), Signal: int(st.Signal)}
 	}
-	return w.WriteJSON(proto.TypeExit, exit)
+	err = w.WriteJSON(proto.TypeExit, exit)
+	// The host closes once it has EXIT. Read until then: a host frame that
+	// races the exit (stdin EOF) must not hit a closed socket, or the host
+	// loses the EXIT frame to EPIPE.
+	select {
+	case <-hangup:
+	case <-time.After(exitLinger):
+	}
+	return err
 }
 
 type output struct {
