@@ -118,28 +118,31 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
   return {
     // a sleeping imp wakes and a stopped one boots, as for an HTTP request
+    // The session counts from the moment the imp is found, before any wake,
+    // so no background sleep slips in between the wake and the exec.
     openExec: async (name, request) => {
-      const running = await requireRunning(name);
-
-      const imp = running.imp;
-
-      await updateImpActivity(context.db, imp.id, new Date());
-
-      const release = context.tracker.open(imp.id, 'exec');
+      const opened = { release: () => {} };
 
       try {
+        const running = await requireRunning(name, (found) => {
+          opened.release = context.tracker.open(found.id, 'exec');
+        });
+
+        const imp = running.imp;
+
+        await updateImpActivity(context.db, imp.id, new Date());
+
         const stream = await openExecStream(context.findPaths(imp.id).vsockSocket, request);
 
         return {
           ...stream,
           close: () => {
-            release();
-
+            opened.release();
             stream.close();
           },
         };
       } catch (error) {
-        release();
+        opened.release();
         throw error;
       }
     },

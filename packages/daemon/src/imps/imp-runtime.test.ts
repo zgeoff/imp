@@ -89,3 +89,30 @@ test('impd stopping sleeps held and connected imps too', async () => {
 
   expect(imp?.state).toBe('sleeping');
 });
+
+test('exec counts its session before the wake and drops it when the wake fails', async () => {
+  await using ctx = await setupRunningImp();
+
+  const id = ctx.impId;
+
+  await ctx.imps.stopImp('dev');
+
+  const gate = Promise.withResolvers<void>();
+
+  ctx.fake.control.bootGate = gate.promise;
+  ctx.fake.control.failBoot = true;
+
+  const exec = ctx.imps.openExec('dev', { argv: ['true'], tty: false });
+
+  await Bun.sleep(5);
+
+  const during = ctx.imps.tracker.count(id, 'exec');
+
+  gate.resolve();
+
+  const rejection = await exec.catch((error: unknown) => error);
+
+  expect(during).toBe(1);
+  expect(rejection).toBeInstanceOf(Error);
+  expect(ctx.imps.tracker.count(id)).toBe(0);
+});
