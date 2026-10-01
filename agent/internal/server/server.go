@@ -14,6 +14,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/services"
 )
 
@@ -35,6 +36,9 @@ type Server struct {
 	// freezeGen counts freezes and thaws. An auto-thaw timer only acts if
 	// no freeze or thaw happened since it was armed.
 	freezeGen uint64
+	frozen    bool
+	// poweringOff refuses freezes once poweroff has thawed for good.
+	poweringOff bool
 }
 
 // Listen backoff bounds. A snapshot restore resets the vsock transport; the
@@ -80,6 +84,8 @@ func (s *Server) Serve(listen func() (net.Listener, error)) error {
 
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
+	// A panic in a request drops its connection, not the agent.
+	defer safe.Recover("request", nil)
 	r, w := proto.NewReader(c), proto.NewWriter(c)
 
 	c.SetReadDeadline(time.Now().Add(requestTimeout))
@@ -104,7 +110,7 @@ func (s *Server) handle(c net.Conn) {
 		}
 		return
 	}
-	resp, err := s.unary(req)
+	resp, err := s.safeUnary(req)
 	if err != nil {
 		var pe *proto.Error
 		if !errors.As(err, &pe) {
@@ -118,6 +124,14 @@ func (s *Server) handle(c net.Conn) {
 		c.Close()
 		s.Shutdown()
 	}
+}
+
+// safeUnary runs unary and turns a panic into an INTERNAL reply.
+func (s *Server) safeUnary(req proto.Request) (resp any, err error) {
+	defer safe.Recover("request "+req.Op, func() {
+		resp, err = nil, &proto.Error{Code: proto.ErrInternal, Message: "agent panic in " + req.Op}
+	})
+	return s.unary(req)
 }
 
 func (s *Server) unary(req proto.Request) (any, error) {
