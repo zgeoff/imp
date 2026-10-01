@@ -191,11 +191,12 @@ export function createVmRunner(): VmRunner {
       rmSync(files.snapshotPath, { force: true });
       rmSync(files.memFilePath, { force: true });
 
-      await api.pause();
-
-      setMark('pause');
-
+      // a pause that times out may still land: resume or kill either way
       try {
+        await api.pause();
+
+        setMark('pause');
+
         await api.createSnapshot(files);
       } catch (error) {
         rmSync(files.snapshotPath, { force: true });
