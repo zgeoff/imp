@@ -19,7 +19,7 @@
 #      Both are repo-relative or absolute paths under the repo.
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
 #      IMP_IDLE_CPU_PERCENT, IMP_RAM_BUDGET_MIB, IMP_BOOT_RESERVE_PERCENT,
-#      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB.
+#      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -31,7 +31,7 @@ api=http://localhost:$((7070 + offset))
 
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
-  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB)
+  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -145,9 +145,17 @@ case ${1:-} in
     ;;
   logs) docker logs -f "$name" ;;
   restart)
-    # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it
-    docker exec "$name" pkill -HUP -f 'bun .*/daemon/src/main.ts' || true
-    sleep 1
+    # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it.
+    # Wait for the old pid to go, so /health answers from the new impd.
+    old=$(docker exec "$name" pgrep -f 'bun .*/daemon/src/main.ts' || true)
+    if [ -n "$old" ]; then
+      docker exec "$name" kill -HUP $old
+      deadline=$((SECONDS + 30))
+      while docker exec "$name" kill -0 $old 2>/dev/null; do
+        [ $SECONDS -lt $deadline ] || { echo "dev.sh: impd $old did not exit" >&2; exit 1; }
+        sleep 0.2
+      done
+    fi
     wait_ready 60
     ;;
   shell) docker exec -it "$name" bash ;;
