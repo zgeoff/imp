@@ -1,43 +1,94 @@
 # imp — status
 
-Updated at each milestone. Newest state at the top of each section.
-
 ## Milestones
 
-| #   | Milestone                                                                       | State       |
-| --- | ------------------------------------------------------------------------------- | ----------- |
-| M0  | Firecracker boots under nested KVM inside a privileged container                | done        |
-| M1  | Walking skeleton: agent as PID 1 from a read-only system drive, exec over vsock | done        |
-| M2  | Workspace, API contract, db, addressing                                         | done        |
-| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done        |
-| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done        |
-| M5  | Checkpoint, restore, fork (XFS reflink)                                         | done        |
-| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | done        |
-| M7  | RAM governor (budget, LRU sleep), scale test                                    | done        |
-| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | done        |
-| M9  | Tailscale                                                                       | done        |
-| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | in progress |
+| #   | Milestone                                                                       | State |
+| --- | ------------------------------------------------------------------------------- | ----- |
+| M0  | Firecracker boots under nested KVM inside a privileged container                | done  |
+| M1  | Walking skeleton: agent as PID 1 from a read-only system drive, exec over vsock | done  |
+| M2  | Workspace, API contract, db, addressing                                         | done  |
+| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done  |
+| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done  |
+| M5  | Checkpoint, restore, fork (XFS reflink)                                         | done  |
+| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | done  |
+| M7  | RAM governor (budget, LRU sleep), scale test                                    | done  |
+| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | done  |
+| M9  | Tailscale                                                                       | done  |
+| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | done  |
+
+## Acceptance
+
+`scripts/acceptance.sh --clean` passed twice in a row on 2026-10-02 (WSL2 dev box, nested KVM).
+
+| Section           | Run 1  | Run 2  |
+| ----------------- | ------ | ------ |
+| 0 setup           | 24.3 s | 23.5 s |
+| 1 shell           | 3.6 s  | 3.4 s  |
+| 2 docker          | 8.9 s  | 8.5 s  |
+| 3 byo-image       | 5.8 s  | 5.7 s  |
+| 4 checkpoint-fork | 4.0 s  | 3.9 s  |
+| 5 sleep-wake      | 14.5 s | 14.9 s |
+| 6 scale           | 75.5 s | 75.2 s |
+| 7 restart         | 9.2 s  | 12.3 s |
+| 8 tailscale       | 6.4 s  | 4.4 s  |
+
+Scale test (section 6): RAM budget 6144 MiB, 30 imps of 512 MiB, each filling 256 MiB of tmpfs. At
+most 19 imps were awake at once; 21–22 were asleep after all 30 existed. Peak usage was 3167–3168
+MiB as measured by impd and 3170–3204 MiB as independent Firecracker PSS. The budget held at every
+one of about 122 samples.
 
 ## Measured
 
-| What                                 | Value      | Notes                                                                                 |
-| ------------------------------------ | ---------- | ------------------------------------------------------------------------------------- |
-| Stock VM boot to init                | ~930 ms    | CI kernel 6.1.155, nested KVM on WSL2, 50 ms poll granularity                         |
-| XFS reflink of a 500 MB file         | 321 ms     | includes `cp` process start in an Alpine container                                    |
-| InstanceStart → agent ping           | 412–464 ms | agent as PID 1 from squashfs, switch_root to ext4; kernel ~275 ms, init→listen ~60 ms |
-| Reflink clone of a 32G sparse rootfs | 3 ms       | in the host container                                                                 |
-| Sleep, 512 MiB guest                 | 0.5-2.1 s  | snapshot 0.4-2.1 s, dig holes 50-80 ms; mem file 50-60 MiB on disk                    |
-| Wake, impd log (FC start to resumed) | 59-101 ms  | load 30-55 ms, agent 21-40 ms; up to 1 s when the snapshot came right after a wake    |
-| HTTP request that wakes an imp       | 89-116 ms  | through the proxy, request to response; `x-imp-wake-ms` 72-97                         |
-| Idle 512 MiB ubuntu guest RAM        | 58-66 MiB  | anonymous (governor count) after boot; 3-6 MiB right after a wake                     |
-| Idle Firecracker CPU                 | 0.4%       | of one core                                                                           |
-| Sleep every imp on SIGTERM           | 1.7-2.5 s  | 5 imps, 410 MiB each, 2 at a time                                                     |
-| Checkpoint of a running imp          | 61–62 ms   | freeze (sync + FIFREEZE) + reflink + thaw, impd side; CLI round trip 89 ms            |
-| Restore of a running imp             | 649–654 ms | graceful stop + reflink + rename + cold boot to agent ping                            |
+From the two acceptance runs:
+
+| What                             | Run 1                | Run 2                |
+| -------------------------------- | -------------------- | -------------------- |
+| `imp new` + first exec           | 683 ms               | 588 ms               |
+| Create (30 imps) p50 / p95 / max | 589 / 1207 / 1223 ms | 589 / 1230 / 3334 ms |
+| Wake (30 imps) p50 / p95 / max   | 282 / 1641 / 5845 ms | 291 / 1307 / 4586 ms |
+| HTTP request that wakes an imp   | 141 ms               | 99 ms                |
+| Per-imp RAM (256 MiB filled)     | 317 MiB              | 317 MiB              |
+| Idle → asleep (timeout 10 s)     | 9.2 s                | 9.7 s                |
+| RAM freed by sleep (idle imp)    | 90 MiB               | 88 MiB               |
+| Checkpoint of a running imp      | 95 ms                | 100 ms               |
+| Restore of a running imp         | 653 ms               | 632 ms               |
+| Live fork + boot                 | 633 ms               | 647 ms               |
+| impd restart                     | 1.4 s                | 4.6 s                |
+
+The long wake tail in the scale test comes from waking 30 imps one after another while the governor
+sleeps others to make room, on a nested-virtualization host.
+
+From the milestone work:
+
+| What                                 | Value                     | Notes                                                 |
+| ------------------------------------ | ------------------------- | ----------------------------------------------------- |
+| InstanceStart → agent ping           | 431–482 ms                | custom kernel; kernel ~275 ms, init → listen ~60 ms   |
+| Reflink clone of a 32G sparse rootfs | 3 ms                      | in the host container                                 |
+| dockerd ready after the agent ping   | 0.7–1.3 s                 | images/base                                           |
+| Idle base imp with dockerd           | 348 MiB host RSS          | 2 GiB guest; 567 MiB with nginx running               |
+| Idle 512 MiB guest, no dockerd       | 58–66 MiB                 | anonymous memory, the governor's measure              |
+| Wake inside impd                     | 59–101 ms                 | load 30–55 ms + agent 21–40 ms; pages fault in lazily |
+| Sleep, 512 MiB guest                 | 0.5–2.1 s                 | memory file 50–60 MiB on disk after `--dig-holes`     |
+| Sleep every imp on SIGTERM           | 1.7–2.5 s                 | 5 imps                                                |
+| Free page reporting                  | 988 → 91 MiB RSS          | ~15 s after the guest frees 900 MiB                   |
+| Image sizes (unpacked)               | base 490 MiB, dev 1.7 GiB |                                                       |
+| Guest kernel build                   | 8m35s first, ~32 s again  | `kernel/build.sh`                                     |
+
+## Known gaps
+
+- A wake right after another wake or exec (under ~1 s apart) takes 650–850 ms instead of ~80 ms. See
+  `docs/sleep-findings.md`. Normal idle timeouts never hit it.
+- The WebSocket relay through the wake proxy was tested by hand, not in an e2e script.
+- No jailer and no inner container in the guest yet (DESIGN.md section 4).
+- `scripts/e2e-*.sh` and the prototype `smoke-*.sh` / `proto-sleep.sh` scripts overlap with
+  `scripts/acceptance.sh`. Fold or retire them.
+- The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
+  already prevents. Remove it.
 
 ## Next
 
-- Finish `scripts/acceptance.sh` (M10).
+- Deploy to bare metal: a server with KVM, XFS on a real partition, and a non-ephemeral tagged
+  Tailscale key.
 
 ## Blockers
 
@@ -47,5 +98,6 @@ None.
 
 - The dev box is WSL2 with nested virtualization. Expect bare metal to be faster.
 - WSL 6.6 kernel: `mkfs.xfs` needs `-i nrext64=0,exchange=0 -n parent=0`.
-- Guests use a custom 6.1.188 kernel (`kernel/build.sh`): the CI kernel lacks nftables and the
-  iptables raw table that Docker 28+ needs. First build 8m35s; rebuilds about 32s.
+- WSL's uplink MTU is 1360; `setup-net.sh` clamps guest TCP MSS to match.
+- Guests use a custom 6.1.188 kernel: the CI kernel lacks nftables and the iptables raw table that
+  Docker 28+ needs.
