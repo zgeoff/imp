@@ -156,14 +156,31 @@ func TestExec(t *testing.T) {
 // TestSignalBehindUnreadStdin checks that a SIGNAL frame still arrives when
 // the process never reads the stdin queued ahead of it.
 func TestSignalBehindUnreadStdin(t *testing.T) {
-	h := startExec(t, newManager(), proto.Request{Argv: []string{"sleep", "30"}})
-	h.started(t)
-	h.send(t, proto.TypeStdin, bytes.Repeat([]byte("x"), 512<<10))
-	sig, _ := json.Marshal(proto.Signal{Signal: int(syscall.SIGTERM)})
-	h.send(t, proto.TypeSignal, sig)
-	_, exit := h.wait(t, 3*time.Second)
-	if exit.Signal != int(syscall.SIGTERM) {
-		t.Fatalf("exit %+v, want SIGTERM", exit)
+	tests := []struct {
+		name          string
+		frames, bytes int
+	}{
+		// More than the pipe buffer holds.
+		{"one large frame", 1, 512 << 10},
+		// Keystrokes typed into a program that hangs, once the pipe is
+		// full: each takes a queue slot.
+		{"many small frames", 500, 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := startExec(t, newManager(), proto.Request{Argv: []string{"sleep", "30"}})
+			h.started(t)
+			h.send(t, proto.TypeStdin, bytes.Repeat([]byte("x"), 128<<10))
+			for range tt.frames {
+				h.send(t, proto.TypeStdin, bytes.Repeat([]byte("x"), tt.bytes))
+			}
+			sig, _ := json.Marshal(proto.Signal{Signal: int(syscall.SIGTERM)})
+			h.send(t, proto.TypeSignal, sig)
+			_, exit := h.wait(t, 3*time.Second)
+			if exit.Signal != int(syscall.SIGTERM) {
+				t.Fatalf("exit %+v, want SIGTERM", exit)
+			}
+		})
 	}
 }
 

@@ -32,16 +32,17 @@ const hangupGrace = time.Second
 
 // stdin flow control. The host frames arrive on one ordered stream, read by
 // one goroutine that also applies RESIZE and SIGNAL. Writes to the child's
-// stdin happen on a separate writer goroutine, fed through a queue of at
-// most stdinQueueChunks chunks of stdinChunk bytes. A child that stops
-// reading stdin fills the queue, not the reader, so RESIZE and SIGNAL
-// frames that follow stay deliverable until stdinQueueChunks*stdinChunk
-// bytes are pending. Past that the reader blocks, which pushes back on the
-// host; frames behind the pending stdin then wait too, because the stream
-// is ordered.
+// stdin happen on a separate writer goroutine, fed through a queue of
+// stdinQueueChunks slots. A STDIN frame takes one slot per stdinChunk bytes
+// or part of it, so the queue holds 1024 frames or 4 MiB, whichever comes
+// first. A child that stops reading stdin fills the queue, not the reader,
+// so RESIZE and SIGNAL frames that follow stay deliverable until the queue
+// is full. Past that the reader blocks, which pushes back on the host;
+// frames behind the pending stdin then wait too, because the stream is
+// ordered.
 const (
-	stdinChunk       = 64 << 10
-	stdinQueueChunks = 64
+	stdinChunk       = 4 << 10
+	stdinQueueChunks = 1024
 )
 
 // Manager runs exec sessions and counts the live ones.
