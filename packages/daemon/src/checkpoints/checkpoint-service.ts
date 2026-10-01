@@ -228,14 +228,20 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const paths = buildImpPaths(deps.config.dataDir, imp.id);
         const wasAwake = imp.state === 'running' || imp.state === 'sleeping';
         const started = performance.now();
-
-        const halted = await deps.imps.haltImp(imp);
-
         const staged = `${paths.disk}.new`;
 
+        // the clone comes first: when it fails, the imp keeps running or
+        // keeps its memory snapshot
         rmSync(staged, { force: true });
 
-        await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), staged);
+        try {
+          await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), staged);
+        } catch (error) {
+          rmSync(staged, { force: true });
+          throw error;
+        }
+
+        const halted = await deps.imps.haltImp(imp);
 
         renameSync(staged, paths.disk);
 

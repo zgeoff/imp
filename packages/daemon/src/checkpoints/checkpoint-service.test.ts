@@ -306,3 +306,27 @@ test('it deletes a checkpoint by label, and destroy removes the rest', async () 
 
   expect(rows).toEqual([]);
 });
+
+test('a restore whose clone fails leaves a sleeping imp asleep with its memory', async () => {
+  await using ctx = await setupTest();
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  await ctx.checkpoints.createCheckpoint('dev', 'v1');
+  await ctx.imps.sleepImp('dev');
+
+  ctx.state.failClone = true;
+
+  const rejection = await ctx.checkpoints
+    .restoreCheckpoint('dev', 'v1')
+    .catch((error: unknown) => error);
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(rejection).toMatchObject({ message: 'clone failed' });
+  expect(record?.state).toBe('sleeping');
+  expect(existsSync(paths.memFile)).toBe(true);
+  expect(existsSync(`${paths.disk}.new`)).toBe(false);
+});
