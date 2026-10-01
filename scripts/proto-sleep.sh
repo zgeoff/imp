@@ -3,7 +3,7 @@
 # in-memory proof that survives them, and virtio-balloon RAM reclamation.
 # Prints measurements as "## key value" lines. Findings: docs/sleep-findings.md.
 #
-#   scripts/proto-sleep.sh [phase...]     phases: sleep big balloon (default: all)
+#   scripts/proto-sleep.sh [phase...]     phases: sleep big balloon run (default: all but run)
 #
 # Env: IMP_DATA (default <repo>/.data-proto-sleep) holds this script's own XFS
 #        file, so it never mounts the one smoke-boot.sh uses.
@@ -379,6 +379,19 @@ phase_balloon() {
   shutdown_fc
 }
 
+# phase_run checks that /run is a fresh tmpfs on every cold boot, so stale
+# pid files (dockerd, containerd) cannot survive a reboot on the disk.
+phase_run() {
+  echo "=== phase run"
+  fresh_disk
+  boot 1024
+  gx 'echo "/run is $(findmnt -n -o FSTYPE /run); system drive at $(findmnt -n -o TARGET /run/imp/sys)"; echo 1 > /run/stale.pid'
+  shutdown_fc
+  boot 1024
+  gx 'if [ -e /run/stale.pid ]; then echo "FAIL: /run/stale.pid survived a reboot"; exit 1; fi; echo "/run is clean after a cold boot"'
+  shutdown_fc
+}
+
 shutdown_fc() {
   ctl shutdown >/dev/null || true
   for _ in $(seq 100); do kill -0 "$fc_pid" 2>/dev/null || break; sleep 0.05; done
@@ -394,6 +407,7 @@ inner() {
       sleep) phase_sleep 1024 0 ;;
       big) phase_sleep 2048 300 ;;
       balloon) phase_balloon ;;
+      run) phase_run ;;
       *) echo "unknown phase $p"; exit 2 ;;
     esac
   done

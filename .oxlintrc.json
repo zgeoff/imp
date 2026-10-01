@@ -49,6 +49,8 @@
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
           // the Kysely handle above under its schema-bound alias
           { "from": "file", "name": "ImpDatabase" },
+          // a live socket; reading and writing it is the point
+          { "from": "package", "name": "Socket", "package": "node:net" },
           // dependency bags that carry the live db handle
           { "from": "file", "name": ["RouterDeps", "AppDeps"] },
           // already the readonly form, or a value type with no readonly form,

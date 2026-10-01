@@ -18,6 +18,9 @@ test('it fills every setting from its default when the env is empty', () => {
     firecrackerBin: 'firecracker',
     kernelPath: '/var/lib/imp/system/vmlinux',
     systemDrivePath: '/var/lib/imp/system/imp-system.squashfs',
+    kernelSource: null,
+    systemDriveSource: null,
+    defaultImage: 'base',
     tailscaleAuthKey: null,
   });
 });
@@ -28,6 +31,7 @@ test('it reads and coerces values from the env', () => {
     IMP_API_PORT: '9000',
     IMP_DNS: '9.9.9.9 , 1.0.0.1',
     IMP_SUBNET: '10.99.0.0/24',
+    IMP_KERNEL: '/src/kernel/out/vmlinux',
     TAILSCALE_AUTHKEY: 'tskey-auth-test',
   });
 
@@ -36,6 +40,7 @@ test('it reads and coerces values from the env', () => {
   expect(config.dns).toEqual(['9.9.9.9', '1.0.0.1']);
   expect(config.subnet.prefixLength).toBe(24);
   expect(config.kernelPath).toBe('/tmp/imp/system/vmlinux');
+  expect(config.kernelSource).toBe('/src/kernel/out/vmlinux');
   expect(config.tailscaleAuthKey).toBe('tskey-auth-test');
 });
 

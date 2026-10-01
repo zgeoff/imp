@@ -21,6 +21,7 @@ const EnvSchema = z.object({
   IMP_FIRECRACKER_BIN: z.string().default('firecracker'),
   IMP_KERNEL: z.string().optional(),
   IMP_SYSTEM_DRIVE: z.string().optional(),
+  IMP_DEFAULT_IMAGE: z.string().default('base'),
   TAILSCALE_AUTHKEY: z.string().optional(),
 });
 
@@ -38,6 +39,15 @@ export interface Config {
   readonly firecrackerBin: string;
   readonly kernelPath: string;
   readonly systemDrivePath: string;
+
+  // where impd copies the kernel and the system drive from on start, so a
+  // rebuild never changes a file a running VM has open
+  readonly kernelSource: string | null;
+  readonly systemDriveSource: string | null;
+
+  // the image `imps.create` uses when none is named; `ubuntu` stands in until
+  // one by this name exists
+  readonly defaultImage: string;
   readonly tailscaleAuthKey: string | null;
 }
 
@@ -70,9 +80,11 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     dns: parsed.IMP_DNS,
     subnet,
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
-    kernelPath: parsed.IMP_KERNEL ?? join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
-    systemDrivePath:
-      parsed.IMP_SYSTEM_DRIVE ?? join(parsed.IMP_DATA_DIR, 'system', 'imp-system.squashfs'),
+    kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
+    systemDrivePath: join(parsed.IMP_DATA_DIR, 'system', 'imp-system.squashfs'),
+    kernelSource: parsed.IMP_KERNEL ?? null,
+    systemDriveSource: parsed.IMP_SYSTEM_DRIVE ?? null,
+    defaultImage: parsed.IMP_DEFAULT_IMAGE,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
   };
 }

@@ -198,3 +198,13 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
 function toDate(ms: number | null): Date | null {
   return ms === null ? null : new Date(ms);
 }
+
+export async function countImpsUsingImage(db: ImpDatabase, imageId: string): Promise<number> {
+  const row = await db
+    .selectFrom('imps')
+    .select((eb) => eb.fn.countAll<number>().as('count'))
+    .where('image_id', '=', imageId)
+    .executeTakeFirstOrThrow();
+
+  return row.count;
+}

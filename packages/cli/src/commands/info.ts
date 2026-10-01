@@ -1,11 +1,19 @@
 import { defineCommand } from 'citty';
+import { formatJson } from '../format-output';
 import { runAction } from '../run-action';
 
 export const infoCommand = defineCommand({
   meta: { name: 'info', description: 'Show impd version, RAM budget and counts' },
-  run: () =>
+  args: { json: { type: 'boolean', description: 'print JSON' } },
+  run: (context) =>
     runAction(async (client) => {
       const info = await client.system.info();
+
+      if (context.args.json === true) {
+        console.log(formatJson(info));
+
+        return;
+      }
 
       const lines = [
         ['version', info.version],

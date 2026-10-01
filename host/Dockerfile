@@ -32,3 +32,8 @@ RUN curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/down
 COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
 
 COPY scripts/ /usr/local/lib/imp/
+COPY entrypoint /usr/local/bin/imp-entrypoint
+
+EXPOSE 7070 7080
+# CMD, not ENTRYPOINT: the build scripts run their own commands in this image.
+CMD ["/usr/local/bin/imp-entrypoint"]

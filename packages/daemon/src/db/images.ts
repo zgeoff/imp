@@ -73,3 +73,30 @@ function toImageRecord(row: Readonly<Selectable<DatabaseSchema['images']>>): Ima
     createdAt: new Date(row.created_at),
   };
 }
+
+// points an image name at a new build; imps keep their own disks, so the
+// old rootfs is no longer needed by them
+export async function updateImage(
+  db: ImpDatabase,
+  id: string,
+  image: Readonly<Omit<NewImage, 'name'>>,
+): Promise<ImageRecord> {
+  const row = await db
+    .updateTable('images')
+    .set({ ref: image.ref, digest: image.digest, size_bytes: image.sizeBytes })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  return toImageRecord(row);
+}
+
+export async function countImageDigestUses(db: ImpDatabase, digest: string): Promise<number> {
+  const row = await db
+    .selectFrom('images')
+    .select((eb) => eb.fn.countAll<number>().as('count'))
+    .where('digest', '=', digest)
+    .executeTakeFirstOrThrow();
+
+  return row.count;
+}

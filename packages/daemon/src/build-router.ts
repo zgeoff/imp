@@ -1,14 +1,20 @@
 import { impContract } from '@imp/api';
-import type { SystemInfo } from '@imp/api';
+import type { Image, SystemInfo } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
 import type { Config } from './config';
-import { countImps } from './db/imps';
+import type { ImageRecord } from './db/images';
+import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { ImageService } from './images/image-service';
+import type { ImpService } from './imps/imp-service';
 
 export interface RouterDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
+  readonly imps: ImpService;
+  readonly images: ImageService;
+  readonly firecrackerVersion: string | null;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -16,14 +22,20 @@ export function buildRouter(deps: RouterDeps) {
 
   return os.router({
     imps: {
-      create: os.imps.create.handler(handleUnimplemented),
-      list: os.imps.list.handler(handleUnimplemented),
-      get: os.imps.get.handler(handleUnimplemented),
-      destroy: os.imps.destroy.handler(handleUnimplemented),
+      create: os.imps.create.handler((context) => deps.imps.createImp(context.input)),
+      list: os.imps.list.handler(() => deps.imps.listImps()),
+      get: os.imps.get.handler((context) => deps.imps.getImp(context.input.name)),
+      destroy: os.imps.destroy.handler(async (context) => {
+        await deps.imps.destroyImp(context.input.name);
+
+        return {};
+      }),
+      start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
+      stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
       sleep: os.imps.sleep.handler(handleUnimplemented),
       wake: os.imps.wake.handler(handleUnimplemented),
       hold: os.imps.hold.handler(handleUnimplemented),
-      url: os.imps.url.handler(handleUnimplemented),
+      url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
       fork: os.imps.fork.handler(handleUnimplemented),
     },
     checkpoints: {
@@ -33,10 +45,30 @@ export function buildRouter(deps: RouterDeps) {
       delete: os.checkpoints.delete.handler(handleUnimplemented),
     },
     images: {
-      list: os.images.list.handler(handleUnimplemented),
-      add: os.images.add.handler(handleUnimplemented),
-      build: os.images.build.handler(handleUnimplemented),
-      delete: os.images.delete.handler(handleUnimplemented),
+      list: os.images.list.handler(async () => {
+        const images = await deps.images.listImages();
+
+        return images.map((image) => toApiImage(image));
+      }),
+      add: os.images.add.handler(async (context) => {
+        const image = await deps.images.addImage(context.input.ref, context.input.name);
+
+        return toApiImage(image);
+      }),
+      build: os.images.build.handler(async (context) => {
+        const image = await deps.images.buildImage(
+          context.input.contextDir,
+          context.input.name,
+          context.input.dockerfile,
+        );
+
+        return toApiImage(image);
+      }),
+      delete: os.images.delete.handler(async (context) => {
+        await deps.images.removeImage(context.input.name);
+
+        return {};
+      }),
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
@@ -44,21 +76,36 @@ export function buildRouter(deps: RouterDeps) {
   });
 }
 
-// Runtime stats (RAM in use, Firecracker and Tailscale state) read as zero
-// and null until the governor and the vmm exist.
+// RAM in use is the memory the running imps were given, until the governor
+// measures Firecracker PSS.
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
+  const imps = await listImps(deps.db);
+
+  const running = imps.filter((imp) => imp.state === 'running');
+
   return {
     version: packageJson.version,
     ramBudgetMib: deps.config.ramBudgetMib,
-    ramUsedMib: 0,
-    awakeCount: await countImps(deps.db, 'running'),
-    impCount: await countImps(deps.db),
-    firecrackerVersion: null,
+    ramUsedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
+    awakeCount: running.length,
+    impCount: imps.length,
+    firecrackerVersion: deps.firecrackerVersion,
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
       state: null,
       hostname: null,
     },
+  };
+}
+
+function toApiImage(image: ImageRecord): Image {
+  return {
+    id: image.id,
+    name: image.name,
+    ref: image.ref,
+    digest: image.digest,
+    createdAt: image.createdAt,
+    sizeBytes: image.sizeBytes,
   };
 }
 

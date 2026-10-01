@@ -33,6 +33,12 @@ export const impContract = {
 
     destroy: base.input(NameInputSchema).output(EmptySchema),
 
+    // cold boot of a stopped imp; a running imp is returned as it is
+    start: base.input(NameInputSchema).output(ImpSchema),
+
+    // agent shutdown, then SIGKILL after a timeout; memory is lost
+    stop: base.input(NameInputSchema).output(ImpSchema),
+
     sleep: base.input(NameInputSchema).output(ImpSchema),
 
     wake: base.input(NameInputSchema).output(ImpSchema),

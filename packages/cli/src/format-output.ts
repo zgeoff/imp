@@ -54,3 +54,7 @@ export function formatImages(images: readonly Image[]): string {
     ]),
   );
 }
+
+export function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}

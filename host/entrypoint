@@ -1,0 +1,44 @@
+#!/bin/bash
+# Host container entrypoint: storage, network, then impd under a small
+# supervisor. Run the container with --init so orphaned processes get reaped.
+#
+# The supervisor restarts impd when it exits on its own. Firecracker processes
+# are detached (setsid), so an impd restart keeps the VMs; impd re-adopts them.
+# SIGTERM or SIGINT stops impd and ends the container.
+#
+# Env: IMP_DAEMON (default /src/packages/daemon/src/main.ts) is the impd entry.
+set -euo pipefail
+
+lib=/usr/local/lib/imp
+daemon=${IMP_DAEMON:-/src/packages/daemon/src/main.ts}
+
+"$lib/setup-storage.sh"
+"$lib/setup-net.sh"
+
+child=
+stopping=
+
+on_signal() {
+  stopping=1
+  if [ -n "$child" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
+}
+trap on_signal TERM INT
+
+while :; do
+  bun "$daemon" &
+  child=$!
+  rc=0
+  wait "$child" || rc=$?
+  # A trapped signal interrupts wait before impd has exited.
+  while kill -0 "$child" 2>/dev/null; do
+    wait "$child" || rc=$?
+  done
+  child=
+  if [ -n "$stopping" ]; then
+    exit 0
+  fi
+  echo "entrypoint: impd exited with $rc; restarting in 1s" >&2
+  sleep 1
+done
