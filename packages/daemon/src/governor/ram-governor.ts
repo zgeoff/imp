@@ -57,7 +57,8 @@ export interface RamGovernorDeps {
   readonly listAwake: () => Promise<AwakeImp[]>;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
 
-  // true while the imp's lifecycle lock is taken: sleeping it would wait
+  // true while the imp's lifecycle lock is taken or it has open exec sessions
+  // or proxied requests: never a victim
   readonly isBusy: (id: string) => boolean;
 
   // sleeps the imp if it is still running; false when it could not

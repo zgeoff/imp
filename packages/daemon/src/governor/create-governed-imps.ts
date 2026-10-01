@@ -46,9 +46,12 @@ export function createGovernedImps(deps: GovernedDeps): {
       );
     },
     readRamMib,
-    isBusy: (id) => holder.imps?.isImpBusy(id) ?? false,
+
+    // an open exec session or proxied request pins the imp, like a hold
+    isBusy: (id) =>
+      holder.imps !== null && (holder.imps.isImpBusy(id) || holder.imps.tracker.count(id) > 0),
     sleepImp: (id, reason) =>
-      holder.imps === null ? Promise.resolve(false) : holder.imps.sleepImpById(id, reason, false),
+      holder.imps === null ? Promise.resolve(false) : holder.imps.sleepImpById(id, reason, true),
     log,
   });
 

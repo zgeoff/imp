@@ -200,7 +200,15 @@ export function createVmRunner(): VmRunner {
         rmSync(files.snapshotPath, { force: true });
         rmSync(files.memFilePath, { force: true });
 
-        await api.resume();
+        try {
+          await api.resume();
+        } catch {
+          // paused for good: kill it, the caller sees it gone and boots the
+          // disk cold next time
+          stopProcess(pid, 'SIGKILL');
+
+          await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS);
+        }
 
         throw error;
       }
