@@ -324,7 +324,7 @@ s4_checkpoint_fork() {
 
   # fork from the checkpoint
   t0=$(now_ms)
-  imp fork "$src" "$fcp" --checkpoint cp1 >/dev/null
+  imp fork "$src" "$fcp" --from cp1 >/dev/null
   imp start "$fcp" >/dev/null # a no-op if fork already booted it
   wait_until 60 "$fcp accepts exec" imp exec "$fcp" -- true
   record forkCheckpointMs "$(($(now_ms) - t0))"

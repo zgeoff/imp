@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { defineCommand } from 'citty';
+import { defineCommand } from '../define-command';
 import { formatImages } from '../format-output';
 import { runAction } from '../run-action';
 

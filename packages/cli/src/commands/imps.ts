@@ -1,4 +1,4 @@
-import { defineCommand } from 'citty';
+import { defineCommand } from '../define-command';
 import { runExec } from '../exec-client';
 import { formatImps, formatJson } from '../format-output';
 import { parseDuration } from '../parse-duration';

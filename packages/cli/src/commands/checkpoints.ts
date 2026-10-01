@@ -1,4 +1,4 @@
-import { defineCommand } from 'citty';
+import { defineCommand } from '../define-command';
 import { formatCheckpoints, formatImps, formatJson } from '../format-output';
 import { runAction } from '../run-action';
 
