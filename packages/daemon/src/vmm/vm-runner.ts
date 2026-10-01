@@ -249,7 +249,11 @@ export function createVmRunner(): VmRunner {
 
         setMark('load');
 
-        await waitForAgent(plan.paths.vsockSocket, { deadlineMs: WAKE_AGENT_DEADLINE_MS });
+        // a ping sent while the guest resumes can hang: retry it soon
+        await waitForAgent(plan.paths.vsockSocket, {
+          deadlineMs: WAKE_AGENT_DEADLINE_MS,
+          attemptMs: 200,
+        });
 
         setMark('agent');
 
