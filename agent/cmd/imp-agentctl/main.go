@@ -4,6 +4,7 @@
 //	imp-agentctl -sock run/vsock.sock ping [-wait 10s]
 //	imp-agentctl -sock run/vsock.sock activity
 //	imp-agentctl -sock run/vsock.sock exec [-t] -- cmd args...
+//	imp-agentctl -sock run/vsock.sock resumed   (sends the host clock)
 //
 // Any other op name is sent as a bare unary request, e.g. "freeze".
 package main
@@ -32,7 +33,7 @@ const agentPort = 1024
 func main() {
 	sock := flag.String("sock", "", "Firecracker vsock unix socket")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: imp-agentctl -sock PATH {ping [-wait D] | activity | exec [-t] -- ARGV... | OP}")
+		fmt.Fprintln(os.Stderr, "usage: imp-agentctl -sock PATH {ping [-wait D] | activity | exec [-t] -- ARGV... | resumed | OP}")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -49,6 +50,8 @@ func main() {
 		err = ping(*sock, args)
 	case "exec":
 		code, err = execCmd(*sock, args)
+	case proto.OpResumed:
+		err = unary(*sock, proto.Request{Op: op, UnixMs: time.Now().UnixMilli()})
 	default:
 		err = unary(*sock, proto.Request{Op: op})
 	}

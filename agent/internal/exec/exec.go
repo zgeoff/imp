@@ -5,6 +5,7 @@ package exec
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -23,6 +24,11 @@ import (
 // Background children that inherited stdout would otherwise hold the
 // session open forever.
 const drainGrace = 500 * time.Millisecond
+
+// hangupGrace bounds how long a session waits for its process after the host
+// connection drops (for example a vsock reset on snapshot restore). A process
+// that ignores SIGHUP keeps running, but no longer counts as a session.
+const hangupGrace = time.Second
 
 // Manager runs exec sessions and counts the live ones.
 type Manager struct {
@@ -62,9 +68,24 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 			pump(o.f, o.typ, w)
 		}()
 	}
-	go s.input(r)
+	hangup := make(chan struct{})
+	go func() {
+		s.input(r)
+		close(hangup)
+	}()
 
-	st := <-s.proc.Done
+	var st reaper.Status
+	select {
+	case st = <-s.proc.Done:
+	case <-hangup:
+		select {
+		case st = <-s.proc.Done:
+		case <-time.After(hangupGrace):
+			s.close()
+			pumps.Wait()
+			return fmt.Errorf("pid %d: host hung up, process ignored SIGHUP; detaching", s.proc.Pid)
+		}
+	}
 	s.exited.Store(true)
 	for _, o := range s.outputs {
 		o.f.SetReadDeadline(time.Now().Add(drainGrace))

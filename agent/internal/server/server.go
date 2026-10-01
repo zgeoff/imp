@@ -34,18 +34,44 @@ type Server struct {
 	thawTimer *time.Timer
 }
 
-// Serve accepts connections until l fails.
-func (s *Server) Serve(l net.Listener) error {
+// Listen backoff bounds. A snapshot restore resets the vsock transport; the
+// listen socket should survive it, but if Accept fails anyway the agent
+// re-listens rather than return, because Serve returning reboots the guest.
+const (
+	minRelistenDelay = 10 * time.Millisecond
+	maxRelistenDelay = time.Second
+)
+
+// Serve accepts connections forever. When Accept fails, it closes the
+// listener and calls listen again, with backoff. It returns only if the
+// first listen fails.
+func (s *Server) Serve(listen func() (net.Listener, error)) error {
+	l, err := listen()
+	if err != nil {
+		return err
+	}
+	delay := minRelistenDelay
 	for {
 		c, err := l.Accept()
-		if err != nil {
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
-			}
-			return err
+		if err == nil {
+			delay = minRelistenDelay
+			go s.handle(c)
+			continue
 		}
-		go s.handle(c)
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			continue
+		}
+		log.Printf("accept: %v; listening again", err)
+		l.Close()
+		for {
+			time.Sleep(delay)
+			delay = min(delay*2, maxRelistenDelay)
+			if l, err = listen(); err == nil {
+				break
+			}
+			log.Printf("listen: %v", err)
+		}
 	}
 }
 

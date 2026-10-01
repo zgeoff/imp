@@ -138,12 +138,21 @@ This file records the decisions and the reasons. `STATUS.md` records progress.
 
 ### 2.8 Sleep and wake
 
-- Sleep: pause the VM, full snapshot (`vmstate` + `memory`), stop Firecracker. Host RAM goes back to
-  the host. The tap stays.
-- Wake: start Firecracker, `PUT /snapshot/load` with `resume_vm: true`, then send `resumed` with the
-  host time so the guest clock jumps forward.
-- TCP connections across a sleep reset. In-memory processes survive.
-- The snapshot stores the Firecracker version. On a mismatch impd boots cold instead.
+Measured procedure and numbers: `docs/sleep-findings.md`.
+
+- Every VM gets a balloon before InstanceStart:
+  `{"amount_mib":0,"deflate_on_oom":true,"stats_polling_interval_s":1,"free_page_reporting":true}`.
+  With free page reporting, memory the guest frees goes back to the host in about 15 s.
+- Sleep: pause, full snapshot to `vmstate.new` / `memory.new`, `fallocate --dig-holes` on the memory
+  file (a 2 GiB file with 300 MiB touched becomes 381 MiB), rename over the old files, stop
+  Firecracker. Never overwrite a memory file in place: a restored VM maps it MAP_PRIVATE.
+- Wake: remove the stale `vsock.sock`, start Firecracker, make `PUT /snapshot/load`
+  (`resume_vm: true`) the first API call, ping the agent, send `resumed` with the host time (the
+  guest clock is otherwise behind by the sleep time). Wake takes about 50–100 ms; pages then fault
+  in lazily from the memory file.
+- On any load failure or a snapshot version mismatch, boot cold instead.
+- TCP connections across a sleep reset. In-memory processes survive. An exec stream whose host side
+  hangs up gets SIGHUP and is detached after 1 s, so it does not keep the imp awake.
 - On SIGTERM impd sleeps every awake imp, so a container restart keeps memory. After a crash, an imp
   with no live VM is marked `stopped` and boots cold.
 - Firecracker processes are detached (`setsid`). A restart of the impd process alone re-adopts

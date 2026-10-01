@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -55,9 +56,13 @@ func Stage2() error {
 		log.Printf("services: %v", err)
 	}
 
-	l, err := vsock.Listen(server.Port, nil)
-	if err != nil {
-		return fmt.Errorf("vsock listen: %w", err)
+	listen := func() (net.Listener, error) {
+		l, err := vsock.Listen(server.Port, nil)
+		if err != nil {
+			return nil, fmt.Errorf("vsock listen: %w", err)
+		}
+		log.Printf("stage2: ready on vsock port %d", server.Port)
+		return l, nil
 	}
 	srv := &server.Server{
 		Exec:     exec.NewManager(r, image),
@@ -78,8 +83,7 @@ func Stage2() error {
 		Poweroff(sup)
 	}()
 
-	log.Printf("stage2: ready on vsock port %d", server.Port)
-	return srv.Serve(l)
+	return srv.Serve(listen)
 }
 
 func mountSystem() error {

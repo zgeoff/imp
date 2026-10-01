@@ -15,6 +15,13 @@ Firecracker exposes the guest vsock as a unix socket (`run/vsock.sock`). To reac
 **One request per connection.** The host sends one REQUEST frame. The guest answers and closes the
 connection. To make another request, connect again.
 
+### Snapshot restore
+
+A snapshot resets the vsock transport. When the VM resumes, the guest closes every open connection,
+so in-flight requests fail on the host side and exec sessions get the host-disconnect treatment
+below. The agent's listen socket survives; if `accept` fails anyway, the agent listens again (with
+backoff) instead of exiting. After a wake the host connects again as usual.
+
 ## Frames
 
 Every message after the handshake is a frame:
@@ -109,7 +116,9 @@ itself, so a host crash cannot leave the guest frozen. `thaw` on an unfrozen fil
 ```
 
 Sets `CLOCK_REALTIME` to `unix_ms`. The host sends it after a snapshot restore, because the guest
-clock stops while the VM sleeps.
+clock stops while the VM sleeps. Send it right after the first `ping` that answers. Only the wall
+clock moves: `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` (and so `uptime_ms`) do not count the time
+asleep.
 
 ### `services.list`
 
@@ -174,6 +183,8 @@ Details:
 - **EXIT.** `code` is the exit status. If a signal killed the process, `signal` is its number and
   `code` is `128 + signal`, as a shell reports it.
 - **Host disconnect.** If the connection closes before the process exits, the guest sends SIGHUP to
-  the process group, as a terminal hangup would.
+  the process group, as a terminal hangup would. If the process is still running 1 s later (it
+  ignores SIGHUP), the guest closes its stdio and ends the session without an EXIT frame; the
+  process keeps running and no longer counts in `exec_sessions`.
 - **Flow control.** There is none beyond the stream itself. A process that does not read stdin
   blocks further host frames on that connection.
