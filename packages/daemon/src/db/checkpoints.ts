@@ -11,6 +11,7 @@ export interface CheckpointRecord {
 }
 
 export interface NewCheckpoint {
+  readonly id: string;
   readonly impId: string;
   readonly label: string | null;
   readonly sizeBytes: number | null;
@@ -23,7 +24,7 @@ export async function createCheckpoint(
   const row = await db
     .insertInto('checkpoints')
     .values({
-      id: Bun.randomUUIDv7(),
+      id: checkpoint.id,
       imp_id: checkpoint.impId,
       label: checkpoint.label,
       created_at: Date.now(),

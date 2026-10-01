@@ -40,7 +40,7 @@ cleanup() {
   rm -rf "$build_dir"
   if [ $rc -ne 0 ]; then
     echo "== impd log tail"
-    docker logs --tail 30 imp-dev 2>&1 || true
+    docker logs --tail 30 "${IMP_DEV_NAME:-imp-dev}" 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -127,7 +127,7 @@ expect_eq "$(imp exec "$name" -- cat /root/persist)" "$name-data" "exec after an
 step "rm"
 imp rm "$name"
 if imp ls | grep -q "^$name "; then fail "$name still listed after rm"; fi
-if docker exec imp-dev ip link show "imp$slot" >/dev/null 2>&1; then
+if docker exec "${IMP_DEV_NAME:-imp-dev}" ip link show "imp$slot" >/dev/null 2>&1; then
   fail "tap imp$slot left behind"
 fi
 

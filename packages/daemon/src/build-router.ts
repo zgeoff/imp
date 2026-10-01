@@ -2,6 +2,7 @@ import { impContract } from '@imp/api';
 import type { Image, SystemInfo } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
+import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
@@ -14,6 +15,7 @@ export interface RouterDeps {
   readonly db: ImpDatabase;
   readonly imps: ImpService;
   readonly images: ImageService;
+  readonly checkpoints: CheckpointService;
   readonly firecrackerVersion: string | null;
 }
 
@@ -36,13 +38,23 @@ export function buildRouter(deps: RouterDeps) {
       wake: os.imps.wake.handler(handleUnimplemented),
       hold: os.imps.hold.handler(handleUnimplemented),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
-      fork: os.imps.fork.handler(handleUnimplemented),
+      fork: os.imps.fork.handler((context) => deps.checkpoints.forkImp(context.input)),
     },
     checkpoints: {
-      create: os.checkpoints.create.handler(handleUnimplemented),
-      list: os.checkpoints.list.handler(handleUnimplemented),
-      restore: os.checkpoints.restore.handler(handleUnimplemented),
-      delete: os.checkpoints.delete.handler(handleUnimplemented),
+      create: os.checkpoints.create.handler((context) =>
+        deps.checkpoints.createCheckpoint(context.input.name, context.input.label),
+      ),
+      list: os.checkpoints.list.handler((context) =>
+        deps.checkpoints.listCheckpoints(context.input.name),
+      ),
+      restore: os.checkpoints.restore.handler((context) =>
+        deps.checkpoints.restoreCheckpoint(context.input.name, context.input.checkpoint),
+      ),
+      delete: os.checkpoints.delete.handler(async (context) => {
+        await deps.checkpoints.deleteCheckpoint(context.input.name, context.input.checkpoint);
+
+        return {};
+      }),
     },
     images: {
       list: os.images.list.handler(async () => {

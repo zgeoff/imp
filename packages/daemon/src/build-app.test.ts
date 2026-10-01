@@ -6,6 +6,7 @@ import { ORPCError, createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildApp } from './build-app';
+import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
 import { createImage } from './db/images';
 import { openDatabase } from './db/open-database';
@@ -84,6 +85,7 @@ async function setupTest(token: string) {
     token: TOKEN,
     imps,
     images,
+    checkpoints: createCheckpointService({ config, db, imps }),
     firecrackerVersion: 'v1.17.0',
     isReady: () => true,
   });
