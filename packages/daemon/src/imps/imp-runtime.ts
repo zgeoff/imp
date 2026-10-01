@@ -14,7 +14,7 @@ export type SleepOutcome = 'slept' | 'skipped' | 'failed';
 // What a background sleep checks again under the lock. The governor sleeps
 // the least recently active imp, idle or not; the idle loop also needs the
 // imp no more active than when it looked.
-export type SleepPolicy =
+type SleepPolicy =
   | { readonly by: 'governor' }
   | { readonly by: 'idle'; readonly seenActiveAt: number };
 
@@ -40,7 +40,8 @@ export interface ImpRuntime {
   // calls it while it holds admission, which a locked boot may be waiting for.
   readonly trySleepImp: (id: string, reason: string, policy: SleepPolicy) => Promise<SleepOutcome>;
 
-  // on SIGTERM: every running imp to sleep, a few at a time
+  // on SIGTERM: every running imp to sleep, a few at a time. A wake or boot
+  // already under way finishes first and is put to sleep; later ones fail.
   readonly sleepAllImps: () => Promise<void>;
 
   // after an impd start: re-adopt live VMs, mark the rest stopped; sleeping
@@ -169,12 +170,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     // open connections do not count: impd is going away
     sleepAllImps: async () => {
+      context.setStopping();
+
+      // every imp, not only the running ones: a sleeping or stopped imp may be
+      // waking or booting under its lock right now
       const imps = await listImps(context.db);
 
-      const running = imps.filter((imp) => imp.state === 'running');
-
       await Promise.all(
-        running.map((imp) =>
+        imps.map((imp) =>
           lock.withImpId(imp.id, (fresh) => sleepIfRunning(fresh, 'impd is stopping')),
         ),
       );

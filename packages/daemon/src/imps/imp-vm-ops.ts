@@ -44,6 +44,13 @@ export interface ImpVmOps {
 export function createImpVmOps(context: ImpContext): ImpVmOps {
   const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
 
+  // a VM started now would outlive impd's last sleep pass
+  const requireNotStopping = (): void => {
+    if (context.isStopping()) {
+      throw new Error('impd is stopping');
+    }
+  };
+
   const updateState = async (imp: LockedImp, change: ImpStateChange): Promise<LockedImp> => {
     if (change.state !== imp.state) {
       requireTransition(imp.state, change.state, `move to ${change.state}`);
@@ -63,6 +70,8 @@ export function createImpVmOps(context: ImpContext): ImpVmOps {
   };
 
   const startImpVm = async (imp: LockedImp): Promise<LockedImp> => {
+    requireNotStopping();
+
     const paths = context.findPaths(imp.id);
     const address = context.findAddress(imp.slot);
 
@@ -179,6 +188,8 @@ export function createImpVmOps(context: ImpContext): ImpVmOps {
   // resumes from the snapshot, or boots cold when there is none, it does not
   // match this host, or the load fails: the disk is always the truth
   const wakeImpVm = async (imp: LockedImp): Promise<LockedImp> => {
+    requireNotStopping();
+
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);
 

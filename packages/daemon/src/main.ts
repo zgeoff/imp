@@ -11,13 +11,34 @@ import { readTailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
+import { waitWithin } from './process/wait-within';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
+import { readErrorMessage } from './read-error-message';
 import { readSnapshotIdentity } from './sleep/snapshot-meta';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
+
+const STOP_STEP_TIMEOUT_MS = 10_000;
+
+// within the 120 s that scripts/dev.sh gives `docker stop`
+const SLEEP_ALL_TIMEOUT_MS = 90_000;
+
+// Bounded, and a failure is logged: impd always reaches its exit. A ticker
+// stop waits for a governor or idle pass under way.
+async function runStopStep(step: string, ms: number, task: () => Promise<unknown>): Promise<void> {
+  try {
+    const finished = await waitWithin(task(), ms);
+
+    if (!finished) {
+      printLog(`impd: stop: ${step} still running after ${String(ms)}ms; going on`);
+    }
+  } catch (error) {
+    printLog(`impd: stop: ${step} failed: ${readErrorMessage(error)}`);
+  }
+}
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
@@ -108,19 +129,24 @@ async function main(): Promise<void> {
   const stop = async (sleepImps: boolean) => {
     const started = performance.now();
 
-    await Promise.all(tickers.map((ticker) => ticker.stop()));
-    await proxy.stop();
-    await app.stop();
+    await runStopStep('tickers', STOP_STEP_TIMEOUT_MS, () =>
+      Promise.all(tickers.map((ticker) => ticker.stop())),
+    );
+
+    await runStopStep('proxy', STOP_STEP_TIMEOUT_MS, () => proxy.stop());
+
+    // open exec sessions end here; their imps go to sleep next
+    await runStopStep('api', STOP_STEP_TIMEOUT_MS, () => app.stop(true));
 
     if (sleepImps) {
-      await imps.sleepAllImps();
+      await runStopStep('sleep', SLEEP_ALL_TIMEOUT_MS, () => imps.sleepAllImps());
 
       const sleptMs = Math.round(performance.now() - started);
 
       printLog(`impd: every imp asleep in ${String(sleptMs)}ms`);
     }
 
-    await db.destroy();
+    await runStopStep('database', STOP_STEP_TIMEOUT_MS, () => db.destroy());
 
     process.exit(0);
   };
