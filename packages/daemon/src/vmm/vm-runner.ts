@@ -3,6 +3,7 @@ import { sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
+import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
 import { createFirecrackerClient } from './firecracker-client';
 import {
@@ -173,7 +174,7 @@ export function createVmRunner(): VmRunner {
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = readErrorMessage(error);
 
         throw new Error(`boot failed: ${reason}\n${readLogTail(plan.paths.logFile)}`, {
           cause: error,
@@ -279,7 +280,7 @@ export function createVmRunner(): VmRunner {
 
         await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
 
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = readErrorMessage(error);
 
         throw new Error(`wake failed: ${reason}\n${readLogTail(plan.paths.logFile, 5)}`, {
           cause: error,

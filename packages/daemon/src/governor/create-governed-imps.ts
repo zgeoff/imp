@@ -1,6 +1,7 @@
 import { listImps } from '../db/imps';
 import { createImpService } from '../imps/imp-service';
 import type { ImpService, ImpServiceDeps } from '../imps/imp-service';
+import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
 import { readVmRam } from '../vmm/vm-stats';
 import { createRamGovernor } from './ram-governor';
@@ -19,11 +20,7 @@ export function createGovernedImps(deps: GovernedDeps): {
   const readRamMib =
     deps.readRamMib ?? ((pid, apiSocket) => readVmRam(pid, apiSocket)?.ownedMib ?? null);
 
-  const log =
-    deps.log ??
-    ((message: string) => {
-      console.log(message);
-    });
+  const log = deps.log ?? printLog;
 
   const governor = createRamGovernor({
     budgetMib: deps.config.ramBudgetMib,

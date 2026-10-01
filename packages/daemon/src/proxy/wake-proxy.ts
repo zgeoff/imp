@@ -6,6 +6,7 @@ import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpService } from '../imps/imp-service';
 import { deriveSlotAddress } from '../net/addressing';
+import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
 import { parseHostName } from './parse-host-name';
 
@@ -172,7 +173,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     } catch (error) {
       opened.release();
 
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = readErrorMessage(error);
 
       return buildErrorPage(
         502,
@@ -200,7 +201,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     } catch (error) {
       release();
 
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = readErrorMessage(error);
 
       return buildErrorPage(502, `The WebSocket to ${target} failed: ${reason}`);
     }
@@ -393,7 +394,7 @@ function buildWakeErrorPage(name: string, error: unknown): Response {
     return buildErrorPage(404, `There is no imp named ${name}.`);
   }
 
-  const reason = error instanceof Error ? error.message : String(error);
+  const reason = readErrorMessage(error);
 
   return buildErrorPage(503, `${name} could not wake: ${reason}`);
 }

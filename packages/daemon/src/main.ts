@@ -9,6 +9,7 @@ import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
 import { readTailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
+import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
@@ -17,10 +18,6 @@ import { setupSystemFiles } from './storage/setup-system-files';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
-
-function printLog(message: string): void {
-  console.log(message);
-}
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);

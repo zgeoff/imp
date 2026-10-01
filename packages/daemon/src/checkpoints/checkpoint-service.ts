@@ -16,6 +16,8 @@ import { findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpService } from '../imps/imp-service';
+import { printLog } from '../process/print-log';
+import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
 import { createReflinkClone } from '../storage/reflink';
 
@@ -86,12 +88,7 @@ function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
 }
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
-  const log =
-    deps.log ??
-    ((message: string) => {
-      console.log(message);
-    });
-
+  const log = deps.log ?? printLog;
   const cloneDisk = deps.cloneDisk ?? createReflinkClone;
   const freezer = deps.freezer ?? { freeze: sendFreeze, thaw: sendThaw };
 
@@ -134,7 +131,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       try {
         await freezer.thaw(paths.vsockSocket);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = readErrorMessage(error);
 
         log(`impd: ${imp.name}: thaw failed (the agent thaws on its own): ${message}`);
       }
