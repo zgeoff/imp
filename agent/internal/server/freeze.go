@@ -19,6 +19,9 @@ const (
 	fiThaw   = 0xC0045878
 )
 
+// rootIoctl is a variable so tests can run without root.
+var rootIoctl = ioctlRoot
+
 // freeze syncs and FIFREEZEs the root filesystem.
 func (s *Server) freeze(timeout time.Duration) error {
 	if timeout <= 0 {
@@ -33,9 +36,20 @@ func (s *Server) freeze(timeout time.Duration) error {
 	if s.thawTimer != nil {
 		s.thawTimer.Stop()
 	}
+	s.freezeGen++
+	gen := s.freezeGen
+	// Stop cannot cancel a callback that already fired and waits on
+	// freezeMu, so the callback checks that its freeze is still current.
 	s.thawTimer = time.AfterFunc(timeout, func() {
+		s.freezeMu.Lock()
+		defer s.freezeMu.Unlock()
+		if gen != s.freezeGen {
+			return
+		}
 		log.Printf("freeze: no thaw after %s, thawing", timeout)
-		s.thaw()
+		if err := s.thawLocked(); err != nil {
+			log.Printf("freeze: auto-thaw: %v", err)
+		}
 	})
 	return nil
 }
@@ -44,6 +58,11 @@ func (s *Server) freeze(timeout time.Duration) error {
 func (s *Server) thaw() error {
 	s.freezeMu.Lock()
 	defer s.freezeMu.Unlock()
+	return s.thawLocked()
+}
+
+func (s *Server) thawLocked() error {
+	s.freezeGen++
 	if s.thawTimer != nil {
 		s.thawTimer.Stop()
 		s.thawTimer = nil
@@ -54,7 +73,7 @@ func (s *Server) thaw() error {
 	return nil
 }
 
-func rootIoctl(req uint) error {
+func ioctlRoot(req uint) error {
 	f, err := os.Open("/")
 	if err != nil {
 		return err

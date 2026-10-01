@@ -30,6 +30,21 @@ const drainGrace = 500 * time.Millisecond
 // that ignores SIGHUP keeps running, but no longer counts as a session.
 const hangupGrace = time.Second
 
+// stdin flow control. The host frames arrive on one ordered stream, read by
+// one goroutine that also applies RESIZE and SIGNAL. Writes to the child's
+// stdin happen on a separate writer goroutine, fed through a queue of
+// stdinQueueChunks slots. A STDIN frame takes one slot per stdinChunk bytes
+// or part of it, so the queue holds 1024 frames or 4 MiB, whichever comes
+// first. A child that stops reading stdin fills the queue, not the reader,
+// so RESIZE and SIGNAL frames that follow stay deliverable until the queue
+// is full. Past that the reader blocks, which pushes back on the host;
+// frames behind the pending stdin then wait too, because the stream is
+// ordered.
+const (
+	stdinChunk       = 4 << 10
+	stdinQueueChunks = 1024
+)
+
 // Manager runs exec sessions and counts the live ones.
 type Manager struct {
 	reaper *reaper.Reaper
@@ -60,6 +75,8 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		s.proc.Signal(syscall.SIGHUP)
 	}
 
+	var writer sync.WaitGroup
+	writer.Go(s.writeStdin)
 	var pumps sync.WaitGroup
 	for _, o := range s.outputs {
 		pumps.Add(1)
@@ -83,6 +100,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		case <-time.After(hangupGrace):
 			s.close()
 			pumps.Wait()
+			writer.Wait()
 			return fmt.Errorf("pid %d: host hung up, process ignored SIGHUP; detaching", s.proc.Pid)
 		}
 	}
@@ -92,6 +110,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	}
 	pumps.Wait()
 	s.close()
+	writer.Wait()
 
 	exit := proto.Exit{Code: st.Code}
 	if st.Signal != 0 {
@@ -112,6 +131,15 @@ type session struct {
 	outputs []output
 	exited  atomic.Bool
 	mu      sync.Mutex // guards stdin close
+
+	// stdinQ carries STDIN payloads from input to writeStdin. Only input
+	// sends on or closes it; stdinEnded records the close.
+	stdinQ     chan []byte
+	stdinEnded bool
+	// done closes when the session ends, so input and writeStdin stop
+	// waiting on each other.
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func (m *Manager) start(req proto.Request) (*session, error) {
@@ -129,7 +157,7 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 	}
 	spec := proc.Spec{Argv: req.Argv, Env: env, Dir: m.cwd(req, env), User: user, TTY: req.TTY}
 
-	s := &session{}
+	s := &session{stdinQ: make(chan []byte, stdinQueueChunks), done: make(chan struct{})}
 	var childEnds []*os.File
 	if req.TTY {
 		master, slave, err := openPTY()
@@ -199,17 +227,19 @@ func (s *session) input(r *proto.Reader) {
 			if !s.exited.Load() {
 				s.proc.Signal(syscall.SIGHUP)
 			}
-			s.closeStdin()
+			s.endStdin()
 			return
 		}
 		switch f.Type {
 		case proto.TypeStdin:
-			if w := s.stdinWriter(); w != nil {
-				w.Write(f.Payload)
+			if !s.queueStdin(f.Payload) {
+				return
 			}
 		case proto.TypeStdinEOF:
 			// A tty has no EOF to give; the client sends ^D itself.
-			s.closeStdin()
+			if s.tty == nil {
+				s.endStdin()
+			}
 		case proto.TypeResize:
 			var rs proto.Resize
 			if s.tty != nil && json.Unmarshal(f.Payload, &rs) == nil {
@@ -222,6 +252,55 @@ func (s *session) input(r *proto.Reader) {
 			}
 		default:
 			log.Printf("exec: ignoring %s frame", f.Type)
+		}
+	}
+}
+
+// queueStdin hands p to writeStdin in chunks. It blocks while the queue is
+// full and returns false if the session ended meanwhile.
+func (s *session) queueStdin(p []byte) bool {
+	if s.stdinEnded {
+		return true
+	}
+	for len(p) > 0 {
+		n := min(len(p), stdinChunk)
+		select {
+		case s.stdinQ <- p[:n]:
+		case <-s.done:
+			return false
+		}
+		p = p[n:]
+	}
+	return true
+}
+
+// endStdin closes the queue; writeStdin closes the pipe once it drains.
+func (s *session) endStdin() {
+	if !s.stdinEnded {
+		s.stdinEnded = true
+		close(s.stdinQ)
+	}
+}
+
+// writeStdin writes queued stdin to the process. After a failed write (the
+// process closed its stdin) it discards the rest, so the queue never stalls
+// the reader. close unblocks a write the process never reads.
+func (s *session) writeStdin() {
+	w := s.stdinWriter()
+	for {
+		select {
+		case p, ok := <-s.stdinQ:
+			if !ok {
+				s.closeStdin()
+				return
+			}
+			if w != nil {
+				if _, err := w.Write(p); err != nil {
+					w = nil
+				}
+			}
+		case <-s.done:
+			return
 		}
 	}
 }
@@ -248,6 +327,7 @@ func (s *session) closeStdin() {
 }
 
 func (s *session) close() {
+	s.closeOnce.Do(func() { close(s.done) })
 	s.closeStdin()
 	for _, o := range s.outputs {
 		o.f.Close()

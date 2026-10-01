@@ -12,6 +12,7 @@ export {
 } from './exec-protocol';
 
 export type { ExecChannel, ExecClientMessage, ExecFrame, ExecServerMessage } from './exec-protocol';
+export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema } from './image-schema';
 export type { Image } from './image-schema';
 export { impContract } from './imp-contract';
