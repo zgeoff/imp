@@ -31,14 +31,14 @@ Put `TAILSCALE_AUTHKEY=` in `.env` (a tagged auth key) to join the tailnet.
 ## Commands
 
 | Command                                                    | What it does                                                |
-| ---------------------------------------------------------- | ----------------------------------------------------------- | --- | --- | ------------- |
+| ---------------------------------------------------------- | ----------------------------------------------------------- |
 | `imp new [name] [--image] [--cpus] [--memory]`             | Create an imp and boot it                                   |
 | `imp ls`, `imp info`                                       | List imps; show the RAM budget and usage (`--json` on both) |
 | `imp exec [-t] <name> -- cmd…`                             | Run a command; `imp console <name>` for a shell             |
 | `imp sleep`, `imp wake`, `imp hold <name> <duration>`      | Control sleep by hand; a hold keeps an imp awake            |
 | `imp checkpoint <name> [label]`, `imp restore`, `imp fork` | Disk checkpoints, rollback and clones                       |
 | `imp url <name>`                                           | Local and tailnet URLs (the guest serves on :8080)          |
-| `imp image build                                           | add                                                         | ls  | rm` | Manage images |
+| `imp image build`, `add`, `ls`, `rm`                       | Manage images                                               |
 
 ## How it works
 
