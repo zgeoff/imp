@@ -1,0 +1,2 @@
+# acc-bare: busybox with no services, so the memory proof owns :8080.
+FROM busybox:1.37
