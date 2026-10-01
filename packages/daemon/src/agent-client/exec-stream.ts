@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
-import { requireNoAgentError } from './agent-requests';
+import { readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
 export interface AgentExecRequest {
@@ -35,6 +35,9 @@ export interface ExecStream {
   readonly close: () => void;
 }
 
+// a hung agent must not leave the exec, and the activity count it holds,
+// pending for good
+const EXEC_START_TIMEOUT_MS = 10_000;
 const StartedSchema = z.object({ pid: z.int() });
 const ExitSchema = z.object({ code: z.int(), signal: z.int() });
 
@@ -43,33 +46,32 @@ const ExitSchema = z.object({ code: z.int(), signal: z.int() });
 export async function openExecStream(
   vsockPath: string,
   request: Readonly<AgentExecRequest>,
+  startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
   const connection = await openAgentConnection(vsockPath);
 
-  connection.sendJson(FRAME_TYPES.request, { op: 'exec', ...request });
-
-  const first = await connection.next().catch((error: unknown) => {
-    connection.close();
-    throw error;
-  });
-
-  if (first === null) {
-    throw new Error('agent closed the exec connection before the process started');
-  }
+  let started: z.infer<typeof StartedSchema>;
 
   try {
+    connection.sendJson(FRAME_TYPES.request, { op: 'exec', ...request });
+
+    const first = await readFrameWithin(connection, startTimeoutMs);
+
+    if (first === null) {
+      throw new Error('agent closed the exec connection before the process started');
+    }
+
     requireNoAgentError(first);
+
+    if (first.type !== FRAME_TYPES.started) {
+      throw new Error(`agent exec: expected STARTED, got frame type ${String(first.type)}`);
+    }
+
+    started = StartedSchema.parse(decodeJsonPayload(first));
   } catch (error) {
     connection.close();
     throw error;
   }
-
-  if (first.type !== FRAME_TYPES.started) {
-    connection.close();
-    throw new Error(`agent exec: expected STARTED, got frame type ${String(first.type)}`);
-  }
-
-  const started = StartedSchema.parse(decodeJsonPayload(first));
 
   return {
     pid: started.pid,
