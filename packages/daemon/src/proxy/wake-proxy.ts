@@ -127,7 +127,11 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       );
     }
 
-    void deps.imps.recordActivity(name);
+    try {
+      await deps.imps.recordActivity(name);
+    } catch {
+      // the idle loop also counts the open connection
+    }
 
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
       return handleWebSocket(request, server, `ws://${target}`, opened.release);
