@@ -15,9 +15,13 @@ export const ImpSchema = z.object({
   ip: z.ipv4(),
   slot: z.int().nonnegative(),
   port: z.int().positive(),
+  httpPort: z.int().positive(),
   url: z.url(),
   createdAt: z.date(),
   lastActiveAt: z.date(),
+
+  // RAM the awake VM owns now (anonymous pages), as the governor counts it
+  ramMib: z.int().nonnegative().optional(),
   sleptAt: z.date().optional(),
   holdUntil: z.date().optional(),
   error: z.string().optional(),

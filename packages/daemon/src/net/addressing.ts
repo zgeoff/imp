@@ -17,7 +17,9 @@ export interface SlotAddress {
   readonly prefixLength: number;
   readonly netmask: string;
   readonly guestMac: string;
-  readonly proxyPort: number;
+
+  // the imp's own port on the host (DESIGN 2.11), for the tailnet
+  readonly tailnetPort: number;
 }
 
 export interface SlotPlan {
@@ -80,7 +82,7 @@ export function deriveSlotAddress(slot: number, plan: SlotPlan): SlotAddress {
     // locally administered unicast, then the guest IP: unique per slot and
     // readable in a packet capture
     guestMac: ['06', '00', ...splitOctets(guest).map((octet) => toHexByte(octet))].join(':'),
-    proxyPort: plan.portBase + slot,
+    tailnetPort: plan.portBase + slot,
   };
 }
 

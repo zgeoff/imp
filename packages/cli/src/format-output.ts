@@ -19,13 +19,14 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'IP', 'URL'],
+    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'IP', 'URL'],
     imps.map((imp) => [
       imp.name,
       imp.state,
       imp.image,
       String(imp.vcpus),
       `${String(imp.memoryMib)} MiB`,
+      imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
       imp.ip,
       imp.url,
     ]),

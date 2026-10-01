@@ -169,8 +169,9 @@ Sequence:
 2. Both sides stream:
    - host → guest: STDIN, STDIN_EOF, RESIZE, SIGNAL.
    - guest → host: STDOUT, STDERR.
-3. When the process exits, the guest forwards remaining output, sends EXIT and closes the
-   connection.
+3. When the process exits, the guest forwards remaining output and sends EXIT. It then reads (and
+   ignores) host frames until the host closes, for at most 2 s, and closes the connection. A host
+   frame that races the exit, such as STDIN_EOF, so never hits a closed socket.
 
 Details:
 

@@ -11,6 +11,9 @@ test('it fills every setting from its default when the env is empty', () => {
     portBase: 20_000,
     ramBudgetMib: 16_384,
     idleTimeoutS: 60,
+    idleCpuPercent: 10,
+    bootReservePercent: 50,
+    wakeReserveMib: 256,
     defaultVcpus: 2,
     defaultMemoryMib: 2048,
     dns: ['1.1.1.1', '8.8.8.8'],
@@ -22,6 +25,7 @@ test('it fills every setting from its default when the env is empty', () => {
     systemDriveSource: null,
     defaultImage: 'base',
     tailscaleAuthKey: null,
+    tailscaleHostname: 'imp',
   });
 });
 

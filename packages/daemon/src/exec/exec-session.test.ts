@@ -8,6 +8,13 @@ interface EventSource {
   readonly next: () => Promise<ExecEvent>;
 }
 
+// one output chunk, then the connection drops
+async function* readWithoutExit(): AsyncGenerator<ExecEvent, void, undefined> {
+  await Bun.sleep(1);
+
+  yield { type: 'stdout', data: new TextEncoder().encode('partial') };
+}
+
 async function* readUntilExit(source: EventSource): AsyncGenerator<ExecEvent, void, undefined> {
   for (;;) {
     const event = await source.next();
@@ -89,6 +96,7 @@ function buildFakePeer() {
       close: (code = 1000) => {
         closes.push(code);
       },
+      readBufferedAmount: () => 0,
     },
   };
 }
@@ -172,4 +180,38 @@ test('it rejects a control message before start', () => {
   session.handleMessage({ type: 'resize', cols: 1, rows: 1 });
 
   expect(peer.sent).toEqual([{ type: 'error', message: 'resize before start' }]);
+});
+
+test('it closes with 1011 when the stream ends without an exit', async () => {
+  const peer = buildFakePeer();
+  const stream: ExecStream = { ...buildFakeStream().stream, events: readWithoutExit };
+
+  const session = createExecSession(peer.peer, {
+    openExec: () => Promise.resolve(stream),
+    recordActivity: () => Promise.resolve(),
+  });
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(10);
+
+  expect(peer.closes).toEqual([1011]);
+});
+
+test('it reports a malformed binary frame instead of throwing', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(peer.peer, {
+    openExec: () => Promise.resolve(fake.stream),
+    recordActivity: () => Promise.resolve(),
+  });
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(5);
+
+  session.handleMessage(new Uint8Array([]));
+
+  expect(peer.closes).toEqual([1011]);
 });

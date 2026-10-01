@@ -1,6 +1,8 @@
-import { sendShutdown } from '../agent-client/agent-requests';
+import { mkdirSync, renameSync, rmSync } from 'node:fs';
+import { sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
+import { runCommand } from '../process/run-command';
 import type { ImpPaths } from '../storage/data-layout';
 import { createFirecrackerClient } from './firecracker-client';
 import {
@@ -14,6 +16,7 @@ import {
 const AGENT_DEADLINE_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const KILL_TIMEOUT_MS = 3000;
+const WAKE_AGENT_DEADLINE_MS = 10_000;
 
 export interface VmPlan {
   readonly firecrackerBin: string;
@@ -21,6 +24,7 @@ export interface VmPlan {
   readonly systemDrivePath: string;
   readonly paths: ImpPaths;
   readonly address: SlotAddress;
+  readonly impId: string;
   readonly hostname: string;
   readonly vcpus: number;
   readonly memoryMib: number;
@@ -35,9 +39,22 @@ interface StartedVm {
   readonly timings: Readonly<Record<string, number>>;
 }
 
+interface WakePlan {
+  readonly firecrackerBin: string;
+  readonly paths: ImpPaths;
+}
+
 // Firecracker, behind an interface so the lifecycle can run against a fake.
 export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
+
+  // pause, snapshot to new files, kill, rename them into place
+  // (docs/sleep-findings.md 8); the VM keeps running when the snapshot fails
+  readonly sleepVm: (pid: number, paths: ImpPaths) => Promise<Readonly<Record<string, number>>>;
+
+  // a new Firecracker that loads the snapshot as its first call; throws, with
+  // the process gone, when the load or the agent fails
+  readonly wakeVm: (plan: WakePlan) => Promise<StartedVm>;
 
   // agent shutdown first when `graceful`, SIGKILL after the timeout
   readonly stopVm: (pid: number, paths: ImpPaths, graceful: boolean) => Promise<void>;
@@ -52,6 +69,7 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
     'console=ttyS0 reboot=k panic=1 pci=off',
     'i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd',
     'root=/dev/vdb rootfstype=squashfs ro init=/imp-agent',
+    `imp.id=${plan.impId}`,
     `imp.hostname=${plan.hostname}`,
     `imp.ip=${plan.address.guestIp}/${String(plan.address.prefixLength)}`,
     `imp.gw=${plan.address.hostIp}`,
@@ -90,15 +108,8 @@ export function createVmRunner(): VmRunner {
 
   return {
     startVm: async (plan) => {
-      const marks: Record<string, number> = {};
-      let last = performance.now();
-
-      const setMark = (step: string): void => {
-        const now = performance.now();
-
-        marks[step] = Math.round(now - last);
-        last = now;
-      };
+      const timer = createMarks();
+      const setMark = timer.setMark;
 
       const pid = await startFirecracker(plan.firecrackerBin, plan.paths);
 
@@ -139,6 +150,13 @@ export function createVmRunner(): VmRunner {
           guestMac: plan.address.guestMac,
         });
 
+        await api.putBalloon({
+          amountMib: 0,
+          deflateOnOom: true,
+          statsPollingIntervalS: 1,
+          freePageReporting: true,
+        });
+
         const firecrackerVersion = await versionPromise;
 
         setMark('configure');
@@ -151,13 +169,111 @@ export function createVmRunner(): VmRunner {
 
         setMark('agent');
 
-        return { pid, firecrackerVersion, timings: marks };
+        return { pid, firecrackerVersion, timings: timer.marks };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
         const reason = error instanceof Error ? error.message : String(error);
 
         throw new Error(`boot failed: ${reason}\n${readLogTail(plan.paths.logFile)}`, {
+          cause: error,
+        });
+      }
+    },
+    sleepVm: async (pid, paths) => {
+      const timer = createMarks();
+      const setMark = timer.setMark;
+      const api = createFirecrackerClient(paths.apiSocket);
+      const files = { snapshotPath: `${paths.vmstate}.new`, memFilePath: `${paths.memFile}.new` };
+
+      mkdirSync(paths.snapshotDir, { recursive: true });
+      rmSync(files.snapshotPath, { force: true });
+      rmSync(files.memFilePath, { force: true });
+
+      await api.pause();
+
+      setMark('pause');
+
+      try {
+        await api.createSnapshot(files);
+      } catch (error) {
+        rmSync(files.snapshotPath, { force: true });
+        rmSync(files.memFilePath, { force: true });
+
+        await api.resume();
+
+        throw error;
+      }
+
+      setMark('snapshot');
+
+      // the VM is paused and its snapshot is on disk: nothing to shut down
+      stopProcess(pid, 'SIGKILL');
+
+      if (!(await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS))) {
+        throw new Error(`firecracker ${String(pid)} survived SIGKILL`);
+      }
+
+      setMark('kill');
+
+      // never write into the old mem file: a restored VM mapped it MAP_PRIVATE
+      renameSync(files.snapshotPath, paths.vmstate);
+      renameSync(files.memFilePath, paths.memFile);
+      rmSync(paths.apiSocket, { force: true });
+      rmSync(paths.vsockSocket, { force: true });
+
+      // zero pages become holes: a 2 GiB file with 300 MiB in use takes 381
+      // MiB; the snapshot is good without it, so a failure only costs disk
+      const dug = await runCommand(['fallocate', '--dig-holes', paths.memFile]);
+
+      const digStep = dug.exitCode === 0 ? 'digHoles' : 'digHolesFailed';
+
+      setMark(digStep);
+
+      return timer.marks;
+    },
+    wakeVm: async (plan) => {
+      const timer = createMarks();
+      const setMark = timer.setMark;
+
+      // startFirecracker removes the stale vsock socket, which would end the load
+      const pid = await startFirecracker(plan.firecrackerBin, plan.paths);
+
+      setMark('spawn');
+
+      try {
+        const api = createFirecrackerClient(plan.paths.apiSocket);
+
+        await api.loadSnapshot(
+          { snapshotPath: plan.paths.vmstate, memFilePath: plan.paths.memFile },
+          true,
+        );
+
+        setMark('load');
+
+        // a ping sent while the guest resumes can hang: retry it soon
+        await waitForAgent(plan.paths.vsockSocket, {
+          deadlineMs: WAKE_AGENT_DEADLINE_MS,
+          attemptMs: 200,
+        });
+
+        setMark('agent');
+
+        await sendResumed(plan.paths.vsockSocket, Date.now());
+
+        const firecrackerVersion = await api.getVersion();
+
+        setMark('resumed');
+
+        return { pid, firecrackerVersion, timings: timer.marks };
+      } catch (error) {
+        stopProcess(pid, 'SIGKILL');
+
+        await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
+
+        const reason = error instanceof Error ? error.message : String(error);
+
+        throw new Error(`wake failed: ${reason}\n${readLogTail(plan.paths.logFile, 5)}`, {
           cause: error,
         });
       }
@@ -174,4 +290,19 @@ export function createVmRunner(): VmRunner {
       }
     },
   };
+}
+
+// milliseconds per step, for the timing breakdown in the log
+function createMarks() {
+  const marks: Record<string, number> = {};
+  let last = performance.now();
+
+  const setMark = (step: string): void => {
+    const now = performance.now();
+
+    marks[step] = Math.round(now - last);
+    last = now;
+  };
+
+  return { marks, setMark };
 }

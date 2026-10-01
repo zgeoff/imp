@@ -1,0 +1,399 @@
+import { ORPCError } from '@orpc/server';
+import type { Server, WebSocketHandler } from 'bun';
+import type { Config } from '../config';
+import type { ImpRecord } from '../db/imps';
+import { listImps } from '../db/imps';
+import type { ImpDatabase } from '../db/open-database';
+import type { ImpService } from '../imps/imp-service';
+import { deriveSlotAddress } from '../net/addressing';
+import { buildErrorPage } from './error-pages';
+import { parseHostName } from './parse-host-name';
+
+// hop-by-hop headers (RFC 9110 7.6.1) stay on their own hop
+const HOP_HEADERS = [
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'proxy-connection',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+];
+
+const UPSTREAM_SOCKET_TIMEOUT_MS = 10_000;
+
+interface SocketData {
+  readonly upstream: WebSocket;
+  readonly release: () => void;
+
+  // upstream messages that arrive before the client socket opens
+  readonly pending: (string | ArrayBuffer)[];
+  readonly handleEarlyMessage: (event: MessageEvent<string | ArrayBuffer>) => void;
+}
+
+type ProxyServer = Server<SocketData>;
+
+interface WakeProxyDeps {
+  readonly config: Config;
+  readonly db: ImpDatabase;
+  readonly imps: ImpService;
+  readonly log: (message: string) => void;
+}
+
+export interface WakeProxy {
+  // one listener per imp on portBase + slot; call after a create or destroy
+  readonly syncListeners: () => Promise<void>;
+  readonly stop: () => Promise<void>;
+}
+
+// The wake-on-request proxy (DESIGN 2.11): Host routing on the proxy port and
+// one port per imp. A request wakes or boots the imp, then goes to its HTTP
+// port; WebSockets are relayed message by message.
+export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
+  const listeners = new Map<string, { readonly slot: number; readonly server: ProxyServer }>();
+  const failedSlots = new Set<number>();
+
+  const websocket: WebSocketHandler<SocketData> = {
+    open: (ws) => {
+      const upstream = ws.data.upstream;
+
+      upstream.removeEventListener('message', ws.data.handleEarlyMessage);
+
+      for (const message of ws.data.pending.splice(0)) {
+        ws.send(message);
+      }
+
+      upstream.addEventListener('message', (event: MessageEvent<string | ArrayBuffer>) => {
+        ws.send(event.data);
+      });
+
+      upstream.addEventListener('close', (event) => {
+        ws.close(toSendableCode(event.code), event.reason);
+      });
+    },
+    message: (ws, message) => {
+      ws.data.upstream.send(message);
+    },
+    close: (ws, code, reason) => {
+      ws.data.release();
+
+      if (ws.data.upstream.readyState <= WebSocket.OPEN) {
+        ws.data.upstream.close(toSendableCode(code), reason);
+      }
+    },
+  };
+
+  const handleRequest = async (
+    request: Request,
+    server: ProxyServer,
+    name: string | null,
+  ): Promise<Response | undefined> => {
+    if (name === null) {
+      return buildErrorPage(
+        404,
+        `Use http://<imp>.imp.localhost:${String(deps.config.proxyPort)}/.`,
+      );
+    }
+
+    const opened: { release: () => void } = {
+      release: () => {
+        // nothing counted yet
+      },
+    };
+
+    let running: { readonly imp: ImpRecord; readonly wokeMs: number | null };
+
+    try {
+      running = await deps.imps.requireRunning(name, (imp) => {
+        opened.release = deps.imps.tracker.open(imp.id, 'proxy');
+      });
+    } catch (error) {
+      opened.release();
+
+      return buildWakeErrorPage(name, error);
+    }
+
+    const imp = running.imp;
+    const wokeMs = running.wokeMs;
+
+    const url = new URL(request.url);
+
+    const target = `${imp.ip}:${String(imp.httpPort)}${url.pathname}${url.search}`;
+
+    if (wokeMs !== null) {
+      deps.log(
+        `impd: proxy: ${name} woke in ${String(wokeMs)}ms for ${request.method} ${url.pathname}`,
+      );
+    }
+
+    try {
+      await deps.imps.recordActivity(name);
+    } catch {
+      // the idle loop also counts the open connection
+    }
+
+    if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+      return handleWebSocket(request, server, `ws://${target}`, opened.release);
+    }
+
+    try {
+      const upstream = await fetch(`http://${target}`, {
+        method: request.method,
+        headers: buildUpstreamHeaders(request, server),
+        body: request.body,
+        redirect: 'manual',
+        decompress: false,
+        keepalive: false,
+      });
+
+      const headers = new Headers(upstream.headers);
+
+      for (const header of HOP_HEADERS) {
+        headers.delete(header);
+      }
+
+      if (wokeMs !== null) {
+        headers.set('x-imp-wake-ms', String(wokeMs));
+      }
+
+      const body = upstream.body === null ? null : buildTrackedBody(upstream.body, opened.release);
+
+      if (body === null) {
+        opened.release();
+      }
+
+      return new Response(body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers,
+      });
+    } catch (error) {
+      opened.release();
+
+      const reason = error instanceof Error ? error.message : String(error);
+
+      return buildErrorPage(
+        502,
+        `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
+      );
+    }
+  };
+
+  const handleWebSocket = async (
+    request: Request,
+    server: ProxyServer,
+    target: string,
+    release: () => void,
+  ): Promise<Response | undefined> => {
+    const protocols = (request.headers.get('sec-websocket-protocol') ?? '')
+      .split(',')
+      .map((protocol) => protocol.trim())
+      .filter((protocol) => protocol !== '');
+
+    let upstream: WebSocket;
+    const pending: (string | ArrayBuffer)[] = [];
+
+    try {
+      upstream = await openUpstreamSocket(target, protocols, buildUpstreamHeaders(request, server));
+    } catch (error) {
+      release();
+
+      const reason = error instanceof Error ? error.message : String(error);
+
+      return buildErrorPage(502, `The WebSocket to ${target} failed: ${reason}`);
+    }
+
+    const handleEarlyMessage = (event: MessageEvent<string | ArrayBuffer>): void => {
+      pending.push(event.data);
+    };
+
+    upstream.addEventListener('message', handleEarlyMessage);
+
+    const upgraded = server.upgrade(request, {
+      data: { upstream, pending, handleEarlyMessage, release },
+      ...(upstream.protocol !== '' && { headers: { 'sec-websocket-protocol': upstream.protocol } }),
+    });
+
+    if (!upgraded) {
+      upstream.close();
+
+      release();
+
+      return new Response('websocket upgrade failed', { status: 400 });
+    }
+
+    return undefined;
+  };
+
+  const startListener = (port: number, fixedName: string | null): ProxyServer =>
+    Bun.serve<SocketData>({
+      port,
+      idleTimeout: 0,
+      fetch: (request, server) =>
+        handleRequest(request, server, fixedName ?? parseHostName(request.headers.get('host'))),
+      websocket,
+    });
+
+  const main = startListener(deps.config.proxyPort, null);
+
+  deps.log(`impd: proxy on :${String(deps.config.proxyPort)}`);
+
+  return {
+    syncListeners: async () => {
+      const imps = await listImps(deps.db);
+
+      const wanted = new Map(imps.map((imp) => [imp.id, imp]));
+
+      for (const [id, listener] of listeners) {
+        if (wanted.get(id)?.slot !== listener.slot) {
+          await listener.server.stop(true);
+
+          listeners.delete(id);
+        }
+      }
+
+      for (const imp of imps) {
+        if (listeners.has(imp.id)) {
+          continue;
+        }
+
+        const port = deriveSlotAddress(imp.slot, deps.config).tailnetPort;
+
+        try {
+          listeners.set(imp.id, { slot: imp.slot, server: startListener(port, imp.name) });
+          failedSlots.delete(imp.slot);
+        } catch (error) {
+          if (!failedSlots.has(imp.slot)) {
+            failedSlots.add(imp.slot);
+
+            deps.log(
+              `impd: proxy: cannot listen on :${String(port)} for ${imp.name}: ${String(error)}`,
+            );
+          }
+        }
+      }
+    },
+    stop: async () => {
+      await Promise.all([
+        main.stop(true),
+        ...[...listeners.values()].map((listener) => listener.server.stop(true)),
+      ]);
+
+      listeners.clear();
+    },
+  };
+}
+
+function buildUpstreamHeaders(request: Request, server: ProxyServer): Headers {
+  const headers = new Headers(request.headers);
+
+  for (const header of HOP_HEADERS) {
+    headers.delete(header);
+  }
+
+  const socketHeaders = [...headers.keys()].filter((header) => header.startsWith('sec-websocket-'));
+
+  for (const header of socketHeaders) {
+    headers.delete(header);
+  }
+
+  // one request per upstream connection: an idle keep-alive socket would
+  // show as an established TCP connection in the guest and keep it awake
+  headers.set('connection', 'close');
+
+  const client = server.requestIP(request)?.address;
+
+  if (client !== undefined) {
+    const forwarded = request.headers.get('x-forwarded-for');
+    const chain = forwarded === null ? client : `${forwarded}, ${client}`;
+
+    headers.set('x-forwarded-for', chain);
+  }
+
+  headers.set('x-forwarded-host', request.headers.get('host') ?? '');
+  headers.set('x-forwarded-proto', 'http');
+
+  return headers;
+}
+
+// counts the connection until the body is sent or the client goes away
+function buildTrackedBody(source: ReadableStream<Uint8Array>, release: () => void) {
+  const reader = source.getReader();
+
+  return new ReadableStream<Uint8Array>({
+    pull: async (controller) => {
+      try {
+        const chunk = await reader.read();
+
+        if (chunk.done) {
+          release();
+
+          controller.close();
+        } else {
+          controller.enqueue(chunk.value);
+        }
+      } catch (error) {
+        release();
+
+        controller.error(error);
+      }
+    },
+    cancel: async (reason) => {
+      release();
+
+      await reader.cancel(reason);
+    },
+  });
+}
+
+function openUpstreamSocket(
+  target: string,
+  protocols: readonly string[],
+  headers: Readonly<Headers>,
+): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(target, {
+      protocols: [...protocols],
+      headers: Object.fromEntries(headers),
+    });
+
+    socket.binaryType = 'arraybuffer';
+
+    const timer = setTimeout(() => {
+      socket.close();
+
+      reject(new Error('timed out'));
+    }, UPSTREAM_SOCKET_TIMEOUT_MS);
+
+    socket.addEventListener('open', () => {
+      clearTimeout(timer);
+      resolve(socket);
+    });
+
+    socket.addEventListener('error', () => {
+      clearTimeout(timer);
+      reject(new Error('connection failed'));
+    });
+  });
+}
+
+// 1005, 1006 and 1015 describe a close; they cannot be sent in one
+function toSendableCode(code: number): number {
+  return code === 1000 ||
+    (code >= 1001 && code <= 1014 && code !== 1005 && code !== 1006) ||
+    (code >= 3000 && code <= 4999)
+    ? code
+    : 1000;
+}
+
+function buildWakeErrorPage(name: string, error: unknown): Response {
+  if (error instanceof ORPCError && error.code === 'NOT_FOUND') {
+    return buildErrorPage(404, `There is no imp named ${name}.`);
+  }
+
+  const reason = error instanceof Error ? error.message : String(error);
+
+  return buildErrorPage(503, `${name} could not wake: ${reason}`);
+}

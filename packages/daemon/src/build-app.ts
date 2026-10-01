@@ -87,6 +87,7 @@ export function buildApp(deps: AppDeps) {
               close: (code, reason) => {
                 ws.raw.close(code, reason);
               },
+              readBufferedAmount: () => readBufferedAmount(ws.raw),
             },
             deps.imps,
           );
@@ -96,10 +97,26 @@ export function buildApp(deps: AppDeps) {
         message: (ws, message) => {
           sessions.get(ws.id)?.handleMessage(message);
         },
+        drain: (ws) => {
+          sessions.get(ws.id)?.handleDrain();
+        },
         close: (ws) => {
           sessions.get(ws.id)?.handleClose();
           sessions.delete(ws.id);
         },
       })
   );
+}
+
+// Bun's ServerWebSocket has getBufferedAmount; Elysia's type leaves it out
+function readBufferedAmount(socket: object): number {
+  const read: unknown = Reflect.get(socket, 'getBufferedAmount');
+
+  if (typeof read !== 'function') {
+    return 0;
+  }
+
+  const amount: unknown = Reflect.apply(read, socket, []);
+
+  return typeof amount === 'number' ? amount : 0;
 }

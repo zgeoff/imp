@@ -21,6 +21,7 @@ export interface ImpRecord {
   readonly error: string | null;
   readonly pid: number | null;
   readonly firecrackerVersion: string | null;
+  readonly httpPort: number;
 }
 
 export interface NewImp {
@@ -30,6 +31,7 @@ export interface NewImp {
   readonly memoryMib: number;
   readonly slot: number;
   readonly ip: string;
+  readonly httpPort?: number;
 }
 
 export interface ImpStateChange {
@@ -76,6 +78,7 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
       memory_mib: imp.memoryMib,
       slot: imp.slot,
       ip: imp.ip,
+      ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
       created_at: now,
       last_active_at: now,
     })
@@ -149,6 +152,34 @@ export async function updateImpState(
   return toImpRecord(row);
 }
 
+// Compare-and-set: applies the change only while the row still has
+// `expected` state and pid; undefined when something else changed it first.
+export async function updateImpStateIf(
+  db: ImpDatabase,
+  id: string,
+  expected: Readonly<{ state: ImpState; pid: number | null }>,
+  change: Readonly<ImpStateChange>,
+): Promise<ImpRecord | undefined> {
+  const values: Updateable<DatabaseSchema['imps']> = { state: change.state };
+
+  if (change.pid !== undefined) {
+    values.pid = change.pid;
+  }
+
+  const pidOperator = expected.pid === null ? 'is' : '=';
+
+  const row = await db
+    .updateTable('imps')
+    .set(values)
+    .where('id', '=', id)
+    .where('state', '=', expected.state)
+    .where('pid', pidOperator, expected.pid)
+    .returningAll()
+    .executeTakeFirst();
+
+  return row === undefined ? undefined : toImpRecord(row);
+}
+
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {
   await db.updateTable('imps').set({ last_active_at: at.getTime() }).where('id', '=', id).execute();
 }
@@ -192,6 +223,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     error: row.error,
     pid: row.pid,
     firecrackerVersion: row.firecracker_version,
+    httpPort: row.http_port,
   };
 }
 

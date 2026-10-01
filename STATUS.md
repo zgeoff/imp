@@ -12,9 +12,9 @@ Updated at each milestone. Newest state at the top of each section.
 | M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done        |
 | M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done        |
 | M5  | Checkpoint, restore, fork (XFS reflink)                                         | done        |
-| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | in progress |
-| M7  | RAM governor (budget, LRU sleep), scale test                                    | in progress |
-| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | in progress |
+| M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | done        |
+| M7  | RAM governor (budget, LRU sleep), scale test                                    | done        |
+| M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | done        |
 | M9  | Tailscale                                                                       | done        |
 | M10 | `scripts/acceptance.sh` passes twice from a clean state                         | in progress |
 
@@ -26,12 +26,18 @@ Updated at each milestone. Newest state at the top of each section.
 | XFS reflink of a 500 MB file         | 321 ms     | includes `cp` process start in an Alpine container                                    |
 | InstanceStart → agent ping           | 412–464 ms | agent as PID 1 from squashfs, switch_root to ext4; kernel ~275 ms, init→listen ~60 ms |
 | Reflink clone of a 32G sparse rootfs | 3 ms       | in the host container                                                                 |
+| Sleep, 512 MiB guest                 | 0.5-2.1 s  | snapshot 0.4-2.1 s, dig holes 50-80 ms; mem file 50-60 MiB on disk                    |
+| Wake, impd log (FC start to resumed) | 59-101 ms  | load 30-55 ms, agent 21-40 ms; up to 1 s when the snapshot came right after a wake    |
+| HTTP request that wakes an imp       | 89-116 ms  | through the proxy, request to response; `x-imp-wake-ms` 72-97                         |
+| Idle 512 MiB ubuntu guest RAM        | 58-66 MiB  | anonymous (governor count) after boot; 3-6 MiB right after a wake                     |
+| Idle Firecracker CPU                 | 0.4%       | of one core                                                                           |
+| Sleep every imp on SIGTERM           | 1.7-2.5 s  | 5 imps, 410 MiB each, 2 at a time                                                     |
 | Checkpoint of a running imp          | 61–62 ms   | freeze (sync + FIFREEZE) + reflink + thaw, impd side; CLI round trip 89 ms            |
 | Restore of a running imp             | 649–654 ms | graceful stop + reflink + rename + cold boot to agent ping                            |
 
 ## Next
 
-- Merge wip/runtime (M6–M8), then finish `scripts/acceptance.sh` (M10).
+- Finish `scripts/acceptance.sh` (M10).
 
 ## Blockers
 

@@ -1,37 +1,54 @@
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, statSync } from 'node:fs';
 import type { Imp } from '@imp/api';
-import { ORPCError } from '@orpc/server';
 import { openExecStream } from '../agent-client/exec-stream';
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
-import { buildConflictError, buildInvalidStateError, buildNotFoundError } from '../api-errors';
+import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';
 import type { ImageRecord } from '../db/images';
 import { findImageById, listImages } from '../db/images';
 import {
   allocateSlot,
   createImp,
+  findImpById,
   findImpByName,
   listImps,
   removeImp,
   updateImpActivity,
+  updateImpHold,
   updateImpState,
+  updateImpStateIf,
 } from '../db/imps';
 import type { ImpRecord, ImpStateChange } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
 import { countSlots, deriveSlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
+import {
+  checkSnapshotMatch,
+  hasSnapshot,
+  readSnapshotIdentity,
+  readSnapshotMeta,
+  removeSnapshot,
+  writeSnapshotMeta,
+} from '../sleep/snapshot-meta';
+import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { createReflinkClone } from '../storage/reflink';
 import type { VmRunner } from '../vmm/vm-runner';
+import { readVmRam } from '../vmm/vm-stats';
+import { createActivityTracker } from './activity-tracker';
+import type { ActivityTracker } from './activity-tracker';
 import { requireTransition } from './imp-transitions';
 import { createKeyedMutex } from './keyed-mutex';
+import { createSemaphore } from './semaphore';
 
 interface CreateImpInput {
   readonly name?: string | undefined;
   readonly image?: string | undefined;
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
+  readonly httpPort?: number | undefined;
 
   // fills the new imp's disk; a reflink clone of the image rootfs by default
   readonly prepareDisk?: (target: string) => Promise<void>;
@@ -56,8 +73,35 @@ export interface ImpService {
   readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
-  // after an impd start: re-adopt live VMs, mark the rest stopped
+  // after an impd start: re-adopt live VMs, mark the rest stopped; sleeping
+  // imps stay asleep until something needs them
   readonly reconcileImps: () => Promise<void>;
+
+  // snapshot memory to disk and stop Firecracker (DESIGN 2.8)
+  readonly sleepImp: (name: string) => Promise<Imp>;
+
+  // a sleeping imp resumes from its snapshot, a stopped one boots cold
+  readonly wakeImp: (name: string) => Promise<Imp>;
+
+  // keeps the imp awake until now + seconds; 0 releases; wakes it if needed
+  readonly holdImp: (name: string, seconds: number) => Promise<Imp>;
+
+  // for the wake proxy: the running imp, woken or booted first if needed;
+  // `wokeMs` is null when it already ran. `onFound` runs before any wait, so
+  // the caller can count its connection before the idle loop looks again.
+  readonly requireRunning: (
+    name: string,
+    onFound?: (imp: ImpRecord) => void,
+  ) => Promise<{ readonly imp: ImpRecord; readonly wokeMs: number | null }>;
+
+  // for the idle loop and the governor: sleeps the imp if it still runs (and,
+  // with `onlyIdle`, has no open connection); false when it did not sleep
+  readonly sleepImpById: (id: string, reason: string, onlyIdle: boolean) => Promise<boolean>;
+
+  // on SIGTERM: every running imp to sleep, a few at a time
+  readonly sleepAllImps: () => Promise<void>;
+  readonly isImpBusy: (id: string) => boolean;
+  readonly tracker: ActivityTracker;
 
   // Hooks for checkpoints/checkpoint-service.ts. `lockImp` runs `action` under
   // the imp's lifecycle lock with a fresh record; `haltImp` and `bootImp`
@@ -65,6 +109,9 @@ export interface ImpService {
   readonly lockImp: <T>(name: string, action: (imp: ImpRecord) => Promise<T>) => Promise<T>;
   readonly haltImp: (imp: ImpRecord) => Promise<ImpRecord>;
   readonly bootImp: (imp: ImpRecord) => Promise<ImpRecord>;
+
+  // wakes a sleeping imp or boots a stopped one; the caller holds the lock
+  readonly requireRunningImp: (imp: ImpRecord) => Promise<ImpRecord>;
   readonly toApi: (imp: ImpRecord) => Promise<Imp>;
 }
 
@@ -78,9 +125,23 @@ export interface ImpServiceDeps {
 
   // a reflink clone by default; tests on a non-XFS tmpdir copy instead
   readonly cloneDisk?: (source: string, target: string) => Promise<void>;
+
+  // the RAM governor; without one every boot is admitted
+  readonly admission?: RamAdmission;
+
+  // what a snapshot is tied to; read from the system files when left out
+  readonly identity?: SnapshotIdentity;
+  readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
+
+  // after a create or a destroy: the proxy opens or closes the imp's port
+  readonly onImpsChanged?: () => void;
 }
 
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
+
+// snapshot writes put the whole mem file through the page cache
+// (docs/sleep-findings.md gotcha 8): a few at a time
+const SLEEP_CONCURRENCY = 2;
 
 export function createImpService(deps: ImpServiceDeps): ImpService {
   const mutex = createKeyedMutex();
@@ -93,6 +154,23 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
   const cloneDisk = deps.cloneDisk ?? createReflinkClone;
   const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
+  const tracker = createActivityTracker();
+  const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
+
+  const readRamMib =
+    deps.readRamMib ?? ((pid, apiSocket) => readVmRam(pid, apiSocket)?.ownedMib ?? null);
+
+  const identityCache: { value: SnapshotIdentity | null } = { value: deps.identity ?? null };
+
+  const readIdentity = (): SnapshotIdentity => {
+    identityCache.value ??= readSnapshotIdentity(deps.config);
+
+    return identityCache.value;
+  };
+
+  const emitChanged = (): void => {
+    deps.onImpsChanged?.();
+  };
 
   const toApiImp = (imp: ImpRecord, imageName: string): Imp => {
     const api: Imp = {
@@ -104,7 +182,8 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       memoryMib: imp.memoryMib,
       ip: imp.ip,
       slot: imp.slot,
-      port: deps.config.portBase + imp.slot,
+      port: deriveSlotAddress(imp.slot, slotPlan).tailnetPort,
+      httpPort: imp.httpPort,
       url: buildLocalUrl(imp.name, deps.config.proxyPort),
       createdAt: imp.createdAt,
       lastActiveAt: imp.lastActiveAt,
@@ -120,6 +199,15 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
     if (imp.error !== null) {
       api.error = imp.error;
+    }
+
+    const ramMib =
+      imp.state === 'running' && imp.pid !== null
+        ? readRamMib(imp.pid, buildImpPaths(deps.config.dataDir, imp.id).apiSocket)
+        : null;
+
+    if (ramMib !== null) {
+      api.ramMib = ramMib;
     }
 
     return api;
@@ -141,19 +229,37 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     return updated;
   };
 
-  // a running imp whose Firecracker died is stopped; seen on any read
+  // A dead VM or a lost snapshot means stopped. The repair is a compare-and-set
+  // and skips a locked imp, so it never hides a VM that a start just booted.
   const checkLiveness = async (imp: ImpRecord): Promise<ImpRecord> => {
     const paths = buildImpPaths(deps.config.dataDir, imp.id);
+    const lostSnapshot = imp.state === 'sleeping' && !hasSnapshot(paths);
 
-    if (imp.state !== 'running' || (imp.pid !== null && deps.vms.isVmAlive(imp.pid, paths))) {
+    const lostVm =
+      imp.state === 'running' && (imp.pid === null || !deps.vms.isVmAlive(imp.pid, paths));
+
+    if ((!lostSnapshot && !lostVm) || mutex.isLocked(imp.id)) {
       return imp;
     }
 
-    log(`impd: ${imp.name}: firecracker is gone; marking it stopped`);
+    const repaired = await updateImpStateIf(
+      deps.db,
+      imp.id,
+      { state: imp.state, pid: imp.pid },
+      { state: 'stopped', pid: null },
+    );
 
-    const stopped = await updateState(imp, { state: 'stopped', pid: null });
+    if (repaired === undefined) {
+      const current = await findImpById(deps.db, imp.id);
 
-    return stopped;
+      return current ?? imp;
+    }
+
+    const what = lostSnapshot ? 'the snapshot is gone' : 'firecracker is gone';
+
+    log(`impd: ${imp.name}: ${what}; marked it stopped`);
+
+    return repaired;
   };
 
   const findOrThrow = async (name: string): Promise<ImpRecord> => {
@@ -166,10 +272,29 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     return checkLiveness(imp);
   };
 
+  // the full text goes to the log, its first line to the record
+  const writeFailure = async (imp: ImpRecord, error: unknown): Promise<void> => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    log(`impd: ${imp.name}: ${message}`);
+
+    await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
+  };
+
   // boots the imp's disk; the caller holds the imp's lock
   const startImpVm = async (imp: ImpRecord): Promise<ImpRecord> => {
     const paths = buildImpPaths(deps.config.dataDir, imp.id);
     const address = deriveSlotAddress(imp.slot, slotPlan);
+
+    // a memory snapshot is only valid with the disk it was taken with
+    removeSnapshot(paths);
+
+    // a fresh guest's RSS starts small and grows; reserve part of its memory
+    await deps.admission?.admit({
+      id: imp.id,
+      name: imp.name,
+      reserveMib: Math.ceil((imp.memoryMib * deps.config.bootReservePercent) / 100),
+    });
 
     try {
       await deps.taps.setupTap(address);
@@ -180,6 +305,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         systemDrivePath: deps.config.systemDrivePath,
         paths,
         address,
+        impId: imp.id,
         hostname: imp.name,
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
@@ -188,18 +314,19 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
       log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
 
+      await updateImpActivity(deps.db, imp.id, new Date());
+
       return await updateState(imp, {
         state: 'running',
         pid: vm.pid,
         error: null,
+        sleptAt: null,
         firecrackerVersion: vm.firecrackerVersion,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      deps.admission?.release(imp.id);
 
-      log(`impd: ${imp.name}: ${message}`);
-
-      await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
+      await writeFailure(imp, error);
 
       throw error;
     }
@@ -219,12 +346,14 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
           imageId: image.id,
           vcpus: input.vcpus ?? deps.config.defaultVcpus,
           memoryMib: input.memoryMib ?? deps.config.defaultMemoryMib,
+          ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
           slot,
           ip: deriveSlotAddress(slot, slotPlan).guestIp,
         });
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('imps.name')) {
+      // slot and ip come from the same transaction: only the name can clash
+      if (isUniqueViolation(error)) {
         throw buildConflictError('imp', name);
       }
 
@@ -251,17 +380,206 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     }
   };
 
+  // snapshots the VM and stops it; the caller holds the imp's lock. A failed
+  // snapshot leaves the VM running; a failure after the kill stops the imp.
+  const sleepImpVm = async (imp: ImpRecord, reason: string): Promise<ImpRecord> => {
+    requireTransition(imp.state, 'sleeping', 'sleep');
+
+    const paths = buildImpPaths(deps.config.dataDir, imp.id);
+    const pid = imp.pid;
+
+    if (pid === null) {
+      throw new Error(`${imp.name} is running without a firecracker pid`);
+    }
+
+    const ramMib = readRamMib(pid, paths.apiSocket) ?? 0;
+    const started = performance.now();
+
+    try {
+      const timings = await sleepSlots.run(() => deps.vms.sleepVm(pid, paths));
+
+      writeSnapshotMeta(paths, {
+        ...readIdentity(),
+        createdAt: Date.now(),
+        memoryMib: imp.memoryMib,
+        ramMib,
+      });
+
+      const sleepMs = Math.round(performance.now() - started);
+
+      log(
+        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason}), ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
+      );
+    } catch (error) {
+      if (deps.vms.isVmAlive(pid, paths)) {
+        throw error;
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+
+      log(`impd: ${imp.name}: sleep failed after firecracker stopped: ${message}`);
+      removeSnapshot(paths);
+      deps.admission?.release(imp.id);
+
+      await updateState(imp, { state: 'stopped', pid: null });
+
+      throw error;
+    }
+
+    deps.admission?.release(imp.id);
+
+    return updateState(imp, { state: 'sleeping', pid: null, sleptAt: new Date() });
+  };
+
+  // resumes from the snapshot, or boots cold when there is none, it does not
+  // match this host, or the load fails: the disk is always the truth
+  const wakeImpVm = async (imp: ImpRecord): Promise<ImpRecord> => {
+    const paths = buildImpPaths(deps.config.dataDir, imp.id);
+    const meta = readSnapshotMeta(paths);
+    const mismatch = meta === null ? 'no snapshot' : checkSnapshotMatch(meta, readIdentity());
+
+    if (meta === null || mismatch !== null) {
+      log(`impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot'}`);
+
+      return startImpVm(imp);
+    }
+
+    // a woken VM faults its pages back in; it grows toward what it owned
+    await deps.admission?.admit({
+      id: imp.id,
+      name: imp.name,
+      reserveMib: Math.max(meta.ramMib, deps.config.wakeReserveMib),
+    });
+
+    const started = performance.now();
+
+    try {
+      // a container restart takes the taps with it
+      await deps.taps.setupTap(deriveSlotAddress(imp.slot, slotPlan));
+
+      const vm = await deps.vms.wakeVm({ firecrackerBin: deps.config.firecrackerBin, paths });
+
+      const wakeMs = Math.round(performance.now() - started);
+
+      log(
+        `impd: ${imp.name}: woke pid ${String(vm.pid)} in ${String(wakeMs)}ms ${formatTimings(vm.timings)}`,
+      );
+
+      await updateImpActivity(deps.db, imp.id, new Date());
+
+      return await updateState(imp, {
+        state: 'running',
+        pid: vm.pid,
+        error: null,
+        sleptAt: null,
+        firecrackerVersion: vm.firecrackerVersion,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      log(`impd: ${imp.name}: ${message.split('\n')[0] ?? ''}; booting cold`);
+      deps.admission?.release(imp.id);
+
+      return startImpVm(imp);
+    }
+  };
+
+  // the running imp, woken or booted first; the caller holds the imp's lock
+  const requireRunningLocked = async (imp: ImpRecord): Promise<ImpRecord> => {
+    if (imp.state === 'running') {
+      return imp;
+    }
+
+    if (imp.state === 'sleeping') {
+      return wakeImpVm(imp);
+    }
+
+    requireTransition(imp.state, 'running', 'start');
+
+    if (imp.pid !== null) {
+      await deps.vms.stopVm(imp.pid, buildImpPaths(deps.config.dataDir, imp.id), false);
+    }
+
+    return startImpVm(imp);
+  };
+
+  const requireRunning = async (
+    name: string,
+    onFound?: (imp: ImpRecord) => void,
+  ): Promise<{ readonly imp: ImpRecord; readonly wokeMs: number | null }> => {
+    const found = await findOrThrow(name);
+
+    onFound?.(found);
+
+    // the hot path: no lock while nothing else changes the imp
+    if (found.state === 'running' && !mutex.isLocked(found.id)) {
+      return { imp: found, wokeMs: null };
+    }
+
+    const started = performance.now();
+
+    return mutex.runExclusive(found.id, async () => {
+      const imp = await findOrThrow(name);
+
+      if (imp.state === 'running') {
+        return { imp, wokeMs: null };
+      }
+
+      const running = await requireRunningLocked(imp);
+
+      return { imp: running, wokeMs: Math.round(performance.now() - started) };
+    });
+  };
+
+  const sleepImpById = (id: string, reason: string, onlyIdle: boolean): Promise<boolean> =>
+    mutex.runExclusive(id, async () => {
+      const imp = await findImpById(deps.db, id);
+
+      if (imp?.state !== 'running' || (onlyIdle && tracker.count(id) > 0)) {
+        return false;
+      }
+
+      try {
+        await sleepImpVm(imp, reason);
+
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        log(`impd: ${imp.name}: could not sleep: ${message}`);
+
+        return false;
+      }
+    });
+
+  // agent shutdown, then the memory goes too: a stopped imp boots cold; the
+  // caller holds the imp's lock
+  const stopImpVm = async (imp: ImpRecord): Promise<ImpRecord> => {
+    const paths = buildImpPaths(deps.config.dataDir, imp.id);
+
+    if (imp.pid !== null) {
+      await deps.vms.stopVm(imp.pid, paths, true);
+    }
+
+    removeSnapshot(paths);
+    deps.admission?.release(imp.id);
+
+    return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
+  };
+
+  const toApiImpWithImage = async (imp: ImpRecord): Promise<Imp> => {
+    const imageName = await readImageName(imp.imageId);
+
+    return toApiImp(imp, imageName);
+  };
+
   return {
     createImp: async (input) => {
       const name = await resolveImpName(input.name);
-      const existing = await findImpByName(deps.db, name);
-
-      if (existing !== undefined) {
-        throw buildConflictError('imp', name);
-      }
-
       const image = await deps.images.resolveImage(input.image);
       const created = await createImpRecord(input, name, image);
+
+      emitChanged();
 
       return mutex.runExclusive(created.id, async () => {
         const paths = buildImpPaths(deps.config.dataDir, created.id);
@@ -274,9 +592,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
             input.prepareDisk ?? ((disk) => cloneDisk(deps.images.getRootfsPath(image), disk))
           )(paths.disk);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-
-          await updateState(created, { state: 'error', error: message });
+          await writeFailure(created, error);
 
           throw error;
         }
@@ -313,29 +629,9 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
       return mutex.runExclusive(found.id, async () => {
         const imp = await findOrThrow(name);
+        const running = await requireRunningLocked(imp);
 
-        if (imp.state === 'sleeping') {
-          throw new ORPCError('NOT_IMPLEMENTED', { message: 'wake is not implemented yet' });
-        }
-
-        if (imp.state !== 'running') {
-          requireTransition(imp.state, 'running', 'start');
-
-          const paths = buildImpPaths(deps.config.dataDir, imp.id);
-
-          if (imp.pid !== null) {
-            await deps.vms.stopVm(imp.pid, paths, false);
-          }
-
-          const running = await startImpVm(imp);
-          const imageName = await readImageName(running.imageId);
-
-          return toApiImp(running, imageName);
-        }
-
-        const imageName = await readImageName(imp.imageId);
-
-        return toApiImp(imp, imageName);
+        return toApiImpWithImage(running);
       });
     },
 
@@ -353,11 +649,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
         requireTransition(imp.state, 'stopped', 'stop');
 
-        if (imp.pid !== null) {
-          await deps.vms.stopVm(imp.pid, buildImpPaths(deps.config.dataDir, imp.id), true);
-        }
-
-        const stopped = await updateState(imp, { state: 'stopped', pid: null });
+        const stopped = await stopImpVm(imp);
         const imageName = await readImageName(stopped.imageId);
 
         return toApiImp(stopped, imageName);
@@ -379,32 +671,56 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         await deps.taps.removeTap(deriveSlotAddress(imp.slot, slotPlan).tap);
 
         rmSync(paths.dir, { recursive: true, force: true });
+        deps.admission?.release(imp.id);
 
         await removeImp(deps.db, imp.id);
       });
+
+      emitChanged();
     },
 
     readUrls: async (name) => {
       const imp = await findOrThrow(name);
 
-      const port = deps.config.portBase + imp.slot;
+      const port = deriveSlotAddress(imp.slot, slotPlan).tailnetPort;
 
       return {
         local: buildLocalUrl(imp.name, deps.config.proxyPort),
-        tailnet: deps.config.tailscaleAuthKey === null ? null : `http://imp:${String(port)}`,
+        tailnet:
+          deps.config.tailscaleAuthKey === null
+            ? null
+            : `http://${deps.config.tailscaleHostname}:${String(port)}`,
       };
     },
 
+    // a sleeping imp wakes and a stopped one boots, as for an HTTP request
     openExec: async (name, request) => {
-      const imp = await findOrThrow(name);
+      const running = await requireRunning(name);
 
-      if (imp.state !== 'running') {
-        throw buildInvalidStateError(imp.state, ['running'], 'exec in');
-      }
+      const imp = running.imp;
 
       await updateImpActivity(deps.db, imp.id, new Date());
 
-      return openExecStream(buildImpPaths(deps.config.dataDir, imp.id).vsockSocket, request);
+      const release = tracker.open(imp.id, 'exec');
+
+      try {
+        const stream = await openExecStream(
+          buildImpPaths(deps.config.dataDir, imp.id).vsockSocket,
+          request,
+        );
+
+        return {
+          ...stream,
+          close: () => {
+            release();
+
+            stream.close();
+          },
+        };
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
 
     recordActivity: async (name) => {
@@ -426,10 +742,14 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
           const paths = buildImpPaths(deps.config.dataDir, imp.id);
           const alive = imp.pid !== null && deps.vms.isVmAlive(imp.pid, paths);
-          const ready = alive ? await deps.vms.isAgentReady(paths) : false;
 
-          if (imp.state === 'running' && ready) {
-            log(`impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}`);
+          // a loaded guest may answer late; killing it would lose its memory
+          if (imp.state === 'running' && alive) {
+            const ready = await deps.vms.isAgentReady(paths);
+
+            const note = ready ? '' : ' (the agent does not answer yet)';
+
+            log(`impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`);
 
             return;
           }
@@ -455,6 +775,64 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       );
     },
 
+    sleepImp: async (name) => {
+      const found = await findOrThrow(name);
+
+      return mutex.runExclusive(found.id, async () => {
+        const imp = await findOrThrow(name);
+
+        const asleep = imp.state === 'sleeping' ? imp : await sleepImpVm(imp, 'requested');
+
+        return toApiImpWithImage(asleep);
+      });
+    },
+
+    wakeImp: async (name) => {
+      const found = await findOrThrow(name);
+
+      return mutex.runExclusive(found.id, async () => {
+        const imp = await findOrThrow(name);
+        const running = await requireRunningLocked(imp);
+
+        return toApiImpWithImage(running);
+      });
+    },
+
+    holdImp: async (name, seconds) => {
+      const found = await findOrThrow(name);
+
+      return mutex.runExclusive(found.id, async () => {
+        const imp = await findOrThrow(name);
+
+        const until = seconds > 0 ? new Date(Date.now() + seconds * 1000) : null;
+
+        const held = await updateImpHold(deps.db, imp.id, until);
+
+        if (until === null) {
+          return toApiImpWithImage(held);
+        }
+
+        await updateImpActivity(deps.db, imp.id, new Date());
+
+        const running = await requireRunningLocked(held);
+
+        return toApiImpWithImage(running);
+      });
+    },
+
+    requireRunning,
+    sleepImpById,
+
+    sleepAllImps: async () => {
+      const imps = await listImps(deps.db);
+
+      const running = imps.filter((imp) => imp.state === 'running');
+
+      await Promise.all(running.map((imp) => sleepImpById(imp.id, 'impd is stopping', false)));
+    },
+
+    isImpBusy: (id) => mutex.isLocked(id),
+    tracker,
     lockImp: async (name, action) => {
       const found = await findOrThrow(name);
 
@@ -465,13 +843,8 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       });
     },
 
-    haltImp: async (imp) => {
-      if (imp.pid !== null) {
-        await deps.vms.stopVm(imp.pid, buildImpPaths(deps.config.dataDir, imp.id), true);
-      }
-
-      return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
-    },
+    haltImp: stopImpVm,
+    requireRunningImp: requireRunningLocked,
 
     bootImp: (imp) => startImpVm(imp),
 
@@ -483,6 +856,15 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
   };
 }
 
+// allocated size: the mem file is sparse after --dig-holes
+function readDiskMib(path: string): number {
+  try {
+    return Math.round((statSync(path).blocks * 512) / 1_048_576);
+  } catch {
+    return 0;
+  }
+}
+
 function buildLocalUrl(name: string, proxyPort: number): string {
   return `http://${name}.imp.localhost:${String(proxyPort)}`;
 }
@@ -491,4 +873,13 @@ function formatTimings(timings: Readonly<Record<string, number>>): string {
   return Object.entries(timings)
     .map(([step, ms]) => `${step}=${String(ms)}ms`)
     .join(' ');
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+  );
 }

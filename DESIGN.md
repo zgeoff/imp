@@ -92,7 +92,7 @@ This file records the decisions and the reasons. `STATUS.md` records progress.
   images/<digest>/rootfs.ext4  images/<digest>/config.json
   imps/<id>/disk.ext4
   imps/<id>/run/{api.sock,vsock.sock,firecracker.log,pid}
-  imps/<id>/snapshot/{vmstate,memory,meta.json}
+  imps/<id>/snapshot/{vmstate,mem,meta.json}
   imps/<id>/checkpoints/<cid>/disk.ext4
 ```
 
@@ -151,24 +151,40 @@ Measured procedure and numbers: `docs/sleep-findings.md`.
   guest clock is otherwise behind by the sleep time). Wake takes about 50–100 ms; pages then fault
   in lazily from the memory file.
 - On any load failure or a snapshot version mismatch, boot cold instead.
+- `meta.json` stores the Firecracker version, the snapshot format, the host kernel, hashes of the
+  guest kernel and the system drive, and the RAM the VM owned at sleep. Any difference means a cold
+  boot. Snapshot files stay until the next sleep renames over them, a stop, or a cold boot.
+- Snapshot writes run 2 at a time (one host-wide semaphore).
+- Anything that needs a VM wakes a sleeping imp and cold-boots a stopped one: exec, console, the
+  proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the imp off.
 - TCP connections across a sleep reset. In-memory processes survive. An exec stream whose host side
   hangs up gets SIGHUP and is detached after 1 s, so it does not keep the imp awake.
-- On SIGTERM impd sleeps every awake imp, so a container restart keeps memory. After a crash, an imp
-  with no live VM is marked `stopped` and boots cold.
-- Firecracker processes are detached (`setsid`). A restart of the impd process alone re-adopts
-  running VMs by pid and API socket.
+- On SIGTERM or SIGINT impd sleeps every awake imp, so a container restart keeps memory
+  (`scripts/dev.sh down` gives it 120 s). After a crash, an imp with no live VM is marked `stopped`
+  and boots cold; sleeping imps stay asleep and wake on demand.
+- Firecracker processes are detached (`setsid`). On SIGHUP impd exits without sleeping anything; the
+  next impd re-adopts every live VM by pid and API socket, even one whose agent answers late
+  (`scripts/dev.sh restart`).
 
 ### 2.9 Idle detection and the RAM governor
 
-- An imp is active when it has an open exec session, an open proxied connection, established guest
-  TCP connections (reported by the agent), or Firecracker CPU time above a threshold. A headless
-  agent waiting on an LLM API keeps a TCP connection open, so it stays awake.
-- Idle for `IMP_IDLE_TIMEOUT` (default 60 s) → sleep.
-- Holds: `imp hold <name> <duration>` keeps an imp awake.
-- RAM budget `IMP_RAM_BUDGET_MIB` (default 16384). Usage = sum of Firecracker PSS. Before a boot or
-  wake, impd reserves the expected size. If the sum would pass the budget, it sleeps the least
-  recently active imps until it fits. If it still cannot fit, the request fails with
-  `RAM_BUDGET_EXCEEDED`. A periodic check enforces the budget when guests grow.
+- Every 2 s, an imp is active when it has an open exec session or proxied connection (counted on the
+  host), established guest TCP connections (the agent's `activity`), Firecracker CPU above
+  `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about 0.4), or a hold. A
+  headless agent waiting on an LLM API keeps a TCP connection open, so it stays awake.
+- The proxy's own connections reach the guest as TCP from the gateway. The proxy sends
+  `Connection: close` upstream, so a finished request leaves no keep-alive socket that counts.
+- Idle for `IMP_IDLE_TIMEOUT_S` (default 60 s) → sleep.
+- Holds: `imp hold <name> <duration>` keeps an imp awake (and wakes it); `0` releases.
+- RAM budget `IMP_RAM_BUDGET_MIB` (default 16384). Usage = sum of Firecracker `Pss_Anon` +
+  `Pss_Shmem` (`smaps_rollup`): pages a woken guest only read are clean pages of the mem file, which
+  the host can drop. `system.info` also reports the committed memory of awake imps.
+- Before a boot or wake, impd reserves RAM under one global lock: a cold boot
+  `IMP_BOOT_RESERVE_PERCENT` (default 50) of the imp's memory, a wake the larger of what it owned at
+  sleep and `IMP_WAKE_RESERVE_MIB` (default 256). A reservation counts until the measurement passes
+  it, at most 20 s. If the sum would pass the budget, impd sleeps the least recently active imps
+  (not held, not busy) until it fits. If it still cannot fit, the request fails with
+  `RAM_BUDGET_EXCEEDED`. Every 5 s, impd sleeps LRU imps while measured usage is over the budget.
 
 ### 2.10 Control plane and API
 
@@ -182,7 +198,9 @@ Measured procedure and numbers: `docs/sleep-findings.md`.
 
 ### 2.11 URLs and Tailscale
 
-- Local: `http://<name>.imp.localhost:7080` (Host header routing).
+- Local: `http://<name>.imp.localhost:7080` (Host header routing; any `<name>.<domain>` works).
+- The proxy forwards to the imp's `httpPort` (default 8080, set at create). WebSockets are relayed
+  message by message. A wake adds an `x-imp-wake-ms` response header.
 - Tailnet: hostnames on MagicDNS do not support wildcards, so each imp also gets a stable port:
   `http://imp:<20000+slot>`.
 - tailscaled runs in the host container with `TAILSCALE_AUTHKEY`, `--advertise-tags=tag:imp`,

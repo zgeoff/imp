@@ -1,22 +1,26 @@
 import { impContract } from '@imp/api';
 import type { Image, SystemInfo } from '@imp/api';
-import { ORPCError, implement } from '@orpc/server';
+import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
+import type { TailscaleStatus } from './net/tailscale-status';
 
 export interface RouterDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
   readonly imps: ImpService;
   readonly images: ImageService;
+  readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
   readonly firecrackerVersion: string | null;
+  readonly readTailscale: () => Promise<TailscaleStatus>;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -34,9 +38,11 @@ export function buildRouter(deps: RouterDeps) {
       }),
       start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
       stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
-      sleep: os.imps.sleep.handler(handleUnimplemented),
-      wake: os.imps.wake.handler(handleUnimplemented),
-      hold: os.imps.hold.handler(handleUnimplemented),
+      sleep: os.imps.sleep.handler((context) => deps.imps.sleepImp(context.input.name)),
+      wake: os.imps.wake.handler((context) => deps.imps.wakeImp(context.input.name)),
+      hold: os.imps.hold.handler((context) =>
+        deps.imps.holdImp(context.input.name, context.input.seconds),
+      ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
       fork: os.imps.fork.handler((context) => deps.checkpoints.forkImp(context.input)),
     },
@@ -88,24 +94,29 @@ export function buildRouter(deps: RouterDeps) {
   });
 }
 
-// RAM in use is the memory the running imps were given, until the governor
-// measures Firecracker PSS.
+// RAM used is measured (what awake Firecrackers own); committed is the
+// memory the awake imps were given (DESIGN 2.9).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const imps = await listImps(deps.db);
+  const [imps, usage, tailscale] = await Promise.all([
+    listImps(deps.db),
+    deps.governor.readUsage(),
+    deps.readTailscale(),
+  ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
 
   return {
     version: packageJson.version,
     ramBudgetMib: deps.config.ramBudgetMib,
-    ramUsedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
+    ramUsedMib: usage.usedMib,
+    ramReservedMib: usage.reservedMib,
+    ramCommittedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
     awakeCount: running.length,
     impCount: imps.length,
     firecrackerVersion: deps.firecrackerVersion,
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
-      state: null,
-      hostname: null,
+      ...tailscale,
     },
   };
 }
@@ -119,8 +130,4 @@ function toApiImage(image: ImageRecord): Image {
     createdAt: image.createdAt,
     sizeBytes: image.sizeBytes,
   };
-}
-
-function handleUnimplemented(): never {
-  throw new ORPCError('NOT_IMPLEMENTED', { message: 'not implemented yet' });
 }

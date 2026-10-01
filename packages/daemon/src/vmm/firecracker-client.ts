@@ -28,6 +28,15 @@ interface Vsock {
   readonly udsPath: string;
 }
 
+// DESIGN 2.8: free page reporting hands memory the guest frees back to the
+// host; deflate_on_oom keeps an inflated balloon from killing guest processes
+interface Balloon {
+  readonly amountMib: number;
+  readonly deflateOnOom: boolean;
+  readonly statsPollingIntervalS: number;
+  readonly freePageReporting: boolean;
+}
+
 interface SnapshotFiles {
   readonly snapshotPath: string;
   readonly memFilePath: string;
@@ -39,6 +48,9 @@ export interface FirecrackerClient {
   readonly putDrive: (drive: Drive) => Promise<void>;
   readonly putNetworkInterface: (iface: NetworkInterface) => Promise<void>;
   readonly putVsock: (vsock: Vsock) => Promise<void>;
+
+  // before InstanceStart only; a running or restored VM cannot add one
+  readonly putBalloon: (balloon: Balloon) => Promise<void>;
   readonly instanceStart: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
@@ -110,6 +122,13 @@ export function createFirecrackerClient(socketPath: string): FirecrackerClient {
         guest_mac: iface.guestMac,
       }),
     putVsock: (vsock) => sendPut('/vsock', { guest_cid: vsock.guestCid, uds_path: vsock.udsPath }),
+    putBalloon: (balloon) =>
+      sendPut('/balloon', {
+        amount_mib: balloon.amountMib,
+        deflate_on_oom: balloon.deflateOnOom,
+        stats_polling_interval_s: balloon.statsPollingIntervalS,
+        free_page_reporting: balloon.freePageReporting,
+      }),
     instanceStart: () => sendPut('/actions', { action_type: 'InstanceStart' }),
     pause: async () => {
       await sendRequest('PATCH', '/vm', { state: 'Paused' });
@@ -122,6 +141,7 @@ export function createFirecrackerClient(socketPath: string): FirecrackerClient {
         snapshot_type: 'Full',
         snapshot_path: files.snapshotPath,
         mem_file_path: files.memFilePath,
+        sync_snapshot_files: true,
       }),
     loadSnapshot: (files, resumeVm) =>
       sendPut('/snapshot/load', {

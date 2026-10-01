@@ -109,16 +109,18 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
   };
 
   // A running disk is frozen around the clone (sync + FIFREEZE in the guest).
-  // A sleeping one is refused: its memory image holds unwritten page cache.
+  // A sleeping one wakes first: its memory image holds unwritten page cache.
   // The caller holds the imp's lock.
-  const createConsistentClone = async (imp: ImpRecord, target: string, action: string) => {
-    const paths = buildImpPaths(deps.config.dataDir, imp.id);
+  const createConsistentClone = async (found: ImpRecord, target: string, action: string) => {
+    const paths = buildImpPaths(deps.config.dataDir, found.id);
 
-    if (imp.state === 'stopped' || imp.state === 'error') {
+    if (found.state === 'stopped' || found.state === 'error') {
       await cloneDisk(paths.disk, target);
 
       return;
     }
+
+    const imp = found.state === 'sleeping' ? await deps.imps.requireRunningImp(found) : found;
 
     if (imp.state !== 'running') {
       throw buildInvalidStateError(imp.state, ['running', 'stopped', 'error'], action);
@@ -255,8 +257,12 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       const source = await deps.imps.lockImp(input.source, async (imp) => {
         if (input.checkpoint !== undefined) {
           await findCheckpointOrThrow(imp, input.checkpoint);
-        } else if (imp.state === 'creating' || imp.state === 'sleeping') {
-          throw buildInvalidStateError(imp.state, ['running', 'stopped', 'error'], 'fork');
+        } else if (imp.state === 'creating') {
+          throw buildInvalidStateError(
+            imp.state,
+            ['running', 'sleeping', 'stopped', 'error'],
+            'fork',
+          );
         }
 
         return deps.imps.toApi(imp);

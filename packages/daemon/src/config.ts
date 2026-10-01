@@ -14,6 +14,9 @@ const EnvSchema = z.object({
   IMP_PORT_BASE: PortSchema.default(20_000),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
+  IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
+  IMP_BOOT_RESERVE_PERCENT: CountSchema.pipe(z.int().max(100)).default(50),
+  IMP_WAKE_RESERVE_MIB: CountSchema.default(256),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
   IMP_DEFAULT_MEMORY_MIB: CountSchema.default(2048),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
@@ -23,6 +26,7 @@ const EnvSchema = z.object({
   IMP_SYSTEM_DRIVE: z.string().optional(),
   IMP_DEFAULT_IMAGE: z.string().default('base'),
   TAILSCALE_AUTHKEY: z.string().optional(),
+  IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
 });
 
 export interface Config {
@@ -32,6 +36,14 @@ export interface Config {
   readonly portBase: number;
   readonly ramBudgetMib: number;
   readonly idleTimeoutS: number;
+
+  // Firecracker CPU (percent of one core) above which an imp counts as busy
+  readonly idleCpuPercent: number;
+
+  // the RAM the governor reserves before a cold boot, as a percentage of the
+  // imp's memory, and the least it reserves before a wake (DESIGN 2.9)
+  readonly bootReservePercent: number;
+  readonly wakeReserveMib: number;
   readonly defaultVcpus: number;
   readonly defaultMemoryMib: number;
   readonly dns: readonly string[];
@@ -49,6 +61,9 @@ export interface Config {
   // one by this name exists
   readonly defaultImage: string;
   readonly tailscaleAuthKey: string | null;
+
+  // the host's tailnet name; per-imp URLs are http://<it>:<tailnetPort>
+  readonly tailscaleHostname: string;
 }
 
 function splitList(value: string): string[] {
@@ -75,6 +90,9 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     portBase: parsed.IMP_PORT_BASE,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,
+    idleCpuPercent: parsed.IMP_IDLE_CPU_PERCENT,
+    bootReservePercent: parsed.IMP_BOOT_RESERVE_PERCENT,
+    wakeReserveMib: parsed.IMP_WAKE_RESERVE_MIB,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,
     defaultMemoryMib: parsed.IMP_DEFAULT_MEMORY_MIB,
     dns: parsed.IMP_DNS,
@@ -86,5 +104,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     systemDriveSource: parsed.IMP_SYSTEM_DRIVE ?? null,
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
+    tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
   };
 }

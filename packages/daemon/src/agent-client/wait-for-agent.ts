@@ -5,6 +5,9 @@ export interface WaitOptions {
   readonly deadlineMs: number;
   readonly firstDelayMs?: number;
   readonly maxDelayMs?: number;
+
+  // how long one ping may take (default 1000)
+  readonly attemptMs?: number;
 }
 
 // Pings until the agent answers. During boot the vsock socket may not exist
@@ -20,7 +23,7 @@ export async function waitForAgent(
   let lastError: unknown = null;
 
   while (Date.now() < deadline) {
-    const attemptMs = Math.min(1000, deadline - Date.now());
+    const attemptMs = Math.min(options.attemptMs ?? 1000, deadline - Date.now());
 
     try {
       return await sendPing(vsockPath, Math.max(1, attemptMs));

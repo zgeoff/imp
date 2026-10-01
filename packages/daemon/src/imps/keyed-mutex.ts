@@ -1,6 +1,9 @@
 export interface KeyedMutex {
   // runs `task` after every task queued earlier for the same key
   readonly runExclusive: <T>(key: string, task: () => Promise<T>) => Promise<T>;
+
+  // true while a task for `key` runs or waits
+  readonly isLocked: (key: string) => boolean;
 }
 
 export function createKeyedMutex(): KeyedMutex {
@@ -27,5 +30,6 @@ export function createKeyedMutex(): KeyedMutex {
         }
       }
     },
+    isLocked: (key) => tails.has(key),
   };
 }

@@ -12,6 +12,7 @@ test('it builds the smoke-boot kernel cmdline with the slot addressing', () => {
     systemDrivePath: '/s',
     paths: buildImpPaths('/var/lib/imp', 'id'),
     address,
+    impId: 'id',
     hostname: 'dev',
     vcpus: 2,
     memoryMib: 1024,
@@ -22,6 +23,6 @@ test('it builds the smoke-boot kernel cmdline with the slot addressing', () => {
   expect(args).toContain('reboot=k');
 
   expect(args).toEndWith(
-    'imp.hostname=dev imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.dns=1.1.1.1,8.8.8.8',
+    'imp.id=id imp.hostname=dev imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.dns=1.1.1.1,8.8.8.8',
   );
 });

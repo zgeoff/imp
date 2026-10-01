@@ -16,7 +16,15 @@ const PingResponseSchema = z.object({
 
 const OkResponseSchema = z.object({ ok: z.literal(true) });
 
+const ActivityResponseSchema = z.object({
+  tcp_established: z.int().nonnegative(),
+  exec_sessions: z.int().nonnegative(),
+  load1: z.number(),
+});
+
 export type AgentPing = z.infer<typeof PingResponseSchema>;
+
+export type AgentActivity = z.infer<typeof ActivityResponseSchema>;
 
 // throws AgentError when the frame is a RESPONSE carrying an `error`
 export function requireNoAgentError(frame: AgentFrame): void {
@@ -65,6 +73,19 @@ export async function sendPing(vsockPath: string, timeoutMs = 2000): Promise<Age
 // The agent replies, then powers the guest off; Firecracker exits after.
 export async function sendShutdown(vsockPath: string): Promise<void> {
   const response = await sendAgentRequest(vsockPath, { op: 'shutdown' });
+
+  OkResponseSchema.parse(response);
+}
+
+export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise<AgentActivity> {
+  const response = await sendAgentRequest(vsockPath, { op: 'activity' }, timeoutMs);
+
+  return ActivityResponseSchema.parse(response);
+}
+
+// After a wake: the guest clock stopped while the VM slept.
+export async function sendResumed(vsockPath: string, unixMs: number): Promise<void> {
+  const response = await sendAgentRequest(vsockPath, { op: 'resumed', unix_ms: unixMs });
 
   OkResponseSchema.parse(response);
 }

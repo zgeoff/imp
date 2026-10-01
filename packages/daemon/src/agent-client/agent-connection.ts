@@ -5,6 +5,11 @@ import type { AgentFrame, FrameType } from './frame-codec';
 
 const AGENT_PORT = 1024;
 
+// frames queued before the socket stops reading, and when it reads again: a
+// reader that falls behind pushes back on the guest through vsock
+const PAUSE_FRAMES = 64;
+const RESUME_FRAMES = 16;
+
 // One agent connection carries one request (agent/PROTOCOL.md).
 export interface AgentConnection {
   readonly send: (type: FrameType, payload?: Uint8Array) => void;
@@ -104,6 +109,10 @@ function buildConnection(socket: Socket, leftover: Uint8Array): AgentConnection 
   const handleData = (chunk: Uint8Array): void => {
     try {
       frames.push(...decoder.push(chunk));
+
+      if (frames.length >= PAUSE_FRAMES) {
+        socket.pause();
+      }
     } catch (error) {
       state.failure = error instanceof Error ? error : new Error(String(error));
 
@@ -152,6 +161,10 @@ function buildConnection(socket: Socket, leftover: Uint8Array): AgentConnection 
       const error = state.failure;
 
       if (frame !== undefined) {
+        if (frames.length <= RESUME_FRAMES && socket.isPaused()) {
+          socket.resume();
+        }
+
         return frame;
       }
 

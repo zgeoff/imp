@@ -55,6 +55,12 @@ async function setupTest() {
 
       return Promise.resolve();
     },
+    sleepVm: (pid) => {
+      alive.delete(pid);
+
+      return Promise.resolve({});
+    },
+    wakeVm: () => Promise.reject(new Error('no snapshot in this test')),
     isVmAlive: (pid) => alive.has(pid),
     isAgentReady: () => Promise.resolve(true),
   };

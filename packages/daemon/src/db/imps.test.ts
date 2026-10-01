@@ -10,6 +10,7 @@ import {
   updateImpActivity,
   updateImpHold,
   updateImpState,
+  updateImpStateIf,
 } from './imps';
 import type { ImpRecord, NewImp } from './imps';
 import type { ImpDatabase } from './open-database';
@@ -177,4 +178,29 @@ test('it lists imps by name and counts them by state', async () => {
   expect(total).toBe(2);
   expect(running).toBe(1);
   expect(sleeping).toBe(0);
+});
+
+test('it applies a compare-and-set change only while the row matches', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+
+  await updateImpState(ctx.db, imp.id, { state: 'running', pid: 42 });
+
+  const stale = await updateImpStateIf(
+    ctx.db,
+    imp.id,
+    { state: 'running', pid: 41 },
+    { state: 'stopped', pid: null },
+  );
+
+  const fresh = await updateImpStateIf(
+    ctx.db,
+    imp.id,
+    { state: 'running', pid: 42 },
+    { state: 'stopped', pid: null },
+  );
+
+  expect(stale).toBeUndefined();
+  expect(fresh).toMatchObject({ state: 'stopped', pid: null });
 });
