@@ -28,6 +28,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   Docker in the guest, and how to make your own.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
+- [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
+  `main`.
 
 [STATUS.md](../STATUS.md) has the measurements and the known gaps. The
 [roadmap](https://github.com/zgeoff/imp/issues/41) has what comes next.
