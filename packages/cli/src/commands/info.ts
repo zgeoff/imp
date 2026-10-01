@@ -18,7 +18,10 @@ export const infoCommand = defineCommand({
       const lines = [
         ['version', info.version],
         ['imps', `${String(info.impCount)} (${String(info.awakeCount)} awake)`],
-        ['ram', `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB`],
+        [
+          'ram',
+          `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed)`,
+        ],
         ['firecracker', info.firecrackerVersion ?? 'unknown'],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
       ];

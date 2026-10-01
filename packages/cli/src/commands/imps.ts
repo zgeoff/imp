@@ -17,6 +17,7 @@ export const newCommand = defineCommand({
     image: { type: 'string', description: 'image name' },
     cpus: { type: 'string', description: 'vCPU count' },
     memory: { type: 'string', description: 'memory in MiB' },
+    'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
   },
   run: (context) =>
     runAction(async (client) => {
@@ -25,6 +26,9 @@ export const newCommand = defineCommand({
         ...(context.args.image !== undefined && { image: context.args.image }),
         ...(context.args.cpus !== undefined && { vcpus: Number(context.args.cpus) }),
         ...(context.args.memory !== undefined && { memoryMib: Number(context.args.memory) }),
+        ...(context.args['http-port'] !== undefined && {
+          httpPort: Number(context.args['http-port']),
+        }),
       });
 
       console.log(`${imp.name} ${imp.url}`);

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
 import { ORPCError, createORPCClient } from '@orpc/client';
@@ -10,16 +10,25 @@ import { loadConfig } from './config';
 import { createImage } from './db/images';
 import { openDatabase } from './db/open-database';
 import type { ImpDatabase } from './db/open-database';
+import { createGovernedImps } from './governor/create-governed-imps';
 import { createImageService } from './images/image-service';
-import { createImpService } from './imps/imp-service';
 import type { VmRunner } from './vmm/vm-runner';
 
 const TOKEN = 'test-token';
 
-// a VM runner that boots instantly and tracks which pids are alive
+const IDENTITY = {
+  firecrackerVersion: 'v1.17.0',
+  snapshotVersion: 'v12.0.0',
+  hostKernel: 'test',
+  guestKernel: 'k',
+  systemDrive: 's',
+};
+
+// a VM runner that boots and sleeps instantly and tracks which pids are alive
 function buildFakeVms() {
   const alive = new Set<number>();
 
+  const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
   let nextPid = 1000;
 
@@ -37,26 +46,46 @@ function buildFakeVms() {
 
       return Promise.resolve();
     },
+    sleepVm: (pid, paths) => {
+      alive.delete(pid);
+
+      mkdirSync(paths.snapshotDir, { recursive: true });
+      writeFileSync(paths.vmstate, 'vmstate');
+      writeFileSync(paths.memFile, 'mem');
+
+      return Promise.resolve({});
+    },
+    wakeVm: () => {
+      nextPid += 1;
+
+      alive.add(nextPid);
+      wakes.push(nextPid);
+
+      return Promise.resolve({ pid: nextPid, firecrackerVersion: 'v1.17.0', timings: {} });
+    },
     isVmAlive: (pid) => alive.has(pid),
     isAgentReady: () => Promise.resolve(true),
   };
 
-  return { vms, alive, stops };
+  return { vms, alive, stops, wakes };
 }
 
-async function setupTest(token: string) {
+async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-test-`);
 
   const db = await openDatabase(':memory:');
 
-  const config = loadConfig({ IMP_DATA_DIR: dataDir });
+  const config = loadConfig({ IMP_DATA_DIR: dataDir, ...env });
   const images = createImageService({ config, db });
   const fake = buildFakeVms();
   const taps: string[] = [];
   const logs: string[] = [];
 
-  const imps = createImpService({
+  // every awake fake VM owns 300 MiB
+  const governed = createGovernedImps({
     config,
+    identity: IDENTITY,
+    readRamMib: (pid) => (fake.alive.has(pid) ? 300 : null),
     db,
     images,
     vms: fake.vms,
@@ -82,8 +111,9 @@ async function setupTest(token: string) {
     config,
     db,
     token: TOKEN,
-    imps,
+    imps: governed.imps,
     images,
+    governor: governed.governor,
     firecrackerVersion: 'v1.17.0',
     isReady: () => true,
   });
@@ -127,6 +157,8 @@ test('it serves system.info from config and the database', async () => {
     version: '0.0.0',
     ramBudgetMib: 16_384,
     ramUsedMib: 0,
+    ramReservedMib: 0,
+    ramCommittedMib: 0,
     awakeCount: 0,
     impCount: 0,
     firecrackerVersion: 'v1.17.0',
@@ -137,7 +169,9 @@ test('it serves system.info from config and the database', async () => {
 test('it answers an unbuilt procedure with NOT_IMPLEMENTED', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  const rejection = await ctx.client.imps.sleep({ name: 'dev' }).catch((error: unknown) => error);
+  const rejection = await ctx.client.imps
+    .fork({ source: 'dev', name: 'copy' })
+    .catch((error: unknown) => error);
 
   expect(rejection).toBeInstanceOf(ORPCError);
   expect(rejection).toMatchObject({ code: 'NOT_IMPLEMENTED', status: 501 });
@@ -188,7 +222,13 @@ test('it creates, stops, starts and destroys an imp', async () => {
   const info = await ctx.client.system.info();
 
   expect(started.state).toBe('running');
-  expect(info).toMatchObject({ impCount: 1, awakeCount: 1, ramUsedMib: 2048 });
+
+  expect(info).toMatchObject({
+    impCount: 1,
+    awakeCount: 1,
+    ramUsedMib: 300,
+    ramCommittedMib: 2048,
+  });
 
   await ctx.client.imps.destroy({ name: 'dev' });
 
@@ -257,4 +297,89 @@ test('it refuses to remove an image an imp uses', async () => {
     .catch((error: unknown) => error);
 
   expect(rejection).toMatchObject({ code: 'CONFLICT' });
+});
+
+test('it sleeps, wakes and holds an imp', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const asleep = await ctx.client.imps.sleep({ name: 'dev' });
+
+  expect(asleep.state).toBe('sleeping');
+  expect(asleep.sleptAt).toBeInstanceOf(Date);
+  expect(ctx.fake.alive.size).toBe(0);
+
+  const awake = await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(awake).toMatchObject({ state: 'running', ramMib: 300 });
+  expect(ctx.fake.wakes).toEqual([1002]);
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const held = await ctx.client.imps.hold({ name: 'dev', seconds: 60 });
+
+  expect(held.state).toBe('running');
+  expect(held.holdUntil?.getTime()).toBeGreaterThan(Date.now() + 50_000);
+
+  const released = await ctx.client.imps.hold({ name: 'dev', seconds: 0 });
+
+  expect(released.holdUntil).toBeUndefined();
+});
+
+test('it boots cold when the snapshot belongs to another firecracker', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const metaPath = `${ctx.dataDir}/imps/${created.id}/snapshot/meta.json`;
+
+  const meta = await Bun.file(metaPath).text();
+
+  await Bun.write(metaPath, meta.replace('"v1.17.0"', '"v0.1.0"'));
+
+  const awake = await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(awake.state).toBe('running');
+  expect(ctx.fake.wakes).toEqual([]);
+});
+
+test('it sleeps the least recently active imp to fit a new one in the budget', async () => {
+  // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
+  await using ctx = await setupTest(TOKEN, {
+    IMP_RAM_BUDGET_MIB: '800',
+    IMP_DEFAULT_MEMORY_MIB: '512',
+  });
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  await ctx.client.imps.create({ name: 'a' });
+  await Bun.sleep(5);
+  await ctx.client.imps.create({ name: 'b' });
+  await Bun.sleep(5);
+  await ctx.client.imps.create({ name: 'c' });
+
+  const states = await ctx.client.imps.list();
+
+  expect(states.map((imp) => [imp.name, imp.state])).toEqual([
+    ['a', 'sleeping'],
+    ['b', 'running'],
+    ['c', 'running'],
+  ]);
+
+  await ctx.client.imps.hold({ name: 'b', seconds: 600 });
+  await ctx.client.imps.hold({ name: 'c', seconds: 600 });
+
+  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+    data: { budgetMib: 800, requestedMib: 300 },
+  });
 });

@@ -46,6 +46,16 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // the guest port the wake proxy forwards to
+  '002_add_imp_http_port': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('http_port', 'integer', (c) => c.notNull().defaultTo(8080))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

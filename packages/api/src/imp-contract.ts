@@ -23,6 +23,9 @@ export const impContract = {
           image: NameSchema.optional(),
           vcpus: z.int().min(1).max(32).optional(),
           memoryMib: z.int().min(128).optional(),
+
+          // the guest port the wake proxy forwards HTTP to (default 8080)
+          httpPort: z.int().min(1).max(65_535).optional(),
         }),
       )
       .output(ImpSchema),

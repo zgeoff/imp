@@ -31,3 +31,11 @@ export function buildInvalidStateError(
     data: { state, allowed: [...allowed] },
   });
 }
+
+export function buildRamBudgetError(budgetMib: number, usedMib: number, requestedMib: number) {
+  return new ORPCError('RAM_BUDGET_EXCEEDED', {
+    status: 503,
+    message: `not enough RAM: ${String(usedMib)} of ${String(budgetMib)} MiB in use, ${String(requestedMib)} MiB requested, and no idle imp left to sleep`,
+    data: { budgetMib, usedMib, requestedMib },
+  });
+}

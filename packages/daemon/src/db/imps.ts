@@ -21,6 +21,7 @@ export interface ImpRecord {
   readonly error: string | null;
   readonly pid: number | null;
   readonly firecrackerVersion: string | null;
+  readonly httpPort: number;
 }
 
 export interface NewImp {
@@ -30,6 +31,7 @@ export interface NewImp {
   readonly memoryMib: number;
   readonly slot: number;
   readonly ip: string;
+  readonly httpPort?: number;
 }
 
 export interface ImpStateChange {
@@ -76,6 +78,7 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
       memory_mib: imp.memoryMib,
       slot: imp.slot,
       ip: imp.ip,
+      ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
       created_at: now,
       last_active_at: now,
     })
@@ -192,6 +195,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     error: row.error,
     pid: row.pid,
     firecrackerVersion: row.firecracker_version,
+    httpPort: row.http_port,
   };
 }
 

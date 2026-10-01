@@ -8,6 +8,11 @@ export interface ImpPaths extends FirecrackerPaths {
   readonly runDir: string;
   readonly disk: string;
   readonly snapshotDir: string;
+
+  // the memory snapshot of a sleeping imp (docs/sleep-findings.md)
+  readonly vmstate: string;
+  readonly memFile: string;
+  readonly snapshotMeta: string;
   readonly checkpointsDir: string;
 }
 
@@ -20,6 +25,7 @@ export interface ImagePaths {
 export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
   const dir = join(dataDir, 'imps', impId);
   const runDir = join(dir, 'run');
+  const snapshotDir = join(dir, 'snapshot');
 
   return {
     dir,
@@ -29,7 +35,10 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
     vsockSocket: join(runDir, 'vsock.sock'),
     logFile: join(runDir, 'firecracker.log'),
     pidFile: join(runDir, 'pid'),
-    snapshotDir: join(dir, 'snapshot'),
+    snapshotDir,
+    vmstate: join(snapshotDir, 'vmstate'),
+    memFile: join(snapshotDir, 'mem'),
+    snapshotMeta: join(snapshotDir, 'meta.json'),
     checkpointsDir: join(dir, 'checkpoints'),
   };
 }

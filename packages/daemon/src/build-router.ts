@@ -6,6 +6,7 @@ import type { Config } from './config';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
 
@@ -14,6 +15,7 @@ export interface RouterDeps {
   readonly db: ImpDatabase;
   readonly imps: ImpService;
   readonly images: ImageService;
+  readonly governor: RamGovernor;
   readonly firecrackerVersion: string | null;
 }
 
@@ -32,9 +34,11 @@ export function buildRouter(deps: RouterDeps) {
       }),
       start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
       stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
-      sleep: os.imps.sleep.handler(handleUnimplemented),
-      wake: os.imps.wake.handler(handleUnimplemented),
-      hold: os.imps.hold.handler(handleUnimplemented),
+      sleep: os.imps.sleep.handler((context) => deps.imps.sleepImp(context.input.name)),
+      wake: os.imps.wake.handler((context) => deps.imps.wakeImp(context.input.name)),
+      hold: os.imps.hold.handler((context) =>
+        deps.imps.holdImp(context.input.name, context.input.seconds),
+      ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
       fork: os.imps.fork.handler(handleUnimplemented),
     },
@@ -76,17 +80,19 @@ export function buildRouter(deps: RouterDeps) {
   });
 }
 
-// RAM in use is the memory the running imps were given, until the governor
-// measures Firecracker PSS.
+// RAM used is measured (what awake Firecrackers own); committed is the
+// memory the awake imps were given (DESIGN 2.9).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const imps = await listImps(deps.db);
+  const [imps, usage] = await Promise.all([listImps(deps.db), deps.governor.readUsage()]);
 
   const running = imps.filter((imp) => imp.state === 'running');
 
   return {
     version: packageJson.version,
     ramBudgetMib: deps.config.ramBudgetMib,
-    ramUsedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
+    ramUsedMib: usage.usedMib,
+    ramReservedMib: usage.reservedMib,
+    ramCommittedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
     awakeCount: running.length,
     impCount: imps.length,
     firecrackerVersion: deps.firecrackerVersion,

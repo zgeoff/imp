@@ -13,7 +13,7 @@
       "error",
       {
         // imp's domain verbs: the lifecycle an imp moves through
-        "verbs": ["allocate", "list", "open"],
+        "verbs": ["allocate", "list", "open", "sleep", "wake", "hold"],
         "exemptNames": [
           "main",
           // kysely's Driver interface: BunSqliteDriver implements it, so
@@ -51,6 +51,14 @@
           { "from": "file", "name": "ImpDatabase" },
           // a live socket; reading and writing it is the point
           { "from": "package", "name": "Socket", "package": "node:net" },
+          // live servers, sockets and streams the proxy relays between
+          { "from": "file", "name": "ProxyServer" },
+          {
+            "from": "package",
+            "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers", "Request"],
+            "package": "bun-types"
+          },
+          { "from": "lib", "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers"] },
           // dependency bags that carry the live db handle
           { "from": "file", "name": ["RouterDeps", "AppDeps"] },
           // already the readonly form, or a value type with no readonly form,

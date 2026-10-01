@@ -1,4 +1,5 @@
 import type { ImpState } from '@imp/api';
+import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
 
@@ -27,6 +28,7 @@ interface ImpsTable {
   error: string | null;
   pid: number | null;
   firecracker_version: string | null;
+  http_port: Generated<number>;
 }
 
 interface CheckpointsTable {

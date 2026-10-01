@@ -37,3 +37,18 @@ test('it keeps the queue moving after a task fails', async () => {
 
   expect(result).toBe('ok');
 });
+
+test('it reports a key locked while its task runs', async () => {
+  const mutex = createKeyedMutex();
+  const gate = Promise.withResolvers<void>();
+  const running = mutex.runExclusive('a', () => gate.promise);
+
+  expect(mutex.isLocked('a')).toBe(true);
+  expect(mutex.isLocked('b')).toBe(false);
+
+  gate.resolve();
+
+  await running;
+
+  expect(mutex.isLocked('a')).toBe(false);
+});
