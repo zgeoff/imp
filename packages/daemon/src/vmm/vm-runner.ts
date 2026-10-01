@@ -24,6 +24,7 @@ export interface VmPlan {
   readonly systemDrivePath: string;
   readonly paths: ImpPaths;
   readonly address: SlotAddress;
+  readonly impId: string;
   readonly hostname: string;
   readonly vcpus: number;
   readonly memoryMib: number;
@@ -68,6 +69,7 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
     'console=ttyS0 reboot=k panic=1 pci=off',
     'i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd',
     'root=/dev/vdb rootfstype=squashfs ro init=/imp-agent',
+    `imp.id=${plan.impId}`,
     `imp.hostname=${plan.hostname}`,
     `imp.ip=${plan.address.guestIp}/${String(plan.address.prefixLength)}`,
     `imp.gw=${plan.address.hostIp}`,

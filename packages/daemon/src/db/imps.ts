@@ -152,6 +152,34 @@ export async function updateImpState(
   return toImpRecord(row);
 }
 
+// Compare-and-set: applies the change only while the row still has
+// `expected` state and pid; undefined when something else changed it first.
+export async function updateImpStateIf(
+  db: ImpDatabase,
+  id: string,
+  expected: Readonly<{ state: ImpState; pid: number | null }>,
+  change: Readonly<ImpStateChange>,
+): Promise<ImpRecord | undefined> {
+  const values: Updateable<DatabaseSchema['imps']> = { state: change.state };
+
+  if (change.pid !== undefined) {
+    values.pid = change.pid;
+  }
+
+  const pidOperator = expected.pid === null ? 'is' : '=';
+
+  const row = await db
+    .updateTable('imps')
+    .set(values)
+    .where('id', '=', id)
+    .where('state', '=', expected.state)
+    .where('pid', pidOperator, expected.pid)
+    .returningAll()
+    .executeTakeFirst();
+
+  return row === undefined ? undefined : toImpRecord(row);
+}
+
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {
   await db.updateTable('imps').set({ last_active_at: at.getTime() }).where('id', '=', id).execute();
 }

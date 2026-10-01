@@ -26,6 +26,7 @@ const EnvSchema = z.object({
   IMP_SYSTEM_DRIVE: z.string().optional(),
   IMP_DEFAULT_IMAGE: z.string().default('base'),
   TAILSCALE_AUTHKEY: z.string().optional(),
+  IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
 });
 
 export interface Config {
@@ -60,6 +61,9 @@ export interface Config {
   // one by this name exists
   readonly defaultImage: string;
   readonly tailscaleAuthKey: string | null;
+
+  // the host's tailnet name; per-imp URLs are http://<it>:<tailnetPort>
+  readonly tailscaleHostname: string;
 }
 
 function splitList(value: string): string[] {
@@ -100,5 +104,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     systemDriveSource: parsed.IMP_SYSTEM_DRIVE ?? null,
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
+    tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
   };
 }

@@ -16,7 +16,7 @@ test('it addresses slot 0 at the start of the subnet', () => {
     prefixLength: 30,
     netmask: '255.255.255.252',
     guestMac: '06:00:0a:42:00:02',
-    proxyPort: 20_000,
+    tailnetPort: 20_000,
   });
 });
 
@@ -34,7 +34,7 @@ test('it addresses the last slot at the end of the subnet', () => {
 
   expect(address.hostIp).toBe('10.66.255.253');
   expect(address.guestIp).toBe('10.66.255.254');
-  expect(address.proxyPort).toBe(36_383);
+  expect(address.tailnetPort).toBe(36_383);
 });
 
 test('it rejects a slot outside the subnet', () => {

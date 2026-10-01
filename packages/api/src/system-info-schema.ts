@@ -19,6 +19,7 @@ export const SystemInfoSchema = z.object({
     enabled: z.boolean(),
     state: z.string().nullable(),
     hostname: z.string().nullable(),
+    ip: z.string().nullable(),
   }),
 });
 

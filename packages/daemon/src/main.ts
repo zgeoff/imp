@@ -7,6 +7,7 @@ import { openDatabase } from './db/open-database';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
+import { readTailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { startTicker } from './process/ticker';
 import { startWakeProxy } from './proxy/wake-proxy';
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
     governor,
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
+    readTailscale: () => readTailscaleStatus(config.tailscaleAuthKey !== null),
     isReady: () => state.ready,
   }).listen(config.apiPort);
 

@@ -163,7 +163,8 @@ Measured procedure and numbers: `docs/sleep-findings.md`.
   (`scripts/dev.sh down` gives it 120 s). After a crash, an imp with no live VM is marked `stopped`
   and boots cold; sleeping imps stay asleep and wake on demand.
 - Firecracker processes are detached (`setsid`). On SIGHUP impd exits without sleeping anything; the
-  next impd re-adopts running VMs by pid and API socket (`scripts/dev.sh restart`).
+  next impd re-adopts every live VM by pid and API socket, even one whose agent answers late
+  (`scripts/dev.sh restart`).
 
 ### 2.9 Idle detection and the RAM governor
 

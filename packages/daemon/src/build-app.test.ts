@@ -33,8 +33,22 @@ function buildFakeVms() {
   const stops: { pid: number; graceful: boolean }[] = [];
   let nextPid = 1000;
 
+  // failBoot: the next boot throws; sleepGate: sleeps wait for it; agentReady:
+  // what isAgentReady answers
+  const control: { failBoot: boolean; sleepGate: Promise<void> | null; agentReady: boolean } = {
+    failBoot: false,
+    sleepGate: null,
+    agentReady: true,
+  };
+
   const vms: VmRunner = {
     startVm: () => {
+      if (control.failBoot) {
+        control.failBoot = false;
+
+        return Promise.reject(new Error('boot failed: no agent\nlog tail'));
+      }
+
       nextPid += 1;
 
       alive.add(nextPid);
@@ -47,14 +61,16 @@ function buildFakeVms() {
 
       return Promise.resolve();
     },
-    sleepVm: (pid, paths) => {
+    sleepVm: async (pid, paths) => {
+      await control.sleepGate;
+
       alive.delete(pid);
 
       mkdirSync(paths.snapshotDir, { recursive: true });
       writeFileSync(paths.vmstate, 'vmstate');
       writeFileSync(paths.memFile, 'mem');
 
-      return Promise.resolve({});
+      return {};
     },
     wakeVm: () => {
       nextPid += 1;
@@ -65,10 +81,10 @@ function buildFakeVms() {
       return Promise.resolve({ pid: nextPid, firecrackerVersion: 'v1.17.0', timings: {} });
     },
     isVmAlive: (pid) => alive.has(pid),
-    isAgentReady: () => Promise.resolve(true),
+    isAgentReady: () => Promise.resolve(control.agentReady),
   };
 
-  return { vms, alive, stops, wakes };
+  return { vms, alive, stops, wakes, control };
 }
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
@@ -117,6 +133,7 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
     governor: governed.governor,
     checkpoints: createCheckpointService({ config, db, imps: governed.imps }),
     firecrackerVersion: 'v1.17.0',
+    readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
   });
 
@@ -130,6 +147,7 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
 
   return {
     app,
+    imps: governed.imps,
     client,
     db,
     dataDir,
@@ -164,7 +182,7 @@ test('it serves system.info from config and the database', async () => {
     awakeCount: 0,
     impCount: 0,
     firecrackerVersion: 'v1.17.0',
-    tailscale: { enabled: false, state: null, hostname: null },
+    tailscale: { enabled: false, state: null, hostname: null, ip: null },
   });
 });
 
@@ -373,4 +391,80 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
     code: 'RAM_BUDGET_EXCEEDED',
     data: { budgetMib: 800, requestedMib: 300 },
   });
+});
+
+test('it records a boot failure as the error state with its first line', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  ctx.fake.control.failBoot = true;
+
+  const rejection = await ctx.client.imps.create({ name: 'dev' }).catch((error: unknown) => error);
+  const imp = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(rejection).toBeInstanceOf(Error);
+  expect(imp).toMatchObject({ state: 'error', error: 'boot failed: no agent' });
+
+  const started = await ctx.client.imps.start({ name: 'dev' });
+
+  expect(started.state).toBe('running');
+});
+
+test('it re-adopts live VMs on reconcile, even with a silent agent', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  await ctx.client.imps.create({ name: 'alive' });
+  await ctx.client.imps.create({ name: 'dead' });
+  await ctx.client.imps.create({ name: 'asleep' });
+  await ctx.client.imps.sleep({ name: 'asleep' });
+
+  const dead = await ctx.client.imps.get({ name: 'dead' });
+
+  ctx.fake.alive.delete(1002);
+
+  ctx.fake.control.agentReady = false;
+
+  await ctx.imps.reconcileImps();
+
+  const imps = await ctx.client.imps.list();
+
+  expect(imps.map((imp) => [imp.name, imp.state])).toEqual([
+    ['alive', 'running'],
+    ['asleep', 'sleeping'],
+    ['dead', 'stopped'],
+  ]);
+
+  expect(dead.state).toBe('running');
+  expect(ctx.fake.stops).toEqual([]);
+});
+
+test('a read during a lifecycle operation does not mark the imp stopped', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const gate = Promise.withResolvers<void>();
+
+  ctx.fake.control.sleepGate = gate.promise;
+
+  const sleeping = ctx.client.imps.sleep({ name: 'dev' });
+
+  await Bun.sleep(5);
+
+  // the VM looks dead to a reader while the sleep holds the lock
+  ctx.fake.alive.clear();
+
+  const during = await ctx.client.imps.get({ name: 'dev' });
+
+  gate.resolve();
+
+  const after = await sleeping;
+
+  expect(during.state).toBe('running');
+  expect(after.state).toBe('sleeping');
 });

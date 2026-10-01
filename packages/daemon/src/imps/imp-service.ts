@@ -16,6 +16,7 @@ import {
   updateImpActivity,
   updateImpHold,
   updateImpState,
+  updateImpStateIf,
 } from '../db/imps';
 import type { ImpRecord, ImpStateChange } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -181,7 +182,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       memoryMib: imp.memoryMib,
       ip: imp.ip,
       slot: imp.slot,
-      port: deps.config.portBase + imp.slot,
+      port: deriveSlotAddress(imp.slot, slotPlan).tailnetPort,
       httpPort: imp.httpPort,
       url: buildLocalUrl(imp.name, deps.config.proxyPort),
       createdAt: imp.createdAt,
@@ -228,26 +229,37 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     return updated;
   };
 
-  // a running imp whose Firecracker died is stopped, and so is a sleeping
-  // imp whose snapshot is gone; seen on any read
+  // A dead VM or a lost snapshot means stopped. The repair is a compare-and-set
+  // and skips a locked imp, so it never hides a VM that a start just booted.
   const checkLiveness = async (imp: ImpRecord): Promise<ImpRecord> => {
     const paths = buildImpPaths(deps.config.dataDir, imp.id);
+    const lostSnapshot = imp.state === 'sleeping' && !hasSnapshot(paths);
 
-    if (imp.state === 'sleeping' && !hasSnapshot(paths)) {
-      log(`impd: ${imp.name}: the snapshot is gone; marking it stopped`);
+    const lostVm =
+      imp.state === 'running' && (imp.pid === null || !deps.vms.isVmAlive(imp.pid, paths));
 
-      return updateState(imp, { state: 'stopped', pid: null });
-    }
-
-    if (imp.state !== 'running' || (imp.pid !== null && deps.vms.isVmAlive(imp.pid, paths))) {
+    if ((!lostSnapshot && !lostVm) || mutex.isLocked(imp.id)) {
       return imp;
     }
 
-    log(`impd: ${imp.name}: firecracker is gone; marking it stopped`);
+    const repaired = await updateImpStateIf(
+      deps.db,
+      imp.id,
+      { state: imp.state, pid: imp.pid },
+      { state: 'stopped', pid: null },
+    );
 
-    const stopped = await updateState(imp, { state: 'stopped', pid: null });
+    if (repaired === undefined) {
+      const current = await findImpById(deps.db, imp.id);
 
-    return stopped;
+      return current ?? imp;
+    }
+
+    const what = lostSnapshot ? 'the snapshot is gone' : 'firecracker is gone';
+
+    log(`impd: ${imp.name}: ${what}; marked it stopped`);
+
+    return repaired;
   };
 
   const findOrThrow = async (name: string): Promise<ImpRecord> => {
@@ -258,6 +270,15 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     }
 
     return checkLiveness(imp);
+  };
+
+  // the full text goes to the log, its first line to the record
+  const writeFailure = async (imp: ImpRecord, error: unknown): Promise<void> => {
+    const message = error instanceof Error ? error.message : String(error);
+
+    log(`impd: ${imp.name}: ${message}`);
+
+    await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
   };
 
   // boots the imp's disk; the caller holds the imp's lock
@@ -284,6 +305,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         systemDrivePath: deps.config.systemDrivePath,
         paths,
         address,
+        impId: imp.id,
         hostname: imp.name,
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
@@ -302,12 +324,9 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         firecrackerVersion: vm.firecrackerVersion,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
       deps.admission?.release(imp.id);
-      log(`impd: ${imp.name}: ${message}`);
 
-      await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
+      await writeFailure(imp, error);
 
       throw error;
     }
@@ -333,7 +352,8 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         });
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('imps.name')) {
+      // slot and ip come from the same transaction: only the name can clash
+      if (isUniqueViolation(error)) {
         throw buildConflictError('imp', name);
       }
 
@@ -556,12 +576,6 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
   return {
     createImp: async (input) => {
       const name = await resolveImpName(input.name);
-      const existing = await findImpByName(deps.db, name);
-
-      if (existing !== undefined) {
-        throw buildConflictError('imp', name);
-      }
-
       const image = await deps.images.resolveImage(input.image);
       const created = await createImpRecord(input, name, image);
 
@@ -578,9 +592,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
             input.prepareDisk ?? ((disk) => cloneDisk(deps.images.getRootfsPath(image), disk))
           )(paths.disk);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-
-          await updateState(created, { state: 'error', error: message });
+          await writeFailure(created, error);
 
           throw error;
         }
@@ -670,11 +682,14 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
     readUrls: async (name) => {
       const imp = await findOrThrow(name);
 
-      const port = deps.config.portBase + imp.slot;
+      const port = deriveSlotAddress(imp.slot, slotPlan).tailnetPort;
 
       return {
         local: buildLocalUrl(imp.name, deps.config.proxyPort),
-        tailnet: deps.config.tailscaleAuthKey === null ? null : `http://imp:${String(port)}`,
+        tailnet:
+          deps.config.tailscaleAuthKey === null
+            ? null
+            : `http://${deps.config.tailscaleHostname}:${String(port)}`,
       };
     },
 
@@ -727,10 +742,14 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
           const paths = buildImpPaths(deps.config.dataDir, imp.id);
           const alive = imp.pid !== null && deps.vms.isVmAlive(imp.pid, paths);
-          const ready = alive ? await deps.vms.isAgentReady(paths) : false;
 
-          if (imp.state === 'running' && ready) {
-            log(`impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}`);
+          // a loaded guest may answer late; killing it would lose its memory
+          if (imp.state === 'running' && alive) {
+            const ready = await deps.vms.isAgentReady(paths);
+
+            const note = ready ? '' : ' (the agent does not answer yet)';
+
+            log(`impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`);
 
             return;
           }
@@ -854,4 +873,13 @@ function formatTimings(timings: Readonly<Record<string, number>>): string {
   return Object.entries(timings)
     .map(([step, ms]) => `${step}=${String(ms)}ms`)
     .join(' ');
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'SQLITE_CONSTRAINT_UNIQUE'
+  );
 }

@@ -5,6 +5,7 @@ import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpService } from '../imps/imp-service';
+import { deriveSlotAddress } from '../net/addressing';
 import { buildErrorPage } from './error-pages';
 import { parseHostName } from './parse-host-name';
 
@@ -258,7 +259,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
           continue;
         }
 
-        const port = deps.config.portBase + imp.slot;
+        const port = deriveSlotAddress(imp.slot, deps.config).tailnetPort;
 
         try {
           listeners.set(imp.id, { slot: imp.slot, server: startListener(port, imp.name) });

@@ -10,6 +10,7 @@ import type { ImpDatabase } from './db/open-database';
 import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
+import type { TailscaleStatus } from './net/tailscale-status';
 
 export interface RouterDeps {
   readonly config: Config;
@@ -19,6 +20,7 @@ export interface RouterDeps {
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
   readonly firecrackerVersion: string | null;
+  readonly readTailscale: () => Promise<TailscaleStatus>;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -95,7 +97,11 @@ export function buildRouter(deps: RouterDeps) {
 // RAM used is measured (what awake Firecrackers own); committed is the
 // memory the awake imps were given (DESIGN 2.9).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const [imps, usage] = await Promise.all([listImps(deps.db), deps.governor.readUsage()]);
+  const [imps, usage, tailscale] = await Promise.all([
+    listImps(deps.db),
+    deps.governor.readUsage(),
+    deps.readTailscale(),
+  ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
 
@@ -110,8 +116,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     firecrackerVersion: deps.firecrackerVersion,
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
-      state: null,
-      hostname: null,
+      ...tailscale,
     },
   };
 }

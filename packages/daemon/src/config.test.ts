@@ -25,6 +25,7 @@ test('it fills every setting from its default when the env is empty', () => {
     systemDriveSource: null,
     defaultImage: 'base',
     tailscaleAuthKey: null,
+    tailscaleHostname: 'imp',
   });
 });
 
