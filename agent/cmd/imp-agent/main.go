@@ -1,0 +1,41 @@
+// Command imp-agent is PID 1 inside every imp guest. The kernel starts it
+// from the system drive (stage 1); it switches root to the user disk and
+// re-execs itself as "imp-agent stage2". See DESIGN.md 2.3.
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/boot"
+	"github.com/zgeoff/imp/agent/internal/proto"
+)
+
+func main() {
+	log.SetFlags(0)
+	log.SetPrefix("imp-agent: ")
+
+	var err error
+	switch {
+	case len(os.Args) > 1 && os.Args[1] == "version":
+		fmt.Println(proto.Version)
+		return
+	case len(os.Args) > 1 && os.Args[1] == "stage2":
+		err = boot.Stage2()
+	case os.Getpid() == 1:
+		err = boot.Stage1()
+	default:
+		fmt.Fprintln(os.Stderr, "imp-agent runs as PID 1 in an imp guest")
+		os.Exit(2)
+	}
+
+	// PID 1 exiting panics the kernel. Reboot instead so Firecracker exits
+	// cleanly, after a pause that keeps the message on the console.
+	log.Printf("fatal: %v", err)
+	time.Sleep(time.Second)
+	unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART)
+}

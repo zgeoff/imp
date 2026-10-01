@@ -1,0 +1,258 @@
+// Package exec runs one exec request: it starts the process, streams its
+// stdio over the connection, and reports its exit.
+package exec
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"os"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/proc"
+	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/reaper"
+)
+
+// drainGrace bounds how long output is forwarded after the process exits.
+// Background children that inherited stdout would otherwise hold the
+// session open forever.
+const drainGrace = 500 * time.Millisecond
+
+// Manager runs exec sessions and counts the live ones.
+type Manager struct {
+	reaper *reaper.Reaper
+	image  imagecfg.Config
+	active atomic.Int64
+}
+
+func NewManager(r *reaper.Reaper, image imagecfg.Config) *Manager {
+	return &Manager{reaper: r, image: image}
+}
+
+// Active returns the number of running exec sessions.
+func (m *Manager) Active() int { return int(m.active.Load()) }
+
+// Serve runs req to completion. r and w are the connection's frame streams;
+// the caller closes the connection after Serve returns.
+func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+	m.active.Add(1)
+	defer m.active.Add(-1)
+
+	s, err := m.start(req)
+	if err != nil {
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+			Error: &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()},
+		})
+	}
+	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid}); err != nil {
+		s.proc.Signal(syscall.SIGHUP)
+	}
+
+	var pumps sync.WaitGroup
+	for _, o := range s.outputs {
+		pumps.Add(1)
+		go func() {
+			defer pumps.Done()
+			pump(o.f, o.typ, w)
+		}()
+	}
+	go s.input(r)
+
+	st := <-s.proc.Done
+	s.exited.Store(true)
+	for _, o := range s.outputs {
+		o.f.SetReadDeadline(time.Now().Add(drainGrace))
+	}
+	pumps.Wait()
+	s.close()
+
+	exit := proto.Exit{Code: st.Code}
+	if st.Signal != 0 {
+		exit = proto.Exit{Code: 128 + int(st.Signal), Signal: int(st.Signal)}
+	}
+	return w.WriteJSON(proto.TypeExit, exit)
+}
+
+type output struct {
+	f   *os.File
+	typ proto.Type
+}
+
+type session struct {
+	proc    *proc.Process
+	tty     *os.File // pty master, nil without a tty
+	stdin   *os.File // write end of the stdin pipe, nil with a tty
+	outputs []output
+	exited  atomic.Bool
+	mu      sync.Mutex // guards stdin close
+}
+
+func (m *Manager) start(req proto.Request) (*session, error) {
+	if len(req.Argv) == 0 {
+		return nil, errors.New("argv is empty")
+	}
+	user := req.User
+	if user == "" {
+		user = m.image.User
+	}
+	// HOME must be the user's before cwd falls back to it.
+	env, err := proc.UserEnv(proc.Merge(m.image.Env, req.Env), user)
+	if err != nil {
+		return nil, err
+	}
+	spec := proc.Spec{Argv: req.Argv, Env: env, Dir: m.cwd(req, env), User: user, TTY: req.TTY}
+
+	s := &session{}
+	var childEnds []*os.File
+	if req.TTY {
+		master, slave, err := openPTY()
+		if err != nil {
+			return nil, err
+		}
+		cols, rows := req.Cols, req.Rows
+		if cols == 0 || rows == 0 {
+			cols, rows = 80, 24
+		}
+		if err := setWinsize(master, cols, rows); err != nil {
+			log.Printf("exec: winsize: %v", err)
+		}
+		s.tty = master
+		s.outputs = []output{{master, proto.TypeStdout}}
+		spec.Files = []*os.File{slave, slave, slave}
+		childEnds = []*os.File{slave}
+	} else {
+		var pipes [3][2]*os.File
+		for i := range pipes {
+			r, w, err := os.Pipe()
+			if err != nil {
+				closeAll(pipes[:i])
+				return nil, err
+			}
+			pipes[i] = [2]*os.File{r, w}
+		}
+		s.stdin = pipes[0][1]
+		s.outputs = []output{{pipes[1][0], proto.TypeStdout}, {pipes[2][0], proto.TypeStderr}}
+		spec.Files = []*os.File{pipes[0][0], pipes[1][1], pipes[2][1]}
+		childEnds = spec.Files
+	}
+
+	p, err := proc.Start(m.reaper, spec)
+	for _, f := range childEnds {
+		f.Close()
+	}
+	if err != nil {
+		s.close()
+		return nil, err
+	}
+	s.proc = p
+	return s, nil
+}
+
+// cwd picks the request's cwd, else the image workdir, else $HOME. Only an
+// explicit request cwd is allowed to fail; defaults fall back to /.
+func (m *Manager) cwd(req proto.Request, env []string) string {
+	if req.Cwd != "" {
+		return req.Cwd
+	}
+	for _, d := range []string{m.image.Workdir, proc.Get(env, "HOME")} {
+		if fi, err := os.Stat(d); d != "" && err == nil && fi.IsDir() {
+			return d
+		}
+	}
+	return "/"
+}
+
+// input applies host frames until the connection ends. If the host goes away
+// while the process runs, the process group gets SIGHUP, as a terminal
+// hangup would deliver.
+func (s *session) input(r *proto.Reader) {
+	for {
+		f, err := r.Next()
+		if err != nil {
+			if !s.exited.Load() {
+				s.proc.Signal(syscall.SIGHUP)
+			}
+			s.closeStdin()
+			return
+		}
+		switch f.Type {
+		case proto.TypeStdin:
+			if w := s.stdinWriter(); w != nil {
+				w.Write(f.Payload)
+			}
+		case proto.TypeStdinEOF:
+			// A tty has no EOF to give; the client sends ^D itself.
+			s.closeStdin()
+		case proto.TypeResize:
+			var rs proto.Resize
+			if s.tty != nil && json.Unmarshal(f.Payload, &rs) == nil {
+				setWinsize(s.tty, rs.Cols, rs.Rows)
+			}
+		case proto.TypeSignal:
+			var sig proto.Signal
+			if json.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 && !s.exited.Load() {
+				s.proc.Signal(syscall.Signal(sig.Signal))
+			}
+		default:
+			log.Printf("exec: ignoring %s frame", f.Type)
+		}
+	}
+}
+
+func (s *session) stdinWriter() io.Writer {
+	if s.tty != nil {
+		return s.tty
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stdin == nil {
+		return nil
+	}
+	return s.stdin
+}
+
+func (s *session) closeStdin() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stdin != nil {
+		s.stdin.Close()
+		s.stdin = nil
+	}
+}
+
+func (s *session) close() {
+	s.closeStdin()
+	for _, o := range s.outputs {
+		o.f.Close()
+	}
+}
+
+// pump forwards f to the host as typ frames until EOF, EIO (a pty whose
+// slave side is fully closed), or the drain deadline.
+func pump(f *os.File, typ proto.Type, w *proto.Writer) {
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			if w.Write(typ, buf[:n]) != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func closeAll(pipes [][2]*os.File) {
+	for _, p := range pipes {
+		p[0].Close()
+		p[1].Close()
+	}
+}
