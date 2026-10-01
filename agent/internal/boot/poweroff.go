@@ -13,11 +13,17 @@ import (
 
 const killGrace = 3 * time.Second
 
-// Poweroff stops services, terminates every other process, syncs, and
-// reboots the guest. Firecracker has no power-off device; with reboot=k on
-// the kernel cmdline a reboot resets through the i8042 controller, which
-// makes Firecracker exit.
-func Poweroff(sup *services.Supervisor) {
+// Poweroff thaws the root filesystem, stops services, terminates every
+// other process, syncs, and reboots the guest. Firecracker has no power-off
+// device; with reboot=k on the kernel cmdline a reboot resets through the
+// i8042 controller, which makes Firecracker exit.
+//
+// The thaw comes first: on a frozen / a service's SIGTERM handler, sync and
+// the read-only remount all block until the freeze's auto-thaw.
+func Poweroff(sup *services.Supervisor, thaw func() error) {
+	if err := thaw(); err != nil {
+		log.Printf("poweroff: thaw: %v", err)
+	}
 	sup.StopAll()
 
 	unix.Kill(-1, unix.SIGTERM)
@@ -32,7 +38,12 @@ func Poweroff(sup *services.Supervisor) {
 		log.Printf("remount / ro: %v", err)
 	}
 	log.Printf("powering off")
-	// RESTART, not POWER_OFF: see the doc comment.
+	reboot()
+}
+
+// reboot resets the guest and never returns. RESTART, not POWER_OFF: see
+// Poweroff.
+func reboot() {
 	if err := unix.Reboot(unix.LINUX_REBOOT_CMD_RESTART); err != nil {
 		log.Printf("reboot: %v", err)
 	}

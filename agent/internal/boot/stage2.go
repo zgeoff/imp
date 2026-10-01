@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/mdlayher/vsock"
@@ -20,6 +21,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
 	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
 )
@@ -69,8 +71,19 @@ func Stage2() error {
 	srv := &server.Server{
 		Exec:     exec.NewManager(r, image),
 		Services: sup,
-		Shutdown: func() { Poweroff(sup) },
 	}
+	// A shutdown request and a signal can race; only the first powers off.
+	// A panic on the way must still end the guest, so it falls back to a
+	// thaw (sync would block on a frozen /), sync and reboot.
+	powerOff := sync.OnceFunc(func() {
+		defer safe.Recover("poweroff", func() {
+			safe.Call("poweroff: thaw", func() { srv.ThawForPoweroff() })
+			unix.Sync()
+			reboot()
+		})
+		Poweroff(sup, srv.ThawForPoweroff)
+	})
+	srv.Shutdown = powerOff
 
 	// Ctrl-Alt-Del (Firecracker's SendCtrlAltDel) arrives as SIGINT once
 	// CAD is off; SIGTERM is the conventional "stop" for init.
@@ -79,11 +92,11 @@ func Stage2() error {
 	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
+	safe.Go("signals", func() {
 		sig := <-sigs
 		log.Printf("%v: shutting down", sig)
-		Poweroff(sup)
-	}()
+		powerOff()
+	}, nil)
 
 	return srv.Serve(listen)
 }
