@@ -106,18 +106,6 @@ export async function listImps(db: ImpDatabase): Promise<ImpRecord[]> {
   return rows.map((row) => toImpRecord(row));
 }
 
-export async function countImps(db: ImpDatabase, state?: ImpState): Promise<number> {
-  let query = db.selectFrom('imps').select((eb) => eb.fn.countAll<number>().as('count'));
-
-  if (state !== undefined) {
-    query = query.where('state', '=', state);
-  }
-
-  const row = await query.executeTakeFirstOrThrow();
-
-  return row.count;
-}
-
 // Fields the change leaves out keep their value; null clears one.
 export async function updateImpState(
   db: ImpDatabase,

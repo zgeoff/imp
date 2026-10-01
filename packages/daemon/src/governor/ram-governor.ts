@@ -37,7 +37,6 @@ interface RamUsage {
 
   // reservations for boots and wakes the measurement does not show yet
   readonly reservedMib: number;
-  readonly byImp: ReadonlyMap<string, number>;
 }
 
 // The part of the governor the imp lifecycle calls.
@@ -212,7 +211,6 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       return {
         usedMib: usage.usedMib,
         reservedMib: usage.effectiveMib - usage.usedMib,
-        byImp: usage.byImp,
       };
     },
 

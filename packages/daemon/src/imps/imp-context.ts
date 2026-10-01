@@ -12,7 +12,7 @@ import { buildImpPaths } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { createReflinkClone } from '../storage/reflink';
 import type { VmRunner } from '../vmm/vm-runner';
-import { readVmRam } from '../vmm/vm-stats';
+import { readOwnedRamMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
 
@@ -80,8 +80,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     log: deps.log ?? printLog,
     cloneDisk: deps.cloneDisk ?? createReflinkClone,
     admission: deps.admission,
-    readRamMib:
-      deps.readRamMib ?? ((pid, apiSocket) => readVmRam(pid, apiSocket)?.ownedMib ?? null),
+    readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readTailnetHostname: deps.readTailnetHostname,
     readIdentity: () => {
       identityCache.value ??= readSnapshotIdentity(deps.config);
