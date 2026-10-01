@@ -220,3 +220,21 @@ check sees nothing.
 8. Set the state to `running`. Keep the snapshot files until the next sleep or a stop (gotcha 3).
 
 Cold boot (all VMs): add the balloon config in section 6 before `InstanceStart`.
+
+## Open: slow wakes after back-to-back cycles
+
+A wake normally takes about 80 ms. When an imp is slept again within about a second of a wake or an
+exec, the next wake takes 650–850 ms, and the delay grows with each back-to-back cycle. A snapshot
+taken at least 3 s after a wake restores fast again.
+
+What was measured during a slow wake:
+
+- The agent accepts the vsock `CONNECT` at once but answers about 700 ms later.
+- Both vCPU threads are busy, mostly in kernel time, with only about 300 minor faults. Lazy page
+  loading is not the cause.
+- Disabling free page reporting does not help. Skipping the `resumed` clock set does not help.
+
+Working theory: the guest does about 0.7 s of kernel work after each resume (for example clock and
+timer catch-up, or deferred work queued while paused). A snapshot taken while that work is still
+running captures it, so the next resume repeats it and adds more. A minimum awake time of 3 s before
+an idle sleep avoids the problem in normal use; the idle timeout is far longer.
