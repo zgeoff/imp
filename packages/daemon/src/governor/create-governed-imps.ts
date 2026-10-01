@@ -1,6 +1,7 @@
 import { listImps } from '../db/imps';
+import type { ImpRuntime } from '../imps/imp-runtime';
 import { createImpService } from '../imps/imp-service';
-import type { ImpService, ImpServiceDeps } from '../imps/imp-service';
+import type { ImpServiceDeps, Imps } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
 import { readVmRam } from '../vmm/vm-stats';
@@ -12,10 +13,12 @@ type GovernedDeps = Omit<ImpServiceDeps, 'admission'>;
 // The imp service and the RAM governor need each other: the service asks the
 // governor before every boot, the governor sleeps imps through the service.
 export function createGovernedImps(deps: GovernedDeps): {
-  readonly imps: ImpService;
+  readonly imps: Imps;
   readonly governor: RamGovernor;
 } {
-  const holder: { imps: ImpService | null } = { imps: null };
+  const holder: { imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'sleepImpById'> | null } = {
+    imps: null,
+  };
 
   const readRamMib =
     deps.readRamMib ?? ((pid, apiSocket) => readVmRam(pid, apiSocket)?.ownedMib ?? null);

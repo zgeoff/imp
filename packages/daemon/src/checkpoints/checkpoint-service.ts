@@ -15,7 +15,8 @@ import type { CheckpointRecord } from '../db/checkpoints';
 import { findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpService } from '../imps/imp-service';
+import type { LockedImp } from '../imps/imp-lock';
+import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
@@ -57,7 +58,7 @@ interface DiskFreezer {
 export interface CheckpointServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: ImpService;
+  readonly imps: ImpCheckpointHooks;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
 
@@ -108,7 +109,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
   // A running disk is frozen around the clone (sync + FIFREEZE in the guest).
   // A sleeping one wakes first: its memory image holds unwritten page cache.
   // The caller holds the imp's lock.
-  const createConsistentClone = async (found: ImpRecord, target: string, action: string) => {
+  const createConsistentClone = async (found: LockedImp, target: string, action: string) => {
     const paths = buildImpPaths(deps.config.dataDir, found.id);
 
     if (found.state === 'stopped' || found.state === 'error') {

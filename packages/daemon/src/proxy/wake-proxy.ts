@@ -4,7 +4,7 @@ import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpService } from '../imps/imp-service';
+import type { ImpRuntime } from '../imps/imp-runtime';
 import { deriveSlotAddress } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
@@ -39,7 +39,7 @@ type ProxyServer = Server<SocketData>;
 interface WakeProxyDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: ImpService;
+  readonly imps: Pick<ImpRuntime, 'requireRunning' | 'tracker' | 'recordActivity'>;
   readonly log: (message: string) => void;
 }
 

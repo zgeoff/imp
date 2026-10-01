@@ -1,4 +1,4 @@
-type TryResult<T> = { readonly ran: true; readonly value: T } | { readonly ran: false };
+export type TryResult<T> = { readonly ran: true; readonly value: T } | { readonly ran: false };
 
 export interface KeyedMutex {
   // runs `task` after every task queued earlier for the same key
