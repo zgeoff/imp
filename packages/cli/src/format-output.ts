@@ -34,11 +34,14 @@ export function formatImps(imps: readonly Imp[]): string {
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
   return formatTable(
-    ['ID', 'LABEL', 'CREATED'],
+    ['ID', 'LABEL', 'CREATED', 'SIZE'],
     checkpoints.map((checkpoint) => [
       checkpoint.id,
       checkpoint.label ?? '',
       checkpoint.createdAt.toISOString(),
+      checkpoint.sizeBytes === undefined
+        ? ''
+        : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
     ]),
   );
 }
