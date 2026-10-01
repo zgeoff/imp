@@ -1,5 +1,5 @@
 #!/bin/bash
-# Join the tailnet as tag:imp (DESIGN.md 2.11). Idempotent.
+# Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
 # Runs inside the host container. Does nothing without TAILSCALE_AUTHKEY.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)

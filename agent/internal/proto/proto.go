@@ -1,4 +1,4 @@
-// Package proto implements the imp agent wire protocol. See PROTOCOL.md.
+// Package proto implements the imp agent wire protocol. See docs/architecture/protocol.md.
 //
 // A frame is [u8 type][u32 big-endian length][payload].
 package proto

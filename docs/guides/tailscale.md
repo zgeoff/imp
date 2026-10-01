@@ -1,7 +1,8 @@
 # Tailscale
 
 The host container joins the tailnet as one node, tagged `tag:imp`. Every imp is reachable through
-that node. See DESIGN.md 2.11.
+that node on its own port. [Networking](../architecture/networking.md#urls) covers the URLs, and
+[configuration](./configuration.md#host-container) lists the variables.
 
 ## How it works
 
@@ -83,9 +84,10 @@ tailscale serve --bg --https=21000 http://127.0.0.1:20000
 - `--tcp=<port> tcp://127.0.0.1:<port>` forwards raw TCP; `--tls-terminated-tcp=<port>` adds TLS in
   front of a raw TCP backend. Both bypass HTTP, so no Host-header routing.
 
-So impd can run `tailscale serve --bg --https=<20000+slot> http://127.0.0.1:<20000+slot>` for each
-slot, and `tailscale serve --https=<port> off` when the imp goes away. Serve config is part of the
-node state, so it survives restarts with persisted state.
+So impd could run `tailscale serve --bg --https=<20000+slot> http://127.0.0.1:<20000+slot>` for each
+slot, and `tailscale serve --https=<port> off` when the imp goes away. It does not do this yet
+([#16](https://github.com/zgeoff/imp/issues/16)). Serve config is part of the node state, so it
+survives restarts with persisted state.
 
 ## DNS
 
@@ -94,7 +96,7 @@ Docker copies the host's resolv.conf into the container. On a host that runs Tai
 quad100 through the host. The imp host container runs its own `tailscaled`, which captures
 `100.64.0.0/10` in its own netns. With `--accept-dns=false` its quad100 has no upstream, so every
 lookup fails, including ACME for `tailscale serve`. `tailscale-up.sh` rewrites resolv.conf in that
-case. The cleaner fix is `docker run --dns 1.1.1.1 --dns 8.8.8.8` for the host container.
+case. `scripts/dev.sh` also starts the host container with `--dns 1.1.1.1 --dns 8.8.8.8`.
 
 ## Limits
 

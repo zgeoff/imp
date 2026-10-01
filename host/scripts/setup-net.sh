@@ -1,5 +1,5 @@
 #!/bin/bash
-# Host-side NAT and isolation for imp taps (DESIGN.md 2.6). Idempotent.
+# Host-side NAT and isolation for imp taps (docs/architecture/networking.md, "iptables"). Idempotent.
 # Runs inside the host container's own network namespace.
 set -euo pipefail
 
