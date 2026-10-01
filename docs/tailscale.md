@@ -49,6 +49,10 @@ key for smoke tests.
 as an offline orphan until Tailscale deletes it. The next node with that hostname gets a `-1`
 suffix.
 
+impd reports the name the node got (the first label of its MagicDNS name) in `imp info` and uses it
+in `imp url`, so the URLs follow a `-1` suffix. The orphan keeps the plain name: `imp` then resolves
+to a dead node. Find the node by its IP (`imp info`), not by `HostName`, which both nodes share.
+
 ## URL scheme
 
 | URL                                                  | Routes to                                    |

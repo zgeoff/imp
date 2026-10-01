@@ -62,7 +62,8 @@ export interface Config {
   readonly defaultImage: string;
   readonly tailscaleAuthKey: string | null;
 
-  // the host's tailnet name; per-imp URLs are http://<it>:<tailnetPort>
+  // the tailnet hostname impd asks for; per-imp URLs use the name the node
+  // got (http://<name>:<tailnetPort>), which differs while an older node holds it
   readonly tailscaleHostname: string;
 }
 

@@ -620,11 +620,14 @@ s8_tailscale() {
     || fail "this machine is not on the tailnet (tailscale status)"
   wait_until 120 "impd tailscale state Running" ts_running
   host=$(info_field tailscale.hostname)
-  [ -n "$host" ] && [ "$host" != null ] || fail "imp info has no tailscale hostname"
+  ip=$(info_field tailscale.ip)
+  [[ $ip == 100.* ]] || fail "imp info has no tailnet IP (got '$ip')"
 
-  ip=$(tailscale status --json | jq -r --arg h "$host" '
-    [.Peer[]? | select(.HostName == $h or (.DNSName | startswith($h + ".")))][0].TailscaleIPs[0] // empty')
-  [[ $ip == 100.* ]] || fail "no tailnet peer $host seen from this machine (got '$ip')"
+  # by IP, not by name: an offline node from an earlier run can still hold
+  # the name, and then this node is imp-1
+  tailscale status --json | jq -e --arg ip "$ip" \
+    'any(.Peer[]?; (.TailscaleIPs | index($ip)) and .Online)' >/dev/null \
+    || fail "this machine sees no online tailnet peer at $ip"
   log "tailnet host $host at $ip"
 
   new_imp "$n" --image acc-tiny

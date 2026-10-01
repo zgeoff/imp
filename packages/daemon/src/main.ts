@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   const token = loadOrCreateToken(config.dataDir);
   const images = createImageService({ config, db });
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
+  const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
 
   const governed = createGovernedImps({
     config,
@@ -44,6 +45,11 @@ async function main(): Promise<void> {
     log: printLog,
     onImpsChanged: () => {
       void proxyHolder.proxy?.syncListeners();
+    },
+    readTailnetHostname: async () => {
+      const status = await readTailscale();
+
+      return status.hostname;
     },
   });
 
@@ -64,7 +70,7 @@ async function main(): Promise<void> {
     governor,
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
-    readTailscale: () => readTailscaleStatus(config.tailscaleAuthKey !== null),
+    readTailscale,
     isReady: () => state.ready,
   }).listen(config.apiPort);
 

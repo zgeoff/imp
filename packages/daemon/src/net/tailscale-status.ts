@@ -4,6 +4,9 @@ import { runCommand } from '../process/run-command';
 export interface TailscaleStatus {
   // tailscaled's BackendState: `Running` once the node is up
   readonly state: string | null;
+
+  // the node's MagicDNS name, which members resolve: the configured hostname,
+  // or `imp-1` and so on while an older node still holds that name
   readonly hostname: string | null;
   readonly ip: string | null;
 }
@@ -12,7 +15,9 @@ const IpListSchema = z.array(z.string()).nullable().optional();
 
 const StatusSchema = z.object({
   BackendState: z.string(),
-  Self: z.object({ HostName: z.string(), TailscaleIPs: IpListSchema }).optional(),
+  Self: z
+    .object({ HostName: z.string(), DNSName: z.string().optional(), TailscaleIPs: IpListSchema })
+    .optional(),
 });
 
 const UNKNOWN: TailscaleStatus = { state: null, hostname: null, ip: null };
@@ -23,10 +28,11 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
   try {
     const status = StatusSchema.parse(JSON.parse(json));
     const ips = status.Self?.TailscaleIPs ?? [];
+    const dnsLabel = status.Self?.DNSName?.split('.')[0] ?? '';
 
     return {
       state: status.BackendState,
-      hostname: status.Self?.HostName ?? null,
+      hostname: dnsLabel === '' ? (status.Self?.HostName ?? null) : dnsLabel,
       ip: ips.find((ip) => ip.includes('.')) ?? ips[0] ?? null,
     };
   } catch {

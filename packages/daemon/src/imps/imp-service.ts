@@ -135,6 +135,10 @@ export interface ImpServiceDeps {
 
   // after a create or a destroy: the proxy opens or closes the imp's port
   readonly onImpsChanged?: () => void;
+
+  // the host's live tailnet name, null when tailscaled does not answer; the
+  // configured name can be taken by an older node (`imp-1`)
+  readonly readTailnetHostname?: () => Promise<string | null>;
 }
 
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -700,12 +704,15 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
       const port = deriveSlotAddress(imp.slot, slotPlan).tailnetPort;
 
+      if (deps.config.tailscaleAuthKey === null) {
+        return { local: buildLocalUrl(imp.name, deps.config.proxyPort), tailnet: null };
+      }
+
+      const live = deps.readTailnetHostname === undefined ? null : await deps.readTailnetHostname();
+
       return {
         local: buildLocalUrl(imp.name, deps.config.proxyPort),
-        tailnet:
-          deps.config.tailscaleAuthKey === null
-            ? null
-            : `http://${deps.config.tailscaleHostname}:${String(port)}`,
+        tailnet: `http://${live ?? deps.config.tailscaleHostname}:${String(port)}`,
       };
     },
 
