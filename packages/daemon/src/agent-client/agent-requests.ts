@@ -90,6 +90,25 @@ export async function sendResumed(vsockPath: string, unixMs: number): Promise<vo
   OkResponseSchema.parse(response);
 }
 
+// sync + FIFREEZE on the guest root; the agent thaws by itself after
+// `timeoutMs` if no thaw arrives. The answer can take a while: sync flushes
+// the guest page cache first.
+export async function sendFreeze(vsockPath: string, timeoutMs: number): Promise<void> {
+  const response = await sendAgentRequest(
+    vsockPath,
+    { op: 'freeze', timeout_ms: timeoutMs },
+    timeoutMs,
+  );
+
+  OkResponseSchema.parse(response);
+}
+
+export async function sendThaw(vsockPath: string): Promise<void> {
+  const response = await sendAgentRequest(vsockPath, { op: 'thaw' });
+
+  OkResponseSchema.parse(response);
+}
+
 async function readFrameWithin(
   connection: AgentConnection,
   timeoutMs: number,

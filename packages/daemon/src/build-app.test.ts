@@ -2,10 +2,11 @@ import { expect, test } from 'bun:test';
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
-import { ORPCError, createORPCClient } from '@orpc/client';
+import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildApp } from './build-app';
+import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
 import { createImage } from './db/images';
 import { openDatabase } from './db/open-database';
@@ -114,6 +115,7 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
     imps: governed.imps,
     images,
     governor: governed.governor,
+    checkpoints: createCheckpointService({ config, db, imps: governed.imps }),
     firecrackerVersion: 'v1.17.0',
     isReady: () => true,
   });
@@ -164,17 +166,6 @@ test('it serves system.info from config and the database', async () => {
     firecrackerVersion: 'v1.17.0',
     tailscale: { enabled: false, state: null, hostname: null },
   });
-});
-
-test('it answers an unbuilt procedure with NOT_IMPLEMENTED', async () => {
-  await using ctx = await setupTest(TOKEN);
-
-  const rejection = await ctx.client.imps
-    .fork({ source: 'dev', name: 'copy' })
-    .catch((error: unknown) => error);
-
-  expect(rejection).toBeInstanceOf(ORPCError);
-  expect(rejection).toMatchObject({ code: 'NOT_IMPLEMENTED', status: 501 });
 });
 
 test('it rejects a request with the wrong token', async () => {

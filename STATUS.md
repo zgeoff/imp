@@ -9,14 +9,14 @@ Updated at each milestone. Newest state at the top of each section.
 | M0  | Firecracker boots under nested KVM inside a privileged container                | done        |
 | M1  | Walking skeleton: agent as PID 1 from a read-only system drive, exec over vsock | done        |
 | M2  | Workspace, API contract, db, addressing                                         | done        |
-| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | in progress |
-| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | in progress |
-| M5  | Checkpoint, restore, fork (XFS reflink)                                         | todo        |
+| M3  | impd lifecycle: create, list, exec, console, destroy (CLI end to end)           | done        |
+| M4  | Images: OCI → ext4, images/base with Docker, images/dev, bring your own         | done        |
+| M5  | Checkpoint, restore, fork (XFS reflink)                                         | done        |
 | M6  | Sleep and wake (memory snapshot), idle detection, wake proxy                    | done        |
 | M7  | RAM governor (budget, LRU sleep), scale test                                    | done        |
 | M8  | Restart survival (re-adopt VMs, sleep on SIGTERM)                               | done        |
-| M9  | Tailscale                                                                       | todo        |
-| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | todo        |
+| M9  | Tailscale                                                                       | done        |
+| M10 | `scripts/acceptance.sh` passes twice from a clean state                         | in progress |
 
 ## Measured
 
@@ -32,6 +32,12 @@ Updated at each milestone. Newest state at the top of each section.
 | Idle 512 MiB ubuntu guest RAM        | 58-66 MiB  | anonymous (governor count) after boot; 3-6 MiB right after a wake                     |
 | Idle Firecracker CPU                 | 0.4%       | of one core                                                                           |
 | Sleep every imp on SIGTERM           | 1.7-2.5 s  | 5 imps, 410 MiB each, 2 at a time                                                     |
+| Checkpoint of a running imp          | 61–62 ms   | freeze (sync + FIFREEZE) + reflink + thaw, impd side; CLI round trip 89 ms            |
+| Restore of a running imp             | 649–654 ms | graceful stop + reflink + rename + cold boot to agent ping                            |
+
+## Next
+
+- Finish `scripts/acceptance.sh` (M10).
 
 ## Blockers
 

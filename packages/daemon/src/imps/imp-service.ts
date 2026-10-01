@@ -48,6 +48,9 @@ interface CreateImpInput {
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
+
+  // fills the new imp's disk; a reflink clone of the image rootfs by default
+  readonly prepareDisk?: (target: string) => Promise<void>;
 }
 
 interface ImpUrls {
@@ -98,6 +101,17 @@ export interface ImpService {
   readonly sleepAllImps: () => Promise<void>;
   readonly isImpBusy: (id: string) => boolean;
   readonly tracker: ActivityTracker;
+
+  // Hooks for checkpoints/checkpoint-service.ts. `lockImp` runs `action` under
+  // the imp's lifecycle lock with a fresh record; `haltImp` and `bootImp`
+  // expect the caller to hold that lock.
+  readonly lockImp: <T>(name: string, action: (imp: ImpRecord) => Promise<T>) => Promise<T>;
+  readonly haltImp: (imp: ImpRecord) => Promise<ImpRecord>;
+  readonly bootImp: (imp: ImpRecord) => Promise<ImpRecord>;
+
+  // wakes a sleeping imp or boots a stopped one; the caller holds the lock
+  readonly requireRunningImp: (imp: ImpRecord) => Promise<ImpRecord>;
+  readonly toApi: (imp: ImpRecord) => Promise<Imp>;
 }
 
 export interface ImpServiceDeps {
@@ -518,6 +532,21 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
       }
     });
 
+  // agent shutdown, then the memory goes too: a stopped imp boots cold; the
+  // caller holds the imp's lock
+  const stopImpVm = async (imp: ImpRecord): Promise<ImpRecord> => {
+    const paths = buildImpPaths(deps.config.dataDir, imp.id);
+
+    if (imp.pid !== null) {
+      await deps.vms.stopVm(imp.pid, paths, true);
+    }
+
+    removeSnapshot(paths);
+    deps.admission?.release(imp.id);
+
+    return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
+  };
+
   const toApiImpWithImage = async (imp: ImpRecord): Promise<Imp> => {
     const imageName = await readImageName(imp.imageId);
 
@@ -545,7 +574,9 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
         try {
           mkdirSync(paths.runDir, { recursive: true });
 
-          await cloneDisk(deps.images.getRootfsPath(image), paths.disk);
+          await (
+            input.prepareDisk ?? ((disk) => cloneDisk(deps.images.getRootfsPath(image), disk))
+          )(paths.disk);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
 
@@ -606,17 +637,7 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
         requireTransition(imp.state, 'stopped', 'stop');
 
-        const paths = buildImpPaths(deps.config.dataDir, imp.id);
-
-        if (imp.pid !== null) {
-          await deps.vms.stopVm(imp.pid, paths, true);
-        }
-
-        // a stopped imp boots cold; its memory is gone
-        removeSnapshot(paths);
-        deps.admission?.release(imp.id);
-
-        const stopped = await updateState(imp, { state: 'stopped', pid: null });
+        const stopped = await stopImpVm(imp);
         const imageName = await readImageName(stopped.imageId);
 
         return toApiImp(stopped, imageName);
@@ -793,6 +814,26 @@ export function createImpService(deps: ImpServiceDeps): ImpService {
 
     isImpBusy: (id) => mutex.isLocked(id),
     tracker,
+    lockImp: async (name, action) => {
+      const found = await findOrThrow(name);
+
+      return mutex.runExclusive(found.id, async () => {
+        const imp = await findOrThrow(name);
+
+        return action(imp);
+      });
+    },
+
+    haltImp: stopImpVm,
+    requireRunningImp: requireRunningLocked,
+
+    bootImp: (imp) => startImpVm(imp),
+
+    toApi: async (imp) => {
+      const imageName = await readImageName(imp.imageId);
+
+      return toApiImp(imp, imageName);
+    },
   };
 }
 

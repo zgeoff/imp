@@ -75,7 +75,7 @@ slot=$(imp ls --json | NAME=$name bun -e \
   'const imps = await Bun.stdin.json(); console.log(imps.find((i) => i.name === process.env.NAME).slot)')
 imp ls | grep -q "^$name  *running" || fail "ls does not show $name running"
 imp ls --json | grep -q "\"name\": \"$name\"" || fail "ls --json lacks $name"
-expect_eq "$(imp url "$name")" "http://$name.imp.localhost:7080" "imp url"
+expect_eq "$(imp url "$name" | head -1)" "http://$name.imp.localhost:7080" "imp url"
 
 step "exec with stdin"
 expect_eq "$(printf 'hello stdin\n' | imp exec "$name" -- cat)" "hello stdin" "stdin round trip"

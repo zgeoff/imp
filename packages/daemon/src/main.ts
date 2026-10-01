@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildApp } from './build-app';
+import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
 import { openDatabase } from './db/open-database';
 import { createGovernedImps } from './governor/create-governed-imps';
@@ -50,6 +51,7 @@ async function main(): Promise<void> {
 
   await imps.reconcileImps();
 
+  const checkpoints = createCheckpointService({ config, db, imps });
   const state = { ready: false };
 
   const app = buildApp({
@@ -59,6 +61,7 @@ async function main(): Promise<void> {
     imps,
     images,
     governor,
+    checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     isReady: () => state.ready,
   }).listen(config.apiPort);

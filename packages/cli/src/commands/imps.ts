@@ -138,14 +138,14 @@ export const forkCommand = defineCommand({
   args: {
     source: { type: 'positional', description: 'imp to fork', required: true },
     name: { type: 'positional', description: 'name of the new imp', required: true },
-    checkpoint: { type: 'string', description: 'checkpoint id or label to fork from' },
+    from: { type: 'string', description: 'checkpoint id or label (default: the live disk)' },
   },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.fork({
         source: context.args.source,
         name: context.args.name,
-        ...(context.args.checkpoint !== undefined && { checkpoint: context.args.checkpoint }),
+        ...(context.args.from !== undefined && { checkpoint: context.args.from }),
       });
 
       console.log(formatImps([imp]));
