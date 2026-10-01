@@ -49,8 +49,10 @@ The host container's scripts in `host/` read these before impd starts.
 | `IMP_DNS`                 | `1.1.1.1 8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet. |
 | `IMP_DAEMON`              | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd entry point the supervisor runs.                                 |
 
-**NOTE:** `tailscale-up.sh` splits `IMP_DNS` on spaces, and impd splits it on commas. Set it for
-only one of them, or leave it unset.
+**NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, but impd splits it on commas and
+`tailscale-up.sh` on spaces. One address works for both. Two or more break one of them: a space list
+stops impd at start, and a comma list writes a bad `nameserver` line. `dev.sh` does not pass
+`IMP_DNS`, so the dev instance uses the defaults.
 
 ## Dev instance
 

@@ -10,7 +10,8 @@ server bootstrap are on the [roadmap](https://github.com/zgeoff/imp/issues/41)
 - `/dev/kvm`: bare metal, or a VM with nested virtualization (WSL2 works).
 - Docker. The host container is privileged and mounts the Docker socket.
 - [Bun](https://bun.sh) for the CLI, and Go for the guest agent.
-- About 200 GiB of free disk for the sparse XFS file. It grows only as imps use it.
+- Disk for the sparse XFS file. `IMP_STORAGE_GIB` (default 200) sets its apparent size; it uses only
+  what imps write.
 
 ## Set up
 

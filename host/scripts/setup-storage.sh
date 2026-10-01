@@ -1,7 +1,8 @@
 #!/bin/bash
 # Make /var/lib/imp an XFS filesystem with reflink, then create the layout
-# from docs/architecture/storage.md. Idempotent. On bare metal, mount a real XFS partition
-# at /var/lib/imp first and this only creates the directories.
+# from docs/architecture/storage.md ("The data directory"). Idempotent. On
+# bare metal, mount a real XFS partition at /var/lib/imp first and this only
+# creates the directories.
 #
 # Env: IMP_STORAGE_GIB (default 200) sizes the sparse loop file.
 #      IMP_STORAGE_FILE (default /data/imp.xfs) is where it lives.
