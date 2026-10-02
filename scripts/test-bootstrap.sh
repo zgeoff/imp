@@ -276,6 +276,9 @@ check_host_firewall_none() {
     || fail "[$distro] an input chain with policy drop is left"
   in_container grep -qx IMP_HOST_FIREWALL=none /etc/imp/imp-host.env || fail "[$distro] the env file does not say none"
   wait_for_imp_host || fail "[$distro] imp-host is not running with --host-firewall none"
+  log "[$distro] --host-firewall none again changes nothing"
+  bootstrap --yes || fail "[$distro] the second run with --host-firewall none failed"
+  grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] --host-firewall none is not idempotent"
 
   extra_args=()
   log "[$distro] the env file keeps none"
