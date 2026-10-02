@@ -5,6 +5,7 @@ import { imageCommand } from './image';
 import { consoleCommand, newCommand, readConsoleSession } from './imps';
 import { auditCommand, secretCommand } from './secrets';
 import { sessionsCommand } from './sessions';
+import { tokenCommand } from './tokens';
 
 // These fail before any call to impd, so they need none: IMP_URL points
 // nowhere, and a call that slipped through would fail with another message.
@@ -156,5 +157,24 @@ test('audit refuses a limit outside 1 to 1000', async () => {
   await runCommand(auditCommand, { rawArgs: ['--limit', '0'] });
 
   expect(stderr).toHaveBeenCalledWith('imp: --limit must be a whole number from 1 to 1000');
+  expect(process.exitCode).toBe(2);
+});
+
+test('token new needs a known scope and well-formed imp patterns', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(tokenCommand, { rawArgs: ['new', 'ci', '--scope', 'root'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: --scope must be one of read, exec, manage');
+  expect(process.exitCode).toBe(2);
+
+  process.exitCode = 0;
+
+  await runCommand(tokenCommand, { rawArgs: ['new', 'ci', '--scope', 'exec', '--imps', 'Dev*'] });
+
+  expect(stderr).toHaveBeenCalledWith(
+    'imp: --imps takes imp names with * for any run of characters, such as dev-*; not Dev*',
+  );
+
   expect(process.exitCode).toBe(2);
 });
