@@ -194,27 +194,28 @@ test('a job started with nohup and & outlives the call that started it', async (
   expect(running).toBe(1);
 });
 
-test('over HTTP, a token limited to the prefix runs a 70 s command and is refused outside', async () => {
+test('over HTTP, a token limited to the prefix runs a 15 s command and is refused outside', async () => {
   const secret = await makeToken(AGENT_TOKEN, '--scope', 'manage', '--imps', `${prefix}*`);
   const agent = await startHttpMcpSession(secret);
 
-  // longer than the API server's 10 s idle timeout, kept open by keepalives
+  // longer than the API server's 10 s idle timeout; the answer comes as SSE,
+  // with a keepalive comment every 5 s
   const startedAt = performance.now();
 
   const long = await agent.runTool('imp_exec', {
     name: tiny,
-    command: 'sleep 70; echo done',
-    timeoutSeconds: 100,
+    command: 'sleep 15; echo done',
+    timeoutSeconds: 60,
   });
 
   const seconds = (performance.now() - startedAt) / 1000;
 
   console.log(
-    `mcp http: a 70 s exec answered after ${seconds.toFixed(1)} s, ${String(agent.readKeepalives())} keepalives`,
+    `mcp http: a 15 s exec answered after ${seconds.toFixed(1)} s, ${String(agent.readKeepalives())} keepalives`,
   );
 
   expect(readData(long)).toMatchObject({ exitCode: 0, stdout: 'done\n', timedOut: false });
-  expect(agent.readKeepalives()).toBeGreaterThanOrEqual(10);
+  expect(agent.readKeepalives()).toBeGreaterThanOrEqual(2);
 
   const outside = await agent.runTool('imp_create', { name: 'e2e-other' });
 
@@ -224,7 +225,7 @@ test('over HTTP, a token limited to the prefix runs a 70 s command and is refuse
   const ended = await agent.close();
 
   expect(ended).toBe(204);
-}, 180_000);
+}, 60_000);
 
 test('over HTTP, a read token sees only the read tools', async () => {
   const secret = await makeToken(READ_TOKEN, '--scope', 'read');

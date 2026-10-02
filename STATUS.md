@@ -33,8 +33,7 @@ harness suite with the same number: shell is `lifecycle`, byo-image is `images`,
 
 Section 9 came after the acceptance runs, with the MCP server (#20); its times are from two runs on
 2026-10-02 against the same dev box, with `E2E_RAM_BUDGET_MIB=2048`. The HTTP endpoint (#50) added a
-70 s exec over `/mcp`, which proves that a long call outlives the API's 10 s idle timeout: the suite
-then took 82.5 s in one run.
+15 s exec over `/mcp` as SSE, longer than the API's 10 s idle timeout.
 
 Scale test (section 6): RAM budget 6144 MiB, 30 imps of 512 MiB, each filling 256 MiB of tmpfs. At
 most 19 imps were awake at once; 21–22 were asleep after all 30 existed. Peak usage was 3167–3168

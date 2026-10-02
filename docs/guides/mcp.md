@@ -139,8 +139,10 @@ claude mcp add --transport http imp https://imp.example.com/mcp \
   [tailnet identity](./tokens.md#tailnet-identity) with no token. The dashboard's cookie does not
   count. impd resolves the caller on every POST, and every tool call goes to the API as that caller,
   so the same scope, imp patterns and audit rows apply as for the CLI.
-- **Browsers.** A request that says it comes from another origin (`Origin`, or `Sec-Fetch-Site`
-  other than `same-origin` or `none`) gets 403, before impd looks at its token.
+- **Browsers.** A request with `Sec-Fetch-Site` or `Origin` comes from a browser, and impd applies
+  the dashboard's rule ([daemon](../architecture/daemon.md#api-and-auth)): `Sec-Fetch-Site` must be
+  `same-origin`, or without it `Origin` must name impd's host and port. Any other such request gets
+  403 before impd looks at its token. A client that is not a browser sends neither header.
 - **Tools by scope.** `tools/list` shows only the tools the caller's scope allows: `read` gets
   `imp_list`, `imp_url`, `imp_image_list` and `imp_checkpoint_list`; `exec` adds `imp_sleep`,
   `imp_exec` and the file tools; `manage` gets them all. impd refuses the rest with `FORBIDDEN`.
@@ -154,14 +156,16 @@ claude mcp add --transport http imp https://imp.example.com/mcp \
   an hour ends.
 - **Restarts.** Sessions live in impd's memory. After a restart a request with an old id gets 404,
   and the client must `initialize` again, as the spec says.
-- **Revocation.** Removing a token ends its sessions, and stops their execs as a cancel does. A
-  tailnet identity has no such signal: a call already running finishes, and each later request is
-  resolved again, so it gets 401 once no rule matches.
+- **Revocation.** Removing a token ends its sessions and stops their execs as a cancel does; the
+  next request with the token gets 401. A change to the tailnet ACL or to `IMP_TAILNET_IDENTITIES`
+  applies to a tailnet identity on its next request, which impd resolves again: a new scope takes
+  effect, or the request gets 401 once no rule matches. An exec already in flight runs on to its
+  end.
 - **Responses.** A `tools/call` from a client that accepts `text/event-stream` gets an SSE stream:
   its progress notifications, then the response. impd sends an SSE comment every 5 s, so no idle
   timeout on the way ends a long call. Every other request gets one JSON response. A notification or
-  a cancelled call gets 202 with no body. A stream the client drops is no cancel: the call runs on
-  and its answer is lost; send `notifications/cancelled` to stop it.
+  a cancelled call gets 202 with no body. A stream the client drops is no cancel: the call runs to
+  its end, and its reply goes nowhere. Send `notifications/cancelled` to stop it.
 - **No GET and no resume.** impd sends nothing outside a POST's own response, so `GET /mcp` gets 405
   and `Last-Event-ID` is not supported.
 
