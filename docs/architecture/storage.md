@@ -180,7 +180,7 @@ promote would take the retired dataset's snapshots with it.
 
 ### Crash recovery
 
-On start, impd settles what a crash cut short, then drops what the database does not name:
+On start, impd settles what a crash cut short, then runs the [cleanup](#cleanup) sweep:
 
 - A `staging/restore-<id>` with no `disks/<id>` came after the old disk was retired: impd renames it
   into place, and the restore is done. With `disks/<id>` still there, impd destroys it, and the
@@ -189,8 +189,9 @@ On start, impd settles what a crash cut short, then drops what the database does
 - A `staging/image-*` is a build that never finished: impd destroys it and its mount dir.
 - A restore whose swap fails while impd runs is repaired the same way at once: the old disk goes
   back when it is still in place, else the clone takes its name.
-- A disk or image with no row is retired; a `@cp-*` snapshot with no row and every `@fork-*` and
-  `@bk-*` snapshot is marked for destroy.
+- A `@cp-*` snapshot with no row and every `@fork-*` and `@bk-*` snapshot is marked for destroy,
+  unless it sits on an orphan. An image with no unmarked `@base` is retired. A disk or a whole image
+  with no row is an orphan, and stays ([what a sweep takes](#what-a-sweep-takes)).
 - A `staging/bk*` clone is a backup run's: impd unmounts it from the backup tree and destroys it.
 
 ### Backups
@@ -320,9 +321,38 @@ destroy imps or checkpoints, and restart impd, which allocates it again.
 
 A crash, or a removal that failed halfway, can leave storage that no row names: an imp's disk and
 directory, a checkpoint, an image, a ZFS fork or backup snapshot, a memory snapshot. One sweep,
-`dropUnnamed`, removes it on both backends: at start, every hour, and on `imp gc`.
+`dropUnnamed`, runs on both backends: at start, every hour, and on `imp gc`. It removes what a crash
+explains, and keeps the orphans: the disks and images that no row names and no crash explains.
 `imp gc --dry-run` lists what would go. On ZFS a disk or image is retired, and the reclaim frees it
 once no clone needs its blocks.
+
+### What a sweep takes
+
+A crash between a destroy's row and its disk leaves an orphan, but so does a lost or replaced
+database. On ZFS the database lives on the root dataset, on the pool with the disks, so an OS
+reinstall keeps both. A database restored from an older copy, or one that is gone while the pool
+survives, makes every newer disk an orphan; a sweep that took them would delete every imp. So a
+sweep sorts what no row names into two classes:
+
+| What no row names                                                                   | Class          | Why                                                                                 |
+| ----------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
+| A disk (`disks/<id>`, or `imps/<id>` with a disk, checkpoint or memory file on XFS) | orphan: kept   | It may hold an imp; only its row says it does not.                                  |
+| An image with its `@base` (ZFS) or its `rootfs.ext4` (XFS)                          | orphan: kept   | It may be the origin of a kept disk, or a template.                                 |
+| Any snapshot or checkpoint on an orphan                                             | kept with it   | A snapshot never goes before the disk it belongs to.                                |
+| A `@cp-*` snapshot or checkpoint of a named disk, with no row                       | leftover: goes | A checkpoint delete removes the row first.                                          |
+| A `@fork-*` or `@bk-*` snapshot on a named disk, an image or in `retired/`          | leftover: goes | A fork or a backup run marks it when it ends; it never outlives one.                |
+| An image with no `@base`, or with it marked (ZFS); with no `rootfs.ext4` (XFS)      | leftover: goes | A build cut short before its snapshot, or a removal after its mark.                 |
+| `imps/<id>` or `mem/<id>` with no disk                                              | leftover: goes | A destroy removes the disk first; nothing is left to boot.                          |
+| `staging/` (ZFS), hidden `images/.new-*` (XFS)                                      | leftover: goes | A build or restore cut short; start settles it ([crash recovery](#crash-recovery)). |
+| `retired/<uuid>` (ZFS)                                                              | reclaimed      | A delete that already happened; the [reclaim](#reclaim) frees it.                   |
+
+Start and the hourly pass log one line for each orphan, with its dataset or directory, its size, its
+creation time and its snapshots or checkpoints, then a count: once a start and once an hour. On XFS
+the size counts the blocks it shares through reflink in full.
+
+`imp gc --orphans` retires them as a destroy would: on ZFS it marks each snapshot on the orphan
+(`zfs destroy -d`), unmounts it and renames it into `retired/`, and the reclaim frees it; on XFS it
+removes the directory. `imp gc --orphans --dry-run` lists exactly that, and changes nothing.
 
 A sweep while impd runs must never take storage that is about to get its row: a checkpoint's
 snapshot exists before its row, an image build takes minutes, a fork's disk is made under its

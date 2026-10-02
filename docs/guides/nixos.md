@@ -76,6 +76,9 @@ A reinstall keeps the pool, and the imps and node state in it:
   the import refuse it.
 - Never let disko, or any disk layout tool, format the pool's disk. Leave that disk out of the
   layout, and let the module import the pool.
+- impd's database lives on the pool too: setup-storage mounts `<pool>/imp` on `/var/lib/imp` before
+  impd starts. A database that is lost or older than the pool leaves disks it does not name; impd
+  keeps and logs them ([storage cleanup](./operations.md#storage-cleanup)).
 
 ## The env file
 
