@@ -129,11 +129,15 @@ export const startCommand = defineCommand({
 });
 
 export const stopCommand = defineCommand({
-  meta: { name: 'stop', description: 'Shut an imp down (its disk stays, its memory does not)' },
+  meta: {
+    name: 'stop',
+    description: 'Shut an imp down (its disk stays, its memory and leases do not)',
+  },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const imp = await client.imps.stop({ name: context.args.name });
+      // a person typed it: the imp's leases end rather than refuse it
+      const imp = await client.imps.stop({ name: context.args.name, force: true });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
     }),
@@ -149,11 +153,15 @@ export const rmCommand = defineCommand({
 });
 
 export const sleepCommand = defineCommand({
-  meta: { name: 'sleep', description: 'Snapshot an imp to disk and free its RAM' },
+  meta: {
+    name: 'sleep',
+    description: 'Snapshot an imp to disk and free its RAM, ending its leases',
+  },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const imp = await client.imps.sleep({ name: context.args.name });
+      // as for stop
+      const imp = await client.imps.sleep({ name: context.args.name, force: true });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
     }),
