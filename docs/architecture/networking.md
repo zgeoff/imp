@@ -97,9 +97,10 @@ still accept what it lets through.
 
 A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
 address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address. Only
-IPv4 is redirected: the guest's resolv.conf names IPv4 servers, and port 53 over IPv6 meets the
-policy as any other port does. A none imp sends no DNS over IPv6, and a box imp sends it only to an
-address its list allows. The `ipv6` e2e suite checks that a box imp's query over IPv6 fails.
+IPv4 is redirected (the `dns` chain matches `meta nfproto ipv4`): the guest's resolv.conf names IPv4
+servers, and port 53 over IPv6 meets the policy as any other port does. A none imp sends no DNS over
+IPv6, and a box imp sends it only to an address its list allows. The `ipv6` e2e suite checks that a
+box imp's query over IPv6 fails.
 
 - A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
   leaves the host. A query with more than one question is refused. Each imp has a rate limit; a
@@ -139,6 +140,8 @@ Known limits:
 ## IPv6
 
 `IMP_SUBNET6` sets what IPv6 imps get. impd decides once, at start, and logs it as `impd: ipv6: …`.
+It fails closed: when setup-net's IPv6 rules and settings are not all in place (no ip6tables, say),
+or the NAT66 table cannot be written, imps get no IPv6, and IPv4 and its firewall go on as before.
 
 | `IMP_SUBNET6`    | Imps get                                                                                                                                                                                                  |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -152,7 +155,8 @@ Known limits:
   the tap. The kernel command line carries `imp.ip6=<address>/128 imp.gw6=fe80::1`. The agent adds
   the address and a default route via `fe80::1`, and turns off router advertisements and redirects
   on `eth0`. An older agent ignores both parameters, and the imp has IPv4 only.
-- NAT66 is impd's table `ip6 imp_nat66`: it masquerades the prefix out of the uplink.
+- NAT66 is impd's table `ip6 imp_nat66`: it masquerades the prefix out of the uplink. impd writes it
+  at start under `auto` and deletes it under `off` or a routed /64.
 - Packet-too-big from beyond the host reaches the guest as related traffic, so path MTU discovery
   works. The MSS clamp covers TCP behind a smaller-MTU uplink.
 
@@ -166,6 +170,9 @@ forwards, could take one as its route out. Nothing a guest sends changes the con
   defaults get `accept_ra=0` and `accept_redirects=0`, and impd sets both on each tap before it
   comes up. setup-net and impd write a key only when it differs, so values from
   `docker run --sysctl` and a read-only `/proc/sys` work.
+- setup-net reads the uplink, the interface of the IPv6 default route, once at start, for
+  `accept_ra=2` and the FORWARD accept out of it. If the default route moves to another interface
+  later, imps' IPv6 stops until the container restarts.
 - `ip6tables INPUT` accepts only router solicitations and neighbour solicitations and advertisements
   from the taps, with a hop limit of 255. Everything else is dropped.
 
@@ -173,18 +180,21 @@ forwards, could take one as its route out. Nothing a guest sends changes the con
 
 The `open` and `box` chains refuse these, and the credential broker never dials them:
 
-| Range                              | Why                                                                                       |
-| ---------------------------------- | ----------------------------------------------------------------------------------------- |
-| `fc00::/7`                         | Unique local: private networks, the imps' own `auto` prefix among them.                   |
-| `fe80::/10`                        | Link-local: the taps and the container's own links.                                       |
-| `ff00::/8`                         | Multicast.                                                                                |
-| `::/128`, `::1/128`                | Unspecified and loopback.                                                                 |
-| `::ffff:0:0/96`                    | IPv4-mapped: an IPv4 address in IPv6 form would pass the IPv4 checks.                     |
-| `64:ff9b::/96`, `64:ff9b:1::/48`   | NAT64: a translator on the path would reach private IPv4 addresses.                       |
-| `2002::/16`                        | 6to4: the address holds an IPv4 address, which a relay reaches.                           |
-| `2001::/32`                        | Teredo: the same.                                                                         |
-| the imps' prefix                   | Other imps.                                                                               |
-| the container's connected prefixes | The host's own networks, such as its Docker network. impd reads them at each table build. |
+| Range                              | Why                                                                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `fc00::/7`                         | Unique local: private networks, the imps' own `auto` prefix among them.                                                                                                  |
+| `fe80::/10`                        | Link-local: the taps and the container's own links.                                                                                                                      |
+| `ff00::/8`                         | Multicast.                                                                                                                                                               |
+| `::/128`, `::1/128`                | Unspecified and loopback.                                                                                                                                                |
+| `::ffff:0:0/96`                    | IPv4-mapped: an IPv4 address in IPv6 form would pass the IPv4 checks.                                                                                                    |
+| `::/96`                            | IPv4-compatible, long deprecated: the same, without the `ffff`.                                                                                                          |
+| `::ffff:0:0:0/96`                  | IPv4-translated (SIIT): a translator would reach the IPv4 address it holds.                                                                                              |
+| `100::/64`                         | Discard-only: nothing legitimate is there.                                                                                                                               |
+| `64:ff9b::/96`, `64:ff9b:1::/48`   | NAT64: a translator on the path would reach private IPv4 addresses.                                                                                                      |
+| `2002::/16`                        | 6to4: the address holds an IPv4 address, which a relay reaches.                                                                                                          |
+| `2001::/32`                        | Teredo: the same.                                                                                                                                                        |
+| the imps' prefix                   | Other imps.                                                                                                                                                              |
+| the container's connected prefixes | The host's own networks, such as its Docker network: every on-link route, whatever made it, and the prefix of every global address. impd reads them at each table build. |
 
 The broker reads the connected prefixes every 30 s. It dials an IPv4-mapped answer as its IPv4
 address, under the IPv4 checks.

@@ -12,7 +12,8 @@ if ! iptables -t nat -S >/dev/null 2>&1; then
   echo "setup-net: using iptables-legacy"
 fi
 
-sysctl -qw net.ipv4.ip_forward=1
+# a value already in place (docker run --sysctl) is not written again
+[ "$(sysctl -n net.ipv4.ip_forward)" = 1 ] || sysctl -qw net.ipv4.ip_forward=1
 
 out=$(ip route show default | awk '{print $5; exit}')
 if [ -z "$out" ]; then
@@ -87,7 +88,7 @@ if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
   # (and link-local, which its tap's own fe80::/64 route passes)
   rule6 raw PREROUTING -i imp+ -m rpfilter --invert -j DROP
 else
-  echo "setup-net: no ip6tables; guest IPv6 to the host is not filtered" >&2
+  echo "setup-net: no ip6tables; impd gives imps no IPv6, and guests' link-local IPv6 to the host is not filtered" >&2
 fi
 
 # A guest may not send from another imp's address: the credential broker
