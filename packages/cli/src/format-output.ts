@@ -35,40 +35,54 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
     .join('\n');
 }
 
+const IMP_HEADER = [
+  'NAME',
+  'STATE',
+  'IMAGE',
+  'VCPUS',
+  'MEMORY',
+  'RAM',
+  'DISK',
+  'USED',
+  'SHARED',
+  'CPU',
+  'SESSIONS',
+  'IP',
+  'URL',
+  'NOTE',
+] as const;
+
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    [
-      'NAME',
-      'STATE',
-      'IMAGE',
-      'VCPUS',
-      'MEMORY',
-      'RAM',
-      'DISK',
-      'USED',
-      'SHARED',
-      'CPU',
-      'SESSIONS',
-      'IP',
-      'URL',
-      'NOTE',
-    ],
-    imps.map((imp) => [
-      imp.name,
-      imp.state,
-      imp.image,
-      String(imp.vcpus),
-      `${String(imp.memoryMib)} MiB`,
-      imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
-      formatDiskMib(imp.diskMib),
-      ...formatDiskUsage(imp.diskUsage),
-      formatCpuUse(imp),
-      imp.sessions === undefined ? '-' : String(imp.sessions),
-      imp.ip,
-      imp.url,
-      formatNote(imp),
-    ]),
+    IMP_HEADER,
+    imps.map((imp) => toImpRow(imp)),
   );
+}
+
+// `imp ls --all`: the saved host first, then the columns of `imp ls`
+export function formatHostImps(imps: readonly (Imp & { readonly host: string })[]): string {
+  return formatTable(
+    ['HOST', ...IMP_HEADER],
+    imps.map((imp) => [imp.host, ...toImpRow(imp)]),
+  );
+}
+
+function toImpRow(imp: Imp): Row {
+  return [
+    imp.name,
+    imp.state,
+    imp.image,
+    String(imp.vcpus),
+    `${String(imp.memoryMib)} MiB`,
+    imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+    formatDiskMib(imp.diskMib),
+    ...formatDiskUsage(imp.diskUsage),
+    formatCpuUse(imp),
+    imp.sessions === undefined ? '-' : String(imp.sessions),
+    imp.ip,
+    imp.url,
+    formatNote(imp),
+  ];
 }
 
 // what a destroy frees, and what the imp shares; `<=` when a fork holds a

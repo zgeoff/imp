@@ -8,6 +8,7 @@ import { runExec } from '../exec-client';
 import { listSavedTargets, runOnHosts } from '../fan-out';
 import {
   formatExposeResult,
+  formatHostImps,
   formatImp,
   formatImps,
   formatJson,
@@ -247,16 +248,66 @@ async function runNew(client: ImpClient, request: NewRequest, host: string | nul
   console.log(text);
 }
 
+// `imp ls --all` when some hosts answered and some did not
+const PARTIAL_CODE = 3;
+
 export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
-  args: { json: jsonArg },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const imps = await client.imps.list();
+  args: {
+    all: { type: 'boolean', description: 'list the imps on every saved host (see imp host ls)' },
+    json: jsonArg,
+  },
+  run: async (context) => {
+    if (context.args.all !== true) {
+      await runAction(context.host, async (client) => {
+        const imps = await client.imps.list();
 
-      console.log(formatOutput(imps, context.args.json, formatImps));
-    }),
+        console.log(formatOutput(imps, context.args.json, formatImps));
+      });
+
+      return;
+    }
+
+    try {
+      if (context.host !== null) {
+        throw new UsageError('--all lists every saved host; drop --host');
+      }
+
+      await listAllImps(context.args.json === true);
+    } catch (error) {
+      printError(error);
+    }
+  },
 });
+
+// One list per saved host, at once. What came back is printed, JSON or
+// table, then one line per host that failed; docs/guides/hosts.md#one-view
+// gives the exit codes.
+async function listAllImps(json: boolean): Promise<void> {
+  const answers = await runOnHosts(listSavedTargets(process.env), (client, signal) =>
+    client.imps.list(undefined, { signal }),
+  );
+
+  const imps = answers.flatMap((answer) =>
+    'value' in answer ? answer.value.map((imp) => ({ host: answer.host, ...imp })) : [],
+  );
+
+  const errors = answers.flatMap((answer) =>
+    'error' in answer ? [{ host: answer.host, message: answer.error }] : [],
+  );
+
+  const output = json ? formatJson({ imps, errors }) : formatHostImps(imps);
+
+  console.log(output);
+
+  for (const error of errors) {
+    console.error(`imp: ${error.host}: ${error.message}`);
+  }
+
+  if (errors.length > 0) {
+    process.exitCode = errors.length === answers.length ? 1 : PARTIAL_CODE;
+  }
+}
 
 export const startCommand = defineCommand({
   meta: { name: 'start', description: 'Boot a stopped imp' },
