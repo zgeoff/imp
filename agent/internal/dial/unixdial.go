@@ -108,9 +108,25 @@ func (d *Dialer) runHelper(args []string, max int, failCode string) ([]int, erro
 		// it. Kill reaches only this helper, never a process that reused its
 		// pid.
 		p.Kill()
+		waitHelper(p)
 		return nil, err
 	}
+	// The helper holds its own copy of what it sent until it exits: a
+	// listener closed before then would still accept.
+	waitHelper(p)
 	return fds, nil
+}
+
+// waitHelper waits for a helper to exit, and kills one that outstays
+// helperTimeout.
+func waitHelper(p *proc.Process) {
+	select {
+	case <-p.Done:
+		return
+	case <-time.After(helperTimeout):
+	}
+	p.Kill()
+	<-p.Done
 }
 
 // receiveSocket reads a dial helper's answer: one stream socket, or the
