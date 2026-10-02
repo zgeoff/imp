@@ -12,7 +12,11 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
 test('it serves system.info from config and the database', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
-  const info = await ctx.client.system.info();
+  const { storage, ...info } = await ctx.client.system.info();
+
+  // the test data dir's own filesystem
+  expect(storage.backend).toBe('xfs');
+  expect(storage.availableBytes).toBeGreaterThan(0);
 
   expect(info).toEqual({
     version: '0.0.0',

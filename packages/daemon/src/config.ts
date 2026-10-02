@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import * as z from 'zod';
 import { countSlots, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
+import type { StorageBackendKind } from './storage/storage-backend';
 
 const PortSchema = z.coerce.number().pipe(z.int().min(1).max(65_535));
 const CountSchema = z.coerce.number().pipe(z.int().positive());
@@ -25,6 +26,8 @@ const EnvSchema = z.object({
   IMP_KERNEL: z.string().optional(),
   IMP_SYSTEM_DRIVE: z.string().optional(),
   IMP_DEFAULT_IMAGE: z.string().default('base'),
+  IMP_STORAGE_BACKEND: z.enum(['xfs', 'zfs']).default('xfs'),
+  IMP_ZFS_ROOT: z.string().optional(),
   TAILSCALE_AUTHKEY: z.string().optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
 });
@@ -60,6 +63,11 @@ export interface Config {
   // the image `imps.create` uses when none is named; `ubuntu` stands in until
   // one by this name exists
   readonly defaultImage: string;
+
+  // where disks live (docs/architecture/storage.md); with zfs, zfsRoot is the
+  // dataset mounted on dataDir, such as tank/imp
+  readonly storageBackend: StorageBackendKind;
+  readonly zfsRoot: string | null;
   readonly tailscaleAuthKey: string | null;
 
   // the tailnet hostname impd asks for; per-imp URLs use the name the node
@@ -84,6 +92,12 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
+  if (parsed.IMP_STORAGE_BACKEND === 'zfs' && parsed.IMP_ZFS_ROOT === undefined) {
+    throw new Error(
+      'IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT, the dataset mounted on IMP_DATA_DIR',
+    );
+  }
+
   return {
     dataDir: parsed.IMP_DATA_DIR,
     apiPort: parsed.IMP_API_PORT,
@@ -104,6 +118,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     systemDriveSource:
       parsed.IMP_SYSTEM_DRIVE ?? join(parsed.IMP_DATA_DIR, 'system', 'imp-system.squashfs'),
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
+    storageBackend: parsed.IMP_STORAGE_BACKEND,
+    zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
   };

@@ -12,6 +12,7 @@ import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
+import type { StorageBackend } from './storage/storage-backend';
 import type { SystemFileInfo } from './storage/system-file-info';
 
 export interface RouterDeps {
@@ -25,6 +26,7 @@ export interface RouterDeps {
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly execTickets: ExecTickets;
+  readonly storage: Pick<StorageBackend, 'kind' | 'readUsage'>;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -111,10 +113,11 @@ export function buildRouter(deps: RouterDeps) {
 // RAM used is measured (what awake Firecrackers own); committed is the
 // memory the awake imps were given (DESIGN 2.9).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const [imps, usage, tailscale] = await Promise.all([
+  const [imps, usage, tailscale, storage] = await Promise.all([
     listImps(deps.db),
     deps.governor.readUsage(),
     deps.readTailscale(),
+    deps.storage.readUsage(),
   ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
@@ -130,6 +133,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     firecrackerVersion: deps.firecrackerVersion,
     guestKernel: deps.systemFiles.guestKernel,
     systemDrive: deps.systemFiles.systemDrive,
+    storage: { backend: deps.storage.kind, ...storage },
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
       ...tailscale,

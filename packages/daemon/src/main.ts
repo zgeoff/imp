@@ -18,9 +18,9 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
+import { createStorageBackend } from './storage/create-storage-backend';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
-import { createXfsBackend } from './storage/xfs-backend';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
   const token = loadOrCreateToken(config.dataDir);
-  const storage = createXfsBackend({ dataDir: config.dataDir });
+  const storage = createStorageBackend(config);
 
   // before any VM is re-adopted or woken: on ZFS the disks are mounted here
   const live = await readLiveStorage(db);
@@ -122,6 +122,7 @@ async function main(): Promise<void> {
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
+    storage,
     readTailscale,
     isReady: () => state.ready,
     now: Date.now,

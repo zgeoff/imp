@@ -1,6 +1,6 @@
 import type { ImpPaths } from './data-layout';
 
-type StorageBackendKind = 'xfs' | 'zfs';
+export type StorageBackendKind = 'xfs' | 'zfs';
 
 // Where a new imp disk comes from. An imp source is its live disk: the caller
 // freezes the guest around the call.

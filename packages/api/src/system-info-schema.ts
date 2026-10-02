@@ -20,6 +20,13 @@ export const SystemInfoSchema = z.object({
   // the kernel image has no version banner
   guestKernel: z.object({ version: z.string().nullable(), sha256: z.string() }),
   systemDrive: z.object({ sha256: z.string() }),
+
+  // the filesystem or pool that holds disks, checkpoints and images
+  storage: z.object({
+    backend: z.enum(['xfs', 'zfs']),
+    usedBytes: z.int().nonnegative(),
+    availableBytes: z.int().nonnegative(),
+  }),
   tailscale: z.object({
     enabled: z.boolean(),
     state: z.string().nullable(),

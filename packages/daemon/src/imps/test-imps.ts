@@ -192,6 +192,7 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
     checkpoints,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
+    storage: ctx.storage,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
     now: ctx.now,
