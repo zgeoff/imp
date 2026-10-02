@@ -72,12 +72,12 @@ scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order ab
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
 
-| Flag      | Effect                                                                                              |
-| --------- | --------------------------------------------------------------------------------------------------- |
-| `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset. |
-| `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir.                 |
-| `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                      |
-| `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                            |
+| Flag      | Effect                                                                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset.                                     |
+| `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir, and the moves suites' second host and its data dir. |
+| `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                                                          |
+| `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                                                                |
 
 The `acceptance` set is the definition of done: the tailscale suite fails without a Tailscale key
 (from the env, 1Password or `.env`, as [configuration](./configuration.md#dev-instance) lists), and
