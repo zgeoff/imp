@@ -37,6 +37,9 @@ interface ImpTestOptions {
 
   // a plain copy by default: the test tmpdir is not XFS
   readonly cloneDisk?: (source: string, target: string) => Promise<void>;
+
+  // sees each log line as impd writes it
+  readonly onLog?: (message: string) => void;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps,
@@ -83,6 +86,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       },
       log: (message) => {
         logs.push(message);
+        options.onLog?.(message);
       },
       cloneDisk,
       now: readClock,

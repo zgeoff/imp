@@ -165,7 +165,9 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
     now: () => clock.now,
   });
 
-  // what the id holds reserved: its share of reservedMib while it is not awake
+  // What the id holds reserved. Asleep, its reservation counts in full;
+  // awake with a huge measurement, it counts nothing, since an awake imp
+  // counts the larger of the two. The difference is the reservation.
   const readReservation = async (id: string): Promise<number> => {
     const imp = findImp(id);
 
@@ -294,7 +296,8 @@ test('one op at a time: admission keeps the budget and never picks a pinned imp'
         } else if (op.kind === 'enforce') {
           await model.governor.enforce();
 
-          // over budget only when sleeping every eligible imp would not do
+          // over budget only when sleeping every eligible imp would not do;
+          // #46 makes enforce sleep what it can, which tightens this
           const room = model.findRoomLeft();
 
           expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
@@ -363,6 +366,7 @@ test('concurrent admits with holds and RSS changes inside them all settle', asyn
 
         await model.governor.enforce();
 
+        // as above; #46 tightens it
         const room = model.findRoomLeft();
 
         expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();

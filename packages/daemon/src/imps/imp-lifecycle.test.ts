@@ -80,8 +80,6 @@ test('a restore waiting for admission does not deadlock the governor sleeping it
 
   await waitUntil(async () => (await ctx.readState('a')) === 'stopped');
 
-  await Bun.sleep(20);
-
   sleepGate.release();
 
   const outcomes = await Promise.all([
@@ -473,6 +471,7 @@ test('impd restarting in place waits for a boot under way and re-adopts its VM',
     waiting.done = true;
   })();
 
+  // time for a wrong early resolve to show
   await Bun.sleep(20);
 
   const doneWhileHeld = waiting.done;
