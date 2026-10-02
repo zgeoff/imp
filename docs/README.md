@@ -9,8 +9,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   container, the control API and the repo layout.
 - [Daemon](./architecture/daemon.md): impd's modules, start and stop, and how the lifecycle, the
   governor, the proxy and the agent client fit together.
-- [Guest agent and kernel](./architecture/agent.md): the two drives, the two-stage boot, the reaper,
-  and why imp builds its own guest kernel.
+- [Guest agent and kernel](./architecture/agent.md): the two drives, the boot, the inner container,
+  the reaper, and why imp builds its own guest kernel.
 - [Agent protocol](./architecture/protocol.md): the host ↔ guest wire format over vsock: frames,
   errors, unary requests and exec streams.
 - [Storage and images](./architecture/storage.md): XFS reflinks, the data directory, checkpoints,
