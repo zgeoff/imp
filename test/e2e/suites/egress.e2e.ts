@@ -205,6 +205,52 @@ test('a private address opens only by an explicit CIDR, and a tighter policy cut
   expect(policy.trim()).toBe('box: example.com');
 });
 
+test('a tighter policy ends broker tunnels it denies, even one whose head comes after it', async () => {
+  await runImp('policy', box, 'box', '--allow', 'example.com,example.org');
+
+  // the broker on the guest's gateway (IMP_BROKER_PORT's default; the
+  // broker's variables reach only an imp with a grant); a held tunnel that
+  // writes until it ends, and one that sends its head after the change
+  const route = await runShellInImp(box, 'ip -4 route show default');
+
+  const gateway = /via (?<ip>[\d.]+)/v.exec(route)?.groups?.['ip'] ?? '';
+  const broker = `${gateway} 7081`;
+  const head = String.raw`CONNECT example.org:80 HTTP/1.1\r\nHost: example.org:80\r\n\r\n`;
+
+  await runShellInImp(
+    box,
+    `rm -f /tmp/tun-*; setsid sh -c "(printf '${head}'; while sleep 0.2; do printf x; done) | nc ${broker} > /tmp/tun-held; echo done > /tmp/tun-done" </dev/null >/dev/null 2>&1 &`,
+  );
+
+  await waitFor('the held tunnel to open', async () => {
+    const opened = await tryInImp(box, 'grep -q " 200 " /tmp/tun-held');
+
+    expect(opened).toBeTrue();
+  });
+
+  await runShellInImp(
+    box,
+    `setsid sh -c "(sleep 4; printf '${head}'; sleep 5) | nc ${broker} > /tmp/tun-late" </dev/null >/dev/null 2>&1 &`,
+  );
+
+  // the late connection is open, its head not yet sent
+  await Bun.sleep(1000);
+
+  await runImp('policy', box, 'box', '--allow', 'example.com');
+
+  await waitFor('the held tunnel to end', async () => {
+    const ended = await tryInImp(box, 'test -f /tmp/tun-done');
+
+    expect(ended).toBeTrue();
+  });
+
+  await waitFor('the late head to be refused', async () => {
+    const refused = await tryInImp(box, 'grep -q " 403 " /tmp/tun-late');
+
+    expect(refused).toBeTrue();
+  });
+});
+
 test('none reaches nothing, and open gives it all back', async () => {
   await runImp('policy', box, 'none');
 
