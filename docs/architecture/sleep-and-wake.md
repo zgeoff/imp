@@ -159,8 +159,9 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   ([background sleeps](#background-sleeps)); it and an imp whose sleep fails are not picked again.
   If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
   with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room,
-  and it stops at the first skip or failure that leaves too little. A request that fails there loses
-  only the sleeps done before that skip or failure; each of those imps wakes on its next request.
+  and it gives up when the new pick after a skip or failure is short. A request that fails there
+  loses only the sleeps done before that skip or failure; each of those imps wakes on its next
+  request.
 - **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget. When the
   imps it may sleep cannot bring usage under the budget, it sleeps all of them to get as close as it
   can. It logs each pass that sleeps an imp, and once when none is left.

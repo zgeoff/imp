@@ -109,8 +109,16 @@ test('a rejected admit stops sleeping imps once the lock of a victim is taken', 
 
   await sleeping.reached;
 
+  const locked = Promise.withResolvers<void>();
   const unlock = Promise.withResolvers<void>();
-  const locking = ctx.imps.lockImp('b', () => unlock.promise);
+
+  const locking = ctx.imps.lockImp('b', () => {
+    locked.resolve();
+
+    return unlock.promise;
+  });
+
+  await locked.promise;
 
   sleeping.release();
 
@@ -125,6 +133,7 @@ test('a rejected admit stops sleeping imps once the lock of a victim is taken', 
   const states = await readStates(ctx);
 
   expect(states).toEqual({ a: 'sleeping', b: 'running', c: 'running' });
+  expect(ctx.fake.alive.size).toBe(2);
 });
 
 test('an admit picks again past a failed sleep and fits when the rest is enough', async () => {
