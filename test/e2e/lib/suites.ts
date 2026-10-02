@@ -35,6 +35,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },
   { name: 'tokens', prefix: 'e2e-tok-', images: ['e2e-tiny'] },
+  { name: 'egress', prefix: 'e2e-eg-', images: ['e2e-tiny'] },
 
   // last: it reboots the instance with backups on, then off again
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },

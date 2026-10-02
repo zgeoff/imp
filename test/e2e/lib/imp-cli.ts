@@ -17,6 +17,7 @@ const ImpRowSchema = z.object({
   vcpus: z.number(),
   memoryMib: z.number(),
   slot: z.number(),
+  ip: z.string(),
   port: z.number(),
   url: z.string(),
   lastActiveAt: z.string(),
