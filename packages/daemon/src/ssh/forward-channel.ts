@@ -1,3 +1,4 @@
+import { posix } from 'node:path';
 import type { AcceptConnection, RejectConnection, ServerChannel } from 'ssh2';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { formatFailure, runChannelRelay } from './channel-io';
@@ -14,6 +15,18 @@ const LOOPBACK_HOSTS: Readonly<Record<string, string>> = {
   '127.0.0.1': '127.0.0.1',
   '::1': '[::1]',
 };
+
+// impd's own sockets in the guest, such as a forwarded ssh-agent's. The
+// agent dials as root, so a forward could reach another user's agent.
+const IMP_RUN_DIR = '/run/imp/';
+
+// the dial target for a direct-streamlocal channel, or null when it is
+// refused; the agent refuses a path whose symlinks lead there
+export function resolveSocketTarget(socketPath: string): DialTarget | null {
+  const path = posix.normalize(posix.join('/', socketPath));
+
+  return path.startsWith(IMP_RUN_DIR) ? null : { network: 'unix', address: path };
+}
 
 // the dial target for a direct-tcpip channel, or null when it is refused
 export function resolveTcpTarget(host: string, port: number): DialTarget | null {

@@ -85,7 +85,7 @@ Host box.imp
 | signals                              | sent to the command's process group                                                                 |
 | SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                          |
 | local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only    |
-| unix socket forward (`-L` to a path) | to any socket path in the imp                                                                       |
+| unix socket forward (`-L` to a path) | to any socket path in the imp but impd's own under `/run/imp/`                                      |
 | env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
 | credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
 | remote forward (`-R`)                | refused                                                                                             |

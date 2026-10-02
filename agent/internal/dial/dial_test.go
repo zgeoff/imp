@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -207,4 +209,24 @@ func TestTargetResetEndsWithoutEOF(t *testing.T) {
 		}
 	}
 	h.waitServed(t)
+}
+
+// A symlink to a socket under the agent's own directory is refused before
+// the dial, so a forward cannot reach a forwarded ssh-agent as root.
+func TestSymlinkIntoImpDirIsRefused(t *testing.T) {
+	// relative: a unix socket path has a 108-byte limit
+	t.Chdir(t.TempDir())
+	old := impDir
+	impDir = "imp"
+	t.Cleanup(func() { impDir = old })
+	if err := os.MkdirAll(impDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listen(t, "unix", filepath.Join(impDir, "agent.sock"), func(net.Conn) {})
+	if err := os.Symlink(filepath.Join(impDir, "agent.sock"), "link.sock"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "unix", Address: "link.sock"})
+	h.requireError(t, proto.ErrBadRequest)
 }

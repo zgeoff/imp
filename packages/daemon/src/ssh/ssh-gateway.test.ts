@@ -476,6 +476,29 @@ test('a streamlocal forward dials the unix socket in the guest', async () => {
   expect(ctx.dials[0]?.target).toEqual({ network: 'unix', address: '/run/app.sock' });
 });
 
+test('a streamlocal forward to impd sockets under /run/imp is prohibited', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  for (const path of [
+    '/run/imp/ssh-agent/ab/agent.sock',
+    '/run/./imp/ssh-agent/ab/agent.sock',
+    '/tmp/../run/imp/x.sock',
+    '//run/imp/x.sock',
+    'run/imp/x.sock',
+  ]) {
+    const failure = await readRejection(
+      openChannel((done) => {
+        client.openssh_forwardOutStreamLocal(path, done);
+      }),
+    );
+
+    expect(failure).toMatchObject({ reason: OPEN_FAILURE.administrativelyProhibited });
+  }
+
+  expect(ctx.dials).toEqual([]);
+});
+
 test('stop ends every connection', async () => {
   const ctx = await startTestGateway();
   const client = await openClient(ctx.gateway);

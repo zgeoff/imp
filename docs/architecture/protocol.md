@@ -303,8 +303,9 @@ listen on the guest's loopback or on a unix socket, which the guest IP cannot. S
 ```
 
 The agent gives up a connect after 5 s. A connect that fails gets `DIAL_FAILED`; a `network` other
-than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The agent does not check the address: the
-host decides what a dial may reach.
+than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The host decides what a dial may reach;
+the agent only refuses, with `BAD_REQUEST`, a unix path whose symlinks lead under `/run/imp/`, where
+its own sockets are (the agent dials as root).
 
 After the RESPONSE:
 

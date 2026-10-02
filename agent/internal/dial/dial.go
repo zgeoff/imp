@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -18,6 +20,12 @@ import (
 // dialTimeout bounds the connect, so a filtered port fails instead of
 // holding the host's channel open.
 const dialTimeout = 5 * time.Second
+
+// impDir holds the agent's own sockets, such as forwarded ssh-agents. The
+// agent dials as root, so a dial there could reach another user's agent;
+// impd refuses the path, and this refuses a symlink that leads there. A
+// variable for tests.
+var impDir = "/run/imp"
 
 // chunk is the most the relay reads from the target before it writes a frame.
 const chunk = 32 << 10
@@ -97,11 +105,27 @@ func open(req proto.Request) (net.Conn, error) {
 	if req.Address == "" {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "address is required"}
 	}
+	if req.Network == "unix" {
+		if err := checkSocketPath(req.Address); err != nil {
+			return nil, err
+		}
+	}
 	c, err := net.DialTimeout(req.Network, req.Address, dialTimeout)
 	if err != nil {
 		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
 	}
 	return c, nil
+}
+
+func checkSocketPath(address string) error {
+	path, err := filepath.EvalSymlinks(address)
+	if err != nil {
+		return &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
+	}
+	if path == impDir || strings.HasPrefix(path, impDir+"/") {
+		return &proto.Error{Code: proto.ErrBadRequest, Message: address + " leads to the agent's own sockets"}
+	}
+	return nil
 }
 
 func pumpOut(target net.Conn, w *proto.Writer) error {
