@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.0](https://github.com/zgeoff/imp/compare/v0.7.0...v0.8.0) (2026-10-02)
+
+
+### Features
+
+* **agent:** kill a stopped command's whole process group ([c2b7371](https://github.com/zgeoff/imp/commit/c2b7371f1a2f83b068fbd8c5b4a070beb032e4e1)), closes [#51](https://github.com/zgeoff/imp/issues/51)
+* **agent:** kill what is left of a stopped exec's process group ([f245c56](https://github.com/zgeoff/imp/commit/f245c560e8ecc2493215c6ce4edfe4529f2d34cd))
+* an exec takes a kill grace and reports the agent's group kill ([fc3e3e8](https://github.com/zgeoff/imp/commit/fc3e3e8c43e2fe8ae0c25ac62caf740f70c575c5))
+* **api:** bind ssh keys to tokens in the contract ([#63](https://github.com/zgeoff/imp/issues/63)) ([3e9a94a](https://github.com/zgeoff/imp/commit/3e9a94aa91d8c51502886aa344cceb0b7261111b))
+* **client:** let the caller open the exec socket ([35034b7](https://github.com/zgeoff/imp/commit/35034b7c9d8eebb7f1107604c4d1f83c4accf24f))
+* **cli:** imp token key add, ls and rm, and new --ssh-key ([#63](https://github.com/zgeoff/imp/issues/63)) ([598da72](https://github.com/zgeoff/imp/commit/598da7273bc57d7932b96131d10b9e0d8fa5da92))
+* **daemon:** serve mcp over http at /mcp ([63a7ec1](https://github.com/zgeoff/imp/commit/63a7ec1c67db2c91f439c13b032a45b4c539f2dd)), closes [#50](https://github.com/zgeoff/imp/issues/50)
+* **daemon:** ssh logins with a bound key run as its token ([#63](https://github.com/zgeoff/imp/issues/63)) ([9f45e07](https://github.com/zgeoff/imp/commit/9f45e07956fffaaf4f1d8d72fb3c6d3a03c699d6))
+* **daemon:** store ssh keys bound to tokens ([#63](https://github.com/zgeoff/imp/issues/63)) ([124f67d](https://github.com/zgeoff/imp/commit/124f67dcf634e79ed7952cee19366471a5c3d56c))
+* **dashboard:** list the ssh keys bound to each token ([#63](https://github.com/zgeoff/imp/issues/63)) ([f969f0a](https://github.com/zgeoff/imp/commit/f969f0aba80afce60cc2855baa6def8a3b5590c2))
+* **deploy:** one-command server bootstrap ([7f87178](https://github.com/zgeoff/imp/commit/7f87178b7c491dc901eae830c0a562b8ea8fd957)), closes [#9](https://github.com/zgeoff/imp/issues/9)
+* **mcp:** add a streamable http transport and a pattern guard ([6bd91fa](https://github.com/zgeoff/imp/commit/6bd91fa8ea1b7968abba0c5d7b087411d94681a6))
+* **mcp:** let the agent kill a stopped command's process group ([753448a](https://github.com/zgeoff/imp/commit/753448ac438ec0a4f561f2faf869bf84d3fb90ec))
+* **mcp:** serve mcp over http from impd with scoped tokens ([1235313](https://github.com/zgeoff/imp/commit/1235313917b85302bf3af0770f8f23e0a0b0c258)), closes [#50](https://github.com/zgeoff/imp/issues/50)
+* **ssh:** bind ssh keys to scoped tokens ([0436331](https://github.com/zgeoff/imp/commit/0436331cddbdee70ebdab95a7be21be3afc24b1c)), closes [#63](https://github.com/zgeoff/imp/issues/63)
+
+
+### Bug Fixes
+
+* **daemon:** cap long timers at the runtime's limit ([abbc951](https://github.com/zgeoff/imp/commit/abbc951dd44f77bd8f7b2f7139d6f1008ffa21e9))
+* **daemon:** cap the event stream's end timer at setTimeout's limit ([830b437](https://github.com/zgeoff/imp/commit/830b437606e659eedc91368fad7dd741a9a0d882))
+* **daemon:** judge /mcp origins by the dashboard's same-origin rule ([0e7380d](https://github.com/zgeoff/imp/commit/0e7380da50cc436c717c91001573700612f59453))
+* **daemon:** never unbind a key that authorized_keys lists ([#63](https://github.com/zgeoff/imp/issues/63)) ([630ea7c](https://github.com/zgeoff/imp/commit/630ea7c60c12019556b4887bed04608ab03cd09e))
+* **db:** number the token ssh keys migration 008 ([ed3d197](https://github.com/zgeoff/imp/commit/ed3d1971918a0d90843d22f6a65cb39563153dd3))
+* **deploy:** refuse zfs when fstab mounts /var/lib/imp ([810ba9d](https://github.com/zgeoff/imp/commit/810ba9d6aa6bbee16c0114e8e443e0ceaa96b363))
+* **dev:** read the tailscale key from 1password only when a run needs it ([7924b0b](https://github.com/zgeoff/imp/commit/7924b0b2ccd17ce8dd9b11a42d9c0fe0ce99de29))
+* **e2e:** put the ignore-unknown line before every ssh host block ([3df70c0](https://github.com/zgeoff/imp/commit/3df70c0b70752aa79107ae9ccf82340a6f69dbf1))
+
 ## [0.7.0](https://github.com/zgeoff/imp/compare/v0.6.0...v0.7.0) (2026-10-02)
 
 ### Features
