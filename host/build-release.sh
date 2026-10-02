@@ -10,6 +10,8 @@
 # Extra args go to `docker buildx build`, for example --push or the
 # --cache-from/--cache-to a CI runner needs to keep the kernel layer.
 # Without --push or --output the image loads into the local docker.
+#
+# linux/amd64 only: Firecracker in the image and the guest kernel are x86_64.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,7 +26,7 @@ for arg in "$@"; do
 done
 
 docker buildx build \
-  -f "$root/host/Dockerfile" --target release \
+  -f "$root/host/Dockerfile" --target release --platform linux/amd64 \
   --build-arg IMP_VERSION="$version" \
   -t "$image:$version" \
   "${output[@]}" "$@" "$root"
