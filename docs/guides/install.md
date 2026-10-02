@@ -108,24 +108,28 @@ change and makes none. `--check` does the same and exits 1 when a change is pend
 only what differs from what it wants, so a second run changes nothing.
 
 **CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
-partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS. Check
-the device name with `lsblk` before the run all the same.
+partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS (or,
+with ZFS, the pool's own). Check the device name with `lsblk` before the run all the same.
 
 The phases run in order:
 
 - **preflight:** Checks root, the OS, x86_64, `/dev/kvm` and `vmx`/`svm`, before any change.
 - **packages:** Installs `xfsprogs`, `nftables`, `jq` and Docker CE from Docker's apt repo. A Docker
-  that is already installed stays.
+  that is already installed stays. With ZFS, also `zfsutils-linux`; on Debian, `zfs-dkms` and the
+  kernel headers from `contrib`, which the script adds.
 - **storage:** Makes `--data-device` XFS with reflink (fstab by UUID), or creates the `--loop-file`
   on the root filesystem (fstab `loop`). Mounts it on `/var/lib/imp`. With `/var/lib/imp` already
-  mounted, it only checks it is XFS with reflink.
+  mounted, it only checks it is XFS with reflink. With ZFS, see [ZFS](#zfs).
 - **kernel:** Writes `vm.overcommit_memory = 1` and `vm.swappiness = 1` to
   `/etc/sysctl.d/90-imp.conf`, and `kvm`, `tun` and `loop` to `/etc/modules-load.d/imp.conf`, and
-  applies both. Swap stays as the installer made it.
+  applies both. Swap stays as the installer made it. With ZFS, also `zfs`, and the ARC cap in
+  `/etc/modprobe.d/imp-zfs.conf`.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`. It refuses while `nftables.service` is enabled.
 - **imp:** Writes `/etc/imp/imp-host.env` (0600) and `/etc/systemd/system/imp-host.service`, pulls
-  the image (or loads `--image-archive`), and starts the unit.
+  the image (or loads `--image-archive`), and starts the unit. The unit has
+  `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
+  orders it after `zfs.target`.
 - **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, then
   creates, runs `uname -a` in, and destroys an imp from `ubuntu`. `--skip-health` skips it.
 
@@ -149,25 +153,44 @@ that partition while it is mounted, so pick a layout without it in the installer
 needs 20 GiB free and puts a loop device in the I/O path; use it only when no disk or partition is
 free.
 
-The storage phase has one backend today, XFS. ZFS ([#11](https://github.com/zgeoff/imp/issues/11))
-adds a second.
+### ZFS
+
+`--storage zfs` puts imp on a ZFS pool instead ([storage](../architecture/storage.md#zfs)):
+
+```sh
+bash bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1   # pool tank, dataset tank/imp
+bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing pool: fast/imp
+```
+
+- With `--data-device`, the script creates the pool on it (`ashift=12`, `compression=lz4`,
+  `atime=off`, `xattr=sa`, `mountpoint=none`), or imports it when the device already holds that
+  pool. Without it, the pool must be imported already; make a mirror that way.
+- It creates `<pool>/imp` with `mountpoint=legacy` and sets `IMP_STORAGE_BACKEND=zfs` and
+  `IMP_ZFS_ROOT=<pool>/imp` in the env file. The host never mounts the dataset; the container mounts
+  it on `/var/lib/imp`, and impd creates the children.
+- A later run without `--storage` keeps the env file's backend. The script refuses to switch
+  backends, since the imps would stay behind on the old one.
+- ZFS takes no `--loop-file`.
 
 ### RAM budget
 
 The script sets `IMP_RAM_BUDGET_MIB` to the RAM the kernel reports, less the larger of 8 GiB and 15
-%. The host keeps that for itself, Docker, impd and the page cache. On a 64 GB box:
+%. The host keeps that for itself, Docker, impd and the page cache. With ZFS, the script caps the
+ARC at 10 % of RAM, within 1 to 8 GiB, and takes that out of the budget too: uncapped, the ARC grows
+to half of RAM. On a 64 GB box:
 
-| What                                    | MiB    |
-| --------------------------------------- | ------ |
-| MemTotal (64 GB reports about 62.5 GiB) | 64,000 |
-| Kept for the host: max(8192, 15 %)      | 9,600  |
-| `IMP_RAM_BUDGET_MIB`                    | 54,400 |
+| What                                    | XFS MiB | ZFS MiB |
+| --------------------------------------- | ------- | ------- |
+| MemTotal (64 GB reports about 62.5 GiB) | 64,000  | 64,000  |
+| Kept for the host: max(8192, 15 %)      | 9,600   | 9,600   |
+| ZFS ARC cap (`zfs_arc_max`)             | none    | 6,400   |
+| `IMP_RAM_BUDGET_MIB`                    | 54,400  | 48,000  |
 
-That is about 170 awake imps at the 317 MiB that `STATUS.md` measured for an imp filling 256 MiB, or
-26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
+On XFS that is about 170 awake imps at the 317 MiB that `STATUS.md` measured for an imp filling 256
+MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
 
 The script writes the budget when the env file holds the template's `16384` or nothing. Any other
-value is yours and stays. With ZFS, cap `zfs_arc_max` and take the ARC out of the budget too.
+value is yours and stays.
 
 ### The Tailscale key
 
@@ -193,10 +216,12 @@ warns when `sshd` allows password logins.
 Debian 13 and Ubuntu 24.04, with a loop file and Docker inside. It checks `--check` on the fresh
 host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*` and
 `kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel settings
-and does not apply them.
+and does not apply them. On Debian it also checks the `--data-device` refusals and what
+`--check --storage zfs` plans. `--zfs` adds a real ZFS run on Ubuntu, on a pool with a unique name
+that the test destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
 
 ```sh
-scripts/test-bootstrap.sh --stub                              # a stand-in image (what CI runs)
+scripts/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
 scripts/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
 ```
 
