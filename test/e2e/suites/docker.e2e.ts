@@ -44,6 +44,23 @@ test('docker runs and builds images inside an imp from images/base', async () =>
   expect(built).toBe('built-42');
 });
 
+test('a container from scratch runs in the inner container, with no registry', async () => {
+  // the agent is a static binary: an image of it alone needs no pull
+  const version = await runShellInImp(
+    name,
+    [
+      'mkdir -p /tmp/e2e-scratch && cd /tmp/e2e-scratch',
+      'cp /run/imp/sys/imp-agent .',
+      String.raw`printf "FROM scratch\nCOPY imp-agent /\nENTRYPOINT [\"/imp-agent\", \"version\"]\n" > Dockerfile`,
+      'docker build -q -t e2e-scratch . >/dev/null',
+      'docker save e2e-scratch | docker load -q >/dev/null',
+      'docker run --rm --memory 64m e2e-scratch',
+    ].join('\n'),
+  );
+
+  expect(version).toMatch(/^\d+\.\d+\.\d+$/v);
+});
+
 test('a container port published on 8080 answers through the wake proxy', async () => {
   await runInImp(name, 'docker', 'run', '-d', '--name', 'web', '-p', '8080:80', 'nginx:alpine');
   await waitForNginx();
