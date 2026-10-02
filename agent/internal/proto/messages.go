@@ -112,9 +112,11 @@ type LogCursor struct {
 
 // Error codes.
 const (
-	ErrBadRequest   = "BAD_REQUEST"
-	ErrUnknownOp    = "UNKNOWN_OP"
-	ErrExecFailed   = "EXEC_FAILED"
+	ErrBadRequest = "BAD_REQUEST"
+	ErrUnknownOp  = "UNKNOWN_OP"
+	ErrExecFailed = "EXEC_FAILED"
+	// the inner container, where every process runs, is down
+	ErrInnerDown    = "INNER_DOWN"
 	ErrFrozen       = "FROZEN"
 	ErrPoweringOff  = "POWERING_OFF"
 	ErrInternal     = "INTERNAL"
@@ -148,8 +150,10 @@ type Ping struct {
 	// set on a boot that reset a template copy's identity: ok, or failed
 	// when impd must ask again on the next boot
 	IdentityReset string `json:"identity_reset,omitempty"`
-	// "template" while stage 1 waits for a claim; empty once stage 2 runs
+	// "template" while the agent waits for a claim; empty once it serves
 	Stage string `json:"stage,omitempty"`
+	// Inner is the inner container's state; absent from older agents
+	Inner *InnerStatus `json:"inner,omitempty"`
 }
 
 // StageTemplate is Ping.Stage for a guest parked in a boot template.
@@ -178,6 +182,22 @@ const (
 	IdentityResetOK     = "ok"
 	IdentityResetFailed = "failed"
 )
+
+// InnerStatus is the inner container's state: whether it runs, how often it
+// started again after its init died, and why the last start failed.
+type InnerStatus struct {
+	Up        bool   `json:"up"`
+	Restarts  int    `json:"restarts"`
+	LastError string `json:"last_error,omitempty"`
+}
+
+// StartError is the error for a process that could not start.
+func StartError(err error, down bool) *Error {
+	if down {
+		return &Error{Code: ErrInnerDown, Message: err.Error()}
+	}
+	return &Error{Code: ErrExecFailed, Message: err.Error()}
+}
 
 type OK struct {
 	OK bool `json:"ok"`

@@ -100,6 +100,10 @@ type Runner interface {
 	Start(s Spec) (*Process, error)
 }
 
+// ErrDown is a Runner's error when it has nowhere to start a process: the
+// inner container is down.
+var ErrDown = errors.New("the inner container is down")
+
 // Direct forks children of this process through its reaper.
 type Direct struct {
 	Reaper *reaper.Reaper
@@ -127,7 +131,9 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 	}
 	files := s.Files
 	path := ""
-	if s.Helper {
+	// impd runs the agent by its path for sftp and tar: from the fd too, so
+	// it works with the system drive unmounted inside
+	if s.Helper || (d.AgentFile != nil && s.Argv[0] == d.Agent) {
 		path = d.Agent
 		if d.AgentFile != nil {
 			// the child's own fd of the binary: unmounting or replacing the

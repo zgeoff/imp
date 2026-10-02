@@ -7,6 +7,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/launch"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 )
@@ -155,7 +157,7 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	}
 	p, master, err := m.launcher.StartPTY(req)
 	if err != nil {
-		return nil, false, &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()}
+		return nil, false, proto.StartError(err, errors.Is(err, proc.ErrDown))
 	}
 	s = newSession(req.Session, req, p, master)
 	s.onDelivered = func() { m.removeIfOver(s) }
