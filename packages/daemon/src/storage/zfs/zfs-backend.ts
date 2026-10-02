@@ -62,6 +62,7 @@ interface LeftoverPlan {
   readonly impDirs: readonly string[];
   readonly memDirs: readonly string[];
   readonly orphans: readonly ZfsEntry[];
+  readonly orphanCheckpoints: readonly ZfsEntry[];
   readonly orphanDirs: readonly OrphanDir[];
 }
 
@@ -175,6 +176,8 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
 
     await (next.kind === 'promote' ? zfs.promote(next.name) : zfs.destroy(next.name));
+
+    log(`impd: zfs: reclaim: ${next.kind === 'promote' ? 'promoted' : 'destroyed'} ${next.name}`);
 
     return false;
   };
@@ -310,6 +313,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
       await zfs.destroy(staged.name);
 
+      log(`impd: zfs: destroyed ${staged.name}, a clone or build a crash cut short`);
       removeMountDir(buildStagingDir(staged.name));
     }
   };
@@ -342,24 +346,34 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       CHECKPOINT_SNAPSHOT.test(snapshot.name) &&
       live.checkpointIds.has(readSnapshotId(snapshot.name));
 
-    // A fork, backup or checkpoint snapshot with no row is a crash leftover,
-    // except on an orphan: its snapshots go only with it, before the retire,
-    // so the reclaim can free it. An image's `@base` goes with the image.
+    // An orphan's snapshots go only with it, before the retire, so the
+    // reclaim can free it; its `@base` goes with the image.
+    const isOnOrphan = (snapshot: ZfsEntry) => orphanNames.has(readSnapshotDataset(snapshot.name));
+
+    // A checkpoint with no row is an orphan wherever it is, on a named disk or
+    // in `retired/`: an older database lacks the newer rows. A fork or backup
+    // snapshot elsewhere is impd's own, and never outlives its operation.
+    const isOrphanCheckpoint = (snapshot: ZfsEntry) =>
+      CHECKPOINT_SNAPSHOT.test(snapshot.name) && !isLiveCheckpoint(snapshot);
+
     const isDead = (snapshot: ZfsEntry) => {
-      if (orphanNames.has(readSnapshotDataset(snapshot.name))) {
+      if (isOnOrphan(snapshot)) {
         return isOrphans && !snapshot.name.endsWith('@base') && !isLiveCheckpoint(snapshot);
       }
 
       return (
         FORK_SNAPSHOT.test(snapshot.name) ||
         BACKUP_SNAPSHOT.test(snapshot.name) ||
-        (CHECKPOINT_SNAPSHOT.test(snapshot.name) && !isLiveCheckpoint(snapshot))
+        (isOrphans && isOrphanCheckpoint(snapshot))
       );
     };
 
-    const snapshots = entries.filter(
-      (entry) => entry.type === 'snapshot' && !entry.deferDestroy && isDead(entry),
-    );
+    const unmarked = entries.filter((entry) => entry.type === 'snapshot' && !entry.deferDestroy);
+    const snapshots = unmarked.filter((entry) => isDead(entry));
+
+    const orphanCheckpoints = isOrphans
+      ? []
+      : unmarked.filter((entry) => !isOnOrphan(entry) && isOrphanCheckpoint(entry));
 
     // A directory with no row goes with a kept disk. With no disk, only an
     // empty one is provably nothing; one with files is an orphan.
@@ -387,6 +401,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       impDirs: droppedDirs.filter((entry) => entry.kind === 'imp').map((entry) => entry.id),
       memDirs: droppedDirs.filter((entry) => entry.kind === 'memory').map((entry) => entry.id),
       orphans: isOrphans ? [] : orphans,
+      orphanCheckpoints,
       orphanDirs: unknownDirs.filter((entry) => !isDirDropped(entry)),
     };
   };
@@ -419,7 +434,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       readDirectoryOrphan(entry.kind, entry.id, entry.dir, []),
     );
 
-    if (plan.orphans.length === 0) {
+    if (plan.orphans.length === 0 && plan.orphanCheckpoints.length === 0) {
       return dirs;
     }
 
@@ -444,7 +459,18 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       };
     });
 
-    return [...datasetOrphans, ...dirs];
+    const checkpoints = plan.orphanCheckpoints.map(
+      (snapshot): OrphanStorage => ({
+        kind: 'checkpoint',
+        id: readSnapshotId(snapshot.name),
+        location: snapshot.name,
+        bytes: space.get(snapshot.name)?.used ?? 0,
+        createdAt: space.get(snapshot.name)?.createdAt ?? null,
+        snapshots: [],
+      }),
+    );
+
+    return [...datasetOrphans, ...checkpoints, ...dirs];
   };
 
   // Drops what the database no longer names and a crash explains, and the
@@ -594,7 +620,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
         const swept = await removeLeftovers(live, { isDryRun: false, isOrphans: false });
 
-        printSweep(log, 'impd: storage', swept, { isOrphansLogged: true });
+        printSweep(log, 'impd: storage', swept, 'each');
 
         await runReclaim(runReclaimStep);
         await setupMounts();

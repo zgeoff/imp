@@ -72,13 +72,13 @@ export interface DroppedStorage {
 }
 
 // What no row names and no crash provably explains: an imp's disk or
-// directory, its memory snapshot (`memory`, ZFS), or an image, as a lost
+// directory, a memory snapshot (ZFS), a checkpoint or an image, as a lost
 // database leaves them. A sweep keeps it unless asked for orphans.
 export interface OrphanStorage {
-  readonly kind: 'imp' | 'image' | 'memory';
+  readonly kind: 'imp' | 'image' | 'memory' | 'checkpoint';
   readonly id: string;
 
-  // the dataset, or the directory on XFS
+  // the dataset or snapshot, or the directory on XFS
   readonly location: string;
 
   // snapshots and checkpoints included

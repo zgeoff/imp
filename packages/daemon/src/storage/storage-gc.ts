@@ -2,6 +2,7 @@ import type { StorageGc } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ImpDatabase } from '../db/open-database';
 import { printSweep } from './print-sweep';
+import type { OrphanLogging } from './print-sweep';
 import { readLiveStorage } from './read-live-storage';
 import type { StorageBackend } from './storage-backend';
 import type { StorageGate } from './storage-gate';
@@ -30,9 +31,11 @@ export interface StorageGcService {
 
 // The GC: the same sweep as start, while nothing that could make storage
 // without its row yet is in flight (docs/architecture/storage.md#cleanup).
-// Only `imp gc --orphans` takes orphans; the hourly pass logs them.
+// Only `imp gc --orphans` takes orphans.
 export function createStorageGc(deps: StorageGcDeps): StorageGcService {
-  const runAlone = async (options: GcOptions, waitMs: number, isOrphansLogged: boolean) => {
+  const hourly = { lastKept: null as string | null };
+
+  const runAlone = async (options: GcOptions, waitMs: number, isScheduled: boolean) => {
     const result = await deps.storageGate.runAlone(async () => {
       const live = await readLiveStorage(deps.db);
 
@@ -40,7 +43,18 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
     }, waitMs);
 
     if (result.ran && !options.isDryRun) {
-      printSweep(deps.log, 'impd: gc', result.value, { isOrphansLogged });
+      const kept = JSON.stringify(result.value.kept.map((orphan) => orphan.location));
+      const isChanged = kept !== hourly.lastKept;
+
+      // the hourly pass lists them when the set changed, else counts them
+      const scheduledLogging: OrphanLogging = isChanged ? 'each' : 'count';
+      const logging = isScheduled ? scheduledLogging : 'none';
+
+      if (isScheduled) {
+        hourly.lastKept = kept;
+      }
+
+      printSweep(deps.log, 'impd: gc', result.value, logging);
     }
 
     return result;

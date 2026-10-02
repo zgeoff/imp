@@ -200,7 +200,7 @@ test('a sweep keeps the orphans, a dry run with orphans lists them, and orphans 
   expect(readdirSync(join(ctx.dataDir, 'images'))).toEqual([]);
 });
 
-test('dropUnnamed removes the checkpoints of a named imp, and keeps the imps no row names', async () => {
+test('dropUnnamed keeps the checkpoints and imps no row names until asked for orphans', async () => {
   using ctx = setupTest();
 
   await ctx.backend.createImage('sha256:abc', writeImage);
@@ -208,34 +208,51 @@ test('dropUnnamed removes the checkpoints of a named imp, and keeps the imps no 
   await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createImpDisk('gone', { kind: 'image', digest: 'sha256:abc' });
   await ctx.backend.createCheckpoint('a', 'cp-1');
-  await ctx.backend.createCheckpoint('a', 'cp-lost');
+  await ctx.backend.createCheckpoint('a', 'cp-new');
   await ctx.backend.createCheckpoint('gone', 'cp-gone');
 
   // an image build in flight keeps its hidden directory
   mkdirSync(join(ctx.dataDir, 'images', '.build-now'), { recursive: true });
 
+  // an older database: it names a and cp-1, not cp-new
   const live = {
     impIds: new Set(['a']),
     checkpointIds: new Set(['cp-1']),
     imageDigests: new Set(['sha256:abc']),
   };
 
-  const listed = await ctx.backend.dropUnnamed(live, { isDryRun: true, isOrphans: false });
+  const swept = await ctx.backend.dropUnnamed(live, { isDryRun: false, isOrphans: false });
 
-  expect(listed.dropped).toEqual([{ kind: 'checkpoint', id: 'cp-lost' }]);
-  expect(listed.kept.map((orphan) => orphan.id)).toEqual(['old', 'gone']);
+  expect(swept.dropped).toEqual([]);
 
-  const lostCheckpoint = join(ctx.backend.resolveImpPaths('a').checkpointsDir, 'cp-lost');
+  expect(swept.kept.map((orphan) => `${orphan.kind} ${orphan.id}`)).toEqual([
+    'image old',
+    'imp gone',
+    'checkpoint cp-new',
+  ]);
 
-  expect(existsSync(lostCheckpoint)).toBeTrue();
-
-  const dropped = await ctx.backend.dropUnnamed(live, { isDryRun: false, isOrphans: false });
-
-  expect(dropped).toEqual(listed);
   expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc', 'old']);
   expect(readdirSync(join(ctx.dataDir, 'imps')).toSorted()).toEqual(['a', 'gone']);
+
+  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir).toSorted()).toEqual([
+    'cp-1',
+    'cp-new',
+  ]);
+
+  const listed = await ctx.backend.dropUnnamed(live, { isDryRun: true, isOrphans: true });
+  const removed = await ctx.backend.dropUnnamed(live, { isDryRun: false, isOrphans: true });
+
+  expect(removed).toEqual(listed);
+
+  expect(removed.dropped.map((dropped) => `${dropped.kind} ${dropped.id}`)).toEqual([
+    'image old',
+    'imp gone',
+    'checkpoint cp-new',
+  ]);
+
+  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc']);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual(['a']);
   expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toEqual(['cp-1']);
-  expect(readdirSync(ctx.backend.resolveImpPaths('gone').checkpointsDir)).toEqual(['cp-gone']);
 });
 
 // imp a cloned from the image, with checkpoint cp-1

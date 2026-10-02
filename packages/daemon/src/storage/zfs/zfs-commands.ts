@@ -60,8 +60,8 @@ export interface ZfsSpace {
   readonly referenced: number;
   readonly usedByDataset: number;
 
-  // `creation`, which `-p` gives in seconds since the epoch
-  readonly createdAt: Date;
+  // `creation`, which `-p` gives in seconds since the epoch; null when unreadable
+  readonly createdAt: Date | null;
 
   // the clones of a snapshot: forks, a restore, a backup tree
   readonly clones: readonly string[];
@@ -258,12 +258,9 @@ function parseBytes(value: string): number {
   return bytes;
 }
 
-function parseEpochSeconds(value: string): Date {
+// only orphans read it, so a value it cannot read never fails a usage pass
+function parseEpochSeconds(value: string): Date | null {
   const seconds = Number(value);
 
-  if (!Number.isSafeInteger(seconds) || seconds < 0) {
-    throw new Error(`zfs: expected seconds since the epoch, got ${JSON.stringify(value)}`);
-  }
-
-  return new Date(seconds * 1000);
+  return Number.isSafeInteger(seconds) && seconds >= 0 ? new Date(seconds * 1000) : null;
 }
