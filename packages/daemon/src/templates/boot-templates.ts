@@ -48,6 +48,7 @@ const TEMPLATE_ADDRESS: SlotAddress = {
   prefixLength: 30,
   netmask: '255.255.255.252',
   guestMac: '06:00:a9:fe:ff:fe',
+  guestIp6: null,
   tailnetPort: 0,
 };
 

@@ -117,7 +117,7 @@ stage 2 leaves the field out.
 
 ```json
 → {"op":"claim","claim":{"id":"01…","hostname":"web","ip":"10.66.0.2/30","gw":"10.66.0.1",
-   "dns":["1.1.1.1"],"mac":"06:00:0a:42:00:02","unix_ms":1790000000000,"seed":"<64 bytes, base64>",
+   "ip6":"fd66::2/128","gw6":"fe80::1","dns":["1.1.1.1"],"mac":"06:00:0a:42:00:02","unix_ms":1790000000000,"seed":"<64 bytes, base64>",
    "reset_identity":true}}
 ← {"ok":true}
 ```

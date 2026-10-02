@@ -102,6 +102,8 @@ func claimParams(c proto.Claim) cmdline.Params {
 		Hostname:      c.Hostname,
 		IP:            c.IP,
 		GW:            c.GW,
+		IP6:           c.IP6,
+		GW6:           c.GW6,
 		DNS:           c.DNS,
 		ResetIdentity: c.ResetIdentity,
 		Raw:           map[string]string{"id": c.ID},
