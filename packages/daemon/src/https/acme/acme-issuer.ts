@@ -57,9 +57,24 @@ export function createAcmeIssuer(options: AcmeIssuerOptions): IssueCertificate {
 
     const accountKey = await readAccountKey();
 
-    const client = new acme.Client({ directoryUrl: options.directoryUrl, accountKey });
+    const accountUrl = options.store.readAccountUrl(options.directoryUrl);
 
-    await registerAccount(client, options.email);
+    const client = new acme.Client({
+      directoryUrl: options.directoryUrl,
+      accountKey,
+      ...(accountUrl !== null && { accountUrl }),
+    });
+
+    // An account the key already has goes by its URL. Asking to create it
+    // again makes acme-client send an update that strict servers refuse.
+    if (accountUrl === null) {
+      await client.createAccount({
+        termsOfServiceAgreed: true,
+        ...(options.email !== null && { contact: [`mailto:${options.email}`] }),
+      });
+
+      options.store.writeAccountUrl(options.directoryUrl, client.getAccountUrl());
+    }
 
     const names = listCertificateNames(domain);
 
@@ -139,21 +154,6 @@ export function readCertificateInfo(chainPem: string): CertificateInfo {
   names.delete('');
 
   return { notBefore: info.notBefore, notAfter: info.notAfter, names: [...names] };
-}
-
-// The account for the stored key: found if it exists, else made. Asking to
-// create an existing account makes acme-client send an update that strict
-// servers such as Pebble refuse, which would fail every renewal.
-async function registerAccount(client: Readonly<acme.Client>, email: string | null): Promise<void> {
-  try {
-    await client.createAccount({ onlyReturnExisting: true });
-  } catch {
-    // no account for this key yet; a real failure shows again below
-    await client.createAccount({
-      termsOfServiceAgreed: true,
-      ...(email !== null && { contact: [`mailto:${email}`] }),
-    });
-  }
 }
 
 // a failed removal leaves a stale TXT value, which harms nothing

@@ -73,3 +73,16 @@ test('the account key and the attempts persist; a damaged attempts file reads as
 
   expect(reopened.readAttempts().failures).toBe(0);
 });
+
+test('the account URL is kept per ACME directory', () => {
+  using temp = useTempDir();
+
+  const store = createCertStore(temp.dir);
+
+  expect(store.readAccountUrl('https://ca.test/dir')).toBeNull();
+
+  store.writeAccountUrl('https://ca.test/dir', 'https://ca.test/acct/1');
+
+  expect(store.readAccountUrl('https://ca.test/dir')).toBe('https://ca.test/acct/1');
+  expect(store.readAccountUrl('https://other.test/dir')).toBeNull();
+});

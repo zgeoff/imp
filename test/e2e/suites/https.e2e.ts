@@ -80,6 +80,9 @@ test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
     // earlier run's Pebble does not chain to it: impd starts without one
     await runInContainer(['rm', '-f', '/var/lib/imp/tls/certificate.pem']);
     await runInContainer(['rm', '-f', '/var/lib/imp/tls/attempts.json']);
+
+    // it forgets every account too, so the stored account URL goes
+    await runInContainer(['rm', '-f', '/var/lib/imp/tls/account.json']);
     await runDevScript('restart');
 
     // the bare domain is the API

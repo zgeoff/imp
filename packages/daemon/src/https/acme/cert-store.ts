@@ -24,6 +24,8 @@ const AttemptStateSchema = z.object({
   lastError: z.string().nullable(),
 });
 
+// the account URL the CA gave the stored key, per ACME directory
+const AccountSchema = z.object({ directoryUrl: z.string(), url: z.string() });
 const NO_ATTEMPTS: AttemptState = { failures: 0, lastAttemptAt: null, lastError: null };
 const PEM_BLOCK = /-----BEGIN (?<label>[A-Z ]+)-----[\s\S]+?-----END \k<label>-----\n?/g;
 
@@ -32,6 +34,10 @@ export interface CertStore {
   readonly writeCertificate: (certificate: Certificate) => void;
   readonly readAccountKey: () => string | null;
   readonly writeAccountKey: (pem: string) => void;
+
+  // null when the key has no account at this directory yet
+  readonly readAccountUrl: (directoryUrl: string) => string | null;
+  readonly writeAccountUrl: (directoryUrl: string, url: string) => void;
   readonly readAttempts: () => AttemptState;
   readonly writeAttempts: (state: AttemptState) => void;
 }
@@ -44,6 +50,7 @@ export function createCertStore(dataDir: string): CertStore {
   const certificatePath = join(dir, 'certificate.pem');
   const accountKeyPath = join(dir, 'account.key');
   const attemptsPath = join(dir, 'attempts.json');
+  const accountPath = join(dir, 'account.json');
 
   const write = (path: string, content: string): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -69,6 +76,20 @@ export function createCertStore(dataDir: string): CertStore {
     readAccountKey: () => readIfExists(accountKeyPath),
     writeAccountKey: (pem) => {
       write(accountKeyPath, pem);
+    },
+    readAccountUrl: (directoryUrl) => {
+      const text = readIfExists(accountPath);
+
+      try {
+        const account = text === null ? null : AccountSchema.parse(JSON.parse(text));
+
+        return account?.directoryUrl === directoryUrl ? account.url : null;
+      } catch {
+        return null;
+      }
+    },
+    writeAccountUrl: (directoryUrl, url) => {
+      write(accountPath, `${JSON.stringify({ directoryUrl, url })}\n`);
     },
     readAttempts: () => {
       const text = readIfExists(attemptsPath);

@@ -14,7 +14,11 @@ import type { PebbleEndpoints } from '../e2e/lib/pebble';
 import { startPebbleStack, stopPebbleStack } from '../e2e/lib/pebble';
 import { readRejection } from '../e2e/lib/read-rejection';
 
-const PREFIX = 'imp-acme-it';
+// per run, so two runs on one machine never remove each other's containers
+const PREFIX = `imp-acme-it-${String(process.pid)}`;
+
+// an issuance; the renewal test makes two, and a slow runner needs the room
+const ISSUE_TIMEOUT_MS = 60_000;
 const dir = mkdtempSync(join(tmpdir(), 'imp-acme-it-'));
 const logs: string[] = [];
 const state: { endpoints: PebbleEndpoints | null } = { endpoints: null };
@@ -57,26 +61,34 @@ function readMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-test('it issues one certificate for the domain and its wildcard', async () => {
-  const issue = createAcmeIssuer(buildOptions({}));
+test(
+  'it issues one certificate for the domain and its wildcard',
+  async () => {
+    const issue = createAcmeIssuer(buildOptions({}));
 
-  const certificate = await issue('imp.test');
+    const certificate = await issue('imp.test');
 
-  const leaf = new X509Certificate(certificate.chainPem);
+    const leaf = new X509Certificate(certificate.chainPem);
 
-  expect(leaf.subjectAltName).toContain('DNS:imp.test');
-  expect(leaf.subjectAltName).toContain('DNS:*.imp.test');
-  expect(certificate.keyPem).toContain('PRIVATE KEY');
-});
+    expect(leaf.subjectAltName).toContain('DNS:imp.test');
+    expect(leaf.subjectAltName).toContain('DNS:*.imp.test');
+    expect(certificate.keyPem).toContain('PRIVATE KEY');
+  },
+  ISSUE_TIMEOUT_MS,
+);
 
-test('a renewal finds the account the stored key already has', async () => {
-  const issue = createAcmeIssuer(buildOptions({}));
+test(
+  'a renewal uses the account the stored key already has',
+  async () => {
+    const issue = createAcmeIssuer(buildOptions({}));
 
-  const first = await issue('imp.test');
-  const second = await issue('imp.test');
+    const first = await issue('imp.test');
+    const second = await issue('imp.test');
 
-  expect(second.chainPem).not.toBe(first.chainPem);
-});
+    expect(second.chainPem).not.toBe(first.chainPem);
+  },
+  ISSUE_TIMEOUT_MS,
+);
 
 test('an untrusted ACME server fails in words, not as an axios crash', async () => {
   const issue = createAcmeIssuer(buildOptions({ caPem: null }));
