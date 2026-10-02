@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { ExecutionGenerationSchema } from './session-output-schema';
 
 // The agent checks the same rule (agent/internal/session).
 export const SessionNameSchema = z
@@ -34,6 +35,15 @@ export const SessionSchema = z.object({
 
   // set once the process exited, until a client attaches and gets it
   exit: SessionExitSchema.optional(),
+
+  // `offsets` when the imp's agent counts output (left out by an older
+  // impd, which means `none`); end is a lower bound, as impd last saw it at
+  // endObservedAt
+  continuity: z.enum(['none', 'offsets']).optional(),
+  executionGeneration: ExecutionGenerationSchema.optional(),
+  bootId: z.string().optional(),
+  end: z.int().nonnegative().optional(),
+  endObservedAt: z.date().optional(),
 });
 
 export type Session = z.infer<typeof SessionSchema>;

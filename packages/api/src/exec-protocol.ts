@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { NameSchema } from './name-schema';
+import { ResumeFromSchema, SessionOutputSchema } from './session-output-schema';
 import { SessionNameSchema } from './session-schema';
 
 // `/exec` WebSocket: text messages are JSON control (the schemas below);
@@ -71,10 +72,18 @@ export const ExecStartMessageSchema = z
     // how long the rest of the process group gets once the command exits
     // before the agent kills it; `started.groupKill` says if it will
     killGraceMs: z.int().min(1).max(KILL_GRACE_MAX_MS).optional(),
+
+    // with a session: the output after the last byte the client saw,
+    // rather than a replay; `started.output.resume` says how it was met
+    resumeFrom: ResumeFromSchema.optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
     path: ['tty'],
+  })
+  .refine((start) => start.resumeFrom === undefined || start.session !== undefined, {
+    message: 'only a session resumes',
+    path: ['resumeFrom'],
   })
   .refine((start) => start.killGraceMs === undefined || !start.tty, {
     message: 'a tty exec takes no kill grace',
@@ -96,6 +105,10 @@ export const ExecAttachMessageSchema = z.object({
   session: SessionNameSchema,
   cols: DimensionSchema.optional(),
   rows: DimensionSchema.optional(),
+  resumeFrom: ResumeFromSchema.optional(),
+
+  // false: fail with INVALID_STATE rather than boot or wake the imp
+  wake: z.boolean().optional(),
 });
 
 export const ExecClientMessageSchema = z.discriminatedUnion('type', [
@@ -131,17 +144,26 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
     // what is left of the group and sends the exit only once it is gone;
     // false for an imp whose agent predates it
     groupKill: z.boolean().optional(),
+
+    // set for a session; an impd from before offsets leaves it out
+    output: SessionOutputSchema.optional(),
   }),
 
-  // code is null when a signal ended the process
+  // code is null when a signal ended the process; offset, for a session
+  // with offsets, is the offset after the last byte this socket sent
   z.object({
     type: z.literal('exit'),
     code: z.int().nullable(),
     signal: z.string().nullable(),
+    offset: z.int().nonnegative().optional(),
   }),
 
   // the last message of a session socket that ends without an exit
-  z.object({ type: z.literal('detached'), reason: z.enum(DETACH_REASONS) }),
+  z.object({
+    type: z.literal('detached'),
+    reason: z.enum(DETACH_REASONS),
+    offset: z.int().nonnegative().optional(),
+  }),
 
   // a tool's stdin bytes the agent took; sent only for a tool
   z.object({ type: z.literal('stdin_ack'), bytes: z.int().positive() }),
