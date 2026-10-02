@@ -2,11 +2,12 @@
 
 ## [0.18.0](https://github.com/zgeoff/imp/compare/v0.17.0...v0.18.0) (2026-10-02)
 
-
 ### Features
 
-* **daemon:** jail boot template builds and restores ([4fe2847](https://github.com/zgeoff/imp/commit/4fe2847f8a6e22b4655523928aa215c428692451))
-* **daemon:** run each vm under the firecracker jailer ([e87662d](https://github.com/zgeoff/imp/commit/e87662d1334e2db67069afd076c13a8f7cafdd53))
+- **daemon:** jail boot template builds and restores
+  ([4fe2847](https://github.com/zgeoff/imp/commit/4fe2847f8a6e22b4655523928aa215c428692451))
+- **daemon:** run each vm under the firecracker jailer
+  ([e87662d](https://github.com/zgeoff/imp/commit/e87662d1334e2db67069afd076c13a8f7cafdd53))
 
 ## [0.17.0](https://github.com/zgeoff/imp/compare/v0.16.0...v0.17.0) (2026-10-02)
 
