@@ -146,8 +146,8 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   };
 
   // sleeps LRU imps until `findMissing` reports nothing missing; it gives up
-  // when no eligible imp is left awake, or as `whenShort` says. An imp that
-  // was skipped or failed is not picked again in this call, so the loop ends.
+  // when no eligible imp is left awake, or as `whenShort` says. Each pass
+  // sleeps an imp or passes one for good, so it ends within 2n passes.
   const makeRoom = async (
     excludeId: string | null,
     reason: string,
@@ -179,20 +179,23 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
       const picked = pickSleepVictims(candidates, missingMib);
 
-      if (picked.victims.length === 0 || (!picked.enough && whenShort === 'giveUp')) {
+      // one victim per pass: after a skip or a failure the rest of the pick is
+      // stale, and sleeping it could cost imps their memory for an admission
+      // that then gives up
+      const [id] = picked.victims;
+
+      if (id === undefined || (!picked.enough && whenShort === 'giveUp')) {
         return { fits: false, slept, missingMib };
       }
 
-      for (const id of picked.victims) {
-        const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
+      const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
 
-        if (outcome === 'slept') {
-          reservations.delete(id);
+      if (outcome === 'slept') {
+        reservations.delete(id);
 
-          slept += 1;
-        } else {
-          passed.add(id);
-        }
+        slept += 1;
+      } else {
+        passed.add(id);
       }
     }
   };
