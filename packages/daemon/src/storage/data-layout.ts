@@ -60,6 +60,11 @@ export function buildImagePaths(dataDir: string, digest: string): ImagePaths {
   return { dir, rootfs: join(dir, 'rootfs.ext4'), config: join(dir, 'config.json') };
 }
 
+// build contexts clients upload, each removed after its build
+export function buildUploadsDir(dataDir: string): string {
+  return join(dataDir, 'uploads');
+}
+
 // System drives are named by their sha256 and never written over: a sleeping
 // VM's snapshot reopens its drive by path, so the bytes there must stay.
 export function buildSystemDrivesDir(dataDir: string): string {

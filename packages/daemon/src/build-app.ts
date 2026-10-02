@@ -2,6 +2,7 @@ import {
   EXEC_CLOSE_RESTARTING,
   EXEC_PATH,
   EXEC_TICKET_PARAM,
+  IMAGE_BUILD_PATH,
   TUNNEL_CLOSE_RESTARTING,
   TUNNEL_PATH,
 } from '@imp/api';
@@ -19,7 +20,7 @@ import type { Caller } from './auth/caller';
 import { createLogouts } from './auth/logouts';
 import type { Revocations } from './auth/revocations';
 import { createSessionRoutes } from './auth/session-routes';
-import { buildRouter } from './build-router';
+import { buildRouter, toApiImage } from './build-router';
 import type { RouterDeps } from './build-router';
 import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
 import { buildAuditedBackend } from './exec/audited-backend';
@@ -29,6 +30,7 @@ import { createExecSession } from './exec/exec-session';
 import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
 import { createInProcessSocket } from './exec/in-process-socket';
+import type { BuildContextRoute } from './images/build-context-route';
 import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
@@ -55,6 +57,9 @@ export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
 
   // false until the default image is seeded; /health reports it
   readonly isReady: () => boolean;
+
+  // `POST /images/build`: a build context streamed from the client
+  readonly buildContexts: BuildContextRoute;
 }
 
 interface SocketEntry<Session> {
@@ -66,6 +71,9 @@ interface SocketEntry<Session> {
 // Elysia's server, or none under app.handle in tests
 interface PeerServer {
   readonly requestIP: (request: Request) => { readonly address: string } | null;
+
+  // seconds a request may sit idle; 0 never ends it
+  readonly timeout: (request: Request, seconds: number) => void;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -246,6 +254,25 @@ export function buildApp(deps: AppDeps) {
         mcpServers.set(context.request, context.server);
 
         return mcp.handle(context.request);
+      },
+      { parse: 'none' },
+    )
+
+    // the context streams for as long as it takes: no idle timeout, and Bun's
+    // body limit is set to fit it where impd listens. The same callers as
+    // /rpc, with the access and audit of `images.build`.
+    .post(
+      IMAGE_BUILD_PATH,
+      async (context) => {
+        const caller = await findCaller(context.request, context.server, true);
+
+        if (caller === null) {
+          return Response.json({ error: 'unauthorized' }, { status: 401 });
+        }
+
+        context.server?.timeout(context.request, 0);
+
+        return deps.buildContexts.handle(context.request, caller, toApiImage);
       },
       { parse: 'none' },
     )

@@ -33,6 +33,9 @@ const ROOTFS_SPARE_BYTES = 2 * GIB;
 // mkfs.ext4's default: one inode per 16 KiB
 const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
+
+// pins the Dockerfile frontend, so a `# syntax=` line cannot pull another one
+const PINNED_FRONTEND = 'BUILDKIT_SYNTAX=docker/dockerfile:1';
 const SEED_REF = 'ubuntu:24.04';
 
 const InspectSchema = z
@@ -43,6 +46,13 @@ export interface ImageService {
   readonly addImage: (ref: string, name?: string) => Promise<ImageRecord>;
   readonly buildImage: (
     contextDir: string,
+    name: string,
+    dockerfile?: string,
+  ) => Promise<ImageRecord>;
+
+  // a context the client uploaded: a tar file docker build reads on stdin
+  readonly buildImageFromContext: (
+    tarPath: string,
     name: string,
     dockerfile?: string,
   ) => Promise<ImageRecord>;
@@ -271,6 +281,40 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
 
       await runChecked(['docker', 'build', '--quiet', '-t', tag, ...fileArgs, contextDir]);
+
+      return createImageFromRef(tag, name);
+    },
+
+    // a fixed argv: nothing from the client but the tag's name and the
+    // Dockerfile's path in the context, both validated by the API schemas
+    buildImageFromContext: async (tarPath, name, dockerfile) => {
+      const tag = `imp/${NameSchema.parse(name)}:latest`;
+      const tarBytes = statSync(tarPath).size;
+
+      const argv = [
+        'docker',
+        'build',
+        '--quiet',
+        '--build-arg',
+        PINNED_FRONTEND,
+        '-t',
+        tag,
+        '-f',
+        dockerfile ?? 'Dockerfile',
+        '-',
+      ];
+
+      // docker keeps its own copy of the context while it builds
+      const result = await deps.diskBudget.withRoom(tarBytes, () =>
+        runCommand(argv, { stdinFile: tarPath }),
+      );
+
+      // the client's Dockerfile failed: its output is the client's to read
+      if (result.exitCode !== 0) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `docker build failed: ${(result.stderr.trim() || result.stdout.trim()).slice(-4000)}`,
+        });
+      }
 
       return createImageFromRef(tag, name);
     },

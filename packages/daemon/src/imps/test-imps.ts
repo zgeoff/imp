@@ -23,6 +23,7 @@ import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
 import { createEgressService } from '../egress/egress-service';
 import { createGovernedImps } from '../governor/create-governed-imps';
+import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
@@ -336,6 +337,15 @@ export function buildTestApp(
   });
 
   const peers = createForwardedPeers(ctx.now);
+  const audit = createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} });
+
+  const buildContexts = createBuildContextRoute({
+    config: ctx.config,
+    images: ctx.images,
+    diskBudget: ctx.diskBudget,
+    audit,
+    now: ctx.now,
+  });
 
   const built = buildApp({
     config: ctx.config,
@@ -366,7 +376,8 @@ export function buildTestApp(
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     isReady: () => true,
     now: ctx.now,
-    audit: createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} }),
+    audit,
+    buildContexts,
   });
 
   const link = new RPCLink({

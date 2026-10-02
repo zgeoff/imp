@@ -10,6 +10,16 @@ export {
 
 export type { BackupPoint, BackupRestore, BackupRun, BackupStatus } from './backup-schema';
 export { CheckpointSchema } from './checkpoint-schema';
+
+export {
+  DockerfilePathSchema,
+  IMAGE_BUILD_PATH,
+  ImageBuildErrorSchema,
+  ImageBuildQuerySchema,
+  ImageBuildResultSchema,
+} from './image-build-protocol';
+
+export type { ImageBuildQuery } from './image-build-protocol';
 export type { Checkpoint } from './checkpoint-schema';
 
 export {

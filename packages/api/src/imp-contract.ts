@@ -10,6 +10,7 @@ import {
 import { CheckpointSchema } from './checkpoint-schema';
 import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
+import { DockerfilePathSchema } from './image-build-protocol';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
@@ -172,14 +173,15 @@ export const impContract = {
       .input(z.object({ ref: ImageRefSchema, name: NameSchema.optional() }))
       .output(ImageSchema),
 
-    // contextDir is a path on the imp host, handed to `docker build`
+    // contextDir is a path on the imp host, handed to `docker build`; a
+    // context on the client's machine streams to IMAGE_BUILD_PATH instead
     build: base
       .input(
         z.object({
           // absolute, so docker build cannot read it as a flag
           contextDir: z.string().startsWith('/'),
           name: NameSchema,
-          dockerfile: z.string().min(1).optional(),
+          dockerfile: DockerfilePathSchema.optional(),
         }),
       )
       .output(ImageSchema),
