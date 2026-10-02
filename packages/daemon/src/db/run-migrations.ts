@@ -256,6 +256,34 @@ const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('imps').addColumn('public_hash', 'text').execute();
     },
   },
+
+  // private networks between imps (#31); a destroyed imp or network takes
+  // its memberships with it
+  '012_add_networks': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('networks')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('name', 'text', (c) => c.notNull().unique())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable('network_members')
+        .addColumn('network_id', 'text', (c) =>
+          c.notNull().references('networks.id').onDelete('cascade'),
+        )
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addPrimaryKeyConstraint('network_members_pk', ['network_id', 'imp_id'])
+        .execute();
+
+      await db.schema
+        .createIndex('network_members_imp_id')
+        .on('network_members')
+        .column('imp_id')
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {
