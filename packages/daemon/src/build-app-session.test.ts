@@ -134,6 +134,7 @@ test('the session alone never authorizes a request from another origin', async (
       headers: { cookie: session, origin: 'http://impd.test:20001' },
       form: true,
     },
+    { method: 'POST', headers: { cookie: session }, form: true },
     {
       method: 'POST',
       headers: { cookie: session, 'content-type': 'text/plain', origin: 'http://impd.test:20001' },
