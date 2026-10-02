@@ -40,6 +40,8 @@ export const infoCommand = defineCommand({
           'disks',
           `${formatGib(info.storage.impDiskBytes)} given to imps, of ${formatGib(info.storage.usedBytes + info.storage.availableBytes)}`,
         ],
+        ...formatDefaults(info.defaults),
+        ...formatEgress(info.egress),
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
         ['public', formatPublic(info.public)],
@@ -77,6 +79,29 @@ function formatPublic(info: SystemInfo['public']): string {
 // what sleeping imps take back on a wake; nothing from an impd before it
 function formatSleeping(mib: number | undefined): string {
   return mib === undefined ? '' : `, ${String(mib)} asleep`;
+}
+
+// what a create gets when it names no memory or image; no line from an
+// impd before it
+function formatDefaults(defaults: SystemInfo['defaults']): string[][] {
+  if (defaults === undefined) {
+    return [];
+  }
+
+  return [['defaults', `${String(defaults.memoryMib)} MiB, image ${defaults.image ?? '(none)'}`]];
+}
+
+function formatEgress(egress: SystemInfo['egress']): string[][] {
+  if (egress === undefined) {
+    return [];
+  }
+
+  return [
+    [
+      'egress',
+      egress.isEnforced ? 'box and none policies enforced' : 'box and none policies not enforced',
+    ],
+  ];
 }
 
 function formatGib(bytes: number): string {
