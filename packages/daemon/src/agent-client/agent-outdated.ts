@@ -28,6 +28,14 @@ const FEATURES = {
     missing: 'no exec --agent',
     strict: true,
   },
+
+  // an older agent fixes the inner container's limit at its boot size, so
+  // its user processes are OOM-killed in memory the guest grew into
+  'elastic-memory': {
+    since: [0, 17],
+    missing: 'no elastic memory, so its programs could not use a grow',
+    strict: true,
+  },
 } as const satisfies Record<string, Feature>;
 
 export type AgentFeature = keyof typeof FEATURES;

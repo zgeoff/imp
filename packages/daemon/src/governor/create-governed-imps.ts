@@ -6,6 +6,7 @@ import type { MemoryController } from '../memory/memory-controller';
 import { NO_MEMORY_LIMIT } from '../memory/memory-limit';
 import { createPluggedSizes } from '../memory/plugged-sizes';
 import { printLog } from '../process/print-log';
+import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { readKsmProfitMib } from '../vmm/ksm';
 import { readOwnedRamMib } from '../vmm/vm-stats';
@@ -60,20 +61,25 @@ export function createGovernedImps(deps: GovernedDeps): {
     listElastic: async () => {
       const listed = await listImps(deps.db);
 
-      return listed.flatMap((imp) =>
-        imp.state === 'running' && imp.pid !== null && imp.maxMemoryMib > imp.memoryMib
-          ? [
-              {
-                id: imp.id,
-                name: imp.name,
-                pid: imp.pid,
-                memoryMib: imp.memoryMib,
-                maxMemoryMib: imp.maxMemoryMib,
-                paths: buildImpPaths(deps.config.dataDir, imp.id),
-              },
-            ]
-          : [],
-      );
+      return listed.flatMap((imp) => {
+        if (imp.state !== 'running' || imp.pid === null || imp.maxMemoryMib <= imp.memoryMib) {
+          return [];
+        }
+
+        const paths = buildImpPaths(deps.config.dataDir, imp.id);
+
+        return [
+          {
+            id: imp.id,
+            name: imp.name,
+            pid: imp.pid,
+            memoryMib: imp.memoryMib,
+            maxMemoryMib: imp.maxMemoryMib,
+            paths,
+            agentVersion: readVmIdentity(paths)?.agentVersion,
+          },
+        ];
+      });
     },
     vms: deps.vms,
     isLocked: (id) => imps.isImpBusy(id),
