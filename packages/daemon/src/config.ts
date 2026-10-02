@@ -40,6 +40,8 @@ const EnvSchema = z.object({
   IMP_BOOT_RESERVE_PERCENT: CountSchema.pipe(z.int().max(100)).default(50),
   IMP_WAKE_RESERVE_MIB: CountSchema.default(256),
   IMP_SLEEP_MIN_GUEST_UPTIME_MS: z.coerce.number().pipe(z.int().nonnegative()).default(1500),
+  IMP_WATCHDOG_TIMEOUT_S: CountSchema.default(60),
+  IMP_WATCHDOG_ACTION: z.enum(['report', 'restart', 'snapshot']).default('report'),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
   IMP_DEFAULT_MEMORY_MIB: CountSchema.default(2048),
   IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
@@ -61,6 +63,10 @@ const EnvSchema = z.object({
   ...HttpsEnvSchema.shape,
   ...TailnetNamesEnvSchema.shape,
 });
+
+// report: log and show it; restart: kill and boot cold; snapshot: keep the
+// memory in the imp's watchdog slot, then boot cold
+type WatchdogAction = 'report' | 'restart' | 'snapshot';
 
 export interface Config {
   readonly dataDir: string;
@@ -100,6 +106,11 @@ export interface Config {
   // gets its clock back (docs/architecture/sleep-and-wake.md#young-guests);
   // 0 turns the wait off
   readonly sleepMinGuestUptimeMs: number;
+
+  // how long an agent may stay silent before the watchdog acts, and what it
+  // does then (docs/architecture/sleep-and-wake.md#the-watchdog)
+  readonly watchdogTimeoutS: number;
+  readonly watchdogAction: WatchdogAction;
   readonly defaultVcpus: number;
   readonly defaultMemoryMib: number;
 
@@ -216,6 +227,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     bootReservePercent: parsed.IMP_BOOT_RESERVE_PERCENT,
     wakeReserveMib: parsed.IMP_WAKE_RESERVE_MIB,
     sleepMinGuestUptimeMs: parsed.IMP_SLEEP_MIN_GUEST_UPTIME_MS,
+    watchdogTimeoutS: parsed.IMP_WATCHDOG_TIMEOUT_S,
+    watchdogAction: parsed.IMP_WATCHDOG_ACTION,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,
     defaultMemoryMib: parsed.IMP_DEFAULT_MEMORY_MIB,
     defaultDiskBytes: parsed.IMP_DEFAULT_DISK_GIB * 1024 ** 3,

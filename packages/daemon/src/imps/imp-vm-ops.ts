@@ -242,34 +242,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return seen.map((session) => setDetached(session));
   };
 
-  const sleepImpVm = async (
+  const sleepWithRoom = async (
     imp: LockedImp,
+    paths: ImpPaths,
+    pid: number,
     reason: string,
-    youngGuest: YoungGuestWait = ALWAYS_WAIT,
+    waitedMs: number,
   ): Promise<LockedImp> => {
-    requireTransition(imp.state, 'sleeping', 'sleep');
-
-    const paths = context.findPaths(imp.id);
-    const pid = imp.pid;
-
-    if (pid === null) {
-      throw new Error(`${imp.name} is running without a firecracker pid`);
-    }
-
-    const waitedMs = youngGuest.wait
-      ? await waitForGuestAge({
-          readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
-          minUptimeMs: context.config.sleepMinGuestUptimeMs,
-          isWanted: youngGuest.isWanted,
-        })
-      : 0;
-
-    if (waitedMs === null) {
-      context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);
-
-      return imp;
-    }
-
     const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
 
     const sessions = await readSessionsForSleep(imp, paths);
@@ -288,11 +267,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     try {
       const cgroup = context.cgroups.setup(imp.id, imp.cpu);
 
-      // the memory file is written in full before its holes are dug: no
-      // pause starts unless the disk has room for it
-      const timings = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, () =>
-        sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup)),
-      );
+      const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup));
 
       const booted = readVmIdentity(paths);
 
@@ -349,6 +324,43 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       pid: null,
       sleptAt: new Date(),
     });
+  };
+
+  const sleepImpVm = async (
+    imp: LockedImp,
+    reason: string,
+    youngGuest: YoungGuestWait = ALWAYS_WAIT,
+  ): Promise<LockedImp> => {
+    requireTransition(imp.state, 'sleeping', 'sleep');
+
+    const paths = context.findPaths(imp.id);
+    const pid = imp.pid;
+
+    if (pid === null) {
+      throw new Error(`${imp.name} is running without a firecracker pid`);
+    }
+
+    // the memory file is written in full before its holes are dug: first,
+    // so no wait or pause starts unless the disk has room for it
+    const slept = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, async () => {
+      const waitedMs = youngGuest.wait
+        ? await waitForGuestAge({
+            readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
+            minUptimeMs: context.config.sleepMinGuestUptimeMs,
+            isWanted: youngGuest.isWanted,
+          })
+        : 0;
+
+      if (waitedMs === null) {
+        context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);
+
+        return imp;
+      }
+
+      return sleepWithRoom(imp, paths, pid, reason, waitedMs);
+    });
+
+    return slept;
   };
 
   // resumes from the snapshot, or boots cold when there is none, it does not

@@ -75,3 +75,7 @@ export function buildRamBudgetError(budgetMib: number, usedMib: number, requeste
     data: { budgetMib, usedMib, requestedMib },
   });
 }
+
+export function isDiskFullError(error: unknown): error is ORPCError<'DISK_FULL', unknown> {
+  return error instanceof ORPCError && error.code === 'DISK_FULL';
+}

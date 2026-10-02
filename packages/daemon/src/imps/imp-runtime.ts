@@ -8,6 +8,7 @@ import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
+import { isDiskFullError } from '../api-errors';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { mergeEnv } from '../exec/merge-env';
@@ -118,6 +119,9 @@ export interface ImpRuntime {
   readonly reconcileImps: () => Promise<void>;
   readonly isImpBusy: (id: string) => boolean;
   readonly tracker: ActivityTracker;
+
+  // the DISK_FULL that last turned a background sleep away
+  readonly readDiskFullError: () => Error | null;
 }
 
 interface ImpRuntimeParts {
@@ -132,6 +136,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const lock = parts.lock;
   const ops = parts.ops;
   const reconciler = createVmReconciler(context, ops);
+  const lastDiskFull: { error: Error | null } = { error: null };
 
   const requireRunning: ImpRuntime['requireRunning'] = async (name, onFound) => {
     const found = await lock.findImp(name);
@@ -236,6 +241,13 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       return after.state === 'sleeping' ? 'slept' : 'skipped';
     } catch (error) {
+      // the disk budget logs a low disk once for the whole disk
+      if (isDiskFullError(error)) {
+        lastDiskFull.error = error;
+
+        return 'diskFull';
+      }
+
       context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
       return 'failed';
@@ -444,6 +456,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     waitForLifecycle: () => lock.waitForAll(),
     isImpBusy: (id) => lock.isLocked(id),
     tracker: context.tracker,
+    readDiskFullError: () => lastDiskFull.error,
   };
 }
 

@@ -1,7 +1,8 @@
 import type { TryResult } from './keyed-mutex';
 
-// 'skipped' when the imp's lock is taken or it no longer qualifies
-export type SleepOutcome = 'slept' | 'skipped' | 'failed';
+// 'skipped' when the imp's lock is taken or it no longer qualifies;
+// 'diskFull' when the disk cannot take its memory snapshot
+export type SleepOutcome = 'slept' | 'skipped' | 'failed' | 'diskFull';
 
 // What a background sleep checks again under the lock. The governor sleeps
 // the least recently active imp, idle or not; the idle loop also needs the

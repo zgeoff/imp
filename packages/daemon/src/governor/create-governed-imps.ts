@@ -54,6 +54,7 @@ export function createGovernedImps(deps: GovernedDeps): {
     // an open exec session or proxied request pins the imp, like a hold
     isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,
     trySleepImp: imps.trySleepImp,
+    readDiskFullError: imps.readDiskFullError,
     log,
     events: imps.events,
     ...(deps.now !== undefined && { now: deps.now }),

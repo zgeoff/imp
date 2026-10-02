@@ -51,6 +51,9 @@ interface RoomOutcome {
   readonly fits: boolean;
   readonly slept: number;
 
+  // a victim's snapshot did not fit on the disk
+  readonly diskFull: boolean;
+
   // what was still missing at the last measurement, and what was in use
   readonly missingMib: number;
   readonly effectiveMib: number;
@@ -95,6 +98,9 @@ export interface RamGovernorDeps {
   // sleeps the imp if it still runs and is not held; the type admits only a
   // sleep that never waits for the imp's lock, since admission is held
   readonly trySleepImp: LockFreeSleep;
+
+  // the DISK_FULL that last turned a victim's sleep away
+  readonly readDiskFullError?: () => Error | null;
   readonly log: (message: string) => void;
   readonly now?: () => number;
 
@@ -182,6 +188,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     const passed = new Set<string>();
 
     let slept = 0;
+    let diskFull = false;
 
     for (;;) {
       const usage = await readEffectiveUsage(excludeId);
@@ -189,7 +196,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       const missingMib = findMissing(usage);
 
       if (missingMib <= 0) {
-        return { fits: true, slept, missingMib, effectiveMib: usage.effectiveMib };
+        return { fits: true, slept, diskFull, missingMib, effectiveMib: usage.effectiveMib };
       }
 
       const time = now();
@@ -210,7 +217,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       const [id] = picked.victims;
 
       if (id === undefined || (!picked.enough && whenShort === 'giveUp')) {
-        return { fits: false, slept, missingMib, effectiveMib: usage.effectiveMib };
+        return { fits: false, slept, diskFull, missingMib, effectiveMib: usage.effectiveMib };
       }
 
       const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
@@ -228,6 +235,8 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         });
       } else {
         passed.add(id);
+
+        diskFull ||= outcome === 'diskFull';
       }
     }
   };
@@ -255,6 +264,13 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           'giveUp',
           (usage) => usage.effectiveMib + request.reserveMib - deps.budgetMib,
         );
+
+        const diskFull = room.diskFull ? (deps.readDiskFullError?.() ?? null) : null;
+
+        // the disk, not the budget, kept an idle imp awake
+        if (!room.fits && diskFull !== null) {
+          throw diskFull;
+        }
 
         if (!room.fits) {
           const usage = await readEffectiveUsage(request.id);
