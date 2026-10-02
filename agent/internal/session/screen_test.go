@@ -11,7 +11,7 @@ func TestHistoryKeepsShortOutput(t *testing.T) {
 	h := newHistory(16)
 	h.Write([]byte("hello "))
 	h.Write([]byte("world"))
-	if got := string(h.Replay()); got != "hello world" {
+	if got := string(replay(h)); got != "hello world" {
 		t.Fatalf("replay %q", got)
 	}
 }
@@ -25,7 +25,7 @@ func TestHistoryDropsTheOldest(t *testing.T) {
 		all.Write(line)
 		h.Write(line)
 	}
-	got := h.Replay()
+	got := replay(h)
 	if len(got) < limit || len(got) > 2*limit {
 		t.Fatalf("replay is %d bytes, want %d to %d", len(got), limit, 2*limit)
 	}
@@ -53,7 +53,7 @@ func TestHistoryCutsBetweenSequences(t *testing.T) {
 			for range 40 {
 				h.Write([]byte(tt.unit))
 			}
-			got := string(h.Replay())
+			got := string(replay(h))
 			if !slices.ContainsFunc(tt.starts, func(s string) bool { return strings.HasPrefix(got, s) }) {
 				t.Fatalf("replay starts %q, inside %q", got[:min(len(got), 20)], tt.unit)
 			}
@@ -66,7 +66,7 @@ func TestHistoryReplaysDroppedModes(t *testing.T) {
 	h := newHistory(32)
 	h.Write([]byte("\x1b[?1049h\x1b[?2004h\x1b[?1000h"))
 	h.Write([]byte(strings.Repeat("x", 100)))
-	got := string(h.Replay())
+	got := string(replay(h))
 	want := "\x1b[?1000h\x1b[?2004h\x1b[?1049h"
 	if !strings.HasPrefix(got, want) || strings.Count(got, "\x1b") != 3 {
 		t.Fatalf("replay %q, want %q then the output", got, want)
@@ -74,7 +74,7 @@ func TestHistoryReplaysDroppedModes(t *testing.T) {
 	// A mode reset later in the kept output stays in the replay too, after
 	// the prefix, so the terminal ends in the program's current modes.
 	h.Write([]byte("\x1b[?2004l"))
-	if got := string(h.Replay()); !strings.HasSuffix(got, "\x1b[?2004l") {
+	if got := string(replay(h)); !strings.HasSuffix(got, "\x1b[?2004l") {
 		t.Fatalf("replay %q lost the later reset", got)
 	}
 }
@@ -83,11 +83,17 @@ func TestHistoryWriteLargerThanTheBuffer(t *testing.T) {
 	h := newHistory(16)
 	big := bytes.Repeat([]byte("y"), 1000)
 	h.Write(big)
-	got := h.Replay()
+	got := replay(h)
 	if len(got) != 16 {
 		t.Fatalf("replay is %d bytes, want 16", len(got))
 	}
 	if cap(h.buf) > 32 {
 		t.Fatalf("buffer kept %d bytes of capacity", cap(h.buf))
 	}
+}
+
+// replay is a fresh attach's replay as one frame carries it.
+func replay(s Screen) []byte {
+	prelude, kept := s.Replay()
+	return append(append([]byte(nil), prelude...), kept...)
 }

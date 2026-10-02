@@ -54,7 +54,7 @@ func TestHistoryReplayMatchesTheGolden(t *testing.T) {
 	for _, chunk := range goldenOutput() {
 		h.Write(chunk)
 	}
-	got := h.Replay()
+	got := replay(h)
 	sum := sha256.Sum256(got)
 	if len(got) != goldenReplayBytes || hex.EncodeToString(sum[:]) != goldenReplaySHA256 {
 		t.Fatalf("replay is %d bytes, sha256 %x; the golden is %d bytes, %s", len(got), sum, goldenReplayBytes, goldenReplaySHA256)

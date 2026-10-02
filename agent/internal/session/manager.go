@@ -6,6 +6,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,19 +40,31 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 type Manager struct {
 	launcher *launch.Launcher
+	// bootID is the guest's boot_id, which every session's output names
+	bootID string
 
 	// starting serializes starts, so a spawn needs no hold on mu, which List
-	// and Kill take.
+	// and Kill take. It guards seq too.
 	starting sync.Mutex
+	seq      uint64
 	mu       sync.Mutex
 	sessions map[string]*session
+	// previous holds, per name, the last generation that ended and left
+	// the name, for at most MaxSessions names
+	previous map[string]ended
 
 	// attached counts open session connections.
 	attached atomic.Int64
 }
 
-func NewManager(l *launch.Launcher) *Manager {
-	return &Manager{launcher: l, sessions: make(map[string]*session)}
+// ended is a generation in previous, with its place among the runs.
+type ended struct {
+	seq      uint64
+	previous proto.Previous
+}
+
+func NewManager(l *launch.Launcher, bootID string) *Manager {
+	return &Manager{launcher: l, bootID: bootID, sessions: make(map[string]*session), previous: make(map[string]ended)}
 }
 
 // Attached returns the number of open session connections.
@@ -82,8 +96,9 @@ func (m *Manager) Kill(name string) error {
 	}
 	m.mu.Unlock()
 	if !ok {
-		return noSession(name)
+		return m.noSession(name)
 	}
+	m.retire(s)
 	if s.exited() {
 		return nil
 	}
@@ -105,16 +120,13 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 	m.attached.Add(1)
 	defer m.attached.Add(-1)
 
-	s, created, perr := m.find(req)
-	if perr != nil {
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: perr})
-	}
 	v := newViewer(conn, w)
-	safe.Go("session "+s.name+" writer", v.run, func() { conn.Close() })
-	if !s.attach(v, req.Cols, req.Rows, created) {
+	safe.Go("session "+req.Session+" writer", v.run, func() { conn.Close() })
+	s, perr := m.attach(req, v)
+	if perr != nil {
 		v.stop(nil, false)
 		<-v.done
-		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: noSession(s.name)})
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: perr})
 	}
 
 	input(s, v, r)
@@ -124,8 +136,32 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 	return nil
 }
 
-// find returns the session req names. exec starts it unless it runs already;
-// session.attach only finds it.
+// attach finds the session req names and makes v its viewer. A start that
+// finds the session over between its look and the attach (a viewer got the
+// EXIT meanwhile) looks again, and then replaces it.
+func (m *Manager) attach(req proto.Request, v *viewer) (*session, *proto.Error) {
+	for range 2 {
+		s, created, perr := m.find(req)
+		if perr != nil {
+			return nil, perr
+		}
+		err := s.attach(v, req.Cols, req.Rows, created, req.ResumeFrom, m.previousOf(s.name))
+		if err == nil {
+			return s, nil
+		}
+		if !errors.Is(err, errOver) {
+			return nil, err.(*proto.Error)
+		}
+		if req.Op != proto.OpExec {
+			break
+		}
+	}
+	return nil, m.noSession(req.Session)
+}
+
+// find returns the session req names. exec starts it unless it runs
+// already, or a resume names its generation, which exited but whose EXIT
+// no viewer got yet; session.attach only finds it.
 func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	if !namePattern.MatchString(req.Session) {
 		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("bad session name %q", req.Session)}
@@ -135,7 +171,7 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 		s, ok := m.sessions[req.Session]
 		m.mu.Unlock()
 		if !ok {
-			return nil, false, noSession(req.Session)
+			return nil, false, m.noSession(req.Session)
 		}
 		return s, false, nil
 	}
@@ -148,10 +184,16 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	s, ok := m.sessions[req.Session]
 	count := len(m.sessions)
 	m.mu.Unlock()
-	if ok && !s.exited() {
+	if ok && (!s.exited() || isResumeOf(req.ResumeFrom, s) && !s.over()) {
 		return s, false, nil
 	}
-	// an exited session gives its name, and its slot, to the new one
+	// an exited session gives its name, and its slot, to the new one. Its
+	// exit is set just before done closes: wait for that, so the new
+	// session's STARTED names it as previous.
+	if ok {
+		<-s.done
+		m.retire(s)
+	}
 	if !ok && count >= MaxSessions {
 		return nil, false, &proto.Error{Code: proto.ErrSessionCap, Message: fmt.Sprintf("this imp already has %d sessions", MaxSessions)}
 	}
@@ -159,7 +201,8 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	if err != nil {
 		return nil, false, proto.StartError(err, errors.Is(err, proc.ErrDown))
 	}
-	s = newSession(req.Session, req, p, master)
+	m.seq++
+	s = newSession(req.Session, req, run{proc: p, master: master, generation: newGeneration(), seq: m.seq, bootID: m.bootID})
 	s.onDelivered = func() { m.removeIfOver(s) }
 	m.mu.Lock()
 	m.sessions[s.name] = s
@@ -174,10 +217,80 @@ func (m *Manager) removeIfOver(s *session) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.sessions[s.name] == s {
+	current := m.sessions[s.name] == s
+	if current {
 		delete(m.sessions, s.name)
 	}
+	m.mu.Unlock()
+	if current {
+		m.retire(s)
+	}
+}
+
+// retire records s as its name's previous generation once its process has
+// ended, so the end and exit it records are final. s has left the name.
+func (m *Manager) retire(s *session) {
+	select {
+	case <-s.done:
+		m.record(s)
+	default:
+		safe.Go("session "+s.name+" retire", func() {
+			<-s.done
+			m.record(s)
+		}, nil)
+	}
+}
+
+// record keeps s as previous unless a later run of the name is there
+// already, as when a killed process outlives its replacement.
+func (m *Manager) record(s *session) {
+	e := ended{seq: s.seq, previous: s.ended()}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.previous[s.name]; ok && cur.seq > e.seq {
+		return
+	}
+	m.previous[s.name] = e
+	if len(m.previous) <= MaxSessions {
+		return
+	}
+	oldest := s.name
+	for name, other := range m.previous {
+		if other.seq < m.previous[oldest].seq {
+			oldest = name
+		}
+	}
+	delete(m.previous, oldest)
+}
+
+// previousOf returns the name's previous generation, or nil.
+func (m *Manager) previousOf(name string) *proto.Previous {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.previous[name]; ok {
+		return &e.previous
+	}
+	return nil
+}
+
+func (m *Manager) noSession(name string) *proto.Error {
+	return &proto.Error{
+		Code:    proto.ErrNoSession,
+		Message: fmt.Sprintf("no session %q", name),
+		Data:    proto.NoSessionData{BootID: m.bootID, Previous: m.previousOf(name)},
+	}
+}
+
+// isResumeOf reports whether a resume names s's generation.
+func isResumeOf(resume *proto.ResumeFrom, s *session) bool {
+	return resume != nil && resume.Generation == s.generation
+}
+
+// newGeneration returns 16 random bytes as 32 lowercase hex characters.
+func newGeneration() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // input applies the viewer's frames until the connection ends. It never
@@ -207,8 +320,4 @@ func input(s *session, v *viewer, r *proto.Reader) {
 			log.Printf("session %s: ignoring %s frame", s.name, f.Type)
 		}
 	}
-}
-
-func noSession(name string) *proto.Error {
-	return &proto.Error{Code: proto.ErrNoSession, Message: fmt.Sprintf("no session %q", name)}
 }

@@ -1,11 +1,13 @@
 package boot
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -52,6 +54,7 @@ func Run() error {
 	// a boot template parks here, before the user disk is touched; the
 	// restored copy goes on with its claim's values, never the template's
 	// cmdline
+	claimed := params.Template
 	if params.Template {
 		claim, err := parkForClaim(listenVsock, applyClaim)
 		if err != nil {
@@ -116,9 +119,13 @@ func Run() error {
 		log.Printf("boot: exec cgroups: %v; a stop reaches only the process group", err)
 		execCgroups = nil
 	}
+	bootID := readBootID()
+	if claimed {
+		bootID = newBootID()
+	}
 	srv := &server.Server{
 		Exec:     exec.NewManager(launcher, execCgroups),
-		Sessions: session.NewManager(launcher),
+		Sessions: session.NewManager(launcher, bootID),
 		Services: sup,
 		Listen:   listener,
 		Dial:     dialer,
@@ -128,6 +135,7 @@ func Run() error {
 		},
 
 		IdentityReset: identityReset,
+		BootID:        bootID,
 	}
 
 	// A shutdown request and a signal can race; only the first powers off.
@@ -191,4 +199,27 @@ func listenVsock() (net.Listener, error) {
 	}
 	log.Printf("boot: ready on vsock port %d", server.Port)
 	return l, nil
+}
+
+// readBootID returns the guest kernel's boot_id, which every cold boot
+// changes and a wake from memory keeps. Without procfs it is "", and impd
+// keeps no cold boot for it. A restored boot template has the template's.
+func readBootID() string {
+	b, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		log.Printf("boot: boot_id: %v", err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// newBootID names a claimed boot template's boot: each copy of the template
+// shares the kernel's boot_id, so it draws a random UUID instead, after the
+// claim reseeded the CRNG. A wake from memory keeps it, as it keeps boot_id.
+func newBootID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

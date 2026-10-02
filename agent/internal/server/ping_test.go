@@ -53,3 +53,15 @@ func TestPingReportsTheIdentityReset(t *testing.T) {
 		}
 	}
 }
+
+// impd records a cold boot under the boot_id the ping reports.
+func TestPingReportsTheBootID(t *testing.T) {
+	s := &Server{BootID: "4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11"}
+	resp, err := s.unary(proto.Request{Op: proto.OpPing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ping := resp.(proto.Ping); ping.BootID != s.BootID {
+		t.Fatalf("ping %+v, want boot_id %s", ping, s.BootID)
+	}
+}
