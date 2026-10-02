@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
 import { requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
-import { createImp, holdImp, waitForExec } from '../lib/imps';
+import { createImp, holdImp, removeImps, waitForExec } from '../lib/imps';
 import {
   instance,
   readImpdLogTail,
@@ -24,6 +24,7 @@ const open = `${prefix}open`;
 const box = `${prefix}box`;
 const none = `${prefix}none`;
 const rogue = `${prefix}ra`;
+const restored = `${prefix}tpl`;
 
 const names = {
   near: `${instance.container}-v6`,
@@ -32,9 +33,17 @@ const names = {
   server: `${instance.container}-v6-server`,
 };
 
-const NEAR = '2001:db8:6a::';
-const FAR = '2001:db8:6b::';
-const ROUTED = '2001:db8:6c::';
+// three /64s of the documentation range per instance, so instances side by
+// side never ask Docker for the same pool: 6a, 6b and 6c at offset 0
+const BLOCK = 0x6a + 3 * instance.portOffset;
+
+function buildPrefix(index: number): string {
+  return `2001:db8:${(BLOCK + index).toString(16)}::`;
+}
+
+const NEAR = buildPrefix(0);
+const FAR = buildPrefix(1);
+const ROUTED = buildPrefix(2);
 const ROUTER_NEAR = `${NEAR}100`;
 const ROUTER_FAR = `${FAR}100`;
 
@@ -254,6 +263,36 @@ test('an imp gets a /128 in the ULA prefix and a default route via fe80::1', asy
 
   expect(address).toBe(expected);
   expect(routes).toContain('default via fe80::1 dev eth0');
+});
+
+test('an imp restored from a boot template gets its /128 from the claim', async () => {
+  // open and box were the shape's two misses; its template builds behind them
+  await waitFor(
+    'the boot template of the shape',
+    async () => {
+      const found = await runInContainer([
+        'sh',
+        '-c',
+        `grep -l '"memoryMib": 256' /var/lib/imp/templates/*/meta.json`,
+      ]);
+
+      expect(found.exitCode).toBe(0);
+    },
+    { timeoutMs: 120_000 },
+  );
+
+  await createImp(restored, '--image', TINY, '--memory', '256');
+
+  try {
+    const log = await readImpdLogTail(400);
+    const address = await readGuestAddress(restored);
+    const expected = await buildExpectedAddress(restored, readUlaNetwork(log));
+
+    expect(log).toContain(`${restored}: restored boot template`);
+    expect(address).toBe(expected);
+  } finally {
+    await removeImps(restored);
+  }
 });
 
 test('an open imp reaches IPv6 hosts beyond the host, behind NAT66', async () => {
