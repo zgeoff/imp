@@ -188,3 +188,33 @@ test('a create that impd stopping cuts short is recorded as an error', async () 
   expect(rejection).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
   expect(late).toMatchObject({ state: 'error', error: 'impd is stopping' });
 });
+
+test('a destroy issued while the create boots waits for it, then removes the imp', async () => {
+  await using ctx = await setupImpTest();
+
+  await ctx.createTestImage('ubuntu');
+
+  const gate = Promise.withResolvers<void>();
+
+  ctx.fake.control.bootGate = gate.promise;
+
+  const creating = ctx.imps.createImp({ name: 'dev' });
+
+  await Bun.sleep(10);
+
+  const destroying = ctx.imps.destroyImp('dev');
+
+  await Bun.sleep(5);
+
+  gate.resolve();
+
+  const created = await creating;
+
+  await destroying;
+
+  const left = await findImpByName(ctx.db, 'dev');
+
+  expect(created.state).toBe('running');
+  expect(left).toBeUndefined();
+  expect(ctx.fake.alive.size).toBe(0);
+});

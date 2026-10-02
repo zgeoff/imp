@@ -25,6 +25,8 @@ export interface ImpRecord {
 }
 
 export interface NewImp {
+  // a fresh UUIDv7 when left out
+  readonly id?: string;
   readonly name: string;
   readonly imageId: string;
   readonly vcpus: number;
@@ -70,7 +72,7 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
   const row = await db
     .insertInto('imps')
     .values({
-      id: Bun.randomUUIDv7(),
+      id: imp.id ?? Bun.randomUUIDv7(),
       name: imp.name,
       image_id: imp.imageId,
       state: 'creating',

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import type { Imp } from '@imp/api';
-import { buildNotFoundError, isRamBudgetError } from '../api-errors';
+import { isRamBudgetError } from '../api-errors';
 import { listImps, removeImp, updateImpActivity, updateImpHold } from '../db/imps';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
@@ -58,16 +58,18 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
   return {
     createImp: async (input) => {
       const image = await context.images.resolveImage(input.image);
-      const created = await createImpRecord(context, input, image);
 
-      context.emitChanged();
+      const id = Bun.randomUUIDv7();
 
-      return lock.withImpId(created.id, async (imp) => {
-        // a destroy that won the race for the new imp's lock
-        if (imp === undefined) {
-          throw buildNotFoundError('imp', created.name);
-        }
+      const writeRecord = async () => {
+        const created = await createImpRecord(context, id, input, image);
 
+        context.emitChanged();
+
+        return created;
+      };
+
+      return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
         const started = performance.now();
 

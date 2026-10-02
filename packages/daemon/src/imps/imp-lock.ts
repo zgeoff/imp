@@ -24,6 +24,14 @@ export interface ImpLock {
     action: (imp: LockedImp | undefined) => Promise<T>,
   ) => Promise<T>;
 
+  // for a new imp: `insert` writes its record under the lock it is created
+  // with, so no other operation can reach the imp before `action` holds it
+  readonly withNewImp: <T>(
+    id: string,
+    insert: () => Promise<ImpRecord>,
+    action: (imp: LockedImp) => Promise<T>,
+  ) => Promise<T>;
+
   // as withImpId, but only when nothing holds or waits for the lock
   readonly tryWithImpId: <T>(
     id: string,
@@ -92,6 +100,12 @@ export function createImpLock(context: ImpContext): ImpLock {
         const imp = await readLocked(id);
 
         return action(imp);
+      }),
+    withNewImp: (id, insert, action) =>
+      mutex.runExclusive(id, async () => {
+        const imp = await insert();
+
+        return action({ ...imp, [LOCKED]: true });
       }),
     tryWithImpId: (id, action) =>
       mutex.tryRunExclusive(id, async () => {

@@ -14,10 +14,11 @@ interface NewImpInput {
   readonly httpPort?: number | undefined;
 }
 
-// A `creating` record with a free slot, under the requested name or a free
+// A `creating` record with id `id` and a free slot, under the requested name or a free
 // `imp-xxxx`.
 export async function createImpRecord(
   context: ImpContext,
+  id: string,
   input: NewImpInput,
   image: ImageRecord,
 ): Promise<ImpRecord> {
@@ -28,6 +29,7 @@ export async function createImpRecord(
       const slot = await allocateSlot(trx, countSlots(context.config.subnet));
 
       return createImp(trx, {
+        id,
         name,
         imageId: image.id,
         vcpus: input.vcpus ?? context.config.defaultVcpus,
