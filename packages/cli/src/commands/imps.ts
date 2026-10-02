@@ -41,11 +41,13 @@ export const newCommand = defineCommand({
     'cpu-weight': cpuWeightArg,
     public: { type: 'boolean', description: 'serve it to the internet too, as imp expose does' },
     ...authArgs,
+    net: { type: 'string', description: 'networks to join, comma-separated (see imp net)' },
     json: jsonArg,
   },
   run: (context) =>
     runAction(context.host, async (client) => {
       const policy = parsePolicy(context.args.policy, context.args.allow);
+      const networks = context.args.net?.split(',').map((network) => network.trim());
       const isPublic = context.args.public === true;
 
       if (!isPublic && (context.args.auth !== undefined || context.args.user !== undefined)) {
@@ -78,6 +80,7 @@ export const newCommand = defineCommand({
         }),
         ...(policy !== undefined && { policy }),
         ...readCpuArgs(context.args),
+        ...(networks !== undefined && { networks }),
       });
 
       if (auth === null) {
