@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 )
@@ -27,7 +28,8 @@ const TotalRecord = "IMP.total"
 
 // Run serves `imp-agent tar` with args after "tar".
 func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
-	image, err := imagecfg.Load()
+	// it runs in the container, where the host view is the user's root
+	image, err := imagecfg.Load(fsroot.Host)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

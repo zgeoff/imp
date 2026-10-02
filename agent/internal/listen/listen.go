@@ -14,7 +14,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"syscall"
@@ -23,6 +22,8 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
+	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/imp/agent/internal/inner"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
@@ -59,17 +60,20 @@ type Manager struct {
 	// user owns the sockets: the image's user, as exec runs commands
 	user   string
 	binder Binder
+	// fsys is where the agent's own sockets go: the inner container's root
+	fsys fsroot.FS
 
 	mu        sync.Mutex
 	listeners map[string]*listener
 }
 
-func NewManager(agentRoot, forwardRoot, user string, binder Binder) *Manager {
+func NewManager(agentRoot, forwardRoot, user string, binder Binder, fsys fsroot.FS) *Manager {
 	return &Manager{
 		agentRoot:   agentRoot,
 		forwardRoot: forwardRoot,
 		user:        user,
 		binder:      binder,
+		fsys:        fsys,
 		listeners:   map[string]*listener{},
 	}
 }
@@ -200,7 +204,7 @@ func (m *Manager) Accept(req proto.Request, r *proto.Reader, w *proto.Writer) er
 }
 
 func (m *Manager) lookupUser() (uid, gid uint32, err error) {
-	cred, _, err := proc.LookupUser(m.user)
+	cred, _, err := proc.LookupUserIn(m.fsys, m.user)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -212,45 +216,53 @@ func (m *Manager) lookupUser() (uid, gid uint32, err error) {
 
 // openOwn makes a directory under root and a socket in it. Both are made as
 // root and handed to the user last, so nobody else can reach the socket in
-// between.
+// between. Every path resolves in the user's root; the bind goes through
+// the directory's own fd, so a symlink planted on the way cannot move it.
 func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, error) {
 	uid, gid, err := m.lookupUser()
 	if err != nil {
 		return proto.Listening{}, err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := m.fsys.MkdirAll(root, 0o755); err != nil {
 		return proto.Listening{}, err
 	}
 	dir := filepath.Join(root, l.id)
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	if err := m.fsys.MkdirAll(dir, 0o700); err != nil {
 		return proto.Listening{}, err
 	}
 	path := filepath.Join(dir, name)
-	ln, err := listenOwn(path, dir, uid, gid)
+	ln, err := m.listenOwn(path, dir, name, uid, gid)
 	if err != nil {
-		os.RemoveAll(dir)
+		m.fsys.RemoveAll(dir)
 		return proto.Listening{}, err
 	}
 	l.ln, l.checkPeer, l.uid = ln, true, uid
-	// the directory goes as a whole when the listener closes
+	// the directory goes as a whole when the listener closes; a container
+	// that died took it along
 	l.cleanup = func() {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := m.fsys.RemoveAll(dir); err != nil && !errors.Is(err, inner.ErrDown) {
 			log.Printf("listen: remove %s: %v", dir, err)
 		}
 	}
 	return proto.Listening{Path: path}, nil
 }
 
-func listenOwn(path, dir string, uid, gid uint32) (net.Listener, error) {
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+func (m *Manager) listenOwn(path, dir, name string, uid, gid uint32) (net.Listener, error) {
+	d, err := m.fsys.Dir(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	at := fmt.Sprintf("/proc/self/fd/%d/%s", d.Fd(), name)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: at, Net: "unix"})
 	if err != nil {
 		return nil, err
 	}
 	ln.SetUnlinkOnClose(false)
 	for _, step := range []func() error{
-		func() error { return os.Chmod(path, 0o600) },
-		func() error { return os.Lchown(path, int(uid), int(gid)) },
-		func() error { return os.Chown(dir, int(uid), int(gid)) },
+		func() error { return m.fsys.Chmod(path, 0o600) },
+		func() error { return m.fsys.Lchown(path, int(uid), int(gid)) },
+		func() error { return m.fsys.Lchown(dir, int(uid), int(gid)) },
 	} {
 		if err := step(); err != nil {
 			ln.Close()
@@ -258,6 +270,20 @@ func listenOwn(path, dir string, uid, gid uint32) (net.Listener, error) {
 		}
 	}
 	return ln, nil
+}
+
+// CloseAll ends every listener: the container they served in is gone.
+// impd opens them again in the next one.
+func (m *Manager) CloseAll() {
+	m.mu.Lock()
+	all := make([]*listener, 0, len(m.listeners))
+	for _, l := range m.listeners {
+		all = append(all, l)
+	}
+	m.mu.Unlock()
+	for _, l := range all {
+		m.close(l)
+	}
 }
 
 // openBound binds network and address as the image's user.

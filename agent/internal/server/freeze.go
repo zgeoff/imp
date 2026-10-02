@@ -92,7 +92,7 @@ func (s *Server) grow(diskBytes int64) error {
 	if s.frozen {
 		return errFrozen
 	}
-	return waitAndGrow("/", diskBytes, growTimeout)
+	return waitAndGrow(UserMount, diskBytes, growTimeout)
 }
 
 // thaw FITHAWs the root filesystem. Thawing an unfrozen fs is not an error.
@@ -124,8 +124,12 @@ func (s *Server) thawLocked() error {
 	return nil
 }
 
+// UserMount is the user disk's mount point in the agent's world: the inner
+// container's root.
+const UserMount = "/user"
+
 func ioctlRoot(req uint) error {
-	f, err := os.Open("/")
+	f, err := os.Open(UserMount)
 	if err != nil {
 		return err
 	}

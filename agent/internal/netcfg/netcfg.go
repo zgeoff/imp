@@ -11,6 +11,8 @@ import (
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 // Up brings lo up and, if cidr is set, gives iface the address and a
@@ -134,20 +136,20 @@ func parseGateway(gw string) (net.IP, error) {
 // WriteResolvConf writes nameservers to /etc/resolv.conf. Images often ship
 // it as a symlink into systemd-resolved's runtime dir, which nothing in an
 // imp populates, so a symlink is replaced by a plain file.
-func WriteResolvConf(servers []string) error {
-	return writeResolvConf("/etc/resolv.conf", servers)
+func WriteResolvConf(fsys fsroot.FS, servers []string) error {
+	return writeResolvConf(fsys, "/etc/resolv.conf", servers)
 }
 
-func writeResolvConf(path string, servers []string) error {
+func writeResolvConf(fsys fsroot.FS, path string, servers []string) error {
 	if len(servers) == 0 {
 		return nil
 	}
-	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(path); err != nil {
+	if fi, err := fsys.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if err := fsys.Remove(path); err != nil {
 			return err
 		}
 	}
-	return os.WriteFile(path, []byte(resolvConf(servers)), 0o644)
+	return fsroot.WriteFileAtomic(fsys, path, []byte(resolvConf(servers)), 0o644)
 }
 
 func resolvConf(servers []string) string {

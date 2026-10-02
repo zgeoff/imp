@@ -9,10 +9,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -30,14 +32,15 @@ type keygenFunc func(prefix string) error
 
 // resetIdentity gives an imp made from a template its own machine-id and ssh
 // host keys, on a boot impd asks it to (imp.reset_identity=1), before any
-// service starts. It returns what ping reports: impd keeps asking until a
+// service starts. root is the inner container's root, and ssh-keygen runs
+// in the container. It returns what ping reports: impd keeps asking until a
 // boot reports ok. See docs/guides/templates.md#identity.
-func resetIdentity(runner proc.Runner, env []string) string {
+func resetIdentity(runner proc.Runner, root fsroot.FS, env []string) string {
 	var keygen keygenFunc
-	if path, err := proc.LookPath("ssh-keygen", env); err == nil {
+	if path, err := lookPathIn(root, "ssh-keygen", env); err == nil {
 		keygen = func(prefix string) error { return runKeygen(runner, path, prefix, env) }
 	}
-	err := resetIdentityAt("/", keygen)
+	err := resetIdentityAt(root, keygen)
 	// the new files must outlive a crash: impd stops asking after this boot
 	unix.Sync()
 	if err != nil {
@@ -47,7 +50,7 @@ func resetIdentity(runner proc.Runner, env []string) string {
 	return proto.IdentityResetOK
 }
 
-func resetIdentityAt(root string, keygen keygenFunc) error {
+func resetIdentityAt(root fsroot.FS, keygen keygenFunc) error {
 	id, err := newMachineID()
 	if err != nil {
 		return err
@@ -70,11 +73,9 @@ func newMachineID() (string, error) {
 // writeMachineID replaces /etc/machine-id, and D-Bus's copy when it is a file
 // of its own rather than a link to it. An empty or missing file stays as it
 // is: the template holds no id to share.
-func writeMachineID(root, id string) error {
-	paths := []string{"etc/machine-id", "var/lib/dbus/machine-id"}
-	for _, rel := range paths {
-		p := filepath.Join(root, rel)
-		fi, err := os.Lstat(p)
+func writeMachineID(root fsroot.FS, id string) error {
+	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		fi, err := root.Lstat(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -84,7 +85,7 @@ func writeMachineID(root, id string) error {
 		if !fi.Mode().IsRegular() || fi.Size() == 0 {
 			continue
 		}
-		if err := writeFileAtomic(p, []byte(id+"\n"), fi.Mode().Perm()); err != nil {
+		if err := fsroot.WriteFileAtomic(root, p, []byte(id+"\n"), fi.Mode().Perm()); err != nil {
 			return fmt.Errorf("%s: %w", p, err)
 		}
 	}
@@ -96,30 +97,34 @@ func writeMachineID(root, id string) error {
 // A keygen that fails or times out leaves the old keys, so sshd still starts.
 // An image without /etc/ssh has no keys to reset; one without ssh-keygen
 // keeps them (the guide says so).
-func resetHostKeys(root string, keygen keygenFunc) error {
-	dir := filepath.Join(root, "etc/ssh")
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+func resetHostKeys(root fsroot.FS, keygen keygenFunc) error {
+	const dir = "/etc/ssh"
+	// a container that is down fails here, not as a missing ssh-keygen
+	if _, err := root.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil
+	} else if err != nil {
+		return err
 	}
-	removeStaleStages(dir)
+	removeStaleStages(root, dir)
 	if keygen == nil {
 		log.Printf("identity: no ssh-keygen; ssh host keys kept")
 		return nil
 	}
-	stage, err := os.MkdirTemp(dir, stagePrefix)
-	if err != nil {
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
 		return err
 	}
+	stage := filepath.Join(dir, stagePrefix+hex.EncodeToString(suffix))
 	made := filepath.Join(stage, "etc/ssh")
-	if err := os.MkdirAll(made, 0o755); err != nil {
+	if err := root.MkdirAll(made, 0o755); err != nil {
 		return err
 	}
 	if err := keygen(stage); err != nil {
 		// a keygen that timed out may still write here: the next boot drops it
 		return fmt.Errorf("ssh-keygen -A: %w", err)
 	}
-	defer os.RemoveAll(stage)
-	keys, err := filepath.Glob(filepath.Join(made, "ssh_host_*"))
+	defer root.RemoveAll(stage)
+	keys, err := listHostKeys(root, made)
 	if err != nil {
 		return err
 	}
@@ -127,34 +132,64 @@ func resetHostKeys(root string, keygen keygenFunc) error {
 		return errors.New("ssh-keygen -A made no host keys")
 	}
 	kept := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		name := filepath.Base(k)
-		if err := os.Rename(k, filepath.Join(dir, name)); err != nil {
+	for _, name := range keys {
+		if err := root.Rename(filepath.Join(made, name), filepath.Join(dir, name)); err != nil {
 			return err
 		}
 		kept[name] = true
 	}
-	old, err := filepath.Glob(filepath.Join(dir, "ssh_host_*"))
+	old, err := listHostKeys(root, dir)
 	if err != nil {
 		return err
 	}
-	for _, k := range old {
-		if kept[filepath.Base(k)] {
+	for _, name := range old {
+		if kept[name] {
 			continue
 		}
-		if err := os.Remove(k); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := root.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
 	return nil
 }
 
-// removeStaleStages drops what an earlier boot's keygen left behind.
-func removeStaleStages(dir string) {
-	stale, _ := filepath.Glob(filepath.Join(dir, stagePrefix+"*"))
-	for _, s := range stale {
-		os.RemoveAll(s)
+// listHostKeys names the ssh_host_* entries of dir.
+func listHostKeys(root fsroot.FS, dir string) ([]string, error) {
+	entries, err := root.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
+	var keys []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "ssh_host_") {
+			keys = append(keys, e.Name())
+		}
+	}
+	return keys, nil
+}
+
+// removeStaleStages drops what an earlier boot's keygen left behind.
+func removeStaleStages(root fsroot.FS, dir string) {
+	entries, _ := root.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), stagePrefix) {
+			root.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+}
+
+// lookPathIn finds file in the PATH of env, as the container sees it.
+func lookPathIn(root fsroot.FS, file string, env []string) (string, error) {
+	for _, dir := range filepath.SplitList(proc.Get(env, "PATH")) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		p := filepath.Join(dir, file)
+		if fi, err := root.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s: executable file not found in $PATH", file)
 }
 
 // runKeygen runs ssh-keygen -A -f prefix, which writes every missing default

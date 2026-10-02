@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 func TestHostsWithName(t *testing.T) {
@@ -33,7 +35,7 @@ func TestHostsWithName(t *testing.T) {
 
 func TestUpdateHostsMissingFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "hosts")
-	if err := updateHosts(p, "imp"); err != nil {
+	if err := updateHosts(fsroot.Host, p, "imp"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p)
@@ -48,7 +50,7 @@ func TestUpdateHostsRewritesInPlace(t *testing.T) {
 	if err := os.WriteFile(p, []byte("127.0.1.1 old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := updateHosts(p, "new"); err != nil {
+	if err := updateHosts(fsroot.Host, p, "new"); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p)
@@ -72,7 +74,7 @@ func TestUpdateHostsFollowsSymlink(t *testing.T) {
 	if err := os.Symlink("real-hosts", link); err != nil {
 		t.Fatal(err)
 	}
-	if err := updateHosts(link, "new"); err != nil {
+	if err := updateHosts(fsroot.Host, link, "new"); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
@@ -88,7 +90,7 @@ func TestUpdateHostsDanglingSymlink(t *testing.T) {
 	if err := os.Symlink("missing", link); err != nil {
 		t.Fatal(err)
 	}
-	if err := updateHosts(link, "new"); err == nil {
+	if err := updateHosts(fsroot.Host, link, "new"); err == nil {
 		t.Fatal("updateHosts replaced a dangling symlink")
 	}
 	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {

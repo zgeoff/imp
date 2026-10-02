@@ -1,6 +1,7 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
-// from the system drive (stage 1); it switches root to the user disk and
-// re-execs itself as "imp-agent stage2". See docs/architecture/agent.md#boot.
+// from the system drive; it mounts the user disk and runs user code in a
+// container over it, whose PID 1 is "imp-agent inner".
+// See docs/architecture/agent.md#boot.
 // "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
 // for the agent's dial op, "imp-agent listen-as-user" binds a reverse
@@ -18,6 +19,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/boot"
 	"github.com/zgeoff/imp/agent/internal/dial"
+	"github.com/zgeoff/imp/agent/internal/inner"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/sftpserver"
 	"github.com/zgeoff/imp/agent/internal/tartool"
@@ -59,8 +61,15 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case len(os.Args) == 2 && os.Args[1] == inner.Command:
+		// PID 1 of the container's namespaces, never of the guest: on failure
+		// it exits, and the agent starts the container again
+		if err := inner.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "imp-agent inner: %v\n", err)
+		}
+		os.Exit(1)
 	case os.Getpid() == 1:
-		err = boot.Stage1()
+		err = boot.Run()
 	default:
 		fmt.Fprintln(os.Stderr, "imp-agent runs as PID 1 in an imp guest")
 		os.Exit(2)

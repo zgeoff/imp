@@ -90,7 +90,7 @@ test('the second boot of a shape makes its template; later boots restore it', as
     `/var/lib/imp/imps/${found.id}/run/firecracker.log`,
   ]);
 
-  expect(consoleLog.stdout).toContain('stage1: claim: crng reseeded from a 64-byte seed');
+  expect(consoleLog.stdout).toContain('boot: claim: crng reseeded from a 64-byte seed');
 });
 
 test('a restored imp has its own name, MAC, address and disk size', async () => {

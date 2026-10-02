@@ -102,7 +102,7 @@ Stage 1 then:
 2. Credits the seed to the entropy pool (`RNDADDENTROPY`) and reseeds the CRNG at once
    (`RNDRESEEDCRNG`). Firecracker's VMGenID also makes the kernel reseed after the restore
    (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it. Stage 1 logs
-   `stage1: claim: crng reseeded from a 64-byte seed` to the console.
+   `boot: claim: crng reseeded from a 64-byte seed` to the console.
 3. Sets `eth0`'s MAC.
 4. Waits, for up to 2 s, until `vda` reports the size in the claim's `disk_bytes`, rounded down to
    whole 512-byte sectors: the size change from the restore's `PATCH` reaches the guest as a config

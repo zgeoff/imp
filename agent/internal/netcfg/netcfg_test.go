@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 func TestParseAddr(t *testing.T) {
@@ -87,7 +89,7 @@ func TestWriteResolvConf(t *testing.T) {
 			if err := place(target, path); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeResolvConf(path, tt.servers); err != nil {
+			if err := writeResolvConf(fsroot.Host, path, tt.servers); err != nil {
 				t.Fatal(err)
 			}
 			b, err := os.ReadFile(path)
