@@ -171,9 +171,12 @@ rest.
 | Host                   | `http://<name>.imp.localhost:7080`     |
 | Tailnet                | `http://<tailnet-host>:<20000 + slot>` |
 | Tailnet, with a domain | `https://<name>.<domain>`              |
+| Tailnet, per-imp names | `https://<name>.<tailnet>.ts.net`      |
 
 MagicDNS does not support wildcard names, so on the tailnet each imp has a port, not a hostname. A
 domain of your own fills that gap: its wildcard record points at the host's tailnet IP
-([why](../guides/https.md#why-the-records-point-at-the-tailnet-ip)). `imp url <name>` prints the
-https URL first, when there is one, then the others. The [Tailscale guide](../guides/tailscale.md)
-covers the tailnet node, the ACL and HTTPS.
+([why](../guides/https.md#why-the-records-point-at-the-tailnet-ip)). It is the recommended way.
+Per-imp names, opt-in, make each imp a Tailscale Service instead
+([per-imp names](../guides/tailscale.md#per-imp-names)). `imp url <name>` prints the domain's https
+URL first, when there is one, then the imp's own tailnet name, then the others. The
+[Tailscale guide](../guides/tailscale.md) covers the tailnet node, the ACL and HTTPS.

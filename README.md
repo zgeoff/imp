@@ -74,7 +74,7 @@ imp fork box box-2                # a second copy to try something else in
 | `gc [--dry-run]`                         | remove storage no imp, checkpoint or image names                       |
 | `sleep`, `wake`, `hold <name> <time>`    | sleep by hand; keep an imp awake for a while                           |
 | `start`, `stop`, `rm`                    | boot cold, shut down, destroy                                          |
-| `url <name>`                             | print the imp's local and tailnet URLs                                 |
+| `url <name>`                             | print the imp's local and tailnet URLs, and its own tailnet name       |
 | `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
 | `image build`, `add`, `ls`, `rm`         | manage images                                                          |
 | `secret add`, `ls`, `rm`                 | store API tokens in impd, never in a guest                             |

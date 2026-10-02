@@ -36,7 +36,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
-| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, and a rule gives a member the API without a token                |
+| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names     |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                               |
 | `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                           |
 | `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
@@ -74,6 +74,11 @@ instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble))
 takes about 3.5 minutes, most of it idle timeouts in the sleep suite. The full set adds docker,
 images, scale and tailscale; at its defaults the scale suite alone took about 75 seconds in the last
 acceptance run.
+
+The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
+Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
+`op://cloud/imp-tailscale-oauth`, fields `client-id` and `client-secret`) and the tailnet policy in
+[per-imp names](./tailscale.md#per-imp-names).
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev.sh`. These variables tune a run:

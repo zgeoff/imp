@@ -7,6 +7,10 @@ Encrypt with the ACME DNS-01 challenge, renews it, and keeps the DNS records poi
 tailnet IP. Without `IMP_DOMAIN`, nothing changes: the
 [per-port URLs](../architecture/networking.md#urls) stay the only tailnet URLs.
 
+This is the recommended way to give imps names. Tailscale Services can give each imp a name instead
+([per-imp names](./tailscale.md#per-imp-names)), but that needs an API credential that reaches every
+service on the tailnet, and it puts each imp's name in the public certificate logs.
+
 ## Set it up
 
 You need a domain in a Cloudflare zone and an API token for it.
