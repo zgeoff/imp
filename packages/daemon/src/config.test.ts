@@ -229,3 +229,8 @@ test('tailnet names need the tailnet, and keep the OAuth file in the data dir by
     }),
   ).toThrow('IMP_TAILNET_NAME_PREFIX');
 });
+
+test('the API and proxy ports must not fall in the imp ports', () => {
+  expect(() => loadConfig({ IMP_API_PORT: '20005' })).toThrow('IMP_API_PORT 20005');
+  expect(() => loadConfig({ IMP_PROXY_PORT: '20000' })).toThrow('IMP_PROXY_PORT 20000');
+});

@@ -181,6 +181,17 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     throw new Error(`IMP_SUBNET ${parsed.IMP_SUBNET} overlaps Tailscale's 100.64.0.0/10`);
   }
 
+  for (const [name, port] of [
+    ['IMP_API_PORT', parsed.IMP_API_PORT],
+    ['IMP_PROXY_PORT', parsed.IMP_PROXY_PORT],
+  ] as const) {
+    if (port >= parsed.IMP_PORT_BASE && port <= lastPort) {
+      throw new Error(
+        `${name} ${String(port)} falls in the imp ports ${String(parsed.IMP_PORT_BASE)}-${String(lastPort)}`,
+      );
+    }
+  }
+
   if (parsed.IMP_STORAGE_BACKEND === 'zfs' && parsed.IMP_ZFS_ROOT === undefined) {
     throw new Error(
       'IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT, the dataset mounted on IMP_DATA_DIR',
