@@ -204,6 +204,7 @@ bootstrap() {
   # a change that failed, such as a restart of imp-host: show why
   if [ "$rc" = 1 ] && grep -q '^bootstrap: failed: ' <<<"$out"; then
     in_container journalctl -u imp-host --no-pager -n 40 >&2 || true
+    in_container journalctl -u docker --no-pager -n 40 >&2 || true
   fi
   return "$rc"
 }
