@@ -4,7 +4,7 @@
   "workspaces": {
     ".": {
       "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "test/integration/*.pebble.ts"],
-      "project": ["test/**/*.ts"]
+      "project": ["test/**/*.ts", "scripts/**/*.ts"]
     },
     "packages/*": {
       "project": ["src/**/*.ts"]

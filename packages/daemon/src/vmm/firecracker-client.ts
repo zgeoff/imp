@@ -28,8 +28,9 @@ interface Vsock {
   readonly udsPath: string;
 }
 
-// DESIGN 2.8: free page reporting hands memory the guest frees back to the
-// host; deflate_on_oom keeps an inflated balloon from killing guest processes
+// docs/architecture/sleep-and-wake.md#sleep: free page reporting hands memory
+// the guest frees back to the host; deflate_on_oom keeps an inflated balloon
+// from killing guest processes
 interface Balloon {
   readonly amountMib: number;
   readonly deflateOnOom: boolean;

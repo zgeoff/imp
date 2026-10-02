@@ -1,5 +1,6 @@
-// Routed, not bridged (DESIGN 2.6): slot n owns the /30 at offset 4n of the
-// subnet, with the host end at 4n+1 and the guest at 4n+2.
+// Routed, not bridged (docs/architecture/networking.md#addressing): slot n owns
+// the /30 at offset 4n of the subnet, with the host end at 4n+1 and the guest
+// at 4n+2.
 
 const SLOT_SIZE = 4;
 const SLOT_PREFIX_LENGTH = 30;
@@ -18,7 +19,8 @@ export interface SlotAddress {
   readonly netmask: string;
   readonly guestMac: string;
 
-  // the imp's own port on the host (DESIGN 2.11), for the tailnet
+  // the imp's own port on the host (docs/architecture/networking.md#urls), for
+  // the tailnet
   readonly tailnetPort: number;
 }
 

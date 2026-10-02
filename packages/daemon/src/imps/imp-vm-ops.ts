@@ -27,7 +27,7 @@ import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
 // snapshot writes put the whole mem file through the page cache
-// (docs/architecture/sleep-and-wake.md gotcha 8): a few at a time
+// (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
 
 // How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
@@ -53,9 +53,9 @@ export interface ImpVmOps {
   // agent shutdown, then the memory goes too: a stopped imp boots cold
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
-  // snapshots the VM and stops it (DESIGN 2.8); a failed snapshot leaves it
-  // running, a failure after the kill stops the imp. A sleep that gives way
-  // to a busy imp returns it still running.
+  // snapshots the VM and stops it (docs/architecture/sleep-and-wake.md#sleep);
+  // a failed snapshot leaves it running, a failure after the kill stops the
+  // imp. A sleep that gives way to a busy imp returns it still running.
   readonly sleepImpVm: (
     imp: LockedImp,
     reason: string,

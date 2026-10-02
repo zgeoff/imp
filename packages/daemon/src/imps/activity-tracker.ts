@@ -1,6 +1,6 @@
 // Host-side connections that keep an imp awake: exec sessions, proxied
 // HTTP requests or WebSockets, SSH connections and `imp proxy` tunnels
-// (DESIGN 2.9).
+// (docs/architecture/sleep-and-wake.md#idle-detection).
 
 const CONNECTION_KINDS = ['exec', 'proxy', 'ssh', 'tunnel'] as const;
 

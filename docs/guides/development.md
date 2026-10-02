@@ -11,6 +11,7 @@ bun run test:dashboard            # the dashboard's component tests, in their ow
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
+bun run lint:docs                 # every docs/ reference in code resolves
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
@@ -165,6 +166,9 @@ Lefthook installs the hooks with `bun install`.
 | `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                               |
 | `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                      |
 | `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks and sleep suites. |
+
+The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
+heading that does not exist.
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
 signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads

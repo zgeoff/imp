@@ -10,7 +10,8 @@ const AGENT_PORT = 1024;
 const PAUSE_FRAMES = 64;
 const RESUME_FRAMES = 16;
 
-// One agent connection carries one request (agent/PROTOCOL.md).
+// One agent connection carries one request
+// (docs/architecture/protocol.md#transport).
 export interface AgentConnection {
   readonly send: (type: FrameType, payload?: Uint8Array) => void;
   readonly sendJson: (type: FrameType, value: unknown) => void;

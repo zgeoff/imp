@@ -344,8 +344,9 @@ export function buildRouter(deps: RouterDeps) {
   });
 }
 
-// RAM used is measured (what awake Firecrackers own); committed is the
-// memory the awake imps were given (DESIGN 2.9).
+// RAM used is measured (what awake Firecrackers own); committed is the memory
+// the awake imps were given
+// (docs/architecture/sleep-and-wake.md#the-ram-governor).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
   const [imps, usage, tailscale, storage] = await Promise.all([
     listImps(deps.db),

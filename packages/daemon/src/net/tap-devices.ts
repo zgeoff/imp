@@ -2,7 +2,8 @@ import { runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 import type { SlotAddress } from './addressing';
 
-// Tap devices for imp slots (DESIGN 2.6). An interface, so tests fake it.
+// Tap devices for imp slots (docs/architecture/networking.md#addressing). An
+// interface, so tests fake it.
 export interface TapDevices {
   // creates `imp<slot>` with the host end of the /30 and brings it up;
   // succeeds when it already exists

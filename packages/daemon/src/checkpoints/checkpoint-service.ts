@@ -49,7 +49,8 @@ export interface CheckpointService {
   // snapshot, and boots again if the imp was awake
   readonly restoreCheckpoint: (name: string, ref: string) => Promise<Imp>;
 
-  // disk only: a memory fork would duplicate entropy and IDs (DESIGN 2.4)
+  // disk only: a memory fork would duplicate entropy and IDs
+  // (docs/architecture/storage.md#checkpoints-restores-and-forks)
   readonly forkImp: (input: ForkInput) => Promise<Imp>;
 }
 

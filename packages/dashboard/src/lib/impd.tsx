@@ -12,7 +12,7 @@ export interface Impd {
 }
 
 // The browser talks to the impd that served the page, with the session
-// cookie and no token (docs/architecture/daemon.md, Dashboard)
+// cookie and no token (docs/architecture/daemon.md#dashboard)
 export function createBrowserImpd(origin: string): Impd {
   return createImpd(createImpClient({ url: origin }));
 }

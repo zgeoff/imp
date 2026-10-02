@@ -2,7 +2,7 @@
 // connection. A connection attaches as the session's one viewer: it gets a
 // replay of recent output, then live output, and its input goes to the
 // program. Closing the connection detaches; the program keeps running. See
-// docs/architecture/protocol.md ("Sessions").
+// docs/architecture/protocol.md#sessions.
 package session
 
 import (

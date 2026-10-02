@@ -15,7 +15,8 @@ export interface ImpUrls {
   readonly tailnet: string | null;
 }
 
-// Imp records as the API shows them (DESIGN 2.11 for the URLs).
+// Imp records as the API shows them; the URLs follow
+// docs/architecture/networking.md#urls.
 export interface ImpPresenter {
   readonly toApi: (imp: ImpRecord) => Promise<Imp>;
   readonly toApiList: (imps: readonly ImpRecord[]) => Promise<Imp[]>;

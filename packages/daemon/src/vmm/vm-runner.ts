@@ -77,8 +77,9 @@ export interface VmRunner {
   readonly growDrive: (paths: ImpPaths, diskBytes: number) => Promise<void>;
 }
 
-// The kernel cmdline: the system drive (vdb) is the initial root and the
-// agent PID 1; imp.* parameters configure the guest (DESIGN 2.3).
+// The kernel cmdline: the system drive (vdb) is the initial root and the agent
+// PID 1; imp.* parameters configure the guest
+// (docs/architecture/agent.md#two-drives).
 export function buildBootArgs(plan: Readonly<VmPlan>): string {
   return [
     'console=ttyS0 reboot=k panic=1 pci=off',

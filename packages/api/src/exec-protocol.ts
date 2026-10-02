@@ -6,7 +6,8 @@ import { SessionNameSchema } from './session-schema';
 // binary messages are one channel byte then raw bytes, never base64'd. The
 // client sends `start` or `attach` first and waits for `started`.
 
-// sessions outlive the socket: docs/architecture/daemon.md#sessions
+// sessions outlive the socket:
+// docs/architecture/daemon.md#sessions-detachable-consoles
 
 // auth is the bearer header, or `?ticket=` from `exec.ticket` for a browser;
 // a ticket starts only the imp it was issued for

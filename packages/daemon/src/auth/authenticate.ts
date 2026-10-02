@@ -81,9 +81,9 @@ function readSessionCaller(request: Request, sources: Readonly<CallerSources>): 
   return null;
 }
 
-// Imps serve pages on other ports of this host, which SameSite counts as the
-// same site; only a same-origin request may use the cookie (daemon.md,
-// Dashboard). No Origin at all is a refusal.
+// Imps serve pages on other ports of this host, which SameSite counts as the same site; only a
+// same-origin request may use the cookie (docs/architecture/daemon.md#dashboard). No Origin
+// at all is a refusal.
 export function isSameOrigin(request: Request): boolean {
   const site = request.headers.get('sec-fetch-site');
 
