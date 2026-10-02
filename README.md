@@ -141,7 +141,8 @@ imp; a forced sleep resets the open ones, and the next one wakes the imp.
 
 `imp cp ./app box:/srv` copies a file or a directory into an imp, and `imp cp box:/var/log/x .`
 copies one out, with modes, times and symlinks. A copy into the imp can reach any path and belongs
-to the image's USER, or to `--owner`. [Copying files](./docs/guides/cp.md) has the details.
+to the owner of the directory it lands in, or to `--owner`. [Copying files](./docs/guides/cp.md) has
+the details.
 
 ## Sleep and wake
 

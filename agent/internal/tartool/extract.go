@@ -41,7 +41,7 @@ type pendingSymlink struct {
 }
 
 type extractor struct {
-	owner   Owner
+	owner   *Owner
 	warn    io.Writer
 	root    *copyRoot
 	dirs    []pendingDir
@@ -50,7 +50,8 @@ type extractor struct {
 }
 
 // Extract reads a tar from r into dest, as cp -r does: into dest/<top> when
-// dest is a directory, else as dest. Every entry belongs to owner. In order:
+// dest is a directory, else as dest. Every entry belongs to owner, or with a
+// nil owner to the owner of the directory the copy lands in. In order:
 //   - a name that is absolute, holds "..", or has another top is refused;
 //   - no lookup follows a symlink below dest, so an entry under a symlink,
 //     even one a guest process puts there meanwhile, is refused;
@@ -62,7 +63,7 @@ type extractor struct {
 //
 // A refused entry is reported on warn and the rest still extract; the
 // error then says so.
-func Extract(dest string, r io.Reader, owner Owner, warn io.Writer) error {
+func Extract(dest string, r io.Reader, owner *Owner, warn io.Writer) error {
 	x := &extractor{owner: owner, warn: warn}
 	defer x.close()
 
@@ -118,6 +119,11 @@ func (x *extractor) extractEntry(dest string, hdr *tar.Header, tr io.Reader) err
 		if x.root, err = openCopyRoot(dest, top); err != nil {
 			return err
 		}
+		if x.owner == nil {
+			if x.owner, err = readOwner(x.root.parent); err != nil {
+				return err
+			}
+		}
 	} else if top != x.root.top {
 		return fmt.Errorf("outside the copy's top %q", x.root.top)
 	}
@@ -170,6 +176,16 @@ func openCopyRoot(dest, top string) (*copyRoot, error) {
 		return nil, fmt.Errorf("open %s: %w", parent, err)
 	}
 	return &copyRoot{parent: fd, base: base, top: top}, nil
+}
+
+// readOwner is the owner of the directory fd names, so a copy into /etc
+// belongs to root and one into /home/dev to dev
+func readOwner(fd int) (*Owner, error) {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil, err
+	}
+	return &Owner{UID: int(st.Uid), GID: int(st.Gid)}, nil
 }
 
 // openParent opens rel's directory under the copy's parent, with flags
@@ -254,7 +270,7 @@ func (x *extractor) writeFile(rel string, hdr *tar.Header, content io.Reader) er
 	return nil
 }
 
-func fillFile(f *os.File, hdr *tar.Header, content io.Reader, owner Owner) error {
+func fillFile(f *os.File, hdr *tar.Header, content io.Reader, owner *Owner) error {
 	if _, err := io.Copy(f, content); err != nil {
 		return err
 	}

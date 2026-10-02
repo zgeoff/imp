@@ -39,22 +39,23 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		}
 		return Create(path, stdout, stderr)
 	case len(args) >= 2 && args[0] == "extract":
-		owner, dest := image.User, args[len(args)-1]
+		dest := args[len(args)-1]
+		var owner *Owner
 		switch {
 		case len(args) == 4 && args[1] == "--owner":
-			owner = args[2]
+			cred, _, err := proc.LookupUser(args[2])
+			if err != nil {
+				return fmt.Errorf("owner %q: %w", args[2], err)
+			}
+			owner = toOwner(cred)
 		case len(args) != 2:
 			return usageError()
-		}
-		cred, _, err := proc.LookupUser(owner)
-		if err != nil {
-			return fmt.Errorf("owner %q: %w", owner, err)
 		}
 		path, err := resolve(dest, image.User)
 		if err != nil {
 			return err
 		}
-		return Extract(path, stdin, toOwner(cred), stderr)
+		return Extract(path, stdin, owner, stderr)
 	default:
 		return usageError()
 	}
@@ -85,9 +86,9 @@ type Owner struct {
 }
 
 // root is a nil credential
-func toOwner(cred *syscall.Credential) Owner {
+func toOwner(cred *syscall.Credential) *Owner {
 	if cred == nil {
-		return Owner{}
+		return &Owner{}
 	}
-	return Owner{UID: int(cred.Uid), GID: int(cred.Gid)}
+	return &Owner{UID: int(cred.Uid), GID: int(cred.Gid)}
 }

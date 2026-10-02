@@ -21,7 +21,7 @@ export const cpCommand = defineCommand({
     owner: {
       type: 'string',
       description:
-        'owner of what a copy into an imp makes: user, uid, user:group (default: the image USER)',
+        'owner of what a copy into an imp makes: user, uid, user:group (default: the owner of the directory it lands in)',
     },
   },
   run: (context) =>

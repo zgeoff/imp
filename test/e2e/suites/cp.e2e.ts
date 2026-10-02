@@ -12,13 +12,14 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { resolveImageName } from '../lib/fixtures';
-import { requireImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import { requireImp, runInImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp } from '../lib/imps';
 import { REPO_ROOT, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 
 // `imp cp` (docs/guides/cp.md) on the e2e-git image, whose USER is `dev`, not
-// root: what a copy makes belongs to dev unless --owner says otherwise.
+// root: what a copy makes belongs to the owner of the directory it lands in
+// unless --owner says otherwise.
 
 const prefix = setupSuite('cp');
 const name = `${prefix}a`;
@@ -57,13 +58,16 @@ afterAll(() => {
   rmSync(local, { recursive: true, force: true });
 });
 
-test('a directory goes into a root-owned path, owned by the image user, modes kept', async () => {
+test('a directory goes into a root-owned path, owned by root, modes kept', async () => {
   const result = await tryImp(['cp', join(local, 'app'), `${name}:/srv`]);
 
   expect(result).toMatchObject({ exitCode: 0 });
 
-  const listed = await runShellInImp(
+  const listed = await runInImp(
     name,
+    'sudo',
+    'sh',
+    '-c',
     [
       'cd /srv/app',
       'stat -c "%n %U %a" . bin bin/run "notes with spaces.txt"',
@@ -75,15 +79,27 @@ test('a directory goes into a root-owned path, owned by the image user, modes ke
 
   expect(listed).toBe(
     [
-      '. dev 750',
-      'bin dev 750',
-      'bin/run dev 755',
-      'notes with spaces.txt dev 600',
+      '. root 750',
+      'bin root 750',
+      'bin/run root 755',
+      'notes with spaces.txt root 600',
       'bin/run',
       bigHash,
       'ran',
     ].join('\n'),
   );
+});
+
+test('a copy into the home belongs to the image user', async () => {
+  const notes = join(local, 'app', 'notes with spaces.txt');
+
+  const result = await tryImp(['cp', notes, `${name}:/home/dev`]);
+
+  expect(result.exitCode).toBe(0);
+
+  const listed = await runInImp(name, 'stat', '-c', '%U %G', '/home/dev/notes with spaces.txt');
+
+  expect(listed).toBe('dev dev');
 });
 
 test('--owner sets the owner, and a relative path lands in the home', async () => {

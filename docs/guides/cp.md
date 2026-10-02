@@ -28,9 +28,10 @@ error.
   archive is made only when it points to a file of the same copy.
 - **Sockets, devices and FIFOs:** left out, with a warning.
 - **Sparse files:** copied whole; the holes become zeros.
-- **Owner:** what a copy into the imp makes belongs to the image's USER, or to `--owner` (`user`,
-  `uid`, `user:group` or `uid:gid`). A directory that was there already keeps its owner and mode. A
-  copy out of the imp belongs to you.
+- **Owner:** what a copy into the imp makes belongs to the owner of the directory it lands in, so a
+  copy into `/etc` belongs to root and one into `/home/dev` to `dev`. `--owner` (`user`, `uid`,
+  `user:group` or `uid:gid`) sets another. A directory that was there already keeps its owner and
+  mode. A copy out of the imp belongs to you.
 
 ## How it works
 

@@ -12,8 +12,8 @@ import (
 	"time"
 )
 
-func ownOwner() Owner {
-	return Owner{UID: os.Getuid(), GID: os.Getgid()}
+func ownOwner() *Owner {
+	return &Owner{UID: os.Getuid(), GID: os.Getgid()}
 }
 
 // buildArchive writes entries to a tar; a TypeReg entry's Linkname is its
@@ -277,7 +277,7 @@ func TestEntriesBelongToTheOwner(t *testing.T) {
 		tar.Header{Typeflag: tar.TypeSymlink, Name: "src/l", Linkname: "a"},
 	)
 
-	if err := Extract(dir, archive, Owner{UID: 4242, GID: 4343}, io.Discard); err != nil {
+	if err := Extract(dir, archive, &Owner{UID: 4242, GID: 4343}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 
@@ -294,5 +294,32 @@ func TestEntriesBelongToTheOwner(t *testing.T) {
 	syscall.Stat(dir, &top)
 	if top.Uid != 0 {
 		t.Fatalf("the existing directory became %d", top.Uid)
+	}
+}
+
+// As root: with no owner, the copy belongs to the owner of the directory it
+// lands in
+func TestWithNoOwnerTheCopyTakesTheDirectorysOwner(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown")
+	}
+	dir := t.TempDir()
+	if err := os.Chown(dir, 4242, 4343); err != nil {
+		t.Fatal(err)
+	}
+	archive := buildArchive(t, dirEntry("src/"), fileEntry("src/a", "x"))
+
+	if err := Extract(dir, archive, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"src", "src/a"} {
+		var st syscall.Stat_t
+		if err := syscall.Lstat(filepath.Join(dir, name), &st); err != nil {
+			t.Fatal(err)
+		}
+		if st.Uid != 4242 || st.Gid != 4343 {
+			t.Fatalf("%s is %d:%d", name, st.Uid, st.Gid)
+		}
 	}
 }
