@@ -153,9 +153,9 @@ system drive rebuild to the same bytes). It takes two cold kernel builds, so it 
 
 ## Branch rules
 
-`.github/rulesets/main.json` protects `main`: the four CI jobs must pass, changes arrive through a
-squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a repository
-admin can bypass it.
+`.github/rulesets/main.json` protects `main`: the seven required CI jobs must pass, changes arrive
+through a squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a
+repository admin can bypass it.
 
 The ruleset is not applied yet. Apply it once:
 
