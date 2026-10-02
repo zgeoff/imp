@@ -180,6 +180,12 @@ wait for the client, output stops; the agent connection then stops reading, so a
 the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
 after 30 s without an answer, so a client that vanished without a close lets go of its session.
 
+A `start` with a `tool` runs a program of the system drive as root instead of `argv`: `tar` runs
+`/run/imp/sys/imp-agent tar <argv>` for `imp cp` ([copying files](../guides/cp.md)), needs the agent
+from `0.7.0`, and is audited as `cp`. impd acks a tool's stdin with `stdin_ack` once it is on its
+way to the guest, and cuts off a client that holds more than 1 MiB plus one 64 KiB frame unacked, so
+a large upload to a slow guest disk cannot grow impd's memory.
+
 ### tunnel: `imp proxy`
 
 `imp proxy <name> 5432 3001:3000` listens on local ports and opens one `/tunnel` WebSocket per TCP

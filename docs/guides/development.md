@@ -43,6 +43,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp              |
 | `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap |
 | `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                 |
+| `cp`          | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                      |
 | `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                           |
 | `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |

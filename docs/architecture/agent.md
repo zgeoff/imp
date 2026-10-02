@@ -72,12 +72,14 @@ and wake, and end with the guest.
 Three pieces serve impd's [SSH gateway](../guides/ssh.md). The `dial` op connects to an address in
 the guest and relays bytes, for port forwarding ([protocol](./protocol.md#dial)); a unix socket dial
 runs `imp-agent dial-unix` as the image's user, which hands the connected socket back. And
-`imp-agent sftp`, run from the system drive as `/run/imp/sys/imp-agent sftp`, is an SFTP server on
-stdin and stdout (`github.com/pkg/sftp`). impd starts it through a plain `exec`, as the image's
-user, so every image gets SFTP without an `sftp-server` of its own. It starts in `$HOME`. And
-`agent.listen` serves a socket for `SSH_AUTH_SOCK` under `/run/imp/ssh-agent/`, owned by the image's
-user, for as long as impd keeps the connection open; `agent.accept` relays each of its clients to
-the user's ssh-agent (`internal/sshagent`, [protocol](./protocol.md#agentlisten-and-agentaccept)).
+`imp-agent tar`, the guest end of `imp cp` ([copying files](../guides/cp.md)), runs from the system
+drive through a plain `exec`, as root. `imp-agent sftp`, run from the system drive as
+`/run/imp/sys/imp-agent sftp`, is an SFTP server on stdin and stdout (`github.com/pkg/sftp`). impd
+starts it through a plain `exec`, as the image's user, so every image gets SFTP without an
+`sftp-server` of its own. It starts in `$HOME`. And `agent.listen` serves a socket for
+`SSH_AUTH_SOCK` under `/run/imp/ssh-agent/`, owned by the image's user, for as long as impd keeps
+the connection open; `agent.accept` relays each of its clients to the user's ssh-agent
+(`internal/sshagent`, [protocol](./protocol.md#agentlisten-and-agentaccept)).
 
 ## Shutdown
 
