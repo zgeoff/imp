@@ -22,6 +22,13 @@ export function buildImpNotes(imp: Imp, nowMs: number): ImpNote[] {
     });
   }
 
+  if (imp.agentSilentSince !== undefined) {
+    notes.push({
+      tone: 'warning',
+      text: `agent not answering since ${formatRelativeTime(imp.agentSilentSince, nowMs)}`,
+    });
+  }
+
   if (imp.coldBootReason !== undefined) {
     const text =
       imp.state === 'sleeping'

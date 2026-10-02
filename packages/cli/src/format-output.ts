@@ -112,9 +112,14 @@ export function formatCpuUse(imp: Imp): string {
   return limit === null ? used : `${used} / ${String(limit)}`;
 }
 
-// what an upgrade means for the imp (docs/guides/operations.md#upgrade)
+// what an upgrade means for the imp (docs/guides/operations.md#upgrade), and
+// an agent the watchdog reports silent
 function formatNote(imp: Imp): string {
   const notes: string[] = [];
+
+  if (imp.agentSilentSince !== undefined) {
+    notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
+  }
 
   if (imp.coldBootReason !== undefined) {
     const when = imp.state === 'sleeping' ? 'boots cold' : 'booted cold';

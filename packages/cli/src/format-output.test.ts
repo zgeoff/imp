@@ -69,6 +69,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     { ...imp, name: 'web', state: 'running', coldBootReason: 'wake failed', outdated: ['agent'] },
     { ...imp, name: 'db', outdated: ['kernel', 'agent'] },
     { ...imp, name: 'old', state: 'running', outdated: ['impd'] },
+    { ...imp, name: 'deaf', state: 'running', agentSilentSince: new Date(60_000) },
   ]).split('\n');
 
   const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
@@ -79,6 +80,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     'booted cold: wake failed; outdated: agent',
     'outdated: kernel, agent',
     'booted by an older impd; its next wake boots cold',
+    'agent silent since 1970-01-01T00:01:00.000Z',
   ]);
 });
 

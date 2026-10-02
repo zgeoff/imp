@@ -37,3 +37,11 @@ test('an awake imp tells why its last boot was cold, and a past hold is gone', (
     { tone: 'info', text: 'last boot was cold: no snapshot' },
   ]);
 });
+
+test('an imp whose agent stopped answering says since when', () => {
+  const imp = buildImp({ name: 'web', agentSilentSince: new Date(NOW - 120_000) });
+
+  expect(buildImpNotes(imp, NOW)).toEqual([
+    { tone: 'warning', text: 'agent not answering since 2m ago' },
+  ]);
+});
