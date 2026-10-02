@@ -3,7 +3,13 @@ import type { ImpContract } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError, toExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
-import type { ExecAttach, ExecSession, ExecStart, ExecStarted } from './open-exec-session';
+import type {
+  ExecAttach,
+  ExecSession,
+  ExecSocket,
+  ExecStart,
+  ExecStarted,
+} from './open-exec-session';
 
 export interface ExecOptions {
   readonly tty?: boolean;
@@ -65,6 +71,7 @@ export interface ExecDeps {
   readonly baseUrl: string;
   readonly token: string | null;
   readonly fetch?: (request: Request) => Promise<Response>;
+  readonly connect?: (url: string) => ExecSocket;
 }
 
 const DEFAULT_MAX_UNREAD_BYTES = 8 * 1024 * 1024;
@@ -173,7 +180,7 @@ async function openHandle(
 
       target.push(data);
     },
-    connect: (url) => new WebSocket(url),
+    connect: deps.connect ?? ((url) => new WebSocket(url)),
     ...(deps.fetch !== undefined && { fetch: deps.fetch }),
   });
 

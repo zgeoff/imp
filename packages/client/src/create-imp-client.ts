@@ -14,6 +14,7 @@ import type {
   RunOptions,
   RunResult,
 } from './exec/open-exec';
+import type { ExecSocket } from './exec/open-exec-session';
 import { requireAwake } from './require-awake';
 import type { RequireAwakeOptions } from './require-awake';
 import { resolveImpdUrl } from './resolve-impd-url';
@@ -31,6 +32,9 @@ export interface ImpClientOptions {
 
   // swaps the transport, e.g. an in-process app in tests
   readonly fetch?: (request: Request) => Promise<Response>;
+
+  // opens the `/exec` socket; impd's own MCP endpoint bridges it in process
+  readonly connect?: (url: string) => ExecSocket;
 }
 
 export interface ImpClient extends RpcClient {
@@ -96,6 +100,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     baseUrl: options.url,
     token: token ?? null,
     ...(customFetch !== undefined && { fetch: customFetch }),
+    ...(options.connect !== undefined && { connect: options.connect }),
   };
 
   return {
