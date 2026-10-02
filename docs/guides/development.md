@@ -42,6 +42,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
 | `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                            |
 | `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp              |
+| `reverse`     | `imp proxy --reverse` and `ssh -R`: a socket and a port on this machine from the imp, refusals, sleep and wake, keep-awake   |
 | `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap |
 | `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                 |
 | `cp`          | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                      |
@@ -54,7 +55,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard, tokens
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, reverse, proxy, dashboard, tokens
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
