@@ -8,6 +8,7 @@ import { formatPolicy, parsePolicy } from '../parse-policy';
 import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
+import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -28,6 +29,8 @@ export const newCommand = defineCommand({
       description:
         'what a box may reach: hosts, *.domains, IPv4 addresses or CIDRs, comma-separated',
     },
+    'cpu-limit': cpuLimitArg,
+    'cpu-weight': cpuWeightArg,
     json: jsonArg,
   },
   run: (context) =>
@@ -44,6 +47,7 @@ export const newCommand = defineCommand({
           httpPort: parseCount(context.args['http-port'], 'http-port'),
         }),
         ...(policy !== undefined && { policy }),
+        ...readCpuArgs(context.args),
       });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
