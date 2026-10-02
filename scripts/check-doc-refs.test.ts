@@ -1,27 +1,40 @@
 import { expect, test } from 'bun:test';
 import { buildAnchor, checkFile, readAnchors } from './check-doc-refs';
+import type { Repo } from './check-doc-refs';
+
+const SLEEP = 'docs/architecture/sleep-and-wake.md';
 
 const PAGE = [
   '# Sleep and wake',
   '## The RAM governor',
   '### 4. Gotchas',
   '### sessions: detachable consoles',
-  '## `exec`',
   '```sh',
-  '# not a heading',
+  '# 1. not a heading',
   '```',
   '## Sleep',
   '## Sleep',
 ].join('\n');
 
-function readPage(path: string): string | null {
-  return path === 'docs/architecture/sleep-and-wake.md' ? PAGE : null;
+const PAGES = new Map([
+  [SLEEP, PAGE],
+  ['docs/architecture/sub/page.md', '# Page'],
+]);
+
+const repo: Repo = {
+  exists: (path) => PAGES.has(path) || path === 'docs/guides' || path === 'LICENSE',
+  readPage: (path) => PAGES.get(path) ?? null,
+};
+
+function readMessages(file: string, text: string): string[] {
+  return checkFile(file, text, repo).map((problem) => problem.message);
 }
 
 test('buildAnchor follows GitHub anchors', () => {
   expect(buildAnchor('4. Gotchas')).toBe('4-gotchas');
   expect(buildAnchor('sessions: detachable consoles')).toBe('sessions-detachable-consoles');
-  expect(buildAnchor('`exec`')).toBe('exec');
+  expect(buildAnchor('`freeze` / `thaw`')).toBe('freeze--thaw');
+  expect(buildAnchor('[The manifest](./x.md) and more')).toBe('the-manifest-and-more');
   expect(buildAnchor('Checkpoints, restores and forks')).toBe('checkpoints-restores-and-forks');
 });
 
@@ -30,55 +43,76 @@ test('readAnchors numbers repeats and skips fenced code', () => {
 
   expect(anchors.has('sleep')).toBe(true);
   expect(anchors.has('sleep-1')).toBe(true);
-  expect(anchors.has('not-a-heading')).toBe(false);
+  expect(anchors.has('1-not-a-heading')).toBe(false);
 });
 
-test('a reference to an existing page and anchor passes', () => {
+test('code references to existing pages and anchors pass', () => {
   const text = [
-    '// see docs/architecture/sleep-and-wake.md#the-ram-governor',
-    '// and docs/architecture/sleep-and-wake.md, the whole page',
+    `// see ${SLEEP}#the-ram-governor and ${SLEEP}#4-gotchas, gotcha 8`,
+    '// and sleep-and-wake.md#sleep-1, a bare page name',
+    '// README.md and CHANGELOG.md are no docs pages',
   ].join('\n');
 
-  expect(checkFile('a.ts', text, readPage)).toEqual([]);
+  expect(readMessages('a.ts', text)).toEqual([]);
 });
 
 test('a missing page or anchor fails with its line', () => {
-  const text = [
-    '// fine',
-    '// docs/guides/gone.md',
-    '# docs/architecture/sleep-and-wake.md#no-such-heading',
-  ].join('\n');
+  const text = ['// fine', '// docs/guides/gone.md', `# ${SLEEP}#no-such-heading`].join('\n');
 
-  expect(checkFile('a.sh', text, readPage)).toEqual([
+  expect(checkFile('a.sh', text, repo)).toEqual([
     { file: 'a.sh', line: 2, message: 'docs/guides/gone.md does not exist' },
-    {
-      file: 'a.sh',
-      line: 3,
-      message: 'docs/architecture/sleep-and-wake.md has no heading #no-such-heading',
-    },
+    { file: 'a.sh', line: 3, message: `${SLEEP} has no heading #no-such-heading` },
   ]);
 });
 
-test('the removed docs fail anywhere, Markdown included', () => {
-  const removed = ['DESIGN.md', 'DESIGN 2.8', 'agent/PROTOCOL.md', 'docs/sleep-findings.md'];
+test('a bare page name resolves against the docs tree', () => {
+  expect(readMessages('a.ts', '// sleep-and-wake.md#nope')).toEqual([
+    `${SLEEP} has no heading #nope`,
+  ]);
+});
 
-  for (const name of removed) {
-    expect(checkFile('notes.md', `see ${name}`, readPage)).toHaveLength(1);
+test('headings named only in prose fail', () => {
+  const lines = [
+    `// ${SLEEP} ("Sleep")`,
+    `// ${SLEEP}, "Sleep"`,
+    `// (${SLEEP}, gotcha 6)`,
+    `// (${SLEEP}, Sleep)`,
+    '// (docs/architecture/',
+  ];
+
+  for (const line of lines) {
+    expect(readMessages('a.ts', line)).toHaveLength(1);
   }
 });
 
-test('a quoted heading fails: it cannot be checked', () => {
-  const text = '// see docs/architecture/sleep-and-wake.md ("Sleep")';
+test('the removed docs fail anywhere, Markdown included', () => {
+  const removed = ['DESIGN.md', 'DESIGN 2.8', 'agent/PROTOCOL.md', 'sleep-findings'];
 
-  expect(checkFile('a.ts', text, readPage)).toEqual([
-    {
-      file: 'a.ts',
-      line: 1,
-      message: 'names a heading in quotes; use docs/<page>.md#<anchor>',
-    },
+  for (const name of removed) {
+    expect(readMessages('notes.md', `see ${name}`)).toEqual([
+      'cites a removed doc; point it at docs/',
+    ]);
+  }
+});
+
+test('Markdown links resolve against the page', () => {
+  const text = [
+    '[ok](../sleep-and-wake.md#sleep) [top](#page) [dir](../../guides/) [web](https://x.dev)',
+    '[gone](./gone.md) [bad](#nope) <a href="./also-gone.md">x</a>',
+  ].join('\n');
+
+  expect(readMessages('docs/architecture/sub/page.md', text)).toEqual([
+    'docs/architecture/sub/gone.md does not exist',
+    'docs/architecture/sub/page.md has no heading #nope',
+    'docs/architecture/sub/also-gone.md does not exist',
   ]);
 });
 
-test('Markdown links are left to the page', () => {
-  expect(checkFile('README.md', '[x](docs/guides/gone.md)', readPage)).toEqual([]);
+test('blob URLs into this repo must exist', () => {
+  const text = [
+    'Documentation=https://github.com/zgeoff/imp/blob/main/LICENSE',
+    'see https://github.com/zgeoff/imp/blob/main/docs/guides/gone.md',
+  ].join('\n');
+
+  expect(readMessages('imp-host.service', text)).toEqual(['docs/guides/gone.md does not exist']);
 });

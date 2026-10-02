@@ -1,17 +1,30 @@
-// `bun run lint:docs`: fails on a `docs/<page>.md#<anchor>` in code whose page
-// or heading is missing, on a heading named in quotes, and anywhere on a
-// mention of a file #6 removed.
-import { existsSync, readFileSync } from 'node:fs';
+// `bun run lint:docs`: fails on a docs reference whose page or heading is missing (code
+// comments, Markdown links, blob URLs), on a heading named only in prose, and on any mention
+// of a file #6 removed.
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { posix } from 'node:path';
 
 // the files the docs tree replaced; nothing may cite them again
 const REMOVED = /\bDESIGN(?:\.md| \d)|agent\/PROTOCOL\.md|sleep-findings/u;
 
-// `docs/guides/tokens.md` or `docs/guides/tokens.md#scopes`
-const DOC_REF = /\bdocs\/[\w/-]+\.md(?:#[\w-]+)?/gu;
+// `docs/guides/tokens.md#scopes`, or a bare `tokens.md#scopes` that names a docs page
+const DOC_PATH = /(?<![\w/.-])docs\/[\w/-]+\.md(?:#[\w-]+)?/gu;
+const BARE_PAGE = /(?<![\w/.-])[\w-]+\.md(?:#[\w-]+)?/gu;
+const DOC_DIRS = ['docs/architecture', 'docs/guides'];
 
-// a heading named in quotes after the page, which no check can follow:
-// `docs/x.md ("Boot")` or `docs/x.md, "CI"`
-const QUOTED_HEADING = /\bdocs\/[\w/-]+\.md,?\s+\(?"/u;
+// this repo's files by URL: https://github.com/zgeoff/imp/blob/main/<path>
+const BLOB_URL = /github\.com\/zgeoff\/imp\/blob\/main\/(?<path>[^\s)"'>]+)/gu;
+
+// Markdown links and HTML hrefs, resolved against the page
+const MD_LINK = /\]\((?<target>[^)\s]+)\)|href="(?<href>[^"]+)"/gu;
+
+// headings named only in prose, which no check can follow
+const PROSE_HEADINGS: readonly (readonly [RegExp, string])[] = [
+  [/\.md,?\s+\(?["“]/u, 'names a heading in quotes'],
+  [/\.md,?\s+(?:gotcha|finding|section)\s+\d/u, 'names a section in prose'],
+  [/\.md,\s+[A-Z][\w ]*\)/u, 'names a heading after a comma'],
+  [/\bdocs\/[\w-]+\/\s*$/u, 'splits a docs path across lines'],
+];
 
 // this checker and its test spell out the removed names on purpose
 const SELF = new Set(['scripts/check-doc-refs.ts', 'scripts/check-doc-refs.test.ts']);
@@ -22,14 +35,22 @@ export interface Problem {
   readonly message: string;
 }
 
-// GitHub's heading anchor: lowercase, punctuation other than `-` dropped,
-// spaces to `-`
+// the repository as the check sees it: whether a path exists, and a Markdown page's text
+export interface Repo {
+  readonly exists: (path: string) => boolean;
+  readonly readPage: (path: string) => string | null;
+}
+
+// GitHub's heading anchor: link and code syntax gone, lowercase, every character but a
+// letter, digit, `_`, `-` or space dropped, and each space a `-` (runs are kept)
 export function buildAnchor(heading: string): string {
   return heading
+    .replaceAll(/\[(?<text>[^\]]*)\]\([^)]*\)/gu, '$<text>')
+    .replaceAll('`', '')
     .trim()
     .toLowerCase()
-    .replaceAll(/[^\p{L}\p{N}\s_-]/gu, '')
-    .replaceAll(/\s/gu, '-');
+    .replaceAll(/[^\p{L}\p{N}_ -]/gu, '')
+    .replaceAll(' ', '-');
 }
 
 // every anchor a Markdown page has; a repeated heading gets `-1`, `-2`…
@@ -40,14 +61,15 @@ export function readAnchors(markdown: string): Set<string> {
   let inFence = false;
 
   for (const line of markdown.split('\n')) {
-    if (line.startsWith('```')) {
+    if (/^\s*(?:```|~~~)/u.test(line)) {
       inFence = !inFence;
     }
 
     const heading = inFence ? null : /^#{1,6}\s+(?<title>.*)/u.exec(line);
+    const title = heading?.groups?.['title'];
 
-    if (heading?.groups?.['title'] !== undefined) {
-      const slug = buildAnchor(heading.groups['title']);
+    if (title !== undefined) {
+      const slug = buildAnchor(title.replace(/\s+#+\s*$/u, ''));
       const count = seen.get(slug) ?? 0;
       const anchor = count === 0 ? slug : `${slug}-${String(count)}`;
 
@@ -59,12 +81,73 @@ export function readAnchors(markdown: string): Set<string> {
   return anchors;
 }
 
-// `readPage` gives a page's Markdown, or null when it does not exist
-export function checkFile(
-  file: string,
-  text: string,
-  readPage: (path: string) => string | null,
-): Problem[] {
+interface Target {
+  readonly path: string;
+  readonly anchor: string | undefined;
+}
+
+function splitTarget(ref: string): Target {
+  const [path = '', anchor] = ref.split('#');
+
+  return { path, anchor };
+}
+
+// what a line of code points at in the docs tree
+function findCodeTargets(line: string, repo: Repo): Target[] {
+  const targets = [...line.matchAll(DOC_PATH)].map(([ref]) => splitTarget(ref));
+
+  for (const [ref] of line.matchAll(BARE_PAGE)) {
+    const target = splitTarget(ref);
+    const page = DOC_DIRS.map((dir) => `${dir}/${target.path}`).find((full) => repo.exists(full));
+
+    // a bare name that is no docs page (README.md, CHANGELOG.md) is not a docs reference
+    if (page !== undefined) {
+      targets.push({ path: page, anchor: target.anchor });
+    }
+  }
+
+  return targets;
+}
+
+// what a line of Markdown links to, resolved against the page
+function findMarkdownTargets(file: string, line: string): Target[] {
+  const targets: Target[] = [];
+
+  for (const match of line.matchAll(MD_LINK)) {
+    const link = match.groups?.['target'] ?? match.groups?.['href'] ?? '';
+
+    // another site, or this repo by URL (BLOB_URL covers it)
+    if (/^[a-z][\w+.-]*:/u.test(link)) {
+      continue;
+    }
+
+    const target = splitTarget(link);
+    const relative = posix.join(posix.dirname(file), target.path);
+    const resolved = target.path === '' ? file : posix.normalize(relative);
+
+    targets.push({ path: resolved, anchor: target.anchor });
+  }
+
+  return targets;
+}
+
+function checkTarget(target: Target, repo: Repo): string | null {
+  const path = target.path.replace(/\/$/u, '');
+
+  if (!repo.exists(path)) {
+    return `${path} does not exist`;
+  }
+
+  const page = path.endsWith('.md') ? repo.readPage(path) : null;
+
+  if (target.anchor !== undefined && page !== null && !readAnchors(page).has(target.anchor)) {
+    return `${path} has no heading #${target.anchor}`;
+  }
+
+  return null;
+}
+
+export function checkFile(file: string, text: string, repo: Repo): Problem[] {
   const problems: Problem[] = [];
   const isMarkdown = file.endsWith('.md');
 
@@ -75,23 +158,23 @@ export function checkFile(
       problems.push({ ...at, message: 'cites a removed doc; point it at docs/' });
     }
 
-    // Markdown links are relative to the page and carry their own checks
-    if (isMarkdown) {
-      continue;
+    const blobTargets = [...line.matchAll(BLOB_URL)].map((match) =>
+      splitTarget(match.groups?.['path'] ?? ''),
+    );
+
+    const lineTargets = isMarkdown ? findMarkdownTargets(file, line) : findCodeTargets(line, repo);
+
+    for (const [pattern, message] of isMarkdown ? [] : PROSE_HEADINGS) {
+      if (pattern.test(line)) {
+        problems.push({ ...at, message: `${message}; use docs/<page>.md#<anchor>` });
+      }
     }
 
-    if (QUOTED_HEADING.test(line)) {
-      problems.push({ ...at, message: 'names a heading in quotes; use docs/<page>.md#<anchor>' });
-    }
+    for (const target of [...blobTargets, ...lineTargets]) {
+      const message = checkTarget(target, repo);
 
-    for (const [ref] of line.matchAll(DOC_REF)) {
-      const [path = '', anchor] = ref.split('#');
-      const page = readPage(path);
-
-      if (page === null) {
-        problems.push({ ...at, message: `${path} does not exist` });
-      } else if (anchor !== undefined && !readAnchors(page).has(anchor)) {
-        problems.push({ ...at, message: `${path} has no heading #${anchor}` });
+      if (message !== null) {
+        problems.push({ ...at, message });
       }
     }
   }
@@ -110,7 +193,7 @@ function listTrackedFiles(): string[] {
 }
 
 function readText(path: string): string | null {
-  if (!existsSync(path)) {
+  if (!existsSync(path) || !statSync(path).isFile()) {
     return null;
   }
 
@@ -123,12 +206,15 @@ function readText(path: string): string | null {
 function main(): void {
   const pages = new Map<string, string | null>();
 
-  const readPage = (path: string): string | null => {
-    if (!pages.has(path)) {
-      pages.set(path, readText(path));
-    }
+  const repo: Repo = {
+    exists: (path) => existsSync(path),
+    readPage: (path) => {
+      if (!pages.has(path)) {
+        pages.set(path, readText(path));
+      }
 
-    return pages.get(path) ?? null;
+      return pages.get(path) ?? null;
+    },
   };
 
   const files = listTrackedFiles().filter((file) => !SELF.has(file));
@@ -136,7 +222,7 @@ function main(): void {
   const problems = files.flatMap((file) => {
     const text = readText(file);
 
-    return text === null ? [] : checkFile(file, text, readPage);
+    return text === null ? [] : checkFile(file, text, repo);
   });
 
   for (const problem of problems) {
