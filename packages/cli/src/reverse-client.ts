@@ -67,14 +67,19 @@ async function* readImpStates(
   signal: AbortSignal,
 ): AsyncGenerator<ImpState> {
   const client = createImpClient(config);
+  const state = { removed: false };
 
   while (!signal.aborted) {
     try {
+      // NOT_FOUND for an imp destroyed before the stream opened
+      await client.imps.get({ name }, { signal });
+
       const stream = await client.events.stream(undefined, { signal });
 
       for await (const event of stream) {
         if (event.ev === 'ImpRemoved' && event.imp.name === name) {
-          throw new Error(`${name} was destroyed`);
+          state.removed = true;
+          break;
         }
 
         if ((event.ev === 'ImpAdded' || event.ev === 'ImpChanged') && event.imp.name === name) {
@@ -82,10 +87,17 @@ async function* readImpStates(
         }
       }
     } catch (error) {
-      // an impd that refuses the stream refuses it again
-      if (signal.aborted || !(error instanceof ORPCError) || error.status < 500) {
+      // an impd that refuses the stream refuses it again; one that is down
+      // or restarting answers later
+      const refused = error instanceof ORPCError && error.status >= 400 && error.status < 500;
+
+      if (signal.aborted || refused) {
         throw error;
       }
+    }
+
+    if (state.removed) {
+      throw new Error(`${name} was destroyed`);
     }
 
     await Bun.sleep(RETRY_MS);
@@ -174,40 +186,58 @@ function formatEnd(end: ReverseForwardEnd): string {
   return `its listener in the imp ended`;
 }
 
-async function waitForNothing(ms: number): Promise<null> {
-  await Bun.sleep(ms);
-
-  return null;
-}
-
-// the next value, or null once `ms` passed first; `pending` keeps a read
-// the timeout left open for the next call
+// the next value, or null once `ms` passed first; a read the timeout left
+// open waits for the next call, and its failure waits with it
 interface StateReader {
   readonly read: (ms: number | null) => Promise<IteratorResult<ImpState> | null>;
 }
 
+type StateRead = IteratorResult<ImpState> | { readonly failure: unknown };
+
 function createStateReader(next: () => Promise<IteratorResult<ImpState>>): StateReader {
-  let pending: Promise<IteratorResult<ImpState>> | null = null;
+  let pending: Promise<StateRead> | null = null;
+
+  const readNext = async (): Promise<StateRead> => {
+    try {
+      return await next();
+    } catch (error) {
+      return { failure: error };
+    }
+  };
+
+  const readResult = (result: Readonly<StateRead>): IteratorResult<ImpState> => {
+    pending = null;
+
+    if ('failure' in result) {
+      throw result.failure;
+    }
+
+    return result;
+  };
 
   return {
     read: async (ms) => {
-      pending ??= next();
+      pending ??= readNext();
 
       const reading = pending;
 
       if (ms === null) {
-        pending = null;
+        const result = await reading;
 
-        return reading;
+        return readResult(result);
       }
 
-      const result = await Promise.race([reading, waitForNothing(ms)]);
+      // cleared, so a timer left behind keeps no process alive
+      const timeout = Promise.withResolvers<null>();
+      const timer = setTimeout(timeout.resolve, ms, null);
 
-      if (result !== null) {
-        pending = null;
+      try {
+        const result = await Promise.race([reading, timeout.promise]);
+
+        return result === null ? null : readResult(result);
+      } finally {
+        clearTimeout(timer);
       }
-
-      return result;
     },
   };
 }
@@ -282,11 +312,17 @@ export async function startReverseForward(
     }
 
     const graceMs = end.kind === 'lost' ? (io.lostGraceMs ?? LOST_GRACE_MS) : null;
-    const states = io.watchImp(config, name, watching.signal)[Symbol.asyncIterator]();
+
+    // each wait has its own stream, closed once the wait is over
+    const waiting = new AbortController();
+
+    const signal = AbortSignal.any([watching.signal, waiting.signal]);
+    const states = io.watchImp(config, name, signal)[Symbol.asyncIterator]();
 
     try {
       await waitForWake(() => states.next(), graceMs);
     } finally {
+      waiting.abort();
       void states.return?.();
     }
 

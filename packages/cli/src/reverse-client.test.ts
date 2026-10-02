@@ -350,3 +350,30 @@ test('stop ends the forward and the wait for a wake', async () => {
 
   expect(impd.controls).toHaveLength(1);
 });
+
+// the watcher of an imp that is gone
+function readDestroyed(): AsyncIterable<ImpState> {
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Error('box was destroyed')),
+    }),
+  };
+}
+
+test('an imp destroyed while the forward waits fails the forward', async () => {
+  const impd = startFakeImpd();
+
+  const forwarding = await startReverseForward(
+    impd.config,
+    'box',
+    parseReverse('9000'),
+    buildIo(readDestroyed),
+  );
+
+  cleanups.push(forwarding.stop);
+  impd.controls[0]?.close(TUNNEL_CLOSE_LOST, 'lost');
+
+  const failure = await forwarding.failed;
+
+  expect(failure.message).toBe('box was destroyed');
+});
