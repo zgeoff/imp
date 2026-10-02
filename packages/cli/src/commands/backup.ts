@@ -64,7 +64,15 @@ const restoreCommand = defineCommand({
         throw new UsageError('usage: imp backup restore <name> [--as <name>] | --all [--merge]');
       }
 
-      const imps = await client.backups.restore({
+      // two hosts with one repository and one host name drop each other's
+      // live locks (docs/architecture/backups.md#whole-host-restore)
+      if (args.all === true) {
+        console.error(
+          'imp: before a whole-host restore, stop the old impd or remove its IMP_BACKUP_* settings',
+        );
+      }
+
+      const result = await client.backups.restore({
         ...(args.name !== undefined && { name: args.name }),
         ...(args.all === true && { all: true }),
         ...(args.at !== undefined && { at: parseUtcTime(args.at) }),
@@ -72,7 +80,11 @@ const restoreCommand = defineCommand({
         ...(args.merge === true && { merge: true }),
       });
 
-      console.log(formatOutput(imps, args.json, formatImps));
+      for (const skipped of result.skippedGrants) {
+        console.error(`imp: ${skipped.imp}: grant ${skipped.secret} left off: ${skipped.reason}`);
+      }
+
+      console.log(formatOutput(result, args.json, (restored) => formatImps(restored.imps)));
     }),
 });
 

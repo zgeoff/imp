@@ -24,6 +24,11 @@ const ManifestImpSchema = z
     dir: z.string(),
     disk: z.string(),
 
+    // the broker's policy for hosts no grant covers, and the names of the
+    // secrets granted: never a value (docs/architecture/backups.md#manifest)
+    egressPolicy: z.string().default('open'),
+    grants: z.array(z.string()).readonly().default([]),
+
     // oldest first
     checkpoints: z.array(ManifestCheckpointSchema).readonly(),
   })

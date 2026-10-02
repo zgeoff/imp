@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import {
   cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -9,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { findImpByName, updateImpState } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
@@ -35,7 +36,8 @@ const CONFIG: BackupConfig = {
 function createFakeRestic(repoDir: string, readNow: () => Date) {
   const snapshots: ResticSnapshot[] = [];
   const calls: string[] = [];
-  const state = { failCheck: false };
+  const state = { failCheck: false, failBackup: false };
+  const restores: string[] = [];
 
   const findSnapshot = (id: string): ResticSnapshot => {
     const found = snapshots.find((snapshot) => snapshot.id === id);
@@ -53,6 +55,10 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
   const restic: Restic = {
     setupRepository: () => Promise.resolve(),
     backup: (dir, tags) => {
+      if (state.failBackup) {
+        return Promise.reject(new Error('Fatal: unable to save snapshot: bucket full'));
+      }
+
       const id = `snap${String(snapshots.length + 1)}`;
 
       cpSync(dir, join(repoDir, id), { recursive: true });
@@ -93,13 +99,15 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
     listSnapshots: () => Promise.resolve([...snapshots]),
     dump: (id, path) => Promise.resolve(readFileSync(resolvePath(id, path), 'utf8')),
     restore: (id, dir, target) => {
+      restores.push(relative(findSnapshot(id).paths[0] ?? '', dir));
+
       cpSync(resolvePath(id, dir), target, { recursive: true });
 
       return Promise.resolve();
     },
   };
 
-  return { restic, snapshots, calls, state };
+  return { restic, snapshots, calls, state, restores };
 }
 
 // Imps on the harness's XFS backend over a fake repository, which a second
@@ -117,6 +125,7 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     backup: CONFIG,
     db: harness.db,
     imps: harness.imps,
+    grants: harness.broker,
     storage: harness.storage,
     restic: fake.restic,
     log: (message) => {
@@ -261,7 +270,9 @@ test('a restore rebuilds the imp stopped, with its checkpoints in order', async 
   await ctx.backups.runBackup();
   await ctx.imps.destroyImp('dev');
 
-  const [restored] = await ctx.backups.restoreBackup({ name: 'dev' });
+  const result = await ctx.backups.restoreBackup({ name: 'dev' });
+
+  const [restored] = result.imps;
 
   expect(restored).toMatchObject({ name: 'dev', state: 'stopped', httpPort: 3000, memoryMib: 256 });
 
@@ -369,7 +380,7 @@ test('restore --all on a fresh host brings back every imp and its image', async 
 
   const restored = await fresh.backups.restoreBackup({ all: true });
 
-  expect(restored.map((imp) => [imp.name, imp.state, imp.image])).toEqual([
+  expect(restored.imps.map((imp) => [imp.name, imp.state, imp.image])).toEqual([
     ['dev', 'stopped', 'base-base'],
     ['web', 'stopped', 'base-base'],
   ]);
@@ -472,4 +483,163 @@ test('an imp being created is left out of the run', async () => {
 
   expect(run.imps).toEqual([]);
   expect(run.skipped).toEqual([{ name: 'dev', reason: 'being created' }]);
+});
+
+// every file under dir, by path relative to it, with its text
+function readTree(dir: string): Map<string, string> {
+  const files = new Map<string, string>();
+
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) {
+      const path = join(entry.parentPath, entry.name);
+
+      files.set(relative(dir, path), readFileSync(path, 'latin1'));
+    }
+  }
+
+  return files;
+}
+
+test('no secret, key, password or token of the host reaches a backup', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_never_backed_up' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  mkdirSync(join(ctx.dataDir, 'tls'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'tls', 'account.key'), 'acme-account-key-text');
+  writeFileSync(join(ctx.dataDir, 'restic-password'), 'restic-password-text');
+  writeFileSync(join(ctx.dataDir, 'token'), 'api-token-text');
+
+  const run = await ctx.backups.runBackup();
+
+  const files = readTree(join(ctx.repoDir, run.snapshotId));
+  const paths = [...files.keys()];
+  const texts = [...files.values()].join('\n');
+
+  expect(
+    paths.filter((path) => /secrets|broker|tls|password|token|db\.sqlite/v.test(path)),
+  ).toEqual([]);
+
+  for (const secret of ['ghp_never_backed_up', 'acme-account-key-text', 'restic-password-text']) {
+    expect(texts).not.toContain(secret);
+  }
+
+  expect(texts).not.toContain('api-token-text');
+  expect(texts).not.toContain('PRIVATE KEY');
+
+  // the grant goes by name only
+  const manifest = await ctx.readManifest(run.snapshotId);
+
+  expect(manifest.imps[0]?.grants).toEqual(['gh']);
+});
+
+test('a restore brings back the egress policy and the grants whose secret is here', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addSecret({ name: 'npm-old', kind: 'npm', value: 'npm_value' });
+  await ctx.broker.addGrant('dev', 'gh');
+  await ctx.broker.addGrant('dev', 'npm-old');
+  await ctx.db.updateTable('imps').set({ egress_policy: 'granted-only' }).execute();
+  await ctx.backups.runBackup();
+  await ctx.broker.deleteSecret('npm-old');
+
+  const result = await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+  const back = await findImpByName(ctx.db, 'back');
+  const grants = await ctx.broker.listGrants('back');
+
+  expect(grants).toEqual(['gh']);
+
+  expect(result.skippedGrants.map((skip) => [skip.imp, skip.secret])).toEqual([
+    ['back', 'npm-old'],
+  ]);
+
+  expect(result.skippedGrants[0]?.reason).toContain('npm-old');
+
+  const row = await ctx.db
+    .selectFrom('imps')
+    .select('egress_policy')
+    .where('id', '=', back?.id ?? '')
+    .executeTakeFirst();
+
+  expect(row?.egress_policy).toBe('granted-only');
+});
+
+test('a restore fetches one file at a time and leaves none behind', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+
+  const run = await ctx.backups.runBackup();
+  const manifest = await ctx.readManifest(run.snapshotId);
+
+  const [dev] = manifest.imps;
+
+  ctx.fake.restores.length = 0;
+
+  await ctx.backups.restoreBackup({ name: 'dev', as: 'copy' });
+
+  expect(ctx.fake.restores).toEqual([
+    ...(dev?.checkpoints ?? []).map((checkpoint) => dirname(checkpoint.disk)),
+    dirname(dev?.disk ?? ''),
+  ]);
+
+  expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toEqual([]);
+});
+
+test('a failed scheduled run waits twice as long each time, up to the interval', async () => {
+  await using ctx = await setupTest();
+
+  const MINUTE_MS = 60 * 1000;
+
+  ctx.fake.state.failBackup = true;
+
+  const tryRun = async (afterMs: number): Promise<boolean> => {
+    ctx.advance(afterMs);
+
+    const before = ctx.logs.length;
+
+    await ctx.backups.runScheduled().catch(() => {});
+
+    const calls = ctx.fake.calls.filter((call) => call === 'unlock').length;
+
+    ctx.fake.calls.length = 0;
+
+    return calls > 0 || ctx.logs.length > before;
+  };
+
+  // first failure, then 5, 10, 20 and 40 minutes, then the hour's interval;
+  // after a success, the interval again
+  const steps: [number, boolean][] = [
+    [0, true],
+    [4, false],
+    [1, true],
+    [9, false],
+    [1, true],
+    [20, true],
+    [40, true],
+    [59, false],
+    [1, true],
+  ];
+
+  const seen: boolean[] = [];
+
+  for (const [minutes] of steps) {
+    const ran = await tryRun(minutes * MINUTE_MS);
+
+    seen.push(ran);
+  }
+
+  ctx.fake.state.failBackup = false;
+
+  for (const minutes of [60, 30]) {
+    const ran = await tryRun(minutes * MINUTE_MS);
+
+    seen.push(ran);
+  }
+
+  expect(seen).toEqual([...steps.map(([, ran]) => ran), true, false]);
 });

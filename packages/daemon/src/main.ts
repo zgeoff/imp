@@ -122,7 +122,14 @@ async function main(): Promise<void> {
   const backups =
     config.backup === null
       ? null
-      : createBackupService({ dataDir: config.dataDir, backup: config.backup, db, imps, storage });
+      : createBackupService({
+          dataDir: config.dataDir,
+          backup: config.backup,
+          db,
+          imps,
+          storage,
+          grants: broker,
+        });
 
   const state = { ready: false };
 

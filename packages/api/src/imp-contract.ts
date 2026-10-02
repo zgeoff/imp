@@ -1,6 +1,11 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
-import { BackupCheckSubsetSchema, BackupRunSchema, BackupStatusSchema } from './backup-schema';
+import {
+  BackupCheckSubsetSchema,
+  BackupRestoreSchema,
+  BackupRunSchema,
+  BackupStatusSchema,
+} from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
@@ -121,7 +126,7 @@ export const impContract = {
           merge: z.boolean().optional(),
         }),
       )
-      .output(z.array(ImpSchema)),
+      .output(BackupRestoreSchema),
 
     check: base.input(z.object({ subset: BackupCheckSubsetSchema.optional() })).output(EmptySchema),
   },

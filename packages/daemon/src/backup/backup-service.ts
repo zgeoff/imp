@@ -1,10 +1,11 @@
 import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import type { BackupRun, BackupStatus, Imp, ImpState } from '@imp/api';
+import { dirname, join } from 'node:path';
+import type { BackupRestore, BackupRun, BackupStatus, Imp, ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
+import type { Broker } from '../broker/broker-service';
 import { FREEZE_TIMEOUT_MS, buildCheckpointId } from '../checkpoints/checkpoint-service';
 import type { DiskFreezer } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
@@ -37,6 +38,10 @@ const CHECK_EVERY_MS = 7 * DAY_MS;
 const CHECK_SUBSET = '5%';
 const ID_ATTEMPTS = 3;
 
+// the wait after a failed scheduled run, doubled for each failure in a row
+// up to the interval: a full bucket must not freeze every guest each tick
+const RETRY_FIRST_MS = 5 * 60 * 1000;
+
 const BackupStateSchema = z.object({
   lastRunAt: z.coerce.date().nullable().default(null),
   lastPruneAt: z.coerce.date().nullable().default(null),
@@ -45,6 +50,8 @@ const BackupStateSchema = z.object({
 });
 
 type BackupState = z.infer<typeof BackupStateSchema>;
+
+type SkippedGrant = BackupRestore['skippedGrants'][number];
 
 // an imp's disk in a run, as its lock found it
 interface DiskCopy {
@@ -69,7 +76,7 @@ interface RestoreInput {
 export interface BackupService {
   readonly runBackup: () => Promise<BackupRun>;
   readonly readStatus: () => Promise<BackupStatus>;
-  readonly restoreBackup: (input: RestoreInput) => Promise<Imp[]>;
+  readonly restoreBackup: (input: RestoreInput) => Promise<BackupRestore>;
   readonly checkBackups: (subset?: string) => Promise<void>;
 
   // The schedule's tick: when IMP_BACKUP_INTERVAL_S has passed since the last
@@ -83,6 +90,9 @@ export interface BackupServiceDeps {
   readonly backup: BackupConfig;
   readonly db: ImpDatabase;
   readonly imps: Pick<Imps, 'createImp' | 'destroyImp' | 'lockImp'>;
+
+  // the broker's grant, checked as `imp grant` checks one
+  readonly grants: Pick<Broker, 'addGrant'>;
   readonly storage: StorageBackend;
   readonly restic?: Restic;
   readonly freezer?: DiskFreezer;
@@ -108,6 +118,20 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   // a run, a restore, a prune and a check never overlap
   const mutex = createKeyedMutex();
   const runExclusive = <T>(task: () => Promise<T>) => mutex.runExclusive('backup', task);
+  const retry = { failures: 0, lastFailureAt: 0 };
+
+  const isRunDue = (): boolean => {
+    const at = now().getTime();
+    const intervalMs = deps.backup.intervalS * 1000;
+
+    if (retry.failures > 0) {
+      const waitMs = Math.min(intervalMs, RETRY_FIRST_MS * 2 ** (retry.failures - 1));
+
+      return at - retry.lastFailureAt >= waitMs;
+    }
+
+    return at - (readState().lastRunAt?.getTime() ?? 0) >= intervalMs;
+  };
 
   const readState = (): BackupState => {
     try {
@@ -182,6 +206,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           state: copies.get(imp.id)?.state ?? imp.state,
           synced: copies.get(imp.id)?.synced ?? false,
           dir: BACKUP_TREE.buildImpDir(imp.id),
+          egressPolicy: imp.egressPolicy,
+          grants: copy.grants
+            .filter((grant) => grant.impId === imp.id)
+            .map((grant) => grant.secretName),
           disk: BACKUP_TREE.buildDisk(imp.id),
           checkpoints: copy.checkpoints
             .filter(
@@ -369,6 +397,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       copyFileSync(join(dir, 'config.json'), join(target, 'config.json'));
     });
 
+    rmSync(dir, { recursive: true, force: true });
+
     const taken = await findImageByName(deps.db, image.name);
 
     const hex = image.digest.replace(/^sha256:/, '').slice(0, 8);
@@ -410,10 +440,21 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     target: RestoreTarget,
     workDir: string,
   ): Promise<Imp> => {
-    const dir = join(workDir, imp.dir);
     const created = { id: null as string | null };
 
-    await restic.restore(point.id, join(base, imp.dir), dir, []);
+    // One file at a time, each gone once written: ten checkpoints never sit
+    // on the host as ten full disks at once.
+    const writeRestoredFile = async (file: string, disk: string) => {
+      const fileDir = dirname(file);
+
+      await restic.restore(point.id, join(base, fileDir), join(workDir, fileDir), []);
+
+      try {
+        await writeChangedBlocks(join(workDir, file), disk);
+      } finally {
+        rmSync(join(workDir, fileDir), { recursive: true, force: true });
+      }
+    };
 
     const writeRestoredDisk = async (impId: string) => {
       created.id = impId;
@@ -423,7 +464,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       const disk = storage.resolveImpPaths(impId).disk;
 
       for (const checkpoint of imp.checkpoints) {
-        await writeChangedBlocks(join(workDir, checkpoint.disk), disk);
+        await writeRestoredFile(checkpoint.disk, disk);
 
         const made = await createCheckpointDisk(impId);
 
@@ -436,7 +477,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         });
       }
 
-      await writeChangedBlocks(join(workDir, imp.disk), disk);
+      await writeRestoredFile(imp.disk, disk);
+
+      await deps.db
+        .updateTable('imps')
+        .set({ egress_policy: imp.egressPolicy })
+        .where('id', '=', impId)
+        .execute();
     };
 
     try {
@@ -453,9 +500,23 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       await removeFailedImp(target.name, created.id);
 
       throw error;
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
     }
+  };
+
+  // Grants by secret name: a value never leaves its host, so a grant comes
+  // back only where a secret of that name exists, and the rest are reported.
+  const createRestoredGrants = async (impName: string, imp: ManifestImp) => {
+    const skipped: SkippedGrant[] = [];
+
+    for (const secret of imp.grants) {
+      try {
+        await deps.grants.addGrant(impName, secret);
+      } catch (error) {
+        skipped.push({ imp: impName, secret, reason: readErrorMessage(error) });
+      }
+    }
+
+    return skipped;
   };
 
   // only the imp this restore made: a name clash fails before any disk
@@ -471,7 +532,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     });
   };
 
-  const runRestore = async (input: RestoreInput): Promise<Imp[]> => {
+  const runRestore = async (input: RestoreInput): Promise<BackupRestore> => {
     if ((input.all === true) === (input.name !== undefined)) {
       throw new ORPCError('BAD_REQUEST', { message: 'restore one imp by name, or all of them' });
     }
@@ -516,6 +577,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     const workDir = join(paths.restoreDir, Bun.randomUUIDv7());
     const restored: Imp[] = [];
+    const skippedGrants: SkippedGrant[] = [];
 
     try {
       const imageNames = new Map<string, string>();
@@ -539,10 +601,14 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
         restored.push(created);
 
+        const skipped = await createRestoredGrants(target.name, imp);
+
+        skippedGrants.push(...skipped);
+
         log(`impd: backup: restored ${target.name} from ${point.id} (${point.time.toISOString()})`);
       }
 
-      return restored;
+      return { imps: restored, skippedGrants };
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -580,14 +646,18 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     runScheduled: () =>
       runExclusive(async () => {
-        const lastRunAt = readState().lastRunAt?.getTime() ?? 0;
-
-        if (now().getTime() - lastRunAt < deps.backup.intervalS * 1000) {
+        if (!isRunDue()) {
           return;
         }
 
         try {
-          const run = await runBackup();
+          const run = await runBackup().catch((error: unknown) => {
+            retry.failures += 1;
+            retry.lastFailureAt = now().getTime();
+            throw error;
+          });
+
+          retry.failures = 0;
 
           const skipped = run.skipped.length > 0 ? `, ${String(run.skipped.length)} left out` : '';
 

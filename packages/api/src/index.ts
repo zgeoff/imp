@@ -1,5 +1,11 @@
-export { BackupPointSchema, BackupRunSchema, BackupStatusSchema } from './backup-schema';
-export type { BackupPoint, BackupRun, BackupStatus } from './backup-schema';
+export {
+  BackupPointSchema,
+  BackupRestoreSchema,
+  BackupRunSchema,
+  BackupStatusSchema,
+} from './backup-schema';
+
+export type { BackupPoint, BackupRestore, BackupRun, BackupStatus } from './backup-schema';
 export { CheckpointSchema } from './checkpoint-schema';
 export type { Checkpoint } from './checkpoint-schema';
 

@@ -13,7 +13,10 @@ const CopyImpSchema = z.object({
   vcpus: z.int(),
   memoryMib: z.int(),
   httpPort: z.int(),
+  egressPolicy: z.string(),
 });
+
+const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
 
 const CopyCheckpointSchema = z.object({
   id: z.string(),
@@ -36,12 +39,17 @@ type CopyCheckpoint = z.infer<typeof CopyCheckpointSchema>;
 
 type CopyImage = z.infer<typeof CopyImageSchema>;
 
+type CopyGrant = z.infer<typeof CopyGrantSchema>;
+
 export interface DatabaseCopy {
   readonly imps: readonly CopyImp[];
 
   // oldest first
   readonly checkpoints: readonly CopyCheckpoint[];
   readonly images: readonly CopyImage[];
+
+  // secret names only: values live in <data>/secrets, which no backup reads
+  readonly grants: readonly CopyGrant[];
 }
 
 // One consistent view of the database for a backup run: `VACUUM INTO` copies
@@ -58,7 +66,7 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
     const imps = copy
       .query(
         `SELECT id, name, image_id AS imageId, state, vcpus, memory_mib AS memoryMib,
-           http_port AS httpPort FROM imps ORDER BY name`,
+           http_port AS httpPort, egress_policy AS egressPolicy FROM imps ORDER BY name`,
       )
       .all();
 
@@ -73,8 +81,13 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
       .query('SELECT id, name, ref, digest, size_bytes AS sizeBytes FROM images ORDER BY name')
       .all();
 
+    const grants = copy
+      .query('SELECT imp_id AS impId, secret_name AS secretName FROM grants ORDER BY secret_name')
+      .all();
+
     return {
       imps: z.array(CopyImpSchema).parse(imps),
+      grants: z.array(CopyGrantSchema).parse(grants),
       checkpoints: z.array(CopyCheckpointSchema).parse(checkpoints),
       images: z.array(CopyImageSchema).parse(images),
     };
