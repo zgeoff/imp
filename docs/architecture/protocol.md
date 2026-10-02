@@ -123,9 +123,10 @@ stage 2 leaves the field out.
 ```
 
 Only a guest parked in a boot template serves it, and it refuses every op but `ping` and `claim`
-with `UNKNOWN_OP`. The guest sets its clock, entropy and MAC, then goes on to stage 2 with these
-values ([claim](./boot-templates.md#claim)). A claim without a hostname and an ip is `BAD_REQUEST`;
-one that fails to apply is `INTERNAL`, and the guest stays parked for another.
+with `UNKNOWN_OP`. The guest sets its clock, entropy and MAC, waits up to 2 s for `vda` to report
+`disk_bytes`, then goes on to stage 2 with these values ([claim](./boot-templates.md#claim)). A
+claim without a hostname and an ip is `BAD_REQUEST`; one that fails to apply, a disk still at the
+wrong size included, is `INTERNAL`, and the guest stays parked for another.
 
 ### `freeze` / `thaw`
 
