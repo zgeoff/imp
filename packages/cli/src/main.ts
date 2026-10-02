@@ -18,6 +18,7 @@ import {
   wakeCommand,
 } from './commands/imps';
 import { infoCommand } from './commands/info';
+import { mcpCommand } from './commands/mcp';
 
 const main = defineCommand({
   meta: {
@@ -43,6 +44,7 @@ const main = defineCommand({
     fork: forkCommand,
     image: imageCommand,
     info: infoCommand,
+    mcp: mcpCommand,
   },
 });
 
