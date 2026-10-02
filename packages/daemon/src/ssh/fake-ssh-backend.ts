@@ -1,3 +1,4 @@
+import type { AgentListener } from '../agent-client/agent-forward-stream';
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 import type { ImpRecord } from '../db/imps';
@@ -79,6 +80,25 @@ interface FakeDial {
   readonly input: readonly string[];
 }
 
+// a guest ssh-agent socket the gateway opened; the test connects clients
+interface FakeAgentListener {
+  readonly id: string;
+  readonly connect: (id: number) => void;
+
+  // the agent connection ended, as after a forced sleep
+  readonly end: () => void;
+  readonly state: { closed: boolean };
+}
+
+// the relay for one guest client; the test sends what the client asks
+interface FakeAgentAccept {
+  readonly listener: string;
+  readonly id: number;
+  readonly input: readonly string[];
+  readonly send: (data: string) => void;
+  readonly state: { closed: boolean };
+}
+
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
@@ -87,6 +107,8 @@ const encoder = new TextEncoder();
 export function createFakeSshBackend() {
   const execs: FakeExec[] = [];
   const dials: FakeDial[] = [];
+  const agentListeners: FakeAgentListener[] = [];
+  const agentAccepts: FakeAgentAccept[] = [];
   const tracker = createActivityTracker();
 
   const fake: {
@@ -94,8 +116,20 @@ export function createFakeSshBackend() {
     wakeError: Error | null;
     execError: Error | null;
     dialError: Error | null;
+    agentListenError: Error | null;
+
+    // the VM's pid; a test changes it to stand for a wake
+    pid: number;
     onExec: ((exec: FakeExec) => void) | null;
-  } = { wakes: 0, wakeError: null, execError: null, dialError: null, onExec: null };
+  } = {
+    pid: FAKE_IMP.pid ?? 0,
+    wakes: 0,
+    wakeError: null,
+    execError: null,
+    dialError: null,
+    agentListenError: null,
+    onExec: null,
+  };
 
   const openExec: SshBackend['openExec'] = (_name, request, feature) => {
     if (fake.execError !== null) {
@@ -167,6 +201,72 @@ export function createFakeSshBackend() {
     return Promise.resolve(stream);
   };
 
+  const openAgentListener: SshBackend['openAgentListener'] = () => {
+    if (fake.agentListenError !== null) {
+      return Promise.reject(fake.agentListenError);
+    }
+
+    const queue = createEventQueue<number>();
+    const id = `fake${String(agentListeners.length + 1)}`;
+    const state = { closed: false };
+
+    agentListeners.push({
+      id,
+      connect: queue.emit,
+      end: () => {
+        queue.emit(null);
+      },
+      state,
+    });
+
+    const listener: AgentListener = {
+      path: `/run/imp/ssh-agent/${id}/agent.sock`,
+      id,
+      connections: () => readEvents(queue.next),
+      close: () => {
+        state.closed = true;
+
+        queue.emit(null);
+      },
+    };
+
+    return Promise.resolve(listener);
+  };
+
+  const openAgentAccept: SshBackend['openAgentAccept'] = (_name, listener, id) => {
+    const queue = createEventQueue<DialEvent>();
+    const input: string[] = [];
+    const state = { closed: false };
+
+    agentAccepts.push({
+      listener,
+      id,
+      input,
+      send: (data) => {
+        queue.emit({ type: 'data', data: encoder.encode(data) });
+      },
+      state,
+    });
+
+    const stream: DialStream = {
+      write: (data) => {
+        input.push(decoder.decode(data));
+      },
+      drained: () => Promise.resolve(),
+      end: () => {
+        queue.emit(null);
+      },
+      events: () => readEvents(queue.next),
+      close: () => {
+        state.closed = true;
+
+        queue.emit(null);
+      },
+    };
+
+    return Promise.resolve(stream);
+  };
+
   const backend: SshBackend = {
     findImp: (name) => {
       const found = name === FAKE_IMP.name ? FAKE_IMP : undefined;
@@ -180,13 +280,15 @@ export function createFakeSshBackend() {
         return Promise.reject(fake.wakeError);
       }
 
-      return Promise.resolve({ imp: FAKE_IMP, wokeMs: null });
+      return Promise.resolve({ imp: { ...FAKE_IMP, pid: fake.pid }, wokeMs: null });
     },
     tracker,
     recordActivity: () => Promise.resolve(),
     openExec,
     openDial,
+    openAgentListener,
+    openAgentAccept,
   };
 
-  return { backend, fake, execs, dials, tracker };
+  return { backend, fake, execs, dials, agentListeners, agentAccepts, tracker };
 }

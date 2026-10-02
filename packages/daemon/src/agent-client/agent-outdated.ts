@@ -5,6 +5,7 @@ import { AgentError } from './agent-connection';
 const FEATURES = {
   sessions: { since: [0, 2], missing: 'no sessions' },
   ssh: { since: [0, 3], missing: 'no port forwarding or SFTP' },
+  'agent-forwarding': { since: [0, 4], missing: 'no ssh-agent forwarding' },
 } as const;
 
 export type AgentFeature = keyof typeof FEATURES;
