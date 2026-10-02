@@ -185,8 +185,9 @@ function setupTest(hosts: Readonly<Record<string, FakeHost>>, withSilent = false
   };
 }
 
-// db carries fields this CLI's schema lacks, as a newer impd's imp does; its
-// `host` must not replace the saved host's name
+// db is on its way to another host. Its `host` is a field this CLI's schema
+// lacks, as a newer impd's imp could carry, and must not replace the saved
+// host's name.
 const TWO_HOSTS = {
   box: { imps: [buildImp('web', 0), { ...buildImp('db', 1), move: 'sending', host: 'peer' }] },
   laptop: { imps: [buildImp('dev', 0)] },
@@ -211,6 +212,9 @@ test('ls --all lists every saved host, says which failed, and exits 3 for a part
     ['box', 'db', 'running'],
     ['laptop', 'dev', 'running'],
   ]);
+
+  // the move mark in the NOTE column
+  expect(rows[2]).toEndWith('  sending');
 
   const failed = listed.stderr.trimEnd().split('\n');
 
