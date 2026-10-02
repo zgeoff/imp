@@ -196,7 +196,7 @@ export async function isSlotFree(db: ImpDatabase, slot: number, now: number): Pr
 }
 
 // A slot a warm move asks for, free of imps; its own ticket holds it
-class SlotTakenError extends Error {
+export class SlotTakenError extends Error {
   override name = 'SlotTakenError';
 
   constructor(slot: number) {

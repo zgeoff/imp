@@ -62,15 +62,16 @@ wake checks the CPU as it does on any host ([moves](../architecture/moves.md#war
 the move is refused, and the message names each fact that differs; `imp move --stop` moves the imp
 cold instead.
 
-| The target must have                                  | Why                                                                                                                            |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| The same Firecracker, snapshot format and host kernel | A snapshot loads only on these.                                                                                                |
-| The same CPU model and CPUID flags                    | The guest kernel picked its code paths from them. In practice: the same kind of machine.                                       |
-| The same `IMP_DATA_DIR` and storage backend           | The snapshot opens the disk and the system drive by path.                                                                      |
-| The same `IMP_SUBNET`, and the imp's slot free        | The guest keeps its address, its gateway and its MAC.                                                                          |
-| The same `IMP_BROKER_PORT`                            | Running processes keep `HTTPS_PROXY`.                                                                                          |
-| The same `IMP_DNS`, for an `open` imp                 | An open imp asks those servers itself; a `box` or `none` imp asks the host's resolver.                                         |
-| No IPv6 address in the imp                            | Its address is in the source's /64. `auto` makes a prefix per host; copy `<data>/net/ipv6-ula` to give two hosts the same one. |
+| The target must have                                  | Why                                                                                                                                                            |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same Firecracker, snapshot format and host kernel | A snapshot loads only on these.                                                                                                                                |
+| The same CPU model and CPUID flags                    | The guest kernel picked its code paths from them. In practice: the same kind of machine.                                                                       |
+| The same `IMP_DATA_DIR` and storage backend           | The snapshot opens the disk and the system drive by path.                                                                                                      |
+| The same `IMP_SUBNET`, and the imp's slot free        | The guest keeps its address, its gateway and its MAC.                                                                                                          |
+| The same `IMP_BROKER_PORT`                            | Running processes keep `HTTPS_PROXY`.                                                                                                                          |
+| The same `IMP_DNS`, for an `open` imp                 | An open imp asks those servers itself; a `box` or `none` imp asks the host's resolver.                                                                         |
+| A source tap with the slot's MAC                      | The guest knows its gateway by that MAC. A tap made before taps took their slot's MAC keeps a random one until a host restart: move such an imp with `--stop`. |
+| No IPv6 address in the imp                            | Its address is in the source's /64. `auto` makes a prefix per host; copy `<data>/net/ipv6-ula` to give two hosts the same one.                                 |
 
 The target's broker CA goes into the guest at its first wake. A process that loaded the source's CA
 before the move fails TLS to the broker until it restarts. Open connections end, as at any sleep.

@@ -18,8 +18,12 @@ interface MoveHostsOptions {
   readonly hook?: FetchHook;
   readonly partBytes?: number;
 
-  // Both hosts report the target's warm facts. Two impds in one process
-  // cannot share a data dir, as a warm move needs.
+  // the source's taps' MACs; none by default
+  readonly readTapMac?: (tap: string) => string | null;
+
+  // Both hosts report the target's warm facts, and the source's VMs open
+  // the target's system drive path. Two impds in one process cannot share
+  // a data dir, as a warm move needs.
   readonly isShared?: boolean;
   readonly source?: ImpTestOptions;
   readonly target?: ImpTestOptions;
@@ -40,12 +44,22 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
 
   const facts = readWarmHost(target.config, target.readIdentity(), target.storage.kind);
   const shared = options.isShared === true ? { readWarmHost: () => facts } : {};
+
+  const sourceImpd =
+    options.isShared === true
+      ? source.restartImpd({
+          ...source.readIdentity(),
+          systemDrivePath: target.readIdentity().systemDrivePath,
+        })
+      : source;
+
   const targetApp = buildTestApp(target, target, undefined, {}, null, shared);
   const sendToTarget = (request: Request) => targetApp.moves.handle(request, SOURCE_PEER);
   const hook = options.hook;
 
-  const sourceApp = buildTestApp(source, source, undefined, {}, null, {
+  const sourceApp = buildTestApp(source, sourceImpd, undefined, {}, null, {
     ...shared,
+    readTapMac: options.readTapMac ?? (() => null),
     fetch: (request) =>
       hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),

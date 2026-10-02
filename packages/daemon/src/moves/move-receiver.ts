@@ -11,7 +11,14 @@ import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { findImpById, findImpByName, isSlotFree, listImps, updateImpCommitted } from '../db/imps';
+import {
+  SlotTakenError,
+  findImpById,
+  findImpByName,
+  isSlotFree,
+  listImps,
+  updateImpCommitted,
+} from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
@@ -505,6 +512,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     // the ticket's checks again, on what the stream itself says
     if (header.warm !== null) {
       requireWarmMove(header.warm.move);
+      requireOwnDrivePath(header.warm);
 
       if (header.warm.move.slot !== row.slot) {
         throw new MoveRequestError(409, `the ticket keeps slot ${String(row.slot)}, not this one`);
@@ -591,6 +599,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           start: false,
           moveState: 'receiving',
           isIdentityResetPending: header.imp.isIdentityResetPending,
+          isDiskGrowPending: header.imp.isDiskGrowPending,
           ...(header.warm !== null && { slot: header.warm.move.slot }),
           prepareDisk: writeDisk,
         });
@@ -609,6 +618,13 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       }
     } catch (error) {
       await removeStaged(header.imp.name, header.imp.id);
+
+      // the ticket streams once: its slot is free for the next imp
+      await deps.db
+        .updateTable('move_tickets')
+        .set({ slot: null })
+        .where('id', '=', row.id)
+        .execute();
 
       throw error;
     } finally {
@@ -631,6 +647,17 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     deps.log(`impd: move: ${header.imp.name}: received, waiting for the commit`);
 
     return { status: 200, body: receipt };
+  };
+
+  // Firecracker reopens the drive by the path the snapshot names: only this
+  // host's own path for that sha256, whether the drive came along or not
+  const requireOwnDrivePath = (warm: NonNullable<MoveHeader['warm']>): void => {
+    const path = buildSystemDrivePath(deps.dataDir, warm.meta.systemDrive);
+    const named = [warm.meta.systemDrivePath, warm.vm?.systemDrivePath];
+
+    if (named.some((given) => given !== undefined && given !== path)) {
+      throw new MoveRequestError(400, `the snapshot's drive is not at ${path}`);
+    }
   };
 
   // the facts of a warm move this host does not match, as a refusal
@@ -695,10 +722,6 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
   // arrived must hash to the name the snapshot gives it
   const writeSystemDrive = async (temp: string, meta: Readonly<SnapshotMeta>) => {
     const path = buildSystemDrivePath(deps.dataDir, meta.systemDrive);
-
-    if (meta.systemDrivePath !== path) {
-      throw new MoveRequestError(400, `the snapshot's drive is not at ${path}`);
-    }
 
     const sha256 = await readFileSha256(temp);
 
@@ -1039,11 +1062,13 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         });
       }
 
+      // a warm move's slot too: the commit reads warm from it
       return writeTicketRow(name, 0, {
         imp_id: imp.id,
         stream_used_at: deps.now(),
         receipt: staged.receipt,
         commit_until: deps.now() + COMMIT_WINDOW_MS,
+        slot: staged.slot,
       });
     },
 
@@ -1112,13 +1137,22 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 }
 
 function readErrorReply(error: unknown, log: (message: string) => void): Reply {
-  const status = error instanceof MoveRequestError ? error.status : 500;
+  const status = readErrorStatus(error);
 
   if (status === 500) {
     log(`impd: move: ${readErrorMessage(error)}`);
   }
 
   return { status, body: { error: readErrorMessage(error) } };
+}
+
+// a slot another imp took since the ticket is a conflict, not a fault
+function readErrorStatus(error: unknown): number {
+  if (error instanceof MoveRequestError) {
+    return error.status;
+  }
+
+  return error instanceof SlotTakenError ? 409 : 500;
 }
 
 function readDataInFile(payload: Uint8Array, size: number): ReturnType<typeof readDataPayload> {

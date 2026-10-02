@@ -15,7 +15,7 @@ abort, and an open and a box imp that keep their tmpfs and processes and reach D
 broker right after the wake. `moves-tailnet` makes both hosts `tag:imp` nodes, each with its own
 `IMP_TAILSCALE_HOSTNAME`: the real peer check and, with `IMP_E2E_TAILNET_NAMES=1`, the handover of a
 per-imp tailnet name. The CI `zfs` job runs the whole flow, cold and warm, between two impds on one
-real pool (`packages/daemon/src/storage/zfs/zfs-move-flow.real.test.ts`).
+real pool, with fake VMs (`packages/daemon/src/storage/zfs/zfs-move-flow.real.test.ts`).
 
 Not yet tested, because it needs a second machine: a warm move refused for a real mismatch of CPU,
 kernel or Firecracker (one machine has one of each, so only faked facts reach it), clock skew
@@ -179,16 +179,28 @@ drive before them when `/move/offer` finds the target lacks it. The header carri
 `vm.json` and, for a `box` imp, the addresses its set lets in, with the seconds each has left.
 
 - The target writes `vmstate` and `mem` straight into the imp's snapshot directory (on ZFS,
-  `<data>/mem/<id>`, its own dataset, so no rename crosses datasets). Without `meta.json` they load
-  nothing, and removing the staged imp removes them.
+  `<data>/mem/<id>`, a directory in the `mem` dataset, so no rename crosses datasets). Without
+  `meta.json` they load nothing, and removing the staged imp removes them.
 - The drive lands under its sha256, which other snapshots trust: the target hashes what arrived and
-  refuses a drive whose sum is not its name, or a path that is not its own.
+  refuses a drive whose sum is not its name. Whether the drive came along or not, `meta.json` and
+  `vm.json` must name this host's own path for that sha256.
+- The imp's disk grow, if one is pending, goes along: the first wake on the target grows the guest.
+- A tap that a failed destroy left in the slot is removed before the staged imp exists, so the wake
+  makes it again with the slot's MAC.
 - `meta.json` goes last. The commit sets the imp `sleeping` in the transaction that takes the mark
   off, and only when `meta.json` reads whole; else it refuses, and the source keeps its copy.
 - `imps.trust_pending` marks the imp until its first wake here, which installs this host's broker CA
   in the guest at once.
 
+**Trust.** A warm move trusts the source with the target host, not only with the imp. `vmstate` is
+Firecracker's own format, which the target does not parse: the paths it names (the disk, the system
+drive, the vsock socket) are what the target's Firecracker opens at the load, with impd's rights.
+The target checks the drive path in `meta.json` and `vm.json`, not the paths inside `vmstate`. Run
+warm moves only between hosts that trust each other; a Firecracker run by the jailer would confine
+what a load can open.
+
 **The slot.** The ticket keeps the imp's slot (`move_tickets.slot`) until the commit once its stream
-started, else until its start window ends. So an `imp new` on the target during a long stream takes
-another. The staged imp is created in exactly that slot, or the receive fails with
-`slot <n> is taken on this host`.
+started, else until its start window ends. A stream that fails, or ends with no part for 60 s, gives
+the slot up at once, abort or not. A reissued ticket keeps it, so `imp move --resume` commits warm.
+So an `imp new` on the target during a long stream takes another. The staged imp is created in
+exactly that slot, or the receive fails with `slot <n> is taken on this host`.
