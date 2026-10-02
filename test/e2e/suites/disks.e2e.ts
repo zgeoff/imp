@@ -4,6 +4,7 @@ import { readInfo, requireImp, runImp, runInImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { waitFor } from '../lib/wait-for';
 
 const prefix = setupSuite('disks');
 const TINY = resolveImageName('e2e-tiny');
@@ -83,13 +84,24 @@ test('a stopped disk grows at its next boot, and never shrinks', async () => {
 
   expect(String(shrink)).toContain('a disk only grows');
 
-  // a pass ran 10 s after the create; the grown filesystem wrote blocks of its own
-  const found = await requireImp(imp);
+  // a pass runs about 10 s after the create; the grown filesystem wrote
+  // blocks of its own
+  const usage = await waitFor(
+    `a usage count for ${imp}`,
+    async () => {
+      const found = await requireImp(imp);
 
-  const usage = found.diskUsage;
+      if (found.diskUsage === undefined) {
+        throw new Error('no pass has counted it yet');
+      }
 
-  expect(usage?.isPartial).toBeFalse();
-  expect(usage?.exclusiveBytes).toBeGreaterThan(0);
+      return found.diskUsage;
+    },
+    { timeoutMs: 30_000 },
+  );
+
+  expect(usage.isPartial).toBeFalse();
+  expect(usage.exclusiveBytes).toBeGreaterThan(0);
 
   await runImp('stop', imp);
   await checkDiskClean(imp);

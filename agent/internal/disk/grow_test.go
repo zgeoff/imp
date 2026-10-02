@@ -31,8 +31,15 @@ func installFakeDisk(t *testing.T, sectors int64) *fakeDisk {
 	return f
 }
 
+// setSectors replaces the file in one rename: a sysfs read never sees a
+// half-written value, and the poll must not either.
 func (f *fakeDisk) setSectors(t *testing.T, sectors int64) {
-	if err := os.WriteFile(f.sizePath, []byte(strconv.FormatInt(sectors, 10)+"\n"), 0o644); err != nil {
+	tmp := f.sizePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(sectors, 10)+"\n"), 0o644); err != nil {
+		t.Error(err)
+		return
+	}
+	if err := os.Rename(tmp, f.sizePath); err != nil {
 		t.Error(err)
 	}
 }
