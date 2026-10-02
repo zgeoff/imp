@@ -21,6 +21,14 @@ export interface Caller {
   // when what it authenticated with expires: a dashboard session's expiry,
   // else null
   readonly expiresAt: number | null;
+
+  // who owns the leases it takes (docs/guides/leases.md#owners); a token
+  // through the API, a dashboard session and a key bound to it are one
+  readonly principal: string;
+
+  // the principal as a person reads it: the token's name, the key's comment
+  // or the node's name
+  readonly display: string;
 }
 
 // who an audit row names

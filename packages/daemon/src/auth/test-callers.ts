@@ -9,6 +9,8 @@ export function buildTestCaller(overrides: Partial<Caller> = {}): Caller {
     imps: null,
     tokenId: 'test-token-id',
     expiresAt: null,
+    principal: 'token:test-token-id',
+    display: 'test',
     ...overrides,
   };
 }

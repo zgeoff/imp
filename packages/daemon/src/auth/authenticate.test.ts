@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
+import { utils } from 'ssh2';
 import { setupTestDatabase } from '../db/test-database';
+import { createEd25519Key } from '../ssh/host-key';
 import { createKnownHosts } from './ambient-request';
 import { isSameOrigin, resolveCaller } from './authenticate';
 import type { CallerSources } from './authenticate';
@@ -11,7 +13,7 @@ import { ROOT_TOKEN_ID, loadTokenStore } from './token-store';
 const NOW = 1_800_000_000_000;
 const ROOT = 'root-secret';
 const TAILNET_PEER = '100.101.102.103';
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
+const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
 
 const FAKE_STATUS = {
   state: 'Running',
@@ -86,6 +88,8 @@ test('the root token is a token with every scope, from anywhere, for good', asyn
     imps: null,
     tokenId: ROOT_TOKEN_ID,
     expiresAt: null,
+    principal: 'root',
+    display: 'root',
   });
 });
 
@@ -104,6 +108,60 @@ test('a made token is itself, with its scope and imps', async () => {
     scope: 'exec',
     imps: ['dev-*'],
   });
+});
+
+test('a token through the API, a dashboard session and a bound key are one principal', async () => {
+  await using ctx = await setupTest();
+
+  const line = `${createEd25519Key().public} me@laptop`;
+
+  const made = await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [line] });
+
+  const api = await resolveCaller(
+    buildRequest({ authorization: `Bearer ${made.secret}` }),
+    ctx.sources,
+    BY_TOKEN,
+  );
+
+  const tokenId = api?.tokenId ?? '';
+
+  const dashboard = await resolveCaller(
+    buildRequest({ cookie: ctx.buildSession(tokenId), 'sec-fetch-site': 'same-origin' }),
+    ctx.sources,
+    BY_TOKEN,
+  );
+
+  const parsed = utils.parseKey(line);
+
+  if (parsed instanceof Error) {
+    throw parsed;
+  }
+
+  const ssh = ctx.tokens.findSshKey(parsed.getPublicSSH())?.caller;
+  const owner = { principal: `token:${tokenId}`, display: 'ci' };
+
+  expect(api).toMatchObject({ kind: 'token', ...owner });
+  expect(dashboard).toMatchObject({ kind: 'dashboard', ...owner });
+  expect(ssh).toMatchObject({ kind: 'ssh', ...owner });
+
+  // a new token under the old name is someone else
+  await ctx.tokens.remove('ci');
+
+  const again = await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  expect(ctx.tokens.authenticate(again.secret)?.principal).not.toBe(owner.principal);
+});
+
+test('the root token and a root dashboard session are the principal root', async () => {
+  await using ctx = await setupTest();
+
+  const session = await resolveCaller(
+    buildRequest({ cookie: ctx.buildSession(ROOT_TOKEN_ID), 'sec-fetch-site': 'same-origin' }),
+    ctx.sources,
+    BY_TOKEN,
+  );
+
+  expect(session).toMatchObject({ kind: 'dashboard', principal: 'root' });
 });
 
 test('a wrong bearer token is refused, even with a valid session beside it', async () => {
@@ -232,6 +290,8 @@ test('a tailnet peer that a rule matches gets the rule’s scope and imps', asyn
     imps: ['dev-*'],
     tokenId: null,
     expiresAt: null,
+    principal: 'tailnet-user:alice@example.com',
+    display: 'laptop',
   });
 });
 

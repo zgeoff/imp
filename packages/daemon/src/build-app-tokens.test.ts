@@ -28,7 +28,7 @@ function readFakeWhois(address: string): Promise<TailnetPeer | null> {
   return Promise.resolve(peer);
 }
 
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
+const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
 
 function readNoNode(): Promise<TailscaleStatus> {
   return Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] });

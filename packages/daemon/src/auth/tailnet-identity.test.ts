@@ -9,8 +9,14 @@ import {
 } from './tailnet-identity';
 import type { TailnetPeer } from './tailnet-identity';
 
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
-const CI: TailnetPeer = { login: null, tags: ['tag:ci'], node: 'runner' };
+const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
+
+const CI: TailnetPeer = {
+  login: null,
+  tags: ['tag:ci'],
+  node: 'runner',
+  stableId: 'nRunner1CNTRL',
+};
 
 // the node impd runs on
 const NODE_STATUS: TailscaleStatus = {
@@ -33,7 +39,7 @@ const USER_WHOIS = JSON.stringify({
 });
 
 const TAGGED_WHOIS = JSON.stringify({
-  Node: { ID: 3, Name: 'runner.tail1234.ts.net.', Tags: ['tag:ci'] },
+  Node: { ID: 3, StableID: 'nRunner1CNTRL', Name: 'runner.tail1234.ts.net.', Tags: ['tag:ci'] },
   UserProfile: { ID: 4, LoginName: 'tagged-devices', DisplayName: 'Tagged Devices' },
 });
 
@@ -61,6 +67,25 @@ test('the first rule that matches gives the scope; a tagged node matches by tag 
   expect(findTailnetCaller(rules, CI)).toMatchObject({ name: 'runner', scope: 'exec' });
   expect(findTailnetCaller(rules.slice(2), CI)).toBeNull();
   expect(findTailnetCaller([{ match: '*', scope: 'read' }], CI)).toMatchObject({ scope: 'read' });
+});
+
+test('a user owns leases by login, a tagged node by its stable ID', () => {
+  const rules = TailnetRulesSchema.parse([{ match: '*', scope: 'exec' }]);
+
+  expect(findTailnetCaller(rules, ALICE)).toMatchObject({
+    principal: 'tailnet-user:alice@example.com',
+    display: 'laptop',
+  });
+
+  expect(findTailnetCaller(rules, CI)).toMatchObject({
+    principal: 'tailnet:nRunner1CNTRL',
+    display: 'runner',
+  });
+
+  // a whois without StableID: the node's name stands in
+  expect(findTailnetCaller(rules, { ...CI, stableId: null })).toMatchObject({
+    principal: 'tailnet:runner',
+  });
 });
 
 test('rules must be well formed', () => {
@@ -128,7 +153,7 @@ test('the node’s own addresses are no peer, whatever whois says', async () => 
     whois: (address) => {
       asked.push(address);
 
-      return Promise.resolve({ login: null, tags: ['tag:imp'], node: 'imp-1' });
+      return Promise.resolve({ login: null, tags: ['tag:imp'], node: 'imp-1', stableId: null });
     },
     readTailscale: readNodeStatus,
     now: () => 0,

@@ -12,7 +12,7 @@ import { startWakeProxy } from '../proxy/wake-proxy';
 import { setupImpdTest } from './test-mcp';
 
 const TAILNET_PEER = '100.101.102.103';
-const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
+const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop', stableId: null };
 const MessageSchema = z.looseObject({ id: z.unknown().optional() });
 const TextSchema = z.object({ type: z.string(), text: z.string() });
 

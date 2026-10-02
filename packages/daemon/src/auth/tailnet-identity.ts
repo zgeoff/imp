@@ -29,12 +29,16 @@ export interface TailnetPeer {
 
   // the node's MagicDNS name, without the tailnet
   readonly node: string;
+
+  // the node's stable ID, which outlives a rename; null from a tailscale
+  // whose whois leaves it out
+  readonly stableId: string | null;
 }
 
 const TagsSchema = z.array(z.string()).nullable().optional();
 
 const WhoisSchema = z.object({
-  Node: z.object({ Name: z.string(), Tags: TagsSchema }),
+  Node: z.object({ Name: z.string(), Tags: TagsSchema, StableID: z.string().min(1).optional() }),
   UserProfile: z.object({ LoginName: z.string() }),
 });
 
@@ -132,7 +136,19 @@ export function findTailnetCaller(
     imps: rule.imps ?? null,
     tokenId: null,
     expiresAt: null,
+    principal: readTailnetPrincipal(peer),
+    display: peer.node,
   };
+}
+
+// A user owns leases across all of its nodes. A tagged node has no user, so
+// it owns them by node: its stable ID, or its name when whois gives none.
+function readTailnetPrincipal(peer: Readonly<TailnetPeer>): string {
+  if (peer.login !== null) {
+    return `tailnet-user:${peer.login}`;
+  }
+
+  return `tailnet:${peer.stableId ?? peer.node}`;
 }
 
 // `tailscale whois --json <address>`; null when the address is no peer's
@@ -145,6 +161,7 @@ export function parseWhois(json: string): TailnetPeer | null {
       login: tags.length > 0 ? null : whois.UserProfile.LoginName,
       tags,
       node: whois.Node.Name.split('.')[0] ?? whois.Node.Name,
+      stableId: whois.Node.StableID ?? null,
     };
   } catch {
     return null;
