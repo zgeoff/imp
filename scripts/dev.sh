@@ -45,6 +45,11 @@
 #      else .env; see load_tailscale_authkey in scripts/lib.sh.
 #      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
 #      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
+#      IMP_DEV_IP gives the container that address on IMP_DEV_NETWORK.
+#      IMP_DEV_PUBLISH=0 publishes no ports: impd answers on IMP_DEV_IP:7070
+#      only, as the moves suite's second host does. IMP_DEV_TAILNET=0 keeps
+#      the container off the tailnet whatever key there is.
+#      IMP_MOVE_TEST_CIDR and IMP_PEER_URL pass through for the moves suite.
 #      IMP_UPLINK_MTU overrides the MTU read from this machine's default route.
 #      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
 #      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
@@ -56,7 +61,12 @@ source "$(dirname "$0")/lib.sh"
 name=${IMP_DEV_NAME:-imp-dev}
 offset=${IMP_DEV_PORT_OFFSET:-0}
 data=${IMP_DEV_DATA:-$IMP_ROOT/.data/dev}
+publish=${IMP_DEV_PUBLISH:-1}
 api=http://localhost:$((7070 + offset))
+if [ "$publish" = 0 ]; then
+  [ -n "${IMP_DEV_IP:-}" ] || { echo "dev.sh: IMP_DEV_PUBLISH=0 needs IMP_DEV_IP" >&2; exit 1; }
+  api=http://$IMP_DEV_IP:7070
+fi
 
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
@@ -69,7 +79,7 @@ tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT
   IMP_HTTP_PORT IMP_PUBLIC_IP IMP_PUBLIC_HTTPS_PORT IMP_PUBLIC_HTTP_PORT IMP_E2E IMP_BROKER_PORT
   IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
   IMP_BACKUP_INTERVAL_S IMP_BACKUP_KEEP IMP_BACKUP_FORGET IMP_BACKUP_CPUS IMP_BACKUP_MEMORY_MIB
-  IMP_BOOT_TEMPLATES IMP_JAILER IMP_JAILER_BIN)
+  IMP_BOOT_TEMPLATES IMP_JAILER IMP_JAILER_BIN IMP_MOVE_TEST_CIDR IMP_PEER_URL)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -147,7 +157,10 @@ up() {
     [ -f "$IMP_ROOT/.env" ] && env_file=(--env-file "$IMP_ROOT/.env")
     # the Tailscale key from the env, 1Password or .env (lib.sh); -e with no
     # value copies it from this environment, so it never lands in argv
-    if load_tailscale_authkey; then
+    if [ "${IMP_DEV_TAILNET:-}" = 0 ]; then
+      # empty overrides a key in .env: impd reads it as unset
+      tuning+=(-e TAILSCALE_AUTHKEY=)
+    elif load_tailscale_authkey; then
       tuning+=(-e TAILSCALE_AUTHKEY)
     fi
     [ -n "${IMP_DEV_BACKUP_ENV_FILE:-}" ] && env_file+=(--env-file "$IMP_DEV_BACKUP_ENV_FILE")
@@ -162,8 +175,14 @@ up() {
     if [ -n "${IMP_ACME_CA_FILE:-}" ]; then
       tuning+=(-e "IMP_ACME_CA_FILE=$(in_container "$IMP_ACME_CA_FILE")")
     fi
-    local network=()
+    local network=() ports=()
     [ -n "${IMP_DEV_NETWORK:-}" ] && network=(--network "$IMP_DEV_NETWORK")
+    [ -n "${IMP_DEV_IP:-}" ] && network+=(--ip "$IMP_DEV_IP")
+    if [ "$publish" != 0 ]; then
+      ports=(-p $((7070 + offset)):7070 -p $((7080 + offset)):7080
+        -p $((20000 + offset))-$((20063 + offset)):20000-20063
+        -p 127.0.0.1:$((2222 + offset)):22)
+    fi
     # The repo is also mounted at its own path, so `imp image build <dir>`
     # paths the CLI resolves on this machine exist in the container.
     # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
@@ -177,9 +196,7 @@ up() {
       --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" "${network[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \
-      -p $((7070 + offset)):7070 -p $((7080 + offset)):7080 \
-      -p $((20000 + offset))-$((20063 + offset)):20000-20063 \
-      -p 127.0.0.1:$((2222 + offset)):22 \
+      "${ports[@]}" \
       -e IMP_STORAGE_GIB="${IMP_STORAGE_GIB:-200}" \
       -e IMP_UPLINK_MTU="${IMP_UPLINK_MTU:-$(read_uplink_mtu)}" \
       -e IMP_KERNEL="$(in_container "$kernel")" \

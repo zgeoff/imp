@@ -12,23 +12,76 @@ if (offset !== 0 && (process.env['IMP_DEV_NAME'] ?? '') === '') {
   throw new Error('IMP_DEV_PORT_OFFSET needs IMP_DEV_NAME: name the instance it belongs to');
 }
 
-// Where the dev instance (scripts/dev.sh) listens. Every published port
-// shifts by IMP_DEV_PORT_OFFSET, so worktrees run instances side by side.
-export const instance = {
-  container: process.env['IMP_DEV_NAME'] ?? 'imp-dev',
+// A dev instance (scripts/dev.sh) and where it listens
+export interface DevInstance {
+  readonly container: string;
 
   // mounted at /data in the container
+  readonly dataDir: string;
+  readonly apiUrl: string;
+  readonly proxyPort: number;
+  readonly impPortBase: number;
+
+  // the SSH gateway, published on localhost by scripts/dev.sh
+  readonly sshPort: number;
+
+  // IMP_DEV_PORT_OFFSET, for what else instances side by side must not share
+  readonly portOffset: number;
+
+  // what scripts/dev.sh reads for this instance, over this process's env;
+  // each call passes it, so no instance's settings leak into another's
+  readonly env: Readonly<Record<string, string>>;
+}
+
+// The run's own instance. Every published port shifts by
+// IMP_DEV_PORT_OFFSET, so worktrees run instances side by side.
+export const instance: DevInstance = {
+  container: process.env['IMP_DEV_NAME'] ?? 'imp-dev',
   dataDir: process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev'),
   apiUrl: process.env['IMP_URL'] ?? `http://localhost:${String(7070 + offset)}`,
   proxyPort: 7080 + offset,
   impPortBase: 20_000 + offset,
-
-  // the SSH gateway, published on localhost by scripts/dev.sh
   sshPort: 2222 + offset,
 
   // IMP_DEV_PORT_OFFSET, for what else instances side by side must not share
   portOffset: offset,
-} as const;
+  env: {},
+};
+
+export interface InstanceOptions {
+  readonly container: string;
+  readonly dataDir: string;
+
+  // a Docker network and the address on it: the instance publishes no
+  // ports, and answers there only
+  readonly network: string;
+  readonly ip: string;
+
+  // tuning for impd, passed through scripts/dev.sh
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+// Another instance beside the run's own, such as a move's second host
+export function createInstance(options: InstanceOptions): DevInstance {
+  return {
+    container: options.container,
+    dataDir: options.dataDir,
+    apiUrl: `http://${options.ip}:7070`,
+    proxyPort: 7080,
+    impPortBase: 20_000,
+    sshPort: 22,
+    portOffset: 0,
+    env: {
+      ...options.env,
+      IMP_DEV_NAME: options.container,
+      IMP_DEV_DATA: options.dataDir,
+      IMP_DEV_PORT_OFFSET: '0',
+      IMP_DEV_NETWORK: options.network,
+      IMP_DEV_IP: options.ip,
+      IMP_DEV_PUBLISH: '0',
+    },
+  };
+}
 
 const HealthSchema = z.object({ ready: z.boolean() });
 
@@ -72,14 +125,19 @@ export async function runChecked(argv: readonly string[]): Promise<string> {
 }
 
 // Passes dev.sh's output through, so a slow `up` shows progress. Tuning
-// variables in this process's env reach impd.
-export async function runDevScript(command: string): Promise<void> {
+// variables in this process's env reach impd, then the instance's, then
+// the call's.
+export async function runDevScript(
+  command: string,
+  target: DevInstance = instance,
+  env: Readonly<Record<string, string>> = {},
+): Promise<void> {
   // Bun.spawn's default env is the one the process started with, not
   // process.env as changed since
   const proc = Bun.spawn([DEV_SCRIPT, command], {
     stdout: 'inherit',
     stderr: 'inherit',
-    env: { ...process.env },
+    env: { ...process.env, ...target.env, ...env },
   });
 
   const exitCode = await proc.exited;
@@ -89,14 +147,21 @@ export async function runDevScript(command: string): Promise<void> {
   }
 }
 
-export async function readToken(): Promise<string> {
-  const token = await runChecked([DEV_SCRIPT, 'token']);
+export async function readToken(target: DevInstance = instance): Promise<string> {
+  const result = await runCommand([DEV_SCRIPT, 'token'], { env: target.env });
 
-  return token.trim();
+  if (result.exitCode !== 0) {
+    throw new Error(`scripts/dev.sh token exited ${String(result.exitCode)}: ${result.stderr}`);
+  }
+
+  return result.stdout.trim();
 }
 
-export function runInContainer(argv: readonly string[]): Promise<CommandResult> {
-  return runCommand(['docker', 'exec', instance.container, ...argv]);
+export function runInContainer(
+  argv: readonly string[],
+  target: DevInstance = instance,
+): Promise<CommandResult> {
+  return runCommand(['docker', 'exec', target.container, ...argv]);
 }
 
 // This machine as the container sees it. Guests reach it through FORWARD
@@ -151,9 +216,9 @@ export async function findImpdPid(): Promise<string | null> {
   return pid === '' ? null : pid;
 }
 
-export async function checkHealthReady(): Promise<boolean> {
+export async function checkHealthReady(target: DevInstance = instance): Promise<boolean> {
   try {
-    const response = await fetch(`${instance.apiUrl}/health`, {
+    const response = await fetch(`${target.apiUrl}/health`, {
       signal: AbortSignal.timeout(5000),
     });
 

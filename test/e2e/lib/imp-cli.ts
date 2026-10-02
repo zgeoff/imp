@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import * as z from 'zod';
-import type { CommandResult } from './instance';
+import type { CommandResult, DevInstance } from './instance';
 import { REPO_ROOT, instance, readToken, runCommand } from './instance';
 
 const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'imp');
@@ -69,34 +69,48 @@ export type SystemInfo = z.infer<typeof SystemInfoSchema>;
 
 export type CheckpointRow = z.infer<typeof CheckpointRowSchema>;
 
-let token: Promise<string> | null = null;
+// each instance's root token, by container
+const tokens = new Map<string, Promise<string>>();
 
 // From the env when the runner passed it, else read from the dev container
-// once, so a suite file also runs on its own.
-function readImpToken(): Promise<string> {
+// once, so a suite file also runs on its own. Another instance's is always
+// read from its container.
+function readImpToken(target: DevInstance): Promise<string> {
   const fromEnv = process.env['IMP_TOKEN'] ?? '';
 
-  if (fromEnv !== '') {
+  if (target === instance && fromEnv !== '') {
     return Promise.resolve(fromEnv);
   }
 
-  token ??= readToken();
+  let token = tokens.get(target.container);
+
+  if (token === undefined) {
+    token = readToken(target);
+
+    tokens.set(target.container, token);
+  }
 
   return token;
 }
 
-// the env that points the CLI at the dev instance
-export async function readImpEnv(): Promise<Record<string, string>> {
-  const impToken = await readImpToken();
+// the env that points the CLI at a dev instance
+export async function readImpEnv(target: DevInstance = instance): Promise<Record<string, string>> {
+  const impToken = await readImpToken(target);
 
-  return { IMP_URL: instance.apiUrl, IMP_TOKEN: impToken };
+  return { IMP_URL: target.apiUrl, IMP_TOKEN: impToken };
 }
 
-interface ImpRunOptions {
+export interface ImpRunOptions {
   readonly stdin?: string;
 
   // a token in place of the run's root token, such as a scoped one
   readonly token?: string;
+
+  // the instance to drive, the run's own by default
+  readonly target?: DevInstance;
+
+  // more env for the CLI, such as XDG_CONFIG_HOME for saved hosts
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 // Runs the imp CLI as a user would and returns what happened, failure
@@ -105,13 +119,13 @@ export async function tryImp(
   args: readonly string[],
   options: ImpRunOptions = {},
 ): Promise<CommandResult> {
-  const env = await readImpEnv();
+  const env = await readImpEnv(options.target);
 
   const runAs = options.token ?? env['IMP_TOKEN'] ?? '';
 
   return runCommand([IMP_SCRIPT, ...args], {
     ...(options.stdin !== undefined && { stdin: options.stdin }),
-    env: { ...env, IMP_TOKEN: runAs },
+    env: { ...env, ...options.env, IMP_TOKEN: runAs },
   });
 }
 
@@ -129,8 +143,15 @@ export async function startImp(args: readonly string[]) {
 }
 
 // Runs the imp CLI and returns its stdout, or throws with its stderr.
-export async function runImp(...args: readonly string[]): Promise<string> {
-  const result = await tryImp(args);
+export function runImp(...args: readonly string[]): Promise<string> {
+  return runImpWith({}, ...args);
+}
+
+export async function runImpWith(
+  options: ImpRunOptions,
+  ...args: readonly string[]
+): Promise<string> {
+  const result = await tryImp(args, options);
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -180,37 +201,44 @@ export async function readImpUrls(name: string): Promise<ImpUrls> {
   return { https, service, local, tailnet };
 }
 
-export async function listImps(): Promise<readonly ImpRow[]> {
-  const stdout = await runImp('ls', '--json');
+export async function listImps(target: DevInstance = instance): Promise<readonly ImpRow[]> {
+  const stdout = await runImpWith({ target }, 'ls', '--json');
 
   return z.array(ImpRowSchema).parse(JSON.parse(stdout));
 }
 
-export async function findImp(name: string): Promise<ImpRow | undefined> {
-  const rows = await listImps();
+export async function findImp(
+  name: string,
+  target: DevInstance = instance,
+): Promise<ImpRow | undefined> {
+  const rows = await listImps(target);
 
   return rows.find((row) => row.name === name);
 }
 
-export async function requireImp(name: string): Promise<ImpRow> {
-  const row = await findImp(name);
+export async function requireImp(name: string, target: DevInstance = instance): Promise<ImpRow> {
+  const row = await findImp(name, target);
 
   if (row === undefined) {
-    throw new Error(`${name} is not in imp ls`);
+    throw new Error(`${name} is not in imp ls on ${target.container}`);
   }
 
   return row;
 }
 
-export async function readState(name: string): Promise<ImpState> {
-  const row = await requireImp(name);
+export async function readState(name: string, target: DevInstance = instance): Promise<ImpState> {
+  const row = await requireImp(name, target);
 
   return row.state;
 }
 
 // throws unless the imp is in the state, for use inside waitFor
-export async function assertState(name: string, state: ImpState): Promise<void> {
-  const actual = await readState(name);
+export async function assertState(
+  name: string,
+  state: ImpState,
+  target: DevInstance = instance,
+): Promise<void> {
+  const actual = await readState(name, target);
 
   if (actual !== state) {
     throw new Error(`${name} is ${actual}, not ${state}`);
