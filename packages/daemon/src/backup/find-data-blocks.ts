@@ -7,7 +7,7 @@ const ENXIO = 6;
 const libc = loadLibc();
 
 // an lseek result: the offset, or the errno of a -1
-export type SeekResult = { readonly offset: number } | { readonly errno: number };
+type SeekResult = { readonly offset: number } | { readonly errno: number };
 
 export type SeekFile = (fd: number, offset: number, whence: number) => SeekResult;
 
@@ -16,7 +16,7 @@ function loadLibc() {
     return dlopen('libc.so.6', {
       lseek: { args: [FFIType.i32, FFIType.i64, FFIType.i32], returns: FFIType.i64 },
 
-      // oxlint-disable-next-line no-underscore-dangle -- libc's name
+      // libc's name for the thread's errno
       __errno_location: { args: [], returns: FFIType.ptr },
     });
   } catch {
