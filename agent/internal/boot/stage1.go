@@ -37,6 +37,11 @@ func Stage1() error {
 	if err := mountOnce("sysfs", "/sys", "sysfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
 	}
+	// cgroup2, devpts and /dev/shm sit on /sys and /dev, which move to the
+	// new root whole; a boot template has them made before its snapshot
+	if err := mountSystem(); err != nil {
+		return err
+	}
 	params, err := cmdline.Read()
 	if err != nil {
 		return err
