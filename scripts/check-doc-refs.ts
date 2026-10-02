@@ -7,7 +7,7 @@ import { posix } from 'node:path';
 // the files the docs tree replaced; nothing may cite them again
 const REMOVED = /\bDESIGN(?:\.md| \d)|agent\/PROTOCOL\.md|sleep-findings/u;
 
-// `docs/guides/tokens.md#scopes`, or a bare `tokens.md#scopes` that names a docs page
+// `docs/guides/tokens.md#scopes`; a bare `tokens.md#scopes` names a docs page without its path
 const DOC_PATH = /(?<![\w/.-])docs\/[\w/-]+\.md(?:#[\w-]+)?/gu;
 const BARE_PAGE = /(?<![\w/.-])[\w-]+\.md(?:#[\w-]+)?/gu;
 const DOC_DIRS = ['docs/architecture', 'docs/guides'];
@@ -93,20 +93,16 @@ function splitTarget(ref: string): Target {
 }
 
 // what a line of code points at in the docs tree
-function findCodeTargets(line: string, repo: Repo): Target[] {
-  const targets = [...line.matchAll(DOC_PATH)].map(([ref]) => splitTarget(ref));
+function findCodeTargets(line: string): Target[] {
+  return [...line.matchAll(DOC_PATH)].map(([ref]) => splitTarget(ref));
+}
 
-  for (const [ref] of line.matchAll(BARE_PAGE)) {
-    const target = splitTarget(ref);
-    const page = DOC_DIRS.map((dir) => `${dir}/${target.path}`).find((full) => repo.exists(full));
-
-    // a bare name that is no docs page (README.md, CHANGELOG.md) is not a docs reference
-    if (page !== undefined) {
-      targets.push({ path: page, anchor: target.anchor });
-    }
-  }
-
-  return targets;
+// docs pages a line of code names without their path, which reads as a file next to the code;
+// a bare name that is no docs page (README.md, CHANGELOG.md) is fine
+function findBarePages(line: string, repo: Repo): string[] {
+  return [...line.matchAll(BARE_PAGE)]
+    .map(([ref]) => splitTarget(ref).path)
+    .filter((name) => DOC_DIRS.some((dir) => repo.exists(`${dir}/${name}`)));
 }
 
 // what a line of Markdown links to, resolved against the page
@@ -162,7 +158,12 @@ export function checkFile(file: string, text: string, repo: Repo): Problem[] {
       splitTarget(match.groups?.['path'] ?? ''),
     );
 
-    const lineTargets = isMarkdown ? findMarkdownTargets(file, line) : findCodeTargets(line, repo);
+    const lineTargets = isMarkdown ? findMarkdownTargets(file, line) : findCodeTargets(line);
+    const barePages = isMarkdown ? [] : findBarePages(line, repo);
+
+    for (const name of barePages) {
+      problems.push({ ...at, message: `names ${name} without its path; use docs/<area>/${name}` });
+    }
 
     for (const [pattern, message] of isMarkdown ? [] : PROSE_HEADINGS) {
       if (pattern.test(line)) {
