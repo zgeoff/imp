@@ -151,6 +151,8 @@ if [ -n "$has_state" ]; then
     echo "tailscale-up: the saved node state is $state, not Running; joining again with the key"
   else
     # Starting with no way out yet (no network): the state counts as good.
+    # Exit 0 with tailscaled's socket up, so the entrypoint sets
+    # IMP_TAILSCALE_NODE and impd comes up as a tailnet node.
     echo "tailscale-up: the saved node is still ${state:-unknown} after 15 s; going on, and waiting for it in the background"
     wait_later </dev/null &
     exit 0

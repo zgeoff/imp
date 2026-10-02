@@ -241,6 +241,18 @@ pkgs.testers.runNixOSTest {
         host.wait_until_succeeds("test $(wc -l < ${stateDir}/fake-up.log) = 4", timeout=60)
         host.succeed("grep -q 'the saved node is NeedsLogin; joining again with the key' ${stateDir}/up.out")
 
+    with subtest("saved state still Starting and no key (a reboot with no network): impd comes up"):
+        host.succeed("rm /etc/imp-test/authkey")
+        host.succeed("echo starting > ${stateDir}/tailscaled.state")
+        out = start_imp_host()
+        assert "going on, and waiting for it in the background" in out, out
+        assert len(ups()) == 4, ups()
+        host.succeed("systemctl is-active imp-host")
+        # tailscaled connects by itself: no login, no key
+        host.succeed("echo valid > ${stateDir}/tailscaled.state")
+        host.wait_until_succeeds("grep -q 'the saved node is Running' ${stateDir}/up.out", timeout=60)
+        assert len(ups()) == 4, ups()
+
     with subtest("the key is never in the env, argv, the log or the store's env file"):
         host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
         host.fail("docker inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")

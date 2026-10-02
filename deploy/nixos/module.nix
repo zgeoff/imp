@@ -128,7 +128,7 @@ in
     imageArchive = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
-      description = "A docker save archive that holds `image`, loaded when the image is missing, instead of a pull.";
+      description = "A docker save archive that holds `image`, used instead of a pull. It is loaded at the first start, and again whenever the archive changes (a new store path).";
     };
 
     storage = lib.mkOption {
