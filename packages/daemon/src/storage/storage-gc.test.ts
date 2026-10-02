@@ -155,6 +155,8 @@ test('the hourly pass on ZFS keeps the disks of a lost database, checkpoints and
       /^impd: gc: kept orphan imp a \(tank\/imp\/disks\/a\): .+snapshots: cp-1$/,
     );
   } finally {
+    await db.destroy();
+
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

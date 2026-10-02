@@ -332,7 +332,7 @@ A crash between a destroy's row and its disk leaves an orphan, but so does a los
 database. On ZFS the database lives on the root dataset, on the pool with the disks, so an OS
 reinstall keeps both. A database restored from an older copy, or one that is gone while the pool
 survives, makes every newer disk an orphan; a sweep that took them would delete every imp. So a
-sweep sorts what no row names into two classes:
+sweep sorts what no row names as follows:
 
 | What no row names                                                                   | Class          | Why                                                                                 |
 | ----------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------- |
