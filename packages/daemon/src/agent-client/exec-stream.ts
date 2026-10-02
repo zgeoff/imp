@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { openAgentConnection } from './agent-connection';
+import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
@@ -68,12 +68,25 @@ const DetachedSchema = z.object({ reason: z.string() });
 
 // Opens an exec connection and waits for STARTED. Throws AgentError
 // (EXEC_FAILED) when the process cannot start.
-export function openExecStream(
+export async function openExecStream(
   vsockPath: string,
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  return openStream(vsockPath, { op: 'exec', ...request }, startTimeoutMs);
+  const stream = await openStream(vsockPath, { op: 'exec', ...request }, startTimeoutMs);
+
+  // an agent from before sessions ignores the name and runs a plain exec,
+  // which would die with its connection; a woken imp keeps its old agent
+  if (request.session !== undefined && stream.session === null) {
+    stream.close();
+
+    throw new AgentError(
+      'AGENT_OUTDATED',
+      "the imp's agent has no sessions yet; stop and start the imp to update it",
+    );
+  }
+
+  return stream;
 }
 
 // Attaches to a session and waits for STARTED; the replay follows as

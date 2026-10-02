@@ -171,6 +171,26 @@ test('it attaches to a session: STARTED, the replay, then detached', async () =>
   });
 });
 
+test('a session request to an agent from before sessions fails', async () => {
+  const closed = Promise.withResolvers<void>();
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.on('close', () => {
+      closed.resolve();
+    });
+
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
+  });
+
+  const opening = openExecStream(vsock.path, { argv: ['sh'], tty: true, session: 'main' });
+
+  const error = await readRejection(opening);
+
+  expect(error).toMatchObject({ code: 'AGENT_OUTDATED' });
+
+  await closed.promise;
+});
+
 test('a plain exec stream has no session', async () => {
   using vsock = await setupFakeVsock((socket) => {
     socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));

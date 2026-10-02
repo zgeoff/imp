@@ -140,6 +140,10 @@ An attached socket counts as an exec connection, so it keeps the imp awake. A de
 no connection: it keeps the imp awake only through its CPU or TCP use
 ([idle detection](./sleep-and-wake.md#idle-detection)).
 
+The code is in `sessions/`: the list and kill service, the in-memory copy of each awake imp's
+sessions, and the count `imp ls` shows. An imp woken with an agent from before sessions keeps it
+until its next cold boot; a session request to it fails with `AGENT_OUTDATED`.
+
 `sessions.list` never wakes an imp. The idle loop reads every awake imp's sessions from `activity`
 every 2 s and keeps them in memory; a list of an awake imp asks the agent again, and falls back to
 that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads the sessions once
