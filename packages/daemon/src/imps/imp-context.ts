@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import type { EgressPolicy } from '@imp/api';
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
@@ -19,6 +20,8 @@ import type { CachedDiskUsage } from '../storage/disk-usage-cache';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
+import { createCpuCgroups } from '../vmm/cpu-cgroups';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { VmRunner } from '../vmm/vm-runner';
 import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
@@ -90,6 +93,12 @@ export interface ImpServiceDeps {
   // leaves the grow to the guest's next boot (imp-disk.ts)
   readonly growFilesystem?: (disk: string) => Promise<boolean>;
   readonly egress?: ImpEgress;
+
+  // each VM's CPU limit; none enforced by default, as outside a container
+  readonly cgroups?: CpuCgroups;
+
+  // the most a CPU limit may be; the host's cores by default
+  readonly hostCpus?: number;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -119,6 +128,8 @@ export interface ImpContext {
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
   readonly egress: ImpEgress;
+  readonly cgroups: CpuCgroups;
+  readonly hostCpus: number;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
@@ -155,5 +166,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
     egress: deps.egress ?? NO_EGRESS,
+    cgroups: deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log: deps.log ?? printLog }),
+    hostCpus: deps.hostCpus ?? availableParallelism(),
   };
 }

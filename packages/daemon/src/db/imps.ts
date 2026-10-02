@@ -1,4 +1,5 @@
 import type { EgressPolicy, ImpChangeReason, ImpEventDetail, ImpState } from '@imp/api';
+import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
@@ -25,6 +26,18 @@ export interface ImpRecord {
   readonly httpPort: number;
   readonly diskBytes: number;
   readonly isDiskGrowPending: boolean;
+  readonly cpu: CpuSettings;
+  readonly wakeCount: number;
+
+  // awake time up to awakeSince; while the imp runs, add the time since
+  readonly awakeMs: number;
+  readonly awakeSince: Date | null;
+}
+
+// cores the VM may use (null: no limit) and its cgroup cpu.weight
+export interface CpuSettings {
+  readonly limit: number | null;
+  readonly weight: number;
 }
 
 export interface NewImp {
@@ -44,6 +57,7 @@ export interface NewImp {
   // open when left out; written in the insert, so the imp never exists
   // without its policy
   readonly egress?: EgressPolicy;
+  readonly cpu?: CpuSettings;
 }
 
 export interface ImpStateChange {
@@ -108,6 +122,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
         egress_policy: imp.egress.mode,
         egress_allow: JSON.stringify(imp.egress.allow),
       }),
+      ...(imp.cpu !== undefined && { cpu_limit: imp.cpu.limit, cpu_weight: imp.cpu.weight }),
       created_at: now,
       last_active_at: now,
     })
@@ -195,7 +210,7 @@ export async function updateImpState(
 
   const row = await db
     .updateTable('imps')
-    .set(values)
+    .set({ ...values, ...buildAwakeValues(change) })
     .where('id', '=', id)
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -225,7 +240,7 @@ export async function updateImpStateIf(
 
   const row = await db
     .updateTable('imps')
-    .set(values)
+    .set({ ...values, ...buildAwakeValues(change) })
     .where('id', '=', id)
     .where('state', '=', expected.state)
     .where('pid', pidOperator, expected.pid)
@@ -233,6 +248,46 @@ export async function updateImpStateIf(
     .executeTakeFirst();
 
   return row === undefined ? undefined : emitChange(db, toImpRecord(row), change);
+}
+
+// Awake time, in the same write as the state: a running imp's span opens
+// once (a re-adopt keeps it), and any other state closes it, a liveness
+// repair after a crash included, so the time still counts. A wake counts.
+function buildAwakeValues(change: Readonly<ImpStateChange>) {
+  const now = Date.now();
+
+  if (change.state === 'running') {
+    return {
+      awake_since: sql<number>`coalesce(awake_since, ${now})`,
+      ...(change.reason === 'woke' && { wake_count: sql<number>`wake_count + 1` }),
+    };
+  }
+
+  return {
+    awake_ms: sql<number>`awake_ms + coalesce(${now} - awake_since, 0)`,
+    awake_since: null,
+  };
+}
+
+// a new limit or weight; the caller applies it to a running VM
+export async function updateImpCpu(
+  db: ImpDatabase,
+  id: string,
+  cpu: Readonly<CpuSettings>,
+  vcpus: number,
+): Promise<ImpRecord> {
+  const row = await db
+    .updateTable('imps')
+    .set({ cpu_limit: cpu.limit, cpu_weight: cpu.weight, vcpus })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const imp = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+
+  return imp;
 }
 
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {
@@ -331,6 +386,10 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     httpPort: row.http_port,
     diskBytes: row.disk_bytes,
     isDiskGrowPending: row.disk_grow_pending === 1,
+    cpu: { limit: row.cpu_limit, weight: row.cpu_weight },
+    wakeCount: row.wake_count,
+    awakeMs: row.awake_ms,
+    awakeSince: toDate(row.awake_since),
   };
 }
 

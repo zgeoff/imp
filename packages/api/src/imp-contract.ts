@@ -44,6 +44,13 @@ const NameInputSchema = z.object({ name: NameSchema });
 const CheckpointRefSchema = z.string().min(1);
 const EmptySchema = z.object({});
 
+// cores; below 0.1 the VMM thread starves and a boot times out. impd also
+// refuses more than the host has.
+const CpuLimitSchema = z.number().min(0.1);
+
+// cgroup v2 cpu.weight; 100 is the default share
+const CpuWeightSchema = z.int().min(1).max(10_000);
+
 export const impContract = {
   imps: {
     create: base
@@ -62,6 +69,8 @@ export const impContract = {
 
           // what the imp may reach directly (default open)
           policy: EgressPolicySchema.optional(),
+          cpuLimit: CpuLimitSchema.optional(),
+          cpuWeight: CpuWeightSchema.optional(),
         }),
       )
       .output(ImpSchema),
@@ -123,6 +132,20 @@ export const impContract = {
           source: NameSchema,
           name: NameSchema,
           checkpoint: CheckpointRefSchema.optional(),
+        }),
+      )
+      .output(ImpSchema),
+
+    // a running VM takes a new CPU limit or weight at once, a sleeping or
+    // stopped one when it next starts; vcpus only while stopped. A null
+    // cpuLimit removes the limit.
+    update: base
+      .input(
+        z.object({
+          name: NameSchema,
+          cpuLimit: CpuLimitSchema.nullable().optional(),
+          cpuWeight: CpuWeightSchema.optional(),
+          vcpus: z.int().min(1).max(32).optional(),
         }),
       )
       .output(ImpSchema),

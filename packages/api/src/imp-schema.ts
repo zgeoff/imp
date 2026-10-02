@@ -11,6 +11,32 @@ const OutdatedPartSchema = z.enum(['firecracker', 'kernel', 'agent', 'impd']);
 
 export type OutdatedPart = z.infer<typeof OutdatedPartSchema>;
 
+// what the imp used: wakes and awake time from the record; the rest from
+// impd's last sample of the running VM, every 5 s
+const ImpResourcesSchema = z.object({
+  wakeCount: z.int().nonnegative(),
+  awakeMs: z.int().nonnegative(),
+
+  // left out while the VM is not running or not sampled yet; the counters
+  // run from `since`, when its Firecracker started
+  sample: z
+    .object({
+      measuredAt: z.date(),
+      since: z.date(),
+
+      // of one core: 150 is one and a half; left out on the first sample
+      cpuPercent: z.number().nonnegative().optional(),
+
+      // time the CPU limit held the VM back
+      cpuThrottledMs: z.int().nonnegative(),
+
+      // from the guest's side: rx is what it received, tx what it sent
+      netRxBytes: z.int().nonnegative(),
+      netTxBytes: z.int().nonnegative(),
+    })
+    .optional(),
+});
+
 export const ImpSchema = z.object({
   id: z.string(),
   name: NameSchema,
@@ -62,6 +88,11 @@ export const ImpSchema = z.object({
   // awake: why the last boot was cold instead of a wake
   coldBootReason: z.string().optional(),
   outdated: z.array(OutdatedPartSchema).readonly().optional(),
+
+  // cores the VM may use (null: no limit) and its share under contention,
+  // the cgroup cpu.weight; left out by an impd from before CPU limits
+  cpu: z.object({ limit: z.number().positive().nullable(), weight: z.int() }).optional(),
+  resources: ImpResourcesSchema.optional(),
 });
 
 export type Imp = z.infer<typeof ImpSchema>;

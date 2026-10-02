@@ -306,6 +306,11 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     reconcileImps: async () => {
       const imps = await listImps(context.db);
 
+      // cgroups of imps destroyed while impd was down, or whose remove failed
+      for (const impId of context.cgroups.removeOrphans(new Set(imps.map((imp) => imp.id)))) {
+        context.log(`impd: removed the cgroup of imp ${impId}: no imp has that id`);
+      }
+
       await Promise.all(
         imps.map((listed) =>
           lock.withImpId(listed.id, async (imp) => {
@@ -324,6 +329,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               context.log(
                 `impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`,
               );
+
+              if (imp.pid !== null) {
+                context.cgroups.adopt(imp.id, imp.pid, imp.cpu);
+              }
 
               // the record does not change; the event stream still hears of it
               await ops.updateState(imp, { reason: 'adopted', state: 'running' });

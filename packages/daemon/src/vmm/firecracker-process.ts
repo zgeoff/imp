@@ -10,16 +10,34 @@ export interface FirecrackerPaths {
 const SOCKET_WAIT_MS = 3000;
 
 // Starts Firecracker detached (setsid), so it outlives an impd restart, and
-// waits for its API socket. Serial console and Firecracker's own log go to
-// `logFile`.
-export async function startFirecracker(bin: string, paths: Readonly<FirecrackerPaths>) {
+// waits for its API socket; its output goes to `logFile`. With `cgroupProcs`
+// it joins that cgroup before the exec, so no thread runs outside.
+export async function startFirecracker(
+  bin: string,
+  paths: Readonly<FirecrackerPaths>,
+  cgroupProcs: string | null = null,
+) {
   rmSync(paths.apiSocket, { force: true });
   rmSync(paths.vsockSocket, { force: true });
 
   const log = openSync(paths.logFile, 'a');
 
-  // setsid execs in place: this process is not a group leader, so no fork
-  const child = Bun.spawn(['setsid', bin, '--api-sock', paths.apiSocket], {
+  // setsid and exec keep the pid: this process is not a group leader, so no
+  // fork
+  const argv =
+    cgroupProcs === null
+      ? ['setsid', bin, '--api-sock', paths.apiSocket]
+      : [
+          'sh',
+          '-c',
+          'echo $$ > "$1" && exec setsid "$2" --api-sock "$3"',
+          'sh',
+          cgroupProcs,
+          bin,
+          paths.apiSocket,
+        ];
+
+  const child = Bun.spawn(argv, {
     stdin: 'ignore',
     stdout: log,
     stderr: log,

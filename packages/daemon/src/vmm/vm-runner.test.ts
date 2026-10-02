@@ -23,6 +23,7 @@ test('it builds the kernel cmdline with the slot addressing', () => {
     vcpus: 2,
     memoryMib: 1024,
     dns: ['1.1.1.1', '8.8.8.8'],
+    cgroup: null,
   });
 
   expect(args).toContain('root=/dev/vdb rootfstype=squashfs ro init=/imp-agent');
@@ -84,15 +85,28 @@ async function setupFailingPause(resumeStatus: number) {
   };
 }
 
-test('a sleep whose pause fails resumes the VM and leaves it running', async () => {
+test('a sleep whose pause fails resumes the VM and leaves it running, its limit back', async () => {
   await using vm = await setupFailingPause(204);
 
+  const limits: string[] = [];
+
+  const cgroup = {
+    procsPath: '/nonexistent',
+    liftLimit: () => {
+      limits.push('lifted');
+    },
+    applyLimit: () => {
+      limits.push('applied');
+    },
+  };
+
   const rejection = await createVmRunner()
-    .sleepVm(vm.child.pid, vm.paths)
+    .sleepVm(vm.child.pid, vm.paths, cgroup)
     .catch((error: unknown) => error);
 
   expect(rejection).toBeInstanceOf(Error);
   expect(vm.calls).toEqual(['PATCH /vm {"state":"Paused"}', 'PATCH /vm {"state":"Resumed"}']);
+  expect(limits).toEqual(['lifted', 'applied']);
   expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBe(true);
 });
 
@@ -100,7 +114,7 @@ test('a sleep whose pause and resume both fail kills the VM', async () => {
   await using vm = await setupFailingPause(500);
 
   const rejection = await createVmRunner()
-    .sleepVm(vm.child.pid, vm.paths)
+    .sleepVm(vm.child.pid, vm.paths, null)
     .catch((error: unknown) => error);
 
   expect(rejection).toBeInstanceOf(Error);

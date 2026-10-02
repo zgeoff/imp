@@ -317,6 +317,10 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         vcpus: source.imp.vcpus,
         memoryMib: source.imp.memoryMib,
         policy: source.policy,
+        ...(source.imp.cpu !== undefined && {
+          cpuLimit: source.imp.cpu.limit,
+          cpuWeight: source.imp.cpu.weight,
+        }),
         prepareDisk: createForkDisk,
       });
     },

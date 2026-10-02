@@ -24,6 +24,9 @@ export const ImpChangeReasonSchema = z.enum([
 
   // its disk size, or a grow the guest still owes
   'resized',
+
+  // its CPU limit, weight or vCPU count changed
+  'updated',
 ]);
 
 export type ImpChangeReason = z.infer<typeof ImpChangeReasonSchema>;

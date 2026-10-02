@@ -26,6 +26,10 @@ export const FAKE_IMP: ImpRecord = {
   httpPort: 8080,
   diskBytes: 34_359_738_368,
   isDiskGrowPending: false,
+  cpu: { limit: null, weight: 100 },
+  wakeCount: 0,
+  awakeMs: 0,
+  awakeSince: null,
 };
 
 // events a fake stream yields, in order; null ends the stream
