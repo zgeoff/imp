@@ -54,6 +54,18 @@ test('with zfs it caps the ARC at 10 % within 1 to 8 GiB and keeps that out of t
   expect(runFunction('ram_budget_mib', [kib64, '6400']).trim()).toBe('48000');
 });
 
+test('a computed budget below 512 MiB is refused, naming the RAM and the setting', () => {
+  const kib3 = String(3 * 1024 * 1024);
+
+  expect(() =>
+    runFunction('check_ram_budget', ['-6144', kib3, '1024', 'IMP_RAM_BUDGET_MIB']),
+  ).toThrow(
+    /comes out at -6144 MiB, below the 512 MiB floor: RAM 3072 MiB.*ARC cap 1024 MiB.*Set IMP_RAM_BUDGET_MIB/u,
+  );
+
+  expect(runFunction('check_ram_budget', ['512', kib3, '0', 'IMP_RAM_BUDGET_MIB'])).toBe('');
+});
+
 function getMkfsOptions(kernel: string, progs: string): string {
   return runFunction('mkfs_xfs_opts', [kernel, progs]).trim();
 }

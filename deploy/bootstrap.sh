@@ -70,6 +70,9 @@ readonly DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 # The template's IMP_RAM_BUDGET_MIB; a file still holding it gets the
 # computed budget, any other value is the operator's and stays.
 readonly TEMPLATE_BUDGET_MIB=16384
+# A computed RAM budget below this is refused: the host is too small for the
+# formula, and the operator sets IMP_RAM_BUDGET_MIB.
+readonly RAM_BUDGET_FLOOR_MIB=512
 # A loop file smaller than this is refused.
 readonly LOOP_MIN_GIB=20
 
@@ -157,6 +160,18 @@ ram_budget_mib() {
   reserve=$((total * 15 / 100))
   [ "$reserve" -lt 8192 ] && reserve=8192
   echo $((total - reserve - arc))
+}
+
+# check_ram_budget BUDGET MEMTOTAL_KIB ARC_MIB SETTING: fail, saying why,
+# when a computed budget is below the floor. SETTING names what the operator
+# sets instead.
+check_ram_budget() {
+  local budget=$1 total=$(($2 / 1024)) arc=$3
+  [ "$budget" -ge "$RAM_BUDGET_FLOOR_MIB" ] && return 0
+  echo "the RAM budget for awake imps comes out at ${budget} MiB, below the ${RAM_BUDGET_FLOOR_MIB} MiB floor:" \
+    "RAM ${total} MiB, less the larger of 8192 MiB and 15 %, less the ZFS ARC cap ${arc} MiB." \
+    "Set $4 to what imps may use on this host" >&2
+  return 1
 }
 
 # zfs_arc_max_mib MEMTOTAL_KIB: the cap on the ZFS ARC, 10 % of RAM within
@@ -986,7 +1001,10 @@ uninstall_firewall() {
   rm -f /etc/systemd/system/imp-firewall.service "$FIREWALL_FILE"
   systemctl daemon-reload
   # An earlier run with own disabled ufw and firewalld.
-  if ! nft list ruleset 2>/dev/null | grep -q 'hook input' \
+  # Read first: under pipefail, grep -q quitting early fails nft with SIGPIPE.
+  local rules
+  rules=$(nft list ruleset 2>/dev/null || true)
+  if ! grep -q 'hook input' <<<"$rules" \
     && ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } \
     && ! systemctl -q is-active firewalld 2>/dev/null; then
     warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host-contract.md#firewall)"
@@ -1054,6 +1072,12 @@ ensure_imp() {
   local env changed=
   env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
     "$storage" "$zfs_root" "$host_firewall")
+  # An operator's value stays (render_env), so the floor binds the formula only.
+  local refusal
+  if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] \
+    && ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
+    die "$refusal"
+  fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
   if [ "$storage" = zfs ]; then
