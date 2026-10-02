@@ -1,5 +1,6 @@
 import { beforeAll, expect, test } from 'bun:test';
 import { config } from '../lib/config';
+import { FIRECRACKER_MEMORY_SCRIPT, parseFirecrackerMemory } from '../lib/firecracker-memory';
 import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy } from '../lib/http';
 import {
@@ -39,20 +40,11 @@ const FILL_SCRIPT =
   `mkdir -p /run/fill && mount -t tmpfs -o size=${String(config.scaleFillMib + 16)}m tmpfs /run/fill && ` +
   `dd if=/dev/urandom of=/run/fill/blob bs=1M count=${String(config.scaleFillMib)} 2>/dev/null`;
 
-// "<MiB> <count>": PSS over every Firecracker process in the container, a
-// figure that does not come from impd
-const FIRECRACKER_PSS_SCRIPT = `
-kib=0; count=0
-for pid in $(pgrep -x firecracker); do
-  v=$(awk '/^Pss:/ { print $2 }' /proc/$pid/smaps_rollup 2>/dev/null)
-  kib=$((kib + \${v:-0})); count=$((count + 1))
-done
-echo $((kib / 1024)) $count`;
-
 interface BudgetSample {
   readonly ramUsedMib: number;
   readonly awake: number;
   readonly firecrackerPssMib: number;
+  readonly firecrackerOwnedMib: number;
 }
 
 interface BudgetMonitor {
@@ -62,18 +54,19 @@ interface BudgetMonitor {
 
 async function readBudgetSample(): Promise<BudgetSample> {
   const info = await readInfo();
-  const pss = await runInContainer(['sh', '-c', FIRECRACKER_PSS_SCRIPT]);
+  const smaps = await runInContainer(['sh', '-c', FIRECRACKER_MEMORY_SCRIPT]);
 
-  const [pssMib] = pss.stdout.trim().split(' ');
+  const memory = parseFirecrackerMemory(smaps.stdout);
 
   return {
     ramUsedMib: info.ramUsedMib,
     awake: info.awakeCount,
-    firecrackerPssMib: Number(pssMib),
+    firecrackerPssMib: memory.pssMib,
+    firecrackerOwnedMib: memory.ownedMib,
   };
 }
 
-// samples impd's RAM figure and Firecracker's PSS about every 0.5 s
+// samples impd's RAM figure and Firecracker's memory about every 0.5 s
 function startBudgetMonitor(): BudgetMonitor {
   const samples: BudgetSample[] = [];
   const state = { running: true };
@@ -102,10 +95,13 @@ function startBudgetMonitor(): BudgetMonitor {
   };
 }
 
+// The budget caps what the VMs own, read from smaps here so a wrong figure
+// from impd cannot hide a breach; full PSS adds clean file pages the governor
+// leaves out, so it is only reported (docs/guides/development.md)
 function findViolations(samples: readonly BudgetSample[]): readonly BudgetSample[] {
   return samples.filter(
     (sample) =>
-      sample.ramUsedMib > config.ramBudgetMib || sample.firecrackerPssMib > config.ramBudgetMib,
+      sample.ramUsedMib > config.ramBudgetMib || sample.firecrackerOwnedMib > config.ramBudgetMib,
   );
 }
 
@@ -221,6 +217,16 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
       fillMib: config.scaleFillMib,
     });
 
+    // An imp restored from a warm boot template owns less than a cold boot
+    // (its untouched pages stay clean template pages), so more fit: the
+    // governor sleeps nothing unless the count passes the fit.
+    if (config.scaleCount <= fit) {
+      throw new Error(
+        `E2E_SCALE_COUNT ${String(config.scaleCount)} fits in the budget at ${String(perImp)} MiB ` +
+          'per imp, so the governor would sleep none: raise the count or lower E2E_RAM_BUDGET_MIB',
+      );
+    }
+
     for (let index = 2; index <= config.scaleCount; index++) {
       const ms = await createFilledImp(buildName(index));
 
@@ -320,16 +326,31 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
   const maxUsed = Math.max(...monitor.samples.map((sample) => sample.ramUsedMib));
   const maxPss = Math.max(...monitor.samples.map((sample) => sample.firecrackerPssMib));
+  const maxOwned = Math.max(...monitor.samples.map((sample) => sample.firecrackerOwnedMib));
+
+  const maxFileMib = Math.max(
+    ...monitor.samples.map((sample) => sample.firecrackerPssMib - sample.firecrackerOwnedMib),
+  );
+
   const maxAwake = Math.max(...monitor.samples.map((sample) => sample.awake));
+
+  const pssOver = monitor.samples.filter(
+    (sample) => sample.firecrackerPssMib > config.ramBudgetMib,
+  ).length;
 
   console.log(
     `    budget held over ${String(monitor.samples.length)} samples: max ramUsedMib ${String(maxUsed)}, ` +
-      `max Firecracker PSS ${String(maxPss)}, max awake ${String(maxAwake)}`,
+      `max Firecracker owned ${String(maxOwned)}, max Firecracker PSS ${String(maxPss)} ` +
+      `(up to ${String(maxFileMib)} MiB of clean file pages, over the budget in ` +
+      `${String(pssOver)}), max awake ${String(maxAwake)}`,
   );
 
   writeMetric('scaleBudget', {
     maxRamUsedMib: maxUsed,
+    maxFirecrackerOwnedMib: maxOwned,
     maxFirecrackerPssMib: maxPss,
+    maxFirecrackerFileMib: maxFileMib,
+    pssOverBudgetSamples: pssOver,
     maxAwake,
     samples: monitor.samples.length,
     sleepingAfterCreate,
