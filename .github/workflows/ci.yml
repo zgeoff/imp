@@ -204,7 +204,8 @@ jobs:
         run: docker build --target compile -f host/Dockerfile .
 
   # Packs @zgeoff/imp-client as the release publishes it, then installs the
-  # tarball into an empty project on the oldest Node it supports.
+  # tarball into an empty project on the oldest Node it supports, and smokes
+  # it against impd's app under Node, Bun and a compiled Bun binary.
   client:
     runs-on: ubuntu-latest
     permissions:
@@ -235,6 +236,11 @@ jobs:
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: scripts/check-client-package.sh "$TARBALL"
+
+      - name: Smoke the package under Node, Bun and a compiled binary
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: scripts/check-client-runtimes.sh "$TARBALL"
 
   # Boots real microVMs: the fast end-to-end set (scripts/test-e2e.sh --only
   # fast) against a dev instance on the runner's own KVM. A required check,

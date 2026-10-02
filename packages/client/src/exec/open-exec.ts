@@ -19,7 +19,8 @@ export interface ExecOptions {
   // with DETACHED when impd ends the socket while the session runs on
   readonly session?: string;
 
-  // closes the session, as `close()` does
+  // closes the session, as `close()` does; before the start, `started` and
+  // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
 
   // output a stream may hold unread before the session ends with
@@ -35,7 +36,7 @@ export interface ExecExit {
 
 // One running command. The output streams end when the session does, and
 // cancelling both ends it; `exit` rejects with an ExecError when the command
-// did not run to its exit.
+// did not run to its exit, or with the abort's reason before it started.
 export interface ExecHandle {
   readonly started: Promise<ExecStarted>;
   readonly stdout: ReadableStream<Uint8Array>;
@@ -179,7 +180,7 @@ async function openHandle(
 
     stdout.end();
     stderr.end();
-    abort?.removeEventListener('abort', stopSession);
+    abort?.removeEventListener('abort', stopForAbort);
 
     if ('error' in result) {
       started.resolve({ error: result.error });
@@ -194,6 +195,20 @@ async function openHandle(
     stopWith('CLOSED', 'the exec session was closed');
   };
 
+  // an abort during the connect is the caller's abort, as one during the
+  // ticket call is; once the command runs, it closes the session
+  const stopForAbort = (): void => {
+    if (session.isStarted()) {
+      stopSession();
+
+      return;
+    }
+
+    session.stop();
+
+    resolveHandle({ error: readAbortReason(abort) });
+  };
+
   const waitForOutcome = async (): Promise<void> => {
     const outcome = await session.outcome;
 
@@ -206,9 +221,9 @@ async function openHandle(
   };
 
   if (abort?.aborted === true) {
-    stopSession();
+    stopForAbort();
   } else {
-    abort?.addEventListener('abort', stopSession, { once: true });
+    abort?.addEventListener('abort', stopForAbort, { once: true });
   }
 
   void waitForOutcome();
@@ -223,7 +238,13 @@ async function openHandle(
   });
 }
 
-type Settled<T> = { readonly value: T } | { readonly error: ExecError };
+type Settled<T> = { readonly value: T } | { readonly error: Error };
+
+function readAbortReason(abort: Readonly<AbortSignal> | undefined): Error {
+  const reason: unknown = abort?.reason;
+
+  return reason instanceof Error ? reason : new DOMException('the exec was aborted', 'AbortError');
+}
 
 export type ConsoleOptions = Omit<ExecOptions, 'tty'>;
 
