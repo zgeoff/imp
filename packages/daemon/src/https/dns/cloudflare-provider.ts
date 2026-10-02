@@ -24,9 +24,18 @@ const ZoneSchema = z.object({
 
 const RecordSchema = z.object({
   id: z.string(),
+  type: z.string().optional(),
   content: z.string(),
   proxied: z.boolean().optional(),
+  comment: z.string().nullable().optional(),
 });
+
+// on every A record impd writes: a record without it is someone else's, such
+// as a website's at the zone apex, and impd never changes it
+const MANAGED_COMMENT = 'managed by impd';
+
+// the types a client resolves a name to an address with
+const ADDRESS_TYPES = new Set(['A', 'AAAA', 'CNAME']);
 
 const ZoneListSchema = z.array(ZoneSchema);
 const RecordListSchema = z.array(RecordSchema);
@@ -38,6 +47,7 @@ interface CloudflareOptions {
   readonly token: string;
   readonly apiUrl?: string;
   readonly propagation?: WaitForTxtOptions;
+  readonly log?: (message: string) => void;
 }
 
 // Cloudflare's v4 API. Records are DNS only (`proxied: false`): a proxied
@@ -136,12 +146,37 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
     setA: async (fqdn, ip) => {
       const zone = await findZone(fqdn);
 
-      const query = `type=A&name=${encodeURIComponent(fqdn)}`;
+      const query = `name=${encodeURIComponent(fqdn)}`;
 
       const result = await sendRequest('GET', `/zones/${zone.id}/dns_records?${query}`);
 
-      const existing = RecordListSchema.parse(result);
-      const record = { type: 'A', name: fqdn, content: ip, ttl: A_TTL_S, proxied: false };
+      const existing = RecordListSchema.parse(result).filter((item) =>
+        ADDRESS_TYPES.has(item.type ?? ''),
+      );
+
+      const foreign = existing.find((item) => item.comment !== MANAGED_COMMENT);
+
+      if (foreign !== undefined) {
+        throw new Error(
+          `Cloudflare: ${fqdn} already has a record impd did not make (${foreign.type ?? ''} ${foreign.content}); remove it, or give impd a name of its own in IMP_DOMAIN`,
+        );
+      }
+
+      if (existing.length > 1) {
+        options.log?.(
+          `impd: https: warning: ${fqdn} has ${String(existing.length)} A records impd made; it updates only the first`,
+        );
+      }
+
+      const record = {
+        type: 'A',
+        name: fqdn,
+        content: ip,
+        ttl: A_TTL_S,
+        proxied: false,
+        comment: MANAGED_COMMENT,
+      };
+
       const [current] = existing;
 
       if (current === undefined) {

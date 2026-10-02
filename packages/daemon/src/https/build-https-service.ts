@@ -23,7 +23,7 @@ export function buildHttpsService(options: BuildHttpsOptions): HttpsService {
   const config = options.config;
   const log = options.log;
   const store = createCertStore(options.dataDir);
-  const dns = createDnsProvider(config.dns);
+  const dns = createDnsProvider(config.dns, log);
 
   const issue = createAcmeIssuer({
     directoryUrl: config.acmeDirectory,
