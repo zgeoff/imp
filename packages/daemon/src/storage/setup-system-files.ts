@@ -2,47 +2,57 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'n
 import { dirname } from 'node:path';
 import type { Config } from '../config';
 import { buildSystemDrivePath } from './data-layout';
-import type { SystemFilePaths } from './system-file-info';
+import { deriveFileSha256, deriveSha256, readKernelInfo } from './system-file-info';
+import type { SystemFileInfo } from './system-file-info';
 
-// Copies the kernel and the system drive into <dataDir>/system; returns the
-// paths imps boot with. Drives are content-addressed and never written over
+// The files imps boot with, and what system.info reports about them.
+export interface SystemFiles {
+  readonly kernelPath: string;
+  readonly systemDrivePath: string;
+  readonly info: SystemFileInfo;
+}
+
+// Copies the kernel and the system drive into <dataDir>/system; each is
+// hashed once here. Drives are content-addressed and never written over
 // (docs/architecture/storage.md#system-files).
-export function setupSystemFiles(config: Config): SystemFilePaths {
-  if (config.kernelSource === null) {
-    // renamed over: a VM that has the old file open keeps the old inode
-    if (!existsSync(config.kernelPath)) {
-      throw new Error(`${config.kernelPath} is missing and no source is configured`);
-    }
-  } else {
-    requireSource(config.kernelSource);
+export async function setupSystemFiles(config: Config): Promise<SystemFiles> {
+  const kernelSource = config.kernelSource ?? config.kernelPath;
 
-    // renamed over: a VM that has the old file open keeps the old inode
-    if (!existsSync(config.kernelPath) || !isSameContent(config.kernelSource, config.kernelPath)) {
-      writeCopy(config.kernelSource, config.kernelPath);
-    }
+  if (!existsSync(kernelSource)) {
+    const missing = config.kernelSource === null ? ' and no source is configured' : '';
+
+    throw new Error(`${kernelSource} does not exist${missing}`);
   }
 
-  requireSource(config.systemDriveSource);
+  const guestKernel = readKernelInfo(readFileSync(kernelSource));
+
+  // renamed over: a VM that has the old file open keeps the old inode
+  if (config.kernelSource !== null && !hasContent(config.kernelPath, guestKernel.sha256)) {
+    writeCopy(config.kernelSource, config.kernelPath);
+  }
+
+  if (!existsSync(config.systemDriveSource)) {
+    throw new Error(`${config.systemDriveSource} does not exist`);
+  }
+
+  const sha256 = await deriveFileSha256(config.systemDriveSource);
 
   // a sleeping VM's snapshot reopens its drive by path: the bytes there stay
-
-  const sha256 = new Bun.CryptoHasher('sha256')
-    .update(readFileSync(config.systemDriveSource))
-    .digest('hex');
-
   const systemDrivePath = buildSystemDrivePath(config.dataDir, sha256);
 
   if (!existsSync(systemDrivePath)) {
     writeCopy(config.systemDriveSource, systemDrivePath);
   }
 
-  return { kernelPath: config.kernelPath, systemDrivePath };
+  return {
+    kernelPath: config.kernelPath,
+    systemDrivePath,
+    info: { guestKernel, systemDrive: { sha256 } },
+  };
 }
 
-function requireSource(source: string): void {
-  if (!existsSync(source)) {
-    throw new Error(`${source} does not exist`);
-  }
+function hasContent(path: string, sha256: string): boolean {
+  return existsSync(path) && deriveSha256(readFileSync(path)) === sha256;
 }
 
 // a crash mid-copy leaves only the .new file, never a short target
@@ -50,8 +60,4 @@ function writeCopy(source: string, target: string): void {
   mkdirSync(dirname(target), { recursive: true });
   copyFileSync(source, `${target}.new`);
   renameSync(`${target}.new`, target);
-}
-
-function isSameContent(a: string, b: string): boolean {
-  return Bun.hash(readFileSync(a)) === Bun.hash(readFileSync(b));
 }

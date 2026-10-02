@@ -10,6 +10,8 @@ import {
   writeSnapshotMeta,
 } from '../sleep/snapshot-meta';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
+import type { VmIdentity } from '../sleep/vm-identity';
+import type { ImpPaths } from '../storage/data-layout';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
@@ -65,6 +67,16 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
   };
 
+  // The identity is advisory: a VM without one sleeps into a snapshot that
+  // boots cold, so a failed write (a full disk) must not fail the boot.
+  const writeIdentity = (imp: LockedImp, paths: ImpPaths, identity: VmIdentity): void => {
+    try {
+      writeVmIdentity(paths, identity);
+    } catch (error) {
+      context.log(`impd: ${imp.name}: could not write vm.json: ${readErrorMessage(error)}`);
+    }
+  };
+
   // `reason` says why a wake booted cold instead; null for a create or a start
   const startColdImpVm = async (imp: LockedImp, reason: string | null): Promise<LockedImp> => {
     try {
@@ -114,7 +126,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
 
       // its sleeps record this, whatever the host boots by then
-      writeVmIdentity(paths, {
+      writeIdentity(imp, paths, {
         ...context.identity,
         agentVersion: vm.agentVersion,
         bootReason: reason,
@@ -169,12 +181,19 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     try {
       const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths));
 
+      const booted = readVmIdentity(paths);
+
       writeSnapshotMeta(paths, {
-        ...buildSnapshotIdentity(readVmIdentity(paths), context.identity),
+        ...buildSnapshotIdentity(booted, context.identity),
         createdAt: Date.now(),
         memoryMib: imp.memoryMib,
         ramMib,
       });
+
+      // its next wake restores this memory: the cold boot is news no longer
+      if (booted !== null && booted.bootReason !== null) {
+        writeIdentity(imp, paths, { ...booted, bootReason: null });
+      }
 
       const sleepMs = Math.round(performance.now() - started);
 
@@ -228,49 +247,89 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const started = performance.now();
 
+    const woken = await loadSnapshot(imp, paths);
+
+    if (woken instanceof Error) {
+      return startAfterFailedWake(imp, paths, woken);
+    }
+
+    // the drive the snapshot reopened is the one the VM booted from, so its
+    // agent answers as it did then; anything else is not that VM
+    if (meta.agentVersion !== undefined && woken.agentVersion !== meta.agentVersion) {
+      await stopWrongVm(imp, paths, woken.pid);
+
+      const wrong = new Error(
+        `the agent answered as ${woken.agentVersion}, not ${meta.agentVersion}`,
+      );
+
+      return startAfterFailedWake(imp, paths, wrong);
+    }
+
+    const wakeMs = Math.round(performance.now() - started);
+
+    context.log(
+      `impd: ${imp.name}: woke pid ${String(woken.pid)} in ${String(wakeMs)}ms ${formatTimings(woken.timings)}`,
+    );
+
+    await updateImpActivity(context.db, imp.id, new Date());
+
+    return updateState(imp, {
+      state: 'running',
+      pid: woken.pid,
+      error: null,
+      sleptAt: null,
+      firecrackerVersion: woken.firecrackerVersion,
+    });
+  };
+
+  // the woken VM, or why the load or the agent failed; the VM is gone then
+  const loadSnapshot = async (imp: LockedImp, paths: ImpPaths) => {
     try {
       // a container restart takes the taps with it
       await context.taps.setupTap(context.findAddress(imp.slot));
 
-      const vm = await context.vms.wakeVm({ firecrackerBin: context.config.firecrackerBin, paths });
-
-      // the drive the snapshot reopened is the one the VM booted from, so its
-      // agent answers as it did then; anything else is not that VM
-      if (meta.agentVersion !== undefined && vm.agentVersion !== meta.agentVersion) {
-        await context.vms.stopVm(vm.pid, paths, false);
-
-        throw new Error(`the agent answered as ${vm.agentVersion}, not ${meta.agentVersion}`);
-      }
-
-      const wakeMs = Math.round(performance.now() - started);
-
-      context.log(
-        `impd: ${imp.name}: woke pid ${String(vm.pid)} in ${String(wakeMs)}ms ${formatTimings(vm.timings)}`,
-      );
-
-      await updateImpActivity(context.db, imp.id, new Date());
-
-      return await updateState(imp, {
-        state: 'running',
-        pid: vm.pid,
-        error: null,
-        sleptAt: null,
-        firecrackerVersion: vm.firecrackerVersion,
-      });
+      return await context.vms.wakeVm({ firecrackerBin: context.config.firecrackerBin, paths });
     } catch (error) {
-      const failure = readErrorMessage(error).split('\n')[0] ?? '';
+      return error instanceof Error ? error : new Error(readErrorMessage(error));
+    }
+  };
 
-      context.log(`impd: ${imp.name}: ${failure}; booting cold`);
+  // A VM that will not stop still has the disk open: a cold boot now would put
+  // two VMs on one disk. The error record keeps its pid, so a start or a
+  // destroy kills it again, as reconcileImps does.
+  const stopWrongVm = async (imp: LockedImp, paths: ImpPaths, pid: number): Promise<void> => {
+    try {
+      await context.vms.stopVm(pid, paths, false);
+    } catch (error) {
+      const message = readErrorMessage(error);
+
+      context.log(`impd: ${imp.name}: could not stop the woken VM: ${message}`);
       context.admission?.release(imp.id);
-
-      // the load may have run the guest, which can write its disk: the
-      // snapshot no longer matches it, even if the cold boot is turned away
       removeSnapshot(paths);
 
-      const stopped = await updateState(imp, { state: 'stopped', pid: null });
+      await updateState(imp, { state: 'error', pid, error: `could not stop: ${message}` });
 
-      return startColdImpVm(stopped, failure);
+      throw error;
     }
+  };
+
+  const startAfterFailedWake = async (
+    imp: LockedImp,
+    paths: ImpPaths,
+    error: Readonly<Error>,
+  ): Promise<LockedImp> => {
+    const failure = error.message.split('\n')[0] ?? '';
+
+    context.log(`impd: ${imp.name}: ${failure}; booting cold`);
+    context.admission?.release(imp.id);
+
+    // the load may have run the guest, which can write its disk: the
+    // snapshot no longer matches it, even if the cold boot is turned away
+    removeSnapshot(paths);
+
+    const stopped = await updateState(imp, { state: 'stopped', pid: null });
+
+    return startColdImpVm(stopped, failure);
   };
 
   const requireRunningImp = async (imp: LockedImp): Promise<LockedImp> => {

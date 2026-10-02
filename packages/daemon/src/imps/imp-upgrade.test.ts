@@ -1,12 +1,11 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createImp, findImpByName, updateImpState } from '../db/imps';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath } from '../storage/data-layout';
-import { removeUnusedSystemDrives } from '../storage/remove-unused-system-drives';
-import { listDrivesInUse } from './drives-in-use';
 import { FAKE_AGENT_VERSION } from './fake-vmm';
+import { removeUnusedDrives } from './remove-unused-drives';
 import { buildTestApp, findBrokenInvariants, setupImpTest, waitForOutcome } from './test-imps';
 
 // An upgrade as imp-host does it: SIGTERM sleeps every awake imp, and a new
@@ -45,15 +44,6 @@ async function setupUpgradeTest() {
     return readVmIdentity(paths)?.systemDrive;
   };
 
-  // what main does once the imps are reconciled
-  const removeUnusedDrives = async () => {
-    const keep = await listDrivesInUse(ctx.db, ctx.dataDir);
-
-    keep.add(ctx.readIdentity().systemDrivePath);
-
-    return removeUnusedSystemDrives(ctx.dataDir, keep);
-  };
-
   const current = { imps: ctx.imps };
 
   const runUpgrade = async (drive: string, sleepFirst = true) => {
@@ -67,7 +57,12 @@ async function setupUpgradeTest() {
 
     await impd.imps.reconcileImps();
 
-    const pruned = await removeUnusedDrives();
+    // as main does once the imps are reconciled
+    const pruned = await removeUnusedDrives(
+      ctx.db,
+      ctx.dataDir,
+      ctx.readIdentity().systemDrivePath,
+    );
 
     return { impd, client: buildTestApp(ctx, impd).client, pruned };
   };
@@ -334,4 +329,116 @@ test('a woken agent that is not the one the snapshot recorded boots cold', async
 
   expect(ctx.fake.wakes).toHaveLength(1);
   expect(ctx.fake.alive.size).toBe(1);
+});
+
+test('a woken VM with the wrong agent that will not stop keeps its disk to itself', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  const meta = readSnapshotMeta(paths);
+
+  if (meta === null) {
+    throw new Error('no snapshot');
+  }
+
+  writeSnapshotMeta(paths, { ...meta, agentVersion: '0.0.9' });
+
+  ctx.fake.queue('stop', 'fail');
+
+  const outcome = await waitForOutcome(ctx.client.imps.wake({ name: 'dev' }), 10_000);
+  const imp = await findImpByName(ctx.db, 'dev');
+  const invariants = await findBrokenInvariants(ctx, true);
+
+  // no cold boot: the VM that would not stop still has the disk open
+  expect(outcome).toBe('failed');
+  expect(ctx.fake.alive.size).toBe(1);
+  expect(imp).toMatchObject({ state: 'error', pid: ctx.fake.wakes[0] });
+  expect(invariants).toEqual([]);
+});
+
+test('a boot whose vm.json cannot be written still runs, and logs why', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.stop({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  // a directory in the way: the rename over it fails, as a full disk would
+  rmSync(paths.vmIdentity);
+  mkdirSync(`${paths.vmIdentity}/blocked`, { recursive: true });
+
+  const started = await ctx.client.imps.start({ name: 'dev' });
+
+  expect(started.state).toBe('running');
+  expect(ctx.logs.some((line) => line.startsWith('impd: dev: could not write vm.json'))).toBeTrue();
+});
+
+test('a VM booted by an impd that kept no identity says its next wake boots cold', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  rmSync(paths.vmIdentity);
+
+  const upgraded = await ctx.runUpgrade(NEW_DRIVE, false);
+  const awake = await upgraded.client.imps.get({ name: 'dev' });
+
+  await upgraded.client.imps.sleep({ name: 'dev' });
+
+  const asleep = await upgraded.client.imps.get({ name: 'dev' });
+
+  expect(awake.outdated).toEqual(['impd']);
+  expect(asleep.coldBootReason).toBe('the snapshot is from an older impd');
+});
+
+test('a sleep clears the reason the last boot was cold', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const upgraded = await ctx.runUpgrade(NEW_DRIVE);
+
+  rmSync(buildSystemDrivePath(ctx.dataDir, ctx.oldDrive));
+
+  const coldBooted = await upgraded.client.imps.wake({ name: 'dev' });
+
+  await upgraded.client.imps.sleep({ name: 'dev' });
+
+  const woken = await upgraded.client.imps.wake({ name: 'dev' });
+
+  expect(coldBooted.coldBootReason).toBeDefined();
+  expect(woken.coldBootReason).toBeUndefined();
+  expect(ctx.fake.wakes).toHaveLength(1);
+});
+
+test('drives in use stay when the data dir moved, by their file name', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  const meta = readSnapshotMeta(paths);
+
+  if (meta === null) {
+    throw new Error('no snapshot');
+  }
+
+  // the snapshot names the drive under the data dir's old place
+  writeSnapshotMeta(paths, {
+    ...meta,
+    systemDrivePath: `/old/imp/system/drives/${ctx.oldDrive}.squashfs`,
+  });
+
+  const upgraded = await ctx.runUpgrade(NEW_DRIVE);
+
+  expect(upgraded.pruned).toEqual([]);
 });

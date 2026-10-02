@@ -38,8 +38,9 @@ export function readBootStatus(
 
   const vm = readVmIdentity(paths);
 
+  // re-adopted from an impd that kept no identity: its sleep cannot name a drive
   if (vm === null) {
-    return {};
+    return { outdated: ['impd'] };
   }
 
   const status = vm.bootReason === null ? {} : { coldBootReason: vm.bootReason };

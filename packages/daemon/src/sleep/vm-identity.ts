@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { release } from 'node:os';
 import type { OutdatedPart } from '@imp/api';
 import * as z from 'zod';
 import type { ImpPaths } from '../storage/data-layout';
-import type { SystemFileInfo } from '../storage/system-file-info';
+import type { SystemFiles } from '../storage/setup-system-files';
 
 // What a VM booted with. impd writes it at every cold boot; it holds until the
 // next one, across sleeps, wakes and impd restarts, so a sleep records what
@@ -30,26 +30,27 @@ export type VmIdentity = z.infer<typeof VmIdentitySchema>;
 // What this host boots imps with now.
 export type HostIdentity = Omit<VmIdentity, 'agentVersion' | 'bootReason'>;
 
-interface HostSources {
-  readonly firecrackerBin: string;
-  readonly systemDrivePath: string;
-  readonly systemFiles: SystemFileInfo;
-}
-
 // Read once at start: impd installs the kernel and the system drive only then.
-export function readHostIdentity(sources: Readonly<HostSources>): HostIdentity {
+export function readHostIdentity(
+  firecrackerBin: string,
+  systemFiles: Readonly<SystemFiles>,
+): HostIdentity {
   return {
-    firecrackerVersion: readVersionOutput(sources.firecrackerBin, '--version'),
-    snapshotVersion: readVersionOutput(sources.firecrackerBin, '--snapshot-version'),
+    firecrackerVersion: readVersionOutput(firecrackerBin, '--version'),
+    snapshotVersion: readVersionOutput(firecrackerBin, '--snapshot-version'),
     hostKernel: release(),
-    guestKernel: sources.systemFiles.guestKernel.sha256,
-    systemDrive: sources.systemFiles.systemDrive.sha256,
-    systemDrivePath: sources.systemDrivePath,
+    guestKernel: systemFiles.info.guestKernel.sha256,
+    systemDrive: systemFiles.info.systemDrive.sha256,
+    systemDrivePath: systemFiles.systemDrivePath,
   };
 }
 
+// written next to the old file and renamed over it: a crash never leaves half
 export function writeVmIdentity(paths: Readonly<ImpPaths>, identity: Readonly<VmIdentity>): void {
-  writeFileSync(paths.vmIdentity, `${JSON.stringify(identity, null, 2)}\n`);
+  const next = `${paths.vmIdentity}.new`;
+
+  writeFileSync(next, `${JSON.stringify(identity, null, 2)}\n`);
+  renameSync(next, paths.vmIdentity);
 }
 
 // null for a VM booted before impd kept the file, or a broken one
