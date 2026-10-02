@@ -203,6 +203,13 @@ async function* encodeStream(
   yield encodeJsonFrame(MOVE_FRAMES.end, {});
 }
 
+// a public imp's credential and DNS record belong to this host's domain
+function buildPublicError(name: string) {
+  return new ORPCError('PRECONDITION_FAILED', {
+    message: `${name} is public: run imp unexpose ${name} first, and imp expose on the target after the move`,
+  });
+}
+
 export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   const fetchPeer = deps.fetch ?? ((request: Request) => fetch(request));
 
@@ -336,12 +343,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         cpu: imp.cpu,
         egress: { mode: egress.mode, allow: [...egress.allow] },
         grants,
+        isIdentityResetPending: imp.isIdentityResetPending,
       },
       image: {
         name: image.name,
         ref: image.ref,
         digest: image.digest,
         sizeBytes: image.sizeBytes,
+        source: image.source,
+        sourceImp: image.sourceImp,
         isIncluded: isImageIncluded,
       },
       checkpoints: checkpoints.map((checkpoint) => ({
@@ -662,6 +672,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   return {
     prepare: (name, options) =>
       deps.imps.lockImp(name, async (imp) => {
+        if (imp.publicAuth !== null) {
+          throw buildPublicError(name);
+        }
+
         if (imp.state === 'running' || imp.state === 'sleeping') {
           if (!options.stop) {
             throw buildInvalidStateError(imp.state, ['stopped'], 'move');
@@ -691,7 +705,14 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           })
           .execute();
 
-        await updateImpMove(deps.db, imp.id, 'sending');
+        const marked = await updateImpMove(deps.db, imp.id, 'sending');
+
+        // an expose that landed before the mark; none lands after it
+        if (marked.publicAuth !== null) {
+          await removeMark(imp);
+
+          throw buildPublicError(name);
+        }
 
         finished.delete(imp.id);
 

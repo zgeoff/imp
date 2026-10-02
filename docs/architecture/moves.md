@@ -40,13 +40,13 @@ only with `IMP_E2E=1`; impd logs a warning at start when it is set.
 
 The stream is frames: a type byte, a 4-byte big-endian length, then the payload.
 
-| Type | Name       | Payload                                                                               |
-| ---- | ---------- | ------------------------------------------------------------------------------------- |
-| 1    | `HEADER`   | JSON: the imp's settings, the grants' secret names, the image, the checkpoints        |
-| 2    | `FILE`     | JSON: the file's kind (`image-rootfs`, `image-config`, `checkpoint`, `disk`) and size |
-| 3    | `DATA`     | An 8-byte offset, then at most 1 MiB of the file at it                                |
-| 4    | `FILE_END` | JSON: the sha256 over every `DATA` payload of the file, in order                      |
-| 5    | `END`      | `{}`                                                                                  |
+| Type | Name       | Payload                                                                                                                                                                      |
+| ---- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `HEADER`   | JSON: the imp's settings, the grants' secret names, the image, the checkpoints. The settings include an owed identity reset; the image includes its source (`oci` or `imp`). |
+| 2    | `FILE`     | JSON: the file's kind (`image-rootfs`, `image-config`, `checkpoint`, `disk`) and size                                                                                        |
+| 3    | `DATA`     | An 8-byte offset, then at most 1 MiB of the file at it                                                                                                                       |
+| 4    | `FILE_END` | JSON: the sha256 over every `DATA` payload of the file, in order                                                                                                             |
+| 5    | `END`      | `{}`                                                                                                                                                                         |
 
 The files go in order: the image's two files (only when the target asked), each checkpoint oldest
 first, then the disk. Between two ZFS hosts, `zfs send` streams take the place of the checkpoint and
@@ -129,9 +129,10 @@ The source checks the MAC and every sum against what it sent before it marks the
 
 `lock.withImp` refuses every call by name on a marked imp with `MOVING`, so no start, wake, stop,
 fork, resize, checkpoint or restore runs. The egress policy and the grants refuse changes too: the
-header carries the ones the send read at its start. The move's own steps pass `isMove`. The storage
-GC drops only what no imp row names, and the marked imp keeps its row, so a GC during the send keeps
-every file the send reads.
+header carries the ones the send read at its start. The exposure refuses changes, and a public imp
+never moves: `prepare` refuses one, and checks again after its mark, so an expose that lands before
+the mark undoes it. The move's own steps pass `isMove`. The storage GC drops only what no imp row
+names, and the marked imp keeps its row, so a GC during the send keeps every file the send reads.
 
 The commit is idempotent: a target that committed answers a second commit, and an abort, with
 `isCommitted: true`. The source destroys its copy on that answer, whether it comes to the send, to

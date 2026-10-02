@@ -1,6 +1,6 @@
 import type { ExposeResult, PublicAuth } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { buildNotFoundError } from '../api-errors';
+import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { findImpByName, updateImpExposure } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -42,6 +42,11 @@ export function createExposureService(deps: ExposureDeps): ExposureService {
       throw buildNotFoundError('imp', name);
     }
 
+    // a move checks the imp is not public as it begins
+    if (imp.moveState !== null) {
+      throw buildMovingError(name);
+    }
+
     return imp;
   };
 
@@ -60,11 +65,15 @@ export function createExposureService(deps: ExposureDeps): ExposureService {
       const credential = request.auth === 'none' ? null : createCredential();
       const user = request.auth === 'basic' ? (request.user ?? DEFAULT_USER) : null;
 
-      await updateImpExposure(deps.db, imp.id, {
+      const changed = await updateImpExposure(deps.db, imp.id, {
         auth: request.auth,
         user,
         hash: credential === null ? null : buildCredentialHash(credential),
       });
+
+      if (changed === undefined) {
+        throw buildMovingError(imp.name);
+      }
 
       const records = await deps.updateRecords();
 
@@ -83,6 +92,10 @@ export function createExposureService(deps: ExposureDeps): ExposureService {
     unexpose: async (name) => {
       const imp = await requireImp(name);
       const changed = await updateImpExposure(deps.db, imp.id, null);
+
+      if (changed === undefined) {
+        throw buildMovingError(imp.name);
+      }
 
       // a failed removal is logged, and the next pass tries again
       await deps.updateRecords();

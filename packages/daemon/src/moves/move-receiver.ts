@@ -370,6 +370,8 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         ref: header.image.ref,
         digest,
         sizeBytes: header.image.sizeBytes,
+        source: header.image.source,
+        sourceImp: header.image.sourceImp,
       });
 
       return { name, files };
@@ -550,6 +552,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           cpuWeight: header.imp.cpu.weight,
           start: false,
           moveState: 'receiving',
+          isIdentityResetPending: header.imp.isIdentityResetPending,
           prepareDisk: writeDisk,
         });
       });

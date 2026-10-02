@@ -1,3 +1,4 @@
+import { ImageSourceSchema } from '@imp/api';
 import * as z from 'zod';
 
 const CpuSchema = z.object({ limit: z.number().positive().nullable(), weight: z.int() }).readonly();
@@ -27,6 +28,9 @@ const ImpSchema = z
 
     // the names of the secrets granted to it; a value never leaves its host
     grants: z.array(z.string()).readonly(),
+
+    // a template copy whose first boot has not reset its identity yet
+    isIdentityResetPending: z.boolean(),
   })
   .readonly();
 
@@ -50,6 +54,10 @@ export const MoveHeaderSchema = z
       ref: z.string(),
       digest: z.string(),
       sizeBytes: z.int().nonnegative(),
+
+      // a template, and the imp it came from, as a backup keeps them
+      source: ImageSourceSchema,
+      sourceImp: z.string().nullable(),
 
       // false: the target said it has the digest, so no image files follow
       isIncluded: z.boolean(),
