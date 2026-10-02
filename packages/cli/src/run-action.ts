@@ -6,7 +6,7 @@ import { createImpClient } from './create-imp-client';
 import type { ImpClient } from './create-imp-client';
 import { UsageError } from './usage-error';
 
-export const TOKEN_HINT =
+const TOKEN_HINT =
   'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>';
 
 // what oRPC puts in a BAD_REQUEST's data when the input fails its schema
@@ -17,11 +17,14 @@ const ValidationDataSchema = z.object({ issues: z.array(IssueSchema) });
 // One line on stderr for any failure, instead of citty's stack dump, and
 // exit code 2 for a usage error, else 1; a 401 gets a hint about where the
 // token comes from.
-export async function runAction(action: (client: ImpClient) => Promise<void>): Promise<void> {
+export async function runAction(
+  host: string | null,
+  action: (client: ImpClient) => Promise<void>,
+): Promise<void> {
   let config: CliConfig | null = null;
 
   try {
-    config = loadCliConfig(process.env);
+    config = loadCliConfig(process.env, host);
 
     await action(createImpClient(config));
   } catch (error) {
@@ -76,7 +79,8 @@ function formatIssues(code: string, data: unknown): string {
   return ` (${issues.join('; ')})`;
 }
 
-function formatUnauthorized(config: CliConfig | null): string {
+// a 401: which token to fix, and where it came from
+export function formatUnauthorized(config: CliConfig | null): string {
   if (config?.host === null || config?.host === undefined) {
     return TOKEN_HINT;
   }

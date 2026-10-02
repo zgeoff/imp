@@ -15,19 +15,12 @@ export interface CliConfig {
 
 const DEFAULT_URL = 'http://localhost:7070';
 
-// what `--host` named, set once by main before any command runs
-let selectedHost: string | null = null;
-
-export function setSelectedHost(name: string): void {
-  selectedHost = checkHostName(name);
-}
-
 // The impd to call and its token, always from one source, so a token never
 // goes to an impd it was not saved for. The order is in
 // docs/guides/configuration.md#cli; the tests cover every combination.
-export function loadCliConfig(env: CliEnv, host: string | null = selectedHost): CliConfig {
+export function loadCliConfig(env: CliEnv, host: string | null): CliConfig {
   const envToken = readVariable(env, 'IMP_TOKEN');
-  const named = host ?? readHostVariable(env);
+  const named = host === null ? readHostVariable(env) : checkHostName(host);
 
   if (named !== null) {
     return loadSavedHost(env, named);

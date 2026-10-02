@@ -196,7 +196,11 @@ test('--host picks a saved host, and a 401 names it', async () => {
 
   const exec = await ctx.run(['--host', 'work', 'exec', 'box', '--', 'true']);
 
-  expect(exec.code).toBe(255);
+  expect(exec).toEqual({
+    stdout: '',
+    stderr: `imp: unauthorized: work (${ctx.impd.url}) refused the token; run imp login ${ctx.impd.url} --name work\n`,
+    code: 255,
+  });
 
   // exec's own socket and its follow-up check both carry the saved token
   expect(new Set(ctx.impd.seen)).toEqual(new Set(['Bearer stale']));
