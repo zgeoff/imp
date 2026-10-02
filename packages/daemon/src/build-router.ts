@@ -1,4 +1,4 @@
-import { EVENT_VERSION, impContract } from '@imp/api';
+import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
 import type { Image, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
@@ -15,7 +15,6 @@ import {
   toCallerError,
   toLeaseSummary,
 } from './auth/caller-view';
-import { isImpAllowed } from './auth/imp-patterns';
 import { hasScope } from './auth/scopes';
 import type { TokenStore } from './auth/token-store';
 import { buildBackupsOffError } from './backup/backup-service';

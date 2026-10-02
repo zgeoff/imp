@@ -1,7 +1,7 @@
+import { isImpAllowed } from '@imp/api';
 import type { ImpContract, Scope } from '@imp/api';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
-import { isImpAllowed } from './imp-patterns';
 import { hasScope } from './scopes';
 
 // host-wide: only a caller with no imp patterns

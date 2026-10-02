@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { isImpAllowed } from '@imp/api';
 import fc from 'fast-check';
-import { isImpAllowed, toLikePattern } from './imp-patterns';
+import { toLikePattern } from './imp-patterns';
 
 test('null patterns allow every imp', () => {
   expect(isImpAllowed(null, 'anything')).toBeTrue();
