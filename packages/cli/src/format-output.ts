@@ -8,6 +8,7 @@ import type {
   Identity,
   Image,
   Imp,
+  Network,
   Secret,
   Service,
   Session,
@@ -327,6 +328,16 @@ export function formatSecrets(secrets: readonly Secret[]): string {
       secret.kind,
       secret.rules.map((rule) => rule.host).join(','),
       secret.imps.length === 0 ? '-' : secret.imps.join(','),
+    ]),
+  );
+}
+
+export function formatNetworks(networks: readonly Network[]): string {
+  return formatTable(
+    ['NAME', 'IMPS'],
+    networks.map((network) => [
+      network.name,
+      network.imps.length === 0 ? '-' : network.imps.join(','),
     ]),
   );
 }

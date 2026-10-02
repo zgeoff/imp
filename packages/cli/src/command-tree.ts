@@ -27,6 +27,7 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import { netCommand } from './commands/networks';
 import { proxyCommand } from './commands/proxy';
 import {
   auditCommand,
@@ -73,6 +74,7 @@ export const mainCommand = defineCommand({
     policy: policyCommand,
     expose: exposeCommand,
     unexpose: unexposeCommand,
+    net: netCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
