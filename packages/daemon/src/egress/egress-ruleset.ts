@@ -1,6 +1,6 @@
 import type { EgressMode } from '@imp/api';
 
-// The nftables table impd owns (docs/architecture/networking.md, "Egress").
+// The nftables table impd owns (docs/architecture/networking.md#the-firewall).
 // It only drops and rejects: setup-net.sh's FORWARD rules still accept what
 // it lets through, and a drop in any base chain is final.
 const EGRESS_TABLE = 'inet imp_egress';
