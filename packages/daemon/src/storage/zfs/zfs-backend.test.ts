@@ -1338,6 +1338,66 @@ test('a restored imp moves its retired checkpoints and its disk as a clone of th
   ]);
 });
 
+test('a GC between the last receive and the rename leaves the received disk snapshot', async () => {
+  await using ctx = await setupStarted();
+  await using target = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+  const last = steps.length - 1;
+  const dropped: unknown[] = [];
+
+  // the last stream stays open after `zfs recv` committed it, while a GC runs
+  const readStep = (index: number) => {
+    const reader = steps[index]?.open().stdout.getReader();
+
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        const read = await reader?.read();
+
+        if (read?.done !== false) {
+          if (index === last) {
+            const swept = await target.backend.dropUnnamed(target.live, {
+              isDryRun: false,
+              isOrphans: false,
+            });
+
+            dropped.push(swept.dropped);
+          }
+
+          controller.close();
+
+          return;
+        }
+
+        controller.enqueue(read.value);
+      },
+    });
+  };
+
+  const received = await target.backend.receiveMoveSnapshots(
+    'a',
+    steps.map((step) => ({
+      isCheckpoint: step.checkpointId !== null,
+      dataset: step.dataset,
+      base: step.base,
+    })),
+    readStep,
+    () => 'cp-moved1',
+  );
+
+  await source.close();
+
+  expect(dropped).toEqual([[]]);
+  expect(received.map((checkpoint) => checkpoint.id)).toEqual(['cp-moved1']);
+  expect(target.fake.readMountedAt(target.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(target.fake.listSnapshots().filter((name) => name.includes('@mv-'))).toEqual([]);
+});
+
 test('a forked disk starts with a full stream: nothing of the other imp goes along', async () => {
   await using ctx = await setupStarted();
 
