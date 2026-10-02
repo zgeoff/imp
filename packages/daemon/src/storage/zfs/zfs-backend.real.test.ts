@@ -359,3 +359,86 @@ test.skipIf(!isReal)(
   },
   REAL_TEST_TIMEOUT_MS,
 );
+
+// The GC's sweep with storage the database names only in part: what the
+// storage gate keeps from overlapping must still never break
+test.skipIf(!isReal)(
+  'a GC keeps a fork of a destroyed imp, an open backup tree, a staged restore and a build',
+  async () => {
+    const pool = await setupPool();
+
+    const backend = pool.backend;
+    const readDisk = (impId: string) => readFileSync(backend.resolveImpPaths(impId).disk, 'utf8');
+
+    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+
+    writeSyncedFile(backend.resolveImpPaths('a').disk, 'from a');
+
+    await backend.createCheckpoint('a', 'cp-one');
+
+    // b forks a's checkpoint, then a goes: b's origin now lives in retired/
+    await backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-one' });
+    await backend.removeImpDisk('a', ['cp-one']);
+    await backend.createBackupCopy('b', 'r1', { isReusable: true });
+
+    const tree = await backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'b', checkpointIds: [] }],
+      imageDigests: [DIGEST],
+    });
+
+    // a restore between its clone and its swap
+    await backend.createImpDisk('c', { kind: 'image', digest: DIGEST });
+    await backend.createCheckpoint('c', 'cp-two');
+
+    await runChecked([
+      'zfs',
+      'clone',
+      `${pool.root}/disks/c@cp-two`,
+      `${pool.root}/staging/restore-c`,
+    ]);
+
+    const live = {
+      impIds: new Set(['b', 'c']),
+      checkpointIds: new Set(['cp-two']),
+      imageDigests: new Set([DIGEST]),
+    };
+
+    // the sweep runs while an image build writes, before the image has a row
+    const swept: { dropped: readonly { kind: string; id: string }[] } = { dropped: [] };
+
+    await backend.createImage('sha256:building', async (dir) => {
+      writeFileSync(join(dir, 'rootfs.ext4'), 'new image');
+
+      swept.dropped = await backend.dropUnnamed(live, { isDryRun: false });
+    });
+
+    const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4');
+    const treeText = readFileSync(treeDisk, 'utf8');
+
+    await tree.close();
+    await backend.waitForReclaim();
+
+    const datasets = await runChecked(['zfs', 'list', '-H', '-o', 'name', '-r', pool.root]);
+
+    console.log(swept.dropped, datasets);
+
+    const droppedIds = swept.dropped.map((dropped) => dropped.id);
+
+    expect(droppedIds.filter((id) => ['b', 'c', 'cp-two'].includes(id))).toEqual([]);
+
+    expect(droppedIds.filter((id) => id.includes('staging') || id.includes('building'))).toEqual(
+      [],
+    );
+
+    expect(readDisk('b')).toBe('from a');
+    expect(treeText).toBe('from a');
+    expect(datasets).toContain(`${pool.root}/staging/restore-c\n`);
+    expect(datasets).toContain(`${pool.root}/images/building\n`);
+
+    expect(readFileSync(join(pool.dataDir, 'images', 'building', 'rootfs.ext4'), 'utf8')).toBe(
+      'new image',
+    );
+  },
+  REAL_TEST_TIMEOUT_MS,
+);

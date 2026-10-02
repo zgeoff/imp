@@ -760,3 +760,86 @@ test('an empty disk is a dataset of its own holding a zero-length file', async (
   expect(ctx.fake.readMountedAt(diskDir)).toBe(`${ROOT}/disks/b`);
   expect(existsSync(join(diskDir, 'rootfs.ext4'))).toBeTrue();
 });
+
+test('dropUnnamed retires what the database does not name and leaves staging alone', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createImp('b');
+  await ctx.createCheckpoint('a', 'cp-1');
+  await ctx.createCheckpoint('a', 'cp-lost');
+
+  // an image build in flight, and the memory of an imp long gone
+  await ctx.fake.run(['zfs', 'create', `${ROOT}/staging/image-now`]);
+
+  mkdirSync(join(ctx.dataDir, 'mem', 'gone'), { recursive: true });
+
+  ctx.live.impIds.delete('b');
+  ctx.live.checkpointIds.delete('cp-lost');
+
+  const listed = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: true });
+
+  expect(listed).toEqual([
+    { kind: 'checkpoint', id: 'cp-lost' },
+    { kind: 'imp', id: 'b' },
+    { kind: 'memory', id: 'gone' },
+  ]);
+
+  expect(ctx.fake.listDatasets()).toContain(`${ROOT}/disks/b`);
+
+  const dropped = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false });
+
+  await ctx.backend.waitForReclaim();
+
+  expect(dropped).toEqual(listed);
+
+  const left = ctx.fake.listDatasets();
+
+  expect(left).not.toContain(`${ROOT}/disks/b`);
+  expect(left).toContain(`${ROOT}/disks/a`);
+  expect(left).toContain(`${ROOT}/staging/image-now`);
+  expect(existsSync(join(ctx.dataDir, 'mem', 'gone'))).toBeFalse();
+  expect(existsSync(join(ctx.dataDir, 'imps', 'b'))).toBeFalse();
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.listSnapshots()).toContain(`${ROOT}/disks/a@cp-1`);
+  expect(ctx.fake.listSnapshots()).not.toContain(`${ROOT}/disks/a@cp-lost`);
+});
+
+test('usage counts the retired checkpoints and is an upper bound under a fork', async () => {
+  await using ctx = await setupStarted();
+
+  const MIB = 1_048_576;
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-old');
+  await ctx.createCheckpoint('a', 'cp-new');
+  await ctx.backend.restoreCheckpoint('a', 'cp-old', () => Promise.resolve());
+  await ctx.createImp('c');
+
+  const imps = [
+    { impId: 'a', checkpointIds: ['cp-old', 'cp-new'] },
+    { impId: 'c', checkpointIds: [] },
+  ];
+
+  const before = await ctx.backend.measureUsage(imps);
+
+  // the fake: each dataset holds 1 MiB of its own and refers to 3
+  expect(before.imps.get('a')).toEqual({
+    exclusiveBytes: 2 * MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  expect(before.imps.get('c')).toEqual({
+    exclusiveBytes: MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-new' });
+
+  const after = await ctx.backend.measureUsage(imps);
+
+  expect(after.imps.get('a')?.isUpperBound).toBe(true);
+  expect(after.imps.get('c')?.isUpperBound).toBe(false);
+});

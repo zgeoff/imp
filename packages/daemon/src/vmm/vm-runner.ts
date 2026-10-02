@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, rmSync } from 'node:fs';
-import { sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
+import { sendGrow, sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
@@ -71,6 +71,10 @@ export interface VmRunner {
   // the guest's uptime from the agent's ping, without the time asleep; null
   // when the agent does not answer within 250 ms or cannot read its clock
   readonly readGuestUptimeMs: (paths: ImpPaths) => Promise<number | null>;
+
+  // a live VM after its disk file grew: Firecracker rereads the size, then
+  // the guest grows its filesystem into it
+  readonly growDrive: (paths: ImpPaths, diskBytes: number) => Promise<void>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the
@@ -299,6 +303,10 @@ export function createVmRunner(): VmRunner {
       }
     },
     stopVm,
+    growDrive: async (paths, diskBytes) => {
+      await createFirecrackerClient(paths.apiSocket).patchDrive('rootfs', paths.disk);
+      await sendGrow(paths.vsockSocket, diskBytes);
+    },
     isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),
     isAgentReady: async (paths) => {
       try {

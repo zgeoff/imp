@@ -39,12 +39,35 @@ interface StorageUsage {
   readonly availableBytes: number;
 }
 
+// Exclusive is what removing the imp frees; shared, what it holds with an
+// image, another imp or the backup tree. docs/architecture/storage.md has more.
+export interface ImpDiskUsage {
+  readonly exclusiveBytes: number;
+  readonly sharedBytes: number;
+  readonly isUpperBound: boolean;
+}
+
+export interface DiskUsageReport {
+  readonly imps: ReadonlyMap<string, ImpDiskUsage>;
+
+  // a pass cut short at its time limit counts only the files it read
+  readonly isPartial: boolean;
+}
+
 // What the database holds when impd starts. Anything else a backend finds is
 // left over from a crash, and start drops it.
 export interface LiveStorage {
   readonly impIds: ReadonlySet<string>;
   readonly checkpointIds: ReadonlySet<string>;
   readonly imageDigests: ReadonlySet<string>;
+}
+
+// What dropUnnamed removed, or would remove in a dry run. `snapshot` is a
+// ZFS fork or backup snapshot, named in full; `memory` an imp's memory
+// snapshot outside its imp directory.
+export interface DroppedStorage {
+  readonly kind: 'imp' | 'checkpoint' | 'image' | 'snapshot' | 'memory';
+  readonly id: string;
 }
 
 // The disks, checkpoints and image rootfs files of imps (docs/architecture/
@@ -56,6 +79,14 @@ export interface StorageBackend {
   // before any VM is re-adopted or woken: mounts, finishes or undoes a restore
   // a crash cut short, and drops what `live` does not name
   readonly start: (live: LiveStorage) => Promise<void>;
+
+  // Removes what `live` does not name; staging, retired datasets and backup
+  // directories stay. The caller holds the storage gate alone, so nothing is
+  // in flight (docs/architecture/storage.md#cleanup).
+  readonly dropUnnamed: (
+    live: LiveStorage,
+    options: Readonly<{ isDryRun: boolean }>,
+  ) => Promise<DroppedStorage[]>;
 
   // the data layout, with the disk and the memory snapshot where this
   // backend keeps them
@@ -96,6 +127,11 @@ export interface StorageBackend {
   readonly openBackupTree: (request: BackupTreeRequest) => Promise<BackupTree>;
 
   readonly readUsage: () => Promise<StorageUsage>;
+
+  // each imp's usage; slow on XFS, so a cache calls it now and then
+  readonly measureUsage: (
+    imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[],
+  ) => Promise<DiskUsageReport>;
 
   // waits for background work (a ZFS reclaim) to finish, before impd exits
   readonly stop: () => Promise<void>;

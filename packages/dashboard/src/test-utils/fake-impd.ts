@@ -112,6 +112,16 @@ export function createFakeImpd(): FakeImpd {
         setImpState('imps.wake', context.input.name, 'running'),
       ),
       hold: os.imps.hold.handler((context) => findImp(context.input.name)),
+      resizeDisk: os.imps.resizeDisk.handler((context) => {
+        registerCall('imps.resizeDisk', context.input);
+
+        const imp = findImp(context.input.name);
+        const resized = { ...imp, diskMib: context.input.diskMib };
+
+        fake.imps.splice(fake.imps.indexOf(imp), 1, resized);
+
+        return resized;
+      }),
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
         https: null,
@@ -136,6 +146,7 @@ export function createFakeImpd(): FakeImpd {
         const checkpoint = {
           id: `cp${String(list.length + 1)}`,
           createdAt: new Date(),
+          diskMib: findImp(context.input.name).diskMib,
           ...(context.input.label !== undefined && { label: context.input.label }),
         };
 
@@ -237,6 +248,10 @@ export function createFakeImpd(): FakeImpd {
     },
     system: {
       info: os.system.info.handler(() => fake.info),
+      gc: os.system.gc.handler((context) => ({
+        dryRun: context.input.dryRun ?? false,
+        dropped: [],
+      })),
     },
   });
 
@@ -325,6 +340,7 @@ export function buildImp(overrides: Partial<Imp> & { readonly name: string }): I
     state: 'running',
     vcpus: 2,
     memoryMib: 2048,
+    diskMib: 32_768,
     ip: '10.66.0.2',
     slot: 0,
     port: 20_000,
@@ -361,7 +377,15 @@ function buildSystemInfo(): SystemInfo {
     firecrackerVersion: 'v1.17.0',
     guestKernel: { version: null, sha256: '0' },
     systemDrive: { sha256: '0' },
-    storage: { backend: 'xfs', usedBytes: 0, availableBytes: 0 },
+    storage: {
+      backend: 'xfs',
+      usedBytes: 0,
+      availableBytes: 0,
+      reserveBytes: 0,
+      pendingBytes: 0,
+      isLow: false,
+      impDiskBytes: 0,
+    },
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   };
 }

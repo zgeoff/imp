@@ -133,3 +133,31 @@ func TestThawForPoweroff(t *testing.T) {
 		t.Fatalf("ioctls = %#x, want %#x", got, want)
 	}
 }
+
+func TestGrowRefusedWhileFrozen(t *testing.T) {
+	var f fakeIoctl
+	f.install(t)
+	var grown []int64
+	prev := waitAndGrow
+	waitAndGrow = func(_ string, target int64, _ time.Duration) error {
+		grown = append(grown, target)
+		return nil
+	}
+	t.Cleanup(func() { waitAndGrow = prev })
+	s := &Server{}
+	if err := s.freeze(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.grow(1 << 30); !errors.Is(err, errFrozen) {
+		t.Fatalf("grow while frozen = %v, want FROZEN", err)
+	}
+	if err := s.thaw(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.grow(1 << 30); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(grown, []int64{1 << 30}) {
+		t.Fatalf("grown = %v, want one grow after the thaw", grown)
+	}
+}

@@ -3,6 +3,7 @@ import type { Imp } from '@imp/api';
 import {
   formatBootStatus,
   formatCheckpoints,
+  formatGc,
   formatImps,
   formatSessions,
   formatTable,
@@ -22,16 +23,22 @@ test('it pads each column to its widest cell', () => {
   );
 });
 
-test('it lists checkpoints with their size in MiB', () => {
+test('it lists checkpoints with their size in MiB and their disk size', () => {
   const table = formatCheckpoints([
-    { id: 'cp-a2b3c4', label: 'clean', createdAt: new Date(0), sizeBytes: 3_145_728 },
-    { id: 'cp-d5e6f7', createdAt: new Date(0) },
+    {
+      id: 'cp-a2b3c4',
+      label: 'clean',
+      createdAt: new Date(0),
+      sizeBytes: 3_145_728,
+      diskMib: 32_768,
+    },
+    { id: 'cp-d5e6f7', createdAt: new Date(0), diskMib: 65_536 + 512 },
   ]);
 
   expect(table.split('\n')).toEqual([
-    'ID         LABEL  CREATED                   SIZE',
-    'cp-a2b3c4  clean  1970-01-01T00:00:00.000Z  3 MiB',
-    'cp-d5e6f7         1970-01-01T00:00:00.000Z',
+    'ID         LABEL  CREATED                   SIZE   DISK',
+    'cp-a2b3c4  clean  1970-01-01T00:00:00.000Z  3 MiB  32 GiB',
+    'cp-d5e6f7         1970-01-01T00:00:00.000Z         66048 MiB',
   ]);
 });
 
@@ -43,6 +50,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     state: 'sleeping',
     vcpus: 2,
     memoryMib: 512,
+    diskMib: 32_768,
     ip: '10.0.0.2',
     slot: 0,
     port: 7100,
@@ -116,6 +124,7 @@ test('it counts sessions in the imp list, and shows - when impd has not seen the
     state: 'running',
     vcpus: 2,
     memoryMib: 512,
+    diskMib: 32_768,
     ip: '10.0.0.2',
     slot: 0,
     port: 7100,
@@ -170,4 +179,69 @@ test('it says an older impd does not report boot status', () => {
   const status = formatBootStatus(undefined, '0.1.0');
 
   expect(status).toBe('unknown (impd 0.1.0 predates it)');
+});
+
+test('a gc lists what it removed, and says when a dry run removed nothing', () => {
+  const dropped = [
+    { kind: 'imp', id: 'lost' },
+    { kind: 'checkpoint', id: 'cp-a2b3c4' },
+  ] as const;
+
+  expect(formatGc({ dryRun: false, dropped: [...dropped] }).split('\n')).toEqual([
+    'KIND        ID',
+    'imp         lost',
+    'checkpoint  cp-a2b3c4',
+  ]);
+
+  expect(formatGc({ dryRun: true, dropped: [...dropped] })).toContain('dry run: nothing removed');
+  expect(formatGc({ dryRun: false, dropped: [] })).toBe('nothing to remove');
+});
+
+test('the imp list shows what a destroy frees and what the imp shares', () => {
+  const imp = {
+    id: 'i1',
+    name: 'dev',
+    image: 'ubuntu',
+    state: 'running',
+    vcpus: 2,
+    memoryMib: 512,
+    diskMib: 32_768,
+    ip: '10.0.0.2',
+    slot: 0,
+    port: 7100,
+    httpPort: 8080,
+    url: 'http://dev.imp.localhost:7080',
+    createdAt: new Date(0),
+    lastActiveAt: new Date(0),
+  } as const;
+
+  const usage = {
+    exclusiveBytes: 300 * 1_048_576,
+    sharedBytes: 1200 * 1_048_576,
+    measuredAt: new Date(0),
+    isPartial: false,
+    isUpperBound: false,
+  };
+
+  const rows = formatImps([
+    { ...imp, diskUsage: usage },
+    { ...imp, name: 'forked', diskUsage: { ...usage, isUpperBound: true, isPartial: true } },
+    { ...imp, name: 'new' },
+  ]).split('\n');
+
+  const start = rows[0]?.indexOf('USED') ?? 0;
+
+  expect(
+    rows.map((row) =>
+      row
+        .slice(start)
+        .split(/\s{2,}/)
+        .slice(0, 2),
+    ),
+  ).toEqual([
+    ['USED', 'SHARED'],
+    ['300 MiB', '1200 MiB'],
+    ['<=300 MiB?', '1200 MiB?'],
+    ['-', '-'],
+  ]);
 });

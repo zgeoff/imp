@@ -3,6 +3,9 @@ import { Migrator } from 'kysely/migration';
 import type { Migration, MigrationProvider, MigrationResultSet } from 'kysely/migration';
 import type { DatabaseSchema } from './schema';
 
+// every disk before sizes was a 32 GiB sparse file
+const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
+
 const MIGRATIONS: Record<string, Migration> = {
   '001_create_initial_schema': {
     async up(db: Kysely<DatabaseSchema>) {
@@ -124,6 +127,26 @@ const MIGRATIONS: Record<string, Migration> = {
         .createIndex('api_audit_imp_name')
         .on('api_audit')
         .columns(['imp_name', 'id'])
+        .execute();
+    },
+  },
+
+  // a disk size per imp and per checkpoint (docs/architecture/storage.md)
+  '005_add_disk_sizes': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('disk_bytes', 'integer', (c) => c.notNull().defaultTo(LEGACY_DISK_BYTES))
+        .execute();
+
+      await db.schema
+        .alterTable('imps')
+        .addColumn('disk_grow_pending', 'integer', (c) => c.notNull().defaultTo(0))
+        .execute();
+
+      await db.schema
+        .alterTable('checkpoints')
+        .addColumn('disk_bytes', 'integer', (c) => c.notNull().defaultTo(LEGACY_DISK_BYTES))
         .execute();
     },
   },

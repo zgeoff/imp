@@ -10,6 +10,7 @@ export interface CheckpointRecord {
   readonly label: string | null;
   readonly createdAt: Date;
   readonly sizeBytes: number | null;
+  readonly diskBytes: number;
 }
 
 export interface NewCheckpoint {
@@ -17,6 +18,9 @@ export interface NewCheckpoint {
   readonly impId: string;
   readonly label: string | null;
   readonly sizeBytes: number | null;
+
+  // 32 GiB when left out
+  readonly diskBytes?: number;
 
   // now by default; a restore from backup keeps the original time
   readonly createdAt?: Date;
@@ -34,6 +38,7 @@ export async function createCheckpoint(
       label: checkpoint.label,
       created_at: checkpoint.createdAt?.getTime() ?? Date.now(),
       size_bytes: checkpoint.sizeBytes,
+      ...(checkpoint.diskBytes !== undefined && { disk_bytes: checkpoint.diskBytes }),
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -99,6 +104,7 @@ function toCheckpointRecord(
     label: row.label,
     createdAt: new Date(row.created_at),
     sizeBytes: row.size_bytes,
+    diskBytes: row.disk_bytes,
   };
 }
 
@@ -106,6 +112,7 @@ export function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
   return {
     id: checkpoint.id,
     createdAt: checkpoint.createdAt,
+    diskMib: Math.ceil(checkpoint.diskBytes / 1_048_576),
     ...(checkpoint.label !== null && { label: checkpoint.label }),
     ...(checkpoint.sizeBytes !== null && { sizeBytes: checkpoint.sizeBytes }),
   };

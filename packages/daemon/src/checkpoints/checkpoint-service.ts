@@ -12,13 +12,15 @@ import {
   toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
-import { findImpByName, updateImpState } from '../db/imps';
+import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { toLockedImp } from '../imps/imp-lock';
 import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
+import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 
@@ -63,6 +65,9 @@ export interface CheckpointServiceDeps {
   readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
+
+  // a checkpoint is thin, but none is made past the reserve
+  readonly diskBudget: Pick<DiskBudget, 'requireRoom'>;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -165,6 +170,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
         const started = performance.now();
 
+        await deps.diskBudget.requireRoom(0);
+
         const created = await withConsistentDisk(imp, 'checkpoint', () =>
           createWithFreshId(imp.id),
         );
@@ -177,6 +184,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
             impId: imp.id,
             label: label ?? null,
             sizeBytes: created.sizeBytes,
+            diskBytes: imp.diskBytes,
           });
 
           const ms = Math.round(performance.now() - started);
@@ -241,7 +249,14 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           return stopped;
         });
 
-        const booted = wasAwake ? await deps.imps.bootImp(halted) : halted;
+        // the disk is the checkpoint's now, at the checkpoint's size
+        const resized = await updateImpDisk(deps.db, imp.id, {
+          diskBytes: checkpoint.diskBytes,
+          isGrowPending: false,
+        });
+
+        const sized = toLockedImp(halted, resized);
+        const booted = wasAwake ? await deps.imps.bootImp(sized) : sized;
         const ms = Math.round(performance.now() - started);
 
         // the state may be what it was, the disk is not: the stream hears of it

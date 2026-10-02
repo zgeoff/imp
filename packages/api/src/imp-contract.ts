@@ -23,6 +23,7 @@ import {
   SecretValueSchema,
 } from './secret-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
+import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 
 const base = oc.errors(IMP_ERRORS);
@@ -41,6 +42,9 @@ export const impContract = {
           image: NameSchema.optional(),
           vcpus: z.int().min(1).max(32).optional(),
           memoryMib: z.int().min(128).optional(),
+
+          // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
+          diskMib: z.int().min(1024).optional(),
 
           // the guest port the wake proxy forwards HTTP to (default 8080)
           httpPort: z.int().min(1).max(65_535).optional(),
@@ -71,6 +75,12 @@ export const impContract = {
     // seconds = 0 releases a hold
     hold: base
       .input(z.object({ name: NameSchema, seconds: z.int().nonnegative() }))
+      .output(ImpSchema),
+
+    // grows the disk; a running guest grows its filesystem at once, a
+    // sleeping one when it wakes, a stopped one when it boots
+    resizeDisk: base
+      .input(z.object({ name: NameSchema, diskMib: z.int().min(1024) }))
       .output(ImpSchema),
 
     url: base
@@ -239,6 +249,10 @@ export const impContract = {
 
   system: {
     info: base.output(SystemInfoSchema),
+
+    // removes the disks, checkpoints, images and snapshots no row names;
+    // PRECONDITION_FAILED while storage operations keep it busy
+    gc: base.input(z.object({ dryRun: z.boolean().optional() })).output(StorageGcSchema),
   },
 };
 

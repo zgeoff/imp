@@ -37,6 +37,9 @@ export interface ZfsCommands {
   readonly readWritten: (snapshot: string) => Promise<number>;
   readonly readUsage: (name: string) => Promise<{ used: number; available: number }>;
 
+  // every dataset and snapshot under root with its space properties
+  readonly listSpace: (root: string) => Promise<ZfsSpace[]>;
+
   // the userland version, such as 2.2.2-0ubuntu9
   readonly readVersion: () => Promise<string>;
 
@@ -47,6 +50,19 @@ export interface ZfsCommands {
 }
 
 const LIST_COLUMNS = 'name,type,origin,defer_destroy';
+const SPACE_COLUMNS = 'name,used,referenced,usedbydataset,clones';
+
+// A dataset's or snapshot's space. `used` of a dataset counts its snapshots;
+// of a snapshot, the blocks only it holds. A snapshot has no usedbydataset.
+export interface ZfsSpace {
+  readonly name: string;
+  readonly used: number;
+  readonly referenced: number;
+  readonly usedByDataset: number;
+
+  // the clones of a snapshot: forks, a restore, a backup tree
+  readonly clones: readonly string[];
+}
 
 export function createZfsCommands(run: CommandRunner): ZfsCommands {
   const runChecked = async (argv: readonly string[]): Promise<string> => {
@@ -104,6 +120,21 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 
       return { used: parseBytes(used), available: parseBytes(available) };
     },
+    listSpace: async (root) => {
+      const stdout = await runChecked([
+        'zfs',
+        'list',
+        '-Hp',
+        '-r',
+        '-t',
+        'filesystem,snapshot',
+        '-o',
+        SPACE_COLUMNS,
+        root,
+      ]);
+
+      return parseZfsSpace(stdout);
+    },
     readVersion: async () => {
       const stdout = await runChecked(['zfs', 'version']);
 
@@ -120,6 +151,24 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
       ]),
     unmount: (dir) => runQuiet(['umount', dir]),
   };
+}
+
+export function parseZfsSpace(stdout: string): ZfsSpace[] {
+  return stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [name = '', used = '', referenced = '', usedByDataset = '', clones = ''] =
+        line.split('\t');
+
+      return {
+        name,
+        used: parseBytes(used),
+        referenced: parseBytes(referenced),
+        usedByDataset: usedByDataset === '-' ? 0 : parseBytes(usedByDataset),
+        clones: clones === '-' || clones === '' ? [] : clones.split(','),
+      };
+    });
 }
 
 // `zfs list -H` output: one tab-separated row per dataset, `-` for no value

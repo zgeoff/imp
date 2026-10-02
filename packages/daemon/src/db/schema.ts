@@ -33,6 +33,13 @@ interface ImpsTable {
   // what the broker does with a CONNECT to a host no grant covers: `open`
   // tunnels it; #26 adds the policies that refuse it
   egress_policy: Generated<string>;
+
+  // the disk file's size; 32 GiB for an imp from before sizes
+  disk_bytes: Generated<number>;
+
+  // 1 while a sleeping imp's guest has not grown into a resize yet: its
+  // next wake grows it, a cold boot grows it anyway
+  disk_grow_pending: Generated<number>;
 }
 
 interface CheckpointsTable {
@@ -41,6 +48,9 @@ interface CheckpointsTable {
   label: string | null;
   created_at: number;
   size_bytes: number | null;
+
+  // the imp's disk size when the checkpoint was taken
+  disk_bytes: Generated<number>;
 }
 
 // A secret's metadata. Its value is a file in <dataDir>/secrets, never a row.

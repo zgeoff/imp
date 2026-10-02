@@ -12,10 +12,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readExtents } from './fiemap';
 import { createXfsBackend } from './xfs-backend';
 
-function setupTest() {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+function setupTest(parentDir = tmpdir()) {
+  const dataDir = mkdtempSync(`${parentDir}/impd-xfs-test-`);
 
   return {
     dataDir,
@@ -62,10 +63,51 @@ test('start sweeps image builds a crash cut short', async () => {
   mkdirSync(join(ctx.dataDir, 'images', '.new-crashed'), { recursive: true });
   mkdirSync(ctx.imageDir, { recursive: true });
 
-  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+  await ctx.backend.start({
+    impIds: new Set(),
+    checkpointIds: new Set(),
+    imageDigests: new Set(['sha256:abc']),
+  });
 
   expect(readdirSync(join(ctx.dataDir, 'images'))).toEqual(['abc']);
   expect(existsSync(ctx.imageDir)).toBeTrue();
+});
+
+test('dropUnnamed removes what the database does not name, and a dry run only lists it', async () => {
+  using ctx = setupTest();
+
+  await ctx.backend.createImage('sha256:abc', writeImage);
+  await ctx.backend.createImage('sha256:old', writeImage);
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('gone', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createCheckpoint('a', 'cp-lost');
+
+  // an image build in flight keeps its hidden directory
+  mkdirSync(join(ctx.dataDir, 'images', '.build-now'), { recursive: true });
+
+  const live = {
+    impIds: new Set(['a']),
+    checkpointIds: new Set(['cp-1']),
+    imageDigests: new Set(['sha256:abc']),
+  };
+
+  const listed = await ctx.backend.dropUnnamed(live, { isDryRun: true });
+
+  expect(listed).toEqual([
+    { kind: 'image', id: 'old' },
+    { kind: 'imp', id: 'gone' },
+    { kind: 'checkpoint', id: 'cp-lost' },
+  ]);
+
+  expect(existsSync(ctx.backend.resolveImpPaths('gone').disk)).toBeTrue();
+
+  const dropped = await ctx.backend.dropUnnamed(live, { isDryRun: false });
+
+  expect(dropped).toEqual(listed);
+  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc']);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual(['a']);
+  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toEqual(['cp-1']);
 });
 
 // imp a cloned from the image, with checkpoint cp-1
@@ -179,4 +221,127 @@ test("a running disk's copy goes when the tree closes; a reusable one stays", as
 
   expect(existsSync(running)).toBeFalse();
   expect(existsSync(stopped)).toBeTrue();
+});
+
+test('start allocates the reserve file once, and again after it was removed', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+  const reserve = join(dataDir, 'reserve');
+
+  const live = {
+    impIds: new Set<string>(),
+    checkpointIds: new Set<string>(),
+    imageDigests: new Set<string>(),
+  };
+
+  try {
+    const backend = createXfsBackend({ dataDir, reserveFileBytes: 65_536, log: () => {} });
+
+    await backend.start(live);
+
+    expect(statSync(reserve).blocks * 512).toBeGreaterThanOrEqual(65_536);
+
+    rmSync(reserve);
+
+    await backend.start(live);
+
+    expect(existsSync(reserve)).toBeTrue();
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// tmpfs has no FIEMAP; the checkout's own filesystem usually does
+const USAGE_DIR = join(import.meta.dir, '../../../../.cache');
+
+mkdirSync(USAGE_DIR, { recursive: true });
+
+const hasFiemap = await readExtents(import.meta.path, Number.POSITIVE_INFINITY).then(
+  () => true,
+  () => false,
+);
+
+test.skipIf(!hasFiemap)('usage counts the blocks of each imp and its checkpoints', async () => {
+  using ctx = setupTest(USAGE_DIR);
+
+  mkdirSync(ctx.imageDir, { recursive: true });
+
+  await ctx.backend.createImage('sha256:abc', writeImage);
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, Buffer.alloc(1_048_576, 1));
+
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  const report = await ctx.backend.measureUsage([
+    { impId: 'a', checkpointIds: ['cp-1'] },
+    { impId: 'b', checkpointIds: [] },
+  ]);
+
+  // copies here, so nothing is shared; the disk and its checkpoint are 1 MiB each
+  expect(report.isPartial).toBeFalse();
+
+  expect(report.imps.get('a')).toEqual({
+    exclusiveBytes: 2 * 1_048_576,
+    sharedBytes: 0,
+    isUpperBound: false,
+  });
+
+  expect(report.imps.get('b')?.exclusiveBytes).toBe(4096);
+});
+
+test('a pass cut short leaves out the imp it stopped at, and the next starts there', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+  const read: string[] = [];
+  const state = { cutAt: 'b' as string | null };
+
+  const backend = createXfsBackend({
+    dataDir,
+    cloneFile: (source, target) => {
+      copyFileSync(source, target);
+
+      return Promise.resolve();
+    },
+    readFileExtents: (path) => {
+      const owner = path.includes('/imps/')
+        ? (path.split('/imps/')[1]?.split('/')[0] ?? '')
+        : 'image';
+
+      read.push(owner);
+
+      const isCut = owner === state.cutAt;
+      const extent = { logical: 0, physical: read.length * 4096, length: 4096, flags: 1 };
+
+      return Promise.resolve({ extents: [extent], isComplete: !isCut });
+    },
+  });
+
+  try {
+    mkdirSync(join(dataDir, 'images', 'abc'), { recursive: true });
+
+    await backend.createImage('sha256:abc', writeImage);
+
+    for (const impId of ['a', 'b', 'c']) {
+      await backend.createImpDisk(impId, { kind: 'image', digest: 'sha256:abc' });
+    }
+
+    const imps = ['a', 'b', 'c'].map((impId) => ({ impId, checkpointIds: [] }));
+
+    const first = await backend.measureUsage(imps);
+
+    expect(read).toEqual(['image', 'a', 'b']);
+    expect(first.isPartial).toBeTrue();
+    expect([...first.imps.keys()]).toEqual(['a']);
+
+    read.length = 0;
+    state.cutAt = null;
+
+    const second = await backend.measureUsage(imps);
+
+    expect(read).toEqual(['image', 'b', 'c', 'a']);
+    expect(second.isPartial).toBeFalse();
+    expect([...second.imps.keys()]).toEqual(['b', 'c', 'a']);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });

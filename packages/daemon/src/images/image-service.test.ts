@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
+import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { createImageService } from './image-service';
+import { createImageService, planRootfs } from './image-service';
 
 // These all fail before any docker command runs, so no docker is needed.
 test('it refuses refs and build contexts that docker could read as flags', async () => {
@@ -17,6 +18,8 @@ test('it refuses refs and build contexts that docker could read as flags', async
       config: loadConfig({ IMP_DATA_DIR: dataDir }),
       db,
       storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
     });
 
     for (const ref of ['--help', '-v/:/host', 'ubuntu --privileged', '']) {
@@ -46,6 +49,8 @@ test('it refuses a build context that is not on the impd host', async () => {
       config: loadConfig({ IMP_DATA_DIR: dataDir }),
       db,
       storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
     });
 
     const failure = await images
@@ -57,4 +62,18 @@ test('it refuses a build context that is not on the impd host', async () => {
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('a rootfs is its tree plus room to spare, in whole GiB, at least 4 GiB', () => {
+  const GIB = 1024 ** 3;
+
+  expect(planRootfs({ bytes: 300 * 1024 ** 2, inodes: 20_000 })).toEqual({
+    bytes: 4 * GIB,
+    inodes: null,
+  });
+
+  expect(planRootfs({ bytes: 5 * GIB, inodes: 90_000 })).toEqual({ bytes: 8 * GIB, inodes: null });
+
+  // node_modules: many small files need more inodes than 16 KiB each gives
+  expect(planRootfs({ bytes: GIB, inodes: 400_000 })).toEqual({ bytes: 4 * GIB, inodes: 800_000 });
 });

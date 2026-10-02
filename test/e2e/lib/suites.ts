@@ -18,6 +18,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'docker', prefix: 'e2e-dock-', images: ['base'] },
   { name: 'images', prefix: 'e2e-img-', images: ['base'] },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
+  { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
   { name: 'sleep', prefix: 'e2e-slp-', images: ['e2e-bare', 'e2e-ws'] },
   { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
@@ -45,6 +46,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   fast: [
     'lifecycle',
     'checkpoints',
+    'disks',
     'sleep',
     'restart',
     'mcp',

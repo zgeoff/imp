@@ -46,6 +46,9 @@ export interface FirecrackerClient {
   readonly putBootSource: (source: BootSource) => Promise<void>;
   readonly putMachineConfig: (config: MachineConfig) => Promise<void>;
   readonly putDrive: (drive: Drive) => Promise<void>;
+
+  // after boot: Firecracker reads the file's size again and tells the guest
+  readonly patchDrive: (driveId: string, pathOnHost: string) => Promise<void>;
   readonly putNetworkInterface: (iface: NetworkInterface) => Promise<void>;
   readonly putVsock: (vsock: Vsock) => Promise<void>;
 
@@ -143,6 +146,12 @@ export function createFirecrackerClient(
         is_root_device: drive.isRootDevice,
         is_read_only: drive.isReadOnly,
       }),
+    patchDrive: async (driveId, pathOnHost) => {
+      await sendRequest('PATCH', `/drives/${driveId}`, {
+        drive_id: driveId,
+        path_on_host: pathOnHost,
+      });
+    },
     putNetworkInterface: (iface) =>
       sendPut(`/network-interfaces/${iface.ifaceId}`, {
         iface_id: iface.ifaceId,

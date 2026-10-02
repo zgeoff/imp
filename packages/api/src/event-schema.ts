@@ -21,6 +21,9 @@ export const ImpChangeReasonSchema = z.enum([
   'adopted',
   'held',
   'restored',
+
+  // its disk size, or a grow the guest still owes
+  'resized',
 ]);
 
 export type ImpChangeReason = z.infer<typeof ImpChangeReasonSchema>;

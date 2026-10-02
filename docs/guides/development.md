@@ -31,6 +31,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                            |
 | `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                              |
 | `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                                                           |
+| `disks`       | a disk past its image, grown while running, asleep and stopped; fsck after                                                   |
 | `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
@@ -49,7 +50,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -150,16 +151,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                                      |
-| ------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                                   |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                    |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                             |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                         |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                        |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                               |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints and sleep suites. |
+| Job          | Required | What it runs                                                                                                                             |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                          |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build.        |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                           |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                    |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                               |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                      |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks and sleep suites. |
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
 signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads
@@ -191,8 +192,8 @@ seconds with the reason. The job then:
    key in CI, and a missed timing limit only warns.
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
-the lifecycle, checkpoints and sleep suites on a pool in a sparse file. The job summary shows the
-ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
+the lifecycle, checkpoints, disks and sleep suites on a pool in a sparse file. The job summary shows
+the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
 `results.json`, `metrics.jsonl`, `impd.log` (the dev container's whole log) and the dashboard

@@ -44,7 +44,15 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
   const calls: string[] = [];
 
   // pruneErrors: what the next prunes throw, one each
-  const state = { failCheck: false, failBackup: false, pruneErrors: [] as Error[] };
+  const state = {
+    failCheck: false,
+    failBackup: false,
+    pruneErrors: [] as Error[],
+
+    // runs as each restore starts
+    onRestore: null as ((dir: string) => Promise<void>) | null,
+  };
+
   const restores: string[] = [];
 
   const findSnapshot = (id: string): ResticSnapshot => {
@@ -108,12 +116,12 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
     },
     listSnapshots: () => Promise.resolve([...snapshots]),
     dump: (id, path) => Promise.resolve(readFileSync(resolvePath(id, path), 'utf8')),
-    restore: (id, dir, target) => {
+    restore: async (id, dir, target) => {
       restores.push(relative(findSnapshot(id).paths[0] ?? '', dir));
 
-      cpSync(resolvePath(id, dir), target, { recursive: true });
+      await state.onRestore?.(relative(findSnapshot(id).paths[0] ?? '', dir));
 
-      return Promise.resolve();
+      cpSync(resolvePath(id, dir), target, { recursive: true });
     },
   };
 
@@ -137,6 +145,8 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     imps: harness.imps,
     grants: harness.broker,
     storage: harness.storage,
+    storageGate: harness.storageGate,
+    diskBudget: harness.diskBudget,
     restic: fake.restic,
     log: (message) => {
       logs.push(message);
@@ -178,7 +188,10 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
 
     const sizeBytes = await harness.storage.createCheckpoint(impId, id);
 
-    await createCheckpoint(harness.db, { id, impId, label, sizeBytes, createdAt });
+    // a size of its own, so a restore shows it took the manifest's
+    const diskBytes = 1000 + label.length;
+
+    await createCheckpoint(harness.db, { id, impId, label, sizeBytes, createdAt, diskBytes });
   };
 
   return {
@@ -293,10 +306,12 @@ test('a restore rebuilds the imp stopped, with its checkpoints in order', async 
   const imp = await findImpByName(ctx.db, 'dev');
   const checkpoints = await listCheckpoints(ctx.db, imp?.id ?? '');
 
-  // newest first, with new ids and the original times
-  expect(checkpoints.map((checkpoint) => [checkpoint.label, checkpoint.createdAt])).toEqual([
-    ['two', new Date('2026-09-02T00:00:00Z')],
-    ['one', new Date('2026-09-01T00:00:00Z')],
+  // newest first, with new ids and the original times and disk sizes
+  expect(
+    checkpoints.map((checkpoint) => [checkpoint.label, checkpoint.createdAt, checkpoint.diskBytes]),
+  ).toEqual([
+    ['two', new Date('2026-09-02T00:00:00Z'), 1003],
+    ['one', new Date('2026-09-01T00:00:00Z'), 1003],
   ]);
 
   expect(checkpoints.map((checkpoint) => checkpoint.id)).not.toContain('cp-one');
@@ -786,4 +801,54 @@ test('a failed scheduled run waits twice as long each time, up to the interval',
   }
 
   expect(seen).toEqual([...steps.map(([, ran]) => ran), true, false]);
+});
+
+test('a restore holds the storage gate for its image and room for each file', async () => {
+  await using source = await setupTest();
+
+  await source.createDevImp();
+
+  const run = await source.backups.runBackup();
+  const manifest = await source.readManifest(run.snapshotId);
+
+  const usedBytes = manifest.imps[0]?.usedBytes ?? -1;
+
+  // what the disk file held in the tree, not its 32 GiB apparent size
+  expect(usedBytes).toBeGreaterThan(0);
+  expect(usedBytes).toBeLessThan(1024 ** 2);
+
+  await using fresh = await setupTest(source.repoDir);
+
+  fresh.fake.snapshots.push(...source.fake.snapshots);
+
+  await fresh.db.deleteFrom('images').execute();
+
+  rmSync(join(fresh.dataDir, 'images', 'base'), { recursive: true });
+
+  const seen: string[] = [];
+  const held: number[] = [];
+
+  // a GC would wait for each of these, so no image dir is taken before its row
+  fresh.fake.state.onRestore = async (dir) => {
+    const status = await fresh.diskBudget.readStatus();
+
+    const kind = dir.startsWith('images/') ? 'image' : 'file';
+
+    seen.push(
+      `${kind} joined=${String(fresh.storageGate.countInFlight() > 0)} held=${String(status.pendingBytes > 0)}`,
+    );
+
+    // twice a file's blocks: restic's sparse copy, then the disk
+    if (dir === dirname(manifest.imps[0]?.disk ?? '')) {
+      held.push(status.pendingBytes);
+    }
+  };
+
+  await fresh.backups.restoreBackup({ name: 'dev' });
+
+  expect(held).toEqual([2 * usedBytes]);
+
+  expect(new Set(seen)).toEqual(
+    new Set(['image joined=true held=true', 'file joined=true held=true']),
+  );
 });

@@ -21,7 +21,9 @@ import type { ImageService } from './images/image-service';
 import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
+import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
+import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
 
 // audit rows `audit.list` gives when the caller names no limit
@@ -42,7 +44,9 @@ export interface RouterDeps {
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly execTickets: ExecTickets;
-  readonly storage: Pick<StorageBackend, 'kind' | 'readUsage'>;
+  readonly storage: Pick<StorageBackend, 'kind'>;
+  readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
+  readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly audit: ApiAudit;
 }
@@ -121,6 +125,9 @@ export function buildRouter(deps: RouterDeps) {
       ),
       hold: os.imps.hold.handler((context) =>
         deps.imps.holdImp(context.input.name, context.input.seconds),
+      ),
+      resizeDisk: os.imps.resizeDisk.handler((context) =>
+        deps.imps.resizeDisk(context.input.name, context.input.diskMib),
       ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
 
@@ -247,6 +254,7 @@ export function buildRouter(deps: RouterDeps) {
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
+      gc: os.system.gc.handler((context) => deps.gc.runGc(context.input.dryRun ?? false)),
     },
   });
 }
@@ -258,7 +266,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     listImps(deps.db),
     deps.governor.readUsage(),
     deps.readTailscale(),
-    deps.storage.readUsage(),
+    deps.diskBudget.readStatus(),
   ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
@@ -276,7 +284,11 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     firecrackerVersion: deps.firecrackerVersion,
     guestKernel: deps.systemFiles.guestKernel,
     systemDrive: deps.systemFiles.systemDrive,
-    storage: { backend: deps.storage.kind, ...storage },
+    storage: {
+      backend: deps.storage.kind,
+      ...storage,
+      impDiskBytes: imps.reduce((sum, imp) => sum + imp.diskBytes, 0),
+    },
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
       ...tailscale,

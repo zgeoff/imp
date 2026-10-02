@@ -275,6 +275,26 @@ export function createFakeZfs(options: FakeZfsOptions) {
     return buildSuccess(rows.map((row) => `${row.line}\n`).join(''));
   };
 
+  // every dataset holds 1 MiB of its own and refers to 3; a snapshot holds 64 KiB
+  const listSpace = (root: string): CommandResult => {
+    const isInTree = (name: string) => name === root || name.startsWith(`${root}/`);
+
+    const rows = [
+      ...[...datasets.keys()]
+        .filter((name) => isInTree(name))
+        .map((name) => `${name}\t1048576\t3145728\t1048576\t-`),
+      ...[...snapshots.keys()]
+        .filter((name) => isInTree(name.split('@')[0] ?? ''))
+        .map((name) => {
+          const clones = findClonesOf(name);
+
+          return `${name}\t65536\t1048576\t-\t${clones.length === 0 ? '-' : clones.join(',')}`;
+        }),
+    ];
+
+    return buildSuccess(rows.map((row) => `${row}\n`).join(''));
+  };
+
   const handleCommand = (argv: readonly string[]): CommandResult => {
     const [tool = '', verb = '', ...rest] = argv;
     const last = argv.at(-1) ?? '';
@@ -316,6 +336,10 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return buildSuccess(
         `zfs-${options.userland ?? '2.2.2-0ubuntu9'}\nzfs-kmod-${options.kernel ?? '2.2.2-0ubuntu9'}\n`,
       );
+    }
+
+    if (verb === 'list' && argv.includes('name,used,referenced,usedbydataset,clones')) {
+      return listSpace(last);
     }
 
     if (verb === 'list' && argv.includes('used,available')) {

@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.4.0"
+const Version = "0.5.0"
 
 // Op names.
 const (
@@ -13,6 +13,7 @@ const (
 	OpResumed      = "resumed"
 	OpShutdown     = "shutdown"
 	OpServicesList = "services.list"
+	OpGrow         = "grow"
 
 	// sessions: exec with a session name starts or attaches one
 	OpSessionAttach = "session.attach"
@@ -57,6 +58,9 @@ type Request struct {
 	// agent.accept: the listener and the connection a CONNECTION named
 	Listener   string `json:"listener,omitempty"`
 	Connection uint64 `json:"connection,omitempty"`
+
+	// grow: the disk's new size in bytes
+	DiskBytes int64 `json:"disk_bytes,omitempty"`
 }
 
 // Error codes.

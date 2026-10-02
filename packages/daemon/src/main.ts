@@ -27,8 +27,12 @@ import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
+import { createDiskBudget } from './storage/disk-budget';
+import { createDiskUsageCache } from './storage/disk-usage-cache';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
+import { createStorageGate } from './storage/storage-gate';
+import { createStorageGc } from './storage/storage-gc';
 import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
@@ -82,7 +86,19 @@ async function main(): Promise<void> {
 
   await storage.start(live);
 
-  const images = createImageService({ config, db, storage });
+  // every operation that makes storage before its row joins it; the GC waits
+  const storageGate = createStorageGate();
+  const zfsCommitDelayMs = config.storageBackend === 'zfs' ? 20_000 : 0;
+
+  const diskBudget = createDiskBudget({
+    storage,
+    reserveBytes: config.diskReserveBytes,
+    releaseDelayMs: zfsCommitDelayMs,
+    log: printLog,
+  });
+
+  const images = createImageService({ config, db, storage, storageGate, diskBudget });
+  const diskUsage = createDiskUsageCache({ db, storage, log: printLog });
 
   const broker = await createBroker({ config, db, log: printLog });
 
@@ -99,6 +115,9 @@ async function main(): Promise<void> {
     identity: readHostIdentity(config.firecrackerBin, systemFiles),
     log: printLog,
     readExecEnv: broker.readExecEnv,
+    storageGate,
+    diskBudget,
+    readDiskUsage: diskUsage.read,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -121,6 +140,11 @@ async function main(): Promise<void> {
 
   // an imp that comes or goes opens or closes its proxy port and its grants
   subscribeImpWrites(db, (write) => {
+    // storage comes or goes with an imp or a checkpoint
+    if (write.kind !== 'changed') {
+      diskUsage.requestRefresh();
+    }
+
     if (isImpSetWrite(write)) {
       void proxyHolder.proxy?.syncListeners();
       void broker.applyGrants();
@@ -141,7 +165,7 @@ async function main(): Promise<void> {
     printLog(`impd: removed system drive ${name}: no imp uses it`);
   }
 
-  const checkpoints = createCheckpointService({ config, db, imps, storage });
+  const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
 
   const backups =
     config.backup === null
@@ -153,8 +177,11 @@ async function main(): Promise<void> {
           imps,
           storage,
           grants: broker,
+          storageGate,
+          diskBudget,
         });
 
+  const gc = createStorageGc({ db, storage, storageGate, log: printLog });
   const state = { ready: false };
   const audit = createApiAudit({ db, now: Date.now, log: printLog });
 
@@ -171,6 +198,8 @@ async function main(): Promise<void> {
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
+    diskBudget,
+    gc,
     readTailscale,
     isReady: () => state.ready,
     now: Date.now,
@@ -217,6 +246,12 @@ async function main(): Promise<void> {
 
     // terminators follow grants; this also renews leaves near their end
     startTicker('broker', 60_000, broker.applyGrants, printLog),
+
+    // what a crash or a failed removal left; start sweeps the same way
+    startTicker('gc', 3_600_000, gc.runScheduled, printLog),
+
+    // FIEMAP over every file on XFS: often enough for `imp ls`
+    startTicker('disk-usage', 300_000, diskUsage.runPass, printLog),
     ...(backups === null
       ? []
       : [
@@ -231,6 +266,9 @@ async function main(): Promise<void> {
           ),
         ]),
   ];
+
+  // the first usage numbers soon after start, not a ticker interval later
+  diskUsage.requestRefresh();
 
   // ready either way: a failed seed leaves `imp image add` to the user
   const setupDefaultImage = async (): Promise<void> => {
@@ -260,6 +298,8 @@ async function main(): Promise<void> {
     const started = performance.now();
     const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));
     const readStepMs = () => Math.min(STOP_STEP_MAX_MS, readLeftMs());
+
+    diskUsage.stop();
 
     await runStopStep('tickers', readStepMs(), () =>
       Promise.all(tickers.map((ticker) => ticker.stop())),

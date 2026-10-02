@@ -8,6 +8,7 @@ import type {
   Imp,
   Secret,
   Session,
+  StorageGc,
   SystemInfo,
 } from '@imp/api';
 
@@ -30,7 +31,21 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'SESSIONS', 'IP', 'URL', 'NOTE'],
+    [
+      'NAME',
+      'STATE',
+      'IMAGE',
+      'VCPUS',
+      'MEMORY',
+      'RAM',
+      'DISK',
+      'USED',
+      'SHARED',
+      'SESSIONS',
+      'IP',
+      'URL',
+      'NOTE',
+    ],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -38,12 +53,39 @@ export function formatImps(imps: readonly Imp[]): string {
       String(imp.vcpus),
       `${String(imp.memoryMib)} MiB`,
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+      formatDiskMib(imp.diskMib),
+      ...formatDiskUsage(imp.diskUsage),
       imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
       formatNote(imp),
     ]),
   );
+}
+
+// what a destroy frees, and what the imp shares; `<=` when a fork holds a
+// snapshot of it, `?` when the last pass was cut short
+function formatDiskUsage(usage: Imp['diskUsage']): [string, string] {
+  if (usage === undefined) {
+    return ['-', '-'];
+  }
+
+  const bound = usage.isUpperBound ? '<=' : '';
+  const partial = usage.isPartial ? '?' : '';
+
+  return [
+    `${bound}${formatBytesMib(usage.exclusiveBytes)}${partial}`,
+    `${formatBytesMib(usage.sharedBytes)}${partial}`,
+  ];
+}
+
+function formatBytesMib(bytes: number): string {
+  return `${String(Math.round(bytes / 1_048_576))} MiB`;
+}
+
+// GiB when whole, as sizes are given
+function formatDiskMib(mib: number): string {
+  return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
 }
 
 // what an upgrade means for the imp (docs/guides/operations.md#upgrade)
@@ -76,7 +118,7 @@ export function formatImp(imp: Imp): string {
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
   return formatTable(
-    ['ID', 'LABEL', 'CREATED', 'SIZE'],
+    ['ID', 'LABEL', 'CREATED', 'SIZE', 'DISK'],
     checkpoints.map((checkpoint) => [
       checkpoint.id,
       checkpoint.label ?? '',
@@ -84,6 +126,7 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
       checkpoint.sizeBytes === undefined
         ? ''
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
+      formatDiskMib(checkpoint.diskMib),
     ]),
   );
 }
@@ -226,6 +269,19 @@ export function formatApiCalls(calls: readonly ApiCall[]): string {
       String(call.durationMs),
     ]),
   );
+}
+
+export function formatGc(gc: Readonly<StorageGc>): string {
+  if (gc.dropped.length === 0) {
+    return 'nothing to remove';
+  }
+
+  const table = formatTable(
+    ['KIND', 'ID'],
+    gc.dropped.map((dropped) => [dropped.kind, dropped.id]),
+  );
+
+  return gc.dryRun ? `${table}\n(dry run: nothing removed)` : table;
 }
 
 export function formatJson(value: unknown): string {

@@ -12,6 +12,7 @@ import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
+import type { Config } from '../config';
 import { createImage } from '../db/images';
 import type { ImageRecord } from '../db/images';
 import { listImps } from '../db/imps';
@@ -24,6 +25,9 @@ import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
+import { createStorageGate } from '../storage/storage-gate';
+import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
@@ -82,10 +86,18 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const db = await openDatabase(':memory:');
 
-  const config = loadConfig({ IMP_DATA_DIR: dataDir, ...options.env });
+  // a new disk stays the size of its image: the fake clone copies every byte
+  const config: Config = {
+    ...loadConfig({ IMP_DATA_DIR: dataDir, ...options.env }),
+    defaultDiskBytes: 0,
+  };
+
   const fake = buildFakeVmm();
   const taps: string[] = [];
   const logs: string[] = [];
+
+  // disks whose filesystem the host grew; the test disks hold no ext4
+  const filesystemGrows: string[] = [];
 
   // the clock for holds and reservations; a test moves it with `advance`
   const clock = { offsetMs: 0 };
@@ -100,7 +112,18 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     });
 
   const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
-  const images = createImageService({ config, db, storage });
+  const storageGate = createStorageGate();
+
+  // the host's free space as the budget sees it; a test lowers it
+  const diskUsage = { usedBytes: 0, availableBytes: 1024 ** 4 };
+
+  const diskBudget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...diskUsage }) },
+    reserveBytes: null,
+    log: () => {},
+  });
+
+  const images = createImageService({ config, db, storage, storageGate, diskBudget });
 
   const printTestLog = (message: string): void => {
     logs.push(message);
@@ -162,6 +185,13 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       storage,
       now: readClock,
       readExecEnv: broker.readExecEnv,
+      storageGate,
+      diskBudget,
+      growFilesystem: (disk) => {
+        filesystemGrows.push(disk);
+
+        return Promise.resolve(true);
+      },
     });
   };
 
@@ -182,11 +212,15 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     fake,
     taps,
     logs,
+    filesystemGrows,
     imps: governed.imps,
     governor: governed.governor,
     broker,
     bundleInstalls,
     storage,
+    storageGate,
+    diskBudget,
+    diskUsage,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -210,7 +244,10 @@ export type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now' | 'broker'>;
+type AppParts = Pick<
+  ImpTest,
+  'config' | 'db' | 'images' | 'storage' | 'storageGate' | 'diskBudget' | 'now' | 'broker'
+>;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
 // that calls it without a socket, a no-op freeze and thaw, and `openExec` in
@@ -230,6 +267,7 @@ export function buildTestApp(
     db: ctx.db,
     imps: impd.imps,
     storage: ctx.storage,
+    diskBudget: ctx.diskBudget,
     log: () => {},
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
@@ -247,6 +285,13 @@ export function buildTestApp(
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,
+    diskBudget: ctx.diskBudget,
+    gc: createStorageGc({
+      db: ctx.db,
+      storage: ctx.storage,
+      storageGate: ctx.storageGate,
+      log: () => {},
+    }),
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
     now: ctx.now,

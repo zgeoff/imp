@@ -41,6 +41,15 @@ export const SystemInfoSchema = z.object({
     backend: z.enum(['xfs', 'zfs']),
     usedBytes: z.int().nonnegative(),
     availableBytes: z.int().nonnegative(),
+
+    // free space no write may take (IMP_DISK_RESERVE_GIB), and what writes
+    // under way have promised; low: below twice the reserve
+    reserveBytes: z.int().nonnegative(),
+    pendingBytes: z.int().nonnegative(),
+    isLow: z.boolean(),
+
+    // the disk sizes of every imp: what the guests could fill, thin or not
+    impDiskBytes: z.int().nonnegative(),
   }),
   tailscale: z.object({
     enabled: z.boolean(),

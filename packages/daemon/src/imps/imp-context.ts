@@ -12,11 +12,17 @@ import { createSessionCache } from '../sessions/session-cache';
 import type { SessionCache } from '../sessions/session-cache';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
+import type { DiskBudget } from '../storage/disk-budget';
+import type { CachedDiskUsage } from '../storage/disk-usage-cache';
 import type { StorageBackend } from '../storage/storage-backend';
+import { createStorageGate } from '../storage/storage-gate';
+import type { StorageGate } from '../storage/storage-gate';
 import type { VmRunner } from '../vmm/vm-runner';
 import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
+import { growFilesystem } from './imp-disk';
 
 export interface ImpServiceDeps {
   readonly config: Config;
@@ -49,6 +55,20 @@ export interface ImpServiceDeps {
   // `KEY=VALUE` entries every exec in the imp starts with, under the
   // caller's own: the credential broker's proxy and CA variables
   readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+
+  // every imp operation joins it under the imp's lock (storage-gate.ts)
+  readonly storageGate?: StorageGate;
+
+  // creates, resizes, boots and wakes need room past the reserve; a sleep
+  // holds room for its memory file while it writes
+  readonly diskBudget?: DiskBudget;
+
+  // the last usage pass's numbers for an imp (disk-usage-cache.ts)
+  readonly readDiskUsage?: (impId: string) => CachedDiskUsage | undefined;
+
+  // grows a disk's filesystem on the host while no VM has it open; false
+  // leaves the grow to the guest's next boot (imp-disk.ts)
+  readonly growFilesystem?: (disk: string) => Promise<boolean>;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -67,6 +87,10 @@ export interface ImpContext {
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly now: () => number;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  readonly growFilesystem: (disk: string) => Promise<boolean>;
+  readonly storageGate: StorageGate;
+  readonly diskBudget: DiskBudget;
+  readonly readDiskUsage: (impId: string) => CachedDiskUsage | undefined;
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
@@ -91,6 +115,16 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readTailnetHostname: deps.readTailnetHostname,
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
+    growFilesystem: deps.growFilesystem ?? growFilesystem,
+    readDiskUsage: deps.readDiskUsage ?? (() => {}),
+    storageGate: deps.storageGate ?? createStorageGate(),
+    diskBudget:
+      deps.diskBudget ??
+      createDiskBudget({
+        storage: deps.storage,
+        reserveBytes: deps.config.diskReserveBytes,
+        log: deps.log ?? printLog,
+      }),
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
