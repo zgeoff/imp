@@ -39,6 +39,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `tailscale`      | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                      |
 | `mcp`            | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                |
 | `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                            |
+| `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                      |
 | `services`       | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove        |
 | `ssh`            | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                                   |
 | `ssh-wake`       | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                                             |
@@ -64,7 +65,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
