@@ -12,13 +12,6 @@ fi
 
 sysctl -qw net.ipv4.ip_forward=1
 
-# Strict reverse-path filtering: a guest cannot send from another imp's
-# address, so the broker's peer check holds. Defense in depth: each tap
-# routes only its own /30. Set before any tap exists, so new taps inherit
-# it from `default`; set -e makes a failed write fatal.
-sysctl -qw net.ipv4.conf.all.rp_filter=1
-sysctl -qw net.ipv4.conf.default.rp_filter=1
-
 out=$(ip route show default | awk '{print $5; exit}')
 if [ -z "$out" ]; then
   echo "setup-net: no default route" >&2
@@ -44,12 +37,27 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 # connections (impd's proxy dials into guests).
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
-# ...and the credential broker on its port (docs/guides/connectors.md). It
-# goes first: `rule` appends, which would put it under the DROP. Keep the
-# default in step with packages/daemon/src/config.ts.
+
+# A guest may not send from another imp's address: the credential broker
+# names the imp by it. A strict reverse-path check on the taps only, not a
+# sysctl floor that would also bind eth0 and tailscale0.
+rule raw PREROUTING -i imp+ -m rpfilter --invert -j DROP
+
+# The credential broker (docs/guides/connectors.md): guests only. It listens
+# on every address, so anything else is dropped. Both rules carry a comment,
+# so a run with another IMP_BROKER_PORT removes the old pair first. The
+# ACCEPT goes first: `rule` appends, which would put it under the DROP above.
+# Keep the default in step with packages/daemon/src/config.ts.
 broker_port=${IMP_BROKER_PORT:-7081}
-iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" -j ACCEPT 2>/dev/null \
-  || iptables -I INPUT 1 -i imp+ -p tcp --dport "$broker_port" -j ACCEPT
+broker_tag=(-m comment --comment imp-broker)
+stale=$(iptables -S INPUT | grep -- '--comment imp-broker' | grep -v -- "--dport $broker_port " || true)
+while read -r spec; do
+  # shellcheck disable=SC2086 # the saved rule is split back into its words
+  [ -z "$spec" ] || iptables ${spec/#-A/-D}
+done <<<"$stale"
+iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT 1 -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j ACCEPT
+rule filter INPUT ! -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j DROP
 
 # Clamp the TCP MSS of guest connections to the real uplink MTU. Behind a
 # smaller-MTU uplink (WSL eth0 is 1360) frag-needed ICMP never reaches the
