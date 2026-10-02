@@ -1,12 +1,11 @@
 import { defineCommand } from '../define-command';
-import { formatCheckpoints, formatImps, formatJson } from '../format-output';
+import { formatCheckpoints, formatImp, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
-
-const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
+import { jsonArg, nameArg } from './common-args';
 
 // `imp checkpoint rm <name> <checkpoint>` shares the command with
 // `imp checkpoint <name> [label]`: citty cannot mix subcommands with
-// positionals, so three positionals led by `rm` mean a delete.
+// positionals, so a first positional `rm` always means a delete.
 export const checkpointCommand = defineCommand({
   meta: {
     name: 'checkpoint',
@@ -15,16 +14,20 @@ export const checkpointCommand = defineCommand({
   args: {
     name: nameArg,
     label: { type: 'positional', description: 'label for the checkpoint', required: false },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
       const positionals = context.args._;
 
-      if (positionals.length === 3 && positionals[0] === 'rm') {
-        await client.checkpoints.delete({
-          name: positionals[1] ?? '',
-          checkpoint: positionals[2] ?? '',
-        });
+      if (positionals[0] === 'rm') {
+        const [, name, checkpoint] = positionals;
+
+        if (positionals.length !== 3 || name === undefined || checkpoint === undefined) {
+          throw new Error('usage: imp checkpoint rm <name> <checkpoint>');
+        }
+
+        await client.checkpoints.delete({ name, checkpoint });
 
         return;
       }
@@ -34,21 +37,18 @@ export const checkpointCommand = defineCommand({
         ...(context.args.label !== undefined && { label: context.args.label }),
       });
 
-      console.log(formatCheckpoints([checkpoint]));
+      console.log(formatOutput(checkpoint, context.args.json, (one) => formatCheckpoints([one])));
     }),
 });
 
 export const checkpointsCommand = defineCommand({
   meta: { name: 'checkpoints', description: "List an imp's checkpoints, newest first" },
-  args: { name: nameArg, json: { type: 'boolean', description: 'print JSON' } },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const checkpoints = await client.checkpoints.list({ name: context.args.name });
 
-      const output =
-        context.args.json === true ? formatJson(checkpoints) : formatCheckpoints(checkpoints);
-
-      console.log(output);
+      console.log(formatOutput(checkpoints, context.args.json, formatCheckpoints));
     }),
 });
 
@@ -60,6 +60,7 @@ export const restoreCommand = defineCommand({
   args: {
     name: nameArg,
     checkpoint: { type: 'positional', description: 'checkpoint id or label', required: true },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
@@ -68,6 +69,6 @@ export const restoreCommand = defineCommand({
         checkpoint: context.args.checkpoint,
       });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });

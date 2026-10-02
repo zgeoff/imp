@@ -1,10 +1,11 @@
 import { defineCommand } from '../define-command';
 import { formatJson } from '../format-output';
 import { runAction } from '../run-action';
+import { jsonArg } from './common-args';
 
 export const infoCommand = defineCommand({
   meta: { name: 'info', description: 'Show impd version, RAM budget and counts' },
-  args: { json: { type: 'boolean', description: 'print JSON' } },
+  args: { json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const info = await client.system.info();

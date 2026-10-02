@@ -1,13 +1,15 @@
-import { resolve } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { defineCommand } from '../define-command';
-import { formatImages } from '../format-output';
+import { formatImages, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
+import { jsonArg } from './common-args';
 
 const addCommand = defineCommand({
   meta: { name: 'add', description: 'Import an image the host docker has or can pull' },
   args: {
     ref: { type: 'positional', description: 'docker image ref', required: true },
     name: { type: 'string', description: 'imp image name (defaults from the ref)' },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
@@ -16,36 +18,53 @@ const addCommand = defineCommand({
         ...(context.args.name !== undefined && { name: context.args.name }),
       });
 
-      console.log(formatImages([image]));
+      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
     }),
 });
 
+// impd runs `docker build` on its own host, so the directory is a path
+// there, not here: a relative path would name a directory this shell sees
 const buildCommand = defineCommand({
-  meta: { name: 'build', description: 'docker build a directory into an imp image' },
+  meta: {
+    name: 'build',
+    description: 'docker build a directory on the impd host into an imp image',
+  },
   args: {
-    dir: { type: 'positional', description: 'build context directory', required: true },
+    dir: {
+      type: 'positional',
+      description: 'build context: an absolute path on the impd host',
+      required: true,
+    },
     name: { type: 'string', description: 'imp image name', required: true },
     file: { type: 'string', description: 'Dockerfile path inside the context' },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
+      if (!isAbsolute(context.args.dir)) {
+        throw new Error(
+          `the build context is a directory on the impd host: give its absolute path, not ${context.args.dir}`,
+        );
+      }
+
       const image = await client.images.build({
-        contextDir: resolve(context.args.dir),
+        contextDir: context.args.dir,
         name: context.args.name,
         ...(context.args.file !== undefined && { dockerfile: context.args.file }),
       });
 
-      console.log(formatImages([image]));
+      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
     }),
 });
 
 const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List images' },
-  run: () =>
+  args: { json: jsonArg },
+  run: (context) =>
     runAction(async (client) => {
       const images = await client.images.list();
 
-      console.log(formatImages(images));
+      console.log(formatOutput(images, context.args.json, formatImages));
     }),
 });
 

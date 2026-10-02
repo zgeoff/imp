@@ -1,10 +1,10 @@
 import { defineCommand } from '../define-command';
 import { runExec } from '../exec-client';
-import { formatImps, formatJson } from '../format-output';
+import { formatImp, formatImps, formatOutput } from '../format-output';
 import { parseDuration } from '../parse-duration';
+import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
-
-const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
+import { jsonArg, nameArg } from './common-args';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -16,57 +16,56 @@ export const newCommand = defineCommand({
     },
     image: { type: 'string', description: 'image name' },
     cpus: { type: 'string', description: 'vCPU count' },
-    memory: { type: 'string', description: 'memory in MiB' },
+    memory: { type: 'string', description: 'memory: MiB, or with a unit (512m, 2g)' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.create({
         ...(context.args.name !== undefined && { name: context.args.name }),
         ...(context.args.image !== undefined && { image: context.args.image }),
-        ...(context.args.cpus !== undefined && { vcpus: Number(context.args.cpus) }),
-        ...(context.args.memory !== undefined && { memoryMib: Number(context.args.memory) }),
+        ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
+        ...(context.args.memory !== undefined && { memoryMib: parseSize(context.args.memory) }),
         ...(context.args['http-port'] !== undefined && {
-          httpPort: Number(context.args['http-port']),
+          httpPort: parseCount(context.args['http-port'], 'http-port'),
         }),
       });
 
-      console.log(`${imp.name} ${imp.url}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
-  args: { json: { type: 'boolean', description: 'print JSON' } },
+  args: { json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const imps = await client.imps.list();
 
-      const output = context.args.json === true ? formatJson(imps) : formatImps(imps);
-
-      console.log(output);
+      console.log(formatOutput(imps, context.args.json, formatImps));
     }),
 });
 
 export const startCommand = defineCommand({
   meta: { name: 'start', description: 'Boot a stopped imp' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.start({ name: context.args.name });
 
-      console.log(`${imp.name} ${imp.state}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const stopCommand = defineCommand({
   meta: { name: 'stop', description: 'Shut an imp down (its disk stays, its memory does not)' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.stop({ name: context.args.name });
 
-      console.log(`${imp.name} ${imp.state}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
@@ -81,23 +80,23 @@ export const rmCommand = defineCommand({
 
 export const sleepCommand = defineCommand({
   meta: { name: 'sleep', description: 'Snapshot an imp to disk and free its RAM' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.sleep({ name: context.args.name });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const wakeCommand = defineCommand({
   meta: { name: 'wake', description: 'Resume a sleeping or stopped imp' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
     runAction(async (client) => {
       const imp = await client.imps.wake({ name: context.args.name });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
@@ -139,6 +138,7 @@ export const forkCommand = defineCommand({
     source: { type: 'positional', description: 'imp to fork', required: true },
     name: { type: 'positional', description: 'name of the new imp', required: true },
     from: { type: 'string', description: 'checkpoint id or label (default: the live disk)' },
+    json: jsonArg,
   },
   run: (context) =>
     runAction(async (client) => {
@@ -148,7 +148,7 @@ export const forkCommand = defineCommand({
         ...(context.args.from !== undefined && { checkpoint: context.args.from }),
       });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 

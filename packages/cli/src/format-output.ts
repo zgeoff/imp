@@ -58,6 +58,10 @@ function formatNote(imp: Imp): string {
   return notes.join('; ');
 }
 
+export function formatImp(imp: Imp): string {
+  return formatImps([imp]);
+}
+
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
   return formatTable(
     ['ID', 'LABEL', 'CREATED', 'SIZE'],
@@ -86,4 +90,13 @@ export function formatImages(images: readonly Image[]): string {
 
 export function formatJson(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+// what a command prints: JSON with --json, else its table
+export function formatOutput<T>(
+  value: T,
+  json: boolean | undefined,
+  formatText: (value: T) => string,
+): string {
+  return json === true ? formatJson(value) : formatText(value);
 }
