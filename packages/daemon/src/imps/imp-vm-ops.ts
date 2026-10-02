@@ -26,6 +26,14 @@ import type { ShutdownGate } from './shutdown-gate';
 // (docs/architecture/sleep-and-wake.md gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
 
+// How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
+// for it, and give way once `isWanted` turns false, or sleep it at once.
+export type YoungGuestWait =
+  | { readonly wait: false }
+  | { readonly wait: true; readonly isWanted: () => Promise<boolean> };
+
+const ALWAYS_WAIT: YoungGuestWait = { wait: true, isWanted: () => Promise.resolve(true) };
+
 // The VM side of the lifecycle. Every operation takes a LockedImp: the caller
 // holds the imp's lock, and the record it passes is fresh.
 export interface ImpVmOps {
@@ -42,12 +50,12 @@ export interface ImpVmOps {
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
   // snapshots the VM and stops it (DESIGN 2.8); a failed snapshot leaves it
-  // running, a failure after the kill stops the imp. A sleep that waits for a
-  // young guest gives way, still running, once `isWanted` turns false.
+  // running, a failure after the kill stops the imp. A sleep that gives way
+  // to a busy imp returns it still running.
   readonly sleepImpVm: (
     imp: LockedImp,
     reason: string,
-    isWanted?: () => boolean,
+    youngGuest?: YoungGuestWait,
   ) => Promise<LockedImp>;
 
   // the running imp, woken or booted first
@@ -191,7 +199,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   const sleepImpVm = async (
     imp: LockedImp,
     reason: string,
-    isWanted: () => boolean = () => true,
+    youngGuest: YoungGuestWait = ALWAYS_WAIT,
   ): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
@@ -202,11 +210,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       throw new Error(`${imp.name} is running without a firecracker pid`);
     }
 
-    const waitedMs = await waitForGuestAge({
-      readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
-      minUptimeMs: context.config.sleepMinGuestUptimeMs,
-      isWanted,
-    });
+    const waitedMs = youngGuest.wait
+      ? await waitForGuestAge({
+          readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
+          minUptimeMs: context.config.sleepMinGuestUptimeMs,
+          isWanted: youngGuest.isWanted,
+        })
+      : 0;
 
     if (waitedMs === null) {
       context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);

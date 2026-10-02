@@ -92,8 +92,9 @@ From the milestone work:
 - An upgrade across an agent change was tested on the dev instance (`scripts/dev.sh down`, then `up`
   on a new drive), not on a server with `deploy/upgrade.sh`. A new Firecracker or host kernel still
   boots every sleeping imp cold ([#10](https://github.com/zgeoff/imp/issues/10)).
-- On a host kernel before Linux 6.7, a sleep within 1.5 s of a cold boot waits up to about 1.2 s
-  first; without the wait the next wake takes 0.75–1.1 s
+- On a host kernel before Linux 6.7, an `imp sleep` within 1.5 s of a cold boot waits up to about
+  1.2 s first; without the wait the next wake takes 0.75–1.1 s. A governor sleep does not wait, so
+  its victim's next wake can be that slow
   ([young guests](docs/architecture/sleep-and-wake.md#young-guests),
   [#33](https://github.com/zgeoff/imp/issues/33)). `scripts/bench-wake.sh` has not run on a host
   with the fix yet.

@@ -89,13 +89,16 @@ test('a sleep right after a cold boot waits until the guest is old enough', asyn
   expect(ctx.logs.some((line) => line.includes('for a young guest'))).toBe(true);
 });
 
-test('a background sleep that waits for a young guest gives way to a request', async () => {
+test('an idle sleep that waits for a young guest gives way to a request', async () => {
   await using ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
 
   ctx.fake.setGuestUptime(0);
 
+  const seen = await findImpByName(ctx.db, 'dev');
+
+  const seenActiveAt = seen?.lastActiveAt.getTime() ?? 0;
   const started = performance.now();
-  const sleeping = ctx.imps.trySleepImp(ctx.impId, 'budget', { by: 'governor' });
+  const sleeping = ctx.imps.trySleepImp(ctx.impId, 'idle', { by: 'idle', seenActiveAt });
 
   await Bun.sleep(20);
 
@@ -112,6 +115,64 @@ test('a background sleep that waits for a young guest gives way to a request', a
 
   expect(outcome).toBe('skipped');
   expect(running).toMatchObject({ imp: { state: 'running' }, wokeMs: null });
+  expect(performance.now() - started).toBeLessThan(2000);
+});
+
+test('an idle sleep that waits for a young guest gives way to a hold', async () => {
+  await using ctx = await setupRunningImp({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000' });
+
+  ctx.fake.setGuestUptime(0);
+
+  const seen = await findImpByName(ctx.db, 'dev');
+
+  const seenActiveAt = seen?.lastActiveAt.getTime() ?? 0;
+  const started = performance.now();
+  const sleeping = ctx.imps.trySleepImp(ctx.impId, 'idle', { by: 'idle', seenActiveAt });
+
+  await Bun.sleep(20);
+
+  await updateImpHold(ctx.db, ctx.impId, new Date(Date.now() + 60_000));
+
+  const outcome = await sleeping;
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(outcome).toBe('skipped');
+  expect(imp?.state).toBe('running');
+  expect(performance.now() - started).toBeLessThan(2000);
+});
+
+test('the governor sleeps young guests at once to admit a boot', async () => {
+  // three imps own 300 MiB each; a 720 MiB boot needs all three asleep
+  await using ctx = await setupImpTest({
+    env: {
+      IMP_RAM_BUDGET_MIB: '1000',
+      IMP_DEFAULT_MEMORY_MIB: '256',
+      IMP_BOOT_RESERVE_PERCENT: '100',
+      IMP_SLEEP_MIN_GUEST_UPTIME_MS: '5000',
+    },
+  });
+
+  await ctx.createTestImage('ubuntu');
+
+  for (const name of ['a', 'b', 'c']) {
+    await ctx.imps.createImp({ name });
+  }
+
+  ctx.fake.setGuestUptime(0);
+
+  const started = performance.now();
+
+  await ctx.imps.createImp({ name: 'big', memoryMib: 720 });
+
+  const imps = await ctx.imps.listImps();
+
+  expect(imps.map((imp) => [imp.name, imp.state])).toEqual([
+    ['a', 'sleeping'],
+    ['b', 'sleeping'],
+    ['big', 'running'],
+    ['c', 'sleeping'],
+  ]);
+
   expect(performance.now() - started).toBeLessThan(2000);
 });
 

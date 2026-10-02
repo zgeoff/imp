@@ -39,6 +39,10 @@ error.
 | `IMP_TAILSCALE_HOSTNAME`        | `imp`             | The tailnet hostname to ask for.                                                                                                                    |
 | `IMP_DASHBOARD_DIR`             | none              | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                    |
 
+A host on Linux 6.7 or later does not set a restored TSC back, so it can set
+`IMP_SLEEP_MIN_GUEST_UPTIME_MS=0`: `scripts/bench-wake.sh` with that setting confirms it, with a
+fast median wake ([young guests](../architecture/sleep-and-wake.md#young-guests)).
+
 [Sleep and wake](../architecture/sleep-and-wake.md#the-ram-governor) explains the RAM and idle
 settings.
 

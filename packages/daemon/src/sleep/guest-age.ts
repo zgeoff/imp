@@ -6,7 +6,7 @@ interface GuestAgeWait {
   readonly minUptimeMs: number;
 
   // false once the sleep is no longer wanted, such as an imp that turned busy
-  readonly isWanted: () => boolean;
+  readonly isWanted: () => Promise<boolean>;
 }
 
 // Before Linux 6.7, KVM restores a TSC under one second old as about 0 and
@@ -28,12 +28,14 @@ export async function waitForGuestAge(wait: Readonly<GuestAgeWait>): Promise<num
   const deadline = started + wait.minUptimeMs - uptimeMs;
 
   for (let now = started; now < deadline; now = performance.now()) {
-    if (!wait.isWanted()) {
+    if (!(await wait.isWanted())) {
       return null;
     }
 
     await Bun.sleep(Math.min(POLL_MS, deadline - now));
   }
 
-  return wait.isWanted() ? Math.round(performance.now() - started) : null;
+  const wanted = await wait.isWanted();
+
+  return wanted ? Math.round(performance.now() - started) : null;
 }

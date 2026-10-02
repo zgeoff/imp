@@ -19,6 +19,9 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const KILL_TIMEOUT_MS = 3000;
 const WAKE_AGENT_DEADLINE_MS = 10_000;
 
+// a sleep asks under the imp's lock: a wedged agent must not hold it long
+const UPTIME_PING_TIMEOUT_MS = 250;
+
 export interface VmPlan {
   readonly firecrackerBin: string;
   readonly kernelPath: string;
@@ -66,7 +69,7 @@ export interface VmRunner {
   readonly isAgentReady: (paths: ImpPaths) => Promise<boolean>;
 
   // the guest's uptime from the agent's ping, without the time asleep; null
-  // when the agent does not answer
+  // when the agent does not answer within 250 ms or cannot read its clock
   readonly readGuestUptimeMs: (paths: ImpPaths) => Promise<number | null>;
 }
 
@@ -308,9 +311,9 @@ export function createVmRunner(): VmRunner {
     },
     readGuestUptimeMs: async (paths) => {
       try {
-        const ping = await sendPing(paths.vsockSocket);
+        const ping = await sendPing(paths.vsockSocket, UPTIME_PING_TIMEOUT_MS);
 
-        return ping.uptime_ms;
+        return ping.uptime_ms ?? null;
       } catch {
         return null;
       }

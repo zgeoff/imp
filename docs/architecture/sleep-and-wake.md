@@ -12,8 +12,8 @@ Every VM gets a balloon before `InstanceStart`:
 With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
 snapshot is smaller.
 
-To sleep an imp, impd takes the imp's lock. If the guest has been up for less than
-`IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500), impd waits for the rest first
+To sleep an imp, impd takes the imp's lock. For `imp sleep` and impd's stop, if the guest has been
+up for less than `IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500), impd waits for the rest first
 ([young guests](#young-guests)). It reads the RAM the VM owns now, for the next wake's reservation.
 Then it waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8](#4-gotchas)) and:
 
@@ -45,8 +45,11 @@ Neither waits for an imp's lock. If the lock is taken, the sleep is skipped. The
 admission lock while it sleeps, and a boot under the imp's lock may be waiting for admission, so
 waiting would deadlock. The type of the governor's sleep admits only a try-lock.
 
-A background sleep that waits for a young guest gives way when the imp turns busy meanwhile, such as
-a request that arrives during the wait: the imp stays awake and the sleep counts as skipped.
+The governor does not wait for a young guest: it holds admission, and the boot that waits on it
+matters more than a slow wake later. An idle sleep would wait, but an imp idle for
+`IMP_IDLE_TIMEOUT_S` is never that young. If it were, the wait reads the imp's record again as it
+goes and gives way when the imp turns busy or held, or a request arrives: the imp stays awake and
+the sleep counts as skipped.
 
 ## Wake
 
@@ -411,9 +414,13 @@ after userspace has written a TSC once. 6.6.87 does not have it.
 `IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500; the TSC also counts about 0.2 s before the kernel
 starts, so the margin is about 0.7 s) impd waits for the rest. That costs up to about 1.2 s, only
 for a sleep within 1.5 s of a cold boot, and on the sleep, not the wake. A woken guest is always
-older than that, so the wait never repeats. On a host kernel with the fix, `0` turns the wait off;
-impd does not read the kernel version, since backports make it unreliable. An agent that does not
-answer does not hold the sleep.
+older than that, so the wait never repeats.
+
+Only `imp sleep` and impd's stop wait in practice. The governor sleeps a young guest at once, and
+its next wake is slow ([background sleeps](#background-sleeps)); an idle sleep never meets a young
+guest. On a host kernel with the fix, `0` turns the wait off; impd does not read the kernel version,
+since backports make it unreliable. An agent that does not answer within 250 ms, or cannot read its
+clock, does not hold the sleep.
 
 `scripts/bench-wake.sh` measures it on any host: a cold boot, a sleep at once and a wake, 3 cycles,
 and a limit on the median wake. With the wait off on WSL2: median 793 ms. With the default: median

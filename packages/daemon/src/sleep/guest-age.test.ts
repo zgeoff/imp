@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { waitForGuestAge } from './guest-age';
 
-function isAlwaysWanted(): boolean {
-  return true;
+function isAlwaysWanted(): Promise<boolean> {
+  return Promise.resolve(true);
 }
 
 test('an old enough guest sleeps at once without a wait', async () => {
@@ -65,7 +65,7 @@ test('a sleep that is no longer wanted gives way during the wait', async () => {
     isWanted: () => {
       checks += 1;
 
-      return checks < 3;
+      return Promise.resolve(checks < 3);
     },
   });
 
