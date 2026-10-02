@@ -95,6 +95,23 @@ export const SystemInfoSchema = z.object({
     names: TailnetNamesSchema.nullable(),
   }),
 
+  // KSM's saving and the RAM the governor keeps free for it; null when IMP_KSM
+  // is off, absent from an impd older than it. profitMib is general_profit,
+  // which goes negative while KSM's metadata outweighs what it merged
+  ksm: z
+    .object({
+      running: z.boolean(),
+      sharedMib: CountSchema,
+      profitMib: z.int(),
+      zeroMib: CountSchema,
+      headroomMib: CountSchema,
+
+      // awake imps whose guest memory KSM cannot merge
+      unmergeable: CountSchema,
+    })
+    .nullable()
+    .optional(),
+
   // the host's cores, the most a CPU limit may be; whether limits hold
   // (false outside a private cgroup v2 namespace: they are kept, not applied)
   cpu: z.object({ hostCpus: z.int().positive(), limitsEnforced: z.boolean() }).optional(),

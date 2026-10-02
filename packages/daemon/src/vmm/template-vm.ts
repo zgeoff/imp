@@ -97,9 +97,10 @@ export interface TemplateRestorePlan {
 export async function buildTemplateVm(
   plan: Readonly<TemplateBuildPlan>,
   jails: Jails,
+  mergeWrapper: string | null = null,
 ): Promise<void> {
   try {
-    await runBuildVm(plan, jails);
+    await runBuildVm(plan, jails, mergeWrapper);
 
     // every restore, of any imp, reads them: root's, and readable by all
     setupTemplateFile(plan.vmstate);
@@ -115,7 +116,11 @@ export async function buildTemplateVm(
   }
 }
 
-async function runBuildVm(plan: Readonly<TemplateBuildPlan>, jails: Jails): Promise<void> {
+async function runBuildVm(
+  plan: Readonly<TemplateBuildPlan>,
+  jails: Jails,
+  mergeWrapper: string | null,
+): Promise<void> {
   try {
     const argv =
       plan.jail === null
@@ -129,7 +134,12 @@ async function runBuildVm(plan: Readonly<TemplateBuildPlan>, jails: Jails): Prom
             scratchFiles: [plan.placeholderPath],
           });
 
-    const pid = await startFirecracker(argv, plan.paths, plan.cgroup?.procsPath ?? null);
+    const pid = await startFirecracker(
+      argv,
+      plan.paths,
+      plan.cgroup?.procsPath ?? null,
+      mergeWrapper,
+    );
 
     try {
       const api = createFirecrackerClient(plan.paths.apiSocket);
@@ -192,11 +202,12 @@ async function runBuildVm(plan: Readonly<TemplateBuildPlan>, jails: Jails): Prom
 async function startRestoreProcess(
   plan: Readonly<TemplateRestorePlan>,
   jails: Jails,
+  mergeWrapper: string | null,
 ): Promise<number> {
   try {
     const argv = await buildRestoreCommand(plan, jails);
 
-    return await startFirecracker(argv, plan.paths, plan.cgroup?.procsPath ?? null);
+    return await startFirecracker(argv, plan.paths, plan.cgroup?.procsPath ?? null, mergeWrapper);
   } catch (error) {
     await jails.release(plan.paths.impId);
 
@@ -245,11 +256,12 @@ export class TemplateRestoreError extends Error {
 export async function loadTemplateVm(
   plan: Readonly<TemplateRestorePlan>,
   jails: Jails,
+  mergeWrapper: string | null = null,
 ): Promise<StartedVm> {
   const marks = createMarks();
 
   // startFirecracker puts the process in the cgroup before the load
-  const pid = await startRestoreProcess(plan, jails);
+  const pid = await startRestoreProcess(plan, jails, mergeWrapper);
 
   marks.setMark('spawn');
 

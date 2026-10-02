@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeAgent } from '../agent-client/fake-agent';
@@ -9,6 +9,7 @@ import { parsePrefix64 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
+import { buildJailerCommand } from './jail';
 import type { Jails } from './jail';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
@@ -327,4 +328,51 @@ test('a jail prepare that fails partway releases its mounts and restores the lim
 
   expect(rejection).toBeInstanceOf(Error);
   expect(calls).toEqual(['lifted', 'release vm', 'applied']);
+});
+
+// a ksm-exec stand-in that records the command it was given, then fails
+test('a jailed VM starts through the merge wrapper, which runs the jailer outside the chroot', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
+
+  try {
+    const paths = buildImpPaths(dir, 'vm');
+    const recorded = join(dir, 'argv');
+    const wrapper = join(dir, 'ksm-exec');
+    const user = { uid: 900_000, gid: 900_000 };
+
+    const command = buildJailerCommand({
+      jailerBin: 'jailer',
+      firecrackerBin: '/usr/local/bin/firecracker',
+      chrootBase: join(dir, 'jail'),
+      impId: 'vm',
+      user,
+      apiSocket: paths.apiSocket,
+    });
+
+    mkdirSync(paths.runDir, { recursive: true });
+
+    writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$@" > '${recorded}'\nexit 1\n`, {
+      mode: 0o755,
+    });
+
+    const jails: Jails = {
+      ...NO_JAILS,
+      prepare: () => Promise.resolve(command),
+    };
+
+    const rejection = await createVmRunner(jails, wrapper)
+      .wakeVm({
+        firecrackerBin: 'firecracker',
+        paths,
+        cgroup: null,
+        jail: user,
+        readOnlyFiles: [],
+      })
+      .catch((error: unknown) => error);
+
+    expect(readErrorMessage(rejection)).toContain('did not open its API socket');
+    expect(readFileSync(recorded, 'utf8').trimEnd().split('\n')).toEqual([...command]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { release } from 'node:os';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
 import { createApiAudit } from './audit/api-audit';
@@ -64,6 +65,7 @@ import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
 import { createCpuCgroups } from './vmm/cpu-cgroups';
 import { createJails } from './vmm/jail';
+import { checkKsmHost, readKsmHostStats } from './vmm/ksm';
 import { createVmRunner } from './vmm/vm-runner';
 
 // the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
@@ -120,6 +122,19 @@ function buildTailnetAccess(config: Config, readStatus: () => Promise<TailscaleS
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
+
+  if (config.ksm !== null) {
+    const ksm = readKsmHostStats();
+    const refusal = checkKsmHost(release(), ksm);
+
+    if (refusal !== null) {
+      throw new Error(refusal);
+    }
+
+    if (ksm?.running === false) {
+      printLog('impd: IMP_KSM is on, but ksmd does not run (/sys/kernel/mm/ksm/run is 0)');
+    }
+  }
 
   // before any instrument is made: a meter taken earlier stays a no-op
   const stopExport = await startOtlpExport(process.env, packageJson.version);
@@ -207,7 +222,7 @@ async function main(): Promise<void> {
     db,
     images,
     taps: createTapDevices(),
-    vms: createVmRunner(jails),
+    vms: createVmRunner(jails, config.ksm?.execBin ?? null),
     storage,
     identity,
     ipv6,

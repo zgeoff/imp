@@ -55,6 +55,9 @@ const EnvSchema = z.object({
   IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
   IMP_DISK_RESERVE_GIB: CountSchema.optional(),
   IMP_BUILD_CONTEXT_MAX_MIB: CountSchema.default(1024),
+  IMP_KSM: z.literal('1').optional(),
+  IMP_KSM_EXEC: z.string().default('ksm-exec'),
+  IMP_KSM_HEADROOM_PERCENT: z.coerce.number().pipe(z.int().min(0).max(100)).default(100),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
   IMP_SUBNET6: z.string().default('auto'),
@@ -155,6 +158,11 @@ export interface Config {
   // <dataDir>/jail, where the jailer makes firecracker/<id>/root; impd
   // cleans it up after a jailed VM even with the jailer off
   readonly jailDir: string;
+
+  // KSM merges identical guest pages (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages);
+  // null when IMP_KSM is off. Firecracker starts through `execBin`, and the
+  // governor keeps `headroomPercent` of KSM's saving free.
+  readonly ksm: { readonly execBin: string; readonly headroomPercent: number } | null;
   readonly kernelPath: string;
 
   // where impd copies the kernel and the system drive from on start, so a
@@ -341,6 +349,10 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
     jailerBin: parsed.IMP_JAILER === 'true' ? parsed.IMP_JAILER_BIN : null,
     jailDir: join(parsed.IMP_DATA_DIR, 'jail'),
+    ksm:
+      parsed.IMP_KSM === undefined
+        ? null
+        : { execBin: parsed.IMP_KSM_EXEC, headroomPercent: parsed.IMP_KSM_HEADROOM_PERCENT },
     kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
     kernelSource: parsed.IMP_KERNEL ?? null,
     systemDriveSource:

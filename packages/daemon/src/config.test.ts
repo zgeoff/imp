@@ -34,6 +34,7 @@ test('it fills every setting from its default when the env is empty', () => {
     firecrackerBin: 'firecracker',
     jailerBin: 'jailer',
     jailDir: '/var/lib/imp/jail',
+    ksm: null,
     kernelPath: '/var/lib/imp/system/vmlinux',
     kernelSource: null,
     systemDriveSource: '/var/lib/imp/system/imp-system.squashfs',
@@ -311,4 +312,20 @@ test('tailnet names need the tailnet, and keep the OAuth file in the data dir by
 test('the API and proxy ports must not fall in the imp ports', () => {
   expect(() => loadConfig({ IMP_API_PORT: '20005' })).toThrow('IMP_API_PORT 20005');
   expect(() => loadConfig({ IMP_PROXY_PORT: '20000' })).toThrow('IMP_PROXY_PORT 20000');
+});
+
+test('IMP_KSM starts Firecracker through ksm-exec and keeps all of the saving free', () => {
+  const config = loadConfig({ IMP_KSM: '1' });
+
+  expect(config.ksm).toEqual({ execBin: 'ksm-exec', headroomPercent: 100 });
+
+  const custom = loadConfig({
+    IMP_KSM: '1',
+    IMP_KSM_EXEC: '/usr/local/bin/ksm-exec',
+    IMP_KSM_HEADROOM_PERCENT: '0',
+  });
+
+  expect(custom.ksm).toEqual({ execBin: '/usr/local/bin/ksm-exec', headroomPercent: 0 });
+  expect(() => loadConfig({ IMP_KSM: '1', IMP_KSM_HEADROOM_PERCENT: '101' })).toThrow();
+  expect(() => loadConfig({ IMP_KSM: 'yes' })).toThrow();
 });

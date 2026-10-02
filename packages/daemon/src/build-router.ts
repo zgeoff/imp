@@ -48,6 +48,8 @@ import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
 import type { TailnetNamesStatus } from './tailnet-names/tailnet-names';
+import { readKsmHostStats } from './vmm/ksm';
+import type { KsmHostStats } from './vmm/ksm';
 
 // audit rows `audit.list` gives when the caller names no limit
 const AUDIT_LIMIT = 100;
@@ -72,6 +74,9 @@ export interface RouterDeps {
   readonly moves: Omit<MoveService, 'handle' | 'recover'>;
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
+
+  // the host's KSM counters; null without KSM
+  readonly readKsmHostStats?: () => KsmHostStats | null;
   readonly readTailscale: () => Promise<TailscaleStatus>;
 
   // per-imp names on the tailnet; null when IMP_TAILNET_NAMES is off
@@ -705,6 +710,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     cpu: deps.imps.readCpuHost(),
     defaults: { memoryMib: deps.config.defaultMemoryMib, image: defaultImage?.name ?? null },
     egress: { isEnforced: deps.egress.isEnforced() },
+    ksm: readKsmInfo(deps, running, usage.headroomMib),
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
     features: SYSTEM_FEATURES,
   };
@@ -728,6 +734,24 @@ function readPublicInfo(
       records === null
         ? null
         : { isOk: records.isOk, error: records.error, at: new Date(records.at) },
+  };
+}
+
+function readKsmInfo(
+  deps: RouterDeps,
+  running: readonly ImpRecord[],
+  headroomMib: number,
+): SystemInfo['ksm'] {
+  const stats = deps.config.ksm === null ? null : (deps.readKsmHostStats ?? readKsmHostStats)();
+
+  if (stats === null) {
+    return null;
+  }
+
+  return {
+    ...stats,
+    headroomMib,
+    unmergeable: running.filter((imp) => deps.imps.isUnmergeable(imp.id)).length,
   };
 }
 

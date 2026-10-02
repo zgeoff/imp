@@ -407,3 +407,57 @@ test('an admission that may not sleep imps takes free room only, and one with no
   expect(slept).toEqual([]);
   expect(published).toEqual([]);
 });
+
+test('the KSM headroom counts against the budget, so a merged page that splits still fits', async () => {
+  const awake = new Map([
+    ['a', { pid: 1, lastActiveAt: 100 }],
+    ['b', { pid: 2, lastActiveAt: 200 }],
+  ]);
+
+  const slept: string[] = [];
+  const headroom = { mib: 0 };
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () =>
+      Promise.resolve(
+        [...awake].map(([id, imp]) => ({
+          id,
+          name: id,
+          pid: imp.pid,
+          apiSocket: '',
+          lastActiveAt: imp.lastActiveAt,
+          holdUntil: null,
+        })),
+      ),
+
+    // two guests whose Pss KSM halved: 300 MiB each, 300 MiB merged away
+    readRamMib: () => 300,
+    readHeadroomMib: () => headroom.mib,
+    isBusy: () => false,
+    trySleepImp: buildFakeSleep((id) => {
+      slept.push(id);
+      awake.delete(id);
+
+      return Promise.resolve('slept');
+    }),
+    log: () => {
+      // quiet
+    },
+  });
+
+  const before = await governor.readUsage();
+
+  expect(before).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+
+  headroom.mib = 300;
+
+  const usage = await governor.readUsage();
+
+  expect(usage).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 300 });
+
+  // 600 used and 300 headroom leave 100: a 200 MiB wake sleeps the oldest
+  await governor.admit({ id: 'c', name: 'c', reserveMib: 200, memoryMib: 512 });
+
+  expect(slept).toEqual(['a']);
+});

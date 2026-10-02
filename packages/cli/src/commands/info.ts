@@ -42,6 +42,7 @@ export const infoCommand = defineCommand({
         ],
         ...formatDefaults(info.defaults),
         ...formatEgress(info.egress),
+        ...formatKsm(info.ksm),
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
         ['public', formatPublic(info.public)],
@@ -100,6 +101,23 @@ function formatEgress(egress: SystemInfo['egress']): string[][] {
     [
       'egress',
       egress.isEnforced ? 'box and none policies enforced' : 'box and none policies not enforced',
+    ],
+  ];
+}
+
+// a line when IMP_KSM is on: what KSM saves and what the governor keeps free for it
+function formatKsm(ksm: SystemInfo['ksm']): string[][] {
+  if (ksm === null || ksm === undefined) {
+    return [];
+  }
+
+  const state = ksm.running ? 'merging' : 'ksmd stopped';
+  const unmergeable = ksm.unmergeable > 0 ? `, ${String(ksm.unmergeable)} imps unmergeable` : '';
+
+  return [
+    [
+      'ksm',
+      `${state}, ${String(ksm.sharedMib)} MiB shared (profit ${String(ksm.profitMib)} MiB), ${String(ksm.headroomMib)} MiB headroom${unmergeable}`,
     ],
   ];
 }

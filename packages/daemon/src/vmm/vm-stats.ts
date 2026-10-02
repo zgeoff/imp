@@ -31,6 +31,21 @@ export function readOwnedRamMib(pid: number, apiSocket: string): number | null {
   return Math.round(((fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0)) / KIB_PER_MIB);
 }
 
+// The VM's anonymous and shmem pages counted in full, as if none were shared. KSM
+// splits a merged page's Pss across the VMs that map it, and a write splits the
+// page again: a wake reserve of this size holds when the guest writes them all.
+export function readUnsharedRamMib(pid: number, apiSocket: string): number | null {
+  const fields = readVmSmaps(pid, apiSocket);
+
+  return fields === null ? null : countUnsharedMib(fields);
+}
+
+export function countUnsharedMib(fields: ReadonlyMap<string, number>): number {
+  return Math.round(
+    ((fields.get('Anonymous') ?? 0) + (fields.get('Pss_Shmem') ?? 0)) / KIB_PER_MIB,
+  );
+}
+
 // All the VM's resident pages (Rss), what `ps` shows; null as above
 export function readRssMib(pid: number, apiSocket: string): number | null {
   const fields = readVmSmaps(pid, apiSocket);
