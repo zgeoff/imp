@@ -1,19 +1,21 @@
 import {
   EXEC_CHANNELS,
   EXEC_PATH,
+  EXEC_TICKET_PARAM,
   ExecServerMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
 import type { ExecClientMessage } from '@imp/api';
+import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkImpdAccess } from './check-impd-access';
-import { buildImpdUrl } from './impd-url';
 
 interface ExecStart {
   readonly name: string;
   readonly argv: readonly string[];
   readonly tty: boolean;
   readonly env?: Readonly<Record<string, string>>;
+  readonly cwd?: string;
   readonly cols?: number;
   readonly rows?: number;
 }
@@ -24,12 +26,20 @@ export type ExecOutcome =
   | { readonly kind: 'exit'; readonly code: number | null; readonly signal: string | null }
 
   // impd refused the command: an unknown imp, no RAM budget, EXEC_FAILED, …
-  | { readonly kind: 'failed'; readonly code: string | null; readonly message: string }
-  | { readonly kind: 'unauthorized' }
+  | {
+      readonly kind: 'failed';
+      readonly code: string | null;
+      readonly message: string;
+      readonly data?: unknown;
+    }
+
+  // ticketRefused: the token is fine, so impd refused the exec ticket
+  | { readonly kind: 'unauthorized'; readonly ticketRefused?: boolean }
   | { readonly kind: 'unreachable'; readonly detail: string }
 
   // the connection dropped after the open, without an exit
-  | { readonly kind: 'closed'; readonly reason: string }
+  // closeCode 1012 (EXEC_CLOSE_RESTARTING) means impd is restarting
+  | { readonly kind: 'closed'; readonly reason: string; readonly closeCode?: number }
   | { readonly kind: 'bad_message'; readonly detail: string }
 
   // a callback threw, such as EPIPE on stdout
@@ -38,6 +48,9 @@ export type ExecOutcome =
 export interface ExecSessionOptions {
   readonly baseUrl: string;
   readonly token: string | null;
+
+  // from `exec.ticket`, for a socket that cannot send the bearer header
+  readonly ticket?: string;
   readonly start: ExecStart;
   readonly onStarted: (pid: number) => void;
   readonly onOutput: (channel: 'stdout' | 'stderr', data: Uint8Array) => void;
@@ -45,6 +58,9 @@ export interface ExecSessionOptions {
   // a browser WebSocket takes no headers (it uses an exec ticket), so the
   // runtime that opens the socket is the caller's choice
   readonly connect: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
+
+  // for the check that tells a rejected token from an unreachable impd
+  readonly fetch?: (request: Request) => Promise<Response>;
 }
 
 export interface ExecSession {
@@ -79,9 +95,13 @@ class BadMessageError extends Error {
 // no stdio and nothing Bun-only: the caller wires the socket, output, stdin
 // and signals, and maps the outcome to messages and an exit code.
 export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSession {
-  const url = buildImpdUrl(options.baseUrl, EXEC_PATH);
+  const url = resolveImpdUrl(options.baseUrl, EXEC_PATH);
 
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+
+  if (options.ticket !== undefined) {
+    url.searchParams.set(EXEC_TICKET_PARAM, options.ticket);
+  }
 
   const headers: Record<string, string> =
     options.token === null ? {} : { authorization: `Bearer ${options.token}` };
@@ -175,7 +195,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       // only a session socket gets this; plain exec never asks for one
       resolveOutcome({ kind: 'closed', reason: `detached (${message.reason})` });
     } else {
-      resolveOutcome({ kind: 'failed', code: message.code ?? null, message: message.message });
+      resolveOutcome({
+        kind: 'failed',
+        code: message.code ?? null,
+        message: message.message,
+        ...(message.data !== undefined && { data: message.data }),
+      });
     }
   };
 
@@ -215,10 +240,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   // Bun reports a refused upgrade (a 401 among others) as an error and a
   // close with no HTTP status, so a close before `open` asks impd why
   const resolveRefusal = async (reason: string): Promise<void> => {
-    const access = await checkImpdAccess(options.baseUrl, options.token);
+    const access = await checkImpdAccess(options.baseUrl, options.token, options.fetch);
 
     if (access === 'unauthorized') {
       resolveOutcome({ kind: 'unauthorized' });
+    } else if (access === 'reachable' && options.ticket !== undefined) {
+      resolveOutcome({ kind: 'unauthorized', ticketRefused: true });
     } else if (access === 'unreachable') {
       resolveOutcome({ kind: 'unreachable', detail: reason });
     } else {
@@ -234,7 +261,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     const reason = event.reason === '' ? `code ${String(event.code)}` : event.reason;
 
     if (state.opened) {
-      resolveOutcome({ kind: 'closed', reason });
+      resolveOutcome({ kind: 'closed', reason, closeCode: event.code });
 
       return;
     }

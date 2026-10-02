@@ -99,7 +99,7 @@ results. The [development guide](./development.md) lists the other checks.
 
 | Symptom                                   | Cause and fix                                                                                                            |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `unauthorized` from the CLI               | Set `IMP_TOKEN`, or write the token to `~/.config/imp/token` (`scripts/dev.sh token` prints it).                         |
+| `unauthorized` from the CLI               | Log in again: `imp login <url> --name <host>` with the token from `<IMP_DATA_DIR>/token` (`scripts/dev.sh token`).       |
 | A wake logs `cold boot instead of a wake` | The snapshot cannot load on this host; the log and `imp ls` say why. Expected after some upgrades ([upgrade](#upgrade)). |
 | An imp never sleeps                       | Something keeps it active: an open connection in the guest, CPU above `IMP_IDLE_CPU_PERCENT`, or a hold.                 |
 | TLS downloads stall in a guest            | The uplink MTU is smaller than 1500. `dev.sh` sets `IMP_UPLINK_MTU`; set it by hand elsewhere.                           |

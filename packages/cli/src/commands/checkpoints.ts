@@ -18,7 +18,7 @@ export const checkpointCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const positionals = context.args._;
 
       if (positionals[0] === 'rm') {
@@ -46,7 +46,7 @@ export const checkpointsCommand = defineCommand({
   meta: { name: 'checkpoints', description: "List an imp's checkpoints, newest first" },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const checkpoints = await client.checkpoints.list({ name: context.args.name });
 
       console.log(formatOutput(checkpoints, context.args.json, formatCheckpoints));
@@ -64,7 +64,7 @@ export const restoreCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.checkpoints.restore({
         name: context.args.name,
         checkpoint: context.args.checkpoint,

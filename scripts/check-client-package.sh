@@ -27,6 +27,8 @@ const imp = client.createImpClient({ url: 'http://impd.test/', token: 't' });
 assert.equal(client.CLIENT_VERSION, process.argv[2]);
 assert.equal(typeof imp.imps.create, 'function');
 assert.equal(typeof imp.requireAwake, 'function');
+assert.equal(typeof imp.openExec, 'function');
+assert.equal(typeof client.ExecError, 'function');
 assert.equal(typeof client.isDefinedError, 'function');
 
 console.log(`imported @zgeoff/imp-client ${client.CLIENT_VERSION}`);
@@ -34,7 +36,7 @@ JS
 
 # the README's examples, against the published declarations only
 cat > example.ts <<'TS'
-import { createImpClient, isDefinedError, safe } from '@zgeoff/imp-client';
+import { ExecError, createImpClient, isDefinedError, safe } from '@zgeoff/imp-client';
 import type { Imp } from '@zgeoff/imp-client';
 
 const imp = createImpClient({ url: 'http://localhost:7070', token: 'token' });
@@ -51,6 +53,23 @@ export async function example(): Promise<Imp> {
   }
 
   const check = await imp.checkServer();
+  const result = await imp.run('dev', ['uname', '-a'], { stdin: 'hi' });
+  const shell = await imp.openConsole('dev', { cols: 80, rows: 24 });
+
+  await shell.write('exit\n');
+  shell.resize(100, 30);
+
+  const exit = await shell.exit.catch((error: unknown) => {
+    if (error instanceof ExecError && error.code === 'RESTARTING') {
+      return { code: null, signal: null };
+    }
+
+    throw error;
+  });
+
+  if (result.code !== 0 || exit.code !== 0 || result.stdout.byteLength === 0) {
+    throw new Error('unexpected');
+  }
 
   return check.compatible && created !== undefined ? created : imp.requireAwake('dev');
 }

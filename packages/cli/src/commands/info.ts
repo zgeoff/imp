@@ -7,7 +7,7 @@ export const infoCommand = defineCommand({
   meta: { name: 'info', description: 'Show impd version, RAM budget and counts' },
   args: { json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const info = await client.system.info();
 
       if (context.args.json === true) {

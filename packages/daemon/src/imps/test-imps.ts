@@ -20,6 +20,7 @@ import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { buildFakeVmm } from './fake-vmm';
+import type { ImpService } from './imp-service';
 
 export const TEST_TOKEN = 'test-token';
 
@@ -166,10 +167,17 @@ type Impd = ReturnType<ImpTest['restartImpd']>;
 
 type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'cloneDisk' | 'now'>;
 
-// The HTTP app over `impd`, the harness's or one after a restart, and
-// an oRPC client that calls it without a socket. The checkpoint service's
-// freeze and thaw do nothing.
-export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, token = TEST_TOKEN) {
+// The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
+// that calls it without a socket, a no-op freeze and thaw, and `openExec` in
+// place of the guest agent, which the fake VMs do not run.
+export function buildTestApp(
+  ctx: Readonly<AppParts>,
+  impd: Readonly<Impd>,
+  token = TEST_TOKEN,
+  openExec?: ImpService['openExec'],
+) {
+  const imps: ImpService = openExec === undefined ? impd.imps : { ...impd.imps, openExec };
+
   const checkpoints = createCheckpointService({
     config: ctx.config,
     db: ctx.db,
@@ -183,7 +191,7 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
     config: ctx.config,
     db: ctx.db,
     token: TEST_TOKEN,
-    imps: impd.imps,
+    imps,
     images: ctx.images,
     governor: impd.governor,
     checkpoints,
