@@ -63,6 +63,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `moves`          | `imp move` to a second instance on a Docker network: cold with a checkpoint, an abort, warm moves of an open and a box imp that keep tmpfs and processes and reach DNS, HTTP and the broker at once |
 | `moves-tailnet`  | `imp move` between two tailnet nodes: the real peer check, and a per-imp tailnet name that goes with its imp                                                                                        |
 | `chaos`          | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                                                                                               |
+| `ksm`            | with KSM on the host (CI's runner only): two jailed guests merge the same pages, their Pss falls, the budget holds after they diverge; skips elsewhere                                              |
 | `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                                                                                     |
 
 ```sh

@@ -221,7 +221,9 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
 - **Reserve.** Before a boot or a wake, impd reserves RAM under one global lock: a cold boot
   reserves `IMP_BOOT_RESERVE_PERCENT` (default 50) of the imp's memory, a wake the larger of what it
   owned at sleep and `IMP_WAKE_RESERVE_MIB` (default 256). A reservation counts until the
-  measurement passes it, for at most 20 s.
+  measurement passes it, for at most 20 s. With `IMP_KSM`, what it owned at sleep is its unshared
+  size, and a share of what KSM saves stays free
+  ([section 8](#8-ksm-sharing-identical-guest-pages)).
 - **Make room.** If the sum would pass the budget, impd sleeps the least recently active imps that
   are not held and not busy, until it fits. It sleeps one at a time, and measures and picks again
   after each. An imp whose lock is taken by the time its turn comes is skipped, not waited for
@@ -491,3 +493,67 @@ and a limit on the median wake. With the wait off on WSL2: median 793 ms. With t
 The prototype saw slow wakes after back-to-back wake and sleep cycles and took them for work that
 built up across resumes. It was this effect: each cycle kept the guest young, and its uptime is what
 counts, not how soon the sleep follows a wake.
+
+### 8. KSM: sharing identical guest pages
+
+KSM (kernel samepage merging) lets the host keep one copy of a page that several guests hold. It is
+off by default. `IMP_KSM=1` turns it on, and `deploy/bootstrap.sh --ksm` sets that on a bare-metal
+host ([configuration](../guides/configuration.md#impd)).
+
+**CAUTION:** Merged pages let one guest learn about another. A write to a merged page takes longer,
+because the kernel copies the page first, so a guest can time its writes to learn which pages
+another guest holds. Shared pages are also a Rowhammer target. imps run agent code, and a prompt
+injection can take that code over. Turn KSM on only on a host whose imps all belong to one tenant.
+The multi-tenant jailer mode ([#27](https://github.com/zgeoff/imp/issues/27)) must refuse `IMP_KSM`.
+
+**How the guest memory becomes mergeable.** Firecracker has no KSM setting, and its seccomp filter
+traps `prctl`. So impd starts it through `ksm-exec` (`agent/cmd/ksm-exec`), which sets
+`PR_SET_MEMORY_MERGE` and execs Firecracker in place. Every anonymous mapping Firecracker makes then
+carries `VM_MERGEABLE`, guest memory included. The flag must survive the exec:
+
+| Linux | Commit       | Change                                                                 |
+| ----- | ------------ | ---------------------------------------------------------------------- |
+| 6.7   | 3c6f33b7273a | The merge flag survives exec.                                          |
+| 6.10  | 3a9e567ca45f | ksmd scans the exec'd process. Before this, nothing merges.            |
+| 6.19  | 590c03ca6a3f | ksmd no longer clears the flag in the exec window (marked for stable). |
+
+impd refuses to start with `IMP_KSM` on a kernel older than 6.10, or one without KSM. After each
+boot, wake and re-adopt it checks that the guest memory shows `mg` in `/proc/<pid>/smaps`. When it
+does not, it logs it, and `imp info` counts the imp as unmergeable. That catches the race that 6.19
+fixes.
+
+**What it saves.** Measured offline on WSL2 (2026-10-02): 3 `ubuntu` guests of 512 MiB, booted cold,
+slept, and every 4 KiB page of their mem files hashed.
+
+| Sample                               | Written pages | Zero pages | The same across guests |
+| ------------------------------------ | ------------- | ---------- | ---------------------- |
+| idle after a boot                    | 299 MiB       | 80.5%      | 161 MiB (53.7%)        |
+| with 100 MiB of its own data in each | 600 MiB       | 61.0%      | 157 MiB (26.2%)        |
+
+That is about 80 MiB for each guest after the first, whatever its own data. It is an upper bound,
+and it applies to pages a guest has written since its last boot or wake. KSM merges only anonymous
+pages. A woken guest maps its mem file MAP_PRIVATE, so the pages it has only read stay clean file
+pages, which KSM does not merge. Sharing those across imps of one image is the template approach
+([#34](https://github.com/zgeoff/imp/issues/34)), which comes first: it needs no ksmd and no copy on
+write. KSM adds the pages guests write.
+
+**The governor.** A merged page's Pss is split across the VMs that map it, so the governor's
+`Pss_Anon` sum falls by what KSM saves, with no change. A write splits a merged page again, at write
+speed, faster than the 5 s enforcement tick. So with `IMP_KSM`:
+
+- a sleep records the VM's unshared size (`Anonymous` + `Pss_Shmem`), not its Pss, and the wake
+  reserve uses that;
+- the governor keeps `IMP_KSM_HEADROOM_PERCENT` (default 100) of `general_profit` free, besides the
+  budget's use. At 100, a split of every merged page at once still fits; KSM then lowers the host's
+  real RAM use but fits no more imps under the budget. A lower value fits more imps and takes the
+  risk that the guests write their merged pages faster than the governor sleeps imps.
+
+**Zero pages and virtio-mem ([#35](https://github.com/zgeoff/imp/issues/35)).** `use_zero_pages=1`
+merges a zero-filled page into the kernel's zero page. Such pages leave `Rss` and Pss, and
+`ksm_zero_pages` counts them. Memory that virtio-mem plugs later is a new anonymous mapping, or part
+of one, so it carries the merge flag too. Unplugged memory is discarded, and its merged pages are
+unmapped.
+
+**Not measured yet.** ksmd's CPU, and real merges with Pss: both need KSM on for the whole host. CI
+turns it on for its own runner VM, and the `ksm` e2e suite records `ksm_merging_pages`, the Pss
+before and after, and ksmd's CPU in `.cache/e2e/results.json`. It never turns KSM on itself.
