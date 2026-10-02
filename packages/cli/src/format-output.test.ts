@@ -73,6 +73,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     { ...imp, name: 'deaf', state: 'running', agentSilentSince: new Date(60_000) },
     { ...imp, name: 'pub', public: { auth: 'token' } },
     { ...imp, name: 'open', public: { auth: 'none' } },
+    { ...imp, name: 'v4', state: 'running', outdated: ['ipv6'] },
   ]).split('\n');
 
   const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
@@ -86,6 +87,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     'agent silent since 1970-01-01T00:01:00.000Z',
     'public (token)',
     'public',
+    'no IPv6 until its next cold boot',
   ]);
 });
 

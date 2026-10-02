@@ -60,6 +60,7 @@ export function countBootStatuses<T extends Pick<ImpRecord, 'state'>>(
   read: (imp: T) => BootStatus,
 ): SystemInfo['bootStatus'] {
   const outdated = { firecracker: 0, kernel: 0, agent: 0 };
+  let noIpv6 = 0;
   let coldBoots = 0;
 
   for (const imp of imps) {
@@ -82,11 +83,14 @@ export function countBootStatuses<T extends Pick<ImpRecord, 'state'>>(
     }
 
     for (const part of parts) {
-      if (part !== 'impd') {
+      if (part === 'ipv6') {
+        noIpv6 += 1;
+      } else if (part !== 'impd') {
         outdated[part] += 1;
       }
     }
   }
 
-  return { coldBoots, outdated };
+  // `ipv6` only when some imp lacks it, as an older impd leaves it out
+  return { coldBoots, outdated: noIpv6 === 0 ? outdated : { ...outdated, ipv6: noIpv6 } };
 }

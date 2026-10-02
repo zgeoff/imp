@@ -171,7 +171,7 @@ async function main(): Promise<void> {
   }
 
   // spawns Firecracker once per version flag; system.info reuses it
-  const identity = readHostIdentity(config.firecrackerBin, systemFiles);
+  const identity = readHostIdentity(config.firecrackerBin, systemFiles, ipv6?.prefix.text ?? null);
 
   const governed = createGovernedImps({
     cgroups,

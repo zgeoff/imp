@@ -20,6 +20,9 @@ const SnapshotIdentitySchema = z.object({
   // VM booted before impd kept its identity
   systemDrivePath: z.string().optional(),
   agentVersion: z.string().optional(),
+
+  // the IPv6 /64 the guest's address is in; null for none
+  ipv6Prefix: z.string().nullable().optional(),
 });
 
 const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
@@ -66,6 +69,7 @@ export function buildSnapshotIdentity(
     systemDrive: vm.systemDrive,
     systemDrivePath: vm.systemDrivePath,
     agentVersion: vm.agentVersion,
+    ...(vm.ipv6Prefix !== undefined && { ipv6Prefix: vm.ipv6Prefix }),
   };
 }
 
@@ -148,6 +152,14 @@ export function findColdBootReason(
 
   if (meta.systemDrivePath === undefined) {
     return 'the snapshot is from an older impd';
+  }
+
+  // a guest with an address in another prefix would send from it; one with
+  // none wakes, and has no IPv6 until its next cold boot
+  const hostPrefix = host.ipv6Prefix ?? null;
+
+  if (typeof meta.ipv6Prefix === 'string' && meta.ipv6Prefix !== hostPrefix) {
+    return `the IPv6 prefix changed (${meta.ipv6Prefix} → ${hostPrefix ?? 'off'})`;
   }
 
   if (!existsSync(meta.systemDrivePath)) {

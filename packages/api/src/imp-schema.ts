@@ -8,7 +8,7 @@ export type ImpState = z.infer<typeof ImpStateSchema>;
 
 // a part of the host an imp's VM predates until its next cold boot; `impd`
 // is a VM an impd from before vm.json booted, whose next wake boots cold
-const OutdatedPartSchema = z.enum(['firecracker', 'kernel', 'agent', 'impd']);
+const OutdatedPartSchema = z.enum(['firecracker', 'kernel', 'agent', 'impd', 'ipv6']);
 
 export type OutdatedPart = z.infer<typeof OutdatedPartSchema>;
 

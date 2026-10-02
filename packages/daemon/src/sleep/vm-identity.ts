@@ -23,6 +23,10 @@ const VmIdentitySchema = z.object({
 
   // why this boot was cold instead of a wake; null for a create or a start
   bootReason: z.string().nullable(),
+
+  // the IPv6 /64 the guest got its address from; null for none, and left
+  // out by an older impd
+  ipv6Prefix: z.string().nullable().optional(),
 });
 
 export type VmIdentity = z.infer<typeof VmIdentitySchema>;
@@ -34,8 +38,10 @@ export type HostIdentity = Omit<VmIdentity, 'agentVersion' | 'bootReason'>;
 export function readHostIdentity(
   firecrackerBin: string,
   systemFiles: Readonly<SystemFiles>,
+  ipv6Prefix: string | null = null,
 ): HostIdentity {
   return {
+    ipv6Prefix,
     firecrackerVersion: readVersionOutput(firecrackerBin, '--version'),
     snapshotVersion: readVersionOutput(firecrackerBin, '--snapshot-version'),
     hostKernel: release(),
@@ -66,20 +72,29 @@ export function readVmIdentity(paths: Readonly<ImpPaths>): VmIdentity | null {
   }
 }
 
-type PartIdentity = Pick<HostIdentity, 'firecrackerVersion' | 'guestKernel' | 'systemDrive'>;
+type PartIdentity = Pick<
+  HostIdentity,
+  'firecrackerVersion' | 'guestKernel' | 'systemDrive' | 'ipv6Prefix'
+>;
 
-// The parts of the host a VM predates; it picks them up at its next cold boot.
+// The parts of the host a VM predates; it picks them up at its next cold
+// boot. `ipv6`: the host gives imps an IPv6 the VM did not boot with.
 export function findOutdatedParts(
   vm: Readonly<PartIdentity>,
   host: Readonly<PartIdentity>,
 ): OutdatedPart[] {
-  const parts: [keyof PartIdentity, OutdatedPart][] = [
+  const parts: [keyof Omit<PartIdentity, 'ipv6Prefix'>, OutdatedPart][] = [
     ['firecrackerVersion', 'firecracker'],
     ['guestKernel', 'kernel'],
     ['systemDrive', 'agent'],
   ];
 
-  return parts.filter(([key]) => vm[key] !== host[key]).map(([, part]) => part);
+  const outdated = parts.filter(([key]) => vm[key] !== host[key]).map(([, part]) => part);
+  const hostPrefix = host.ipv6Prefix ?? null;
+
+  return hostPrefix !== null && (vm.ipv6Prefix ?? null) !== hostPrefix
+    ? [...outdated, 'ipv6']
+    : outdated;
 }
 
 // what a version reads as when the binary is missing, as on a dev machine

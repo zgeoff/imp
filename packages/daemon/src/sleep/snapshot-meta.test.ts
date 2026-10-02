@@ -133,3 +133,24 @@ test('a VM is outdated in each part the host has a newer one of', () => {
     ).toEqual(['firecracker', 'kernel', 'agent']);
   });
 });
+
+test('a snapshot from another IPv6 prefix boots cold; one with none wakes and counts as outdated', () => {
+  withTempDir((dir) => {
+    const host = { ...buildHost(dir), ipv6Prefix: 'fd12:3456:789a::/64' };
+    const moved = findColdBootReason({ ...host, ipv6Prefix: 'fd00:1::/64' }, host);
+    const turnedOff = findColdBootReason(host, { ...host, ipv6Prefix: null });
+    const none = findColdBootReason({ ...host, ipv6Prefix: null }, host);
+    const older = findColdBootReason({ ...host, ipv6Prefix: undefined }, host);
+
+    expect(moved).toBe('the IPv6 prefix changed (fd00:1::/64 → fd12:3456:789a::/64)');
+    expect(turnedOff).toBe('the IPv6 prefix changed (fd12:3456:789a::/64 → off)');
+    expect([none, older]).toEqual([null, null]);
+    expect(findOutdatedParts({ ...host, ipv6Prefix: null }, host)).toEqual(['ipv6']);
+    expect(findOutdatedParts({ ...host, ipv6Prefix: undefined }, host)).toEqual(['ipv6']);
+    expect(findOutdatedParts(host, host)).toEqual([]);
+
+    expect(findOutdatedParts({ ...host, ipv6Prefix: null }, { ...host, ipv6Prefix: null })).toEqual(
+      [],
+    );
+  });
+});

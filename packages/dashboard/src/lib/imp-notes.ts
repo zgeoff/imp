@@ -38,8 +38,14 @@ export function buildImpNotes(imp: Imp, nowMs: number): ImpNote[] {
     notes.push({ tone: imp.state === 'sleeping' ? 'warning' : 'info', text });
   }
 
-  if (imp.outdated !== undefined && imp.outdated.length > 0) {
-    notes.push({ tone: 'warning', text: `runs an older ${imp.outdated.join(', ')}` });
+  const parts = (imp.outdated ?? []).filter((part) => part !== 'ipv6');
+
+  if (parts.length > 0) {
+    notes.push({ tone: 'warning', text: `runs an older ${parts.join(', ')}` });
+  }
+
+  if (imp.outdated?.includes('ipv6') === true) {
+    notes.push({ tone: 'info', text: 'no IPv6 until its next cold boot' });
   }
 
   return notes;

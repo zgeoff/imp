@@ -12,7 +12,14 @@ const TailnetNamesSchema = z.object({
 
 const BootStatusSchema = z.object({
   coldBoots: CountSchema,
-  outdated: z.object({ firecracker: CountSchema, kernel: CountSchema, agent: CountSchema }),
+  outdated: z.object({
+    firecracker: CountSchema,
+    kernel: CountSchema,
+    agent: CountSchema,
+
+    // imps with no IPv6 until their next cold boot; left out by an older impd
+    ipv6: CountSchema.optional(),
+  }),
 });
 
 // the last pass over the public imps' DNS records

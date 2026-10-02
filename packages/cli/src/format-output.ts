@@ -135,7 +135,7 @@ function formatNote(imp: Imp): string {
   }
 
   const outdated = imp.outdated ?? [];
-  const parts = outdated.filter((part) => part !== 'impd');
+  const parts = outdated.filter((part) => part !== 'impd' && part !== 'ipv6');
 
   if (outdated.includes('impd')) {
     notes.push('booted by an older impd; its next wake boots cold');
@@ -143,6 +143,10 @@ function formatNote(imp: Imp): string {
 
   if (parts.length > 0) {
     notes.push(`outdated: ${parts.join(', ')}`);
+  }
+
+  if (outdated.includes('ipv6')) {
+    notes.push('no IPv6 until its next cold boot');
   }
 
   return notes.join('; ');
@@ -230,12 +234,18 @@ export function formatBootStatus(
     notes.push(`${String(status.coldBoots)} will boot cold`);
   }
 
-  const outdated = Object.entries(status.outdated)
+  const { ipv6 = 0, ...parts } = status.outdated;
+
+  const outdated = Object.entries(parts)
     .filter(([, count]) => count > 0)
     .map(([part, count]) => `${String(count)} ${part}`);
 
   if (outdated.length > 0) {
     notes.push(`outdated: ${outdated.join(', ')}`);
+  }
+
+  if (ipv6 > 0) {
+    notes.push(`${String(ipv6)} with no IPv6 until a cold boot`);
   }
 
   return notes.length === 0 ? 'none' : notes.join('; ');
