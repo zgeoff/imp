@@ -13,7 +13,7 @@ const addCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const image = await client.images.add({
         ref: context.args.ref,
         ...(context.args.name !== undefined && { name: context.args.name }),
@@ -41,7 +41,7 @@ const buildCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       if (!isAbsolute(context.args.dir)) {
         throw new UsageError(
           `the build context is a directory on the impd host: give its absolute path, not ${context.args.dir}`,
@@ -62,7 +62,7 @@ const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List images' },
   args: { json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const images = await client.images.list();
 
       console.log(formatOutput(images, context.args.json, formatImages));
@@ -73,7 +73,7 @@ const rmCommand = defineCommand({
   meta: { name: 'rm', description: 'Remove an image no imp uses' },
   args: { name: { type: 'positional', description: 'image name', required: true } },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       await client.images.delete({ name: context.args.name });
     }),
 });

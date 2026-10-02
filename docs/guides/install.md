@@ -52,10 +52,10 @@ A one-command server bootstrap is on the [roadmap](https://github.com/zgeoff/imp
 5. Give the CLI the token:
 
    ```sh
-   export IMP_TOKEN=$(scripts/dev.sh token)
+   scripts/dev.sh token | scripts/imp login http://localhost:7070 --name dev
    ```
 
-   Or write it to `~/.config/imp/token` once.
+   Or `export IMP_TOKEN=$(scripts/dev.sh token)` in each shell.
 
 6. Check it:
 
@@ -88,6 +88,40 @@ restarts and day-to-day care.
   match.
 - If the host runs Tailscale with MagicDNS, the container uses public resolvers instead, because its
   own tailscaled would capture `100.100.100.100`.
+
+## The CLI on another machine
+
+The `imp` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
+release attaches it to the GitHub release.
+
+**NOTE:** imp has no release yet. Until the first one, run the CLI from a checkout (`scripts/imp`,
+which needs Bun). `install.sh` works from the first release. `brew install` works once the owner has
+also set up the tap ([RELEASING.md](../../RELEASING.md#homebrew-tap)).
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
+brew install zgeoff/tap/imp                                                  # with completions
+```
+
+`install.sh` checks the binary against the release's `SHA256SUMS` before it installs it, and checks
+its provenance attestation too when the `gh` CLI is on `PATH` and logged in. `IMP_INSTALL_VERSION`
+pins a release and `IMP_INSTALL_DIR` picks the directory.
+
+macOS quarantines a binary downloaded with a browser, and Gatekeeper then refuses to run it. Clear
+the flag once (Homebrew and `install.sh` use curl, which sets no quarantine flag):
+
+```sh
+xattr -d com.apple.quarantine ./imp-darwin-arm64
+```
+
+Then point it at an impd and its token (impd writes the token to `<IMP_DATA_DIR>/token`):
+
+```sh
+imp login https://imp.example.ts.net
+imp ls
+```
+
+[Configuration](./configuration.md#cli) covers saved hosts, `--host` and shell completions.
 
 ## Run the release image
 

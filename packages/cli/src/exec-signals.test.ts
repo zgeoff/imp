@@ -98,7 +98,7 @@ test(
       setRawMode: (mode) => console.error('raw ' + mode),
     });
 
-    await runExec({ name: 'box', argv: ['sh'], tty: true }, {
+    await runExec({ host: null, name: 'box', argv: ['sh'], tty: true }, {
       env: process.env,
       stdin,
       writeOutput: () => process.exit(3),
