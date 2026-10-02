@@ -37,6 +37,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PRUNE_EVERY_MS = DAY_MS;
 const CHECK_EVERY_MS = 7 * DAY_MS;
 const CHECK_SUBSET = '5%';
+
+// Prunes in a row that may meet a lock before the next try waits for a run:
+// six ticks of 5 minutes outlast restic's 30 minutes, after which a lock
+// left behind is stale and unlock removes it.
+const PRUNE_LOCK_TRIES = 6;
 const ID_ATTEMPTS = 3;
 
 // the wait after a failed scheduled run, doubled for each failure in a row
@@ -120,9 +125,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   const mutex = createKeyedMutex();
   const runExclusive = <T>(task: () => Promise<T>) => mutex.runExclusive('backup', task);
 
-  // pruneLocked: the last prune found another restic's lock, so the next
-  // tick tries again instead of waiting for the next run
-  const retry = { failures: 0, lastFailureAt: 0, pruneLocked: false };
+  // pruneLocks: prunes in a row that found another restic's lock. The next
+  // tick tries again, up to PRUNE_LOCK_TRIES, instead of waiting for a run.
+  const retry = { failures: 0, lastFailureAt: 0, pruneLocks: 0 };
 
   const isRunDue = (): boolean => {
     const at = now().getTime();
@@ -346,11 +351,11 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       await restic.unlock();
       await restic.prune();
 
-      retry.pruneLocked = false;
+      retry.pruneLocks = 0;
 
       writeState({ lastPruneAt: now() });
     } catch (error) {
-      retry.pruneLocked = isResticLocked(error);
+      retry.pruneLocks = isResticLocked(error) ? retry.pruneLocks + 1 : 0;
 
       log(`impd: backup: PRUNE FAILED: ${readErrorMessage(error)}`);
     }
@@ -361,6 +366,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const at = now().getTime();
 
     if (deps.backup.forget && at - (state.lastPruneAt?.getTime() ?? 0) >= PRUNE_EVERY_MS) {
+      // a run starts a new series of tries
+      retry.pruneLocks = 0;
+
       await runPrune();
     }
 
@@ -674,7 +682,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     runScheduled: () =>
       runExclusive(async () => {
         if (!isRunDue()) {
-          if (retry.pruneLocked) {
+          if (retry.pruneLocks > 0 && retry.pruneLocks < PRUNE_LOCK_TRIES) {
             await runPrune();
           }
 

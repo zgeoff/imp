@@ -83,7 +83,9 @@ password file. A restored host keeps its own token, CA and certificates.
    destroyed while restic reads.
 7. The tree closes, and `restic forget` applies the retention.
 
-One run, restore, prune or check runs at a time.
+One run, restore, prune or check runs at a time. A restore can therefore wait behind a scheduled
+run, and each restic command in it can wait up to 2 minutes more for another process's lock
+([Locks](#locks)).
 
 ### XFS
 
@@ -121,7 +123,9 @@ the last run, so a restart never puts a run off by a whole interval. A due run i
 - `forget` with `IMP_BACKUP_KEEP` (by default 24 hourly, 7 daily and 4 weekly points) after every
   run, manual ones included;
 - `prune` once a day, which holds restic's exclusive lock. A prune that meets another process's lock
-  tries again on the next 5-minute check; one that fails for another reason waits for the next run;
+  tries again on the next 5-minute check, up to 6 prunes in a row (30 minutes, after which restic
+  counts a lock left behind as stale), then waits for the next run; one that fails for another
+  reason waits for the next run;
 - after a failed run, the next try waits 5 minutes, then twice as long after each failure in a row,
   up to the interval, so a full bucket does not freeze every running guest every few minutes;
 - `check --read-data-subset=5%` once a week. A failure logs

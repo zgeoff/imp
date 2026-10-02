@@ -178,6 +178,47 @@ const LOCKING_OUTPUT: Readonly<Record<string, string>> = {
   }),
 };
 
+test('with --retry-lock, the lock failure is still the line that names the holder', async () => {
+  // restic 0.19.1's text, with the line it can print first while it waits
+  const stderr = [
+    'repo already locked, waiting up to 2m0s for the lock',
+    'unable to create lock in backend: repository is already locked exclusively by PID 40 on 78a6135f8901 by root (UID 0, GID 0)',
+    'lock was created at 2026-10-02 07:41:13 (2.477798054s ago)',
+    'storage ID ab39f58b',
+    'the `unlock` command can be used to remove stale locks',
+  ].join('\n');
+
+  const recorder = setupRecorder([{ exitCode: 11, stdout: '', stderr }]);
+
+  const error = await recorder.restic.prune().catch(String);
+
+  expect(error).toBe(
+    'ResticError: restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 40 on 78a6135f8901 by root (UID 0, GID 0)',
+  );
+});
+
+test('a snapshot that is gone is NOT_FOUND for a restore or a dump', async () => {
+  const gone = {
+    exitCode: 1,
+    stdout: '',
+    stderr: 'Fatal: failed to find snapshot: no matching ID found for prefix "deadbeef"\n',
+  };
+
+  const recorder = setupRecorder([gone, gone]);
+
+  const restoreError = await recorder.restic
+    .restore('deadbeef', '/data/backup/tree', '/tmp/x', [])
+    .catch((error: unknown) => error);
+
+  const dumpError = await recorder.restic
+    .dump('deadbeef', '/data/backup/tree/manifest.json')
+    .catch((error: unknown) => error);
+
+  for (const error of [restoreError, dumpError]) {
+    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'backup deadbeef not found' });
+  }
+});
+
 // restic's own lock rule over one repository: forget, prune and check take
 // it alone, the rest share it, and --no-lock takes none. A command that
 // meets a lock it cannot share exits 11, unless --retry-lock lets it wait.

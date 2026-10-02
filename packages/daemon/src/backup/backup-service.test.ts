@@ -23,6 +23,11 @@ import type { Restic, ResticSnapshot } from './restic';
 
 const HOUR_MS = 60 * 60 * 1000;
 
+const LOCKED = new ResticError(
+  'restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 7 on imp-host by root (UID 0, GID 0)',
+  11,
+);
+
 const CONFIG: BackupConfig = {
   repository: 'fake',
   passwordFile: '/dev/null',
@@ -38,13 +43,8 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
   const snapshots: ResticSnapshot[] = [];
   const calls: string[] = [];
 
-  // failPrune: the error the next prune throws, once
-  const state = {
-    failCheck: false,
-    failBackup: false,
-    failPrune: null as Error | null,
-  };
-
+  // pruneErrors: what the next prunes throw, one each
+  const state = { failCheck: false, failBackup: false, pruneErrors: [] as Error[] };
   const restores: string[] = [];
 
   const findSnapshot = (id: string): ResticSnapshot => {
@@ -90,11 +90,9 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
     prune: () => {
       calls.push('prune');
 
-      const failure = state.failPrune;
+      const failure = state.pruneErrors.shift();
 
-      state.failPrune = null;
-
-      return failure === null ? Promise.resolve() : Promise.reject(failure);
+      return failure === undefined ? Promise.resolve() : Promise.reject(failure);
     },
     check: () => {
       calls.push('check');
@@ -487,10 +485,7 @@ test('a prune that meets a lock tries again on the next tick, not the next run',
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  ctx.fake.state.failPrune = new ResticError(
-    'restic prune exited 11: unable to create lock in backend: repository is already locked by PID 7',
-    11,
-  );
+  ctx.fake.state.pruneErrors.push(LOCKED);
 
   await ctx.backups.runScheduled();
 
@@ -519,12 +514,59 @@ test('a prune that meets a lock tries again on the next tick, not the next run',
   expect(ctx.fake.calls).toEqual([]);
 });
 
+test('after six prunes in a row meet a lock, the next try waits for a run', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.fake.state.pruneErrors.push(...Array.from({ length: 7 }, () => LOCKED));
+
+  // the run's prune, then five ticks: six in all
+  await ctx.backups.runScheduled();
+
+  ctx.fake.calls.length = 0;
+
+  for (let tick = 0; tick < 6; tick += 1) {
+    ctx.advance(5 * 60 * 1000);
+
+    await ctx.backups.runScheduled();
+  }
+
+  expect(ctx.fake.calls.filter((call) => call === 'prune')).toHaveLength(5);
+
+  // the next run starts a new series: its prune meets the seventh lock, and
+  // the tick after it succeeds
+  ctx.fake.calls.length = 0;
+
+  ctx.advance(HOUR_MS);
+
+  await ctx.backups.runScheduled();
+
+  ctx.advance(5 * 60 * 1000);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual([
+    'unlock',
+    'backup',
+    'forget',
+    'unlock',
+    'prune',
+    'unlock',
+    'prune',
+  ]);
+
+  const status = await ctx.backups.readStatus();
+
+  expect(status.lastPruneAt).not.toBeNull();
+});
+
 test('a prune that fails for another reason waits for the next run', async () => {
   await using ctx = await setupTest();
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  ctx.fake.state.failPrune = new ResticError('restic prune exited 1: Fatal: bucket full', 1);
+  ctx.fake.state.pruneErrors.push(new ResticError('restic prune exited 1: Fatal: bucket full', 1));
 
   await ctx.backups.runScheduled();
 

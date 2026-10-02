@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { buildNotFoundError } from '../api-errors';
 import { runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 import type { BackupConfig, BackupKeep } from './backup-config';
@@ -27,6 +28,12 @@ const LOCKED_EXIT = 11;
 // during a prune, the user's own restic, or a second host on a shared
 // repository. Longer than impd's own short commands, short of a whole prune.
 const RETRY_LOCK = '2m';
+
+// the line of a lock failure that names the holder
+const LOCK_HOLDER = /locked.* by PID /v;
+
+// restic's answer for a snapshot ID that is not in the repository
+const NO_SNAPSHOT = 'no matching ID found';
 
 const SnapshotSchema = z.object({
   id: z.string(),
@@ -137,6 +144,19 @@ export function createRestic(deps: ResticDeps): Restic {
     return result.stdout;
   };
 
+  // a snapshot that went (another host's forget) is a NOT_FOUND, not a failure
+  const runForSnapshot = async (snapshotId: string, args: readonly string[]): Promise<string> => {
+    try {
+      return await runChecked(args);
+    } catch (error) {
+      if (error instanceof ResticError && error.message.includes(NO_SNAPSHOT)) {
+        throw buildNotFoundError('backup', snapshotId);
+      }
+
+      throw error;
+    }
+  };
+
   return {
     setupRepository: async () => {
       const found = await runRestic(['cat', 'config', '--quiet']);
@@ -196,10 +216,10 @@ export function createRestic(deps: ResticDeps): Restic {
       return parseSnapshots(stdout);
     },
 
-    dump: (snapshotId, path) => runChecked(['dump', '--quiet', snapshotId, path]),
+    dump: (snapshotId, path) => runForSnapshot(snapshotId, ['dump', '--quiet', snapshotId, path]),
 
     restore: async (snapshotId, dir, target, includes) => {
-      await runChecked([
+      await runForSnapshot(snapshotId, [
         'restore',
         '--quiet',
         '--sparse',
@@ -256,19 +276,25 @@ export function isResticLocked(error: unknown): boolean {
   return error instanceof ResticError && error.exitCode === LOCKED_EXIT;
 }
 
-// Why restic failed, in one line. A lock failure's first line names the
-// holder, which the last line (the hint to run unlock) does not; a --json
-// command puts the message in an exit_error object.
+// Why restic failed, in one line: for a lock, the line naming the holder,
+// not the unlock hint or --retry-lock's waiting line; with --json, from the
+// exit_error object.
 function readReason(result: CommandResult): string {
   const lines = (result.stderr || result.stdout).trim().split('\n');
   const last = lines.at(-1) ?? '';
   const message = readExitErrorMessage(last);
+  const reasonLines = message === null ? lines : message.split('\n');
+  const holder = reasonLines.find((line) => LOCK_HOLDER.test(line));
 
-  if (message !== null) {
-    return message.split('\n')[0] ?? '';
+  if (holder !== undefined) {
+    return holder;
   }
 
-  return result.exitCode === LOCKED_EXIT ? (lines[0] ?? '') : last;
+  if (message !== null || result.exitCode === LOCKED_EXIT) {
+    return reasonLines[0] ?? '';
+  }
+
+  return last;
 }
 
 function readExitErrorMessage(line: string): string | null {
