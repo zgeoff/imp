@@ -205,9 +205,10 @@ async function runFault(fault: Fault, idsByName: ReadonlyMap<string, string>): P
   return [...NAMES];
 }
 
-// every imp settles in a state a user can act on, and each awake one has
-// exactly the one VM its record says
-async function checkStates(): Promise<void> {
+// Every imp settles in a state a user can act on, and each awake one has
+// exactly the one VM its record says; returns the imps in `error`, where an
+// adopt leaves one whose VM outlived SIGKILL, with the pid on its record.
+async function checkStates(): Promise<Set<string>> {
   await waitFor('every imp to settle', async () => {
     const rows = await listImps();
 
@@ -215,7 +216,7 @@ async function checkStates(): Promise<void> {
       const row = rows.find((candidate) => candidate.name === name);
       const state = row?.state ?? 'missing';
 
-      expect(['running', 'sleeping', 'stopped']).toContain(state);
+      expect(['running', 'sleeping', 'stopped', 'error']).toContain(state);
     }
   });
 
@@ -224,7 +225,7 @@ async function checkStates(): Promise<void> {
 
   for (const row of rows) {
     const count = vms.get(row.id)?.length ?? 0;
-    const expected = row.state === 'running' ? 1 : 0;
+    const expected = row.state === 'running' || (row.state === 'error' && count > 0) ? 1 : 0;
 
     expect(`${row.name} ${row.state}: ${String(count)} VMs`).toBe(
       `${row.name} ${row.state}: ${String(expected)} VMs`,
@@ -234,6 +235,17 @@ async function checkStates(): Promise<void> {
   const known = new Set(rows.map((row) => row.id));
 
   expect([...vms.keys()].filter((id) => !known.has(id))).toEqual([]);
+
+  return new Set(rows.filter((row) => row.state === 'error').map((row) => row.name));
+}
+
+// a new marker each round, synced: the last write before a kill survives it
+async function writeMarker(name: string, round: number): Promise<void> {
+  const marker = `${name} ${String(config.chaosSeed)} ${String(round)}`;
+
+  await runShellInImp(name, `echo '${marker}' > ${MARKER} && sync`);
+
+  markers.set(name, marker);
 }
 
 // a fresh proof for an imp that lost its memory, held awake again
@@ -272,13 +284,8 @@ test('setup: three imps with a disk marker and a memory proof', async () => {
   console.log(`    chaos seed ${String(config.chaosSeed)} (E2E_CHAOS_SEED replays it)`);
 
   for (const name of NAMES) {
-    const marker = `${name} ${String(config.chaosSeed)}`;
-
     await createImp(name, '--image', BARE, '--memory', '512');
-
-    markers.set(name, marker);
-
-    await runShellInImp(name, `echo '${marker}' > ${MARKER} && sync`);
+    await writeMarker(name, 0);
 
     // only the suite's own operations sleep them
     await startFreshProof(name);
@@ -286,7 +293,13 @@ test('setup: three imps with a disk marker and a memory proof', async () => {
 });
 
 test('every imp stays valid through rounds of kills', async () => {
+  const failed = new Set<string>();
+
   for (let round = 1; round <= config.chaosRounds; round += 1) {
+    for (const name of NAMES.filter((candidate) => !failed.has(candidate))) {
+      await writeMarker(name, round);
+    }
+
     const rows = await listImps();
 
     const idsByName = new Map(rows.map((row) => [row.name, row.id]));
@@ -311,13 +324,19 @@ test('every imp stays valid through rounds of kills', async () => {
     await running;
     await waitForImpd();
 
-    // an operation a kill cut short may cost its imp its memory, and a stop
-    // and start always does
-    const lost = new Set([...cost, ...ops.map((step) => step.name)]);
+    // A stop and start always costs the imp its memory. A sleep, a wake or
+    // an exec (which wakes) cut by impd's death may too; a Firecracker kill
+    // costs only its own imp.
+    const cut = ops.filter((step) => step.op === 'stop-start' || fault !== 'firecracker');
 
-    await checkStates();
+    const lost = new Set([...cost, ...cut.map((step) => step.name)]);
 
-    for (const name of NAMES) {
+    for (const name of await checkStates()) {
+      console.log(`    ${name}: error after round ${String(round)}; left out from here`);
+      failed.add(name);
+    }
+
+    for (const name of NAMES.filter((candidate) => !failed.has(candidate))) {
       await checkImp(name, lost);
     }
   }
