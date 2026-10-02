@@ -29,9 +29,9 @@ func Up(iface, cidr, gw string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", iface, err)
 	}
-	addr, err := netlink.ParseAddr(cidr)
+	addr, err := parseAddr(cidr)
 	if err != nil {
-		return fmt.Errorf("imp.ip %q: %w", cidr, err)
+		return err
 	}
 	// Replace, not Add: a cold boot of a restored disk must not fail on EEXIST.
 	if err := netlink.AddrReplace(link, addr); err != nil {
@@ -40,12 +40,13 @@ func Up(iface, cidr, gw string) error {
 	if err := netlink.LinkSetUp(link); err != nil {
 		return fmt.Errorf("%s up: %w", iface, err)
 	}
-	if gw == "" {
-		return nil
+	// a bad gateway still leaves the address up: the host can reach the guest
+	gwIP, err := parseGateway(gw)
+	if err != nil {
+		return err
 	}
-	gwIP := net.ParseIP(gw)
 	if gwIP == nil {
-		return fmt.Errorf("imp.gw %q: not an IP", gw)
+		return nil
 	}
 	route := &netlink.Route{LinkIndex: link.Attrs().Index, Gw: gwIP}
 	if err := netlink.RouteReplace(route); err != nil {
@@ -54,22 +55,50 @@ func Up(iface, cidr, gw string) error {
 	return nil
 }
 
+// parseAddr reads imp.ip, an address with its prefix length.
+func parseAddr(cidr string) (*netlink.Addr, error) {
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("imp.ip %q: %w", cidr, err)
+	}
+	return addr, nil
+}
+
+// parseGateway reads imp.gw; an empty one means no default route.
+func parseGateway(gw string) (net.IP, error) {
+	if gw == "" {
+		return nil, nil
+	}
+	ip := net.ParseIP(gw)
+	if ip == nil {
+		return nil, fmt.Errorf("imp.gw %q: not an IP", gw)
+	}
+	return ip, nil
+}
+
 // WriteResolvConf writes nameservers to /etc/resolv.conf. Images often ship
 // it as a symlink into systemd-resolved's runtime dir, which nothing in an
 // imp populates, so a symlink is replaced by a plain file.
 func WriteResolvConf(servers []string) error {
+	return writeResolvConf("/etc/resolv.conf", servers)
+}
+
+func writeResolvConf(path string, servers []string) error {
 	if len(servers) == 0 {
 		return nil
 	}
-	const path = "/etc/resolv.conf"
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		if err := os.Remove(path); err != nil {
 			return err
 		}
 	}
+	return os.WriteFile(path, []byte(resolvConf(servers)), 0o644)
+}
+
+func resolvConf(servers []string) string {
 	var b strings.Builder
 	for _, s := range servers {
 		fmt.Fprintf(&b, "nameserver %s\n", s)
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return b.String()
 }

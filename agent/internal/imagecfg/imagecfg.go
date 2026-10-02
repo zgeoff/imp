@@ -29,8 +29,12 @@ var defaultEnv = []string{
 // Load reads Path. A missing file gives the defaults; image env entries
 // override the defaults key by key.
 func Load() (Config, error) {
+	return load(Path)
+}
+
+func load(path string) (Config, error) {
 	c := Config{}
-	b, err := os.ReadFile(Path)
+	b, err := os.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
