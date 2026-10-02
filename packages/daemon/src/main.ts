@@ -313,6 +313,7 @@ async function main(): Promise<void> {
   namesHolder.names = tailnetNames;
 
   const moves = createMoveService({
+    audit,
     config,
     db,
     dataDir: config.dataDir,

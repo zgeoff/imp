@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { removeImp } from '../db/imps';
+import { removeImp, updateImpMove } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
 import { readRejection } from '../read-rejection';
@@ -427,5 +427,40 @@ test('a slot that could not listen warns again once a new imp holds it', async (
   } finally {
     await proxy.stop();
     await squatter.stop(true);
+  }
+});
+
+test('a request to a moving imp gets 503 with Retry-After', async () => {
+  const ports = pickPorts();
+
+  await using ctx = await setupImpTest({ env: ports });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  try {
+    await ctx.createTestImage('ubuntu');
+
+    const imp = await ctx.imps.createImp({ name: 'web' });
+
+    await ctx.imps.stopImp('web');
+
+    await updateImpMove(ctx.db, imp.id, 'sending');
+
+    await proxy.syncListeners();
+
+    const response = await fetch(
+      `http://127.0.0.1:${String(Number(ports.IMP_PORT_BASE) + imp.slot)}/`,
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('30');
+  } finally {
+    await proxy.stop();
   }
 });

@@ -3,7 +3,7 @@
 export const MOVE_PART_BYTES = 256 * 1024 * 1024;
 
 // how long the receiver waits for the next part before it gives up
-const PART_WAIT_MS = 60_000;
+export const PART_WAIT_MS = 60_000;
 
 export interface PartPipe {
   // the parts' bytes as one stream

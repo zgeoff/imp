@@ -1,5 +1,6 @@
 import { ORPCError } from '@orpc/server';
 import type { Server, WebSocketHandler } from 'bun';
+import { MOVING_RETRY_AFTER_S } from '../api-errors';
 import { removeSessionCookie } from '../auth/session-cookie';
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
@@ -582,6 +583,12 @@ function buildWakeErrorPage(name: string, error: unknown): Response {
   }
 
   const reason = readErrorMessage(error);
+  const page = buildErrorPage(503, `${name} could not wake: ${reason}`);
 
-  return buildErrorPage(503, `${name} could not wake: ${reason}`);
+  // a move holds the imp for a while: the client may come back
+  if (error instanceof ORPCError && error.code === 'MOVING') {
+    page.headers.set('retry-after', String(MOVING_RETRY_AFTER_S));
+  }
+
+  return page;
 }

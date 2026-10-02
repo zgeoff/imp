@@ -1,15 +1,18 @@
-import { mkdirSync, rmSync } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFile, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { EgressPolicy, MoveTicket } from '@imp/api';
 import { EgressPolicySchema } from '@imp/api';
 import { ORPCError } from '@orpc/server';
+import type { ApiAudit } from '../audit/api-audit';
 import { writeChangedBlocks } from '../backup/write-changed-blocks';
 import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { findImpById, findImpByName, updateImpMove } from '../db/imps';
+import { findImpById, findImpByName, listImps, updateImpCommitted } from '../db/imps';
+import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { Imps } from '../imps/imp-service';
 import { readErrorMessage } from '../read-error-message';
@@ -35,7 +38,7 @@ import {
   MoveOfferSchema,
 } from './move-header';
 import type { MoveHeader } from './move-header';
-import { createPartPipe } from './move-parts';
+import { PART_WAIT_MS, createPartPipe } from './move-parts';
 import type { PartPipe } from './move-parts';
 import {
   buildReceipt,
@@ -93,8 +96,8 @@ export interface MoveReceiverDeps {
   >;
   readonly storageGate: Pick<StorageGate, 'join'>;
   readonly diskBudget: Pick<DiskBudget, 'requireRoom' | 'withRoom'>;
-  readonly imps: Pick<Imps, 'createImp' | 'destroyImp'>;
-  readonly grants: Pick<Broker, 'addGrant'>;
+  readonly imps: Pick<Imps, 'createImp' | 'destroyImp' | 'lockImpId'>;
+  readonly grants: Pick<Broker, 'addGrant' | 'listSecrets'>;
   readonly ranges: PeerRanges;
 
   // this host's base URL as a source reaches it
@@ -102,8 +105,24 @@ export interface MoveReceiverDeps {
 
   // after a commit: the tailnet-names pass, which gives the imp its name here
   readonly onCommitted: (name: string) => void;
+  readonly audit: Pick<ApiAudit, 'record'>;
   readonly now: () => number;
   readonly log: (message: string) => void;
+}
+
+// an HTTP status as the audit log names a refusal
+const STATUS_CODES: Readonly<Record<number, string>> = {
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  410: 'GONE',
+  413: 'PAYLOAD_TOO_LARGE',
+};
+
+function readStatusCode(status: number): string {
+  return STATUS_CODES[status] ?? 'INTERNAL_SERVER_ERROR';
 }
 
 class MoveRequestError extends Error {
@@ -153,6 +172,9 @@ interface Reply {
 interface ReceiveSession {
   readonly pipe: PartPipe;
   nextPart: number;
+
+  // by impd's clock: a part later than PART_WAIT_MS after this ends it
+  lastPartAt: number;
 
   // the receipt, or the error, once the stream is read
   readonly result: Promise<Reply>;
@@ -289,11 +311,13 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
   };
 
-  // the image by digest, or from the stream when the source sent it
+  // The image by the source's digest when this host has it, else from the
+  // stream under the digest of what arrived (docs/guides/hosts.md#moves)
   const requireImage = async (
     reader: FrameReader,
     header: MoveHeader,
     count: ByteCounter,
+    tempBase: string,
   ): Promise<{ readonly name: string; readonly files: readonly ReceivedFile[] }> => {
     const existing = await findImageByDigest(deps.db, header.image.digest);
 
@@ -305,35 +329,80 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, `this host has no image ${header.image.digest}`);
     }
 
-    const files: ReceivedFile[] = [];
+    const temps = { rootfs: `${tempBase}.rootfs`, config: `${tempBase}.config` };
 
-    await deps.storageGate.join(() =>
-      deps.storage.createImage(header.image.digest, async (dir) => {
-        const rootfs = await readFileInto(reader, 'image-rootfs', join(dir, 'rootfs.ext4'), count);
-        const config = await readFileInto(reader, 'image-config', join(dir, 'config.json'), count);
+    try {
+      const rootfs = await readFileInto(reader, 'image-rootfs', temps.rootfs, count);
+      const config = await readFileInto(reader, 'image-config', temps.config, count);
 
-        files.push(
-          { kind: 'image-rootfs', sha256: rootfs.sha256, bytes: rootfs.bytes },
-          { kind: 'image-config', sha256: config.sha256, bytes: config.bytes },
+      const files: ReceivedFile[] = [
+        { kind: 'image-rootfs', sha256: rootfs.sha256, bytes: rootfs.bytes },
+        { kind: 'image-config', sha256: config.sha256, bytes: config.bytes },
+      ];
+
+      const digest = buildReceivedDigest(rootfs.sha256, config.sha256);
+
+      const known = await findImageByDigest(deps.db, digest);
+
+      if (known !== undefined) {
+        return { name: known.name, files };
+      }
+
+      await deps.storageGate.join(() =>
+        deps.storage.createImage(digest, async (dir) => {
+          await copyFile(temps.config, join(dir, 'config.json'));
+
+          writeFileSync(join(dir, 'rootfs.ext4'), '');
+
+          await writeChangedBlocks(temps.rootfs, join(dir, 'rootfs.ext4'));
+        }),
+      );
+
+      const taken = await findImageByName(deps.db, header.image.name);
+
+      const hex = digest.replace(/^sha256:/, '').slice(0, 8);
+
+      const name =
+        taken === undefined ? header.image.name : `${header.image.name.slice(0, 22)}-${hex}`;
+
+      await createImage(deps.db, {
+        name,
+        ref: header.image.ref,
+        digest,
+        sizeBytes: header.image.sizeBytes,
+      });
+
+      return { name, files };
+    } finally {
+      rmSync(temps.rootfs, { force: true });
+      rmSync(temps.config, { force: true });
+    }
+  };
+
+  // Only a grant of a secret this host has by that name; the rest are
+  // logged, never made
+  const createGrants = async (header: MoveHeader): Promise<void> => {
+    const secrets = await deps.grants.listSecrets();
+
+    const known = new Set(secrets.map((secret) => secret.name));
+
+    for (const secretName of header.imp.grants) {
+      if (!known.has(secretName)) {
+        deps.log(
+          `impd: move: ${header.imp.name}: grant ${secretName} dropped: no such secret here`,
         );
-      }),
-    );
 
-    const taken = await findImageByName(deps.db, header.image.name);
+        continue;
+      }
 
-    const hex = header.image.digest.replace(/^sha256:/, '').slice(0, 8);
-
-    const name =
-      taken === undefined ? header.image.name : `${header.image.name.slice(0, 22)}-${hex}`;
-
-    await createImage(deps.db, {
-      name,
-      ref: header.image.ref,
-      digest: header.image.digest,
-      sizeBytes: header.image.sizeBytes,
-    });
-
-    return { name, files };
+      try {
+        await deps.grants.addGrant(header.imp.name, secretName);
+      } catch (error) {
+        deps.log(
+          `impd: move: ${header.imp.name}: grant ${secretName} not kept: ${readErrorMessage(error)}`,
+        );
+      }
+    }
   };
 
   // ZFS to ZFS: each stream into `zfs recv`, then the checkpoints' rows
@@ -464,7 +533,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     try {
       // twice the data: each file sits in the temp file, then on the disk
       await deps.diskBudget.withRoom(2 * row.bytes, async () => {
-        const image = await requireImage(reader, header, count);
+        const image = await requireImage(reader, header, count, temp);
 
         files.push(...image.files);
 
@@ -498,13 +567,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       rmSync(temp, { force: true });
     }
 
-    for (const secretName of header.imp.grants) {
-      await deps.grants.addGrant(header.imp.name, secretName).catch((error: unknown) => {
-        deps.log(
-          `impd: move: ${header.imp.name}: grant ${secretName} not kept: ${readErrorMessage(error)}`,
-        );
-      });
-    }
+    await createGrants(header);
 
     const receipt = buildReceipt(
       { ticketId: row.id, name: header.imp.name, impId: header.imp.id, files },
@@ -584,16 +647,23 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const pipe = createPartPipe();
     const result = readStreamOrFail(pipe, row, secret);
-    const session: ReceiveSession = { pipe, nextPart: 0, result };
+    const session: ReceiveSession = { pipe, nextPart: 0, lastPartAt: deps.now(), result };
 
     sessions.set(row.id, session);
 
-    // a source that never sends its finish leaves the session this long
-    setTimeout(() => {
-      sessions.delete(row.id);
-    }, STREAM_WINDOW_MS).unref();
+    // a stream lasts as long as its parts keep coming; once it is read, a
+    // source that never sends its finish leaves the session this long
+    void removeSessionLater(row.id, result);
 
     return session;
+  };
+
+  const removeSessionLater = async (id: string, result: Promise<Reply>): Promise<void> => {
+    await result;
+
+    setTimeout(() => {
+      sessions.delete(id);
+    }, PART_WAIT_MS).unref();
   };
 
   // A part's body goes into the stream; the finish waits for the receipt.
@@ -624,10 +694,24 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, `part ${String(part)} is out of order`);
     }
 
+    if (part > 0 && deps.now() - session.lastPartAt > PART_WAIT_MS) {
+      session.pipe.fail(
+        new MoveRequestError(410, 'the next part of the move stream came too late'),
+      );
+
+      const reply = await session.result;
+
+      return Response.json(reply.body, { status: reply.status });
+    }
+
     session.nextPart += 1;
+    session.lastPartAt = deps.now();
 
     try {
       await session.pipe.push(request.body);
+
+      // the gap runs from the end of one part to the start of the next
+      session.lastPartAt = deps.now();
     } catch {
       const reply = await session.result;
 
@@ -637,66 +721,116 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     return Response.json({ part }, { status: 202 });
   };
 
-  // idempotent: a commit the target made already answers the same
-  const handleCommit = async (request: Request): Promise<Response> => {
-    const checked = await requireTicket(request);
-
-    const row = checked.row;
-
-    if (row.committed_at !== null) {
-      return Response.json({ isCommitted: true });
-    }
-
-    if (row.receipt === null || row.imp_id === null) {
-      throw new MoveRequestError(409, 'nothing to commit: no receipt for this ticket');
-    }
-
-    if (row.commit_until !== null && deps.now() > row.commit_until) {
-      throw new MoveRequestError(410, 'the commit window ended; reissue the ticket');
-    }
-
-    const imp = await findImpById(deps.db, row.imp_id);
-
-    if (imp?.moveState === 'receiving') {
-      await updateImpMove(deps.db, imp.id, null);
-    }
-
-    await deps.db
-      .updateTable('move_tickets')
-      .set({ committed_at: deps.now() })
-      .where('imp_id', '=', row.imp_id)
-      .execute();
+  // The commit's two writes, the mark and the ticket, as one
+  const writeCommit = async (imp: ImpRecord, row: MoveTicketRow): Promise<void> => {
+    await updateImpCommitted(deps.db, imp.id, deps.now());
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
     deps.onCommitted(row.name);
-
-    return Response.json({ isCommitted: true });
   };
 
-  // refused once committed: the source must destroy its copy instead
+  // Idempotent, under the imp's lock, so a commit and an abort never cross:
+  // a commit the target made already answers the same
+  const handleCommit = async (request: Request): Promise<Response> => {
+    const checked = await requireTicket(request);
+
+    const impId = checked.row.imp_id;
+
+    if (checked.row.receipt === null || impId === null) {
+      throw new MoveRequestError(409, 'nothing to commit: no receipt for this ticket');
+    }
+
+    return deps.imps.lockImpId(impId, async (imp) => {
+      const row = await findTicketRow(checked.row.id);
+
+      const settled = row === undefined ? 'none' : readSettled(row, imp);
+
+      if (settled === 'committed') {
+        return Response.json({ isCommitted: true });
+      }
+
+      if (row === undefined || imp === undefined || settled === 'none') {
+        throw new MoveRequestError(409, 'nothing to commit: the received copy is gone');
+      }
+
+      if (row.commit_until !== null && deps.now() > row.commit_until) {
+        throw new MoveRequestError(410, 'the commit window ended; reissue the ticket');
+      }
+
+      await writeCommit(imp, row);
+
+      return Response.json({ isCommitted: true });
+    });
+  };
+
+  // Refused once committed: the source must destroy its copy instead. The
+  // tickets go under the lock, so no commit follows; the staged imp after.
   const handleAbort = async (request: Request): Promise<Response> => {
     const checked = await requireTicket(request);
 
-    const row = checked.row;
+    const impId = checked.row.imp_id;
 
-    if (row.committed_at !== null) {
+    // a stream still open stops reading now
+    sessions.get(checked.row.id)?.pipe.fail(new Error('the source aborted the move'));
+
+    const removeTickets = () =>
+      deps.db
+        .deleteFrom('move_tickets')
+        .where((eb) =>
+          eb.or([
+            eb('id', '=', checked.row.id),
+            ...(impId === null ? [] : [eb('imp_id', '=', impId)]),
+          ]),
+        )
+        .execute();
+
+    if (impId === null) {
+      await removeTickets();
+
+      return Response.json({ isCommitted: false });
+    }
+
+    const settled = await deps.imps.lockImpId(impId, async (imp) => {
+      const row = await findTicketRow(checked.row.id);
+
+      const found = row === undefined ? 'none' : readSettled(row, imp);
+
+      if (found !== 'committed') {
+        await removeTickets();
+      }
+
+      return found;
+    });
+
+    if (settled === 'committed') {
       return Response.json({ isCommitted: true }, { status: 409 });
     }
 
-    // a stream still open stops reading now
-    sessions.get(row.id)?.pipe.fail(new Error('the source aborted the move'));
+    await removeStaged(checked.row.name, impId);
 
-    if (row.imp_id !== null) {
-      await removeStaged(row.name, row.imp_id);
-
-      await deps.db.deleteFrom('move_tickets').where('imp_id', '=', row.imp_id).execute();
-    }
-
-    await deps.db.deleteFrom('move_tickets').where('id', '=', row.id).execute();
-
-    deps.log(`impd: move: ${row.name}: aborted by the source`);
+    deps.log(`impd: move: ${checked.row.name}: aborted by the source`);
 
     return Response.json({ isCommitted: false });
+  };
+
+  const handleRoute = async (request: Request, peer: string | null): Promise<Response> => {
+    const route = ROUTES[new URL(request.url).pathname];
+
+    if (route === undefined || request.method !== 'POST') {
+      return Response.json({ error: 'not found' }, { status: 404 });
+    }
+
+    if (peer === null || !deps.ranges.isAllowed(peer)) {
+      return Response.json({ error: 'moves come only over the tailnet' }, { status: 403 });
+    }
+
+    try {
+      return await route(request);
+    } catch (error) {
+      const reply = readErrorReply(error, deps.log);
+
+      return Response.json(reply.body, { status: reply.status });
+    }
   };
 
   const ROUTES: Readonly<Record<string, (request: Request) => Promise<Response>>> = {
@@ -751,23 +885,31 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     },
 
     handle: async (request, peer) => {
-      const route = ROUTES[new URL(request.url).pathname];
+      const startedAt = deps.now();
 
-      if (route === undefined || request.method !== 'POST') {
-        return Response.json({ error: 'not found' }, { status: 404 });
-      }
+      const path = new URL(request.url).pathname;
 
-      if (peer === null || !deps.ranges.isAllowed(peer)) {
-        return Response.json({ error: 'moves come only over the tailnet' }, { status: 403 });
-      }
+      const ticket = readTicketHeader(request);
 
-      try {
-        return await route(request);
-      } catch (error) {
-        const reply = readErrorReply(error, deps.log);
+      // before the route: an abort removes the ticket
+      const row = ticket === null ? undefined : await findTicketRow(ticket.id);
 
-        return Response.json(reply.body, { status: reply.status });
-      }
+      const response = await handleRoute(request, peer);
+
+      const failure = response.ok ? null : new ORPCError(readStatusCode(response.status));
+
+      // as a call on /rpc, by the peer: `move.receive` and the rest
+      deps.audit.record(
+        {
+          procedure: `move.${path.slice(path.lastIndexOf('/') + 1)}`,
+          actor: { kind: 'tailnet', name: `move from ${peer ?? 'unknown'}` },
+          impName: row?.name ?? null,
+          startedAt,
+        },
+        failure,
+      );
+
+      return response;
     },
 
     recover: async () => {
@@ -787,6 +929,17 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
         if (isCutShort || isUnused || isSpent) {
           await deps.db.deleteFrom('move_tickets').where('id', '=', row.id).execute();
+        }
+      }
+
+      // an abort that removed the tickets, then stopped before the imp
+      const left = await deps.db.selectFrom('move_tickets').select('imp_id').execute();
+
+      const ticketed = new Set(left.map((row) => row.imp_id));
+
+      for (const imp of await listImps(deps.db)) {
+        if (imp.moveState === 'receiving' && !ticketed.has(imp.id)) {
+          await removeStaged(imp.name, imp.id);
         }
       }
 
@@ -918,4 +1071,24 @@ function readStreamFile(
       controller.enqueue(data.data);
     },
   });
+}
+
+// a received image's digest: its two files' stream sums, as they arrived
+function buildReceivedDigest(rootfsSha256: string, configSha256: string): string {
+  const hash = createHash('sha256').update(`rootfs ${rootfsSha256}\nconfig ${configSha256}\n`);
+
+  return `sha256:${hash.digest('hex')}`;
+}
+
+// Where a ticket's imp stands. Committed once the ticket says so, or once
+// the imp lives here unmarked: a mark gone means the commit landed.
+function readSettled(
+  row: MoveTicketRow,
+  imp: ImpRecord | undefined,
+): 'committed' | 'staged' | 'none' {
+  if (row.committed_at !== null || (imp !== undefined && imp.moveState === null)) {
+    return 'committed';
+  }
+
+  return imp?.moveState === 'receiving' ? 'staged' : 'none';
 }

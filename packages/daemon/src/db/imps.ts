@@ -350,6 +350,37 @@ export async function updateImpSettings(
   return imp;
 }
 
+// A move's commit on the target: the mark off and the tickets committed in
+// one transaction, so no crash leaves one without the other
+export async function updateImpCommitted(
+  db: ImpDatabase,
+  id: string,
+  committedAt: number,
+): Promise<ImpRecord> {
+  const row = await db.transaction().execute(async (trx) => {
+    const updated = await trx
+      .updateTable('imps')
+      .set({ move_state: null })
+      .where('id', '=', id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+
+    await trx
+      .updateTable('move_tickets')
+      .set({ committed_at: committedAt })
+      .where('imp_id', '=', id)
+      .execute();
+
+    return updated;
+  });
+
+  const imp = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+
+  return imp;
+}
+
 // sets or clears the move mark (moves/); the change goes out as `updated`
 export async function updateImpMove(
   db: ImpDatabase,

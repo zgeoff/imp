@@ -8,6 +8,7 @@ import { Client, utils } from 'ssh2';
 import type { ClientChannel, ExecOptions } from 'ssh2';
 import { AgentError } from '../agent-client/agent-connection';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
+import { buildMovingError } from '../api-errors';
 import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import type { TokenStore } from '../auth/token-store';
@@ -312,6 +313,20 @@ test('a failed wake reaches the channel as an error with exit status 255', async
 
   expect(result.code).toBe(255);
   expect(result.stderr).toBe('imp: RAM_BUDGET_EXCEEDED: no room for box under the RAM budget\n');
+  expect(ctx.execs).toHaveLength(0);
+});
+
+test('a moving imp answers the channel with MOVING and exit status 255', async () => {
+  const ctx = await startTestGateway();
+
+  ctx.fake.wakeError = buildMovingError(FAKE_IMP.name);
+
+  const client = await openClient(ctx.gateway);
+  const channel = await openExecChannel(client, 'true');
+  const result = await readResult(channel);
+
+  expect(result.code).toBe(255);
+  expect(result.stderr).toContain('imp: MOVING:');
   expect(ctx.execs).toHaveLength(0);
 });
 

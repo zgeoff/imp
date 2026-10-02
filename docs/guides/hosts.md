@@ -13,8 +13,9 @@ imp move dev big-box --stop     # stop it first if it runs or sleeps
 imp --host small move dev big-box   # from a host other than the current one
 ```
 
-The CLI needs a saved host, with a `manage` token for the imp, on both sides. A move goes in four
-steps:
+The CLI needs a saved host on both sides: a `manage` token for the imp on the source, and a `manage`
+token with no imp patterns on the target, since a receive takes in an image and grants. A move goes
+in four steps:
 
 1. The source marks the imp `sending` and counts its data.
 2. The target checks that it has no imp by that name and room for twice the data, then issues a
@@ -26,10 +27,11 @@ steps:
    name, asks the target to commit, then destroys its own copy.
 
 `imp ls` shows the mark in `--json` as `move`. A marked imp does not start, wake, stop, sleep,
-change or go away: each call by name fails fast with `409 MOVING` and `Retry-After: 30`. So neither
-host can wake the imp while both hold it. On the source, a move holds no lock on storage for its
-length: other imps, backups and `imp gc` go on. On the target, `imp gc` waits for the receive, as it
-does for a backup.
+change or go away: each call by name fails fast with `409 MOVING` and `Retry-After: 30`. A request
+to its URL gets `503` with `Retry-After: 30`, and an SSH login an error with exit status 255. So
+neither host can wake the imp while both hold it. On the source, a move holds no lock on storage for
+its length: other imps, backups and `imp gc` go on. On the target, `imp gc` waits for the receive,
+as it does for a backup.
 
 ### What a move keeps
 
@@ -43,8 +45,9 @@ does for a backup.
 | Grants, for each secret the target has by the same name | The audit logs and the event history                         |
 
 The image goes by digest, as files. A target with the digest uses its own; one without it gets the
-image in the stream. When the target has an image by that name with another digest, the moved
-image's name gets a `-<8 hex>` suffix.
+image in the stream and files it under a digest of what arrived, never the source's claim: the
+source's digest names an OCI config the target cannot check against a built rootfs. When the target
+has an image by that name with another digest, the moved image's name gets a `-<8 hex>` suffix.
 
 ### URLs
 
@@ -73,8 +76,10 @@ it travels in the `Authorization` header, never the URL. Its lifetime:
 
 ### When a move fails
 
-Before the receipt, nothing changed: the source takes its mark off and the target removes what it
-wrote. `imp move` says so; run it again.
+Before the receipt, nothing changed: the target removes what it wrote, and once it confirms, the
+source takes its mark off. `imp move` says so; run it again. A target that does not confirm (it is
+down, or the network is) leaves the mark on, with the error in `moves.status`: run
+`imp move <name> <host> --abort` once it is back.
 
 The send runs in the source impd, not in the CLI. An `imp move` stopped with Ctrl-C leaves it to
 finish by itself: `imp ls --json` shows the mark until it does, and a second `imp move` gets

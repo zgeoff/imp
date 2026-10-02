@@ -85,12 +85,13 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'leases.list': { scope: 'exec', on: 'any', audit: false },
 
   // a move hands the whole imp, its disk and checkpoints, to another host;
-  // on the target, a ticket stages an imp under its name
+  // on the target a ticket takes in an image and grants, which are
+  // host-wide, as images.add and grants.add are
   'moves.prepare': manageImp,
-  'moves.receive': manageImp,
+  'moves.receive': manageHost,
   'moves.send': manageImp,
   'moves.status': readImp,
-  'moves.reissue': manageImp,
+  'moves.reissue': manageHost,
   'moves.resume': manageImp,
   'moves.abort': manageImp,
 
