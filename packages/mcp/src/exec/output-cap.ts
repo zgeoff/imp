@@ -100,16 +100,69 @@ function mergeBytes(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 // The text an agent reads: invalid UTF-8 becomes U+FFFD, and a marker says
-// where bytes were dropped and how many.
+// where bytes were dropped and how many. The cut never splits a character:
+// the bytes of one it would split count as dropped.
 export function formatCappedText(output: Readonly<CappedOutput>): string {
   const decoder = new TextDecoder();
 
-  const head = decoder.decode(output.head);
-  const tail = decoder.decode(output.tail);
-
   if (output.droppedBytes === 0) {
-    return head + tail;
+    return decoder.decode(mergeBytes([output.head, output.tail]));
   }
 
-  return `${head}\n[... ${String(output.droppedBytes)} bytes dropped ...]\n${tail}`;
+  const headEnd = findHeadEnd(output.head);
+  const tailStart = findTailStart(output.tail);
+  const head = output.head.subarray(0, headEnd);
+  const tail = output.tail.subarray(tailStart);
+  const dropped = output.droppedBytes + (output.head.byteLength - headEnd) + tailStart;
+
+  return `${decoder.decode(head)}\n[... ${String(dropped)} bytes dropped ...]\n${decoder.decode(tail)}`;
+}
+
+const MAX_CHARACTER_BYTES = 4;
+
+// a byte that continues a UTF-8 character: 10xxxxxx
+function isContinuation(byte: number): boolean {
+  return (byte & 0xc0) === 0x80;
+}
+
+// how many bytes the character this lead byte starts takes
+function countCharacterBytes(lead: number): number {
+  if (lead >= 0xf0) {
+    return 4;
+  }
+
+  if (lead >= 0xe0) {
+    return 3;
+  }
+
+  return lead >= 0xc0 ? 2 : 1;
+}
+
+// the end of the head without a character cut short at it
+function findHeadEnd(head: Uint8Array): number {
+  for (let back = 1; back <= Math.min(MAX_CHARACTER_BYTES, head.byteLength); back++) {
+    const start = head.byteLength - back;
+    const byte = head[start] ?? 0;
+
+    if (!isContinuation(byte)) {
+      return start + countCharacterBytes(byte) > head.byteLength ? start : head.byteLength;
+    }
+  }
+
+  return head.byteLength;
+}
+
+// the start of the tail past the rest of a character cut at it
+function findTailStart(tail: Uint8Array): number {
+  let start = 0;
+
+  while (
+    start < MAX_CHARACTER_BYTES - 1 &&
+    start < tail.byteLength &&
+    isContinuation(tail[start] ?? 0)
+  ) {
+    start++;
+  }
+
+  return start;
 }

@@ -46,3 +46,16 @@ test('invalid UTF-8 becomes the replacement character', () => {
 
   expect(formatCappedText(collector.finish())).toBe('h�i');
 });
+
+test('a character split between head and tail decodes whole when nothing is dropped', () => {
+  const output = collect(['abé'], 10, 3);
+
+  expect(formatCappedText(output)).toBe('abé');
+});
+
+test('a cut never splits a character; its bytes count as dropped', () => {
+  const output = collect(['😀😀', 'x'.repeat(10), '😀😀'], 10, 5);
+
+  expect(output.droppedBytes).toBe(16);
+  expect(formatCappedText(output)).toBe('😀\n[... 18 bytes dropped ...]\n😀');
+});
