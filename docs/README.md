@@ -46,6 +46,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   wildcard certificate, its renewal, the DNS records, and testing with Pebble.
 - [Events, audit and telemetry](./guides/events.md): `imp events` and the event stream, the API
   audit log, and OpenTelemetry metrics and spans.
+- [CPU limits and resource use](./guides/cpu-limits.md): `imp set`, `imp top`, CPU limits and
+  weights, and what impd samples from each running imp.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
 - [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
   `main`.

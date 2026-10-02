@@ -74,6 +74,7 @@ imp fork box box-2                # a second copy to try something else in
 | `gc [--dry-run]`                         | remove storage no imp, checkpoint or image names                       |
 | `sleep`, `wake`, `hold <name> <time>`    | sleep by hand; keep an imp awake for a while                           |
 | `start`, `stop`, `rm`                    | boot cold, shut down, destroy                                          |
+| `set <name>`, `top`                      | change CPU limit, weight, vCPUs; watch resource use                    |
 | `url <name>`                             | print the imp's local and tailnet URLs, and its own tailnet name       |
 | `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
 | `image build`, `add`, `ls`, `rm`         | manage images                                                          |
@@ -85,9 +86,10 @@ imp fork box box-2                # a second copy to try something else in
 | `completion bash\|zsh\|fish`             | print the shell completion script                                      |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
-[Connectors](docs/guides/connectors.md) covers secrets and grants; [tokens](docs/guides/tokens.md)
-covers scopes and tailnet identity. Commands that print imps, images, checkpoints or `info` take
-`--json`. `scripts/imp` runs the CLI from the repo.
+`imp new` and `imp set` take `--cpu-limit` and `--cpu-weight`
+([CPU limits](docs/guides/cpu-limits.md)). [Connectors](docs/guides/connectors.md) covers secrets
+and grants; [tokens](docs/guides/tokens.md) covers scopes and tailnet identity. Commands that print
+imps, images, checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown

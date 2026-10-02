@@ -165,6 +165,19 @@ network and balloon, and starts the VM. It also runs the sleep (pause, snapshot,
 and checks a pid's command line, so a recycled pid never counts as a live VM. Every API call times
 out: 10 s, or 120 s for a snapshot create or load.
 
+#### cgroups
+
+`host/scripts/setup-cgroups.sh` runs first in the host container. In a private cgroup v2 namespace
+(`/proc/self/cgroup` reads `0::/`), it moves every process to `/init`, enables the `cpu` controller
+at the root and makes `imps/` with `cpu` enabled. In any other namespace it changes nothing, and
+impd stores CPU settings without enforcing them. impd makes `imps/<id>` for each VM, writes
+`cpu.max` and `cpu.weight`, and starts Firecracker inside it
+(`sh -c 'echo $$ > cgroup.procs; exec setsid firecracker'`), so no VM thread runs outside the limit.
+A sleep or a wake writes `cpu.max` as `max` while the snapshot is made or loaded. impd removes the
+cgroup when the VM exits, and its reconcile at start removes `imps/*` dirs that no imp owns. The
+resource sampler reads `cpu.stat`, the tap's byte counters and `smaps_rollup` once per imp every 5
+s, and the presenter and the telemetry read that cache.
+
 ### sleep: snapshot metadata
 
 The sleep module writes and reads `vm.json`, what a VM booted with, and `snapshot/meta.json`, which
