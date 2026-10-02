@@ -1,5 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statfsSync,
+  writeFileSync,
+} from 'node:fs';
+import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import * as z from 'zod';
 import { config } from './lib/config';
@@ -8,6 +16,7 @@ import { listImageNames, readInfo, runImp } from './lib/imp-cli';
 import { removeImpsWithPrefix } from './lib/imps';
 import {
   REPO_ROOT,
+  checkHealthReady,
   instance,
   readImpdLogTail,
   readToken,
@@ -59,15 +68,39 @@ let interrupted = false;
 // the suite process running now, so a signal can stop it
 let running: Subprocess | null = null;
 
-// The dev instance's data dir, as scripts/dev.sh picks it. The reset deletes
-// it as root, so anything outside the repo is refused.
-function resolveDataDir(): string {
+// as scripts/dev.sh resolves it: a relative IMP_DEV_DATA is relative to the
+// caller's directory
+function resolveDataPath(): string {
   const configured = process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev');
-  const data = resolve(REPO_ROOT, configured);
-  const inside = relative(REPO_ROOT, data);
 
-  if (configured.trim() === '' || inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
-    throw new Error(`refusing to wipe ${data}: --clean only wipes a data dir inside ${REPO_ROOT}`);
+  if (configured.trim() === '') {
+    throw new Error('IMP_DEV_DATA is empty');
+  }
+
+  return resolve(process.cwd(), configured);
+}
+
+// The data dir to wipe, or null when it does not exist. The reset deletes it
+// as root, so it must sit under <repo>/.data/ or hold an imp.xfs.
+function resolveWipeTarget(): string | null {
+  const path = resolveDataPath();
+
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  const data = realpathSync(path);
+
+  const dataRoot = existsSync(join(REPO_ROOT, '.data'))
+    ? realpathSync(join(REPO_ROOT, '.data'))
+    : null;
+
+  const underDataRoot = dataRoot !== null && data.startsWith(`${dataRoot}/`);
+
+  if (!underDataRoot && !existsSync(join(data, 'imp.xfs'))) {
+    throw new Error(
+      `refusing to wipe ${data}: it is not under ${join(REPO_ROOT, '.data')} and holds no imp.xfs`,
+    );
   }
 
   return data;
@@ -76,10 +109,12 @@ function resolveDataDir(): string {
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = resolveDataDir();
+  const data = resolveWipeTarget();
   const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
 
-  console.log(`    clean reset: tailnet logout, remove ${instance.container}, wipe ${data}`);
+  console.log(
+    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${data ?? 'nothing'}`,
+  );
 
   const container = await runCommand(['docker', 'inspect', instance.container]);
 
@@ -94,7 +129,7 @@ async function resetInstance(): Promise<void> {
 
   await runDevScript('down');
 
-  if (!existsSync(data)) {
+  if (data === null) {
     return;
   }
 
@@ -120,6 +155,30 @@ async function resetInstance(): Promise<void> {
     '-c',
     'for dev in $(losetup -n -O NAME -j /d/imp.xfs 2>/dev/null); do losetup -d "$dev" || true; done; find /d -mindepth 1 -delete',
   ]);
+}
+
+// The scale suite needs host RAM for the budget plus headroom, and disk on
+// the data volume for a memory snapshot of every imp it creates.
+function checkScaleHeadroom(): void {
+  const availableMib = readAvailableMib();
+
+  if (availableMib < config.ramBudgetMib + 2048) {
+    throw new Error(
+      `only ${String(availableMib)} MiB available; the scale suite needs the budget ` +
+        `${String(config.ramBudgetMib)} MiB + 2048 MiB headroom`,
+    );
+  }
+
+  const disk = statfsSync(resolveDataPath());
+  const freeMib = Math.floor((disk.bavail * disk.bsize) / 1_048_576);
+  const neededMib = config.scaleCount * config.scaleMemoryMib;
+
+  if (freeMib < neededMib) {
+    throw new Error(
+      `only ${String(freeMib)} MiB free on the data volume; the scale suite needs ` +
+        `${String(neededMib)} MiB for ${String(config.scaleCount)} snapshots`,
+    );
+  }
 }
 
 function readAvailableMib(): number {
@@ -151,19 +210,12 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     );
   }
 
-  if (args.suites.includes('scale')) {
-    const available = readAvailableMib();
-
-    if (available < config.ramBudgetMib + 2048) {
-      throw new Error(
-        `only ${String(available)} MiB available; the scale suite needs the budget ` +
-          `${String(config.ramBudgetMib)} MiB + 2048 MiB headroom`,
-      );
-    }
-  }
-
   // leftovers of an aborted --keep run would skew RAM numbers
   await removeImpsWithPrefix(PREFIX);
+
+  if (args.suites.includes('scale')) {
+    checkScaleHeadroom();
+  }
 
   const images = new Set<FixtureImage>();
 
@@ -178,14 +230,24 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
   await createMissingImages([...images]);
 }
 
+// The first signal stops the running suite (its whole process group, imp
+// CLI calls included), runs no more and cleans up; a second exits at once.
 function stopRun(signal: NodeJS.Signals): void {
+  if (interrupted) {
+    process.exit(130);
+  }
+
   interrupted = true;
-  running?.kill(signal);
+
+  if (running !== null) {
+    process.kill(-running.pid, signal);
+  }
 }
 
 async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
   const proc = Bun.spawn([...buildSuiteArgv(process.execPath, name)], {
     cwd: REPO_ROOT,
+    detached: true,
     stdout: 'inherit',
     stderr: 'inherit',
     env: {
@@ -204,10 +266,29 @@ async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
   running = null;
 
   if (exitCode !== 0 && !interrupted) {
-    console.log(`== impd log tail\n${await readImpdLogTail(40)}`);
+    const tail = await readImpdLogTail(40);
+
+    console.log(`== impd log tail\n${tail}`);
+  }
+
+  // --bail skips the suite's afterAll; scale's imps stay for restart
+  if (exitCode !== 0 && !args.keep && !(name === 'scale' && args.suites.includes('restart'))) {
+    await removeSuiteImps(name);
   }
 
   return exitCode === 0;
+}
+
+async function removeSuiteImps(name: string): Promise<void> {
+  const suite = SUITES.find((candidate) => candidate.name === name);
+
+  try {
+    await removeImpsWithPrefix(suite?.prefix ?? `${PREFIX}${name}-`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+
+    console.error(`    could not remove the ${name} suite's imps: ${reason}`);
+  }
 }
 
 async function runTimed(
@@ -248,14 +329,29 @@ function formatSection(section: Section): string {
 async function removeLeftovers(): Promise<void> {
   console.log('== cleanup');
 
-  await removeImpsWithPrefix(PREFIX);
+  const healthy = await checkHealthReady();
 
-  const images = await listImageNames();
+  if (!healthy) {
+    console.error('    impd is not ready; imps and images left in place');
 
-  for (const image of images) {
-    if (image.startsWith(PREFIX)) {
-      await runImp('image', 'rm', image);
+    return;
+  }
+
+  try {
+    await removeImpsWithPrefix(PREFIX);
+
+    const images = await listImageNames();
+
+    for (const image of images) {
+      if (image.startsWith(PREFIX)) {
+        await runImp('image', 'rm', image);
+      }
     }
+  } catch (error) {
+    // the results and summary still matter more than a tidy instance
+    const reason = error instanceof Error ? error.message : String(error);
+
+    console.error(`    cleanup failed: ${reason}`);
   }
 }
 

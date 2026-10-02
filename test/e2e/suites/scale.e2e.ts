@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test';
+import { beforeAll, expect, test } from 'bun:test';
 import { config } from '../lib/config';
+import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy } from '../lib/http';
 import {
   findImp,
@@ -12,15 +13,27 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { registerImp, removeImps, waitForExec } from '../lib/imps';
-import { runInContainer } from '../lib/instance';
+import { runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { buildStats } from '../lib/stats';
 import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('scale');
+const TINY = resolveImageName('e2e-tiny');
 
 // restart re-adopts a full house when it runs after this suite
 const leaveForRestart = config.runSuites.includes('restart');
+
+// long enough that only the governor sleeps imps during the suite
+const SCALE_IDLE_TIMEOUT_S = 600;
+
+// The governor, not the idle timeout, must pick who sleeps, or the budget
+// never fills. The instance keeps this timeout for the suites after scale.
+beforeAll(async () => {
+  process.env['IMP_IDLE_TIMEOUT_S'] = String(SCALE_IDLE_TIMEOUT_S);
+
+  await runDevScript('reboot');
+}, 600_000);
 
 const FILL_SCRIPT =
   `mkdir -p /run/fill && mount -t tmpfs -o size=${String(config.scaleFillMib + 16)}m tmpfs /run/fill && ` +
@@ -108,7 +121,7 @@ async function createFilledImp(name: string): Promise<number> {
 
   const started = Date.now();
 
-  await runImp('new', name, '--image', 'e2e-tiny', '--memory', String(config.scaleMemoryMib));
+  await runImp('new', name, '--image', TINY, '--memory', String(config.scaleMemoryMib));
 
   const ms = Date.now() - started;
 
@@ -130,6 +143,46 @@ async function readPerImpMib(usedBefore: number): Promise<number> {
   return info.ramUsedMib - usedBefore;
 }
 
+// An imp that fits the budget but not its boot reserve (a share of its
+// memory, held until the RAM shows up) while every awake imp is held, so the
+// governor has nothing to sleep, is refused.
+async function assertBootReserveRefused(): Promise<void> {
+  const rows = await listImps();
+
+  const awake = rows.filter((row) => row.name.startsWith(prefix) && row.state === 'running');
+
+  for (const row of awake) {
+    await runImp('hold', row.name, '10m');
+  }
+
+  try {
+    const info = await readInfo();
+
+    const inUse = info.ramUsedMib + info.ramReservedMib;
+
+    // the boot reserve is half the memory by default: twice the room, plus margin
+    const memory = (config.ramBudgetMib - inUse) * 2 + 512;
+    const tight = `${prefix}tight`;
+
+    expect(memory).toBeLessThanOrEqual(config.ramBudgetMib);
+
+    registerImp(tight);
+
+    const rejected = await tryImp(['new', tight, '--image', TINY, '--memory', String(memory)]);
+
+    await removeImps(tight);
+
+    expect(rejected.exitCode).not.toBe(0);
+    expect(rejected.stderr).toContain('RAM_BUDGET_EXCEEDED');
+
+    console.log(`    a ${String(memory)} MiB imp with ${String(inUse)} MiB in use: refused`);
+  } finally {
+    for (const row of awake) {
+      await runImp('hold', row.name, '0');
+    }
+  }
+}
+
 test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on request`, async () => {
   const start = await readInfo();
 
@@ -140,6 +193,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
   const createMs: number[] = [];
   const wakeMs: number[] = [];
   let sleepingAfterCreate = 0;
+  let perImp = 0;
 
   try {
     const firstMs = await createFilledImp(buildName(1));
@@ -148,7 +202,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
     await Bun.sleep(3000);
 
-    const perImp = await readPerImpMib(start.ramUsedMib);
+    perImp = await readPerImpMib(start.ramUsedMib);
 
     const fit = Math.floor(config.ramBudgetMib / perImp);
 
@@ -187,6 +241,15 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
     expect(scaleImps).toHaveLength(config.scaleCount);
     expect(sleeping).not.toBeEmpty();
+
+    // the budget filled: the peak came within one imp of it
+    const peak = Math.max(...monitor.samples.map((sample) => sample.ramUsedMib));
+
+    console.log(
+      `    peak ramUsedMib while creating: ${String(peak)} of ${String(config.ramBudgetMib)}`,
+    );
+
+    expect(peak).toBeGreaterThan(config.ramBudgetMib - perImp);
 
     sleepingAfterCreate = sleeping.length;
 
@@ -237,7 +300,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
     registerImp(huge);
 
-    const rejected = await tryImp(['new', huge, '--image', 'e2e-tiny', '--memory', memory]);
+    const rejected = await tryImp(['new', huge, '--image', TINY, '--memory', memory]);
     const leftBehind = await findImp(huge);
 
     await removeImps(huge);
@@ -245,6 +308,8 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     expect(rejected.exitCode).not.toBe(0);
     expect(rejected.stderr).toContain('RAM_BUDGET_EXCEEDED');
     expect(leftBehind).toBeUndefined();
+
+    await assertBootReserveRefused();
 
     await Bun.sleep(2000);
   } finally {

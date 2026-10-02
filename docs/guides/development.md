@@ -67,8 +67,11 @@ the scale suite alone took about 75 seconds in the last acceptance run.
 | `E2E_MAX_NEW_MS`        | 3000    | limit for `imp new` plus the first exec                  |
 | `E2E_MAX_CHECKPOINT_MS` | 500     | limit for a checkpoint of a running imp, as impd logs it |
 
-The scale suite needs the budget plus 2 GiB of free host memory. On a smaller machine, lower the
-budget and the count, for example `E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`.
+The scale suite needs the budget plus 2 GiB of free host memory, and free disk on the data volume
+for a memory snapshot of each imp (count × memory). It restarts the instance with a 600 s idle
+timeout, so the RAM governor, not idleness, decides which imps sleep; the suites after it keep that
+timeout. On a smaller machine, lower the budget and the count, for example
+`E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`.
 
 A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the timings the suites
 measure. A suite file also runs on its own against a running instance:

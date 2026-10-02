@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readRejection } from './read-rejection';
 import { waitFor } from './wait-for';
 
 test('it returns the value of an attempt that succeeds at once', async () => {
@@ -29,7 +30,7 @@ test('it retries until the attempt stops throwing and resolves with its value', 
   expect(value).toBe('done');
 });
 
-test('it names what it waited for and the last failure once the deadline passes', () => {
+test('it names what it waited for and the last failure once the deadline passes', async () => {
   let attempts = 0;
 
   const wait = waitFor(
@@ -41,8 +42,11 @@ test('it names what it waited for and the last failure once the deadline passes'
     { intervalMs: 10, timeoutMs: 80 },
   );
 
-  expect(wait).rejects.toThrowWithMessage(
-    Error,
-    /^timed out after 80 ms waiting for the flaky thing: attempt \d+ failed$/,
+  const error = await readRejection(wait);
+
+  expect(error).toBeInstanceOf(Error);
+
+  expect(String(error)).toMatch(
+    /^Error: timed out after 80 ms waiting for the flaky thing: attempt \d+ failed$/,
   );
 });

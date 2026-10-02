@@ -26,6 +26,7 @@ const ImpRowSchema = z.object({
 const SystemInfoSchema = z.object({
   ramBudgetMib: z.number(),
   ramUsedMib: z.number(),
+  ramReservedMib: z.number(),
   awakeCount: z.number(),
   impCount: z.number(),
   tailscale: z.object({

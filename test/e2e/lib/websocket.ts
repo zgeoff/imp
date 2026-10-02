@@ -52,14 +52,19 @@ function openQueuedSocket(
   const readMessage = async (): Promise<Message> => {
     if (queue.length === 0) {
       await new Promise<void>((resolve, reject) => {
+        const wakeReader = (): void => {
+          clearTimeout(timer);
+          resolve();
+        };
+
         const timer = setTimeout(() => {
+          // a later message must not go to a reader that gave up
+          waiters.splice(waiters.indexOf(wakeReader), 1);
+
           reject(new Error(`no WebSocket message from ${url} in ${String(TIMEOUT_MS)} ms`));
         }, TIMEOUT_MS);
 
-        waiters.push(() => {
-          clearTimeout(timer);
-          resolve();
-        });
+        waiters.push(wakeReader);
       });
     }
 
@@ -112,4 +117,15 @@ export function sendAndRead(queued: QueuedSocket, message: string | Uint8Array):
   queued.socket.send(message);
 
   return queued.readMessage();
+}
+
+// throws unless the reply is a binary message
+export async function sendAndReadBinary(queued: QueuedSocket, data: Uint8Array): Promise<Buffer> {
+  const reply = await sendAndRead(queued, data);
+
+  if (typeof reply === 'string') {
+    throw new TypeError(`expected a binary reply, got '${reply}'`);
+  }
+
+  return Buffer.from(reply);
 }

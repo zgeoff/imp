@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import { getThroughProxy } from '../lib/http';
 import { listImageNames, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
@@ -24,6 +25,10 @@ const buildDir = mkdtempSync(join(CACHE_DIR, 'build-'));
 
 afterAll(async () => {
   rmSync(buildDir, { recursive: true, force: true });
+
+  if (config.keep) {
+    return;
+  }
 
   for (const image of [hello, built]) {
     await tryImp(['image', 'rm', image]);

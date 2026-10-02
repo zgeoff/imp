@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
+import { resolveImageName } from '../lib/fixtures';
 import { listCheckpoints, readState, requireImp, runImp, runInImp, tryImp } from '../lib/imp-cli';
 import {
   createImp,
@@ -16,6 +17,7 @@ import { setupSuite } from '../lib/setup-suite';
 import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('checkpoints');
+const TINY = resolveImageName('e2e-tiny');
 const source = `${prefix}src`;
 const fromCheckpoint = `${prefix}fork-cp`;
 const fromLive = `${prefix}fork-live`;
@@ -42,7 +44,7 @@ async function checkInContainer(...argv: readonly string[]): Promise<boolean> {
 }
 
 test('a checkpoint of a running imp restores its disk', async () => {
-  await createImp(source, '--image', 'e2e-tiny', '--memory', '512');
+  await createImp(source, '--image', TINY, '--memory', '512');
   await holdImp(source);
   await writeGuestFile(source, '/root/f', 'v1');
 

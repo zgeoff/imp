@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
 import { config } from '../lib/config';
+import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy, readOkBody, sendImpPortRequest, sendProxyRequest } from '../lib/http';
 import {
   assertState,
@@ -14,12 +16,20 @@ import { createImp, holdImp } from '../lib/imps';
 import { checkFirecrackerRunning } from '../lib/instance';
 import type { MemoryProof } from '../lib/memory-proof';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
+import { readRejection } from '../lib/read-rejection';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
-import { openImpPortSocket, openProxySocket, sendAndRead } from '../lib/websocket';
+import {
+  openImpPortSocket,
+  openProxySocket,
+  sendAndRead,
+  sendAndReadBinary,
+} from '../lib/websocket';
 import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('sleep');
+const BARE = resolveImageName('e2e-bare');
+const WS = resolveImageName('e2e-ws');
 const name = `${prefix}mem`;
 const wsName = `${prefix}ws`;
 
@@ -41,7 +51,7 @@ async function readRamMib(imp: string): Promise<number> {
 }
 
 test('an idle imp sleeps by itself, frees its RAM and an HTTP request wakes it intact', async () => {
-  await createImp(name, '--image', 'e2e-bare', '--memory', '512');
+  await createImp(name, '--image', BARE, '--memory', '512');
 
   proof = await startMemoryProof(name);
 
@@ -197,15 +207,14 @@ test('the proxy answers 404 for an unknown imp and 502 when nothing listens', as
   await runInImp(name, 'pkill', '-x', 'httpd');
 
   const refused = await sendProxyRequest(name);
-
-  const upgrade = openProxySocket(name);
+  const upgradeError = await readRejection(openProxySocket(name));
 
   expect(refused.status).toBe(502);
-  expect(upgrade).rejects.toThrow(/closed/);
+  expect(String(upgradeError)).toMatch(/closed/);
 });
 
 test('WebSockets relay text and binary both ways, with an early message and a subprotocol', async () => {
-  await createImp(wsName, '--image', 'e2e-ws', '--memory', '512');
+  await createImp(wsName, '--image', WS, '--memory', '512');
 
   await waitFor(`${wsName} to serve HTTP`, async () => {
     const body = await getThroughProxy(wsName);
@@ -218,23 +227,21 @@ test('WebSockets relay text and binary both ways, with an early message and a su
   // the server speaks first; the proxy buffers it while it upgrades
   const greeting = await ws.readMessage();
   const text = await sendAndRead(ws, 'hello');
-  const binary = await sendAndRead(ws, new Uint8Array([0, 1, 254, 255]));
+  const binary = await sendAndReadBinary(ws, new Uint8Array([0, 1, 254, 255]));
 
   expect(ws.socket.protocol).toBe('e2e.v1');
   expect(greeting).toBe('hello');
   expect(text).toBe('echo hello');
+  expect([...binary]).toEqual([...new TextEncoder().encode('echo '), 0, 1, 254, 255]);
 
-  if (!(binary instanceof ArrayBuffer)) {
-    throw new TypeError(`expected a binary reply, got '${binary}'`);
+  // a 16-bit and a 64-bit frame length, as RFC 6455 encodes them
+  for (const size of [1000, 100 * 1024]) {
+    const payload = randomBytes(size);
+
+    const reply = await sendAndReadBinary(ws, payload);
+
+    expect(reply).toEqual(Buffer.concat([Buffer.from('echo '), payload]));
   }
-
-  expect([...new Uint8Array(binary)]).toEqual([
-    ...new TextEncoder().encode('echo '),
-    0,
-    1,
-    254,
-    255,
-  ]);
 
   ws.socket.close();
 

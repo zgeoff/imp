@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy } from '../lib/http';
 import {
   assertState,
@@ -18,6 +19,8 @@ import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('restart');
+const TINY = resolveImageName('e2e-tiny');
+const BARE = resolveImageName('e2e-bare');
 const disk = `${prefix}disk`;
 const mem = `${prefix}mem`;
 const stopped = `${prefix}stopped`;
@@ -59,7 +62,7 @@ async function listAwakeImps(): Promise<readonly string[]> {
 }
 
 test('setup: a running imp with a checkpoint, a sleeping imp and a stopped imp', async () => {
-  await createImp(disk, '--image', 'e2e-tiny', '--memory', '512');
+  await createImp(disk, '--image', TINY, '--memory', '512');
   await holdImp(disk);
   await writeGuestFile(disk, '/root/f', 'r1');
   await runImp('checkpoint', disk, 'r1');
@@ -67,14 +70,14 @@ test('setup: a running imp with a checkpoint, a sleeping imp and a stopped imp',
 
   diskBootId = await runShellInImp(disk, BOOT_ID);
 
-  await createImp(mem, '--image', 'e2e-bare', '--memory', '512');
+  await createImp(mem, '--image', BARE, '--memory', '512');
 
   proof = await startMemoryProof(mem);
 
   // the idle sleeper may get there first
   await tryImp(['sleep', mem]);
   await waitFor(`${mem} to sleep`, () => assertState(mem, 'sleeping'));
-  await createImp(stopped, '--image', 'e2e-tiny', '--memory', '512');
+  await createImp(stopped, '--image', TINY, '--memory', '512');
   await runImp('stop', stopped);
 });
 
