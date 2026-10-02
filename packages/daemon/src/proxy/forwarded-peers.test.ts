@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
-import { PEER_HEADER, createForwardedPeers, readPeerAddress } from './forwarded-peers';
+import {
+  PEER_HEADER,
+  createForwardedPeers,
+  isCallerPath,
+  readPeerAddress,
+} from './forwarded-peers';
 
 function buildRequest(handle: string | null): Request {
   return new Request('http://imp.example.com/rpc/system/info', {
@@ -29,4 +34,16 @@ test('a forged or expired handle gives the socket’s own address', () => {
 
   expect(readPeerAddress(buildRequest(handle), '::ffff:127.0.0.1', peers)).toBe('::ffff:127.0.0.1');
   expect(readPeerAddress(buildRequest(null), null, peers)).toBeNull();
+});
+
+test('only /rpc, /exec and /tunnel resolve a caller', () => {
+  expect(['/rpc/imps/list', '/exec', '/tunnel'].map((path) => isCallerPath(path))).toEqual([
+    true,
+    true,
+    true,
+  ]);
+
+  expect(['/ui/', '/health', '/rpcx', '/exec/x', '/'].some((path) => isCallerPath(path))).toBe(
+    false,
+  );
 });

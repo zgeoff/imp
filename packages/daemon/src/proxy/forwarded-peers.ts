@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { EXEC_PATH, TUNNEL_PATH } from '@imp/api';
 
 // The wake proxy hands impd's API the client's address in-process, not in a
 // forwarded header a client could write: it sends a random handle that the
@@ -46,6 +47,12 @@ export function createForwardedPeers(now: () => number): ForwardedPeers {
       return entry === undefined || entry.expiresAt <= now() ? null : entry.address;
     },
   };
+}
+
+// The paths where the API resolves a caller, so where a handle is redeemed;
+// a handle for any other path would only crowd out live ones
+export function isCallerPath(pathname: string): boolean {
+  return pathname.startsWith('/rpc/') || pathname === EXEC_PATH || pathname === TUNNEL_PATH;
 }
 
 // The client's address: the socket's own, or, when the socket is the wake

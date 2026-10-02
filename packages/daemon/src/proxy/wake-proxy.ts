@@ -10,7 +10,7 @@ import { createSemaphore } from '../imps/semaphore';
 import { deriveSlotAddress } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
-import { PEER_HEADER } from './forwarded-peers';
+import { PEER_HEADER, isCallerPath } from './forwarded-peers';
 import type { ForwardedPeers } from './forwarded-peers';
 import { parseHostName } from './parse-host-name';
 
@@ -209,7 +209,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
 
     const client = server.requestIP(request)?.address;
 
-    if (options.toApi && client !== undefined) {
+    if (options.toApi && client !== undefined && isCallerPath(url.pathname)) {
       upstreamHeaders.set(PEER_HEADER, deps.peers.register(client));
     }
 
