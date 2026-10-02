@@ -21,7 +21,15 @@ import { buildImagePaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
-const ROOTFS_SIZE = '32G';
+const GIB = 1024 ** 3;
+
+// An image's ext4 holds its files and room to spare; each imp disk grows past
+// it (docs/architecture/storage.md#disk-sizes)
+const ROOTFS_MIN_BYTES = 4 * GIB;
+const ROOTFS_SPARE_BYTES = 2 * GIB;
+
+// mkfs.ext4's default: one inode per 16 KiB
+const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 const SEED_REF = 'ubuntu:24.04';
 const InspectSchema = z.array(z.object({ Id: z.string(), Config: z.unknown() })).length(1);
@@ -104,12 +112,28 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         JSON.stringify(buildImageRuntimeConfig(ociConfig)),
       );
 
+      const usage = await readTreeUsage(root);
+
+      const plan = planRootfs(usage);
+
       // the backend gives the directory: on ZFS it is a dataset of its own
       await deps.storage.createImage(digest, async (dir) => {
         const image = join(dir, 'rootfs.ext4');
 
-        await runChecked(['truncate', '-s', ROOTFS_SIZE, image]);
-        await runChecked(['mkfs.ext4', '-q', '-F', '-L', 'imp-root', '-d', root, image]);
+        await runChecked(['truncate', '-s', String(plan.bytes), image]);
+
+        // the default features keep resize_inode, which an online grow needs
+        await runChecked([
+          'mkfs.ext4',
+          '-q',
+          '-F',
+          '-L',
+          'imp-root',
+          ...(plan.inodes === null ? [] : ['-N', String(plan.inodes)]),
+          '-d',
+          root,
+          image,
+        ]);
 
         writeFileSync(join(dir, 'config.json'), JSON.stringify(ociConfig ?? {}, null, 2));
       });
@@ -262,6 +286,42 @@ function assertImageRef(ref: string): void {
       message: `invalid image reference ${JSON.stringify(ref)}`,
     });
   }
+}
+
+interface RootfsPlan {
+  readonly bytes: number;
+
+  // null leaves mkfs.ext4 its default count
+  readonly inodes: number | null;
+}
+
+// The rootfs size for a tree: its bytes and a fifth more, plus 2 GiB, in
+// whole GiB and at least 4 GiB. A tree of many small files gets twice its
+// inode count, since a grow adds inodes only in proportion to the size.
+export function planRootfs(tree: Readonly<{ bytes: number; inodes: number }>): RootfsPlan {
+  const wanted = Math.ceil((tree.bytes * 1.2 + ROOTFS_SPARE_BYTES) / GIB) * GIB;
+  const bytes = Math.max(ROOTFS_MIN_BYTES, wanted);
+  const inodes = tree.inodes * 2;
+
+  return { bytes, inodes: inodes > bytes / BYTES_PER_INODE ? inodes : null };
+}
+
+// bytes on disk and files in the unpacked image
+async function readTreeUsage(root: string): Promise<{ bytes: number; inodes: number }> {
+  const bytes = await runChecked(['du', '-s', '-B1', root]);
+  const inodes = await runChecked(['du', '-s', '--inodes', root]);
+
+  return { bytes: parseDuCount(bytes), inodes: parseDuCount(inodes) };
+}
+
+function parseDuCount(stdout: string): number {
+  const count = Number(stdout.split(/\s/)[0]);
+
+  if (!Number.isSafeInteger(count)) {
+    throw new TypeError(`du printed ${stdout}`);
+  }
+
+  return count;
 }
 
 function readDiskUsage(path: string): number {
