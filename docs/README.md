@@ -17,8 +17,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   restores and forks, and how an OCI image becomes an ext4 disk.
 - [Backups](./architecture/backups.md): restic, what a backup holds, a run on XFS and ZFS, the
   schedule, restores, whole-host restore, and the repository's security.
-- [Networking](./architecture/networking.md): addressing, iptables, the wake proxy, the credential
-  broker's port and the URLs.
+- [Networking](./architecture/networking.md): addressing, iptables, egress, networks, the wake
+  proxy, the credential broker's port and the URLs.
 - [Host contract](./architecture/host-contract.md): what the host under the container must give, the
   two installers, the RAM budget, and who owns the host firewall.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
@@ -44,6 +44,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp` and impd's `/mcp` endpoint, the tools a coding agent
   gets, the guard, and how exec output, timeouts and cancels work.
+- [Private networks](./guides/networks.md): `imp net`, which imps reach which, and the
+  `<imp>.<network>.internal` names.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
 - [Reverse forwards](./guides/reverse-forwards.md): `imp proxy --reverse`, a socket or a port in an
   imp that reaches one on your machine, and how it lives through sleeps.

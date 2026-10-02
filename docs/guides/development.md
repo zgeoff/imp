@@ -52,6 +52,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                                               |
 | `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token                     |
 | `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                                      |
+| `networks`    | two imps on a network across open and box, names, a peer DNS port, a reset on leave                                                           |
 | `ipv6`        | a /128 per imp, NAT66 and a routed /64, policies over IPv6, packet-too-big, a guest's router advertisement                                    |
 | `cpu`         | CPU limits: half a core holds a busy guest, again after a sleep and a wake, `imp set` at once, `imp top`, `docker exec` after the cgroup move |
 | `templates`   | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm                          |
