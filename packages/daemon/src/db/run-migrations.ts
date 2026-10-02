@@ -56,6 +56,55 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // the credential broker: secrets, grants, the audit log, and the egress
+  // policy for hosts no grant covers
+  '003_add_broker': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('egress_policy', 'text', (c) => c.notNull().defaultTo('open'))
+        .execute();
+
+      await db.schema
+        .createTable('secrets')
+        .addColumn('name', 'text', (c) => c.primaryKey())
+        .addColumn('kind', 'text', (c) => c.notNull())
+        .addColumn('rules', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable('grants')
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addColumn('secret_name', 'text', (c) =>
+          c.notNull().references('secrets.name').onDelete('cascade'),
+        )
+        .addPrimaryKeyConstraint('grants_pk', ['imp_id', 'secret_name'])
+        .execute();
+
+      await db.schema
+        .createTable('broker_audit')
+        .addColumn('id', 'integer', (c) => c.primaryKey().autoIncrement())
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addColumn('secret_name', 'text', (c) => c.notNull())
+        .addColumn('at', 'integer', (c) => c.notNull())
+        .addColumn('method', 'text', (c) => c.notNull())
+        .addColumn('host', 'text', (c) => c.notNull())
+        .addColumn('path', 'text', (c) => c.notNull())
+        .addColumn('status', 'integer', (c) => c.notNull())
+        .addColumn('request_bytes', 'integer', (c) => c.notNull())
+        .addColumn('response_bytes', 'integer', (c) => c.notNull())
+        .addColumn('duration_ms', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createIndex('broker_audit_imp_id')
+        .on('broker_audit')
+        .columns(['imp_id', 'id'])
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

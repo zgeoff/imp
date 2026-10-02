@@ -86,6 +86,46 @@ export function deriveSlotAddress(slot: number, plan: SlotPlan): SlotAddress {
   };
 }
 
+// A dotted IPv4 address as a number, or null for anything else (IPv6
+// included). Node writes an IPv4 peer of a dual-stack socket as
+// ::ffff:a.b.c.d; pass `allowMapped` to read that form as IPv4.
+export function parseIpv4(text: string, allowMapped = false): number | null {
+  const plain = allowMapped && text.startsWith('::ffff:') ? text.slice('::ffff:'.length) : text;
+  const parts = plain.split('.');
+
+  if (parts.length !== 4 || !parts.every((part) => isDecimal(part))) {
+    return null;
+  }
+
+  const octets = parts.map(Number);
+
+  if (octets.some((octet) => octet > 255)) {
+    return null;
+  }
+
+  return octets.reduce((acc, octet) => acc * 256 + octet, 0);
+}
+
+// The slot whose /30 holds both ends of a connection: the guest end as the
+// peer and the host end as the local address. Null when they are not one
+// slot's pair, as when a guest dials another slot's gateway.
+export function findPeerSlot(peer: string, local: string, subnet: Subnet): number | null {
+  const peerIp = parseIpv4(peer, true);
+  const localIp = parseIpv4(local, true);
+
+  if (peerIp === null || localIp === null) {
+    return null;
+  }
+
+  const offset = peerIp - subnet.network;
+
+  if (offset < 0 || offset >= 2 ** (32 - subnet.prefixLength) || offset % SLOT_SIZE !== 2) {
+    return null;
+  }
+
+  return localIp === peerIp - 1 ? (offset - 2) / SLOT_SIZE : null;
+}
+
 function isDecimal(text: string): boolean {
   return /^\d{1,3}$/.test(text);
 }

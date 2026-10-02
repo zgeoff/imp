@@ -103,6 +103,7 @@ export function createFakeImpd(): FakeImpd {
       hold: os.imps.hold.handler((context) => findImp(context.input.name)),
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
+        https: null,
         tailnet: null,
       })),
       fork: os.imps.fork.handler((context) => {
@@ -189,6 +190,23 @@ export function createFakeImpd(): FakeImpd {
 
         return {};
       }),
+    },
+
+    // the dashboard shows no secrets yet
+    secrets: {
+      add: os.secrets.add.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      list: os.secrets.list.handler(() => []),
+      delete: os.secrets.delete.handler(() => ({})),
+    },
+    grants: {
+      add: os.grants.add.handler(() => ({})),
+      delete: os.grants.delete.handler(() => ({})),
+      list: os.grants.list.handler(() => []),
+    },
+    audit: {
+      list: os.audit.list.handler(() => []),
     },
     system: {
       info: os.system.info.handler(() => fake.info),

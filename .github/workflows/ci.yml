@@ -92,6 +92,10 @@ jobs:
       - name: Test
         run: bun test
 
+      # the ACME issuer against Pebble and challtestsrv in Docker
+      - name: Test ACME
+        run: bun run test:pebble
+
       # its own run: the component tests register a DOM that must not reach
       # the daemon's tests (bunfig.toml pathIgnorePatterns)
       - name: Test Dashboard

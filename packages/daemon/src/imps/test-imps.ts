@@ -1,9 +1,13 @@
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { createBroker } from '../broker/broker-service';
+import type { InstallBundle } from '../broker/guest-trust';
+import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
@@ -58,6 +62,15 @@ interface ImpTestOptions {
 
   // sees each log line as impd writes it
   readonly onLog?: (message: string) => void;
+
+  // the broker's CA install into a guest; by default it records the imp's
+  // vsock path and succeeds
+  readonly installBundle?: InstallBundle;
+
+  // where the broker's plain tunnels dial, in place of DNS and its checks;
+  // by default a tunnel is refused, so no test reaches the network
+  readonly resolveTunnelTarget?: (host: string) => Promise<string>;
+  readonly dialTunnel?: (address: string, port: number) => Socket;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -87,6 +100,31 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
   const images = createImageService({ config, db, storage });
+
+  const printTestLog = (message: string): void => {
+    logs.push(message);
+    options.onLog?.(message);
+  };
+
+  // the vsock paths the broker installed its CA through
+  const bundleInstalls: string[] = [];
+
+  const broker = await createBroker({
+    config,
+    db,
+    log: printTestLog,
+    installBundle:
+      options.installBundle ??
+      ((vsockPath) => {
+        bundleInstalls.push(vsockPath);
+
+        return Promise.resolve();
+      }),
+    resolveTunnelTarget:
+      options.resolveTunnelTarget ??
+      ((host) => Promise.reject(new TunnelRefusedError(`${host}: no network in tests`))),
+    ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
+  });
 
   // a system drive file, as setupSystemFiles installs it
   const createSystemDrive = (drive: string): HostIdentity => {
@@ -119,12 +157,10 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         },
         removeTap: () => Promise.resolve(),
       },
-      log: (message) => {
-        logs.push(message);
-        options.onLog?.(message);
-      },
+      log: printTestLog,
       storage,
       now: readClock,
+      readExecEnv: broker.readExecEnv,
     });
   };
 
@@ -147,6 +183,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     logs,
     imps: governed.imps,
     governor: governed.governor,
+    broker,
+    bundleInstalls,
     storage,
     now: readClock,
     advance: (ms: number) => {
@@ -159,6 +197,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     async [Symbol.asyncDispose]() {
       fake.releaseHangs();
 
+      await broker.stop();
       await db.destroy();
 
       rmSync(dataDir, { recursive: true, force: true });
@@ -170,7 +209,7 @@ type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now'>;
+type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now' | 'broker'>;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
 // that calls it without a socket, a no-op freeze and thaw, and `openExec` in
@@ -203,6 +242,7 @@ export function buildTestApp(
     governor: impd.governor,
     checkpoints,
     backups: null,
+    broker: ctx.broker,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,

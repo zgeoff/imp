@@ -2,6 +2,8 @@ import { join } from 'node:path';
 import * as z from 'zod';
 import { loadBackupConfig } from './backup/backup-config';
 import type { BackupConfig } from './backup/backup-config';
+import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
+import type { HttpsConfig } from './https/https-config';
 import { countSlots, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import type { StorageBackendKind } from './storage/storage-backend';
@@ -15,6 +17,8 @@ const EnvSchema = z.object({
   IMP_API_PORT: PortSchema.default(7070),
   IMP_PROXY_PORT: PortSchema.default(7080),
   IMP_PORT_BASE: PortSchema.default(20_000),
+  IMP_BROKER_PORT: PortSchema.default(7081),
+  IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
@@ -33,6 +37,7 @@ const EnvSchema = z.object({
   TAILSCALE_AUTHKEY: z.string().optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
   IMP_DASHBOARD_DIR: z.string().optional(),
+  ...HttpsEnvSchema.shape,
 });
 
 export interface Config {
@@ -40,6 +45,13 @@ export interface Config {
   readonly apiPort: number;
   readonly proxyPort: number;
   readonly portBase: number;
+
+  // the credential broker's port on every guest's gateway address
+  readonly brokerPort: number;
+
+  // tests only: a file of fake upstreams for granted hosts
+  // (broker/test-upstreams.ts)
+  readonly brokerTestUpstreams: string | null;
   readonly ramBudgetMib: number;
   readonly idleTimeoutS: number;
 
@@ -83,6 +95,10 @@ export interface Config {
 
   // off-host backups with restic; null when IMP_BACKUP_REPOSITORY is unset
   readonly backup: BackupConfig | null;
+
+  // imps at https://<name>.<domain> (docs/guides/https.md); null without
+  // IMP_DOMAIN
+  readonly https: HttpsConfig | null;
 }
 
 function splitList(value: string): string[] {
@@ -113,6 +129,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     apiPort: parsed.IMP_API_PORT,
     proxyPort: parsed.IMP_PROXY_PORT,
     portBase: parsed.IMP_PORT_BASE,
+    brokerPort: parsed.IMP_BROKER_PORT,
+    brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,
     idleCpuPercent: parsed.IMP_IDLE_CPU_PERCENT,
@@ -134,5 +152,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
     backup: loadBackupConfig(present),
+    https: parseHttpsConfig(parsed),
   };
 }

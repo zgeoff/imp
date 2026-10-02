@@ -20,6 +20,13 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import {
+  auditCommand,
+  grantCommand,
+  grantsCommand,
+  revokeCommand,
+  secretCommand,
+} from './commands/secrets';
 import { attachCommand, sessionsCommand } from './commands/sessions';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
@@ -53,6 +60,11 @@ export const mainCommand = defineCommand({
     fork: forkCommand,
     backup: backupCommand,
     image: imageCommand,
+    secret: secretCommand,
+    grant: grantCommand,
+    revoke: revokeCommand,
+    grants: grantsCommand,
+    audit: auditCommand,
     info: infoCommand,
     mcp: mcpCommand,
     login: loginCommand,

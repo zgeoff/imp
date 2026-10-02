@@ -26,6 +26,7 @@ import {
 } from './lib/instance';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
+import { startPebble, stopPebble } from './lib/pebble';
 import type { FixtureImage } from './lib/suites';
 import { SUITES, buildSuiteArgv } from './lib/suites';
 
@@ -194,6 +195,11 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     await resetInstance();
   } else if (!args.reuse) {
     await runDevScript('down');
+  }
+
+  // before `up`: impd asks Pebble for its certificate as it starts
+  if (args.suites.includes('https')) {
+    await startPebble();
   }
 
   await runDevScript('up');
@@ -444,6 +450,10 @@ async function main(): Promise<number> {
     if (!args.keep) {
       await removeLeftovers();
     }
+  }
+
+  if (args.suites.includes('https')) {
+    await stopPebble();
   }
 
   writeResults(sections);

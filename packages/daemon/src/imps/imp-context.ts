@@ -1,4 +1,5 @@
 import type { Config } from '../config';
+import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
@@ -43,6 +44,10 @@ export interface ImpServiceDeps {
   // the clock holds and RAM reservations are judged by; Date.now by default,
   // so tests can move it
   readonly now?: () => number;
+
+  // `KEY=VALUE` entries every exec in the imp starts with, under the
+  // caller's own: the credential broker's proxy and CA variables
+  readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -60,6 +65,7 @@ export interface ImpContext {
   readonly readRssMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly now: () => number;
+  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
   readonly identity: HostIdentity;
   readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
@@ -84,6 +90,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readRssMib: deps.readRssMib ?? readRssMib,
     readTailnetHostname: deps.readTailnetHostname,
     now: deps.now ?? Date.now,
+    readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     identity: deps.identity,
     emitChanged: () => {
       deps.onImpsChanged?.();

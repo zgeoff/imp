@@ -26,6 +26,15 @@
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
 #      IMP_STORAGE_BACKEND=zfs with IMP_ZFS_ROOT runs on a ZFS dataset instead
 #      of the XFS file (scripts/zfs-host-test.sh; the host needs the module).
+#      IMP_BROKER_PORT moves the credential broker. A dev instance always reads
+#      <IMP_DEV_DATA>/broker-test-upstreams.json when it exists: the fake
+#      upstreams the connectors suite puts in for granted hosts.
+#      HTTPS (docs/guides/https.md) passes through the same way: IMP_DOMAIN,
+#      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
+#      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
+#      repo. IMP_DNS_API_TOKEN, a secret, goes in .env like TAILSCALE_AUTHKEY.
+#      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
+#      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
 #      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
 #      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
 #      AWS_* keys, so this shell's own AWS_* never reach the container.
@@ -41,7 +50,9 @@ api=http://localhost:$((7070 + offset))
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
   IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
-  IMP_STORAGE_BACKEND IMP_ZFS_ROOT IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
+  IMP_STORAGE_BACKEND IMP_ZFS_ROOT
+  IMP_DOMAIN IMP_DNS_PROVIDER IMP_DNS_API_URL IMP_ACME_DIRECTORY IMP_ACME_EMAIL IMP_HTTPS_PORT
+  IMP_HTTP_PORT IMP_E2E IMP_BROKER_PORT IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
   IMP_BACKUP_INTERVAL_S IMP_BACKUP_KEEP IMP_BACKUP_FORGET IMP_BACKUP_CPUS IMP_BACKUP_MEMORY_MIB)
 
 # in_container PATH maps a path under the repo to its /src path.
@@ -122,6 +133,11 @@ up() {
     for var in "${tuning_vars[@]}"; do
       [ -n "${!var:-}" ] && tuning+=(-e "$var=${!var}")
     done
+    if [ -n "${IMP_ACME_CA_FILE:-}" ]; then
+      tuning+=(-e "IMP_ACME_CA_FILE=$(in_container "$IMP_ACME_CA_FILE")")
+    fi
+    local network=()
+    [ -n "${IMP_DEV_NETWORK:-}" ] && network=(--network "$IMP_DEV_NETWORK")
     # The repo is also mounted at its own path, so `imp image build <dir>`
     # paths the CLI resolves on this machine exist in the container.
     # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
@@ -129,7 +145,7 @@ up() {
     # a fixed hostname: restic counts a lock stale at once only when it
     # holds this host's name and a dead pid
     docker run -d --name "$name" --hostname "$name" --init --privileged --device /dev/kvm \
-      --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" \
+      --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" "${network[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \
       -p $((7070 + offset)):7070 -p $((7080 + offset)):7080 \
@@ -139,6 +155,7 @@ up() {
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
+      -e IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json \
       -e IMP_DASHBOARD_DIR=/src/packages/dashboard/dist \
       "$IMP_HOST_IMAGE" >/dev/null
     echo "dev.sh: started $name"
