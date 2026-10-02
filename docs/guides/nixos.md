@@ -58,7 +58,10 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json), the same file
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes
   `/etc/imp/imp-host.env` (0600), and loads `imageArchive` or pulls `image` when the image is
-  missing. With ZFS, it needs `imp-zfs-dataset.service`.
+  missing. With ZFS, it needs `imp-zfs-dataset.service`. The module and the image must come from the
+  same release: pin `inputs.imp` and `image` (or `imageArchive`) together. The module runs the image
+  without `--privileged`, so an image from before that change
+  ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start, in `setup-storage`.
 - **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
   ([public imps](./https.md#public-imps)). Set `IMP_PUBLIC_IP` in `settings`, and open the ports in

@@ -2,9 +2,9 @@
 
 imp is a self-hosted take on Fly.io Sprites: persistent Linux microVMs that boot in about a second,
 sleep when idle with their memory intact, wake on an HTTP request, and checkpoint, restore and fork
-their disks instantly. One host runs everything. The control plane, impd, lives in one privileged
-container next to the Firecracker processes it starts. Inside each guest, a small Go agent runs as
-PID 1 and talks to impd over vsock.
+their disks instantly. One host runs everything. The control plane, impd, lives in one container
+next to the Firecracker processes it starts. Inside each guest, a small Go agent runs as PID 1 and
+talks to impd over vsock.
 
 This page gives the shape and the main decisions. The other architecture pages go deeper:
 
@@ -24,7 +24,7 @@ This page gives the shape and the main decisions. The other architecture pages g
  browser/curl ──HTTP─────┤
  ssh/scp/sftp ──SSH──────┤
                          ▼
- ┌──────────── imp host container (privileged, own netns) ────────────┐
+ ┌──────────── imp host container (root, own netns) ──────────────────┐
  │  impd (bun)                                                        │
  │   ├─ rpc        oRPC router (control) + WebSocket (exec streams)   │
  │   ├─ proxy      wake-on-request HTTP/WebSocket proxy               │
@@ -57,8 +57,9 @@ This page gives the shape and the main decisions. The other architecture pages g
 - One Firecracker microVM per imp gives a hardware (KVM) boundary per tenant.
 - Firecracker over QEMU: about 5 MB of VMM overhead against 50–150 MB, fast snapshot and restore,
   and a minimal device model. The cost: no GPU and no virtiofs.
-- The jailer is not used yet. The host container is the outer boundary. Add the jailer before
-  multi-tenant use ([#27](https://github.com/zgeoff/imp/issues/27)).
+- Each Firecracker runs under its jailer, as the imp's own uid in a chroot
+  ([#27](https://github.com/zgeoff/imp/issues/27)). The host container around them is not a security
+  boundary ([privileges](./host-contract.md#privileges)).
 - The guest has no inner container yet. Fly runs user code in a container inside the VM, so the
   agent survives a user who breaks PID 1 or runs `rm -rf /`. imp runs user code next to the agent.
   That risk is accepted for a personal platform ([#28](https://github.com/zgeoff/imp/issues/28)).
@@ -67,11 +68,13 @@ This page gives the shape and the main decisions. The other architecture pages g
   same kernel layout, so a kernel exploit needs no address leak. Imps restored from one
   [boot template](./boot-templates.md#accepted-risks) also share the slab freelist seeds.
 
-## Host: one privileged container
+## Host: one container
 
-- impd, Firecracker and tailscaled run in one container, started with
-  `--privileged --device /dev/kvm` and its **own** network namespace. Taps, routes and iptables
-  never touch the host's network. The same image runs on bare metal.
+- impd, Firecracker and tailscaled run in one container, started without `--privileged`: it gets
+  only the capabilities, devices and sysctls it uses ([privileges](./host-contract.md#privileges)),
+  and its **own** network namespace. That stops accidents, not an escape: root in it can still
+  become root on the host. Taps, routes and iptables never touch the host's network. The same image
+  runs on bare metal.
 - The host Docker socket is mounted, so impd can build and export OCI images.
 - Data lives in `/var/lib/imp`, backed by a host bind mount
   ([storage](./storage.md#the-data-directory)).

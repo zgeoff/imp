@@ -1,7 +1,8 @@
 #!/bin/bash
 # Check that this machine can boot Firecracker guests: the CPU exposes
 # hardware virtualization and /dev/kvm opens for read and write. The host
-# container runs privileged as root, so root opening the device is enough.
+# container runs as root with /dev/kvm passed in, so root opening the device
+# is enough.
 #
 #   scripts/check-kvm.sh
 #
