@@ -115,6 +115,11 @@ To move a key from `authorized_keys` to a token: delete its line, then bind it. 
 moved, `IMP_SSH_AUTHORIZED_KEYS=false` turns the file off: impd then reads it only to refuse
 bindings, and only bound keys log in.
 
+> **CAUTION:** A token with a key that `authorized_keys` also lists cannot be deleted, and that key
+> cannot be unbound, until the line is gone: `imp token rm` fails with `CONFLICT` and names the key.
+> To revoke such a token at once, delete the key's line from `authorized_keys` first, then run
+> `imp token rm`. Until then, the token's secret and its keys keep working.
+
 ## What works
 
 | Request                              | What happens                                                                                        |
