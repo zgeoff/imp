@@ -619,13 +619,6 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     } catch (error) {
       await removeStaged(header.imp.name, header.imp.id);
 
-      // the ticket streams once: its slot is free for the next imp
-      await deps.db
-        .updateTable('move_tickets')
-        .set({ slot: null })
-        .where('id', '=', row.id)
-        .execute();
-
       throw error;
     } finally {
       rmSync(temp, { force: true });
@@ -780,6 +773,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       const failure = error instanceof Error ? error : new Error(String(error));
 
       pipe.fail(failure);
+
+      // the ticket streams once, so a refused header or a failed stream
+      // gives up its slot now, abort or not
+      await deps.db
+        .updateTable('move_tickets')
+        .set({ slot: null })
+        .where('id', '=', row.id)
+        .execute();
 
       return readErrorReply(error, deps.log);
     }

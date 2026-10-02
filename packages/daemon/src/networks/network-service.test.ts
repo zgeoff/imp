@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { listImps } from '../db/imps';
+import { findImpByName, listImps, updateImpMove } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { createNetworkService } from './network-service';
@@ -216,4 +216,16 @@ test("a policy change that mixes a network gets the same warning, for each of th
   ]);
 
   expect(missing).toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('an imp a move marked cannot join a network', async () => {
+  await using ctx = await setupNetwork();
+
+  const imp = await findImpByName(ctx.db, 'web');
+
+  await updateImpMove(ctx.db, imp?.id ?? '', 'sending');
+
+  const refused = await readRejection(ctx.client.networks.join({ network: 'lab', name: 'web' }));
+
+  expect(refused).toMatchObject({ code: 'MOVING' });
 });
