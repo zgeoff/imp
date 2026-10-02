@@ -122,6 +122,9 @@ lock, so two calls never change one imp at once.
   with no live VM is marked `stopped` (or `sleeping`, see above); an imp that was still `creating`
   goes to `error`, and its VM is killed. If the VM does not die, the record keeps its pid for a
   later start or destroy, and impd starts anyway. Sleeping imps stay asleep.
+- **Orphans** (`reconcile-vms.ts`). impd scans `/proc` for Firecracker processes on an imp's API
+  socket. It kills every one the record does not own, adopts the one VM a dead impd left mid-wake,
+  resumes a paused VM of a running imp, and deletes half-written snapshot files.
 
 [Sleep and wake](./sleep-and-wake.md) describes the sleep and wake steps.
 
@@ -155,6 +158,13 @@ Every 2 s the idle loop asks each running imp's agent for its `activity` and rea
 time from `/proc`. It combines that with the host-side counts and any hold. An imp with nothing to
 keep it awake for `IMP_IDLE_TIMEOUT_S` goes to sleep, unless it was held or active again by the time
 the sleep takes its lock.
+
+### watchdog: silent agents
+
+The idle loop feeds the watchdog each agent's answer. An agent silent for `IMP_WATCHDOG_TIMEOUT_S`
+gets one more 5 s ping, then the watchdog acts by `IMP_WATCHDOG_ACTION`: it reports, restarts the
+VM, or writes a snapshot to `<imp>/watchdog/` and restarts. Restarts back off and stop at 3 an hour.
+[Sleep and wake](./sleep-and-wake.md#the-watchdog) has the rules.
 
 ### vmm: Firecracker
 

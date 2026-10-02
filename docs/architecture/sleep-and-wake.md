@@ -12,10 +12,12 @@ Every VM gets a balloon before `InstanceStart`:
 With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
 snapshot is smaller.
 
-To sleep an imp, impd takes the imp's lock. For `imp sleep` and impd's stop, if the guest has been
-up for less than `IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500), impd waits for the rest first
-([young guests](#young-guests)). It reads the RAM the VM owns now, for the next wake's reservation.
-Then it waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8](#4-gotchas)) and:
+To sleep an imp, impd takes the imp's lock and first checks the disk can take the snapshot
+([disk full](#disk-full)). For `imp sleep` and impd's stop, if the guest has been up for less than
+`IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500), impd waits for the rest
+([young guests](#young-guests)). It reads the RAM the VM owns now, for the next wake's reservation,
+and deletes `meta.json`, so no crash from here on can pair the old record with new files. Then it
+waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8](#4-gotchas)) and:
 
 1. Pauses the VM (`PATCH /vm`).
 2. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If the pause or
@@ -27,7 +29,8 @@ Then it waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8
    VM maps it `MAP_PRIVATE` ([gotcha 3](#4-gotchas)).
 5. Deletes `api.sock` and `vsock.sock`, and runs `fallocate --dig-holes` on the mem file. A 2 GiB
    file with 300 MiB in use becomes 381 MiB. A failure here only costs disk.
-6. Writes `meta.json` and sets the state to `sleeping`. The tap stays.
+6. Writes `meta.json`, flushed and renamed into place, and sets the state to `sleeping`. The tap
+   stays. `meta.json` is the snapshot's commit record: without it the files never load.
 
 If Firecracker is gone after a failed sleep, impd drops the snapshot and marks the imp `stopped`.
 
@@ -51,6 +54,15 @@ matters more than a slow wake later. An idle sleep would wait, but an imp idle f
 goes and gives way when the imp turns busy or held, or a request arrives: the imp stays awake and
 the sleep counts as skipped.
 
+### Disk full
+
+A snapshot writes the whole guest memory before `fallocate --dig-holes` shrinks it. So a sleep first
+holds the imp's memory in the [disk budget](./storage.md#disk-budget), before the young-guest wait
+and the pause. When the hold would cut into `IMP_DISK_RESERVE_GIB`, impd does not pause the VM: the
+imp stays awake and `imp sleep` fails with `DISK_FULL`. The idle loop and the governor move on to
+other imps; an admission the disk keeps from making room fails with that `DISK_FULL` instead of
+`RAM_BUDGET_EXCEEDED`. A wake still goes through, so a full disk never strands an imp's work.
+
 ## Wake
 
 1. impd reads `meta.json` and checks it against this host ([snapshot identity](#snapshot-identity)).
@@ -61,7 +73,8 @@ the sleep counts as skipped.
    makes `PUT /snapshot/load` with `resume_vm: true` the first API call.
 5. It pings the agent for up to 10 s, then sends `resumed` with the host time. Without it the guest
    clock is behind by the time asleep.
-6. It sets the state to `running`. Pages then fault in lazily from the mem file.
+6. It sets the state to `running` and deletes `meta.json`: the VM now runs on that memory. Pages
+   then fault in lazily from the mem file.
 
 If the load or the agent fails, impd kills the new Firecracker, drops the snapshot and boots the
 disk cold. The loaded guest may have written the disk, so the snapshot no longer matches it. The imp
@@ -134,6 +147,17 @@ it does not keep the imp off.
   snapshot on disk is newer than the imp's last activity, impd stopped between a sleep's snapshot
   and its record, so the imp is marked `sleeping` and keeps its memory. Sleeping imps stay asleep
   and wake on demand.
+- On start, impd finds every Firecracker on each imp's exact API socket, by its pid file and in
+  `/proc` (a start killed before the pid file leaves none), and settles it under the imp's lock:
+  - A VM its record does not own is killed: a second one on a running imp's socket, one on a stopped
+    imp's, or one on the socket of an imp with no record.
+  - A running imp's VM that a cut sleep left paused (`GET /` says `Paused`) is resumed.
+  - A VM a cut wake left on a sleeping imp is killed if `GET /` says it never loaded, and the
+    snapshot stays. One that loaded gets the rest of the wake: the RAM reservation, the agent's ping
+    and version check, and the guest clock. If any of it fails, the VM is killed and the snapshot
+    dropped, since the guest may have written the disk; the imp boots cold.
+  - Half-written files go: a sleep's `.new` snapshot files, `meta.json.new`, `vm.json.new` and the
+    watchdog slot's.
 
 ## Idle detection
 
@@ -148,6 +172,26 @@ Every 2 s, an imp counts as active when it has any of these:
 
 A headless agent that waits on an LLM API keeps a TCP connection open, so it stays awake. An imp
 with none of these for `IMP_IDLE_TIMEOUT_S` (default 60 s) goes to sleep.
+
+## The watchdog
+
+The idle loop asks every running imp's agent for its `activity` every 2 s. The watchdog counts the
+answers: an agent silent for `IMP_WATCHDOG_TIMEOUT_S` (default 60), that also misses a 5 s ping, is
+reported once in the log, and `imp ls` and the dashboard show it (`agentSilentSince`). An answer
+clears it; so does a lifecycle operation holding the imp, which starts its count over.
+
+Then `IMP_WATCHDOG_ACTION` decides:
+
+| Action             | What impd does                                                                                                                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `report` (default) | Nothing more. The proxy reaches the guest's TCP without the agent, so a deaf agent can still serve.                                                                                             |
+| `restart`          | Kills Firecracker without asking the agent and boots the disk cold. The imp's `coldBootReason` says the watchdog did it.                                                                        |
+| `snapshot`         | First writes the VM's memory to `<imp>/watchdog/` (mode 0700, files 0600), for a post-mortem, then boots cold. One slot per imp, replaced each time; without disk room it restarts without one. |
+
+The slot counts in the disk check, a destroy removes it with the imp's directory, and backups copy
+only disks. The log names its path. Recoveries take the imp's lock with a try-lock, as background
+sleeps do, and back off: the first may run at once, each later one in the hour waits twice as long
+(1 min, then 2), and after three in an hour the watchdog only reports.
 
 ## The RAM governor
 

@@ -51,6 +51,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
 | `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
 | `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                     |
+| `chaos`       | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                        |
 | `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
@@ -93,6 +94,8 @@ Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
 | `E2E_SCALE_FILL_MIB`    | 256     | tmpfs each scale imp fills                               |
 | `E2E_MAX_NEW_MS`        | 3000    | limit for `imp new` plus the first exec                  |
 | `E2E_MAX_CHECKPOINT_MS` | 500     | limit for a checkpoint of a running imp, as impd logs it |
+| `E2E_CHAOS_ROUNDS`      | 8       | fault rounds of the chaos suite                          |
+| `E2E_CHAOS_SEED`        | random  | seed of the chaos suite; the log shows it                |
 
 The scale suite needs the budget plus 2 GiB of free host memory, and free disk on the data volume
 for a memory snapshot of each imp (count × memory). It restarts the instance with a 600 s idle

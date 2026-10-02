@@ -18,7 +18,8 @@ notices. Use `reboot` after a change to `host/`. Data stays in `.data/dev` acros
 
 After a crash (impd or the container killed without a signal), an imp with no live VM comes back
 `stopped` and boots cold on the next use. Its disk is intact; its memory is lost. Sleeping imps stay
-asleep. [Sleep and wake](../architecture/sleep-and-wake.md#restarts) has the details.
+asleep. A VM that the dead impd left behind is adopted or killed, so no imp ends with two.
+[Sleep and wake](../architecture/sleep-and-wake.md#restarts) has the details.
 
 ## Upgrade
 
@@ -98,6 +99,17 @@ measured use, the committed memory of awake imps, and the imp counts.
   `imp sleep` or `imp stop`, or raise the budget.
 
 To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` releases it.
+
+## Disk space and silent agents
+
+A sleep writes the imp's memory to disk. impd refuses the sleep with `DISK_FULL` when the write
+would cut into `IMP_DISK_RESERVE_GIB`; the imp stays awake. Admission fails with `DISK_FULL` too
+when the disk kept impd from sleeping an imp to make RAM room. Free disk on the data volume to clear
+it.
+
+An agent that stops answering for `IMP_WATCHDOG_TIMEOUT_S` shows `agent silent since …` in `imp ls`
+and the dashboard, and impd logs it. Set `IMP_WATCHDOG_ACTION=restart` to boot such an imp cold, or
+`snapshot` to keep its memory in `<imp>/watchdog/` first. Backups skip that folder.
 
 ## Backups
 

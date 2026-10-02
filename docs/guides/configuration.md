@@ -27,6 +27,8 @@ error.
 | `IMP_BOOT_RESERVE_PERCENT`      | `50`                              | The RAM reserved before a cold boot, as a percentage of the imp's memory (1–100).                                                                           |
 | `IMP_WAKE_RESERVE_MIB`          | `256`                             | The least RAM reserved before a wake.                                                                                                                       |
 | `IMP_SLEEP_MIN_GUEST_UPTIME_MS` | `1500`                            | A sleep first waits until the guest has been up this long; `0` turns the wait off ([young guests](../architecture/sleep-and-wake.md#young-guests)).         |
+| `IMP_WATCHDOG_TIMEOUT_S`        | `60`                              | Seconds an agent may stay silent before the [watchdog](../architecture/sleep-and-wake.md#the-watchdog) acts.                                                |
+| `IMP_WATCHDOG_ACTION`           | `report`                          | What the watchdog does then: `report`, `restart` (boot cold), or `snapshot` (keep the memory, then boot cold).                                              |
 | `IMP_DEFAULT_VCPUS`             | `2`                               | vCPUs for `imp new` without `--cpus`.                                                                                                                       |
 | `IMP_DEFAULT_MEMORY_MIB`        | `2048`                            | Memory for `imp new` without `--memory`.                                                                                                                    |
 | `IMP_DEFAULT_DISK_GIB`          | `32`                              | Disk for `imp new` without `--disk`; never less than the image's filesystem.                                                                                |
@@ -163,15 +165,16 @@ With none of them, the dev instance stays off the tailnet. The key reaches Docke
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
-`IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_TAILNET_IDENTITIES`, `IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to
-impd, the `IMP_BACKUP_*` variables, and the HTTPS settings except the token: `IMP_DOMAIN`,
-`IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`,
-`IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the
-container on that Docker network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the
-repository's `AWS_*` keys, so the keys in your own shell never reach the container. Other impd
-variables keep their defaults in the dev container. A ZFS dev instance needs the zfs module on the
-machine; `scripts/zfs-host-test.sh` runs one on a throwaway pool.
+`IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_WATCHDOG_TIMEOUT_S`,
+`IMP_WATCHDOG_ACTION`, `IMP_TAILSCALE_HOSTNAME`, `IMP_TAILNET_IDENTITIES`,
+`IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
+variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
+`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and
+`IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker
+network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
+the keys in your own shell never reach the container. Other impd variables keep their defaults in
+the dev container. A ZFS dev instance needs the zfs module on the machine;
+`scripts/zfs-host-test.sh` runs one on a throwaway pool.
 
 ## CLI
 

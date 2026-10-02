@@ -285,6 +285,7 @@ fails with `DISK_FULL` (HTTP 507), before it touches anything:
 | Write                                 | Estimate                                                                                                                |
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | sleep                                 | the imp's memory: the file is full size until its holes are dug                                                         |
+| watchdog snapshot                     | the imp's memory, as a sleep                                                                                            |
 | image build                           | twice the Docker image: the tree, and the ext4 file from it                                                             |
 | build from an upload                  | its Content-Length (else the upload limit) while the tar arrives, the tar again for Docker's copy, then twice the image |
 | restore from backup                   | twice each file's blocks while restic fetches and writes it (an older manifest: the disk size); twice an image's size   |
