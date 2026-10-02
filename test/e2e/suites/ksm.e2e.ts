@@ -210,39 +210,42 @@ test.skipIf(!KSM_READY)(
     // private and mergeable, so memfd-backed memory would fail here
     expect(new Set(mappings.flat())).toEqual(new Set(['rw-p mg']));
 
+    // before the fill, so no merge of it has begun yet
+    const before = await Promise.all(names.map((name) => readPssMib(name)));
+
     for (const name of names) {
       await runShellInImp(name, FILL);
     }
 
-    const before = await Promise.all(names.map((name) => readPssMib(name)));
-
-    const merged = await waitFor(
+    const merge = await waitFor(
       'KSM to merge the guests',
       async () => {
         const pages = await Promise.all(names.map((name) => readMergingPages(name)));
+        const pss = await Promise.all(names.map((name) => readPssMib(name)));
 
         // most of each guest's fill, in 4 KiB pages
         expect(Math.min(...pages)).toBeGreaterThan((FILL_MIB * 256) / 2);
 
-        return pages;
+        // unmerged, the fills add 2 × FILL_MIB; the shared fill counts half
+        // in each guest, so the sum stays well under that
+        expect(countMib(pss)).toBeLessThan(countMib(before) + 2 * FILL_MIB - FILL_MIB / 2);
+
+        return { merged: pages, after: pss };
       },
       { timeoutMs: 300_000, intervalMs: 2000 },
     );
 
-    const after = await Promise.all(names.map((name) => readPssMib(name)));
     const info = await readInfo();
 
-    writeMetric('ksm_merging_pages', merged);
-    writeMetric('ksm_pss_before_mib', before);
-    writeMetric('ksm_pss_after_mib', after);
+    writeMetric('ksm_merging_pages', merge.merged);
+    writeMetric('ksm_pss_before_fill_mib', before);
+    writeMetric('ksm_pss_after_mib', merge.after);
     writeMetric('ksm_ksmd_cpu_ms', readKsmdCpuMs() - cpuBefore);
     writeMetric('ksm_info', info.ksm);
 
     // a metric until the CI kernel is known to keep the flag (590c03ca6a3f)
     writeMetric('ksm_unmergeable', info.ksm?.unmergeable);
 
-    // the shared fill counts half in each guest
-    expect(countMib(after)).toBeLessThan(countMib(before) - FILL_MIB / 2);
     expect(info.ksm?.headroomMib).toBeGreaterThan(0);
   },
   600_000,
