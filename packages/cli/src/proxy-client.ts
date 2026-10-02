@@ -2,6 +2,10 @@ import { createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import {
   TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_NORMAL,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_CLOSE_RESTARTING,
+  TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_PATH,
   TUNNEL_WINDOW_BYTES,
   TunnelServerMessageSchema,
@@ -29,10 +33,15 @@ export interface Proxy {
   readonly stop: () => void;
 }
 
-// WebSocket close codes the tunnel uses besides TUNNEL_CLOSE_LOST
-const CLOSE_NORMAL = 1000;
-const CLOSE_PROTOCOL = 1008;
-const CLOSE_RESTARTING = 1012;
+// a WebSocket that closed without a handshake: impd is down or unreachable
+const CLOSE_ABNORMAL = 1006;
+
+// one notice for a burst of connections that cannot reach impd: another
+// comes only after this long without a failure
+const UNREACHABLE_QUIET_MS = 5000;
+
+// a local port 0 whose IPv4 port is taken on ::1 tries a new one this often
+const FREE_PORT_TRIES = 5;
 
 // a busy port fails the command; a machine with no IPv6 loopback serves IPv4
 const NO_IPV6_CODES = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT']);
@@ -57,6 +66,15 @@ function buildTunnelUrl(base: string): string {
   return url.toString();
 }
 
+// null for text that is not JSON, which the schema then refuses
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 function readErrorCode(error: unknown): string | null {
   return error instanceof Error && 'code' in error && typeof error.code === 'string'
     ? error.code
@@ -76,9 +94,10 @@ function buildBindError(error: unknown, name: string, forward: Forward): Error {
     );
   }
 
+  // a port below 1024; plus 8000 keeps it recognisable (80 to 8080)
   if (code === 'EACCES') {
     return new Error(
-      `local port ${local} needs privileges; map a port above 1023: imp proxy ${name} 8${remote.padStart(3, '0')}:${remote}`,
+      `local port ${local} needs privileges; map a port above 1023: imp proxy ${name} ${String(forward.local + 8000)}:${remote}`,
     );
   }
 
@@ -90,11 +109,11 @@ function formatClose(code: number): string {
     return 'the connection in the imp was lost';
   }
 
-  if (code === CLOSE_RESTARTING) {
+  if (code === TUNNEL_CLOSE_RESTARTING) {
     return 'impd restarted';
   }
 
-  if (code === CLOSE_PROTOCOL) {
+  if (code === TUNNEL_CLOSE_PROTOCOL) {
     return 'impd broke the tunnel protocol';
   }
 
@@ -118,39 +137,54 @@ function startListener(server: Server, port: number, host: string): Promise<numb
   return listening.promise;
 }
 
+interface StartedForward {
+  readonly port: number;
+  readonly servers: readonly Server[];
+}
+
 // both loopbacks, so `localhost` works whichever address it resolves to
 async function startForward(
   name: string,
   forward: Forward,
   onConnection: (socket: Socket, remote: number) => void,
-): Promise<{ readonly port: number; readonly servers: readonly Server[] }> {
+): Promise<StartedForward> {
   const createListener = (): Server =>
     createServer({ allowHalfOpen: true, pauseOnConnect: true }, (socket) => {
       onConnection(socket, forward.remote);
     });
 
-  const ipv4 = createListener();
-  let port: number;
+  for (let tries = 1; ; tries++) {
+    const ipv4 = createListener();
+    let port: number;
 
-  try {
-    port = await startListener(ipv4, forward.local, '127.0.0.1');
-  } catch (error) {
-    throw buildBindError(error, name, forward);
-  }
-
-  const ipv6 = createListener();
-
-  try {
-    await startListener(ipv6, port, '::1');
-
-    return { port, servers: [ipv4, ipv6] };
-  } catch (error) {
-    if (NO_IPV6_CODES.has(readErrorCode(error) ?? '')) {
-      return { port, servers: [ipv4] };
+    try {
+      port = await startListener(ipv4, forward.local, '127.0.0.1');
+    } catch (error) {
+      throw buildBindError(error, name, forward);
     }
 
-    ipv4.close();
-    throw buildBindError(error, name, { local: port, remote: forward.remote });
+    const ipv6 = createListener();
+
+    try {
+      await startListener(ipv6, port, '::1');
+
+      return { port, servers: [ipv4, ipv6] };
+    } catch (error) {
+      const code = readErrorCode(error) ?? '';
+
+      if (NO_IPV6_CODES.has(code)) {
+        return { port, servers: [ipv4] };
+      }
+
+      ipv4.close();
+
+      // any free port: the next one may be free on ::1 too
+      if (forward.local === 0 && code === 'EADDRINUSE' && tries < FREE_PORT_TRIES) {
+        continue;
+      }
+
+      throw buildBindError(error, name, { local: port, remote: forward.remote });
+    }
   }
 }
 
@@ -161,10 +195,17 @@ interface TunnelTarget {
   readonly port: number;
 }
 
+interface TunnelNotices {
+  readonly writeNotice: (text: string) => void;
+
+  // impd did not answer the WebSocket
+  readonly writeUnreachable: () => void;
+}
+
 // One local TCP connection over its own `/tunnel` WebSocket. The socket
 // stays paused until impd answers `opened`, and pauses again while more than
 // TUNNEL_WINDOW_BYTES of its bytes wait for an ack. Returns a stop.
-function openTunnel(socket: Socket, target: TunnelTarget, io: ProxyIo): () => void {
+function openTunnel(socket: Socket, target: TunnelTarget, notices: TunnelNotices): () => void {
   const ws = new WebSocket(target.url, { headers: { ...target.headers } });
 
   const label = `${target.name}:${String(target.port)}`;
@@ -194,7 +235,7 @@ function openTunnel(socket: Socket, target: TunnelTarget, io: ProxyIo): () => vo
     } else {
       state.reported = true;
 
-      io.writeNotice(`${label}: ${message.code ?? 'error'}: ${message.message}`);
+      notices.writeNotice(`${label}: ${message.code ?? 'error'}: ${message.message}`);
       socket.destroy();
     }
   };
@@ -216,31 +257,35 @@ function openTunnel(socket: Socket, target: TunnelTarget, io: ProxyIo): () => vo
       return;
     }
 
-    const parsed = TunnelServerMessageSchema.safeParse(JSON.parse(String(event.data)));
+    const parsed = TunnelServerMessageSchema.safeParse(parseJson(String(event.data)));
 
     if (parsed.success) {
       handleControl(parsed.data);
     } else {
-      ws.close(CLOSE_PROTOCOL, 'bad message');
+      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
     }
   });
 
   ws.addEventListener('close', (event) => {
-    if (event.code === CLOSE_NORMAL) {
+    if (event.code === TUNNEL_CLOSE_NORMAL) {
       socket.end();
 
       return;
     }
 
-    if (!state.reported) {
-      io.writeNotice(`${label}: ${formatClose(event.code)}`);
+    if (event.code === CLOSE_ABNORMAL) {
+      notices.writeUnreachable();
+    } else if (!state.reported) {
+      notices.writeNotice(`${label}: ${formatClose(event.code)}`);
     }
 
     socket.destroy();
   });
 
   socket.on('data', (chunk: Buffer) => {
-    ws.send(chunk);
+    for (let offset = 0; offset < chunk.byteLength; offset += TUNNEL_MAX_FRAME_BYTES) {
+      ws.send(chunk.subarray(offset, offset + TUNNEL_MAX_FRAME_BYTES));
+    }
 
     state.unacked += chunk.byteLength;
 
@@ -259,7 +304,7 @@ function openTunnel(socket: Socket, target: TunnelTarget, io: ProxyIo): () => vo
 
   socket.on('close', () => {
     if (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN) {
-      ws.close(CLOSE_NORMAL, 'local connection closed');
+      ws.close(TUNNEL_CLOSE_NORMAL, 'local connection closed');
     }
   });
 
@@ -282,7 +327,20 @@ export async function startProxy(
   const tunnels = new Set<() => void>();
 
   const ports: number[] = [];
-  const state = { ready: false };
+  const state = { ready: false, unreachableAt: 0 };
+
+  const notices: TunnelNotices = {
+    writeNotice: io.writeNotice,
+    writeUnreachable: () => {
+      const now = Date.now();
+
+      if (now - state.unreachableAt > UNREACHABLE_QUIET_MS) {
+        io.writeNotice(`could not reach impd at ${config.url}`);
+      }
+
+      state.unreachableAt = now;
+    },
+  };
 
   const target = {
     url: buildTunnelUrl(config.url),
@@ -298,7 +356,7 @@ export async function startProxy(
       return;
     }
 
-    const stopTunnel = openTunnel(socket, { ...target, port: remote }, io);
+    const stopTunnel = openTunnel(socket, { ...target, port: remote }, notices);
 
     tunnels.add(stopTunnel);
 

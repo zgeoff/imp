@@ -1,7 +1,12 @@
 import { afterEach, expect, test } from 'bun:test';
 import { connect, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
-import { TUNNEL_WINDOW_BYTES, TunnelClientMessageSchema } from '@imp/api';
+import {
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_MAX_FRAME_BYTES,
+  TUNNEL_WINDOW_BYTES,
+  TunnelClientMessageSchema,
+} from '@imp/api';
 import type { TunnelServerMessage } from '@imp/api';
 import type { ServerWebSocket } from 'bun';
 import type { CliConfig } from './cli-config';
@@ -13,6 +18,9 @@ const TOKEN = 'proxy-token';
 interface FakeTunnelOptions {
   // a port that answers with this error instead of a connection
   readonly errors?: Readonly<Record<number, TunnelServerMessage>>;
+
+  // a port that answers with text that is not JSON
+  readonly junk?: number;
 
   // false holds every ack, to see the client stop at the window
   readonly ack?: boolean;
@@ -43,6 +51,12 @@ function startFakeTunnel(options: FakeTunnelOptions = {}) {
 
   const openGuest = (ws: ServerWebSocket<FakeTunnelData>, port: number): void => {
     const error = options.errors?.[port];
+
+    if (port === options.junk) {
+      ws.send('not json');
+
+      return;
+    }
 
     if (error !== undefined) {
       sendControl(ws, error);
@@ -91,9 +105,9 @@ function startFakeTunnel(options: FakeTunnelOptions = {}) {
         if (typeof message !== 'string') {
           const guest = ws.data.guest;
 
-          // data before `opened` breaks the protocol
-          if (guest === null) {
-            ws.close(1008, 'data before opened');
+          // data before `opened`, or a frame past the cap, breaks the protocol
+          if (guest === null || message.byteLength > TUNNEL_MAX_FRAME_BYTES) {
+            ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad data');
 
             return;
           }
@@ -341,4 +355,58 @@ test('an error from impd reaches the user and resets the local connection', asyn
   await Bun.sleep(50);
 
   expect(tested.notices).toEqual(['box:9: AGENT_OUTDATED: stop and start the imp']);
+});
+
+test('a message from impd that is not JSON ends only its own tunnel', async () => {
+  const fake = startFakeTunnel({ junk: 9 });
+
+  const guest = await startGuest();
+
+  cleanups.push(() => {
+    void fake.server.stop(true);
+    guest.server.close();
+  });
+
+  const tested = createTestIo();
+
+  const proxy = await startProxy(
+    fake.config,
+    'box',
+    [
+      { local: 0, remote: 9 },
+      { local: 0, remote: guest.port },
+    ],
+    tested.io,
+  );
+
+  cleanups.push(() => {
+    proxy.stop();
+  });
+
+  const junk = await sendRequest('127.0.0.1', proxy.ports[0] ?? 0, new Uint8Array(1)).catch(
+    (error: unknown) => error,
+  );
+
+  const reply = await sendRequest('127.0.0.1', proxy.ports[1] ?? 0, new TextEncoder().encode('ok'));
+
+  expect(String(junk)).toContain('ECONNRESET');
+  expect(reply).toBe('got 2 bytes');
+  expect(tested.notices).toEqual(['box:9: impd broke the tunnel protocol']);
+});
+
+test('connections that cannot reach impd print one notice for the burst', async () => {
+  const tested = createTestIo();
+  const config: CliConfig = { url: 'http://127.0.0.1:1', token: TOKEN, host: null };
+
+  const proxy = await startProxy(config, 'box', [{ local: 0, remote: 80 }], tested.io);
+
+  cleanups.push(() => {
+    proxy.stop();
+  });
+
+  for (let index = 0; index < 3; index++) {
+    await sendRequest('127.0.0.1', proxy.ports[0] ?? 0, new Uint8Array(1)).catch(() => '');
+  }
+
+  expect(tested.notices).toEqual(['could not reach impd at http://127.0.0.1:1']);
 });
