@@ -1,9 +1,9 @@
 import * as z from 'zod';
 import { NameSchema } from './name-schema';
 
-// who made an API call: the bearer token (CLI, SDK, MCP), the dashboard's
-// session cookie or exec ticket, or an ssh login
-export const ApiActorSchema = z.enum(['token', 'dashboard', 'ssh']);
+// who made an API call: a bearer token (CLI, SDK, MCP), the dashboard's
+// session cookie or exec ticket, an ssh login, or a tailnet identity
+export const ApiActorSchema = z.enum(['token', 'dashboard', 'ssh', 'tailnet']);
 
 export type ApiActor = z.infer<typeof ApiActorSchema>;
 
@@ -14,6 +14,10 @@ export const ApiCallSchema = z.object({
   at: z.date(),
   procedure: z.string(),
   actor: ApiActorSchema,
+
+  // the token's name, the ssh key's comment or the tailnet login; absent on
+  // rows from before named tokens
+  actorName: z.string().optional(),
 
   // the imp the call named; it may be gone since
   imp: NameSchema.optional(),
