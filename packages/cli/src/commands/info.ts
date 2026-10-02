@@ -24,7 +24,7 @@ export const infoCommand = defineCommand({
         ['boot status', formatBootStatus(info.bootStatus, info.version)],
         [
           'ram',
-          `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed)`,
+          `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed${formatSleeping(info.ramSleepingMib)})`,
         ],
         ['firecracker', info.firecrackerVersion ?? 'unknown'],
         [
@@ -72,6 +72,11 @@ function formatPublic(info: SystemInfo['public']): string {
   }
 
   return `${String(info.imps)} imps at ${info.ip}, ${state}`;
+}
+
+// what sleeping imps take back on a wake; nothing from an impd before it
+function formatSleeping(mib: number | undefined): string {
+  return mib === undefined ? '' : `, ${String(mib)} asleep`;
 }
 
 function formatGib(bytes: number): string {
