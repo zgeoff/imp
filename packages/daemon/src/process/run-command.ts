@@ -10,6 +10,9 @@ interface CommandOptions {
 
   // a file the child reads as stdin; none by default
   readonly stdinFile?: string;
+
+  // kills the child when it aborts
+  readonly signal?: AbortSignal;
 }
 
 // Runs argv to completion and captures its output; never throws on a
@@ -23,6 +26,7 @@ export async function runCommand(
     stdout: 'pipe',
     stderr: 'pipe',
     ...(options.env !== undefined && { env: { ...options.env } }),
+    ...(options.signal !== undefined && { signal: options.signal }),
   });
 
   const [stdout, stderr, exitCode] = await Promise.all([

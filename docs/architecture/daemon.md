@@ -338,10 +338,10 @@ a new imp. [Storage](./storage.md#checkpoints-restores-and-forks) covers the fil
 The image service turns an OCI image into a sparse ext4 rootfs, once per image ID. It runs
 `docker build` for `imp image build`, on a context the client uploaded or a directory on the host.
 The build route streams an upload to a temp file, checks its size as the bytes come, holds disk room
-for it, and lets 4 builds run at once. It checks the caller and writes the audit row itself, as the
-router does for an oRPC call. For `imp image add` it uses the image the host Docker has, and pulls
-it when it is missing. Then it exports the filesystem and writes the image config for the agent.
-When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
+for it, and lets 4 builds run at once. A client that goes kills its build. It checks the caller and
+writes the audit row itself, as the router does for an oRPC call. For `imp image add` it uses the
+image the host Docker has, and pulls it when it is missing. Then it exports the filesystem and
+writes the image config for the agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
 ### storage: the data layout

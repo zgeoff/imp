@@ -50,11 +50,13 @@ export interface ImageService {
     dockerfile?: string,
   ) => Promise<ImageRecord>;
 
-  // a context the client uploaded: a tar file docker build reads on stdin
+  // a context the client uploaded: a tar file docker build reads on stdin;
+  // `signal` aborts when the client goes, and kills the build
   readonly buildImageFromContext: (
     tarPath: string,
     name: string,
-    dockerfile?: string,
+    dockerfile: string | undefined,
+    signal: AbortSignal,
   ) => Promise<ImageRecord>;
   readonly listImages: () => Promise<ImageRecord[]>;
   readonly removeImage: (name: string) => Promise<void>;
@@ -287,7 +289,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     // a fixed argv: nothing from the client but the tag's name and the
     // Dockerfile's path in the context, both validated by the API schemas
-    buildImageFromContext: async (tarPath, name, dockerfile) => {
+    buildImageFromContext: async (tarPath, name, dockerfile, signal) => {
       const tag = `imp/${NameSchema.parse(name)}:latest`;
       const tarBytes = statSync(tarPath).size;
 
@@ -306,8 +308,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       // docker keeps its own copy of the context while it builds
       const result = await deps.diskBudget.withRoom(tarBytes, () =>
-        runCommand(argv, { stdinFile: tarPath }),
+        runCommand(argv, { stdinFile: tarPath, signal }),
       );
+
+      // nobody waits for the image: the build was killed, or its tag is left
+      signal.throwIfAborted();
 
       // the client's Dockerfile failed: its output is the client's to read
       if (result.exitCode !== 0) {

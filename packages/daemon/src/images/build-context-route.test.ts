@@ -33,14 +33,27 @@ async function setupTest(options: TestOptions = {}) {
 
   const calls: BuildCall[] = [];
 
+  // builds stopped because their client went
+  const stopped: string[] = [];
+
   const writeBuildCall: ImageService['buildImageFromContext'] = async (
     tarPath,
     name,
     dockerfile,
+    signal,
   ) => {
     calls.push({ bytes: readFileSync(tarPath, 'utf8'), name, dockerfile });
 
-    await options.gate;
+    const gone = Promise.withResolvers<void>();
+
+    signal.addEventListener('abort', () => {
+      stopped.push(name);
+      gone.resolve();
+    });
+
+    await Promise.race([options.gate, gone.promise]);
+
+    signal.throwIfAborted();
 
     return createImage(harness.db, {
       name,
@@ -58,12 +71,14 @@ async function setupTest(options: TestOptions = {}) {
     body: string | ReadableStream<Uint8Array>,
     token = TEST_TOKEN,
     headers: Readonly<Record<string, string>> = {},
+    signal: AbortSignal | null = null,
   ): Promise<Response> =>
     root.app.handle(
       new Request(`http://impd.test${IMAGE_BUILD_PATH}?${query}`, {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, ...headers },
         body,
+        signal,
       }),
     );
 
@@ -108,6 +123,7 @@ async function setupTest(options: TestOptions = {}) {
   return {
     harness,
     calls,
+    stopped,
     sendBuild,
     readStatus,
     createToken,
@@ -247,6 +263,37 @@ test('a fifth build while four upload or run gets 429', async () => {
   const sixth = await ctx.readStatus('name=web6', 'tar');
 
   expect(sixth).toBe(200);
+});
+
+test('a client that goes mid-build stops the build, frees its slot and its file', async () => {
+  const gate = Promise.withResolvers<void>();
+
+  await using ctx = await setupTest({ gate: gate.promise });
+
+  const clients = [1, 2, 3, 4].map(() => new AbortController());
+
+  const builds = clients.map((client, n) =>
+    ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, {}, client.signal),
+  );
+
+  while (ctx.calls.length < 4) {
+    await Bun.sleep(1);
+  }
+
+  for (const client of clients) {
+    client.abort();
+  }
+
+  await Promise.allSettled(builds);
+
+  expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
+  expect(ctx.listUploads()).toEqual([]);
+
+  gate.resolve();
+
+  const next = await ctx.readStatus('name=web', 'tar');
+
+  expect(next).toBe(200);
 });
 
 test('a failed build answers its error and removes the upload', async () => {

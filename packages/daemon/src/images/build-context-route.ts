@@ -65,7 +65,14 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       return await deps.diskBudget.withRoom(limitBytes, async () => {
         await writeBody(request, tarPath, limitBytes, deps.config.buildContextMaxBytes);
 
-        return deps.images.buildImageFromContext(tarPath, query.name, query.dockerfile);
+        request.signal.throwIfAborted();
+
+        return deps.images.buildImageFromContext(
+          tarPath,
+          query.name,
+          query.dockerfile,
+          request.signal,
+        );
       });
     } finally {
       running.count -= 1;
@@ -113,7 +120,8 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
 
         return Response.json(toApi(image));
       } catch (error) {
-        if (!(error instanceof ORPCError)) {
+        // a client that went is in the audit, not the log
+        if (!(error instanceof ORPCError) && !request.signal.aborted) {
           console.error('impd: image build from an upload failed:', error);
         }
 
