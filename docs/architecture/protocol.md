@@ -6,8 +6,8 @@ connection carries one request. The first frame is a JSON request; exec connecti
 binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
 both ways. An `agent.listen` connection stays open for the life of an SSH connection.
 
-Version `0.4.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.5.0`, which added `grow`. The Go side is `agent/internal/proto`; the host side is the
+agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -78,7 +78,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `SESSION_LIMIT` | A new session would be the 17th.                                                         |
 | `DIAL_FAILED`   | `dial` could not connect (refused, timed out, no such socket).                           |
 | `NO_CONNECTION` | `agent.accept` named no waiting client: it closed, timed out, or never was.              |
-| `FROZEN`        | `freeze` found the root filesystem already frozen.                                       |
+| `FROZEN`        | `freeze` found the root filesystem already frozen, or `grow` arrived during a freeze.    |
 | `POWERING_OFF`  | `freeze` arrived after a poweroff started.                                               |
 | `INTERNAL`      | A system call failed (for example `FIFREEZE`).                                           |
 
@@ -144,6 +144,19 @@ Sets `CLOCK_REALTIME` to `unix_ms`. The host sends it after a snapshot restore, 
 clock stops while the VM sleeps. Send it right after the first `ping` that answers. Only the wall
 clock moves: `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` (and so `uptime_ms`) do not count the time
 asleep.
+
+### `grow`
+
+```json
+→ {"op":"grow","disk_bytes":68719476736}
+← {"ok":true}
+```
+
+Grows the root filesystem to fill its disk, after the host grew the disk file and told Firecracker.
+The guest sees the new size on its own time, so the agent polls `/sys/block/vda/size` until the disk
+has at least `disk_bytes` (10 s at most), then runs `EXT4_IOC_RESIZE_FS`, an online resize. A frozen
+filesystem would block the resize, so `grow` during a freeze fails with `FROZEN`. Every cold boot
+also grows the filesystem to fill the disk, in stage 1, before the switch of root.
 
 ### `services.list`
 

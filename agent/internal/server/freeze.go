@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/disk"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 )
@@ -72,6 +73,24 @@ func (s *Server) freeze(timeout time.Duration) error {
 		}
 	})
 	return nil
+}
+
+// growTimeout bounds the wait for the guest to see the disk's new size.
+const growTimeout = 10 * time.Second
+
+// waitAndGrow is a variable so tests can run without a disk.
+var waitAndGrow = disk.WaitAndGrow
+
+// grow resizes the root filesystem once the disk reaches diskBytes. A frozen
+// filesystem would block the resize, so a grow during a freeze fails with
+// FROZEN, and a freeze waits for a grow.
+func (s *Server) grow(diskBytes int64) error {
+	s.freezeMu.Lock()
+	defer s.freezeMu.Unlock()
+	if s.frozen {
+		return errFrozen
+	}
+	return waitAndGrow("/", diskBytes, growTimeout)
 }
 
 // thaw FITHAWs the root filesystem. Thawing an unfrozen fs is not an error.

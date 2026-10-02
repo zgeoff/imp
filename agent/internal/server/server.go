@@ -181,6 +181,11 @@ func (s *Server) unary(req proto.Request) (any, error) {
 		}
 		ts := unix.NsecToTimespec(req.UnixMs * int64(time.Millisecond))
 		return proto.OK{OK: true}, unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
+	case proto.OpGrow:
+		if req.DiskBytes <= 0 {
+			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "disk_bytes is required"}
+		}
+		return proto.OK{OK: true}, s.grow(req.DiskBytes)
 	case proto.OpServicesList:
 		return proto.ServicesList{Services: s.Services.List()}, nil
 	case proto.OpSessionKill:
