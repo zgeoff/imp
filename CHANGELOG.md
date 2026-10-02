@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.17.0](https://github.com/zgeoff/imp/compare/v0.16.0...v0.17.0) (2026-10-02)
+
+### Features
+
+- **agent:** output offsets, generations and resume for sessions
+  ([c42c8c1](https://github.com/zgeoff/imp/commit/c42c8c1c7e892a9294a0a7314208f73748d87a25))
+- **api:** session output offsets, resume and cold boots on /exec
+  ([98f2a51](https://github.com/zgeoff/imp/commit/98f2a515e2012c996b5d8c3174859b3c18d077a8))
+- **client:** resume sessions and type their errors
+  ([fbfc8d0](https://github.com/zgeoff/imp/commit/fbfc8d003b7cf1734f549393c468f4ee32755334))
+- **daemon:** carry session offsets, resume and cold-boot causes
+  ([40bc10a](https://github.com/zgeoff/imp/commit/40bc10ae213547fc0bc501bf522c168d98205fd4))
+
 ## [0.16.0](https://github.com/zgeoff/imp/compare/v0.15.0...v0.16.0) (2026-10-02)
 
 ### Features
