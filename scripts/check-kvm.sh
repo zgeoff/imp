@@ -28,6 +28,7 @@ ls -l /dev/kvm
 # Opening the device is what Firecracker needs; the mode bits alone do not
 # say whether the kvm module is usable.
 if ! (exec 3<>/dev/kvm) 2>/dev/null; then
+  sudo -n true 2>/dev/null || fail "/dev/kvm does not open for this user, and sudo needs a password; run as root or join the kvm group"
   sudo -n bash -c 'exec 3<>/dev/kvm' 2>/dev/null || fail "/dev/kvm does not open for read and write, even as root"
 fi
 echo "check-kvm: /dev/kvm is usable"

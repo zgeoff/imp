@@ -124,11 +124,11 @@ seconds with the reason. The job then:
 
 1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
-   the kernel config files change. A cold kernel build takes about 10 minutes, so the job's timeout
-   is 25.
+   the kernel config files change, or after GitHub evicts the cache (7 days unused, or the repo's 10
+   GB quota). A cold kernel build takes about 10 minutes, so the job's timeout is 25.
 2. builds the dev host image with a cache of its own (scope `imp-dev`) and sets
    `IMP_HOST_IMAGE_READY=1`, so `scripts/dev.sh` uses it instead of building it again. Only runs on
-   `main` write either cache; pull requests read them.
+   `main` write these caches; pull requests only read them.
 3. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
    key in CI, and a missed timing limit only warns.

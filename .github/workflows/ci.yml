@@ -248,7 +248,9 @@ jobs:
         run: scripts/check-kvm.sh
 
       # /mnt is the runner's larger temp disk; the XFS file goes there when
-      # the image has one
+      # the image has one. CI must not pass --clean to the harness: it
+      # refuses to wipe a data dir outside .data/ that holds no imp.xfs, and
+      # a fresh runner has nothing to clean.
       - name: Pick the data dir
         run: |
           df -h / /mnt || true
@@ -293,7 +295,7 @@ jobs:
           if [ "$WRITE_CACHE" = true ]; then
             cache_to=(--cache-to "type=gha,scope=system-files,mode=max")
           fi
-          docker buildx build -f host/Dockerfile --target system-files \
+          docker buildx build -f host/Dockerfile --target system-files --platform linux/amd64 \
             --output type=local,dest=.cache/ci \
             --cache-from type=gha,scope=system-files "${cache_to[@]}" .
 
@@ -305,7 +307,7 @@ jobs:
           if [ "$WRITE_CACHE" = true ]; then
             cache_to=(--cache-to "type=gha,scope=imp-dev,mode=max")
           fi
-          docker buildx build -f host/Dockerfile --target dev -t imp-host:dev --load \
+          docker buildx build -f host/Dockerfile --target dev -t "${IMP_HOST_IMAGE:-imp-host:dev}" --load \
             --cache-from type=gha,scope=imp-dev "${cache_to[@]}" .
 
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
