@@ -185,6 +185,19 @@ export async function readImpdLogTail(lines: number): Promise<string> {
   return `${result.stdout}${result.stderr}`;
 }
 
+// what impd logged from `since` on
+export async function readImpdLogSince(since: Readonly<Date>): Promise<string> {
+  const result = await runCommand([
+    'docker',
+    'logs',
+    '--since',
+    since.toISOString(),
+    instance.container,
+  ]);
+
+  return `${result.stdout}${result.stderr}`;
+}
+
 // The milliseconds impd logged for an operation: the newest log line that
 // contains the text and ends in `in <n>ms`, or null.
 export async function readImpdLoggedMs(text: string): Promise<number | null> {
