@@ -116,6 +116,14 @@ function buildShellStream(command: string, recordSignal: (signal: number) => voi
     stream.emit({ type: 'exit', code: 0, signal: 0 });
   }
 
+  // a command that runs for N ms, longer than any idle timeout on the way
+  if (verb === 'wait') {
+    setTimeout(() => {
+      stream.emitText('stdout', 'waited\n');
+      stream.emit({ type: 'exit', code: 0, signal: 0 });
+    }, Number(rest[0]));
+  }
+
   // the sweep that kills what is left of a stopped command's group
   if (verb === 'kill') {
     stream.emit({ type: 'exit', code: 0, signal: 0 });

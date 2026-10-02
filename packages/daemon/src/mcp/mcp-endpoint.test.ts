@@ -6,7 +6,9 @@ import { createTailnetIdentities } from '../auth/tailnet-identity';
 import type { TailnetPeer } from '../auth/tailnet-identity';
 import { listApiCalls } from '../db/api-audit';
 import type { TailscaleStatus } from '../net/tailscale-status';
+import { findFreePorts } from '../net/test-free-ports';
 import { PEER_HEADER } from '../proxy/forwarded-peers';
+import { startWakeProxy } from '../proxy/wake-proxy';
 import { setupImpdTest } from './test-mcp';
 
 const TAILNET_PEER = '100.101.102.103';
@@ -345,3 +347,88 @@ test('a page on another origin is refused, Sec-Fetch-Site first, as the dashboar
   // a 400, not a 403: past the origin check, the ping has no session
   expect(statuses).toEqual([403, 403, 403, 400, 400]);
 });
+
+// longer than the API server's 10 s idle timeout
+const LONG_CALL_MS = 15_000;
+
+test('a 15 s call answers through the wake proxy, as JSON and as SSE', async () => {
+  await using ctx = await setupHttpTest();
+
+  await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
+
+  // the proxy's API route, as the HTTPS domain serves impd
+  const proxy = startWakeProxy({
+    config: {
+      ...ctx.config,
+      apiPort: Number(new URL(ctx.url).port),
+      proxyPort: findFreePorts(1).take(),
+    },
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: ctx.peers,
+  });
+
+  const front = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  try {
+    const agent = startHttpClient(`http://127.0.0.1:${String(front.port)}`, {
+      authorization: `Bearer ${ctx.token}`,
+    });
+
+    const opened = await agent.initialize();
+
+    const session = opened.headers.get('mcp-session-id') ?? '';
+
+    const runCall = async (id: number, accept: string) => {
+      const response = await agent.sendPost(
+        {
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: {
+            name: 'imp_exec',
+            arguments: { name: 'box', command: `wait ${String(LONG_CALL_MS)}` },
+          },
+        },
+        { 'mcp-session-id': session, accept },
+      );
+
+      const text = await response.text();
+
+      const contentType = response.headers.get('content-type');
+
+      return { contentType, messages: parseMessages(contentType, text) };
+    };
+
+    const startedAt = performance.now();
+
+    const [json, sse] = await Promise.all([
+      runCall(1, 'application/json'),
+      runCall(2, 'application/json, text/event-stream'),
+    ]);
+
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(elapsedMs).toBeGreaterThanOrEqual(LONG_CALL_MS);
+    expect(json.contentType).toBe('application/json');
+    expect(sse.contentType).toBe('text/event-stream');
+
+    for (const [id, call] of [
+      [1, json],
+      [2, sse],
+    ] as const) {
+      expect(call.messages.at(-1)).toMatchObject({
+        id,
+        result: { structuredContent: { exitCode: 0, stdout: 'waited\n' } },
+      });
+    }
+  } finally {
+    await front.stop(true);
+    await proxy.stop();
+  }
+}, 40_000);
