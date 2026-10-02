@@ -239,6 +239,29 @@ test('a receipt that does not hold leaves the source as it was and the target em
   expect(target).toBeUndefined();
 });
 
+test('a send to a target that is gone ends with the mark on, and says so', async () => {
+  await using ctx = await setupMoveTest(async (request, forward) => {
+    // the abort fails late, so a status read while it goes would show the
+    // send's error with the mark not yet settled
+    if (request.url.endsWith(MOVE_PATHS.abort)) {
+      await Bun.sleep(100);
+    }
+
+    if (request.url.endsWith(MOVE_PATHS.receive) || request.url.endsWith(MOVE_PATHS.abort)) {
+      throw new TypeError('Unable to connect');
+    }
+
+    return forward();
+  });
+
+  const status = await ctx.runMove();
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(status.state).toBe('sending');
+  expect(status.error).toContain('the target did not confirm the abort');
+  expect(source?.moveState).toBe('sending');
+});
+
 test('a commit lost after the receipt holds both copies until resume commits', async () => {
   const lost = { commits: 1 };
 
