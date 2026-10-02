@@ -246,8 +246,8 @@ guest, and how to make your own.
 
 `imp ls` shows two numbers for each imp. USED is what a destroy of the imp would free: its disk, its
 checkpoints and its memory snapshot. SHARED is what it refers to that others hold too: the image and
-the source of a fork. A pass measures every imp at start, every 5 minutes, and 10 s after a change
-to the list of imps; `imp ls` reads the last pass, and `--json` gives its time.
+the source of a fork. A pass measures every imp at start, every 5 minutes, and 10 s after an imp or
+a checkpoint comes or goes; `imp ls` reads the last pass, and `--json` gives its time.
 
 On ZFS, one `zfs list` gives it all. USED is the disk's `used` (with its snapshots), plus each
 retired dataset that holds the imp's checkpoints after a restore, plus the memory file. SHARED is

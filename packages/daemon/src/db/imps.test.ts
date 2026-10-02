@@ -9,6 +9,7 @@ import {
   listImps,
   removeImp,
   updateImpActivity,
+  updateImpDisk,
   updateImpHold,
   updateImpState,
   updateImpStateIf,
@@ -229,4 +230,23 @@ test('it applies a compare-and-set change only while the row matches', async () 
 
   expect(stale).toBeUndefined();
   expect(fresh).toMatchObject({ state: 'stopped', pid: null });
+});
+
+test('a new disk size emits ImpChanged resized; a pending grow alone does not', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const imp = await createWithSlot(ctx.db, ctx.image.id, 'dev');
+
+  const reasons: string[] = [];
+
+  subscribeImpWrites(ctx.db, (write) => {
+    const reason = write.kind === 'changed' ? write.reason : write.kind;
+
+    reasons.push(reason);
+  });
+
+  await updateImpDisk(ctx.db, imp.id, { diskBytes: imp.diskBytes, isGrowPending: true });
+  await updateImpDisk(ctx.db, imp.id, { diskBytes: 2 * imp.diskBytes, isGrowPending: true });
+
+  expect(reasons).toEqual(['resized']);
 });

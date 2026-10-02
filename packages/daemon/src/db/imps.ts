@@ -246,6 +246,8 @@ export async function updateImpDisk(
   id: string,
   disk: Readonly<{ diskBytes: number; isGrowPending: boolean }>,
 ): Promise<ImpRecord> {
+  const before = await findImpById(db, id);
+
   const row = await db
     .updateTable('imps')
     .set({ disk_bytes: disk.diskBytes, disk_grow_pending: disk.isGrowPending ? 1 : 0 })
@@ -255,7 +257,10 @@ export async function updateImpDisk(
 
   const sized = toImpRecord(row);
 
-  emitImpWrite(db, { kind: 'changed', imp: sized, reason: 'resized' });
+  // the API shows the size, not a grow the guest owes
+  if (before?.diskBytes !== sized.diskBytes) {
+    emitImpWrite(db, { kind: 'changed', imp: sized, reason: 'resized' });
+  }
 
   return sized;
 }
