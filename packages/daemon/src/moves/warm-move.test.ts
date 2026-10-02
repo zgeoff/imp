@@ -1,96 +1,35 @@
 import { expect, test } from 'bun:test';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
-import type { MoveStatus } from '@imp/api';
+import { existsSync, rmSync } from 'node:fs';
 import { findImpByName } from '../db/imps';
-import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImagePaths } from '../storage/data-layout';
 import { MOVE_PATHS } from './move-header';
-import { readWarmHost } from './warm-facts';
-
-// the target's peer URL: a literal tailnet address, as a move needs
-const TARGET_URL = 'http://100.100.0.2:7070';
-
-// the source's address, as the target's socket sees it
-const SOURCE_PEER = '100.100.0.1';
-
-type FetchHook = (request: Request, forward: () => Promise<Response>) => Promise<Response>;
+import { createUbuntuImage, setupMoveHosts } from './test-moves';
+import type { FetchHook } from './test-moves';
 
 // Two impds and a sleeping `dev` in slot 1 of the source. `isShared`: both
-// report the target's facts, since two impds in one process cannot share a
-// data dir, as a warm move needs.
+// report the target's facts (setupMoveHosts).
 async function setupWarmTest(options: Readonly<{ isShared?: boolean; hook?: FetchHook }> = {}) {
-  const source = await setupImpTest();
-  const target = await setupImpTest({ env: { IMP_PEER_URL: TARGET_URL } });
-
-  const facts = readWarmHost(target.config, target.readIdentity(), 'xfs');
-  const shared = options.isShared === false ? {} : { readWarmHost: () => facts };
-  const targetApp = buildTestApp(target, target, undefined, {}, null, shared);
-  const sendToTarget = (request: Request) => targetApp.moves.handle(request, SOURCE_PEER);
-  const hook = options.hook;
-
-  const sourceApp = buildTestApp(source, source, undefined, {}, null, {
-    ...shared,
-    fetch: (request) =>
-      hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
+  const hosts = await setupMoveHosts({
+    isShared: options.isShared !== false,
+    ...(options.hook !== undefined && { hook: options.hook }),
   });
 
-  for (const host of [source, target]) {
-    await host.createTestImage('ubuntu');
-
-    writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').config, '{}');
-  }
+  await createUbuntuImage(hosts.source);
+  await createUbuntuImage(hosts.target);
 
   // slot 0 goes to another imp, so the target's lowest free slot is not dev's
-  await sourceApp.client.imps.create({ name: 'first', image: 'ubuntu' });
+  await hosts.sourceApp.client.imps.create({ name: 'first', image: 'ubuntu' });
 
-  const created = await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  const created = await hosts.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  await sourceApp.client.imps.sleep({ name: 'dev' });
-
-  const waitForMove = async (): Promise<MoveStatus> => {
-    for (let tries = 0; tries < 500; tries += 1) {
-      const status = await sourceApp.client.moves.status({ name: 'dev' });
-
-      if (status.isDone || status.error !== null) {
-        return status;
-      }
-
-      await Bun.sleep(10);
-    }
-
-    throw new Error('the move never ended');
-  };
-
-  // a whole move, as `imp move` runs it
-  const runMove = async (): Promise<MoveStatus> => {
-    const targetFacts = await targetApp.client.moves.facts();
-    const plan = await sourceApp.client.moves.prepare({ name: 'dev', target: targetFacts });
-
-    const ticket = await targetApp.client.moves.receive({
-      name: 'dev',
-      bytes: plan.bytes,
-      ...(plan.warm !== null && { warm: plan.warm }),
-    });
-
-    await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
-
-    return waitForMove();
-  };
+  await hosts.sourceApp.client.imps.sleep({ name: 'dev' });
 
   return {
-    source,
-    target,
-    sourceApp,
-    targetApp,
+    ...hosts,
     impId: created.id,
     slot: created.slot,
-    runMove,
-    async [Symbol.asyncDispose]() {
-      await source[Symbol.asyncDispose]();
-      await target[Symbol.asyncDispose]();
-    },
+    runMove: () => hosts.runMove('dev'),
   };
 }
 

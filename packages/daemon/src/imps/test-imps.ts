@@ -75,8 +75,12 @@ function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
   };
 }
 
-interface ImpTestOptions {
+export interface ImpTestOptions {
   readonly env?: Readonly<Record<string, string>>;
+
+  // a data dir the caller made and removes, such as a mounted dataset; a
+  // fresh temp dir that the dispose removes by default
+  readonly dataDir?: string;
 
   // a plain copy by default: the test tmpdir is not XFS
   readonly cloneDisk?: (source: string, target: string) => Promise<void>;
@@ -121,7 +125,7 @@ interface ImpTestOptions {
 // a fresh data dir. `restartImpd` starts a new impd on the same database, data
 // dir and VMs, as a restart would; given an identity, as an upgrade would.
 export async function setupImpTest(options: ImpTestOptions = {}) {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-test-`);
+  const dataDir = options.dataDir ?? mkdtempSync(`${tmpdir()}/impd-test-`);
 
   const db = await openDatabase(':memory:');
 
@@ -344,7 +348,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       await broker.stop();
       await db.destroy();
 
-      rmSync(dataDir, { recursive: true, force: true });
+      if (options.dataDir === undefined) {
+        rmSync(dataDir, { recursive: true, force: true });
+      }
     },
   };
 }
