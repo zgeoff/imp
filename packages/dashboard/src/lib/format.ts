@@ -47,6 +47,22 @@ export function formatCpuUse(imp: Imp): string {
   return limit === null ? used : `${used} / ${String(limit)}`;
 }
 
+// what the imp's storage takes over its disk size: "≤1.2 GiB / 32 GiB"; ≤
+// when a fork holds a snapshot of it, ? when the last pass was cut short
+export function formatDiskUse(imp: Imp): string {
+  const size = formatMib(imp.diskMib);
+  const usage = imp.diskUsage;
+
+  if (usage === undefined) {
+    return `— / ${size}`;
+  }
+
+  const bound = usage.isUpperBound ? '≤' : '';
+  const partial = usage.isPartial ? '?' : '';
+
+  return `${bound}${formatBytes(usage.exclusiveBytes)}${partial} / ${size}`;
+}
+
 // "45s", "12m", "3h 20m"
 export function formatDuration(ms: number): string {
   const minutes = Math.floor(ms / 60_000);

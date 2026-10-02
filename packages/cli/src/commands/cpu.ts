@@ -1,6 +1,12 @@
 import type { Imp } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
-import { formatCpuUse, formatImp, formatOutput, formatTable } from '../format-output';
+import {
+  formatCpuUse,
+  formatDiskUse,
+  formatImp,
+  formatOutput,
+  formatTable,
+} from '../format-output';
 import { parseCpuLimit, parseCpuWeight } from '../parse-cpu';
 import { parseCount } from '../parse-size';
 import { runAction } from '../run-action';
@@ -71,7 +77,8 @@ export const setCommand = defineCommand({
 });
 
 // Each imp's use, busiest first: CPU over its limit, the time the limit held
-// it back, RAM, traffic since its VM started, wakes and time awake.
+// it back, RAM, disk use over its size, traffic since its VM started, wakes
+// and time awake.
 export function formatTop(imps: readonly Imp[]): string {
   const sorted = imps.toSorted(
     (a, b) =>
@@ -80,7 +87,19 @@ export function formatTop(imps: readonly Imp[]): string {
   );
 
   return formatTable(
-    ['NAME', 'STATE', 'CPU', 'WEIGHT', 'THROTTLED', 'RAM', 'NET IN', 'NET OUT', 'WAKES', 'AWAKE'],
+    [
+      'NAME',
+      'STATE',
+      'CPU',
+      'WEIGHT',
+      'THROTTLED',
+      'RAM',
+      'DISK',
+      'NET IN',
+      'NET OUT',
+      'WAKES',
+      'AWAKE',
+    ],
     sorted.map((imp) => {
       const sample = imp.resources?.sample;
 
@@ -91,6 +110,7 @@ export function formatTop(imps: readonly Imp[]): string {
         String(imp.cpu?.weight ?? '-'),
         sample === undefined ? '-' : formatSeconds(sample.cpuThrottledMs),
         imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+        formatDiskUse(imp),
         sample === undefined ? '-' : formatBytes(sample.netRxBytes),
         sample === undefined ? '-' : formatBytes(sample.netTxBytes),
         String(imp.resources?.wakeCount ?? '-'),

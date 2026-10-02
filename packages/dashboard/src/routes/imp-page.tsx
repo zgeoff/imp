@@ -10,7 +10,7 @@ import { ForkDialog } from '../components/fork-dialog';
 import { ImpActions } from '../components/imp-actions';
 import { ImpNotes } from '../components/imp-notes';
 import { StateBadge } from '../components/state-badge';
-import { formatMib, formatRelativeTime } from '../lib/format';
+import { formatBytes, formatDiskUse, formatMib, formatRelativeTime } from '../lib/format';
 import { useImpd } from '../lib/impd';
 import { LIVE, SLOW } from '../lib/live';
 import { useNow } from '../lib/use-now';
@@ -95,6 +95,11 @@ function ImpDetails(props: ImpDetailsProps) {
       <dd>
         {imp.ramMib === undefined ? 'not awake' : `${formatMib(imp.ramMib)} owned`}
         {imp.rssMib !== undefined && `, ${formatMib(imp.rssMib)} resident`}
+      </dd>
+      <dt>Disk</dt>
+      <dd>
+        {formatDiskUse(imp)}
+        {imp.diskUsage !== undefined && `, ${formatBytes(imp.diskUsage.sharedBytes)} shared`}
       </dd>
       <dt>URL</dt>
       <dd>

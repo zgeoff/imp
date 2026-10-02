@@ -41,6 +41,7 @@ arrive and every 2 s; `imp top --once` prints it once, `--json` prints the imps 
 | `WEIGHT`    | The CPU weight.                                                         |
 | `THROTTLED` | Time the limit held the VM back since the last boot, wake or adopt.     |
 | `RAM`       | Memory the VM owns, as the RAM governor counts it.                      |
+| `DISK`      | What a destroy frees over the disk size, from impd's disk-usage pass.   |
 | `NET IN`    | Bytes the guest received since the last boot, wake or adopt.            |
 | `NET OUT`   | Bytes the guest sent since the last boot, wake or adopt.                |
 | `WAKES`     | Wakes from a memory snapshot since the imp was created; not cold boots. |

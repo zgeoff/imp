@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import type { Imp } from '@zgeoff/imp-client';
-import { formatCpuUse, formatMib, formatRelativeTime } from '../lib/format';
+import { formatCpuUse, formatDiskUse, formatMib, formatRelativeTime } from '../lib/format';
 import { ImpActions } from './imp-actions';
 import { ImpNotes } from './imp-notes';
 import { StateBadge } from './state-badge';
@@ -20,6 +20,7 @@ export function ImpTable(props: ImpTableProps) {
           <th>State</th>
           <th className={styles['numeric']}>RAM</th>
           <th className={styles['numeric']}>CPU</th>
+          <th className={styles['numeric']}>Disk</th>
           <th>Last active</th>
           <th>URL</th>
           <th aria-label="Actions" />
@@ -43,6 +44,7 @@ export function ImpTable(props: ImpTableProps) {
               {formatMib(imp.memoryMib)}
             </td>
             <td className={styles['numeric']}>{formatCpuUse(imp)}</td>
+            <td className={styles['numeric']}>{formatDiskUse(imp)}</td>
             <td>{formatRelativeTime(imp.lastActiveAt, props.nowMs)}</td>
             <td>
               <a href={imp.url} target="_blank" rel="noreferrer">

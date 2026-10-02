@@ -93,6 +93,14 @@ function formatDiskMib(mib: number): string {
   return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
 }
 
+// what the imp's storage takes over its disk size, as `imp top` shows it:
+// `<=1203 MiB / 32 GiB`
+export function formatDiskUse(imp: Imp): string {
+  const [used] = formatDiskUsage(imp.diskUsage);
+
+  return `${used} / ${formatDiskMib(imp.diskMib)}`;
+}
+
 // the last sample's CPU, in percent of one core, over the limit when there is
 // one: `45% / 1.5`
 export function formatCpuUse(imp: Imp): string {
