@@ -1,6 +1,7 @@
 import { buildForbiddenError } from '../api-errors';
 import { formatCaller, isCallerAllowed } from '../auth/caller';
 import type { Caller } from '../auth/caller';
+import { toCallerError } from '../auth/caller-view';
 import type { ExecBackend } from './exec-session';
 
 // What an `/exec` socket may start: its caller, and a ticket's one imp. Each
@@ -33,6 +34,15 @@ export function buildGrantedBackend(
     return null;
   };
 
+  // a refusal to boot names only the imps the caller may read
+  const openAsCaller = async <T>(opening: Promise<T>): Promise<T> => {
+    try {
+      return await opening;
+    } catch (error) {
+      throw toCallerError(error, grant?.caller ?? null);
+    }
+  };
+
   return {
     // A tool runs as root, which `exec` scope must not reach (a forward runs
     // as the image user), so it needs `manage`; a ticket never starts one
@@ -44,7 +54,7 @@ export function buildGrantedBackend(
       }
 
       if (feature === undefined) {
-        return backend.openExec(name, request);
+        return openAsCaller(backend.openExec(name, request));
       }
 
       if (grant?.name !== null) {
@@ -57,12 +67,14 @@ export function buildGrantedBackend(
         );
       }
 
-      return backend.openExec(name, request, feature);
+      return openAsCaller(backend.openExec(name, request, feature));
     },
     openAttach: (name, request) => {
       const refused = checkGrant(name);
 
-      return refused === null ? backend.openAttach(name, request) : Promise.reject(refused);
+      return refused === null
+        ? openAsCaller(backend.openAttach(name, request))
+        : Promise.reject(refused);
     },
     recordActivity: (name) => backend.recordActivity(name),
   };
