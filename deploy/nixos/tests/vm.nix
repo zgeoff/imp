@@ -43,6 +43,11 @@ let
     done
     if [ -n "$up" ]; then
       [ -s "$key_file" ] || { echo "fake tailscale: no key in $key_file" >&2; exit 1; }
+      # a single-use key that joined once already
+      if [ "$(cat "$key_file")" = used-key ]; then
+        echo "backend error: invalid key: unable to validate API key" >&2
+        exit 1
+      fi
       echo "up $*" >>"$dir/fake-up.log"
       echo valid >"$dir/tailscaled.state"
       echo "$name" >"$dir/fake-hostname"
@@ -117,6 +122,9 @@ pkgs.testers.runNixOSTest {
     };
     # A store file would do in a test, but the module takes a path outside it.
     environment.etc."imp-test/authkey".text = fakeKey;
+    # 3 GiB is below what the formula needs, so imp-host refuses to start
+    # until ramBudgetMiB is set; the test switches to this.
+    specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
   };
 
   nodes.own = {
@@ -137,14 +145,21 @@ pkgs.testers.runNixOSTest {
     start_all()
     host.wait_for_unit("multi-user.target")
 
-    def start_imp_host():
+    def start_imp_host(want_rc="0"):
         host.succeed("rm -f ${stateDir}/up.rc")
+        host.succeed("systemctl reset-failed imp-host || true")
         host.succeed("systemctl restart imp-host")
         host.wait_until_succeeds("test -s ${stateDir}/up.rc", timeout=120)
         rc = host.succeed("cat ${stateDir}/up.rc").strip()
         out = host.succeed("cat ${stateDir}/up.out")
-        assert rc == "0", f"tailscale-up exited {rc}: {out}"
+        assert rc == want_rc, f"tailscale-up exited {rc}, not {want_rc}: {out}"
         return out
+
+    def restarts():
+        return int(host.succeed("systemctl show -p NRestarts --value imp-host"))
+
+    def loads():
+        return int(host.succeed("journalctl -u imp-host --no-pager | grep -c 'imp-host: loading' || true"))
 
     def ups():
         return host.succeed("cat ${stateDir}/fake-up.log 2>/dev/null || true").strip().splitlines()
@@ -152,8 +167,16 @@ pkgs.testers.runNixOSTest {
     with subtest("without the pool, imp-host does not start"):
         host.fail("systemctl is-active imp-host")
 
-    with subtest("the pool, then imp-host, and a first join with the key file"):
+    with subtest("a budget below the floor is refused, and the refusal does not loop"):
         host.succeed("zpool create -O mountpoint=none tank /dev/vdb")
+        host.fail("systemctl start imp-host")
+        host.wait_until_succeeds("journalctl -u imp-host --no-pager | grep -q 'below the 512 MiB floor: RAM'", timeout=60)
+        host.succeed("journalctl -u imp-host --no-pager | grep -q 'Set services.imp.ramBudgetMiB'")
+        host.wait_until_succeeds("systemctl show -p Result --value imp-host | grep -qx start-limit-hit", timeout=120)
+        host.succeed("test ! -e /etc/imp/imp-host.env")
+
+    with subtest("with ramBudgetMiB, imp-host starts and joins with the key file"):
+        host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
         start_imp_host()
         host.succeed("zfs get -H -o value mountpoint tank/imp | grep -qx legacy")
         joins = ups()
@@ -161,15 +184,49 @@ pkgs.testers.runNixOSTest {
         assert "--auth-key=file:/run/imp/tailscale-authkey" in joins[0], joins
         assert "--hostname=imp-vm" in joins[0], joins
 
-    with subtest("a restart from good saved state uses no key"):
+    with subtest("a restart from good saved state uses no key, and loads no image"):
         out = start_imp_host()
         assert len(ups()) == 1, ups()
+        assert loads() == 1, loads()
+
+    with subtest("an archive that differs from the one loaded is loaded again"):
+        host.succeed("echo /nix/store/another-archive > /var/lib/imp-host/image-archive")
+        start_imp_host()
+        assert loads() == 2, loads()
 
     with subtest("saved state that needs a login joins again with the key"):
         host.succeed("echo stale > ${stateDir}/tailscaled.state")
         out = start_imp_host()
         assert "joining again with the key" in out, out
         assert len(ups()) == 2, ups()
+
+    with subtest("a missing key file warns, and the node starts from its saved state"):
+        host.succeed("rm /etc/imp-test/authkey")
+        out = start_imp_host()
+        assert len(ups()) == 2, ups()
+        host.succeed("journalctl -u imp-host --no-pager | grep -q 'authkey is missing or empty; the node starts from its saved state'")
+
+    with subtest("stale state and no key: a clear failure, imp-host keeps running"):
+        before = restarts()
+        host.succeed("echo stale > ${stateDir}/tailscaled.state")
+        out = start_imp_host(want_rc="1")
+        assert "give an auth key to join again" in out, out
+        host.succeed("systemctl is-active imp-host")
+        assert restarts() == before, (before, restarts())
+
+    with subtest("a single-use key used already: a clear failure, no loop"):
+        host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< used-key")
+        out = start_imp_host(want_rc="1")
+        assert "single-use key that was used already" in out, out
+        assert len(ups()) == 2, ups()
+        host.succeed("systemctl is-active imp-host")
+        host.succeed("sleep 10; systemctl is-active imp-host")
+        assert restarts() == before, (before, restarts())
+
+    with subtest("a new key joins again"):
+        host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< ${fakeKey}")
+        start_imp_host()
+        assert len(ups()) == 3, ups()
 
     with subtest("the key is never in the env, argv, the log or the store's env file"):
         host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
@@ -182,11 +239,8 @@ pkgs.testers.runNixOSTest {
         for line in ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
                      "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]:
             host.succeed(f"grep -qx {line} /etc/imp/imp-host.env")
-        budget = int(host.succeed("sed -n 's/^IMP_RAM_BUDGET_MIB=//p' /etc/imp/imp-host.env"))
-        # 3 GiB of RAM is below the 8 GiB the host keeps, so the budget is negative;
-        # what matters is that it is bootstrap.sh's formula.
-        mem = int(host.succeed("awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo"))
-        assert budget == mem - max(8192, mem * 15 // 100) - 1024, f"budget {budget}, RAM {mem} MiB"
+        # the formula refused this host (above); ramBudgetMiB is what runs
+        host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
 
     with subtest("the kernel"):
         host.succeed("sysctl -n vm.overcommit_memory | grep -qx 1")

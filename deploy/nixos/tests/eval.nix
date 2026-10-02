@@ -61,6 +61,7 @@ let
     ];
   };
   poolElsewhere = host { services.imp.zfs.importPool = false; };
+  noArcCap = host { services.imp.zfs.arcMaxMiB = lib.mkForce null; };
   flushing = host {
     networking.nftables.enable = true;
     networking.nftables.flushRuleset = true;
@@ -96,6 +97,10 @@ let
     (expect "the ARC cap" (
       lib.hasInfix "options zfs zfs_arc_max=1073741824" zfsCfg.boot.extraModprobeConfig
     ))
+    (expect "no arcMaxMiB, no modprobe line" (
+      !(lib.hasInfix "zfs_arc_max" noArcCap.config.boot.extraModprobeConfig)
+    ))
+    (expect "a failing start stops after five tries" (unit.unitConfig.StartLimitBurst == 5))
     (expect "importPool = false imports nothing" (poolElsewhere.config.boot.zfs.extraPools == [ ]))
     (expect "the dataset waits for the pools" (
       lib.elem "zfs-import.target" zfsCfg.systemd.services.imp-zfs-dataset.after
@@ -121,7 +126,7 @@ let
       lib.hasInfix "/bin/docker run ${sharedArgs} " unit.serviceConfig.ExecStart
     ))
     (expect "the key file is mounted read-only, by path" (
-      lib.hasInfix "-v /run/secrets/imp-authkey:/run/imp/tailscale-authkey:ro -e 'IMP_TAILSCALE_AUTHKEY_FILE=/run/imp/tailscale-authkey'" unit.serviceConfig.ExecStart
+      lib.hasInfix "-v /run/imp-host/tailscale-authkey:/run/imp/tailscale-authkey:ro -e 'IMP_TAILSCALE_AUTHKEY_FILE=/run/imp/tailscale-authkey'" unit.serviceConfig.ExecStart
     ))
     (expect "no key mount without a key file" (
       !(lib.hasInfix "tailscale-authkey" xfsCfg.systemd.services.imp-host.serviceConfig.ExecStart)
