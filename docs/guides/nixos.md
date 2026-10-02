@@ -24,9 +24,9 @@ meets the [host contract](../architecture/host-contract.md), as
             enable = true;
             storage = "zfs"; # the default
             zfs.pool = "tank"; # imported at boot; imp gets tank/imp
-            zfs.arcMaxMiB = 6400; # 10 % of 64 GB, within 1 to 8 GiB, as bootstrap.sh picks
+            zfs.arcMaxMiB = 6400; # optional: 10 % of 64 GB, within 1 to 8 GiB, as bootstrap.sh picks
             settings.IMP_TAILSCALE_HOSTNAME = "imp";
-            tailscaleAuthKeyFile = "/run/secrets/imp-tailscale-authkey";
+            tailscaleAuthKeyFile = "/var/lib/imp-host/secrets/tailscale-authkey"; # root, 0400
             environmentFile = "/run/secrets/imp-host.env"; # IMP_DNS_API_TOKEN and other secrets
           };
         }
@@ -82,12 +82,20 @@ not the file:
 - `environmentFile`: a file outside the store, such as a sops or agenix secret, copied in at each
   start.
 - `IMP_RAM_BUDGET_MIB`: `ramBudgetMiB`, else measured at each start, as `bootstrap.sh` does, less
-  `zfs.arcMaxMiB` ([RAM](../architecture/host-contract.md#ram)).
+  the ARC cap ([RAM](../architecture/host-contract.md#ram)). When the formula gives less than 512
+  MiB, `imp-host` refuses to start and logs the RAM and the formula: set `ramBudgetMiB`. A start
+  that keeps failing stops after five tries in five minutes.
+- The ARC cap: `zfs.arcMaxMiB`, set through `boot.extraModprobeConfig` so it holds from boot. Unset,
+  each start keeps a cap that is already set, or else sets bootstrap.sh's 10 % of RAM within 1 to 8
+  GiB.
 
 ## The Tailscale key
 
 `tailscaleAuthKeyFile` names a file outside the Nix store that holds a tagged auth key
-([Tailscale](./tailscale.md)). The module never copies the key: it mounts the file read-only into
+([Tailscale](./tailscale.md)). Keep it at `/var/lib/imp-host/secrets/tailscale-authkey`, owned by
+root, mode 0400: `/var/lib/imp-host` is the module's own directory (0700), and a reinstall with
+nixos-anywhere can put the file there with `--extra-files`. The key never goes into the env file or
+the store. At each start the module copies it to `/run/imp-host` and mounts the copy read-only into
 the container at `/run/imp/tailscale-authkey`, and `tailscale-up.sh` in the container decides when
 to use it ([how it works](./tailscale.md#how-it-works)):
 
@@ -95,6 +103,10 @@ to use it ([how it works](./tailscale.md#how-it-works)):
 - With no state, or a saved node that needs a login, `tailscale` joins with the key. An ephemeral
   node that stays offline long enough is deleted by Tailscale, and a reinstall can take that long,
   so keep a valid key in the file if the host may be down for a while.
+- A missing or empty key file only warns, and the node comes back from its saved state.
+- A key that Tailscale refuses, such as a single-use key that joined once already, fails the join
+  with a message that says so. `imp-host` keeps running without the tailnet; it does not restart in
+  a loop. Put a new key in the file and restart `imp-host`.
 
 ## Check it
 
