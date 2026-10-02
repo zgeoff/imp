@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.0](https://github.com/zgeoff/imp/compare/v0.15.0...v0.16.0) (2026-10-02)
+
+
+### Features
+
+* **daemon:** move a stopped imp to another host ([1adc0f3](https://github.com/zgeoff/imp/commit/1adc0f37ce94a43a1fa0bfa82e60eea801ee5528))
+* **daemon:** move imps from a zfs host ([88bb12b](https://github.com/zgeoff/imp/commit/88bb12b40a240b49cff5512374de14f8b5dee0fd))
+
+
+### Bug Fixes
+
+* **cli:** point at --abort when a failed send leaves the mark on ([ed8d7b1](https://github.com/zgeoff/imp/commit/ed8d7b1f9e09b8e189f367a5aa66d1f67915d66e))
+* **daemon:** close the review's gaps in moves ([9888012](https://github.com/zgeoff/imp/commit/98880122087da131b9ed3ecdf5251731e51761f7))
+* **daemon:** hash zfs move streams before recv can commit them ([70f6f69](https://github.com/zgeoff/imp/commit/70f6f69fff90aa192ecafb40c52106c5c8bd9e4d))
+* **daemon:** hold a received move snapshot until setup destroys it ([4d8a04b](https://github.com/zgeoff/imp/commit/4d8a04b675aed8a11254149b02091cbefcd391c4)), closes [#40](https://github.com/zgeoff/imp/issues/40)
+* **daemon:** keep template state and refuse public imps in moves ([579bec1](https://github.com/zgeoff/imp/commit/579bec156533979de73b02238cf4c94dcd112f64))
+
 ## [0.15.0](https://github.com/zgeoff/imp/compare/v0.14.0...v0.15.0) (2026-10-02)
 
 ### Features
