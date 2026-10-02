@@ -202,10 +202,15 @@ drive before them when `/move/offer` finds the target lacks it. The header carri
 
 **Trust.** A warm move trusts the source with the target host, not only with the imp. `vmstate` is
 Firecracker's own format, which the target does not parse: the paths it names (the disk, the system
-drive, the vsock socket) are what the target's Firecracker opens at the load, with impd's rights.
-The target checks the drive path in `meta.json` and `vm.json`, not the paths inside `vmstate`. Run
-warm moves only between hosts that trust each other; a Firecracker run by the jailer would confine
-what a load can open.
+drive, the vsock socket) are what the target's Firecracker opens at the load. The target checks the
+drive path in `meta.json` and `vm.json`, not the paths inside `vmstate`. With the
+[jailer](./daemon.md#the-jailer), the load runs in the imp's chroot as its uid, so it opens only
+what the jail holds; with `IMP_JAILER=false` it has impd's rights. Run warm moves only between hosts
+that trust each other.
+
+**The jail uid.** A moved imp gets a uid of the target's own at the create, as a cold-moved one
+does; the source's never goes along. The files arrive as root's. The prepare before the first wake
+gives the disk to that uid and the snapshot files to its group, as before any wake.
 
 **The slot.** The ticket keeps the imp's slot (`move_tickets.slot`) until the commit once its stream
 started, else until its start window ends. A stream that fails, or ends with no part for 60 s, gives
