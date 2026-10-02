@@ -59,7 +59,9 @@ waiting would deadlock. The type of the governor's sleep admits only a try-lock.
 If the load or the agent fails, impd kills the new Firecracker and boots the disk cold. The disk is
 always the truth.
 
-Snapshot files stay until the next sleep renames over them, a stop, a restore or a cold boot.
+Snapshot files stay until the next sleep renames over them, a stop, a restore or a cold boot. A cold
+boot removes them only once the governor admits it, so a sleeping imp that the budget turns away
+keeps its memory.
 
 ### Snapshot identity
 

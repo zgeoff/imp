@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
+import { findImpByName } from './db/imps';
 import { setupImpTest } from './imps/test-imps';
 
 const TOKEN = 'test-token';
@@ -272,6 +273,39 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
     code: 'RAM_BUDGET_EXCEEDED',
     data: { budgetMib: 800, requestedMib: 300 },
   });
+});
+
+test('a cold boot the budget turns away keeps the sleeping imp and its snapshot', async () => {
+  await using ctx = await setupTest(TOKEN, {
+    IMP_RAM_BUDGET_MIB: '800',
+    IMP_DEFAULT_MEMORY_MIB: '512',
+  });
+
+  await ctx.createTestImage('ubuntu');
+
+  const asleep = await ctx.client.imps.create({ name: 'a' });
+
+  await ctx.client.imps.sleep({ name: 'a' });
+  await ctx.client.imps.create({ name: 'b' });
+  await ctx.client.imps.create({ name: 'c' });
+  await ctx.client.imps.hold({ name: 'b', seconds: 600 });
+  await ctx.client.imps.hold({ name: 'c', seconds: 600 });
+
+  // a snapshot from another firecracker: the wake falls back to a cold boot
+  const metaPath = `${ctx.dataDir}/imps/${asleep.id}/snapshot/meta.json`;
+
+  const meta = await Bun.file(metaPath).text();
+
+  await Bun.write(metaPath, meta.replace('"v1.17.0"', '"v0.1.0"'));
+
+  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
+
+  // the raw row: a read through the service would repair a lost snapshot
+  const row = await findImpByName(ctx.db, 'a');
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(row?.state).toBe('sleeping');
+  expect(existsSync(metaPath)).toBeTrue();
 });
 
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
