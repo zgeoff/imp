@@ -235,6 +235,15 @@ A [network](../guides/networks.md) lets its imps reach one another. The rows are
   own tap, so a guest that sends from another address matches nothing. A match sets the mark
   `0x01000000` with an OR, so a bit another program uses survives, and is accepted; iptables then
   accepts the mark ahead of its imp-to-imp DROP.
+- The mark bit is `0x01000000`. Calico's default mark mask (`0xffff0000`) covers it, and other
+  programs that mark packets may too. The rules live in the host container's own network namespace,
+  so only a program that marks packets inside that namespace could clash.
+- impd checks at start that setup-net's `imp-network` ACCEPT is in FORWARD, and logs
+  `imp-network ACCEPT is missing` when it is not: then the imp-to-imp DROP takes every packet, and
+  networks fail closed.
+- A change whose table nft refuses puts its rows back; when that undo fails too, impd logs it and
+  writes the table from the rows as they are, so a failed leave or `net rm` never leaves a pair
+  connected that the rows part.
 - The rules come before the egress policies, so a network reaches past `box` and `none`. Networks
   are IPv4 only. `oifname "imp*" goto deny` follows them: no other packet between taps passes, IPv6
   included.
@@ -243,10 +252,10 @@ A [network](../guides/networks.md) lets its imps reach one another. The rows are
   shares a network has its conntrack entries deleted in both directions; the next packet of a held
   connection is refused with a reset in any case, since the rules do not look at `ct state`.
 - A destroyed imp leaves the sets with its slot, before its row goes.
-- impd answers `<imp>.<network>.internal`, a peer's bare name, and every reverse name inside
-  `IMP_SUBNET` itself, before the policy's verdict, so none is ever forwarded. A name of the zone
-  the asker shares no network with is NXDOMAIN. The answers never go into a box's set: the peer
-  rule, not the set, lets the traffic through.
+- impd answers `<imp>.<network>.internal` (for a network that exists), a peer's bare name, and every
+  reverse name inside `IMP_SUBNET` itself, before the policy's verdict, so none is ever forwarded. A
+  name of the zone the asker shares no network with is NXDOMAIN. The answers never go into a box's
+  set: the peer rule, not the set, lets the traffic through.
 - With no nft (`NO FIREWALL`), nothing marks a packet, and iptables drops all imp-to-imp traffic:
   networks fail closed.
 
