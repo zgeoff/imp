@@ -19,6 +19,8 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 
+// Every imp command. `completion` walks this tree to write its scripts, so
+// it loads lazily: a static import would be a cycle.
 export const mainCommand = defineCommand({
   meta: {
     name: 'imp',
@@ -49,5 +51,10 @@ export const mainCommand = defineCommand({
     login: loginCommand,
     host: hostCommand,
     hosts: hostsCommand,
+    completion: async () => {
+      const completion = await import('./commands/completion');
+
+      return completion.completionCommand;
+    },
   },
 });
