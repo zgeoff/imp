@@ -23,8 +23,9 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_create',
+    cancellable: false,
     description:
-      'Create an imp, a persistent Linux microVM, and boot it. Its disk survives sleeps and restarts until imp_destroy. Without a name, the server picks one inside its guard. Returns the imp. A cancel does not stop the create: look for the imp with imp_list.',
+      'Create an imp, a persistent Linux microVM, and boot it. Its disk survives sleeps and restarts until imp_destroy. Without a name, the server picks one inside its guard. Returns the imp. A cancel does not stop the create, and its result still comes back.',
     input: z.strictObject({
       name: NameSchema.optional().describe(
         "The new imp's name: a lowercase letter, then up to 30 lowercase letters, digits or hyphens. Omit to have one picked.",
@@ -126,8 +127,9 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_fork',
+    cancellable: false,
     description:
-      'Create a new imp from the disk of another, now or as it was at one of its checkpoints. The fork boots fresh: it has the disk, not the running processes. Use it to try two approaches side by side. A cancel does not stop the fork: look for it with imp_list.',
+      'Create a new imp from the disk of another, now or as it was at one of its checkpoints. The fork boots fresh: it has the disk, not the running processes. Use it to try two approaches side by side. A cancel does not stop the fork, and its result still comes back.',
     input: z.strictObject({
       source: NameSchema.describe('The imp to fork, from imp_list'),
       name: NameSchema.optional().describe("The fork's name; omit to have one picked"),

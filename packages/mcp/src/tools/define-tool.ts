@@ -44,6 +44,10 @@ interface ToolResult {
 export interface Tool {
   readonly definition: ToolDefinition;
 
+  // false for a call impd finishes once started: its result is still sent
+  // after a cancel, so the agent learns the name of what it made
+  readonly cancellable: boolean;
+
   // never throws for a failed call: the agent reads the failure as an
   // isError result; a cancel throws the signal's reason
   readonly call: (args: unknown, context: Readonly<ToolContext>) => Promise<ToolResult>;
@@ -62,6 +66,7 @@ interface ToolSpec<Input extends z.ZodObject> {
   readonly description: string;
   readonly input: Input;
   readonly annotations: ToolAnnotations;
+  readonly cancellable?: false;
   readonly run: (input: z.output<Input>, context: Readonly<ToolContext>) => Promise<ToolOutput>;
 }
 
@@ -76,8 +81,11 @@ export function defineTool<Input extends z.ZodObject>(spec: Readonly<ToolSpec<In
     annotations: spec.annotations,
   };
 
+  const cancellable = spec.cancellable ?? true;
+
   return {
     definition,
+    cancellable,
     call: async (args, context) => {
       const parsed = spec.input.safeParse(args ?? {});
 
@@ -104,7 +112,7 @@ export function defineTool<Input extends z.ZodObject>(spec: Readonly<ToolSpec<In
           isError: output.failed !== undefined,
         };
       } catch (error) {
-        if (context.signal.aborted) {
+        if (cancellable && context.signal.aborted) {
           throw error;
         }
 
@@ -136,7 +144,8 @@ function formatErrorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// the agent's own messages may already lead with the code
+// impd passes the agent's EXEC_FAILED on with the code already in the
+// message; until it stops doing so, the code is not added twice
 function formatCoded(code: string, message: string): string {
   return message.startsWith(`${code}: `) ? message : `${code}: ${message}`;
 }

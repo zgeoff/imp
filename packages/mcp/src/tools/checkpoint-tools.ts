@@ -54,8 +54,9 @@ export const CHECKPOINT_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_restore',
+    cancellable: false,
     description:
-      "Put the imp's disk back to a checkpoint. Everything written since the checkpoint is lost, and so is the memory: an awake imp boots fresh, a sleeping or stopped one boots on its next use. A cancel does not stop the restore.",
+      "Put the imp's disk back to a checkpoint. Everything written since the checkpoint is lost, and so is the memory: an awake imp boots fresh, a sleeping or stopped one boots on its next use. A cancel does not stop the restore, and its result still comes back.",
     input: z.strictObject({ name: ImpNameInput, checkpoint: CheckpointRefInput }),
     annotations: {
       title: 'Restore a checkpoint',

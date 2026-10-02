@@ -59,8 +59,8 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
   const progressIntervalMs = options.progressIntervalMs ?? PROGRESS_INTERVAL_MS;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 
-  // never rejects: a failed tool call is an isError result, a bug an
-  // internal error, and a cancelled call gets no response at all
+  // never rejects: a failed tool call is an isError result and a bug an
+  // internal error
   const runToolCall = async (
     id: RequestId,
     params: Readonly<Record<string, unknown>>,
@@ -75,18 +75,24 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
       return;
     }
 
-    const stopProgress = startProgress(options.send, readProgressToken(params), progressIntervalMs);
+    const stopProgress = startProgress(options.send, readProgressToken(params), {
+      intervalMs: progressIntervalMs,
+      signal,
+    });
+
+    // a cancelled call gets no response, unless the tool cannot be cancelled
+    const isAnswered = (): boolean => !signal.aborted || !tool.cancellable;
 
     try {
       const context = { client: options.client, guard: options.guard, signal, killGraceMs };
 
       const result = await tool.call(params['arguments'], context);
 
-      if (!signal.aborted) {
+      if (isAnswered()) {
         options.send(formatResult(id, result));
       }
     } catch (error) {
-      if (!signal.aborted) {
+      if (isAnswered()) {
         sendInternalError(id, error);
       }
     } finally {
@@ -222,12 +228,19 @@ function readProgressToken(params: Readonly<Record<string, unknown>>): string | 
   return typeof token === 'string' || typeof token === 'number' ? token : null;
 }
 
+interface ProgressOptions {
+  readonly intervalMs: number;
+
+  // the call's cancel: a cancelled call reports no more progress
+  readonly signal: Readonly<AbortSignal>;
+}
+
 // Long calls tell a client that asked for progress that they still run, so
 // it can keep its own timeout from ending them; returns the stop.
 function startProgress(
   send: (message: string) => void,
   token: string | number | null,
-  intervalMs: number,
+  options: Readonly<ProgressOptions>,
 ): () => void {
   if (token === null) {
     return () => {};
@@ -248,9 +261,15 @@ function startProgress(
         message: `still running after ${String(seconds)} s`,
       }),
     );
-  }, intervalMs);
+  }, options.intervalMs);
 
-  return () => {
+  const stop = (): void => {
     clearInterval(timer);
+
+    options.signal.removeEventListener('abort', stop);
   };
+
+  options.signal.addEventListener('abort', stop, { once: true });
+
+  return stop;
 }
