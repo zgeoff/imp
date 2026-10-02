@@ -21,6 +21,7 @@ import type { ImageRecord } from '../db/images';
 import { listImps } from '../db/imps';
 import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
+import { createEgressService } from '../egress/egress-service';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createImageService } from '../images/image-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
@@ -80,6 +81,9 @@ interface ImpTestOptions {
   // by default a tunnel is refused, so no test reaches the network
   readonly resolveTunnelTarget?: (host: string) => Promise<string>;
   readonly dialTunnel?: (address: string, port: number) => Socket;
+
+  // nft in place of the real one; by default it records each script
+  readonly runNft?: (script: string) => Promise<void>;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -154,6 +158,33 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
   });
 
+  // every nft script and conntrack flush the egress firewall ran
+  const nftScripts: string[] = [];
+  const flushed: string[] = [];
+
+  const egress = createEgressService({
+    config,
+    db,
+    log: printTestLog,
+    isGranted: broker.isGranted,
+    closeTunnels: broker.closeTunnels,
+    runNft:
+      options.runNft ??
+      ((script) => {
+        nftScripts.push(script);
+
+        return Promise.resolve();
+      }),
+    flushConnections: (guestIp) => {
+      flushed.push(guestIp);
+
+      return Promise.resolve();
+    },
+    forward: () => Promise.reject(new Error('no upstream in tests')),
+    resolveExact: () => Promise.resolve([]),
+    now: readClock,
+  });
+
   // a system drive file, as setupSystemFiles installs it
   const createSystemDrive = (drive: string): HostIdentity => {
     const identity = buildTestIdentity(dataDir, drive);
@@ -196,6 +227,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
         return Promise.resolve(true);
       },
+      egress,
     });
   };
 
@@ -228,6 +260,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     imps: governed.imps,
     governor: governed.governor,
     broker,
+    egress,
+    nftScripts,
+    flushed,
     bundleInstalls,
     storage,
     storageGate,
@@ -270,6 +305,7 @@ type AppParts = Pick<
   | 'broker'
   | 'tokens'
   | 'revocations'
+  | 'egress'
 >;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
@@ -314,6 +350,7 @@ export function buildTestApp(
     checkpoints,
     backups: null,
     broker: ctx.broker,
+    egress: ctx.egress,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,

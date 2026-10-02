@@ -60,6 +60,10 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'imps.hold': execImp,
   'imps.url': readImp,
 
+  // what the imp may reach: a change is the imp's to manage
+  'imps.policy': readImp,
+  'imps.setPolicy': manageImp,
+
   // a bigger disk spends the host's disk budget, as a create does
   'imps.resizeDisk': manageImp,
   'imps.fork': { scope: 'manage', on: 'imp', fields: ['source', 'name'] },

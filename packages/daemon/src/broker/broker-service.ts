@@ -89,6 +89,12 @@ export interface Broker {
   // failure rather than throwing
   readonly applyGrants: () => Promise<void>;
 
+  // true when a grant of the imp covers the host
+  readonly isGranted: (impId: string, host: string) => Promise<boolean>;
+
+  // ends the imp's plain tunnels to hosts `keep` rejects
+  readonly closeTunnels: (impId: string, keep: (host: string) => boolean) => void;
+
   // opens the front port on every address; 0 picks a free port, which it
   // returns
   readonly listen: (port: number) => Promise<number>;
@@ -398,6 +404,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     applyGrants,
+
+    closeTunnels: (impId, keep) => {
+      state.front?.closeTunnels(impId, keep);
+    },
+
+    isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
 
     listen: async (port) => {
       const front = await startBrokerFront(port, {

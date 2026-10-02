@@ -133,6 +133,12 @@ export function createFakeImpd(): FakeImpd {
         https: null,
         tailnet: null,
       })),
+      policy: os.imps.policy.handler(() => ({ mode: 'open' as const, allow: [] })),
+      setPolicy: os.imps.setPolicy.handler((context) => {
+        registerCall('imps.setPolicy', context.input);
+
+        return context.input.policy;
+      }),
       fork: os.imps.fork.handler((context) => {
         registerCall('imps.fork', context.input);
 

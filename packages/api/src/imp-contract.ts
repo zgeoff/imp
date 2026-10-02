@@ -8,6 +8,7 @@ import {
   BackupStatusSchema,
 } from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
+import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
@@ -49,6 +50,9 @@ export const impContract = {
 
           // the guest port the wake proxy forwards HTTP to (default 8080)
           httpPort: z.int().min(1).max(65_535).optional(),
+
+          // what the imp may reach directly (default open)
+          policy: EgressPolicySchema.optional(),
         }),
       )
       .output(ImpSchema),
@@ -88,7 +92,15 @@ export const impContract = {
       .input(NameInputSchema)
       .output(z.object({ local: z.url(), https: z.url().nullable(), tailnet: z.url().nullable() })),
 
-    // disk only: a memory fork would duplicate entropy and IDs across clones
+    // the egress policy; a change applies at once, whatever the imp's state
+    policy: base.input(NameInputSchema).output(EgressPolicySchema),
+
+    setPolicy: base
+      .input(z.object({ name: NameSchema, policy: EgressPolicySchema }))
+      .output(EgressPolicySchema),
+
+    // disk only, with the source's egress policy: a memory fork would
+    // duplicate entropy and IDs across clones
     fork: base
       .input(
         z.object({

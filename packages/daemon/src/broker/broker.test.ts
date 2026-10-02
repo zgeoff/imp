@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAuditEntries } from '../db/broker-audit';
@@ -140,11 +141,49 @@ async function setupBroker() {
     return { code, stdout, stderr };
   };
 
+  // a CONNECT from slot 0's guest that stays open: `established` once the
+  // broker answers 200, `closed` when either end ends it
+  const startTunnel = (target: string) => {
+    const established = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const state = { open: true };
+
+    const socket = createConnection({ host: '127.0.0.1', port, localAddress: '127.0.0.2' }, () => {
+      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      if (chunk.toString().startsWith('HTTP/1.1 200')) {
+        established.resolve();
+      } else {
+        established.reject(new Error(chunk.toString()));
+      }
+    });
+
+    socket.on('error', () => {});
+
+    socket.once('close', () => {
+      state.open = false;
+
+      closed.resolve();
+    });
+
+    return {
+      established: established.promise,
+      closed: closed.promise,
+      isOpen: () => state.open,
+      end: () => {
+        socket.destroy();
+      },
+    };
+  };
+
   return {
     ...ctx,
     seen,
     tunnelled,
     runCurl,
+    startTunnel,
     [Symbol.asyncDispose]: async () => {
       await upstream.stop(true);
       await realHost.stop(true);
@@ -241,18 +280,77 @@ test('a plain tunnel dials the checked address, and a closed egress policy refus
   try {
     await using ctx = await setupBroker();
 
-    const open = await ctx.runCurl(`http://plain.test:${String(port)}/`, ['--proxytunnel']);
+    const url = `http://plain.test:${String(port)}/`;
+
+    const open = await ctx.runCurl(url, ['--proxytunnel']);
 
     expect(open).toMatchObject({ code: 0, stdout: 'tunnel' });
 
-    await ctx.db.updateTable('imps').set({ egress_policy: 'none' }).execute();
+    // a box reaches the hosts its list names, and no other
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['plain.test'] });
 
-    const closed = await ctx.runCurl(`http://plain.test:${String(port)}/`, ['--proxytunnel']);
+    const boxed = await ctx.runCurl(url, ['--proxytunnel']);
+
+    expect(boxed).toMatchObject({ code: 0, stdout: 'tunnel' });
+
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['other.test'] });
+
+    const outside = await ctx.runCurl(url, ['--proxytunnel']);
+
+    expect(outside.code).not.toBe(0);
+    expect(outside.stderr).toContain('403');
+
+    await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+    const closed = await ctx.runCurl(url, ['--proxytunnel']);
 
     expect(closed.code).not.toBe(0);
     expect(closed.stderr).toContain('403');
   } finally {
     echo.close();
+  }
+});
+
+test('a tighter policy ends the open tunnels it denies, and keeps the rest', async () => {
+  // a server that holds every connection open until the test ends
+  const held = new Set<Socket>();
+
+  const hold = createServer((socket) => {
+    held.add(socket);
+    socket.on('error', () => {});
+  });
+
+  const listening = Promise.withResolvers<void>();
+
+  hold.listen(0, '127.0.0.1', listening.resolve);
+
+  await listening.promise;
+
+  const address = hold.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+
+  try {
+    await using ctx = await setupBroker();
+
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test', 'drop.test'] });
+
+    const keep = ctx.startTunnel(`keep.test:${String(port)}`);
+    const drop = ctx.startTunnel(`drop.test:${String(port)}`);
+
+    await Promise.all([keep.established, drop.established]);
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test'] });
+
+    await drop.closed;
+
+    expect(keep.isOpen()).toBeTrue();
+
+    keep.end();
+  } finally {
+    for (const socket of held) {
+      socket.destroy();
+    }
+
+    hold.close();
   }
 });
 

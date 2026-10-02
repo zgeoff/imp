@@ -11,6 +11,7 @@ test('it fills every setting from its default when the env is empty', () => {
     portBase: 20_000,
     sshPort: 22,
     brokerPort: 7081,
+    egressDnsPort: 7053,
     brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
     idleTimeoutS: 60,

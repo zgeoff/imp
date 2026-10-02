@@ -37,9 +37,10 @@ const ManifestImpSchema = z
     diskBytes: z.int().positive().default(LEGACY_DISK_BYTES),
     usedBytes: z.int().nonnegative().optional(),
 
-    // the broker's policy for hosts no grant covers, and the names of the
-    // secrets granted: never a value (docs/architecture/backups.md#manifest)
+    // the egress policy's mode and allow-list, and the names of the secrets
+    // granted: never a value (docs/architecture/backups.md#manifest)
     egressPolicy: z.string().default('open'),
+    egressAllow: z.array(z.string()).readonly().default([]),
     grants: z.array(z.string()).readonly().default([]),
 
     // oldest first

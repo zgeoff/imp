@@ -30,8 +30,8 @@ interface ImpsTable {
   firecracker_version: string | null;
   http_port: Generated<number>;
 
-  // what the broker does with a CONNECT to a host no grant covers: `open`
-  // tunnels it; #26 adds the policies that refuse it
+  // the egress mode, `open`, `box` or `none` (docs/architecture/networking.md),
+  // and a box's allow-list as a JSON array
   egress_policy: Generated<string>;
 
   // the disk file's size; 32 GiB for an imp from before sizes
@@ -40,6 +40,7 @@ interface ImpsTable {
   // 1 while a sleeping imp's guest has not grown into a resize yet: its
   // next wake grows it, a cold boot grows it anyway
   disk_grow_pending: Generated<number>;
+  egress_allow: Generated<string>;
 }
 
 interface CheckpointsTable {
