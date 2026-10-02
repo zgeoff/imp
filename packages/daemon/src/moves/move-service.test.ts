@@ -63,6 +63,7 @@ async function setupMoveTest(hook?: FetchHook, options: MoveTestOptions = {}) {
     ...hosts,
     impId: created.id,
     runMove: () => hosts.runMove('dev'),
+    runMoveWith: (stop: boolean) => hosts.runMove('dev', stop),
     waitForMove: () => hosts.waitForMove('dev'),
   };
 }
@@ -431,21 +432,26 @@ test('an elastic imp keeps its max memory', async () => {
   expect(moved).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
 });
 
+// a target from before elastic memory: its offer reply has no keepsMaxMemory
+async function removeKeepsMaxMemory(
+  request: Request,
+  forward: () => Promise<Response>,
+): Promise<Response> {
+  const response = await forward();
+
+  if (!request.url.endsWith(MOVE_PATHS.offer)) {
+    return response;
+  }
+
+  const body: unknown = await response.json();
+
+  const { keepsMaxMemory: _dropped, ...older } = MoveOfferReplySchema.parse(body);
+
+  return Response.json(older);
+}
+
 test('an elastic imp is refused a move to a target that would drop its max memory', async () => {
-  // a target from before elastic memory: its offer reply has no keepsMaxMemory
-  await using ctx = await setupMoveTest(async (request, forward) => {
-    const response = await forward();
-
-    if (!request.url.endsWith(MOVE_PATHS.offer)) {
-      return response;
-    }
-
-    const body: unknown = await response.json();
-
-    const { keepsMaxMemory: _dropped, ...older } = MoveOfferReplySchema.parse(body);
-
-    return Response.json(older);
-  });
+  await using ctx = await setupMoveTest(removeKeepsMaxMemory);
 
   await ctx.source.db
     .updateTable('imps')
@@ -461,6 +467,28 @@ test('an elastic imp is refused a move to a target that would drop its max memor
   expect(status.error).toContain('predates elastic memory');
   expect(status.sentBytes).toBe(0);
   expect(source).toMatchObject({ state: 'stopped', moveState: null, maxMemoryMib: 1024 });
+  expect(landed).toBeUndefined();
+});
+
+test('a running elastic imp that --stop halted runs again when the target refuses its max memory', async () => {
+  await using ctx = await setupMoveTest(removeKeepsMaxMemory);
+
+  await ctx.source.db
+    .updateTable('imps')
+    .set({ memory_mib: 256, max_memory_mib: 1024 })
+    .where('id', '=', ctx.impId)
+    .execute();
+
+  await ctx.sourceApp.client.imps.start({ name: 'dev' });
+
+  const status = await ctx.runMoveWith(true);
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  expect(status.error).toContain('predates elastic memory');
+  expect(source).toMatchObject({ state: 'running', moveState: null });
+
+  const landed = await findImpByName(ctx.target.db, 'dev');
+
   expect(landed).toBeUndefined();
 });
 
