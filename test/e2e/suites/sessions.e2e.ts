@@ -19,6 +19,9 @@ const ASLEEP_WITHIN_MS = (config.idleTimeoutS + 15) * 1000;
 const PAST_IDLE_MS = (config.idleTimeoutS + 6) * 1000;
 const DETACH_KEY = '\u001D';
 
+// the CLI's exit code once another terminal took the session over
+const TAKEN_OVER_CODE = 254;
+
 // prints the terminal size on SIGWINCH, on the main screen
 const DRAW_PROGRAM = String.raw`sh -c 'trap "echo size=\$(stty size)" WINCH; echo drawn; while :; do sleep 0.2; done'`;
 
@@ -129,34 +132,43 @@ test('a second attach takes the session over', async () => {
   const second = await openTerminal(['attach', name]);
   const firstCode = await first.exited;
 
-  await second.waitForText('size=24 80');
+  // the same size: the redraw goes through one row less first
+  await second.waitForText('size=23 80');
+  await second.waitForText('size=24 80', second.readOutput().lastIndexOf('size=23 80'));
+
+  const typed = second.readOutput().length;
 
   second.type('\u0003');
-  second.type('echo second-here\n');
+  second.type('echo second-$((2+3))\n');
 
-  await second.waitForText('second-here');
+  await second.waitForText('second-5', typed);
 
   second.type(DETACH_KEY);
 
   await second.exited;
 
-  expect(firstCode).toBe(0);
+  expect(firstCode).toBe(TAKEN_OVER_CODE);
   expect(first.readOutput()).toContain('another client attached to session main');
 });
 
 test('an attached terminal survives imp sleep by attaching again', async () => {
   const terminal = await openTerminal(['attach', name]);
 
-  await terminal.waitForText('# ');
+  // the replay has a prompt already; new output shows the attach is live
+  terminal.type('echo live-$((3+4))\n');
+
+  await terminal.waitForText('live-7');
 
   await runImp('sleep', name);
 
   await terminal.waitForText('attaching again');
 
+  // typed while it attaches again, so the keys wait for the session
   const after = terminal.readOutput().length;
 
   terminal.type('echo back-$((40+2))\n');
 
+  await terminal.waitForText('attached again', after);
   await terminal.waitForText('back-42', after);
 
   terminal.type(DETACH_KEY);
@@ -173,10 +185,12 @@ test('a busy detached session keeps the imp awake until it is killed', async () 
 
   await terminal.waitForText('# ');
 
-  terminal.type('while :; do :; done\n');
+  const typed = terminal.readOutput().length;
 
-  // let the loop start before the detach
-  await Bun.sleep(500);
+  terminal.type('echo spin-$((1+1)); while :; do :; done\n');
+
+  // the loop runs once the marker shows
+  await terminal.waitForText('spin-2', typed);
 
   terminal.type(DETACH_KEY);
 
