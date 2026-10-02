@@ -1,3 +1,4 @@
+import type { ExposeResult, Imp } from '@imp/api';
 import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import type { CliConfig } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
@@ -6,6 +7,7 @@ import { defineCommand } from '../define-command';
 import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
 import { listSavedTargets, runOnHosts } from '../fan-out';
+import type { SavedTarget } from '../fan-out';
 import {
   formatExposeResult,
   formatHostImps,
@@ -20,7 +22,7 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
-import { printError, runAction } from '../run-action';
+import { formatError, printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
@@ -103,15 +105,17 @@ async function runPlacedNew(request: NewRequest): Promise<void> {
     await createPlaced(
       ranking.ranked,
       async (host) => {
-        config = targets.find((target) => target.host === host)?.config ?? null;
+        const target = targets.find((saved) => saved.host === host);
 
-        if (config === null) {
+        if (target === undefined) {
           throw new Error(`no saved host ${host}`);
         }
 
+        config = target.config;
+
         console.error(`imp: placing on ${host}`);
 
-        await runNew(createImpClient(config), request, host);
+        await runNew(createImpClient(target.config), request, target);
       },
       (host, message) => {
         console.error(`imp: ${host}: ${message}; trying the next host`);
@@ -199,15 +203,16 @@ function readNewRequest(args: NewArgs): NewRequest {
 }
 
 // The create on one host, then what follows it there: trust warnings for
-// --net, and the expose for --public. `host` is the saved host placement
+// --net, and the expose for --public. `placed` is the saved host placement
 // picked, null for the usual one-host create.
-async function runNew(client: ImpClient, request: NewRequest, host: string | null) {
+async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarget | null) {
   const input = request.input;
   const auth = request.auth;
+  const host = placed?.host ?? null;
 
   // expose needs manage on the host; impd checks it again on the call.
   // Placement checked it on every host it ranked.
-  if (auth !== null && host === null) {
+  if (auth !== null && placed === null) {
     const identity = await client.tokens.whoami();
 
     if (identity.scope !== 'manage' || identity.imps !== null) {
@@ -223,12 +228,22 @@ async function runNew(client: ImpClient, request: NewRequest, host: string | nul
     ...(networks !== undefined && { networks: [...networks] }),
   });
 
-  if (networks !== undefined) {
-    await printTrustWarnings(client, imp.name);
-  }
+  let exposed: ExposeResult | null = null;
 
-  // a failure here leaves the imp tailnet-only; `imp expose` tries again
-  const exposed = auth === null ? null : await client.imps.expose({ name: imp.name, ...auth });
+  try {
+    if (networks !== undefined) {
+      await printTrustWarnings(client, imp.name);
+    }
+
+    // a failure here leaves the imp tailnet-only; `imp expose` tries again
+    exposed = auth === null ? null : await client.imps.expose({ name: imp.name, ...auth });
+  } catch (error) {
+    if (placed === null) {
+      throw error;
+    }
+
+    throw printPlacedFailure(imp, placed, error, request.json);
+  }
 
   if (request.json) {
     // the plain create keeps its shape: the imp alone
@@ -246,6 +261,19 @@ async function runNew(client: ImpClient, request: NewRequest, host: string | nul
     exposed === null ? formatImp(imp) : `${formatImp(imp)}\n${formatExposeResult(exposed)}`;
 
   console.log(text);
+}
+
+// After a placed create only the stderr line `placing on <host>` says where
+// the imp is, so the error names the host and --json still gets the imp. It
+// is a plain Error: placement never tries the next host for it.
+function printPlacedFailure(imp: Imp, placed: SavedTarget, error: unknown, json: boolean): Error {
+  const message = formatError(error, placed.config);
+
+  if (json) {
+    console.log(formatJson({ host: placed.host, imp, error: message }));
+  }
+
+  return new Error(`${imp.name} was created on ${placed.host}; ${message}`);
 }
 
 // `imp ls --all` when some hosts answered and some did not
@@ -289,7 +317,7 @@ async function listAllImps(json: boolean): Promise<void> {
   );
 
   const imps = answers.flatMap((answer) =>
-    'value' in answer ? answer.value.map((imp) => ({ host: answer.host, ...imp })) : [],
+    'value' in answer ? answer.value.map((imp) => ({ ...imp, host: answer.host })) : [],
   );
 
   const errors = answers.flatMap((answer) =>
