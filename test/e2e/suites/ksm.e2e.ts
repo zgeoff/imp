@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { release } from 'node:os';
+import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
+import { listImps, readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -16,8 +17,21 @@ const prefix = setupSuite('ksm');
 const TINY = resolveImageName('e2e-tiny');
 const names = [`${prefix}a`, `${prefix}b`];
 
-// both guests fill this much tmpfs with the same pages, then with their own
-const FILL_MIB = 128;
+// The same bytes in both guests, but no two pages alike within one: only a
+// merge across the guests counts. 96 MiB of 9-byte lines; /dev/shm holds
+// about 245 MiB in a 512 MiB guest.
+const FILL_MIB = 96;
+const FILL = `seq -w 1 ${String(Math.floor((FILL_MIB * 1024 ** 2) / 9))} > /dev/shm/fill`;
+
+// what each guest then writes of its own: together past the budget below,
+// so the governor must sleep one
+const OWN_MIB = 160;
+
+// low enough that the two guests' own data does not fit; boots reserve 20 %
+const BUDGET_MIB = 384;
+
+// guest mappings at least this large are guest memory
+const GUEST_MAPPING_MIB = 256;
 
 function readHostFile(path: string): string {
   try {
@@ -80,12 +94,60 @@ async function readMergingPages(name: string): Promise<number> {
   return Number(text);
 }
 
+// the permissions and flags of the VM's guest memory mappings: rw-s (memfd)
+// memory would never merge
+async function readGuestMappings(name: string): Promise<string[]> {
+  const pid = await readFirecrackerPid(name);
+  const smaps = await readContainerText(['cat', `/proc/${pid}/smaps`]);
+
+  const mappings: string[] = [];
+  const current = { perms: '', large: false };
+
+  for (const line of smaps.split('\n')) {
+    const header = /^(?<start>[\da-f]+)-(?<end>[\da-f]+) (?<perms>\S+) /u.exec(line);
+
+    if (header?.groups !== undefined) {
+      const bytes =
+        Number.parseInt(header.groups['end'] ?? '0', 16) -
+        Number.parseInt(header.groups['start'] ?? '0', 16);
+
+      current.perms = header.groups['perms'] ?? '';
+      current.large = bytes >= GUEST_MAPPING_MIB * 1024 ** 2;
+    } else if (line.startsWith('VmFlags:') && current.large) {
+      mappings.push(`${current.perms}${line.includes(' mg') ? ' mg' : ''}`);
+    }
+  }
+
+  return mappings;
+}
+
+// the governor's measure for every awake guest of the suite, read from /proc
+async function readAwakePssMib(): Promise<number> {
+  const rows = await listImps();
+
+  const awake = rows.filter((row) => names.includes(row.name) && row.state === 'running');
+
+  const pss = await Promise.all(awake.map((row) => readPssMib(row.name)));
+
+  return pss.reduce((sum, mib) => sum + mib, 0);
+}
+
+function countMib(mibs: readonly number[]): number {
+  return mibs.reduce((sum, mib) => sum + mib, 0);
+}
+
 beforeAll(async () => {
   if (!KSM_READY) {
     return;
   }
 
-  process.env['IMP_KSM'] = '1';
+  // a budget the guests can pass, and no idle sleeps to hide it
+  Object.assign(process.env, {
+    IMP_KSM: '1',
+    IMP_RAM_BUDGET_MIB: String(BUDGET_MIB),
+    IMP_BOOT_RESERVE_PERCENT: '20',
+    IMP_IDLE_TIMEOUT_S: '600',
+  });
 
   await runDevScript('reboot');
 }, 600_000);
@@ -95,13 +157,19 @@ afterAll(async () => {
     return;
   }
 
+  Object.assign(process.env, {
+    IMP_RAM_BUDGET_MIB: String(config.ramBudgetMib),
+    IMP_IDLE_TIMEOUT_S: String(config.idleTimeoutS),
+  });
+
   delete process.env['IMP_KSM'];
+  delete process.env['IMP_BOOT_RESERVE_PERCENT'];
 
   await runDevScript('reboot');
 }, 600_000);
 
 test.skipIf(!KSM_READY)(
-  'two guests that hold the same pages merge them, and their Pss falls',
+  'two guests that hold the same pages merge them across each other, and their Pss falls',
   async () => {
     const cpuBefore = readKsmdCpuMs();
 
@@ -110,9 +178,14 @@ test.skipIf(!KSM_READY)(
       await holdImp(name);
     }
 
-    // every 4 KiB page of `yes` output is the same page
+    const mappings = await Promise.all(names.map((name) => readGuestMappings(name)));
+
+    // private and mergeable, so memfd-backed memory would fail here
+    expect(mappings.flat().length).toBeGreaterThan(0);
+    expect(new Set(mappings.flat())).toEqual(new Set(['rw-p mg']));
+
     for (const name of names) {
-      await runShellInImp(name, `yes ksm | head -c ${String(FILL_MIB)}M > /dev/shm/fill`);
+      await runShellInImp(name, FILL);
     }
 
     const before = await Promise.all(names.map((name) => readPssMib(name)));
@@ -139,37 +212,46 @@ test.skipIf(!KSM_READY)(
     writeMetric('ksm_ksmd_cpu_ms', readKsmdCpuMs() - cpuBefore);
     writeMetric('ksm_info', info.ksm);
 
-    expect(after.reduce((sum, mib) => sum + mib, 0)).toBeLessThan(
-      before.reduce((sum, mib) => sum + mib, 0) - FILL_MIB,
-    );
+    // a metric until the CI kernel is known to keep the flag (590c03ca6a3f)
+    writeMetric('ksm_unmergeable', info.ksm?.unmergeable);
 
-    expect(info.ksm?.unmergeable).toBe(0);
+    // the shared fill counts half in each guest
+    expect(countMib(after)).toBeLessThan(countMib(before) - FILL_MIB / 2);
     expect(info.ksm?.headroomMib).toBeGreaterThan(0);
   },
   600_000,
 );
 
 test.skipIf(!KSM_READY)(
-  'when the guests write their own pages, the budget still holds',
+  'when the guests write their own pages past the budget, the governor keeps the budget',
   async () => {
+    for (const name of names) {
+      await runImp('hold', name, '0');
+    }
+
+    // the fill goes first: /dev/shm cannot hold both
     for (const name of names) {
       await runShellInImp(
         name,
-        `head -c ${String(FILL_MIB)}M /dev/urandom > /dev/shm/own && rm /dev/shm/fill`,
+        `rm /dev/shm/fill && head -c ${String(OWN_MIB)}M /dev/urandom > /dev/shm/own`,
       );
     }
 
-    // one governor tick after the split
-    await Bun.sleep(6000);
+    // two governor ticks after the last write
+    await Bun.sleep(12_000);
 
-    const info = await readInfo();
+    const awakeMib = await readAwakePssMib();
+    const rows = await listImps();
 
-    writeMetric('ksm_after_split', { usedMib: info.ramUsedMib, ksm: info.ksm });
+    const states = rows.filter((row) => names.includes(row.name)).map((row) => row.state);
 
-    expect(info.ramUsedMib + (info.ksm?.headroomMib ?? 0)).toBeLessThanOrEqual(info.ramBudgetMib);
+    writeMetric('ksm_after_split', { awakeMib, states });
 
-    await runImp('rm', names[0] ?? '');
-    await runImp('rm', names[1] ?? '');
+    expect(awakeMib).toBeLessThanOrEqual(BUDGET_MIB);
+
+    for (const name of names) {
+      await runImp('rm', name);
+    }
   },
   600_000,
 );
