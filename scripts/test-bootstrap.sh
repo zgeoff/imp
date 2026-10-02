@@ -79,12 +79,13 @@ fail() {
 }
 
 # kernel_state: the global kernel state a container could change. Counters
-# and values that move on their own are left out.
+# and values that move on their own are left out, and so are the socket
+# diag modules: any `ss` on the runner loads them on demand.
 kernel_state() {
   sysctl -a 2>/dev/null \
     | grep -E '^(vm|kernel)\.' \
     | grep -vE '^kernel\.(random\.|ns_last_pid|pty\.nr|sched_domain\.|perf_event_max_sample_rate|tainted)' || true
-  awk '{ print "module", $1 }' /proc/modules | sort
+  awk '$1 !~ /_diag$/ { print "module", $1 }' /proc/modules | sort
 }
 
 # teardown: stop the test container. Mounts are undone and loop devices
