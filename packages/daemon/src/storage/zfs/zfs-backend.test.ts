@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { waitWithin } from '../../process/wait-within';
@@ -605,9 +605,9 @@ const NO_ROWS = {
   imageDigests: new Set<string>(),
 };
 
-// What a lost database leaves on a pool: imps a (cp-1, cp-2, a backup copy
-// and a memory snapshot) and b (a fork of cp-1, with cp-b and a fork
-// snapshot), two images, and the leftovers of four crashes.
+// What a lost database leaves on a pool: imps a and b with checkpoints and
+// other snapshots, three images, the files of two imps with no disk, and
+// three crash leftovers.
 async function setupSurvivors() {
   const ctx = await setupStarted();
 
@@ -623,10 +623,19 @@ async function setupSurvivors() {
   mkdirSync(join(ctx.dataDir, 'mem', 'a'), { recursive: true });
   writeFileSync(join(ctx.dataDir, 'mem', 'a', 'mem'), 'memory');
 
-  // an image build, an image renamed but never snapshotted, and what two
+  // an image with no `@base`: a build cut short, or not
+  await ctx.fake.run(['zfs', 'create', `${ROOT}/images/half`]);
+
+  // a memory snapshot and a VM identity whose disks are gone
+  mkdirSync(join(ctx.dataDir, 'mem', 'm1'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'mem', 'm1', 'vmstate'), 'vmstate');
+  writeFileSync(join(ctx.dataDir, 'mem', 'm1', 'meta.json'), '{}');
+  mkdirSync(join(ctx.dataDir, 'imps', 'v1'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'imps', 'v1', 'vm.json'), '{}');
+
+  // an image build under its temporary name, and the empty directories two
   // destroys leave once their disks are retired
   await ctx.fake.run(['zfs', 'create', `${ROOT}/staging/image-crashed`]);
-  await ctx.fake.run(['zfs', 'create', `${ROOT}/images/half`]);
 
   mkdirSync(join(ctx.dataDir, 'mem', 'done'), { recursive: true });
   mkdirSync(join(ctx.dataDir, 'imps', 'done', 'run'), { recursive: true });
@@ -654,7 +663,13 @@ test('start after a lost database keeps every disk, image and checkpoint, and lo
 
   expect(
     ctx.fake.listDatasets().filter((name) => /\/(?:disks|images|staging)\//.test(name)),
-  ).toEqual([`${ROOT}/disks/a`, `${ROOT}/disks/b`, `${ROOT}/images/7e1d`, IMAGE]);
+  ).toEqual([
+    `${ROOT}/disks/a`,
+    `${ROOT}/disks/b`,
+    `${ROOT}/images/7e1d`,
+    IMAGE,
+    `${ROOT}/images/half`,
+  ]);
 
   expect(ctx.listRetired()).toEqual([]);
 
@@ -663,20 +678,33 @@ test('start after a lost database keeps every disk, image and checkpoint, and lo
   expect(ctx.fake.readMountedAt(ctx.diskDir('b'))).toBe(`${ROOT}/disks/b`);
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'images', '7e1d'))).toBe(`${ROOT}/images/7e1d`);
   expect(existsSync(join(ctx.dataDir, 'mem', 'a', 'mem'))).toBeTrue();
+  expect(existsSync(join(ctx.dataDir, 'mem', 'm1', 'vmstate'))).toBeTrue();
+  expect(existsSync(join(ctx.dataDir, 'imps', 'v1', 'vm.json'))).toBeTrue();
   expect(existsSync(join(ctx.dataDir, 'mem', 'done'))).toBeFalse();
   expect(existsSync(join(ctx.dataDir, 'imps', 'done'))).toBeFalse();
 
   const readCreated = (name: string) => readFakeCreation(ctx.fake, name);
 
-  expect(ctx.logs.filter((line) => line.startsWith('impd: storage:'))).toEqual([
-    'impd: storage: removed image half',
+  // a directory's creation is its birth time on the test's filesystem
+  const lines = ctx.logs
+    .filter((line) => line.startsWith('impd: storage:'))
+    .map((line) =>
+      line.includes(ctx.dataDir)
+        ? line.replace(/created \S+Z, snapshots: none$/, 'created <birth>, snapshots: none')
+        : line,
+    );
+
+  expect(lines).toEqual([
     'impd: storage: removed imp done',
     'impd: storage: removed memory done',
     `impd: storage: kept orphan imp a (${ROOT}/disks/a): 1.0 MiB, created ${readCreated(`${ROOT}/disks/a`)}, snapshots: cp-1, cp-2, bk-r1-a`,
     `impd: storage: kept orphan imp b (${ROOT}/disks/b): 1.0 MiB, created ${readCreated(`${ROOT}/disks/b`)}, snapshots: cp-b, fork-left`,
     `impd: storage: kept orphan image 9f2c (${IMAGE}): 1.0 MiB, created ${readCreated(IMAGE)}, snapshots: base`,
     `impd: storage: kept orphan image 7e1d (${ROOT}/images/7e1d): 1.0 MiB, created ${readCreated(`${ROOT}/images/7e1d`)}, snapshots: base`,
-    'impd: storage: kept 4 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+    `impd: storage: kept orphan image half (${ROOT}/images/half): 1.0 MiB, created ${readCreated(`${ROOT}/images/half`)}, snapshots: none`,
+    `impd: storage: kept orphan imp v1 (${ctx.dataDir}/imps/v1): 0.0 MiB, created <birth>, snapshots: none`,
+    `impd: storage: kept orphan memory m1 (${ctx.dataDir}/mem/m1): 0.0 MiB, created <birth>, snapshots: none`,
+    'impd: storage: kept 7 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
   ]);
 });
 
@@ -698,6 +726,9 @@ test('a sweep keeps the orphans; with orphans, a dry run lists what the next swe
     'imp b',
     'image 9f2c',
     'image 7e1d',
+    'image half',
+    'imp v1',
+    'memory m1',
   ]);
 
   expect(
@@ -715,9 +746,12 @@ test('a sweep keeps the orphans; with orphans, a dry run lists what the next swe
       { kind: 'snapshot', id: `${ROOT}/disks/a@bk-r1-a` },
       { kind: 'image', id: '9f2c' },
       { kind: 'image', id: '7e1d' },
+      { kind: 'image', id: 'half' },
       { kind: 'imp', id: 'a' },
       { kind: 'imp', id: 'b' },
+      { kind: 'imp', id: 'v1' },
       { kind: 'memory', id: 'a' },
+      { kind: 'memory', id: 'm1' },
     ],
     kept: [],
   });
@@ -732,8 +766,8 @@ test('a sweep keeps the orphans; with orphans, a dry run lists what the next swe
   expect(ctx.listRetired()).toEqual([]);
   expect(ctx.fake.listSnapshots()).toEqual([]);
   expect(ctx.fake.listDatasets().filter((name) => /\/(?:disks|images)\//.test(name))).toEqual([]);
-  expect(existsSync(join(ctx.dataDir, 'mem', 'a'))).toBeFalse();
-  expect(existsSync(join(ctx.dataDir, 'imps', 'a'))).toBeFalse();
+  expect(readdirSync(join(ctx.dataDir, 'mem'))).toEqual([]);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([]);
 });
 
 test('it reads the pool usage of the root dataset', async () => {

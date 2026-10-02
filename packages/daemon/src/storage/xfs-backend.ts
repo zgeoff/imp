@@ -19,6 +19,7 @@ import type { OwnedFile } from './count-owner-bytes';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { readExtents } from './fiemap';
 import { readLoopHostFreeBytes } from './loop-backing-file';
+import { isHoldingFiles, listFilesUnder, readDirectoryOrphan } from './orphan-files';
 import { printSweep } from './print-sweep';
 import { createReflinkClone } from './reflink';
 import type {
@@ -168,20 +169,10 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       .flatMap((impId) => listEntries(resolveImpPaths(impId).checkpointsDir))
       .filter((checkpointId) => !live.checkpointIds.has(checkpointId));
 
-    // with no disk, checkpoint or memory file, an imp directory is what a
-    // destroy leaves; with no rootfs, an image directory is a build cut short
-    const isImpHeld = (impId: string) => {
-      const paths = resolveImpPaths(impId);
-
-      return (
-        existsSync(paths.disk) ||
-        existsSync(paths.memFile) ||
-        listEntries(paths.checkpointsDir).length > 0
-      );
-    };
-
-    const isImageHeld = (name: string) =>
-      existsSync(join(deps.dataDir, 'images', name, 'rootfs.ext4'));
+    // only a directory with no file in it is provably nothing; anything
+    // else may be what an imp needs to come back
+    const isImpHeld = (impId: string) => isHoldingFiles(resolveImpPaths(impId).dir);
+    const isImageHeld = (name: string) => isHoldingFiles(join(deps.dataDir, 'images', name));
 
     // hidden entries are image builds in flight, which only start drops
     const unknownImages = listEntries(join(deps.dataDir, 'images'))
@@ -204,21 +195,15 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     };
   };
 
-  // the size, age and checkpoints of an orphan, for the log and `imp gc`;
-  // the size counts blocks a reflink shares in full
+  // the size, age and checkpoints of an orphan, for the log and `imp gc`
   const readOrphan = (orphan: DroppedStorage): OrphanStorage => {
-    const isImp = orphan.kind === 'imp';
-    const dir = isImp ? resolveImpPaths(orphan.id).dir : join(deps.dataDir, 'images', orphan.id);
-    const birth = statSync(dir).birthtimeMs;
+    if (orphan.kind === 'imp') {
+      const paths = resolveImpPaths(orphan.id);
 
-    return {
-      kind: isImp ? 'imp' : 'image',
-      id: orphan.id,
-      location: dir,
-      bytes: listFilesUnder(dir).reduce((sum, path) => sum + statSync(path).blocks * 512, 0),
-      createdAt: birth > 0 ? new Date(birth) : null,
-      snapshots: isImp ? listEntries(resolveImpPaths(orphan.id).checkpointsDir) : [],
-    };
+      return readDirectoryOrphan('imp', orphan.id, paths.dir, listEntries(paths.checkpointsDir));
+    }
+
+    return readDirectoryOrphan('image', orphan.id, join(deps.dataDir, 'images', orphan.id), []);
   };
 
   const removeLeftover = (dropped: DroppedStorage, live: LiveStorage): void => {
@@ -604,16 +589,6 @@ async function readOwnedExtents(
 
     return { extents: [], isComplete: true };
   }
-}
-
-function listFilesUnder(dir: string): string[] {
-  if (!existsSync(dir)) {
-    return [];
-  }
-
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 // a kind and id alone, without what planLeftovers sorted by
