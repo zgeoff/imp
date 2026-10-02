@@ -42,7 +42,7 @@ export interface ExecSessionOptions {
   readonly onStarted: (pid: number) => void;
   readonly onOutput: (channel: 'stdout' | 'stderr', data: Uint8Array) => void;
 
-  // a browser WebSocket takes no headers (impd also reads ?token=), so the
+  // a browser WebSocket takes no headers (it uses an exec ticket), so the
   // runtime that opens the socket is the caller's choice
   readonly connect: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
 }
