@@ -52,8 +52,15 @@ interface BudgetMonitor {
   readonly stop: () => Promise<void>;
 }
 
-async function readBudgetSample(): Promise<BudgetSample> {
-  const info = await readInfo();
+// null for a sample lost to a busy impd, which is not a budget violation; a
+// bad smaps read throws, and stop() rethrows it
+async function readBudgetSample(): Promise<BudgetSample | null> {
+  const info = await readInfo().catch(() => null);
+
+  if (info === null) {
+    return null;
+  }
+
   const smaps = await runInContainer(['sh', '-c', FIRECRACKER_MEMORY_SCRIPT]);
 
   const memory = parseFirecrackerMemory(smaps.stdout);
@@ -73,12 +80,10 @@ function startBudgetMonitor(): BudgetMonitor {
 
   const loop = (async () => {
     while (state.running) {
-      try {
-        const sample = await readBudgetSample();
+      const sample = await readBudgetSample();
 
+      if (sample !== null) {
         samples.push(sample);
-      } catch {
-        // a sample lost to a busy impd is not a budget violation
       }
 
       await Bun.sleep(500);
@@ -127,16 +132,26 @@ async function createFilledImp(name: string): Promise<number> {
   return ms;
 }
 
-async function readPerImpMib(usedBefore: number): Promise<number> {
-  const row = await requireImp(buildName(1));
+// The smallest RAM of the first `count` imps: imp 1 may cold-boot while its
+// boot template builds, and the imps restored from it own less, so more fit.
+async function readPerImpMib(count: number, usedBefore: number): Promise<number> {
+  const figures: number[] = [];
 
-  if (row.ramMib !== undefined) {
-    return row.ramMib;
+  for (let index = 1; index <= count; index++) {
+    const row = await requireImp(buildName(index));
+
+    if (row.ramMib !== undefined) {
+      figures.push(row.ramMib);
+    }
+  }
+
+  if (figures.length > 0) {
+    return Math.min(...figures);
   }
 
   const info = await readInfo();
 
-  return info.ramUsedMib - usedBefore;
+  return Math.floor((info.ramUsedMib - usedBefore) / count);
 }
 
 // An imp that fits the budget but not its boot reserve (a share of its
@@ -192,13 +207,19 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
   let perImp = 0;
 
   try {
-    const firstMs = await createFilledImp(buildName(1));
+    // two imps before the measure: the second restores from the boot
+    // template when the first built it
+    const measured = Math.min(2, config.scaleCount);
 
-    createMs.push(firstMs);
+    for (let index = 1; index <= measured; index++) {
+      const ms = await createFilledImp(buildName(index));
+
+      createMs.push(ms);
+    }
 
     await Bun.sleep(3000);
 
-    perImp = await readPerImpMib(start.ramUsedMib);
+    perImp = await readPerImpMib(measured, start.ramUsedMib);
 
     const fit = Math.floor(config.ramBudgetMib / perImp);
 
@@ -217,9 +238,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
       fillMib: config.scaleFillMib,
     });
 
-    // An imp restored from a warm boot template owns less than a cold boot
-    // (its untouched pages stay clean template pages), so more fit: the
-    // governor sleeps nothing unless the count passes the fit.
+    // the governor sleeps nothing unless the count passes the fit
     if (config.scaleCount <= fit) {
       throw new Error(
         `E2E_SCALE_COUNT ${String(config.scaleCount)} fits in the budget at ${String(perImp)} MiB ` +
@@ -227,7 +246,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
       );
     }
 
-    for (let index = 2; index <= config.scaleCount; index++) {
+    for (let index = measured + 1; index <= config.scaleCount; index++) {
       const ms = await createFilledImp(buildName(index));
 
       createMs.push(ms);
