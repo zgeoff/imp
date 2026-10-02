@@ -1,7 +1,6 @@
 import { rmSync } from 'node:fs';
 import type { Checkpoint, Imp } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
 import { buildConflictError, buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';
 import {
@@ -17,16 +16,13 @@ import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { toLockedImp } from '../imps/imp-lock';
-import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
-import { readErrorMessage } from '../read-error-message';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
-
-// How long the guest stays frozen at most if impd never sends thaw.
-export const FREEZE_TIMEOUT_MS = 10_000;
+import { createConsistentDisk } from './consistent-disk';
+import type { DiskFreezer } from './consistent-disk';
 
 // Short, typeable and global, so the existing primary key holds them without
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
@@ -52,12 +48,6 @@ export interface CheckpointService {
   // disk only: a memory fork would duplicate entropy and IDs
   // (docs/architecture/storage.md#checkpoints-restores-and-forks)
   readonly forkImp: (input: ForkInput) => Promise<Imp>;
-}
-
-// the agent's freeze and thaw, behind an interface for tests
-export interface DiskFreezer {
-  readonly freeze: (vsockPath: string, timeoutMs: number) => Promise<void>;
-  readonly thaw: (vsockPath: string) => Promise<void>;
 }
 
 export interface CheckpointServiceDeps {
@@ -88,7 +78,13 @@ export function isValidCheckpointLabel(label: string): boolean {
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
   const log = deps.log ?? printLog;
   const storage = deps.storage;
-  const freezer = deps.freezer ?? { freeze: sendFreeze, thaw: sendThaw };
+
+  const withConsistentDisk = createConsistentDisk({
+    storage,
+    imps: deps.imps,
+    log,
+    freezer: deps.freezer,
+  });
 
   const findCheckpointOrThrow = async (imp: ImpRecord, ref: string): Promise<CheckpointRecord> => {
     const checkpoint = await findCheckpoint(deps.db, imp.id, ref);
@@ -98,41 +94,6 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     }
 
     return checkpoint;
-  };
-
-  // Runs `task` on a consistent disk: a running one is frozen around it (sync
-  // + FIFREEZE in the guest), a sleeping one wakes first, since its memory
-  // image holds unwritten page cache. The caller holds the imp's lock.
-  const withConsistentDisk = async <T>(
-    found: LockedImp,
-    action: string,
-    task: () => Promise<T>,
-  ): Promise<T> => {
-    const paths = storage.resolveImpPaths(found.id);
-
-    if (found.state === 'stopped' || found.state === 'error') {
-      return task();
-    }
-
-    const imp = found.state === 'sleeping' ? await deps.imps.requireRunningImp(found) : found;
-
-    if (imp.state !== 'running') {
-      throw buildInvalidStateError(imp.state, ['running', 'stopped', 'error'], action);
-    }
-
-    try {
-      await freezer.freeze(paths.vsockSocket, FREEZE_TIMEOUT_MS);
-
-      return await task();
-    } finally {
-      try {
-        await freezer.thaw(paths.vsockSocket);
-      } catch (error) {
-        const message = readErrorMessage(error);
-
-        log(`impd: ${imp.name}: thaw failed (the agent thaws on its own): ${message}`);
-      }
-    }
   };
 
   // On ZFS an id can still be taken by the snapshot of a deleted checkpoint
@@ -288,7 +249,9 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           );
         }
 
-        return { imp: await deps.imps.toApi(imp), policy };
+        const api = await deps.imps.toApi(imp);
+
+        return { imp: api, policy, isIdentityResetPending: imp.isIdentityResetPending };
       });
 
       const createForkDisk = (impId: string) =>
@@ -321,6 +284,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           cpuLimit: source.imp.cpu.limit,
           cpuWeight: source.imp.cpu.weight,
         }),
+        isIdentityResetPending: source.isIdentityResetPending,
         prepareDisk: createForkDisk,
       });
     },

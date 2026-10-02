@@ -39,6 +39,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'tokens', prefix: 'e2e-tok-', images: ['e2e-tiny'] },
   { name: 'egress', prefix: 'e2e-eg-', images: ['e2e-tiny'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
+  { name: 'templates', prefix: 'e2e-tpl-', images: ['e2e-git'] },
 
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
@@ -48,8 +49,8 @@ export const SUITES: readonly Suite[] = [
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs: exec, checkpoints, sleep, HTTP wakes, restart, MCP,
-// services, SSH, reverse forwards, proxy, the dashboard, tokens and CPU limits.
+// `fast` is what CI runs; docs/guides/development.md#end-to-end-tests lists
+// its suites.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
   fast: [
@@ -67,6 +68,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'dashboard',
     'tokens',
     'cpu',
+    'templates',
   ],
 };
 

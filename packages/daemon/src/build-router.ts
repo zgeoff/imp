@@ -25,6 +25,7 @@ import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
+import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
@@ -47,6 +48,7 @@ export interface RouterDeps {
   readonly images: ImageService;
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
+  readonly templates: TemplateService;
   readonly broker: Broker;
   readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy'>;
 
@@ -147,7 +149,23 @@ export function buildRouter(deps: RouterDeps) {
 
   return os.router({
     imps: {
-      create: os.imps.create.handler((context) => deps.imps.createImp(context.input)),
+      create: os.imps.create.handler(async (context) => {
+        const caller = context.context.caller;
+
+        // a template holds its source imp's disk: a caller limited to some
+        // imps must reach the source, as for a fork
+        if (caller.imps !== null) {
+          const image = await deps.images.resolveImage(context.input.image);
+
+          if (image.sourceImp !== null && !isCallerAllowed(caller, 'manage', image.sourceImp)) {
+            throw buildForbiddenError(
+              `${formatCaller(caller)} may not copy imp ${image.sourceImp}, the source of template ${image.name}`,
+            );
+          }
+        }
+
+        return deps.imps.createImp(context.input);
+      }),
       list: os.imps.list.handler((context) => listCallerImps(context.context.caller)),
       get: os.imps.get.handler((context) => deps.imps.getImp(context.input.name)),
       destroy: os.imps.destroy.handler(async (context) => {
@@ -220,7 +238,12 @@ export function buildRouter(deps: RouterDeps) {
         return images.map((image) => toApiImage(image));
       }),
       add: os.images.add.handler(async (context) => {
-        const image = await deps.images.addImage(context.input.ref, context.input.name);
+        const input = context.input;
+
+        const image =
+          'imp' in input
+            ? await deps.templates.createTemplate(input.imp, input.name)
+            : await deps.images.addImage(input.ref, input.name);
 
         return toApiImage(image);
       }),
@@ -446,6 +469,7 @@ export function toApiImage(image: ImageRecord): Image {
     name: image.name,
     ref: image.ref,
     digest: image.digest,
+    source: image.source,
     createdAt: image.createdAt,
     sizeBytes: image.sizeBytes,
   };

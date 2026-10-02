@@ -37,3 +37,12 @@ func TestParseEmptyDNSEntries(t *testing.T) {
 		t.Fatalf("dns = %v, want %v", p.DNS, want)
 	}
 }
+
+func TestParseResetIdentity(t *testing.T) {
+	if Parse("imp.hostname=a").ResetIdentity {
+		t.Fatal("reset without the parameter")
+	}
+	if !Parse("imp.hostname=a imp.reset_identity=1").ResetIdentity {
+		t.Fatal("no reset with imp.reset_identity=1")
+	}
+}

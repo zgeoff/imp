@@ -57,6 +57,12 @@ const CpuLimitSchema = z.number().min(0.1);
 // cgroup v2 cpu.weight; 100 is the default share
 const CpuWeightSchema = z.int().min(1).max(10_000);
 
+// a docker image ref, or an imp whose disk becomes a template
+const ImageAddInputSchema = z.union([
+  z.object({ ref: ImageRefSchema, name: NameSchema.optional() }),
+  z.object({ imp: NameSchema, name: NameSchema }),
+]);
+
 export const impContract = {
   imps: {
     create: base
@@ -162,7 +168,12 @@ export const impContract = {
 
   checkpoints: {
     create: base
-      .input(z.object({ name: NameSchema, label: z.string().min(1).max(64).optional() }))
+      .input(
+        z.object({
+          name: NameSchema,
+          label: z.string().min(1).max(64).optional(),
+        }),
+      )
       .output(CheckpointSchema),
 
     list: base.input(NameInputSchema).output(z.array(CheckpointSchema)),
@@ -207,10 +218,10 @@ export const impContract = {
   images: {
     list: base.output(z.array(ImageSchema)),
 
-    // from an image ref the host's docker already has or can pull
-    add: base
-      .input(z.object({ ref: ImageRefSchema, name: NameSchema.optional() }))
-      .output(ImageSchema),
+    // From an image ref the host's docker already has or can pull, or a
+    // template from an imp's disk (docs/guides/templates.md). A template
+    // name made again points at the new disk; imps made before keep theirs.
+    add: base.input(ImageAddInputSchema).output(ImageSchema),
 
     // contextDir is a path on the imp host, handed to `docker build`; a
     // context on the client's machine streams to IMAGE_BUILD_PATH instead

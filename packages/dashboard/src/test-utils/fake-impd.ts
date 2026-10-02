@@ -222,7 +222,11 @@ export function createFakeImpd(): FakeImpd {
       add: os.images.add.handler((context) => {
         registerCall('images.add', context.input);
 
-        return buildImage({ name: context.input.name ?? 'added', ref: context.input.ref });
+        const input = context.input;
+
+        return 'imp' in input
+          ? buildImage({ name: input.name, ref: `imp:${input.imp}`, source: 'imp' })
+          : buildImage({ name: input.name ?? 'added', ref: input.ref });
       }),
       build: os.images.build.handler(() => {
         throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
@@ -446,6 +450,7 @@ export function buildImage(overrides: Partial<Image> & { readonly name: string }
     id: `image-${overrides.name}`,
     ref: `docker.io/library/${overrides.name}:latest`,
     digest: 'sha256:0',
+    source: 'oci',
     createdAt: NOW,
     sizeBytes: 512 * 1024 * 1024,
     ...overrides,

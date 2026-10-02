@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { ImageSourceSchema } from '@imp/api';
 import { sql } from 'kysely';
 import * as z from 'zod';
 import type { ImpDatabase } from '../db/open-database';
@@ -16,6 +17,7 @@ const CopyImpSchema = z.object({
   egressPolicy: z.string(),
   diskBytes: z.int(),
   egressAllow: z.string(),
+  identityResetPending: z.int(),
 });
 
 const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
@@ -33,6 +35,8 @@ const CopyImageSchema = z.object({
   name: z.string(),
   ref: z.string(),
   digest: z.string(),
+  source: ImageSourceSchema,
+  sourceImp: z.string().nullable(),
   sizeBytes: z.int(),
 });
 
@@ -70,7 +74,8 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
       .query(
         `SELECT id, name, image_id AS imageId, state, vcpus, memory_mib AS memoryMib,
            http_port AS httpPort, egress_policy AS egressPolicy, egress_allow AS egressAllow,
-           disk_bytes AS diskBytes FROM imps ORDER BY name`,
+           disk_bytes AS diskBytes, identity_reset_pending AS identityResetPending
+           FROM imps ORDER BY name`,
       )
       .all();
 
@@ -82,7 +87,10 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
       .all();
 
     const images = copy
-      .query('SELECT id, name, ref, digest, size_bytes AS sizeBytes FROM images ORDER BY name')
+      .query(
+        `SELECT id, name, ref, digest, source, source_imp AS sourceImp, size_bytes AS sizeBytes
+           FROM images ORDER BY name`,
+      )
       .all();
 
     const grants = copy

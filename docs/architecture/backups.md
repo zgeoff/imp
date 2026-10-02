@@ -46,11 +46,11 @@ The paths are the same every run, so restic finds each file it read the run befo
 
 `manifest.json` is everything a restore reads: each imp's name, image digest, vCPUs, memory, HTTP
 port, state, egress policy and its allow-list, the names of the secrets granted to it, its
-checkpoints oldest first with labels and times, and each image's name, ref and digest. Each disk and
-checkpoint has its size (`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which
-a restore holds twice in the [disk budget](./storage.md#disk-budget); a manifest from before
-`usedBytes` falls back to the size. It holds no tokens or secret values, and no slots or addresses:
-a restore takes new ones.
+checkpoints oldest first with labels and times, and each image's name, ref, digest and source
+(`oci`, or `imp` for a [template](../guides/templates.md)). Each disk and checkpoint has its size
+(`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which a restore holds twice in
+the [disk budget](./storage.md#disk-budget); a manifest from before `usedBytes` falls back to the
+size. It holds no tokens or secret values, and no slots or addresses: a restore takes new ones.
 
 The database itself stays on the host. Each run starts with `VACUUM INTO <data>/backup/db.sqlite`,
 one consistent read of the database, and backs up only what that copy names. The copy stays out of
@@ -174,7 +174,10 @@ imp backup restore --all --merge               # add every imp to a host that ha
   0.1 %) unaccounted for means the scan ended early, and every block from there is read. A file
   restic restored showed no gap on XFS or ext4.
 - An image with the same digest is reused. Otherwise it is restored too, under its name, or under
-  `<name>-<digest prefix>` when another image has that name.
+  `<name>-<tag>` when another image has that name: the tag is a docker ID's first 8 characters, or
+  the last 8 of a template's uuid. A fallback name that is taken too stops the restore before it
+  writes anything. Each image comes back before the imps on it. `--all` also brings back every
+  template that no imp uses, since a template cannot be pulled again.
 - A name in use stops the restore with a conflict that names the imp; `--as` picks another name.
 - `--all` refuses a host that has imps, unless `--merge`. With `--merge`, every name is checked
   first, and a clash names the imp; nothing is restored then.

@@ -30,6 +30,7 @@ export const FAKE_IMP: ImpRecord = {
   wakeCount: 0,
   awakeMs: 0,
   awakeSince: null,
+  isIdentityResetPending: false,
 };
 
 // events a fake stream yields, in order; null ends the stream

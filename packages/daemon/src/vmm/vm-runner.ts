@@ -41,6 +41,10 @@ export interface VmPlan {
 
   // the CPU limit's cgroup; null runs the VM unlimited
   readonly cgroup: ImpCgroup | null;
+
+  // the first boot of an imp from a template: the agent gives it a new
+  // machine-id and ssh host keys (docs/guides/templates.md#identity)
+  readonly isIdentityReset: boolean;
 }
 
 interface StartedVm {
@@ -52,6 +56,9 @@ interface StartedVm {
 
   // milliseconds per step, for the create-time breakdown in the log
   readonly timings: Readonly<Record<string, number>>;
+
+  // what a boot with isIdentityReset reported; absent for any other start
+  readonly identityReset?: 'ok' | 'failed' | undefined;
 }
 
 interface WakePlan {
@@ -129,6 +136,7 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
     `imp.ip=${plan.address.guestIp}/${String(plan.address.prefixLength)}`,
     `imp.gw=${plan.address.hostIp}`,
     `imp.dns=${plan.dns.join(',')}`,
+    ...(plan.isIdentityReset ? ['imp.reset_identity=1'] : []),
   ].join(' ');
 }
 
@@ -228,7 +236,13 @@ export function createVmRunner(): VmRunner {
 
         setMark('agent');
 
-        return { pid, firecrackerVersion, agentVersion: ping.version, timings: timer.marks };
+        return {
+          pid,
+          firecrackerVersion,
+          agentVersion: ping.version,
+          timings: timer.marks,
+          identityReset: ping.identity_reset,
+        };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 

@@ -51,12 +51,13 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
 | `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
 | `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                     |
+| `templates`   | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm         |
 | `chaos`       | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                        |
 | `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, templates
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```

@@ -78,6 +78,7 @@ imp fork box box-2                # a second copy to try something else in
 | `url <name>`                             | print the imp's local and tailnet URLs, and its own tailnet name       |
 | `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
 | `image build`, `add`, `ls`, `rm`         | manage images                                                          |
+| `template create`, `ls`, `rm`            | make an image from an imp's disk, to create imps from                  |
 | `secret add`, `ls`, `rm`                 | store API tokens in impd, never in a guest                             |
 | `grant`, `revoke`, `grants`, `audit`     | let an imp use a token through the host-side broker                    |
 | `mcp --prefix <p>`                       | serve imps to a coding agent as MCP tools over stdio                   |

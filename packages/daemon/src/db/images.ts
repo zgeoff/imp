@@ -1,3 +1,4 @@
+import type { ImageSource } from '@imp/api';
 import type { Selectable } from 'kysely';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
@@ -7,6 +8,10 @@ export interface ImageRecord {
   readonly name: string;
   readonly ref: string;
   readonly digest: string;
+  readonly source: ImageSource;
+
+  // a template's source imp, by name; null for a docker image
+  readonly sourceImp: string | null;
   readonly sizeBytes: number;
   readonly createdAt: Date;
 }
@@ -16,6 +21,10 @@ export interface NewImage {
   readonly ref: string;
   readonly digest: string;
   readonly sizeBytes: number;
+
+  // oci and null when left out
+  readonly source?: ImageSource;
+  readonly sourceImp?: string | null;
 }
 
 export async function createImage(db: ImpDatabase, image: NewImage): Promise<ImageRecord> {
@@ -27,6 +36,8 @@ export async function createImage(db: ImpDatabase, image: NewImage): Promise<Ima
       ref: image.ref,
       digest: image.digest,
       size_bytes: image.sizeBytes,
+      source: image.source ?? 'oci',
+      source_imp: image.sourceImp ?? null,
       created_at: Date.now(),
     })
     .returningAll()
@@ -83,6 +94,8 @@ function toImageRecord(row: Readonly<Selectable<DatabaseSchema['images']>>): Ima
     name: row.name,
     ref: row.ref,
     digest: row.digest,
+    source: row.source,
+    sourceImp: row.source_imp,
     sizeBytes: row.size_bytes,
     createdAt: new Date(row.created_at),
   };
@@ -93,11 +106,16 @@ function toImageRecord(row: Readonly<Selectable<DatabaseSchema['images']>>): Ima
 export async function updateImage(
   db: ImpDatabase,
   id: string,
-  image: Readonly<Omit<NewImage, 'name'>>,
+  image: Readonly<Omit<NewImage, 'name' | 'source'>>,
 ): Promise<ImageRecord> {
   const row = await db
     .updateTable('images')
-    .set({ ref: image.ref, digest: image.digest, size_bytes: image.sizeBytes })
+    .set({
+      ref: image.ref,
+      digest: image.digest,
+      size_bytes: image.sizeBytes,
+      source_imp: image.sourceImp ?? null,
+    })
     .where('id', '=', id)
     .returningAll()
     .executeTakeFirstOrThrow();

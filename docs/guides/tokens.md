@@ -29,7 +29,8 @@ a path with no entry to every caller. A refused call fails with `FORBIDDEN`.
 A token can be limited to some imps with patterns: an imp name with `*` for any run of characters,
 such as `dev-*`. Such a token:
 
-- touches only the imps its patterns match. A fork needs both the source and the new name to match.
+- touches only the imps its patterns match. A fork needs both the source and the new name to match,
+  and so does a create from a [template](./templates.md): the template's source imp must match.
 - must name the imp it creates. impd never picks a name for it.
 - sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, and in both
   audit logs. Rows of the API audit log that name no imp are hidden from it.

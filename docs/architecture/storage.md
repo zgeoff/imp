@@ -75,6 +75,9 @@ These are the same on both backends; only the clone differs.
   it was. Memory and disk always belong together: a snapshot never wakes on a different disk.
 - **Fork.** impd clones a disk, or a checkpoint, into a new imp. A fork is disk only. A memory fork
   would duplicate entropy and IDs across the clones.
+- **Template.** impd clones a disk, frozen as for a checkpoint, into a new image
+  (`images/imp-<uuidv7>`), and imps are made from it as from any image. The first boot of each one
+  gets a new machine-id and new ssh host keys ([templates](../guides/templates.md)).
 
 ## ZFS
 

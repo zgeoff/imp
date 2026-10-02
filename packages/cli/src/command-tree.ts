@@ -8,7 +8,7 @@ import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
 import { gcCommand } from './commands/gc';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
-import { imageCommand } from './commands/image';
+import { imageCommand, templateCommand } from './commands/image';
 import {
   consoleCommand,
   execCommand,
@@ -78,6 +78,7 @@ export const mainCommand = defineCommand({
     gc: gcCommand,
     backup: backupCommand,
     image: imageCommand,
+    template: templateCommand,
     secret: secretCommand,
     grant: grantCommand,
     revoke: revokeCommand,

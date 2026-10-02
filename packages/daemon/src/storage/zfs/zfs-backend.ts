@@ -416,6 +416,43 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
   };
 
+  // Mounts a staged image dataset for `write`, then renames it into place
+  // with its @base snapshot; a failed write destroys it.
+  const createImageFromStaging = async (
+    digest: string,
+    staged: string,
+    write: (dir: string) => Promise<void>,
+  ): Promise<void> => {
+    const dir = buildStagingDir(staged);
+
+    try {
+      await runSerial(() => setupMount(staged, dir));
+      await write(dir);
+    } catch (error) {
+      await runSerial(async () => {
+        await removeMount(dir);
+
+        await zfs.destroy(staged);
+      });
+
+      removeMountDir(dir);
+      throw error;
+    }
+
+    await runSerial(async () => {
+      const name = buildImageName(digest);
+
+      await removeMount(dir);
+
+      removeMountDir(dir);
+
+      await zfs.rename(staged, name);
+      await zfs.snapshot(`${name}@base`);
+
+      await setupMount(name, buildImageDir(digest));
+    });
+  };
+
   // A swap that failed halfway leaves the imp a disk: the old one when it is
   // still in place, else the staged clone, as the next start would.
   const resolveFailedSwap = async (impId: string): Promise<void> => {
@@ -473,39 +510,30 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
     createImage: async (digest, write) => {
       const staged = `${datasets.staging}/image-${Bun.randomUUIDv7()}`;
-      const dir = buildStagingDir(staged);
 
-      await runSerial(async () => {
-        await zfs.create(staged);
+      await runSerial(() => zfs.create(staged));
+      await createImageFromStaging(digest, staged, write);
+    },
 
-        await setupMount(staged, dir);
-      });
+    // The fork of a live disk, as createImpDisk makes one, in staging: the
+    // image's origin is the imp's disk until a reclaim promotes it.
+    createImageFromImp: async (digest, impId, steps) => {
+      const staged = `${datasets.staging}/image-${Bun.randomUUIDv7()}`;
+      const snapshot = `${buildDiskName(impId)}@fork-${Bun.randomUUIDv7()}`;
 
-      try {
-        await write(dir);
-      } catch (error) {
-        await runSerial(async () => {
-          await removeMount(dir);
+      await steps.hold(() =>
+        runSnapshot(async () => {
+          await zfs.snapshot(snapshot);
 
-          await zfs.destroy(staged);
-        });
+          try {
+            await zfs.clone(snapshot, staged);
+          } finally {
+            await zfs.destroyDeferred(snapshot);
+          }
+        }),
+      );
 
-        removeMountDir(dir);
-        throw error;
-      }
-
-      await runSerial(async () => {
-        const name = buildImageName(digest);
-
-        await removeMount(dir);
-
-        removeMountDir(dir);
-
-        await zfs.rename(staged, name);
-        await zfs.snapshot(`${name}@base`);
-
-        await setupMount(name, buildImageDir(digest));
-      });
+      await createImageFromStaging(digest, staged, steps.write);
     },
 
     removeImage: async (digest) => {

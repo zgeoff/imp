@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.11.0"
+const Version = "0.12.0"
 
 // Op names.
 const (
@@ -138,7 +138,16 @@ type Ping struct {
 	// nil when the guest clock cannot be read: impd then skips its
 	// young-guest wait before a sleep
 	UptimeMs *int64 `json:"uptime_ms,omitempty"`
+	// set on a boot that reset a template copy's identity: ok, or failed
+	// when impd must ask again on the next boot
+	IdentityReset string `json:"identity_reset,omitempty"`
 }
+
+// Ping.IdentityReset values.
+const (
+	IdentityResetOK     = "ok"
+	IdentityResetFailed = "failed"
+)
 
 type OK struct {
 	OK bool `json:"ok"`

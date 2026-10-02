@@ -188,6 +188,28 @@ test('it refuses to remove an image an imp uses', async () => {
   expect(rejection).toMatchObject({ code: 'CONFLICT' });
 });
 
+test('images.add with an imp makes a template that imps.create takes', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const template = await ctx.client.images.add({ imp: 'dev', name: 'tools' });
+
+  expect(template).toMatchObject({ name: 'tools', ref: 'imp:dev', source: 'imp' });
+
+  const copy = await ctx.client.imps.create({ name: 'copy', image: 'tools' });
+
+  expect(copy.image).toBe('tools');
+
+  const images = await ctx.client.images.list();
+
+  expect(images.map((image) => [image.name, image.source])).toEqual([
+    ['tools', 'imp'],
+    ['ubuntu', 'oci'],
+  ]);
+});
+
 test('it sleeps, wakes and holds an imp', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 

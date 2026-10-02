@@ -9,10 +9,10 @@ import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
-test('it builds the kernel cmdline with the slot addressing', () => {
+function buildPlan(isIdentityReset: boolean) {
   const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
 
-  const args = buildBootArgs({
+  return {
     firecrackerBin: 'firecracker',
     kernelPath: '/k',
     systemDrivePath: '/s',
@@ -24,7 +24,12 @@ test('it builds the kernel cmdline with the slot addressing', () => {
     memoryMib: 1024,
     dns: ['1.1.1.1', '8.8.8.8'],
     cgroup: null,
-  });
+    isIdentityReset,
+  };
+}
+
+test('it builds the kernel cmdline with the slot addressing', () => {
+  const args = buildBootArgs(buildPlan(false));
 
   expect(args).toContain('root=/dev/vdb rootfstype=squashfs ro init=/imp-agent');
   expect(args).toContain('reboot=k');
@@ -32,6 +37,11 @@ test('it builds the kernel cmdline with the slot addressing', () => {
   expect(args).toEndWith(
     'imp.id=id imp.hostname=dev imp.ip=10.66.0.14/30 imp.gw=10.66.0.13 imp.dns=1.1.1.1,8.8.8.8',
   );
+});
+
+test('it asks for an identity reset only on the first boot of a template copy', () => {
+  expect(buildBootArgs(buildPlan(false))).not.toContain('imp.reset_identity');
+  expect(buildBootArgs(buildPlan(true))).toEndWith(' imp.reset_identity=1');
 });
 
 // A Firecracker stand-in: a process whose command line names the API socket,

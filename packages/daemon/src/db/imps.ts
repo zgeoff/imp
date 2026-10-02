@@ -32,6 +32,10 @@ export interface ImpRecord {
   // awake time up to awakeSince; while the imp runs, add the time since
   readonly awakeMs: number;
   readonly awakeSince: Date | null;
+
+  // an imp from a template, not yet booted with its own machine-id and ssh
+  // host keys (docs/guides/templates.md#identity)
+  readonly isIdentityResetPending: boolean;
 }
 
 // cores the VM may use (null: no limit) and its cgroup cpu.weight
@@ -58,6 +62,7 @@ export interface NewImp {
   // without its policy
   readonly egress?: EgressPolicy;
   readonly cpu?: CpuSettings;
+  readonly isIdentityResetPending?: boolean;
 }
 
 export interface ImpStateChange {
@@ -125,6 +130,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       ip: imp.ip,
       ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
       ...(imp.diskBytes !== undefined && { disk_bytes: imp.diskBytes }),
+      ...(imp.isIdentityResetPending === true && { identity_reset_pending: 1 }),
       ...(imp.egress !== undefined && {
         egress_policy: imp.egress.mode,
         egress_allow: JSON.stringify(imp.egress.allow),
@@ -391,6 +397,18 @@ function emitChange(
   return imp;
 }
 
+// after the first cold boot of an imp from a template
+export async function removeIdentityReset(db: ImpDatabase, id: string): Promise<ImpRecord> {
+  const row = await db
+    .updateTable('imps')
+    .set({ identity_reset_pending: 0 })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  return toImpRecord(row);
+}
+
 function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
   return {
     id: row.id,
@@ -415,6 +433,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     wakeCount: row.wake_count,
     awakeMs: row.awake_ms,
     awakeSince: toDate(row.awake_since),
+    isIdentityResetPending: row.identity_reset_pending === 1,
   };
 }
 

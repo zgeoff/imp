@@ -22,6 +22,7 @@ import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
+import { createTemplateService } from './images/template-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
 import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
@@ -229,6 +230,7 @@ async function main(): Promise<void> {
   }
 
   const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
+  const templates = createTemplateService({ config, db, imps, storage, storageGate, diskBudget });
 
   const backups =
     config.backup === null
@@ -292,6 +294,7 @@ async function main(): Promise<void> {
     images,
     governor,
     checkpoints,
+    templates,
     backups,
     broker,
     egress,

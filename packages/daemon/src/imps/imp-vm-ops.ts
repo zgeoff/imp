@@ -6,7 +6,7 @@ import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
 import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError } from '../api-errors';
-import { updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
+import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
@@ -43,7 +43,10 @@ export type YoungGuestWait =
   | { readonly wait: false }
   | { readonly wait: true; readonly isWanted: () => Promise<boolean> };
 
-const ALWAYS_WAIT: YoungGuestWait = { wait: true, isWanted: () => Promise.resolve(true) };
+const ALWAYS_WAIT: YoungGuestWait = {
+  wait: true,
+  isWanted: () => Promise.resolve(true),
+};
 
 // The VM side of the lifecycle. Every operation takes a LockedImp: the caller
 // holds the imp's lock, and the record it passes is fresh.
@@ -179,6 +182,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         memoryMib: imp.memoryMib,
         dns: context.config.dns,
         cgroup: context.cgroups.setup(imp.id, imp.cpu),
+        isIdentityReset: imp.isIdentityResetPending,
       });
 
       context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
@@ -209,8 +213,21 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         firecrackerVersion: vm.firecrackerVersion,
       });
 
+      // the flag stays until a boot reports the reset done, so a failed
+      // ssh-keygen is tried again on the next boot
+      const reset =
+        running.isIdentityResetPending && vm.identityReset === 'ok'
+          ? await removeLockedIdentityReset(running)
+          : running;
+
+      if (reset.isIdentityResetPending) {
+        context.log(
+          `impd: ${imp.name}: the identity reset did not finish (${vm.identityReset ?? 'no report'}); the next boot tries again`,
+        );
+      }
+
       // stage 1 grew the filesystem to fill the disk
-      return running.isDiskGrowPending ? await setGrowPending(running, false) : running;
+      return reset.isDiskGrowPending ? await setGrowPending(reset, false) : reset;
     } catch (error) {
       context.admission?.release(imp.id);
 
@@ -450,6 +467,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     // the disk grew while it slept: a failed grow stays pending, the wake stands
     return growGuestDisk(running).catch(() => running);
+  };
+
+  const removeLockedIdentityReset = async (imp: LockedImp): Promise<LockedImp> => {
+    const updated = await removeIdentityReset(context.db, imp.id);
+
+    return toLockedImp(imp, updated);
   };
 
   const setGrowPending = async (imp: LockedImp, isGrowPending: boolean): Promise<LockedImp> => {

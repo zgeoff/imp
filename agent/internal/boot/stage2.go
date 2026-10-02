@@ -63,6 +63,10 @@ func Stage2() error {
 	if err != nil {
 		log.Printf("%s: %v (using defaults)", imagecfg.Path, err)
 	}
+	identityReset := ""
+	if params.ResetIdentity {
+		identityReset = resetIdentity(r, image.Env)
+	}
 
 	sup := services.New(r, image)
 	if err := sup.Load(); err != nil {
@@ -91,6 +95,8 @@ func Stage2() error {
 		Services: sup,
 		Listen:   listen.NewManager(listen.AgentRoot, listen.ForwardRoot, image.User, dialer),
 		Dial:     dialer,
+
+		IdentityReset: identityReset,
 	}
 	// A shutdown request and a signal can race; only the first powers off.
 	// A panic on the way must still end the guest, so it falls back to a

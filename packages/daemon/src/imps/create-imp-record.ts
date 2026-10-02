@@ -18,6 +18,7 @@ interface NewImpInput {
   readonly policy?: EgressPolicy | undefined;
   readonly cpuLimit?: number | null | undefined;
   readonly cpuWeight?: number | undefined;
+  readonly isIdentityResetPending?: boolean;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -45,6 +46,7 @@ export async function createImpRecord(
         ...(input.policy !== undefined && { egress: input.policy }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
         cpu,
+        ...(input.isIdentityResetPending === true && { isIdentityResetPending: true }),
       },
       {
         count: countSlots(context.config.subnet),

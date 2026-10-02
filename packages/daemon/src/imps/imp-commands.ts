@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import type { EgressPolicy, Imp } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
+import type { ImageRecord } from '../db/images';
 import {
   listImps,
   removeImp,
@@ -43,6 +44,9 @@ interface CreateImpInput {
 
   // false leaves the new imp stopped, as a restore from backup does
   readonly start?: boolean;
+
+  // a fork of a template copy that has not booted yet owes the reset too
+  readonly isIdentityResetPending?: boolean;
 }
 
 // The imp API's commands. Each takes the imp's lock for its whole run.
@@ -104,9 +108,16 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         context.egress.requirePolicy(input.policy);
       }
 
-      const diskBytes = resolveDiskBytes(context, input, image.digest);
+      const diskBytes = resolveDiskBytes(context, input, image);
       const id = Bun.randomUUIDv7();
-      const writeRecord = () => createImpRecord(context, id, { ...input, diskBytes }, image);
+
+      // a template's disk holds its source's machine-id and ssh host keys; a
+      // fork keeps its source's, reset or not
+      const isIdentityResetPending =
+        input.isIdentityResetPending ?? (image.source === 'imp' && input.prepareDisk === undefined);
+
+      const writeRecord = () =>
+        createImpRecord(context, id, { ...input, diskBytes, isIdentityResetPending }, image);
 
       // a thin clone takes next to nothing, but none is made past the reserve
       await context.diskBudget.requireRoom(0);
@@ -361,13 +372,13 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
   };
 }
 
-// The size a new disk gets. An explicit size below the image's filesystem
-// is refused; the default grows to it. A disk prepareDisk makes keeps the
-// size of its source unless a larger one is asked for.
+// The size a new disk gets. A size below the image's filesystem (a
+// template's disk) is refused; the default grows to it. A prepareDisk disk
+// keeps its source's size unless a larger one is asked for.
 function resolveDiskBytes(
   context: ImpContext,
   input: CreateImpInput,
-  digest: string,
+  image: ImageRecord,
 ): number | undefined {
   const requested = input.diskMib === undefined ? undefined : input.diskMib * MIB;
 
@@ -375,10 +386,13 @@ function resolveDiskBytes(
     return requested;
   }
 
-  const floor = readFileBytes(buildImagePaths(context.config.dataDir, digest).rootfs);
+  const floor = readFileBytes(buildImagePaths(context.config.dataDir, image.digest).rootfs);
 
   if (requested !== undefined && requested < floor) {
-    throw buildDiskTooSmallError(requested, floor, "the image's filesystem");
+    const what =
+      image.source === 'imp' ? `template ${image.name}'s disk` : "the image's filesystem";
+
+    throw buildDiskTooSmallError(requested, floor, what);
   }
 
   return requested ?? Math.max(context.config.defaultDiskBytes, floor);

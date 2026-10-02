@@ -388,6 +388,78 @@ test('a removed image hands its blocks to the imps cloned from it', async () => 
   expect(ctx.fake.listSnapshots()).toEqual([]);
 });
 
+test('a template is a clone of the live disk, made under hold, and reclaims cleanly', async () => {
+  await using ctx = await setupStarted();
+
+  const template = 'imp-0199a3b4-0000-7000-8000-000000000001';
+  const templateName = `${ROOT}/images/${template}`;
+  const held: string[] = [];
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  ctx.live.imageDigests.add(template);
+
+  await ctx.backend.createImageFromImp(template, 'a', {
+    hold: async (clone) => {
+      held.push('hold');
+
+      await clone();
+
+      held.push('release');
+    },
+    write: (dir) => {
+      held.push(`write ${dir.startsWith(join(ctx.dataDir, 'staging')) ? 'staging' : dir}`);
+
+      return Promise.resolve();
+    },
+  });
+
+  expect(held).toEqual(['hold', 'release', 'write staging']);
+  expect(ctx.fake.readOrigin(templateName)).toMatch(/^tank\/imp\/disks\/a@fork-/);
+  expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'images', template))).toBe(templateName);
+
+  // two imps from the template, then the source, the template and the imps go
+  ctx.live.impIds.add('c');
+  ctx.live.impIds.add('d');
+
+  await ctx.backend.createImpDisk('c', { kind: 'image', digest: template });
+  await ctx.backend.createImpDisk('d', { kind: 'image', digest: template });
+
+  expect(ctx.fake.readOrigin(`${ROOT}/disks/c`)).toBe(`${templateName}@base`);
+
+  await ctx.backend.removeImpDisk('a', ['cp-one']);
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.removeImage(template);
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.removeImpDisk('c', []);
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.removeImpDisk('d', []);
+  await ctx.backend.waitForReclaim();
+
+  expect(ctx.listRetired()).toEqual([]);
+  expect(ctx.fake.listDatasets().filter((name) => name.startsWith(`${ROOT}/disks/`))).toEqual([]);
+  expect(ctx.fake.listDatasets()).not.toContain(templateName);
+  expect(ctx.fake.listSnapshots()).toEqual([`${IMAGE}@base`]);
+});
+
+test('a template whose write fails leaves no dataset, and the fork snapshot goes', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+
+  const failure = await readFailure(
+    ctx.backend.createImageFromImp('imp-x', 'a', {
+      hold: (clone) => clone(),
+      write: () => Promise.reject(new Error('no config')),
+    }),
+  );
+
+  expect(failure).toMatchObject({ message: 'no config' });
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots()).toEqual([`${IMAGE}@base`]);
+});
+
 // the swap after the halt, step by step; a crash before each one
 const SWAP_STEPS = [
   { step: 'umount', before: (command: string) => command.startsWith('umount'), restored: false },

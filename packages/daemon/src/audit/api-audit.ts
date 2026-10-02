@@ -45,19 +45,26 @@ export function createApiAudit(deps: ApiAuditDeps): ApiAudit {
 export function readImpName(procedure: string, input: unknown, output: unknown): string | null {
   const namespace = procedure.split('.')[0] ?? '';
 
+  // a template reads its source imp's disk
+  if (procedure === 'images.add') {
+    return readField(input, 'imp');
+  }
+
   if (!IMP_NAMESPACES.has(namespace)) {
     return null;
   }
 
-  return readName(input) ?? readName(output);
+  return readField(input, 'name') ?? readField(output, 'name');
 }
 
-function readName(value: unknown): string | null {
-  if (typeof value !== 'object' || value === null || !('name' in value)) {
+function readField(value: unknown, key: string): string | null {
+  if (typeof value !== 'object' || value === null || !(key in value)) {
     return null;
   }
 
-  return typeof value.name === 'string' ? value.name : null;
+  const field: unknown = Reflect.get(value, key);
+
+  return typeof field === 'string' ? field : null;
 }
 
 // `ok` for a call that succeeded, else the error code the caller got

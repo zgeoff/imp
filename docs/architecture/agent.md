@@ -13,7 +13,9 @@ the filesystems, sets up the network, supervises services, reaps zombies, and se
   for the dev instance: the same bytes either way.
 
 The kernel command line is `root=/dev/vdb rootfstype=squashfs ro init=/imp-agent`, plus `imp.*`
-parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`.
+parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`, and
+`imp.reset_identity=1` on the first boot of an imp made from a
+[template](../guides/templates.md#identity).
 
 ## Boot
 
@@ -29,8 +31,9 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 
 1. Mount cgroup2, `/dev/pts` and `/dev/shm`.
 2. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
-3. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
-4. Listen on vsock port 1024.
+3. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
+4. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
+5. Listen on vsock port 1024.
 
 `/run` is a tmpfs every boot, so stale pid files and sockets from the last boot never reach a new
 one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly, with no wrapper.

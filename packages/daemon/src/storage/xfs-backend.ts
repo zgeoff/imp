@@ -81,6 +81,27 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     throw new Error('xfs: an empty disk has no source file');
   };
 
+  const createImage = async (digest: string, write: (dir: string) => Promise<void>) => {
+    const paths = buildImagePaths(deps.dataDir, digest);
+    const staged = join(deps.dataDir, 'images', `${STAGING_PREFIX}${Bun.randomUUIDv7()}`);
+
+    mkdirSync(staged, { recursive: true });
+
+    try {
+      await write(staged);
+
+      // impd before the storage backends wrote config.json first, so a
+      // crash could leave the directory with no rootfs
+      if (!existsSync(paths.rootfs)) {
+        rmSync(paths.dir, { recursive: true, force: true });
+      }
+
+      renameSync(staged, paths.dir);
+    } finally {
+      rmSync(staged, { recursive: true, force: true });
+    }
+  };
+
   const backup = buildBackupPaths(deps.dataDir);
 
   // this run's copies of running disks: new every run, so none outlives it
@@ -246,26 +267,13 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options.isDryRun)),
     resolveImpPaths,
 
-    createImage: async (digest, write) => {
-      const paths = buildImagePaths(deps.dataDir, digest);
-      const staged = join(deps.dataDir, 'images', `${STAGING_PREFIX}${Bun.randomUUIDv7()}`);
+    createImage,
 
-      mkdirSync(staged, { recursive: true });
-
-      try {
-        await write(staged);
-
-        // impd before the storage backends wrote config.json first, so a
-        // crash could leave the directory with no rootfs
-        if (!existsSync(paths.rootfs)) {
-          rmSync(paths.dir, { recursive: true, force: true });
-        }
-
-        renameSync(staged, paths.dir);
-      } finally {
-        rmSync(staged, { recursive: true, force: true });
-      }
-    },
+    createImageFromImp: (digest, impId, steps) =>
+      createImage(digest, async (dir) => {
+        await steps.hold(() => cloneFile(resolveImpPaths(impId).disk, join(dir, 'rootfs.ext4')));
+        await steps.write(dir);
+      }),
 
     removeImage: (digest) => {
       rmSync(buildImagePaths(deps.dataDir, digest).dir, { recursive: true, force: true });

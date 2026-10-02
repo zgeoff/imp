@@ -77,8 +77,8 @@ export type { TunnelClientMessage, TunnelServerMessage } from './tunnel-protocol
 export { DroppedStorageSchema, StorageGcSchema } from './storage-schema';
 export type { DroppedStorage, StorageGc } from './storage-schema';
 export { ImageRefSchema } from './image-ref-schema';
-export { ImageSchema } from './image-schema';
-export type { Image } from './image-schema';
+export { ImageSchema, ImageSourceSchema } from './image-schema';
+export type { Image, ImageSource } from './image-schema';
 export { impContract } from './imp-contract';
 export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';

@@ -32,6 +32,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   Docker in the guest, and how to make your own.
 - [Services and logs](./guides/services.md): `imp service` to add, restart and remove the processes
   an imp keeps running, and `imp logs` to print and follow their logs.
+- [Templates](./guides/templates.md): `imp template`, an image made from an imp's disk, how a copy
+  gets its own machine-id and ssh host keys, and how templates are stored and backed up.
 - [Credential connectors](./guides/connectors.md): `imp secret` and `imp grant`, the host-side
   broker that adds tokens to an imp's requests, and where secrets live.
 - [Dashboard](./guides/dashboard.md): the web dashboard impd serves at `/ui/`: what it shows, the

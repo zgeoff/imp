@@ -253,6 +253,37 @@ test('a token limited to dev-* sees and touches only its imps', async () => {
   expect(stop).toMatchObject({ actor: 'token', actorName: 'dev', imp: 'dev-a' });
 });
 
+test('a token limited to dev-* cannot copy another imp through its template', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'prod' });
+  await ctx.client.imps.create({ name: 'dev-src' });
+  await ctx.client.images.add({ imp: 'prod', name: 'prod-tpl' });
+  await ctx.client.images.add({ imp: 'dev-src', name: 'dev-tpl' });
+
+  const dev = await ctx.createTokenClient('dev', 'manage', ['dev-*']);
+
+  const refused = await readErrorCode(
+    dev.client.imps.create({ name: 'dev-copy', image: 'prod-tpl' }),
+  );
+
+  expect(refused).toBe('FORBIDDEN');
+
+  const allowed = await dev.client.imps.create({ name: 'dev-copy', image: 'dev-tpl' });
+
+  expect(allowed.image).toBe('dev-tpl');
+
+  // the root token's images.add rows name the imp whose disk each copied
+  const calls = await waitForCalls(ctx, 6);
+
+  const adds = calls
+    .filter((call) => call.procedure === 'images.add')
+    .map((call) => call.imp ?? '')
+    .toSorted((a, b) => a.localeCompare(b));
+
+  expect(adds).toEqual(['dev-src', 'prod']);
+});
+
 test('a limited token’s event stream holds only its imps', async () => {
   await using ctx = await setupTest();
 

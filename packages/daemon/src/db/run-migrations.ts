@@ -223,6 +223,24 @@ const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('imps').addColumn('awake_since', 'integer').execute();
     },
   },
+
+  // templates: images made from an imp's disk (#22), and the identity reset
+  // an imp from one owes its first boot
+  '010_add_image_source': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('images')
+        .addColumn('source', 'text', (c) => c.notNull().defaultTo('oci'))
+        .execute();
+
+      await db.schema.alterTable('images').addColumn('source_imp', 'text').execute();
+
+      await db.schema
+        .alterTable('imps')
+        .addColumn('identity_reset_pending', 'integer', (c) => c.notNull().defaultTo(0))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

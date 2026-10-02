@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
 // TestPingOmitsUptimeWithoutAClock checks that a failed clock read leaves
@@ -30,5 +32,24 @@ func TestPingReportsUptime(t *testing.T) {
 	ping := buildPing(clock)
 	if ping.UptimeMs == nil || *ping.UptimeMs != 2500 {
 		t.Fatalf("UptimeMs = %v, want 2500", ping.UptimeMs)
+	}
+}
+
+// impd clears an imp's pending identity reset only on an ok in the ping.
+func TestPingReportsTheIdentityReset(t *testing.T) {
+	for _, reset := range []string{"", proto.IdentityResetOK, proto.IdentityResetFailed} {
+		s := &Server{IdentityReset: reset}
+		resp, err := s.unary(proto.Request{Op: proto.OpPing})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := strings.Contains(string(data), `"identity_reset":"`+reset+`"`)
+		if has != (reset != "") || (reset == "" && strings.Contains(string(data), "identity_reset")) {
+			t.Fatalf("reset %q: ping = %s", reset, data)
+		}
 	}
 }

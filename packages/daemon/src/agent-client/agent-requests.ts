@@ -15,6 +15,9 @@ const PingResponseSchema = z.object({
 
   // an agent that cannot read its clock leaves it out
   uptime_ms: z.number().optional(),
+
+  // set on a boot that asked for an identity reset (docs/guides/templates.md#identity)
+  identity_reset: z.enum(['ok', 'failed']).optional(),
 });
 
 export const OkResponseSchema = z.object({ ok: z.literal(true) });

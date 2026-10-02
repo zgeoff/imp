@@ -36,6 +36,8 @@ type Server struct {
 	Dial     *dial.Dialer
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
+	// IdentityReset is what this boot's identity reset reported, or "".
+	IdentityReset string
 
 	freezeMu  sync.Mutex
 	thawTimer *time.Timer
@@ -179,7 +181,9 @@ func (s *Server) safeUnary(req proto.Request) (resp any, err error) {
 func (s *Server) unary(req proto.Request) (any, error) {
 	switch req.Op {
 	case proto.OpPing:
-		return buildPing(unix.ClockGettime), nil
+		ping := buildPing(unix.ClockGettime)
+		ping.IdentityReset = s.IdentityReset
+		return ping, nil
 	case proto.OpActivity:
 		return s.activity()
 	case proto.OpFreeze:

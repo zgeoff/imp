@@ -12,12 +12,14 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
+import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
+import { createTemplateService } from '../images/template-service';
 import { setupImpTest } from '../imps/test-imps';
 import { buildImpPaths } from '../storage/data-layout';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
-import { createBackupService } from './backup-service';
+import { buildDigestTag, createBackupService } from './backup-service';
 import { ResticError } from './restic';
 import type { Restic, ResticSnapshot } from './restic';
 
@@ -421,6 +423,77 @@ test('restore --all on a fresh host brings back every imp and its image', async 
   const freshDisk = await fresh.readDisk('dev');
 
   expect(freshDisk).toBe('now');
+});
+
+test('templates round-trip with their source, and --all brings back unused ones', async () => {
+  await using source = await setupTest();
+
+  const templates = createTemplateService({
+    config: source.config,
+    db: source.db,
+    imps: source.imps,
+    storage: source.storage,
+    storageGate: source.storageGate,
+    diskBudget: source.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
+  await source.createDevImp();
+  await source.imps.stopImp('dev');
+  await templates.createTemplate('dev', 'tools');
+  await templates.createTemplate('dev', 'spare');
+
+  // made stopped, so its identity reset is still owed
+  await source.imps.createImp({ name: 'copy', image: 'tools', start: false });
+
+  const run = await source.backups.runBackup();
+  const manifest = await source.readManifest(run.snapshotId);
+
+  expect(manifest.images.map((image) => [image.name, image.source, image.sourceImp])).toEqual([
+    ['base', 'oci', null],
+    ['spare', 'imp', 'dev'],
+    ['tools', 'imp', 'dev'],
+  ]);
+
+  expect(manifest.imps.map((imp) => [imp.name, imp.identityResetPending])).toEqual([
+    ['copy', true],
+    ['dev', false],
+  ]);
+
+  await using fresh = await setupTest(source.repoDir);
+
+  fresh.fake.snapshots.push(...source.fake.snapshots);
+
+  // a docker image named tools: the restored template gets a tag
+  await fresh.createTestImage('tools');
+
+  const restored = await fresh.backups.restoreBackup({ all: true });
+  const tools = await findImageByName(source.db, 'tools');
+
+  const renamed = `tools-${buildDigestTag(tools?.digest ?? '')}`;
+
+  expect(restored.imps.map((imp) => [imp.name, imp.image])).toEqual([
+    ['copy', renamed],
+    ['dev', 'base'],
+  ]);
+
+  const spare = await findImageByName(fresh.db, 'spare');
+
+  expect(spare).toMatchObject({ source: 'imp', sourceImp: 'dev' });
+
+  const copy = await findImpByName(fresh.db, 'copy');
+
+  expect(copy?.isIdentityResetPending).toBe(true);
+
+  const copyDisk = await fresh.readDisk('copy');
+
+  expect(copyDisk).toBe('now');
+});
+
+test('a digest tag is the head of a docker ID or the random tail of a template uuid', () => {
+  expect(buildDigestTag('sha256:9f2c1a0b77')).toBe('9f2c1a0b');
+  expect(buildDigestTag('imp-0199a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b')).toBe('3e4f5a6b');
 });
 
 test('a restore that fails part way leaves no imp behind', async () => {

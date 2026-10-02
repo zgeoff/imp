@@ -15,8 +15,9 @@ import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
-import { FREEZE_TIMEOUT_MS, buildCheckpointId } from '../checkpoints/checkpoint-service';
-import type { DiskFreezer } from '../checkpoints/checkpoint-service';
+import { buildCheckpointId } from '../checkpoints/checkpoint-service';
+import { FREEZE_TIMEOUT_MS } from '../checkpoints/consistent-disk';
+import type { DiskFreezer } from '../checkpoints/consistent-disk';
 import { createCheckpoint } from '../db/checkpoints';
 import { parseStoredPolicy } from '../db/egress';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
@@ -248,6 +249,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           grants: copy.grants
             .filter((grant) => grant.impId === imp.id)
             .map((grant) => grant.secretName),
+          identityResetPending: imp.identityResetPending === 1,
           disk: BACKUP_TREE.buildDisk(imp.id),
           diskBytes: imp.diskBytes,
           usedBytes: readTreeUsedBytes(BACKUP_TREE.buildDisk(imp.id)),
@@ -270,6 +272,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           name: image.name,
           ref: image.ref,
           digest: image.digest,
+          source: image.source,
+          sourceImp: image.sourceImp,
           sizeBytes: image.sizeBytes,
           dir: BACKUP_TREE.buildImageDir(image.digest),
         })),
@@ -448,6 +452,29 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       ),
     );
 
+  // its own name, else `<name>-<tag>` when another image has it
+  const resolveRestoredImageName = async (image: ManifestImage): Promise<string> => {
+    const taken = await findImageByName(deps.db, image.name);
+
+    if (taken === undefined) {
+      return image.name;
+    }
+
+    const fallback = `${image.name.slice(0, 22)}-${buildDigestTag(image.digest)}`;
+
+    const fallbackTaken = await findImageByName(deps.db, fallback);
+
+    if (fallbackTaken !== undefined) {
+      throw buildConflictError(
+        'image',
+        fallback,
+        `images ${image.name} and ${fallback} both exist; remove one to restore this image`,
+      );
+    }
+
+    return fallback;
+  };
+
   const createJoinedImage = async (
     point: ResticSnapshot,
     base: string,
@@ -459,6 +486,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     if (existing !== undefined) {
       return existing.name;
     }
+
+    // the name first: a clash on the fallback fails before any storage
+    const name = await resolveRestoredImageName(image);
 
     const dir = join(workDir, image.dir);
 
@@ -474,16 +504,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     rmSync(dir, { recursive: true, force: true });
 
-    const taken = await findImageByName(deps.db, image.name);
-
-    const hex = image.digest.replace(/^sha256:/, '').slice(0, 8);
-    const name = taken === undefined ? image.name : `${image.name.slice(0, 22)}-${hex}`;
-
     await createImage(deps.db, {
       name,
       ref: image.ref,
       digest: image.digest,
       sizeBytes: image.sizeBytes,
+      source: image.source,
+      sourceImp: image.sourceImp,
     });
 
     return name;
@@ -569,6 +596,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         memoryMib: imp.memoryMib,
         httpPort: imp.httpPort,
         policy: resolveEgressPolicy(target.name, imp),
+        isIdentityResetPending: imp.identityResetPending,
         start: false,
         prepareDisk: writeRestoredDisk,
       });
@@ -674,7 +702,15 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     try {
       const imageNames = new Map<string, string>();
 
-      for (const digest of new Set(chosen.map((imp) => imp.imageDigest))) {
+      // images before the imps on them; with all, every template too
+      const templates = manifest.images.filter((image) => image.source === 'imp');
+
+      const digests = new Set([
+        ...chosen.map((imp) => imp.imageDigest),
+        ...(input.all === true ? templates.map((image) => image.digest) : []),
+      ]);
+
+      for (const digest of digests) {
         const image = manifest.images.find((candidate) => candidate.digest === digest);
 
         if (image === undefined) {
@@ -765,4 +801,14 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         }
       }),
   };
+}
+
+// Eight characters that tell images apart: a docker ID's first, a template's
+// last, since its uuidv7 starts with the time (docs/guides/templates.md)
+export function buildDigestTag(digest: string): string {
+  if (digest.startsWith('imp-')) {
+    return digest.replaceAll('-', '').slice(-8);
+  }
+
+  return digest.replace(/^sha256:/, '').slice(0, 8);
 }

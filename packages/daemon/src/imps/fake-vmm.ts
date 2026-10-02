@@ -47,6 +47,9 @@ export function buildFakeVmm() {
   const stops: { pid: number; graceful: boolean }[] = [];
   const grows: { disk: string; diskBytes: number }[] = [];
 
+  // each cold boot's hostname and whether it asked for an identity reset
+  const boots: { hostname: string; isIdentityReset: boolean }[] = [];
+
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
   const usedSnapshots = new Set<string>();
@@ -54,7 +57,7 @@ export function buildFakeVmm() {
   const counter = { nextPid: 1000, generation: 0 };
 
   // what every fake agent reports as its uptime: old enough to sleep at once
-  const guest = { uptimeMs: 60_000 };
+  const guest = { uptimeMs: 60_000, identityReset: 'ok' as 'ok' | 'failed' | undefined };
 
   const queues = new Map<VmStep, VmOutcome[]>();
   const holds = new Map<VmStep, { gate: PromiseWithResolvers<void>; reached: () => void }>();
@@ -139,7 +142,14 @@ export function buildFakeVmm() {
     };
 
     return {
-      startVm: (plan) => runInGeneration(() => startFakeVm('boot', plan.paths)),
+      startVm: (plan) =>
+        runInGeneration(async () => {
+          boots.push({ hostname: plan.hostname, isIdentityReset: plan.isIdentityReset });
+
+          const vm = await startFakeVm('boot', plan.paths);
+
+          return plan.isIdentityReset ? { ...vm, identityReset: guest.identityReset } : vm;
+        }),
       wakeVm: (plan) =>
         runInGeneration(async () => {
           try {
@@ -274,6 +284,7 @@ export function buildFakeVmm() {
     wakes,
     stops,
     grows,
+    boots,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {
@@ -317,6 +328,12 @@ export function buildFakeVmm() {
     // the uptime every agent reports from now on
     setGuestUptime: (uptimeMs: number) => {
       guest.uptimeMs = uptimeMs;
+    },
+
+    // what every later boot that asks for an identity reset reports;
+    // undefined is an agent that leaves the field out
+    setIdentityReset: (result: 'ok' | 'failed' | undefined) => {
+      guest.identityReset = result;
     },
 
     setPace: (pace: (step: VmStep) => Promise<void>) => {

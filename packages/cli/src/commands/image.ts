@@ -102,3 +102,61 @@ export const imageCommand = defineCommand({
   meta: { name: 'image', description: 'Manage images' },
   subCommands: { add: addCommand, build: buildCommand, ls: lsCommand, rm: rmCommand },
 });
+
+// `imp template`: the images API with an imp as the source
+// (docs/guides/templates.md)
+const templateCreateCommand = defineCommand({
+  meta: { name: 'create', description: "Make a template from an imp's disk" },
+  args: {
+    imp: { type: 'positional', description: 'imp to copy', required: true },
+    name: {
+      type: 'positional',
+      description: 'template name; an existing template moves to the new disk',
+      required: true,
+    },
+    json: jsonArg,
+  },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      const image = await client.images.add({ imp: context.args.imp, name: context.args.name });
+
+      console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
+    }),
+});
+
+const templateLsCommand = defineCommand({
+  meta: { name: 'ls', description: 'List templates' },
+  args: { json: jsonArg },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      const images = await client.images.list();
+
+      const templates = images.filter((image) => image.source === 'imp');
+
+      console.log(formatOutput(templates, context.args.json, formatImages));
+    }),
+});
+
+const templateRmCommand = defineCommand({
+  meta: { name: 'rm', description: 'Remove a template no imp uses' },
+  args: { name: { type: 'positional', description: 'template name', required: true } },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      const images = await client.images.list();
+
+      const image = images.find((one) => one.name === context.args.name);
+
+      if (image !== undefined && image.source !== 'imp') {
+        throw new UsageError(
+          `${context.args.name} is a docker image, not a template: use imp image rm`,
+        );
+      }
+
+      await client.images.delete({ name: context.args.name });
+    }),
+});
+
+export const templateCommand = defineCommand({
+  meta: { name: 'template', description: "Manage templates: images made from an imp's disk" },
+  subCommands: { create: templateCreateCommand, ls: templateLsCommand, rm: templateRmCommand },
+});

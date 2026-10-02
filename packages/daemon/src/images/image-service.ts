@@ -210,6 +210,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const imageName = NameSchema.parse(name ?? deriveImageName(ref));
 
+    const taken = await findImageByName(deps.db, imageName);
+
+    requireDockerImage(taken);
+
     const inspect = await readInspect(ref);
 
     if (inspect === undefined) {
@@ -224,6 +228,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       storageGate.join(async () => {
         const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
         const existing = await findImageByName(deps.db, imageName);
+
+        requireDockerImage(existing);
 
         if (existing === undefined) {
           return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
@@ -351,6 +357,18 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
     },
   };
+}
+
+// A template is never rebuilt from docker: its name is made again from an
+// imp (docs/guides/templates.md)
+function requireDockerImage(existing: ImageRecord | undefined): void {
+  if (existing?.source === 'imp') {
+    throw buildConflictError(
+      'image',
+      existing.name,
+      `image ${existing.name} is a template; make it again from an imp, or pick another name`,
+    );
+  }
 }
 
 // The contract validates refs already; this guards every other caller, since

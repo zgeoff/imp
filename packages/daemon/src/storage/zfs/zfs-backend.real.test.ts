@@ -174,6 +174,82 @@ test.skipIf(!isReal)(
   REAL_TEST_TIMEOUT_MS,
 );
 
+// The chain #11's retire and reclaim must cover: a template's dataset is a
+// clone of its source's disk, and imps are clones of the template.
+test.skipIf(!isReal)(
+  'a template outlives its source, its imps outlive it, and all of it reclaims',
+  async () => {
+    const pool = await setupPool();
+
+    const backend = pool.backend;
+    const template = 'imp-0199a3b4-0000-7000-8000-000000000001';
+    const readDisk = (impId: string) => readFileSync(backend.resolveImpPaths(impId).disk, 'utf8');
+
+    await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+
+    writeSyncedFile(backend.resolveImpPaths('a').disk, 'golden');
+
+    await backend.createCheckpoint('a', 'cp-one');
+
+    await backend.createImageFromImp(template, 'a', {
+      hold: (clone) => clone(),
+      write: (dir) => {
+        writeFileSync(join(dir, 'config.json'), '{}');
+
+        return Promise.resolve();
+      },
+    });
+
+    writeSyncedFile(backend.resolveImpPaths('a').disk, 'changed after');
+
+    await backend.createImpDisk('b', { kind: 'image', digest: template });
+    await backend.createImpDisk('c', { kind: 'image', digest: template });
+
+    expect(readDisk('b')).toBe('golden');
+    expect(readDisk('c')).toBe('golden');
+
+    // the source goes, then the template, while the imps need their blocks
+    await backend.removeImpDisk('a', ['cp-one']);
+    await backend.waitForReclaim();
+    await backend.removeImage(template);
+    await backend.waitForReclaim();
+
+    expect(readDisk('b')).toBe('golden');
+    expect(readDisk('c')).toBe('golden');
+
+    await backend.removeImpDisk('b', []);
+    await backend.removeImpDisk('c', []);
+    await backend.waitForReclaim();
+
+    const left = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-r',
+      '-t',
+      'all',
+      '-o',
+      'name',
+      pool.root,
+    ]);
+
+    expect(left.trim().split('\n').toSorted()).toEqual(
+      [
+        pool.root,
+        `${pool.root}/disks`,
+        `${pool.root}/images`,
+        `${pool.root}/images/real`,
+        `${pool.root}/images/real@base`,
+        `${pool.root}/mem`,
+        `${pool.root}/reserve`,
+        `${pool.root}/retired`,
+        `${pool.root}/staging`,
+      ].toSorted(),
+    );
+  },
+  REAL_TEST_TIMEOUT_MS,
+);
+
 test.skipIf(!isReal)(
   'a restore cut short is finished by the next start',
   async () => {

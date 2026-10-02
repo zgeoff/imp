@@ -25,6 +25,7 @@ import { createEgressService } from '../egress/egress-service';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
+import { createTemplateService } from '../images/template-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
@@ -352,6 +353,17 @@ export function buildTestApp(
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
+  const templates = createTemplateService({
+    config: ctx.config,
+    db: ctx.db,
+    imps: impd.imps,
+    storage: ctx.storage,
+    storageGate: ctx.storageGate,
+    diskBudget: ctx.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+  });
+
   const peers = createForwardedPeers(ctx.now);
   const audit = createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} });
 
@@ -375,6 +387,7 @@ export function buildTestApp(
     images: ctx.images,
     governor: impd.governor,
     checkpoints,
+    templates,
     backups: null,
     broker: ctx.broker,
     egress: ctx.egress,

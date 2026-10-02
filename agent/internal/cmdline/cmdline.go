@@ -13,6 +13,8 @@ type Params struct {
 	IP  string
 	GW  string
 	DNS []string
+	// ResetIdentity is set on the first boot of an imp made from a template.
+	ResetIdentity bool
 	// Raw holds every imp.* key (without the prefix), including unknown ones.
 	Raw map[string]string
 }
@@ -45,6 +47,8 @@ func Parse(line string) Params {
 			p.IP = val
 		case "gw":
 			p.GW = val
+		case "reset_identity":
+			p.ResetIdentity = val == "1"
 		case "dns":
 			for _, s := range strings.Split(val, ",") {
 				if s = strings.TrimSpace(s); s != "" {

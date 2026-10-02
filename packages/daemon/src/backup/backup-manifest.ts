@@ -1,3 +1,4 @@
+import { ImageSourceSchema } from '@imp/api';
 import * as z from 'zod';
 
 const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
@@ -43,6 +44,9 @@ const ManifestImpSchema = z
     egressAllow: z.array(z.string()).readonly().default([]),
     grants: z.array(z.string()).readonly().default([]),
 
+    // a template copy whose first boot has not reset its identity yet
+    identityResetPending: z.boolean().default(false),
+
     // oldest first
     checkpoints: z.array(ManifestCheckpointSchema).readonly(),
   })
@@ -53,6 +57,13 @@ const ManifestImageSchema = z
     name: z.string(),
     ref: z.string(),
     digest: z.string(),
+
+    // a template has no docker ref to pull again, so a restore of all brings
+    // it back with no imp on it; oci in a backup from before templates
+    source: ImageSourceSchema.default('oci'),
+
+    // a template's source imp, which a limited token must reach to copy it
+    sourceImp: z.string().nullable().default(null),
     sizeBytes: z.int(),
     dir: z.string(),
   })

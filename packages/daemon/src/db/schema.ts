@@ -1,4 +1,4 @@
-import type { ApiActor, ImpState, Scope } from '@imp/api';
+import type { ApiActor, ImageSource, ImpState, Scope } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -10,6 +10,12 @@ interface ImagesTable {
   digest: string;
   size_bytes: number;
   created_at: number;
+
+  // `oci` from docker, `imp` a template from an imp's disk
+  source: Generated<ImageSource>;
+
+  // a template's source imp, by name: a token must reach it to copy its disk
+  source_imp: string | null;
 }
 
 interface ImpsTable {
@@ -50,6 +56,10 @@ interface ImpsTable {
   // awake time before awake_since, which is set while the imp runs
   awake_ms: Generated<number>;
   awake_since: number | null;
+
+  // 1 until the first cold boot of an imp from a template gives it its own
+  // machine-id and ssh host keys
+  identity_reset_pending: Generated<number>;
 }
 
 interface CheckpointsTable {
