@@ -1,5 +1,5 @@
 #!/bin/bash
-# Take a fresh Ubuntu 24.04 or Debian 13 server to a running imp host
+# Take a fresh Ubuntu 24.04 or 26.04, or Debian 13, server to a running imp host
 # (docs/guides/install.md, "Bootstrap a server"). Run as root:
 #
 #   bootstrap.sh --yes --data-device /dev/nvme1n1
@@ -449,8 +449,8 @@ preflight() {
   # shellcheck source=/dev/null
   . /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    ubuntu:24.04 | debian:13) log "OS: $PRETTY_NAME" ;;
-    *) die "unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 24.04 or Debian 13" ;;
+    ubuntu:24.04 | ubuntu:26.04 | debian:13) log "OS: $PRETTY_NAME" ;;
+    *) die "unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 24.04 or 26.04, or Debian 13" ;;
   esac
   [ "$(uname -m)" = x86_64 ] || die "the host image is x86_64 only"
 
@@ -820,9 +820,10 @@ ensure_firewall() {
   mapfile -t ports < <(ssh_ports)
   [ ${#ports[@]} -gt 0 ] || die "found no SSH port; give --ssh-port"
   # sudo drops SSH_CONNECTION by default, and without it the check below
-  # cannot see the session's port.
+  # cannot see the session's port. sudo-rs (Ubuntu 26.04) ignores -E, so
+  # name the variable.
   if [ -z "${SSH_CONNECTION:-}" ] && [ -n "${SUDO_USER:-}" ]; then
-    die "run as root, or with sudo -E, so the firewall phase can check this SSH session's port"
+    die "run as root, or with sudo --preserve-env=SSH_CONNECTION, so the firewall phase can check this SSH session's port"
   fi
   local session_port
   session_port=$(awk '{ print $4 }' <<<"${SSH_CONNECTION:-}")

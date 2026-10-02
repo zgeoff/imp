@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run deploy/bootstrap.sh for real inside a throwaway container with systemd
-# as PID 1, on Debian 13 and Ubuntu 24.04, and check that a second run
+# as PID 1, on Debian 13 and Ubuntu 24.04 and 26.04, and check that a second run
 # changes nothing.
 #
 #   scripts/test-bootstrap.sh --image imp-host:<tag>   a local release image
@@ -8,7 +8,7 @@
 #   scripts/test-bootstrap.sh --image ... --health     also create and exec an imp (needs KVM)
 #   scripts/test-bootstrap.sh --distro debian ...      one distro only
 #   scripts/test-bootstrap.sh --keep ...               leave a failed container to inspect
-#   scripts/test-bootstrap.sh --zfs ...                also a real ZFS run on Ubuntu (needs
+#   scripts/test-bootstrap.sh --zfs ...                also a real ZFS run on Ubuntu 24.04 (needs
 #                                                      the zfs module loaded on this host)
 #
 # Each distro runs on a loop file. Debian also runs --data-device on a loop
@@ -36,7 +36,7 @@ stub=
 health=
 keep=
 zfs=
-distros=(debian ubuntu)
+distros=(debian ubuntu24 ubuntu26)
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
     --health) health=1 ;;
     --keep) keep=1 ;;
     --zfs) zfs=1 ;;
-    --distro) distros=("${2:?--distro needs debian or ubuntu}") && shift ;;
+    --distro) distros=("${2:?--distro needs debian, ubuntu24 or ubuntu26}") && shift ;;
     *) echo "test-bootstrap: unknown argument: $1" >&2 && exit 2 ;;
   esac
   shift
@@ -139,7 +139,8 @@ build_image() {
   case $distro in
     debian) base=debian:trixie ;;
     # Vultr's Ubuntu images ship ufw enabled; the test does the same.
-    ubuntu) base=ubuntu:24.04 extra=ufw ;;
+    ubuntu24) base=ubuntu:24.04 extra=ufw ;;
+    ubuntu26) base=ubuntu:26.04 extra=ufw ;;
   esac
   docker build -q -t "imp-bootstrap-test:$distro" --build-arg BASE="$base" --build-arg EXTRA="$extra" - >/dev/null <<'EOF'
 ARG BASE
@@ -241,7 +242,7 @@ run_distro() {
   local distro=$1
   start_container "$distro"
   storage_args=(--loop-file "$loop_file" --loop-size 50)
-  if [ "$distro" = ubuntu ]; then
+  if [[ $distro == ubuntu* ]]; then
     in_container ufw --force enable >/dev/null
   fi
 
@@ -260,8 +261,8 @@ run_distro() {
   in_container systemctl -q is-active imp-firewall || fail "[$distro] imp-firewall is not active"
   in_container nft list table inet imp_host >/dev/null || fail "[$distro] the firewall table is missing"
   [ "$(in_container stat -c %a /etc/imp/imp-host.env)" = 600 ] || fail "[$distro] imp-host.env is not 0600"
-  if [ "$distro" = ubuntu ]; then
-    in_container ufw status | grep -q 'Status: inactive' || fail "[ubuntu] ufw is still active"
+  if [[ $distro == ubuntu* ]]; then
+    in_container ufw status | grep -q 'Status: inactive' || fail "[$distro] ufw is still active"
   fi
   check_firewall_drops
 
@@ -319,7 +320,7 @@ run_device() {
 # run_zfs: --storage zfs on a loop device, for real: a pool, the dataset,
 # imp-host on it, then --check and a second run.
 run_zfs() {
-  local distro=ubuntu dev
+  local distro=ubuntu24 dev
   start_container "$distro"
   dev=$(in_container bash -c "truncate -s 20G $disk_empty && losetup -f --show $disk_empty")
   storage_args=(--storage zfs --zfs-pool "$zfs_pool" --data-device "$dev")

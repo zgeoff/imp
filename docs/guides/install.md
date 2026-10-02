@@ -95,9 +95,9 @@ restarts and day-to-day care.
 
 ## Bootstrap a server
 
-[`deploy/bootstrap.sh`](../../deploy/bootstrap.sh) takes a fresh Ubuntu 24.04 or Debian 13 server,
-x86_64 with KVM, to a running impd. It is one file with no other repo files, so copy it to the
-server and run it as root:
+[`deploy/bootstrap.sh`](../../deploy/bootstrap.sh) takes a fresh Ubuntu 24.04 or 26.04, or Debian
+13, server, x86_64 with KVM, to a running impd. It is one file with no other repo files, so copy it
+to the server and run it as root:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/main/deploy/bootstrap.sh
@@ -106,10 +106,11 @@ bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file 
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 ```
 
-Run it in a root login, or with `sudo -E`: plain `sudo` drops `SSH_CONNECTION`, which the firewall
-phase reads to keep your session's port open, so the script refuses it. `--dry-run` prints every
-change and makes none. `--check` does the same and exits 1 when a change is pending. A run changes
-only what differs from what it wants, so a second run changes nothing.
+Run it in a root login, or with `sudo --preserve-env=SSH_CONNECTION`: plain `sudo` drops
+`SSH_CONNECTION`, which the firewall phase reads to keep your session's port open, so the script
+refuses it. `sudo -E` is not enough on Ubuntu 26.04, whose `sudo-rs` ignores `-E`. `--dry-run`
+prints every change and makes none. `--check` does the same and exits 1 when a change is pending. A
+run changes only what differs from what it wants, so a second run changes nothing.
 
 **CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
 partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS (or,
@@ -175,6 +176,8 @@ bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing
 - A later run without `--storage` keeps the env file's backend. The script refuses to switch
   backends, since the imps would stay behind on the old one.
 - ZFS takes no `--loop-file`.
+- Ubuntu 26.04 ships the 2.4 module, and the host image ships 2.3 tools. impd starts and warns about
+  the minor skew ([versions](../architecture/storage.md#versions)).
 
 ### RAM budget
 
@@ -217,12 +220,12 @@ warns when `sshd` allows password logins.
 ### Test it
 
 `scripts/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on
-Debian 13 and Ubuntu 24.04, with a loop file and Docker inside. It checks `--check` on the fresh
-host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*` and
-`kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel settings
-and does not apply them. On Debian it also checks the `--data-device` refusals and what
-`--check --storage zfs` plans. `--zfs` adds a real ZFS run on Ubuntu, on a pool with a unique name
-that the test destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
+Debian 13 and Ubuntu 24.04 and 26.04, with a loop file and Docker inside. It checks `--check` on the
+fresh host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*`
+and `kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel
+settings and does not apply them. On Debian it also checks the `--data-device` refusals and what
+`--check --storage zfs` plans. `--zfs` adds a real ZFS run on Ubuntu 24.04, on a pool with a unique
+name that the test destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
 
 ```sh
 scripts/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)
