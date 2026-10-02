@@ -21,8 +21,8 @@ network the imp is not on do nothing.
 ## What a network allows
 
 - Every member reaches every other member on any port, over TCP, UDP and ICMP, whatever either one's
-  [egress policy](../architecture/networking.md#egress) is. A `box` or `none` imp on a network still
-  reaches nothing else.
+  [egress policy](../architecture/networking.md#egress) is. The firewall still holds a `box` or
+  `none` imp to its policy for every address outside the network.
 - A non-member reaches no member, and no member reaches it. A packet between two imps that share no
   network is refused: TCP gets a reset, the rest ICMP admin-prohibited.
 - IPv4 only: two members do not reach each other over IPv6, and names answer A records only.
@@ -33,6 +33,17 @@ network the imp is not on do nothing.
 - A fork joins no network: a join is a choice made for each imp. A
   [backup](../architecture/backups.md) keeps each imp's network names, and a restore puts the imp
   back on them, making any network that is gone.
+
+## A network is a trust boundary
+
+A network weakens the egress policy of a `box` or `none` member whenever an `open` imp is on it too.
+The open peer reaches anything, so it can relay for the others: a proxy, a port forward or a tunnel
+on it carries the box imp's traffic anywhere. A `box` or `none` imp on a network trusts every open
+peer on it with its egress.
+
+`imp net join` warns when a join puts a `box` or `none` imp on a network with an `open` one, from
+either side, and `--json` carries the same text in `warning`. `imp new --net` does not warn: check
+the network's imps first. To keep a box imp boxed, keep every imp on its networks `box` or `none`.
 
 ## Names
 
@@ -46,14 +57,24 @@ no network asks `IMP_DNS` directly, as before, and gets its NXDOMAIN from there.
 | `<imp>`                                | the same, for a bare name of an imp the asker shares a network with |
 | the reverse name of a member's address | `<imp>.<network>.internal`, once for each network the two share     |
 
-- Any other name under `internal`, or under the reverse zone of `IMP_SUBNET`, is NXDOMAIN, the same
-  answer whether the name does not exist or names an imp the asker shares no network with. A guest
-  cannot list imps through it.
-- A bare name that is no peer is resolved as it would be without a network.
+- Any other name under `<network>.internal` for a network that exists, or under the reverse zone of
+  `IMP_SUBNET`, is NXDOMAIN, the same answer whether the name does not exist or names an imp the
+  asker shares no network with. A guest cannot list imps through it, though it can tell which
+  network names exist.
+- Every other `.internal` name, such as `metadata.google.internal` or a company's own, is resolved
+  as it would be without a network.
+- A bare name that is a peer's imp name gets the peer's address, ahead of anything `IMP_DNS` would
+  say for it. Imp names are unique on a host, so two peers never tie. A bare name that is no peer is
+  resolved as it would be without a network.
+- When the guest shares more than one network with a peer, a reverse lookup answers one name for
+  each, sorted by network name.
 - The answers have a TTL of 5 s, so a join or a leave shows soon in a guest's cache.
 - An imp's own name answers too: `web.lab.internal` from `web` is its own address.
 - A member can run a DNS server for its peers: a query to another imp's address on port 53 goes to
   that imp, not to impd.
+- An `open` imp on a network sends every query to `IMP_DNS` through impd, so its DNS now depends on
+  impd: it stops while impd restarts, and it has a rate limit, higher than a box imp's (a burst of
+  2000, then 1000 a second). Off every network, an open imp asks `IMP_DNS` directly again.
 
 ## Access
 
