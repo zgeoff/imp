@@ -310,24 +310,33 @@ test(
             expect(quiescent).toEqual([]);
             expect(repaired).toEqual([]);
 
-            // the governor brings measured usage under the budget whenever the
-            // imps it may sleep are enough; #46 makes it sleep what it can,
-            // which tightens this
+            // the governor may sleep every running imp without a hold: none
+            // is locked or has an open exec session or request
+            const beforeEnforce = await listImps(ctx.db);
+
+            const busy = beforeEnforce.filter(
+              (imp) => ctx.imps.isImpBusy(imp.id) || ctx.imps.tracker.count(imp.id) > 0,
+            );
+
+            expect(busy).toEqual([]);
+
+            // the governor brings measured usage under the budget, or sleeps
+            // every imp it may; with the queues cleared each sleep succeeds,
+            // so no imp it tried is left running
             await ctx.governor.enforce();
 
             const usage = await ctx.governor.readUsage();
             const imps = await listImps(ctx.db);
 
-            const freeableMib =
-              imps.filter(
-                (imp) =>
-                  imp.state === 'running' &&
-                  (imp.holdUntil === null || imp.holdUntil.getTime() <= ctx.now()),
-              ).length * 300;
+            const runningUnheld = imps.filter(
+              (imp) =>
+                imp.state === 'running' &&
+                (imp.holdUntil === null || imp.holdUntil.getTime() <= ctx.now()),
+            );
 
             const overMib = usage.usedMib - ctx.config.ramBudgetMib;
 
-            expect(overMib <= 0 || freeableMib < overMib).toBeTrue();
+            expect(overMib <= 0 || runningUnheld.length === 0).toBeTrue();
           },
         ),
         { numRuns: 300 },

@@ -13,8 +13,8 @@ test('it picks the least recently active imps until enough RAM is free', () => {
     buildCandidate('mid', 400, 200),
   ];
 
-  expect(pickSleepVictims(candidates, 300)).toEqual(['old']);
-  expect(pickSleepVictims(candidates, 700)).toEqual(['old', 'mid']);
+  expect(pickSleepVictims(candidates, 300)).toEqual({ victims: ['old'], enough: true });
+  expect(pickSleepVictims(candidates, 700)).toEqual({ victims: ['old', 'mid'], enough: true });
 });
 
 test('it skips held and busy imps', () => {
@@ -24,15 +24,28 @@ test('it skips held and busy imps', () => {
     buildCandidate('free', 400, 200),
   ];
 
-  expect(pickSleepVictims(candidates, 300)).toEqual(['free']);
+  expect(pickSleepVictims(candidates, 300)).toEqual({ victims: ['free'], enough: true });
 });
 
-test('it gives up when every eligible imp together is not enough', () => {
-  const candidates = [buildCandidate('a', 100, 1), { ...buildCandidate('b', 900, 2), held: true }];
+test('it frees exactly what is needed', () => {
+  const candidates = [buildCandidate('a', 300, 1), buildCandidate('b', 200, 2)];
 
-  expect(pickSleepVictims(candidates, 500)).toBeNull();
+  expect(pickSleepVictims(candidates, 500)).toEqual({ victims: ['a', 'b'], enough: true });
+});
+
+test('it lists every eligible imp, oldest first, when together they are not enough', () => {
+  const candidates = [
+    buildCandidate('new', 100, 3),
+    { ...buildCandidate('held', 900, 1), held: true },
+    buildCandidate('old', 100, 2),
+  ];
+
+  expect(pickSleepVictims(candidates, 500)).toEqual({ victims: ['old', 'new'], enough: false });
 });
 
 test('it needs no victim when nothing is missing', () => {
-  expect(pickSleepVictims([buildCandidate('a', 100, 1)], 0)).toEqual([]);
+  const candidates = [buildCandidate('a', 100, 1)];
+
+  expect(pickSleepVictims(candidates, 0)).toEqual({ victims: [], enough: true });
+  expect(pickSleepVictims(candidates, -50)).toEqual({ victims: [], enough: true });
 });
