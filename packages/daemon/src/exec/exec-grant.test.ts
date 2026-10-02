@@ -12,6 +12,11 @@ function buildBackend() {
 
       return Promise.reject(new Error('opened'));
     },
+    openAttach: (name) => {
+      opened.push(`attach ${name}`);
+
+      return Promise.reject(new Error('opened'));
+    },
     recordActivity: () => Promise.resolve(),
   };
 
@@ -33,13 +38,19 @@ test('a ticket grant starts only its imp', async () => {
   const granted = buildGrantedBackend(ctx.backend, { kind: 'imp', name: 'a' });
 
   await granted.openExec('a', { argv: ['true'], tty: false }).catch(() => {});
+  await granted.openAttach('a', { session: 'main' }).catch(() => {});
 
   const rejection = await granted
     .openExec('b', { argv: ['true'], tty: false })
     .catch((error: unknown) => error);
 
+  const attachRejection = await granted
+    .openAttach('b', { session: 'main' })
+    .catch((error: unknown) => error);
+
   expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
-  expect(ctx.opened).toEqual(['a']);
+  expect(attachRejection).toMatchObject({ code: 'FORBIDDEN' });
+  expect(ctx.opened).toEqual(['a', 'attach a']);
 });
 
 test('a socket with no grant starts nothing', async () => {

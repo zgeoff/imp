@@ -171,6 +171,9 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       options.onStarted(message.pid);
     } else if (message.type === 'exit') {
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
+    } else if (message.type === 'detached') {
+      // only a session socket gets this; plain exec never asks for one
+      resolveOutcome({ kind: 'closed', reason: `detached (${message.reason})` });
     } else {
       resolveOutcome({ kind: 'failed', code: message.code ?? null, message: message.message });
     }

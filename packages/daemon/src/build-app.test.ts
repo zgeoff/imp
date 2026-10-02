@@ -22,6 +22,7 @@ test('it serves system.info from config and the database', async () => {
     ramCommittedMib: 0,
     awakeCount: 0,
     impCount: 0,
+    sessionCount: 0,
     firecrackerVersion: 'v1.17.0',
     ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null },

@@ -1,5 +1,7 @@
-import { openExecStream } from '../agent-client/exec-stream';
-import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { sendActivity } from '../agent-client/agent-requests';
+import type { AgentActivity } from '../agent-client/agent-requests';
+import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
+import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -18,7 +20,14 @@ export interface ImpRuntime {
   // the imp must be running; exec runs outside the lifecycle lock, so a
   // long console session never blocks stop or destroy
   readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
+
+  // as openExec, for a session that exists
+  readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
   readonly recordActivity: (name: string) => Promise<void>;
+
+  // for the idle loop: the agent's activity, its sessions recorded on the
+  // way; null when the agent does not answer
+  readonly readActivity: (imp: ImpRecord) => Promise<AgentActivity | null>;
 
   // for the wake proxy: the running imp, woken or booted first if needed;
   // `wokeMs` is null when it already ran. `onFound` runs before any wait, so
@@ -82,6 +91,39 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     });
   };
 
+  // A sleeping imp wakes and a stopped one boots, as for an HTTP request.
+  // The stream counts from the moment the imp is found, before any wake, so
+  // no background sleep slips in between the wake and the open.
+  const openStream = async (
+    name: string,
+    open: (vsockPath: string) => Promise<ExecStream>,
+  ): Promise<ExecStream> => {
+    const opened = { release: () => {} };
+
+    try {
+      const running = await requireRunning(name, (found) => {
+        opened.release = context.tracker.open(found.id, 'exec');
+      });
+
+      const imp = running.imp;
+
+      await updateImpActivity(context.db, imp.id, new Date());
+
+      const stream = await open(context.findPaths(imp.id).vsockSocket);
+
+      return {
+        ...stream,
+        close: () => {
+          opened.release();
+          stream.close();
+        },
+      };
+    } catch (error) {
+      opened.release();
+      throw error;
+    }
+  };
+
   const isSleepAllowed = (imp: ImpRecord, policy: SleepPolicy): boolean => {
     if (context.tracker.count(imp.id) > 0) {
       return false;
@@ -115,33 +157,20 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   };
 
   return {
-    // a sleeping imp wakes and a stopped one boots, as for an HTTP request
-    // The session counts from the moment the imp is found, before any wake,
-    // so no background sleep slips in between the wake and the exec.
-    openExec: async (name, request) => {
-      const opened = { release: () => {} };
+    openExec: (name, request) =>
+      openStream(name, (vsockPath) => openExecStream(vsockPath, request)),
+    openAttach: (name, request) =>
+      openStream(name, (vsockPath) => openAttachStream(vsockPath, request)),
 
+    readActivity: async (imp) => {
       try {
-        const running = await requireRunning(name, (found) => {
-          opened.release = context.tracker.open(found.id, 'exec');
-        });
+        const activity = await sendActivity(context.findPaths(imp.id).vsockSocket);
 
-        const imp = running.imp;
+        context.sessions.record(imp.id, activity.sessions);
 
-        await updateImpActivity(context.db, imp.id, new Date());
-
-        const stream = await openExecStream(context.findPaths(imp.id).vsockSocket, request);
-
-        return {
-          ...stream,
-          close: () => {
-            opened.release();
-            stream.close();
-          },
-        };
-      } catch (error) {
-        opened.release();
-        throw error;
+        return activity;
+      } catch {
+        return null;
       }
     },
 

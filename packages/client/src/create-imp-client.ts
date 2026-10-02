@@ -50,6 +50,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     checkpoints: rpc.checkpoints,
     images: rpc.images,
     exec: rpc.exec,
+    sessions: rpc.sessions,
     system: rpc.system,
   } satisfies RpcClient;
 

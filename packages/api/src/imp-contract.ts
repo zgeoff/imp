@@ -6,6 +6,7 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { NameSchema } from './name-schema';
+import { SessionNameSchema, SessionSchema } from './session-schema';
 import { SystemInfoSchema } from './system-info-schema';
 
 const base = oc.errors(IMP_ERRORS);
@@ -116,6 +117,17 @@ export const impContract = {
     ticket: base
       .input(NameInputSchema)
       .output(z.object({ ticket: z.string(), expiresAt: z.date() })),
+  },
+
+  sessions: {
+    // a running imp's live sessions; a sleeping imp's as it went to sleep,
+    // without waking it; none for a stopped imp
+    list: base.input(NameInputSchema).output(z.array(SessionSchema)),
+
+    // wakes a sleeping imp; SIGHUP, then SIGKILL after 2 s
+    kill: base
+      .input(z.object({ name: NameSchema, session: SessionNameSchema }))
+      .output(EmptySchema),
   },
 
   system: {
