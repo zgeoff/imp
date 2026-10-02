@@ -154,6 +154,10 @@ export async function updateImpStateIf(
     values.pid = change.pid;
   }
 
+  if (change.sleptAt !== undefined) {
+    values.slept_at = change.sleptAt === null ? null : change.sleptAt.getTime();
+  }
+
   const pidOperator = expected.pid === null ? 'is' : '=';
 
   const row = await db
