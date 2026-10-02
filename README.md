@@ -61,28 +61,29 @@ imp restore box clean             # and back
 imp fork box box-2                # a second copy to try something else in
 ```
 
-| Command                                | What it does                                             |
-| -------------------------------------- | -------------------------------------------------------- |
-| `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`) |
-| `ls`, `info`                           | list imps; show RAM use and the budget                   |
-| `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                      |
-| `console <name>`                       | open a shell in a session that outlives the terminal     |
-| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine            |
-| `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                     |
-| `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)           |
-| `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while             |
-| `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
-| `url <name>`                           | print the imp's local and tailnet URLs                   |
-| `image build`, `add`, `ls`, `rm`       | manage images                                            |
-| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest               |
-| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker      |
-| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
-| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
-| `completion bash\|zsh\|fish`           | print the shell completion script                        |
+| Command                                | What it does                                                       |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`) |
+| `ls`, `info`                           | list imps; show RAM use and the budget                             |
+| `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                                |
+| `console <name>`                       | open a shell in a session that outlives the terminal               |
+| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine                      |
+| `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                               |
+| `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)                     |
+| `disk resize <name> <size>`            | grow an imp's disk; the guest grows into it                        |
+| `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
+| `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
+| `url <name>`                           | print the imp's local and tailnet URLs                             |
+| `image build`, `add`, `ls`, `rm`       | manage images                                                      |
+| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
+| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |
+| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio               |
+| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)              |
+| `completion bash\|zsh\|fish`           | print the shell completion script                                  |
 
-`--memory` takes MiB or a unit (`512m`, `2g`). [Connectors](docs/guides/connectors.md) covers
-secrets and grants. Commands that print imps, images, checkpoints or `info` take `--json`.
-`scripts/imp` runs the CLI from the repo.
+`--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
+[Connectors](docs/guides/connectors.md) covers secrets and grants. Commands that print imps, images,
+checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).

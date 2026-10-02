@@ -12,6 +12,7 @@ import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
+import type { Config } from '../config';
 import { createImage } from '../db/images';
 import type { ImageRecord } from '../db/images';
 import { listImps } from '../db/imps';
@@ -82,7 +83,12 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const db = await openDatabase(':memory:');
 
-  const config = loadConfig({ IMP_DATA_DIR: dataDir, ...options.env });
+  // a new disk stays the size of its image: the fake clone copies every byte
+  const config: Config = {
+    ...loadConfig({ IMP_DATA_DIR: dataDir, ...options.env }),
+    defaultDiskBytes: 0,
+  };
+
   const fake = buildFakeVmm();
   const taps: string[] = [];
   const logs: string[] = [];

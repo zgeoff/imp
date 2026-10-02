@@ -2,9 +2,18 @@ import { mkdirSync, rmSync } from 'node:fs';
 import type { Imp } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
-import { listImps, removeImp, updateImpActivity, updateImpHold, updateImpState } from '../db/imps';
+import {
+  listImps,
+  removeImp,
+  updateImpActivity,
+  updateImpDisk,
+  updateImpHold,
+  updateImpState,
+} from '../db/imps';
+import { buildImagePaths } from '../storage/data-layout';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
+import { MIB, buildDiskTooSmallError, growDiskFile, readFileBytes } from './imp-disk';
 import { checkLiveness } from './imp-liveness';
 import { toLockedImp } from './imp-lock';
 import type { ImpLock } from './imp-lock';
@@ -18,6 +27,10 @@ interface CreateImpInput {
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
+
+  // the disk's size: IMP_DEFAULT_DISK_GIB by default, the source's size for
+  // a disk that prepareDisk makes
+  readonly diskMib?: number | undefined;
 
   // creates the new imp's disk; a clone of the image rootfs by default
   readonly prepareDisk?: (impId: string) => Promise<void>;
@@ -45,6 +58,10 @@ export interface ImpCommands {
 
   // keeps the imp awake until now + seconds; 0 releases; wakes it if needed
   readonly holdImp: (name: string, seconds: number) => Promise<Imp>;
+
+  // grows the disk file; the guest grows its filesystem into it now when
+  // running, at its next wake when sleeping, at its next boot when stopped
+  readonly resizeDisk: (name: string, diskMib: number) => Promise<Imp>;
 }
 
 interface ImpCommandParts {
@@ -64,8 +81,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
     createImp: async (input) => {
       const image = await context.images.resolveImage(input.image);
 
+      const diskBytes = resolveDiskBytes(context, input, image.digest);
       const id = Bun.randomUUIDv7();
-      const writeRecord = () => createImpRecord(context, id, input, image);
+      const writeRecord = () => createImpRecord(context, id, { ...input, diskBytes }, image);
 
       return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
@@ -89,6 +107,13 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
 
+        // a fork or a restore takes its source's size, an image's disk grows
+        // past the image's filesystem; the first boot grows the guest's too
+        const sized = await updateImpDisk(context.db, imp.id, {
+          diskBytes: growDiskFile(paths.disk, diskBytes ?? 0),
+          isGrowPending: false,
+        });
+
         // past the lifecycle table: no stop ever leaves `creating` otherwise
         if (input.start === false) {
           const stopped = await updateImpState(context.db, imp.id, {
@@ -100,7 +125,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         }
 
         try {
-          const running = await ops.startImpVm(imp);
+          const running = await ops.startImpVm(toLockedImp(imp, sized));
 
           return await presenter.toApi(running);
         } catch (error) {
@@ -200,6 +225,49 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(running);
       }),
 
+    resizeDisk: (name, diskMib) =>
+      lock.withImp(name, async (imp) => {
+        if (imp.state === 'creating') {
+          throw buildInvalidStateError(
+            imp.state,
+            ['running', 'sleeping', 'stopped', 'error'],
+            'resize',
+          );
+        }
+
+        const diskBytes = diskMib * MIB;
+
+        if (diskBytes < imp.diskBytes) {
+          throw buildDiskTooSmallError(diskBytes, imp.diskBytes, 'the disk now; a disk only grows');
+        }
+
+        if (diskBytes === imp.diskBytes) {
+          return presenter.toApi(imp);
+        }
+
+        const paths = context.findPaths(imp.id);
+
+        growDiskFile(paths.disk, diskBytes);
+
+        // a stopped guest grows on its next boot, a sleeping one on its wake
+        const updated = await updateImpDisk(context.db, imp.id, {
+          diskBytes,
+          isGrowPending: imp.state === 'sleeping',
+        });
+
+        const grown = toLockedImp(imp, updated);
+
+        context.log(`impd: ${imp.name}: disk grown to ${String(diskMib)} MiB`);
+
+        if (grown.state !== 'running') {
+          return presenter.toApi(grown);
+        }
+
+        const resized = await ops.growGuestDisk(grown);
+
+        return presenter.toApi(resized);
+      }),
+
     holdImp: (name, seconds) =>
       lock.withImp(name, async (imp) => {
         const until = seconds > 0 ? new Date(context.now() + seconds * 1000) : null;
@@ -219,6 +287,29 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(running);
       }),
   };
+}
+
+// The size a new disk gets. An explicit size below the image's filesystem
+// is refused; the default grows to it. A disk prepareDisk makes keeps the
+// size of its source unless a larger one is asked for.
+function resolveDiskBytes(
+  context: ImpContext,
+  input: CreateImpInput,
+  digest: string,
+): number | undefined {
+  const requested = input.diskMib === undefined ? undefined : input.diskMib * MIB;
+
+  if (input.prepareDisk !== undefined) {
+    return requested;
+  }
+
+  const floor = readFileBytes(buildImagePaths(context.config.dataDir, digest).rootfs);
+
+  if (requested !== undefined && requested < floor) {
+    throw buildDiskTooSmallError(requested, floor, "the image's filesystem");
+  }
+
+  return requested ?? Math.max(context.config.defaultDiskBytes, floor);
 }
 
 // The disk goes through the backend first: on ZFS a dataset is mounted inside

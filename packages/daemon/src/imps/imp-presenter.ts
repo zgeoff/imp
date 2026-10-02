@@ -5,6 +5,7 @@ import type { HttpsConfig } from '../https/https-config';
 import { countSessions } from '../sessions/count-sessions';
 import { readBootStatus } from './boot-status';
 import type { ImpContext } from './imp-context';
+import { MIB } from './imp-disk';
 
 export interface ImpUrls {
   readonly local: string;
@@ -33,6 +34,7 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       state: imp.state,
       vcpus: imp.vcpus,
       memoryMib: imp.memoryMib,
+      diskMib: Math.ceil(imp.diskBytes / MIB),
       ip: imp.ip,
       slot: imp.slot,
       port: context.findAddress(imp.slot).tailnetPort,

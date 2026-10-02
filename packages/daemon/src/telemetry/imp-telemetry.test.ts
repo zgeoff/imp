@@ -26,6 +26,7 @@ const imp: Imp = {
   state: 'running',
   vcpus: 2,
   memoryMib: 2048,
+  diskMib: 32_768,
   ip: '10.66.0.2',
   slot: 0,
   port: 20_000,

@@ -156,7 +156,8 @@ Grows the root filesystem to fill its disk, after the host grew the disk file an
 The guest sees the new size on its own time, so the agent polls `/sys/block/vda/size` until the disk
 has at least `disk_bytes` (10 s at most), then runs `EXT4_IOC_RESIZE_FS`, an online resize. A frozen
 filesystem would block the resize, so `grow` during a freeze fails with `FROZEN`. Every cold boot
-also grows the filesystem to fill the disk, in stage 1, before the switch of root.
+also grows the filesystem to fill the disk, in stage 1, before the switch of root. Since `0.5.0`: an
+older agent answers `UNKNOWN_OP`, which impd reports as `AGENT_OUTDATED`.
 
 ### `services.list`
 

@@ -22,6 +22,8 @@ export const FAKE_IMP: ImpRecord = {
   pid: 100,
   firecrackerVersion: 'v1.17.0',
   httpPort: 8080,
+  diskBytes: 34_359_738_368,
+  isDiskGrowPending: false,
 };
 
 // events a fake stream yields, in order; null ends the stream

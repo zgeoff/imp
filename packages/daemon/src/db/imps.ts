@@ -23,6 +23,8 @@ export interface ImpRecord {
   readonly pid: number | null;
   readonly firecrackerVersion: string | null;
   readonly httpPort: number;
+  readonly diskBytes: number;
+  readonly isDiskGrowPending: boolean;
 }
 
 export interface NewImp {
@@ -35,6 +37,9 @@ export interface NewImp {
   readonly slot: number;
   readonly ip: string;
   readonly httpPort?: number;
+
+  // 32 GiB when left out
+  readonly diskBytes?: number;
 }
 
 export interface ImpStateChange {
@@ -94,6 +99,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       slot: imp.slot,
       ip: imp.ip,
       ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
+      ...(imp.diskBytes !== undefined && { disk_bytes: imp.diskBytes }),
       created_at: now,
       last_active_at: now,
     })
@@ -234,6 +240,26 @@ export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): 
   await db.updateTable('imps').set({ last_active_at: at.getTime() }).where('id', '=', id).execute();
 }
 
+// the disk's size, and whether a sleeping guest still has to grow into it
+export async function updateImpDisk(
+  db: ImpDatabase,
+  id: string,
+  disk: Readonly<{ diskBytes: number; isGrowPending: boolean }>,
+): Promise<ImpRecord> {
+  const row = await db
+    .updateTable('imps')
+    .set({ disk_bytes: disk.diskBytes, disk_grow_pending: disk.isGrowPending ? 1 : 0 })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const sized = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp: sized, reason: 'resized' });
+
+  return sized;
+}
+
 export async function updateImpHold(
   db: ImpDatabase,
   id: string,
@@ -299,6 +325,8 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     pid: row.pid,
     firecrackerVersion: row.firecracker_version,
     httpPort: row.http_port,
+    diskBytes: row.disk_bytes,
+    isDiskGrowPending: row.disk_grow_pending === 1,
   };
 }
 

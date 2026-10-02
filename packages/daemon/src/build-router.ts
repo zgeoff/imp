@@ -122,6 +122,9 @@ export function buildRouter(deps: RouterDeps) {
       hold: os.imps.hold.handler((context) =>
         deps.imps.holdImp(context.input.name, context.input.seconds),
       ),
+      resizeDisk: os.imps.resizeDisk.handler((context) =>
+        deps.imps.resizeDisk(context.input.name, context.input.diskMib),
+      ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
 
       // a fork gets its source's grants, as it gets its disk

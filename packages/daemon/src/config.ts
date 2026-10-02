@@ -30,6 +30,7 @@ const EnvSchema = z.object({
   IMP_SLEEP_MIN_GUEST_UPTIME_MS: z.coerce.number().pipe(z.int().nonnegative()).default(1500),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
   IMP_DEFAULT_MEMORY_MIB: CountSchema.default(2048),
+  IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
   IMP_FIRECRACKER_BIN: z.string().default('firecracker'),
@@ -76,6 +77,9 @@ export interface Config {
   readonly sleepMinGuestUptimeMs: number;
   readonly defaultVcpus: number;
   readonly defaultMemoryMib: number;
+
+  // the disk an imp gets when `imps.create` names no size
+  readonly defaultDiskBytes: number;
   readonly dns: readonly string[];
   readonly subnet: Subnet;
   readonly firecrackerBin: string;
@@ -152,6 +156,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     sleepMinGuestUptimeMs: parsed.IMP_SLEEP_MIN_GUEST_UPTIME_MS,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,
     defaultMemoryMib: parsed.IMP_DEFAULT_MEMORY_MIB,
+    defaultDiskBytes: parsed.IMP_DEFAULT_DISK_GIB * 1024 ** 3,
     dns: parsed.IMP_DNS,
     subnet,
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,

@@ -30,7 +30,7 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'SESSIONS', 'IP', 'URL', 'NOTE'],
+    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'DISK', 'SESSIONS', 'IP', 'URL', 'NOTE'],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -38,12 +38,18 @@ export function formatImps(imps: readonly Imp[]): string {
       String(imp.vcpus),
       `${String(imp.memoryMib)} MiB`,
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+      formatDiskMib(imp.diskMib),
       imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
       formatNote(imp),
     ]),
   );
+}
+
+// GiB when whole, as sizes are given
+function formatDiskMib(mib: number): string {
+  return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
 }
 
 // what an upgrade means for the imp (docs/guides/operations.md#upgrade)
@@ -76,7 +82,7 @@ export function formatImp(imp: Imp): string {
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
   return formatTable(
-    ['ID', 'LABEL', 'CREATED', 'SIZE'],
+    ['ID', 'LABEL', 'CREATED', 'SIZE', 'DISK'],
     checkpoints.map((checkpoint) => [
       checkpoint.id,
       checkpoint.label ?? '',
@@ -84,6 +90,7 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
       checkpoint.sizeBytes === undefined
         ? ''
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
+      formatDiskMib(checkpoint.diskMib),
     ]),
   );
 }

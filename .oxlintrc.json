@@ -12,8 +12,9 @@
     "zgeoff/function-verb": [
       "error",
       {
-        // imp's domain verbs: the lifecycle an imp moves through
-        "verbs": ["allocate", "list", "open", "sleep", "wake", "hold"],
+        // imp's domain verbs: the lifecycle an imp moves through, and its
+        // disk, which only grows
+        "verbs": ["allocate", "list", "open", "sleep", "wake", "hold", "grow"],
         "exemptNames": [
           "main",
           // kysely's Driver interface: BunSqliteDriver implements it, so

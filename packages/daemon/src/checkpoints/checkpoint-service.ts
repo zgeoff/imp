@@ -12,9 +12,10 @@ import {
   toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
-import { findImpByName, updateImpState } from '../db/imps';
+import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { toLockedImp } from '../imps/imp-lock';
 import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
@@ -177,6 +178,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
             impId: imp.id,
             label: label ?? null,
             sizeBytes: created.sizeBytes,
+            diskBytes: imp.diskBytes,
           });
 
           const ms = Math.round(performance.now() - started);
@@ -241,7 +243,14 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           return stopped;
         });
 
-        const booted = wasAwake ? await deps.imps.bootImp(halted) : halted;
+        // the disk is the checkpoint's now, at the checkpoint's size
+        const resized = await updateImpDisk(deps.db, imp.id, {
+          diskBytes: checkpoint.diskBytes,
+          isGrowPending: false,
+        });
+
+        const sized = toLockedImp(halted, resized);
+        const booted = wasAwake ? await deps.imps.bootImp(sized) : sized;
         const ms = Math.round(performance.now() - started);
 
         // the state may be what it was, the disk is not: the stream hears of it

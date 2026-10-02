@@ -8,10 +8,11 @@ test('it reads sizes as MiB', () => {
   expect(parseSize('2G')).toBe(2048);
   expect(parseSize('2GiB')).toBe(2048);
   expect(parseSize('256MB')).toBe(256);
+  expect(parseSize('1t')).toBe(1_048_576);
 });
 
 test('it rejects fractions, zero and other units', () => {
-  for (const text of ['1.5g', '0', '0g', '', 'g', '2t', '-1', 'lots', '512b', '512ib', '2gb2']) {
+  for (const text of ['1.5g', '0', '0g', '', 'g', '2k', '-1', 'lots', '512b', '512ib', '2gb2']) {
     expect(() => parseSize(text)).toThrow(`not a size: ${text}`);
   }
 });

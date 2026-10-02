@@ -18,6 +18,9 @@ export const ImpSchema = z.object({
   state: ImpStateSchema,
   vcpus: z.int().positive(),
   memoryMib: z.int().positive(),
+
+  // the disk's size; the guest's filesystem fills it
+  diskMib: z.int().positive(),
   ip: z.ipv4(),
   slot: z.int().nonnegative(),
   port: z.int().positive(),

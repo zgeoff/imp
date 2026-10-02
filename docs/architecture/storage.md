@@ -195,8 +195,35 @@ of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)
 2. impd runs `docker create` and `docker export` and unpacks the tar.
 3. It writes the OCI config (`Env`, `WorkingDir`, `User`) to `/etc/imp/image.json` in the rootfs.
    The agent uses it as the default environment for exec and services.
-4. It writes the tree into a sparse 32 GiB ext4 file with `mkfs.ext4 -d`, at
-   `images/<digest>/rootfs.ext4`.
+4. It writes the tree into a sparse ext4 file with `mkfs.ext4 -d`, at `images/<digest>/rootfs.ext4`:
+   the tree's size and a fifth more, plus 2 GiB, in whole GiB, and at least 4 GiB. A tree of many
+   small files gets twice its count of inodes. Images built before disk sizes keep their 32 GiB
+   filesystem.
+
+## Disk sizes
+
+An imp's disk is a file larger than its image's filesystem; the guest grows the filesystem to fill
+it. `imp new --disk 64g` sets the size, `IMP_DEFAULT_DISK_GIB` (32) is the default, and the size is
+never below the image's filesystem. A fork takes its source's size, and a checkpoint keeps the size
+the disk had, which a restore or a fork from it takes back. A backup's manifest holds the sizes.
+
+`imp disk resize <name> <size>` grows the file, never shrinks it: the guest's ext4 cannot shrink
+online. Both backends keep the disk as a file (on ZFS, in its dataset), so the grow is a `truncate`
+under the imp's lock. The guest follows:
+
+- **Stopped**: every cold boot grows the filesystem to fill the disk. The agent's stage 1 runs
+  `EXT4_IOC_RESIZE_FS`, an online resize, after it mounts the disk.
+- **Running**: impd sends `PATCH /drives/rootfs` so Firecracker reads the file's size again and
+  tells the guest, then the agent's `grow` request waits for the new size and resizes
+  ([protocol](./protocol.md#grow)).
+- **Sleeping**: the snapshot holds the old size, so the grow waits for the wake, which runs the same
+  two steps. A failed grow stays pending (`disk_grow_pending`) for the next wake; a cold boot clears
+  it.
+
+`mkfs.ext4` keeps `resize_inode`, which lets an online grow add block group descriptors: a 4 GiB
+filesystem grows to well past 1 TiB. The journal keeps the size mkfs gave the image, 64 MiB for a 4
+GiB filesystem where a 32 GiB one gets 256 MiB. A grown disk with heavy metadata writes may want the
+larger journal; `tune2fs` can only change it offline.
 
 The cache key is the Docker image ID: a rootfs is built once per ID, and two names for the same ID
 share one file. When no image exists at all, impd adds `ubuntu:24.04` as `ubuntu`. An imp created

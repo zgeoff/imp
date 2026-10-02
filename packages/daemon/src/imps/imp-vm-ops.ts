@@ -1,8 +1,9 @@
 import { statSync } from 'node:fs';
 import type { ImpEventDetail } from '@imp/api';
+import { ORPCError } from '@orpc/server';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
-import { updateImpActivity, updateImpState } from '../db/imps';
+import { updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
@@ -61,6 +62,10 @@ export interface ImpVmOps {
 
   // the running imp, woken or booted first
   readonly requireRunningImp: (imp: LockedImp) => Promise<LockedImp>;
+
+  // a running guest grows its filesystem into a grown disk file; a failure
+  // leaves the grow pending for the next wake, and a cold boot grows anyway
+  readonly growGuestDisk: (imp: LockedImp) => Promise<LockedImp>;
 }
 
 export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
@@ -163,7 +168,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       await updateImpActivity(context.db, imp.id, new Date());
 
-      return await updateState(imp, {
+      const running = await updateState(imp, {
         reason: 'booted',
         detail: {
           durationMs: countStepsMs(vm.timings),
@@ -176,6 +181,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         sleptAt: null,
         firecrackerVersion: vm.firecrackerVersion,
       });
+
+      // stage 1 grew the filesystem to fill the disk
+      return running.isDiskGrowPending ? await setGrowPending(running, false) : running;
     } catch (error) {
       context.admission?.release(imp.id);
 
@@ -364,7 +372,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     await updateImpActivity(context.db, imp.id, new Date());
 
-    return updateState(imp, {
+    const running = await updateState(imp, {
       reason: 'woke',
       detail: { durationMs: wakeMs, steps: woken.timings },
       state: 'running',
@@ -373,6 +381,41 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       sleptAt: null,
       firecrackerVersion: woken.firecrackerVersion,
     });
+
+    if (!running.isDiskGrowPending) {
+      return running;
+    }
+
+    // the disk grew while it slept: a failed grow stays pending, the wake stands
+    return growGuestDisk(running).catch(() => running);
+  };
+
+  const setGrowPending = async (imp: LockedImp, isGrowPending: boolean): Promise<LockedImp> => {
+    const updated = await updateImpDisk(context.db, imp.id, {
+      diskBytes: imp.diskBytes,
+      isGrowPending,
+    });
+
+    return toLockedImp(imp, updated);
+  };
+
+  const growGuestDisk = async (imp: LockedImp): Promise<LockedImp> => {
+    try {
+      await context.vms.growDrive(context.findPaths(imp.id), imp.diskBytes);
+    } catch (error) {
+      const message = readErrorMessage(error);
+
+      context.log(`impd: ${imp.name}: the guest did not grow into its disk: ${message}`);
+
+      await setGrowPending(imp, true);
+
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: `the disk grew, but the guest did not grow its filesystem (its next wake or boot does): ${message}`,
+        cause: error,
+      });
+    }
+
+    return imp.isDiskGrowPending ? setGrowPending(imp, false) : imp;
   };
 
   // the woken VM, or why the load or the agent failed; the VM is gone then
@@ -453,7 +496,15 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return startImpVm(imp);
   };
 
-  return { updateState, writeFailure, startImpVm, stopImpVm, sleepImpVm, requireRunningImp };
+  return {
+    updateState,
+    writeFailure,
+    startImpVm,
+    stopImpVm,
+    sleepImpVm,
+    requireRunningImp,
+    growGuestDisk,
+  };
 }
 
 // allocated size: the mem file is sparse after --dig-holes

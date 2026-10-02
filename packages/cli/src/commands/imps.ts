@@ -19,6 +19,7 @@ export const newCommand = defineCommand({
     image: { type: 'string', description: 'image name' },
     cpus: { type: 'string', description: 'vCPU count' },
     memory: { type: 'string', description: 'memory: MiB, or with a unit (512m, 2g)' },
+    disk: { type: 'string', description: 'disk size, with a unit (64g); 32g by default' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
     json: jsonArg,
   },
@@ -29,6 +30,7 @@ export const newCommand = defineCommand({
         ...(context.args.image !== undefined && { image: context.args.image }),
         ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
         ...(context.args.memory !== undefined && { memoryMib: parseSize(context.args.memory) }),
+        ...(context.args.disk !== undefined && { diskMib: parseSize(context.args.disk) }),
         ...(context.args['http-port'] !== undefined && {
           httpPort: parseCount(context.args['http-port'], 'http-port'),
         }),

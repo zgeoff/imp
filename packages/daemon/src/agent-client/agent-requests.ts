@@ -19,6 +19,9 @@ const PingResponseSchema = z.object({
 
 const OkResponseSchema = z.object({ ok: z.literal(true) });
 
+// the agent's own 10 s wait for the new size, and the resize after it
+const GROW_TIMEOUT_MS = 20_000;
+
 export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).readonly();
 
 export const AgentSessionSchema = z
@@ -133,6 +136,19 @@ export async function sendFreeze(vsockPath: string, timeoutMs: number): Promise<
     { op: 'freeze', timeout_ms: timeoutMs },
     timeoutMs,
   );
+
+  OkResponseSchema.parse(response);
+}
+
+// After the host grew the disk: the agent waits up to 10 s for the guest to
+// see the new size, then grows the root filesystem online. AGENT_OUTDATED
+// for an agent from before it: the next cold boot grows the filesystem.
+export async function sendGrow(vsockPath: string, diskBytes: number): Promise<void> {
+  const response = await sendAgentRequest(
+    vsockPath,
+    { op: 'grow', disk_bytes: diskBytes },
+    GROW_TIMEOUT_MS,
+  ).catch(handleUnknownOp('grow'));
 
   OkResponseSchema.parse(response);
 }

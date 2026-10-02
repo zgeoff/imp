@@ -1,15 +1,15 @@
 import { UsageError } from './usage-error';
 
-const UNIT_MIB: Readonly<Record<string, number>> = { m: 1, g: 1024 };
+const UNIT_MIB: Readonly<Record<string, number>> = { m: 1, g: 1024, t: 1024 * 1024 };
 
-// `2048`, `512m`, `2g`, `2GiB` → MiB; a bare number is MiB already
+// `2048`, `512m`, `2g`, `2GiB`, `1t` → MiB; a bare number is MiB already
 export function parseSize(text: string): number {
-  const match = /^(?<amount>\d+)(?:(?<unit>[mg])(?:i?b)?)?$/i.exec(text.trim());
+  const match = /^(?<amount>\d+)(?:(?<unit>[mgt])(?:i?b)?)?$/i.exec(text.trim());
   const amount = Number(match?.groups?.['amount'] ?? 0);
   const unit = match?.groups?.['unit']?.toLowerCase() ?? 'm';
 
   if (amount === 0) {
-    throw new UsageError(`not a size: ${text} (try 512m, 2g, or MiB as a whole number)`);
+    throw new UsageError(`not a size: ${text} (try 512m, 2g, 1t, or MiB as a whole number)`);
   }
 
   return amount * (UNIT_MIB[unit] ?? 1);

@@ -4,7 +4,7 @@ import type { VmRunner } from '../vmm/vm-runner';
 // what every fake agent's ping reports
 export const FAKE_AGENT_VERSION = '0.1.0';
 
-export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady';
+export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady' | 'grow';
 
 // What the next call of a step does, within the VmRunner contract; each step
 // below says what fail and die mean for it. A hang waits for releaseHangs(),
@@ -34,6 +34,7 @@ export function buildFakeVmm() {
 
   const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
+  const grows: { disk: string; diskBytes: number }[] = [];
 
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
@@ -166,6 +167,18 @@ export function buildFakeVmm() {
 
         return alive.has(pid);
       },
+
+      // fail and die: the guest did not grow
+      growDrive: (paths, diskBytes) =>
+        runInGeneration(async () => {
+          const outcome = await pickOutcome('grow');
+
+          if (outcome !== 'ok') {
+            throw new FakeVmError('grow failed');
+          }
+
+          grows.push({ disk: paths.disk, diskBytes });
+        }),
       isAgentReady: () =>
         runInGeneration(async () => {
           const outcome = await pickOutcome('agentReady');
@@ -181,6 +194,7 @@ export function buildFakeVmm() {
     usedSnapshots,
     wakes,
     stops,
+    grows,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {

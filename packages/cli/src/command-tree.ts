@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
 import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
+import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
 import { imageCommand } from './commands/image';
@@ -61,6 +62,7 @@ export const mainCommand = defineCommand({
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
     fork: forkCommand,
+    disk: diskCommand,
     backup: backupCommand,
     image: imageCommand,
     secret: secretCommand,

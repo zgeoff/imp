@@ -10,7 +10,7 @@ function setupTest() {
   fake.state.imps.push(buildImp({ name: 'web', ramMib: 300, rssMib: 340 }));
 
   fake.state.checkpoints.set('web', [
-    { id: 'cp1', label: 'before-upgrade', createdAt: new Date(), sizeBytes: 2048 },
+    { id: 'cp1', label: 'before-upgrade', createdAt: new Date(), sizeBytes: 2048, diskMib: 32_768 },
   ]);
 
   return { fake, user: userEvent.setup() };
