@@ -56,6 +56,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   identity.
 - [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the
   wildcard certificate, its renewal, the DNS records, and testing with Pebble.
+- [Leases and holds](./guides/leases.md): `leases.*` and `imp hold`, who owns a lease, what blocks a
+  sleep or a stop, and what a RAM refusal names.
 - [Events, audit and telemetry](./guides/events.md): `imp events` and the event stream, the API
   audit log, and OpenTelemetry metrics and spans.
 - [CPU limits and resource use](./guides/cpu-limits.md): `imp set`, `imp top`, CPU limits and

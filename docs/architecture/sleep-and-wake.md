@@ -174,7 +174,8 @@ Every 2 s, an imp counts as active when it has any of these:
 - established guest TCP connections, from the agent's `activity` (loopback does not count);
 - Firecracker CPU above `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about
   0.4);
-- a hold: `imp hold <name> <duration>` keeps an imp awake and wakes it; `0` releases.
+- a live lease or hold: `imp hold <name> <duration>` or `leases.acquire` keeps an imp awake and
+  wakes it ([leases](../guides/leases.md)).
 
 A headless agent that waits on an LLM API keeps a TCP connection open, so it stays awake. An imp
 with none of these for `IMP_IDLE_TIMEOUT_S` (default 60 s) goes to sleep.
@@ -216,10 +217,11 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   after each. An imp whose lock is taken by the time its turn comes is skipped, not waited for
   ([background sleeps](#background-sleeps)); it and an imp whose sleep fails are not picked again.
   If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
-  with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room,
-  and it gives up when the new pick after a skip or failure is short. A request that fails there
-  loses only the sleeps done before that skip or failure; each of those imps wakes on its next
-  request.
+  with `RAM_BUDGET_EXCEEDED`, which names the awake imps it could not sleep
+  ([capacity refusals](../guides/leases.md#capacity-refusals)). impd does not start sleeping imps
+  when together they cannot make room, and it gives up when the new pick after a skip or failure is
+  short. A request that fails there loses only the sleeps done before that skip or failure; each of
+  those imps wakes on its next request.
 - **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget. When the
   imps it may sleep cannot bring usage under the budget, it sleeps all of them to get as close as it
   can. It logs each pass that sleeps an imp, and once when none is left.
