@@ -42,3 +42,24 @@ load_tailscale_authkey() {
   if [[ $xtrace == *x* ]]; then set -x; fi
   return "$found"
 }
+
+# write_tailnet_oauth_file PATH writes the OAuth client for per-imp tailnet
+# names (docs/guides/tailscale.md#per-imp-names) to PATH, mode 0600, from the
+# 1Password item IMP_TAILNET_OAUTH_REF (default op://cloud/imp-tailscale-oauth),
+# fields client-id and client-secret. Returns 1 when op has no such item.
+# Tracing stays off in here, so `bash -x` never shows the secret.
+write_tailnet_oauth_file() {
+  { local xtrace=$-; set +x; } 2>/dev/null
+  local ref=${IMP_TAILNET_OAUTH_REF:-op://cloud/imp-tailscale-oauth} id secret found=1
+  if command -v op >/dev/null 2>&1 \
+    && id=$(timeout 20 op read "$ref/client-id" </dev/null 2>/dev/null) \
+    && secret=$(timeout 20 op read "$ref/client-secret" </dev/null 2>/dev/null) \
+    && [ -n "$id" ] && [ -n "$secret" ]; then
+    mkdir -p "$(dirname "$1")"
+    (umask 077 && jq -n --arg id "$id" --arg secret "$secret" \
+      '{clientId: $id, clientSecret: $secret}' >"$1")
+    found=0
+  fi
+  if [[ $xtrace == *x* ]]; then set -x; fi
+  return "$found"
+}
