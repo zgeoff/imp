@@ -5,6 +5,7 @@ import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
+import { writeToDisk } from '../storage/write-file-durably';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import type { InstanceState } from './firecracker-client';
@@ -303,6 +304,10 @@ export function createVmRunner(): VmRunner {
       const digStep = dug.exitCode === 0 ? 'digHoles' : 'digHolesFailed';
 
       setMark(digStep);
+
+      // meta.json, written next, vouches for these: they reach the disk first
+      writeToDisk([target.vmstate, target.memFile, target.snapshotDir]);
+      setMark('flush');
 
       return timer.marks;
     },
