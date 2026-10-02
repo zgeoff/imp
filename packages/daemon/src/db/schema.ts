@@ -30,6 +30,9 @@ interface ImpsTable {
   created_at: number;
   last_active_at: number;
   slept_at: number | null;
+
+  // the latest end of the imp's leases, kept with each lease write
+  // (db/leases.ts); null while it has none
   hold_until: number | null;
   error: string | null;
   pid: number | null;
@@ -164,6 +167,21 @@ interface NetworkMembersTable {
   imp_id: string;
 }
 
+// one owner's hold on an imp (docs/guides/leases.md): the principal impd
+// derived for the caller, and a label the caller picked
+export interface ImpLeasesTable {
+  imp_id: string;
+  principal: string;
+  label: string;
+
+  // the owner as a person reads it, when the lease was written
+  display: string;
+
+  // null holds with no end
+  until: number | null;
+  created_at: number;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -176,4 +194,5 @@ export interface DatabaseSchema {
   token_ssh_keys: TokenSshKeysTable;
   networks: NetworksTable;
   network_members: NetworkMembersTable;
+  imp_leases: ImpLeasesTable;
 }

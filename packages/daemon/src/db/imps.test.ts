@@ -10,7 +10,6 @@ import {
   removeImp,
   updateImpActivity,
   updateImpDisk,
-  updateImpHold,
   updateImpState,
   updateImpStateIf,
 } from './imps';
@@ -173,7 +172,7 @@ test('it updates the state and only the fields the change names', async () => {
   expect(failed).toMatchObject({ state: 'error', error: 'boot timed out', sleptAt });
 });
 
-test('it records activity and holds', async () => {
+test('it records activity', async () => {
   await using ctx = await setupTestDatabase();
 
   const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
@@ -183,12 +182,8 @@ test('it records activity and holds', async () => {
   await updateImpActivity(ctx.db, imp.id, at);
 
   const active = await findImpById(ctx.db, imp.id);
-  const held = await updateImpHold(ctx.db, imp.id, at);
-  const released = await updateImpHold(ctx.db, imp.id, null);
 
   expect(active?.lastActiveAt).toEqual(at);
-  expect(held.holdUntil).toEqual(at);
-  expect(released.holdUntil).toBeNull();
 });
 
 test('it lists imps by name', async () => {
