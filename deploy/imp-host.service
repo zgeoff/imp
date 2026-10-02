@@ -24,6 +24,8 @@ EnvironmentFile=/etc/imp/imp-host.env
 ExecStartPre=-/usr/bin/docker rm -f imp-host
 # With IPv6 (IMP_HOST_NETWORK names it), the network imp-host on its /64,
 # created when it is missing; bootstrap.sh --check reports one that differs.
+# Keep it equal to create_host_network in deploy/bootstrap.sh and the
+# networks block of deploy/compose.yaml.
 ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.

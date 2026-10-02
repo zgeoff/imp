@@ -201,6 +201,10 @@ bootstrap() {
     fail "the host's kernel state changed during bootstrap.sh $mode"
   fi
   LAST_OUTPUT=$out
+  # a change that failed, such as a restart of imp-host: show why
+  if [ "$rc" = 1 ] && grep -q '^bootstrap: failed: ' <<<"$out"; then
+    in_container journalctl -u imp-host --no-pager -n 40 >&2 || true
+  fi
   return "$rc"
 }
 
@@ -420,7 +424,38 @@ check_ipv6_cases() {
   bootstrap --yes || fail "[$distro] the run after --ra-handled failed"
   grep -qF "IPv6 was on already" <<<"$LAST_OUTPUT" || fail "[$distro] a later run did not accept the network"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the run after --ra-handled changed something"
+
+  log "[$distro] ipv6: an older host whose adverts a client takes re-runs into auto, which warns and stays off"
+  make_old_host
+  in_container sysctl -qw "net/ipv6/conf/$fake/accept_ra=0"
+  bootstrap --yes || fail "[$distro] the re-run of an older host failed"
+  grep -qF "WARNING: the IPv6 default route on $fake comes from router adverts" <<<"$LAST_OUTPUT" \
+    || fail "[$distro] auto did not warn about the router adverts"
+  [ "$(env_value IMP_HOST_IPV6)" = off ] || fail "[$distro] auto did not record off"
+  wait_for_imp_host || fail "[$distro] imp-host is not running after the re-run"
+  [ "$(imp_host_networks)" = bridge ] || fail "[$distro] imp-host left the default bridge"
+
+  log "[$distro] ipv6: an older host whose adverts the kernel takes re-runs into auto, which turns IPv6 on"
+  make_old_host
+  in_container sysctl -qw "net/ipv6/conf/$fake/accept_ra=1"
+  bootstrap --yes || fail "[$distro] the re-run of an older host failed"
+  grep -qF "ipv6: on (auto: $fake has a global IPv6 default route)" <<<"$LAST_OUTPUT" || fail "[$distro] auto did not turn on"
+  wait_for_imp_host || fail "[$distro] imp-host is not running after the re-run"
+  check_ipv6_on
   in_container ip link del "$fake"
+}
+
+# make_old_host: the host as a bootstrap.sh before IPv6 left it: imp-host
+# on the default bridge, and no IPv6 keys in the env file or the unit.
+make_old_host() {
+  extra_args=(--ipv6 off)
+  bootstrap --yes || fail "[$distro] the --ipv6 off run before an older host failed"
+  extra_args=()
+  in_container sed -i '/^IMP_HOST_\(IPV6\|SUBNET6\|NETWORK\)=/d' /etc/imp/imp-host.env
+  in_container sed -i '/IMP_HOST_NETWORK/d' /etc/systemd/system/imp-host.service
+  in_container systemctl daemon-reload
+  in_container systemctl restart imp-host
+  wait_for_imp_host || fail "[$distro] imp-host is not running as an older host"
 }
 
 run_distro() {
