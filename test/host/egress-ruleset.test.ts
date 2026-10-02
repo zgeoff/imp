@@ -187,3 +187,92 @@ nft list set inet imp_egress net1 2>&1 | head -1 || true
     '',
   ]);
 });
+
+// Three guests in network namespaces behind veth pairs named as taps: g0 on
+// lab, g1 on lab and ops, g2 on ops. g1's own nft counts the pings that
+// reach it from g0's address, so a spoofed one that arrives shows.
+const GUESTS = `
+mount -t tmpfs tmpfs /run
+mkdir -p /run/netns
+sysctl -qw net.ipv4.ip_forward=1
+for n in 0 1 2; do
+  ip netns add g$n
+  ip link add imp$n type veth peer name eth0 netns g$n
+  ip addr add 10.66.0.$((n * 4 + 1))/30 dev imp$n
+  ip link set imp$n up
+  ip -n g$n addr add 10.66.0.$((n * 4 + 2))/30 dev eth0
+  ip -n g$n link set eth0 up
+  ip -n g$n link set lo up
+  ip -n g$n route add default via 10.66.0.$((n * 4 + 1))
+done
+ip netns exec g1 nft -f - <<'NFT'
+table inet count {
+  chain input {
+    type filter hook input priority 0; policy accept;
+    ip saddr 10.66.0.2 icmp type echo-request counter name from_g0
+  }
+  counter from_g0 {}
+}
+NFT
+printf '%s' "$TABLE" | nft -f -
+reach() { ip netns exec "$1" ping -c 1 -W 1 "$2" >/dev/null 2>&1 && echo "$1>$2 yes" || echo "$1>$2 no"; }
+counted() { ip netns exec g1 nft list counter inet count from_g0 | grep -o 'packets [0-9]*'; }
+`;
+
+test.skipIf(!canUnshare)(
+  'packets: a network joins only its own members, each from its own tap',
+  () => {
+    const table = buildRuleset({
+      ...BASE,
+      slots: SLOTS,
+      networks: [
+        [
+          { tap: 'imp0', guestIp: '10.66.0.2' },
+          { tap: 'imp1', guestIp: '10.66.0.6' },
+        ],
+        [
+          { tap: 'imp1', guestIp: '10.66.0.6' },
+          { tap: 'imp2', guestIp: '10.66.0.10' },
+        ],
+      ],
+    });
+
+    const result = Bun.spawnSync(
+      [
+        'unshare',
+        '-rnm',
+        '--propagation',
+        'private',
+        'bash',
+        '-euo',
+        'pipefail',
+        '-c',
+        `${GUESTS}
+reach g0 10.66.0.6
+reach g1 10.66.0.10
+reach g2 10.66.0.6
+reach g0 10.66.0.10
+reach g2 10.66.0.2
+counted
+ip -n g2 addr add 10.66.0.2/32 dev eth0
+ip netns exec g2 ping -c 1 -W 1 -I 10.66.0.2 10.66.0.6 >/dev/null 2>&1 || true
+counted
+`,
+      ],
+      { env: { ...process.env, TABLE: table } },
+    );
+
+    expect(result.stderr.toString()).toBe('');
+
+    // the spoofed ping from g2's tap with g0's address never reaches g1
+    expect(result.stdout.toString().trim().split('\n')).toEqual([
+      'g0>10.66.0.6 yes',
+      'g1>10.66.0.10 yes',
+      'g2>10.66.0.6 yes',
+      'g0>10.66.0.10 no',
+      'g2>10.66.0.2 no',
+      'packets 1',
+      'packets 1',
+    ]);
+  },
+);
