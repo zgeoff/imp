@@ -25,8 +25,6 @@ export interface ServiceServe {
   // plain HTTP on 80 and HTTPS on 443, both to the target
   readonly writeServe: (service: string, target: string) => Promise<void>;
 
-  // no new connections, then no config: the order a removal takes
-  readonly drainServe: (service: string) => Promise<void>;
   readonly clearServe: (service: string) => Promise<void>;
 }
 
@@ -70,9 +68,6 @@ export function createServiceServe(
     writeServe: async (service, target) => {
       await run(['tailscale', 'serve', `--service=${service}`, '--http=80', target]);
       await run(['tailscale', 'serve', `--service=${service}`, '--https=443', target]);
-    },
-    drainServe: async (service) => {
-      await run(['tailscale', 'serve', 'drain', service]);
     },
     clearServe: async (service) => {
       await run(['tailscale', 'serve', 'clear', service]);

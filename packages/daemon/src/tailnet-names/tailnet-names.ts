@@ -99,6 +99,9 @@ export function createTailnetNames(deps: TailnetNamesDeps): TailnetNames {
       return;
     }
 
+    // The API has no conditional write, so a service someone makes between
+    // this read and the PUT is overwritten; the read narrows that to the
+    // time one request takes.
     const current = await deps.api.readService(service);
 
     if (current !== null && !isOurs(current)) {
@@ -108,7 +111,9 @@ export function createTailnetNames(deps: TailnetNamesDeps): TailnetNames {
     await deps.api.writeService(definition);
   };
 
-  // drain, clear, then the definition, and only for a name no imp has
+  // Serve config, then the definition, and only for a name no imp has. No
+  // drain first: the imp is gone, so no connection through it is left to
+  // finish.
   const removeService = async (service: string, isServed: boolean) => {
     const impName = service.slice(`svc:${deps.config.prefix}`.length);
 
@@ -119,7 +124,6 @@ export function createTailnetNames(deps: TailnetNamesDeps): TailnetNames {
     }
 
     if (isServed) {
-      await deps.serve.drainServe(service);
       await deps.serve.clearServe(service);
     }
 

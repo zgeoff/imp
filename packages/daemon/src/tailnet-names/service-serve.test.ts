@@ -33,7 +33,7 @@ test('no config, or output it cannot read, serves nothing', () => {
   expect(parseServedServices('No serve config').size).toBe(0);
 });
 
-test('it serves HTTP and HTTPS for a service, and drains before it clears', async () => {
+test('it serves HTTP and HTTPS for a service, and clears it', async () => {
   const commands: string[] = [];
 
   const serve = createServiceServe((argv) => {
@@ -43,13 +43,11 @@ test('it serves HTTP and HTTPS for a service, and drains before it clears', asyn
   });
 
   await serve.writeServe('svc:box', 'http://127.0.0.1:20000');
-  await serve.drainServe('svc:box');
   await serve.clearServe('svc:box');
 
   expect(commands).toEqual([
     'tailscale serve --service=svc:box --http=80 http://127.0.0.1:20000',
     'tailscale serve --service=svc:box --https=443 http://127.0.0.1:20000',
-    'tailscale serve drain svc:box',
     'tailscale serve clear svc:box',
   ]);
 });

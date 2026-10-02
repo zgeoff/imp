@@ -81,11 +81,6 @@ function createFakeServe(record: (call: string) => void) {
 
       return Promise.resolve();
     },
-    drainServe: (service) => {
-      record(`drain ${service}`);
-
-      return Promise.resolve();
-    },
     clearServe: (service) => {
       record(`clear ${service}`);
 
@@ -203,7 +198,7 @@ test('a service that appears after the list is read again before any write', asy
   expect(ctx.fake.services.get('svc:box')?.comment).toBe('someone else');
 });
 
-test('a destroyed imp’s service is drained, cleared, then deleted; others stay', async () => {
+test('a destroyed imp’s service is cleared, then deleted; others stay', async () => {
   await using ctx = await setupNames();
 
   await ctx.imps.createImp({ name: 'box' });
@@ -225,7 +220,7 @@ test('a destroyed imp’s service is drained, cleared, then deleted; others stay
 
   await ctx.names.runSync();
 
-  expect(ctx.fake.calls).toEqual(['list', 'drain svc:box', 'clear svc:box', 'delete svc:box']);
+  expect(ctx.fake.calls).toEqual(['list', 'clear svc:box', 'delete svc:box']);
 
   expect([...ctx.fake.services.keys()].toSorted()).toEqual([
     'svc:other',
