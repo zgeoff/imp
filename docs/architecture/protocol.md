@@ -7,7 +7,8 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.13.0`, which adds `claim` and the `stage` of a parked boot template's `ping` (`0.12.0`
+Version `0.14.0`, which runs user code in the inner container, reports it in `ping` and adds
+`INNER_DOWN` (`0.13.0` adds `claim` and the `stage` of a parked boot template's `ping`, `0.12.0`
 reports a template copy's identity reset in `ping`, `0.11.0` kills a stopped exec's whole cgroup,
 `0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards, `0.8.0` kills what is
 left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`,
@@ -82,7 +83,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `BAD_REQUEST`    | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid.    |
 | `UNKNOWN_OP`     | The `op` is not known to this agent.                                                        |
 | `EXEC_FAILED`    | `exec` could not start the process (bad argv, cwd, or user).                                |
-| `INNER_DOWN`     | `exec` or a session found the inner container down: it starts again, or gave up.            |
+| `INNER_DOWN`     | `exec` or a session found the inner container down: it starts again, or gave up. `0.14.0`.  |
 | `NO_SESSION`     | `session.attach` or `session.kill` named no session.                                        |
 | `SESSION_LIMIT`  | A new session would be the 17th.                                                            |
 | `DIAL_FAILED`    | `dial` could not connect (refused, timed out, no such socket).                              |
@@ -104,14 +105,15 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 
 ```json
 → {"op":"ping"}
-← {"ok":true,"version":"0.13.0","uptime_ms":265,"inner":{"up":true,"restarts":0}}
+← {"ok":true,"version":"0.14.0","uptime_ms":265,"inner":{"up":true,"restarts":0}}
 ```
 
 `uptime_ms` is `CLOCK_BOOTTIME`. The host uses `ping` as the boot-readiness probe. On a boot with
 `imp.reset_identity=1`, `identity_reset` is `ok` or `failed`; impd keeps asking for the reset until
 a boot answers `ok` ([templates](../guides/templates.md#identity)). `inner` is the
 [inner container](./agent.md#the-inner-container): whether it runs, how often it started again after
-its init died, and `last_error`, why the last start failed. An older agent leaves it out.
+its init died, and `last_error`, why the last start failed. Since `0.14.0`: an older agent leaves it
+out.
 
 A guest parked in a [boot template](./boot-templates.md#make) answers with `"stage":"template"`;
 once it boots on, it leaves the field out.

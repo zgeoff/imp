@@ -56,6 +56,11 @@ export interface ExecIo {
 // could not start, 141 our output went away, 254 another client took the
 // session over, 255 imp failed. A detach exits 0.
 const EXEC_FAILED_CODE = 127;
+
+// the imp answers, but the container its commands run in is down
+const INNER_DOWN_HINT =
+  ' (the container in the imp starts again on its own; imp stop and imp start, or imp restore, bring it back)';
+
 const BROKEN_PIPE_CODE = 141;
 const TAKEN_OVER_CODE = 254;
 const IMP_FAILED_CODE = 255;
@@ -522,8 +527,9 @@ function buildOutcomeResult(
     case 'failed': {
       const prefix = outcome.code === null ? '' : `${outcome.code}: `;
       const code = outcome.code === 'EXEC_FAILED' ? EXEC_FAILED_CODE : IMP_FAILED_CODE;
+      const hint = outcome.code === 'INNER_DOWN' ? INNER_DOWN_HINT : '';
 
-      return { code, message: `${prefix}${outcome.message}` };
+      return { code, message: `${prefix}${outcome.message}${hint}` };
     }
     case 'detached': {
       if (outcome.reason === 'taken_over') {
