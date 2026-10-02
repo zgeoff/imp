@@ -249,6 +249,8 @@ imp completion fish > ~/.config/fish/completions/imp.fish
 Some `IMP_*` variables are internal to the scripts and tests, not settings: `IMP_ROOT`, `IMP_BUILD`,
 `IMP_HOST_IMAGE`, `IMP_DATA`, `IMP_ID`, `IMP_CI_KERNEL`, `IMP_SMOKE_IMAGE`, `IMP_BASE_IMAGE` and
 `IMP_E2E_*`. `IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` pick the image, the env file
-and the data directory for `deploy/`. `IMP_VERSION` and `IMP_RELEASE_IMAGE` name the image
-`host/build-release.sh` builds. `KVER` and `KSHA256` pick the kernel source for `kernel/build.sh`
-([kernel README](../../kernel/README.md)).
+and the data directory for `deploy/`. `IMP_HOST_FIREWALL` (`own` or `none`) records who owns the
+host's inbound firewall; `deploy/bootstrap.sh` reads it, and impd ignores it
+([host contract](../architecture/host-contract.md#firewall)). `IMP_VERSION` and `IMP_RELEASE_IMAGE`
+name the image `host/build-release.sh` builds. `KVER` and `KSHA256` pick the kernel source for
+`kernel/build.sh` ([kernel README](../../kernel/README.md)).
