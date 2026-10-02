@@ -141,9 +141,9 @@ seconds with the reason. The job then:
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
    key in CI, and a missed timing limit only warns.
 
-The `zfs` job builds the same inputs, caps the ZFS ARC at 1 GiB, and runs the lifecycle, checkpoints
-and sleep suites on a pool in a sparse file. The job summary shows the ZFS timings, and the
-`zfs-e2e-results` artifact holds the logs.
+The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
+the lifecycle, checkpoints and sleep suites on a pool in a sparse file. The job summary shows the
+ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
 `results.json`, `metrics.jsonl` and `impd.log`, the dev container's whole log. A failed suite also

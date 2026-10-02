@@ -347,7 +347,6 @@ jobs:
       IMP_HOST_IMAGE_READY: 1
       IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep
       IMP_ZFS_TEST_UNIT: 0
-      WRITE_CACHE: ${{ github.event_name == 'push' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -403,15 +402,28 @@ jobs:
       - name: ZFS backend tests
         run: sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR= scripts/test-zfs.sh
 
+      # reads the caches only: the required e2e job writes the same scopes on
+      # push, and two writers at once can fail its build
       - name: Build kernel, system drive and host image
         uses: ./.github/actions/e2e-build
         with:
-          write-cache: ${{ env.WRITE_CACHE }}
+          write-cache: false
 
       - name: Imps on ZFS
+        run: scripts/zfs-host-test.sh
+
+      # also after a failed suite: the script writes the summary either way
+      - name: Job summary
+        if: always()
         run: |
-          scripts/zfs-host-test.sh
-          cat "$IMP_ZFS_TEST_DIR/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "Nested KVM on a shared runner, a pool in a sparse file and a 1 GiB ARC: these"
+            echo "numbers do not compare directly with the XFS ones in STATUS.md."
+            echo
+            echo '```text'
+            cat "$IMP_ZFS_TEST_DIR/summary.txt" 2>/dev/null || echo "no summary: the run stopped before it"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
       # also after a failure or a timeout, so none of these may fail the job
       - name: Collect logs

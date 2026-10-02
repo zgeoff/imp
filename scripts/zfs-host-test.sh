@@ -61,14 +61,9 @@ sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa
   "$pool" "$work/bench.img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
 
-"$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" 2>&1 |
-  tee "$work/e2e.log"
-
-docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1
-
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
 summarize() {
-  grep -oE "$2" "$work/impd.log" | grep -oE '[0-9]+ms$' | tr -d ms | sort -n |
+  { grep -oE "$2" "$work/impd.log" || true; } | grep -oE '[0-9]+ms$' | tr -d ms | sort -n |
     awk -v label="$1" '{ v[NR] = $1 } END {
       if (NR == 0) { printf "%-22s no samples\n", label; exit }
       printf "%-22s n=%d  min %d  median %d  max %d ms\n", label, NR, v[1], v[int((NR + 1) / 2)], v[NR]
@@ -90,5 +85,16 @@ report() {
   sudo zfs list -r -o name,used,refer,compressratio,recordsize "$pool"
 }
 
+# A failed suite still gets its report; the script then exits with the
+# suites' status.
+set +e
+"$IMP_ROOT/scripts/test-e2e.sh" --only "${IMP_ZFS_E2E_SUITES:-checkpoints,sleep}" 2>&1 |
+  tee "$work/e2e.log"
+status=${PIPESTATUS[0]}
+set -e
+
+docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
+
 echo
-report | tee "$work/summary.txt"
+report | tee "$work/summary.txt" || true
+[ "$status" = 0 ] || exit "$status"
