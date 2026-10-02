@@ -1,4 +1,6 @@
 import { statSync } from 'node:fs';
+import { sendActivity } from '../agent-client/agent-requests';
+import type { AgentSession } from '../agent-client/agent-requests';
 import { updateImpActivity, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -55,6 +57,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
 
     const updated = await updateImpState(context.db, imp.id, change);
+
+    if (change.state !== 'running') {
+      context.sessions.forget(imp.id);
+    }
 
     return toLockedImp(imp, updated);
   };
@@ -165,6 +171,17 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
   };
 
+  // the last look before the pause, under the imp's lock; nothing attaches
+  // in between, since an open exec or attach keeps an imp from sleeping
+  const readSessionsForSleep = async (imp: LockedImp, paths: ImpPaths) => {
+    const seen = await sendActivity(paths.vsockSocket).then(
+      (activity) => activity.sessions,
+      () => context.sessions.read(imp.id) ?? [],
+    );
+
+    return seen.map((session) => setDetached(session));
+  };
+
   const sleepImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
@@ -176,6 +193,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
 
     const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
+
+    const sessions = await readSessionsForSleep(imp, paths);
+
     const started = performance.now();
 
     try {
@@ -188,6 +208,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         createdAt: Date.now(),
         memoryMib: imp.memoryMib,
         ramMib,
+        sessions,
       });
 
       // its next wake restores this memory: the cold boot is news no longer
@@ -366,4 +387,9 @@ function formatTimings(timings: Readonly<Record<string, number>>): string {
   return Object.entries(timings)
     .map(([step, ms]) => `${step}=${String(ms)}ms`)
     .join(' ');
+}
+
+// a sleeping imp has no client attached: the sleep closed every connection
+function setDetached(session: AgentSession): AgentSession {
+  return { ...session, attached: false };
 }

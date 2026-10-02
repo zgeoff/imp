@@ -210,6 +210,8 @@ function buildEventStream() {
     },
     toExecStream: (hooks: Readonly<StreamHooks> = {}): ExecStream => ({
       pid: 42,
+      session: null,
+      created: true,
       writeStdin: hooks.writeStdin ?? (() => {}),
       closeStdin: hooks.closeStdin ?? (() => {}),
       resize: () => {},
@@ -247,10 +249,12 @@ export async function setupImpdTest() {
   const guest = buildFakeGuest();
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
-  const built = buildTestApp(harness, harness, TEST_TOKEN, async (name, request) => {
-    await harness.imps.requireRunning(name);
+  const built = buildTestApp(harness, harness, TEST_TOKEN, {
+    openExec: async (name, request) => {
+      await harness.imps.requireRunning(name);
 
-    return guest.openExec(name, request);
+      return guest.openExec(name, request);
+    },
   });
 
   const server = built.app.listen(0);

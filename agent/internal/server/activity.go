@@ -20,7 +20,12 @@ func (s *Server) activity() (proto.Activity, error) {
 		}
 		n += c
 	}
-	return proto.Activity{TCPEstablished: n, ExecSessions: s.Exec.Active(), Load1: load1()}, nil
+	return proto.Activity{
+		TCPEstablished: n,
+		ExecSessions:   s.Exec.Active() + s.Sessions.Attached(),
+		Load1:          load1(),
+		Sessions:       s.Sessions.List(),
+	}, nil
 }
 
 // countEstablished counts ESTABLISHED sockets in a /proc/net/tcp{,6} table,

@@ -102,6 +102,14 @@ export function buildRouter(deps: RouterDeps) {
         return deps.execTickets.issue(context.input.name);
       }),
     },
+    sessions: {
+      list: os.sessions.list.handler((context) => deps.imps.listSessions(context.input.name)),
+      kill: os.sessions.kill.handler(async (context) => {
+        await deps.imps.killSession(context.input.name, context.input.session);
+
+        return {};
+      }),
+    },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
     },
@@ -127,6 +135,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     ramCommittedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
     awakeCount: running.length,
     impCount: imps.length,
+    sessionCount: imps.reduce((sum, imp) => sum + (deps.imps.countSessions(imp) ?? 0), 0),
     firecrackerVersion: deps.firecrackerVersion,
     guestKernel: deps.systemFiles.guestKernel,
     systemDrive: deps.systemFiles.systemDrive,

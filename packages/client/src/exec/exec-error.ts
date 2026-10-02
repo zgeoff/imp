@@ -8,6 +8,7 @@ export type ExecClientErrorCode =
   | 'UNREACHABLE'
   | 'RESTARTING'
   | 'CONNECTION_CLOSED'
+  | 'DETACHED'
   | 'BAD_MESSAGE'
   | 'CLOSED'
   | 'OUTPUT_OVERFLOW'
@@ -51,6 +52,13 @@ export function toExecError(outcome: Exclude<ExecOutcome, { kind: 'exit' }>): Ex
 
   if (outcome.kind === 'unreachable') {
     return new ExecError('UNREACHABLE', `cannot reach impd (${outcome.detail})`);
+  }
+
+  // data.reason: `taken_over`, `slow` or `lost`; the session runs on
+  if (outcome.kind === 'detached') {
+    return new ExecError('DETACHED', `detached from the session (${outcome.reason})`, {
+      data: { reason: outcome.reason },
+    });
   }
 
   if (outcome.kind === 'closed') {

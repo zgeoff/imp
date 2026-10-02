@@ -16,6 +16,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/services"
+	"github.com/zgeoff/imp/agent/internal/session"
 )
 
 // Port is the vsock port the agent listens on.
@@ -27,6 +28,7 @@ const requestTimeout = 10 * time.Second
 
 type Server struct {
 	Exec     *exec.Manager
+	Sessions *session.Manager
 	Services *services.Supervisor
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
@@ -104,6 +106,12 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 
+	if req.Op == proto.OpSessionAttach || (req.Op == proto.OpExec && req.Session != "") {
+		if err := s.Sessions.Serve(req, c, r, w); err != nil {
+			log.Printf("session %s: %v", req.Session, err)
+		}
+		return
+	}
 	if req.Op == proto.OpExec {
 		if err := s.Exec.Serve(req, r, w); err != nil {
 			log.Printf("exec: %v", err)
@@ -152,6 +160,8 @@ func (s *Server) unary(req proto.Request) (any, error) {
 		return proto.OK{OK: true}, unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
 	case proto.OpServicesList:
 		return proto.ServicesList{Services: s.Services.List()}, nil
+	case proto.OpSessionKill:
+		return proto.OK{OK: true}, s.Sessions.Kill(req.Session)
 	case proto.OpShutdown:
 		return proto.OK{OK: true}, nil
 	default:

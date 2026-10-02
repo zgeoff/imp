@@ -37,8 +37,9 @@ never accepted in a URL, where logs and browser history would keep it; no client
 `token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
 router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
 contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
-while impd stops, and `FORBIDDEN` for an exec ticket used for another imp. The token is made on
-first start and kept in `<dataDir>/token`, readable by the owner only.
+while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
+session request to an agent from before sessions. The token is made on first start and kept in
+`<dataDir>/token`, readable by the owner only.
 
 ### imps: the lifecycle
 
@@ -118,7 +119,40 @@ exec that the agent does not start within 10 s fails and closes its connection.
 Each `/exec` WebSocket becomes one exec session. The session opens an agent exec stream, forwards
 stdin, resizes and signals to the guest, and sends output and the exit back. When too many bytes
 wait for the client, output stops; the agent connection then stops reading, so a slow client slows
-the guest process instead of growing impd's memory.
+the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
+after 30 s without an answer, so a client that vanished without a close lets go of its session.
+
+### sessions: detachable consoles
+
+A session is a program on a pty in the guest that outlives its WebSocket
+([protocol](./protocol.md#sessions)). On `/exec`, a `start` with a `session` name starts the
+session, or attaches to it if it runs; `attach` attaches to one that exists. The socket gets
+`started` (with `session` and `created`), the replay of recent output, then live output. Closing the
+socket detaches: the program keeps running.
+
+One client is attached at a time. A new attach takes the session over, and the client attached
+before gets `detached` with `taken_over`; a client too far behind gets `slow`. When impd loses the
+agent connection without an exit or a detach (the imp went to sleep, a vsock reset), the socket gets
+`detached` with `lost` and closes with 1000: the session runs on, and the client may attach again. A
+plain exec in that case still fails with 1011, because the agent sent its process SIGHUP. Read-only
+viewers, which watch without taking the session over, are future work.
+
+An attached socket counts as an exec connection, so it keeps the imp awake. A detached session holds
+no connection: it keeps the imp awake only through its CPU or TCP use
+([idle detection](./sleep-and-wake.md#idle-detection)).
+
+The code is in `sessions/`: the list and kill service, the in-memory copy of each awake imp's
+sessions, and the count `imp ls` shows. An imp woken with an agent from before sessions keeps it
+until its next cold boot; a session request to it fails with `AGENT_OUTDATED`. impd checks the agent
+version it recorded at boot before a session exec, so an old agent never runs the command as a plain
+exec. An attach or a kill that the old agent answers with `UNKNOWN_OP` fails the same way.
+
+`sessions.list` never wakes an imp. The idle loop reads every awake imp's sessions from `activity`
+every 2 s and keeps them in memory; a list of an awake imp asks the agent again, and falls back to
+that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads the sessions once
+more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from there. A stopped imp
+has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
+copies.
 
 ### proxy: the wake proxy
 

@@ -1,7 +1,7 @@
 import type { ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 
-type ResourceKind = 'imp' | 'image' | 'checkpoint';
+type ResourceKind = 'imp' | 'image' | 'checkpoint' | 'session';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.
@@ -30,6 +30,10 @@ export function buildInvalidStateError(
     message: `cannot ${action} an imp that is ${state} (allowed: ${allowed.join(', ')})`,
     data: { state, allowed: [...allowed] },
   });
+}
+
+export function buildAgentOutdatedApiError(message: string) {
+  return new ORPCError('AGENT_OUTDATED', { status: 409, message });
 }
 
 export function buildStoppingError() {

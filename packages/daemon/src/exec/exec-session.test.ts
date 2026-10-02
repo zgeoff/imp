@@ -2,8 +2,14 @@ import { expect, test } from 'bun:test';
 import { EXEC_CHANNELS, decodeExecFrame, encodeExecFrame } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
-import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import type {
+  AgentAttachRequest,
+  AgentExecRequest,
+  ExecEvent,
+  ExecStream,
+} from '../agent-client/exec-stream';
 import { createExecSession } from './exec-session';
+import type { ExecBackend } from './exec-session';
 
 interface EventSource {
   readonly next: () => Promise<ExecEvent>;
@@ -16,13 +22,13 @@ async function* readWithoutExit(): AsyncGenerator<ExecEvent, void, undefined> {
   yield { type: 'stdout', data: new TextEncoder().encode('partial') };
 }
 
-async function* readUntilExit(source: EventSource): AsyncGenerator<ExecEvent, void, undefined> {
+async function* readUntilEnd(source: EventSource): AsyncGenerator<ExecEvent, void, undefined> {
   for (;;) {
     const event = await source.next();
 
     yield event;
 
-    if (event.type === 'exit') {
+    if (event.type === 'exit' || event.type === 'detached') {
       return;
     }
   }
@@ -57,6 +63,8 @@ function buildFakeStream() {
 
   const stream: ExecStream = {
     pid: 7,
+    session: null,
+    created: false,
     writeStdin: (data) => {
       input.push(`stdin:${new TextDecoder().decode(data)}`);
     },
@@ -69,13 +77,23 @@ function buildFakeStream() {
     sendSignal: (signal) => {
       input.push(`signal:${String(signal)}`);
     },
-    events: () => readUntilExit(source),
+    events: () => readUntilEnd(source),
     close: () => {
       input.push('close');
     },
   };
 
   return { stream, input, emitEvent };
+}
+
+// the backend a test passes, with the parts it leaves out failing
+function buildBackend(backend: Partial<ExecBackend>): ExecBackend {
+  return {
+    openExec: () => Promise.reject(new Error('unused')),
+    openAttach: () => Promise.reject(new Error('unused')),
+    recordActivity: () => Promise.resolve(),
+    ...backend,
+  };
 }
 
 function buildFakePeer() {
@@ -107,14 +125,16 @@ test('it bridges a WebSocket to an agent exec stream', async () => {
   const peer = buildFakePeer();
   const requests: AgentExecRequest[] = [];
 
-  const session = createExecSession(peer.peer, {
-    openExec: (_name, request) => {
-      requests.push(request);
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (_name, request) => {
+        requests.push(request);
 
-      return Promise.resolve(fake.stream);
-    },
-    recordActivity: () => Promise.resolve(),
-  });
+        return Promise.resolve(fake.stream);
+      },
+    }),
+  );
 
   session.handleMessage({
     type: 'start',
@@ -154,10 +174,12 @@ test('it bridges a WebSocket to an agent exec stream', async () => {
 test('it reports an exec that cannot start and closes the socket', async () => {
   const peer = buildFakePeer();
 
-  const session = createExecSession(peer.peer, {
-    openExec: () => Promise.reject(new AgentError('EXEC_FAILED', 'no such file')),
-    recordActivity: () => Promise.resolve(),
-  });
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: () => Promise.reject(new AgentError('EXEC_FAILED', 'no such file')),
+    }),
+  );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['nope'], tty: false });
 
@@ -174,11 +196,13 @@ test('it passes a contract error on with its data', async () => {
   const peer = buildFakePeer();
   const data = { budgetMib: 1024, usedMib: 900, requestedMib: 512 };
 
-  const session = createExecSession(peer.peer, {
-    openExec: () =>
-      Promise.reject(new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room', data })),
-    recordActivity: () => Promise.resolve(),
-  });
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: () =>
+        Promise.reject(new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room', data })),
+    }),
+  );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
 
@@ -192,10 +216,12 @@ test('it passes a contract error on with its data', async () => {
 test('it rejects a control message before start', () => {
   const peer = buildFakePeer();
 
-  const session = createExecSession(peer.peer, {
-    openExec: () => Promise.reject(new Error('unused')),
-    recordActivity: () => Promise.resolve(),
-  });
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: () => Promise.reject(new Error('unused')),
+    }),
+  );
 
   session.handleMessage({ type: 'resize', cols: 1, rows: 1 });
 
@@ -206,10 +232,12 @@ test('it closes with 1011 when the stream ends without an exit', async () => {
   const peer = buildFakePeer();
   const stream: ExecStream = { ...buildFakeStream().stream, events: readWithoutExit };
 
-  const session = createExecSession(peer.peer, {
-    openExec: () => Promise.resolve(stream),
-    recordActivity: () => Promise.resolve(),
-  });
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: () => Promise.resolve(stream),
+    }),
+  );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
 
@@ -222,10 +250,12 @@ test('it reports a malformed binary frame instead of throwing', async () => {
   const fake = buildFakeStream();
   const peer = buildFakePeer();
 
-  const session = createExecSession(peer.peer, {
-    openExec: () => Promise.resolve(fake.stream),
-    recordActivity: () => Promise.resolve(),
-  });
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: () => Promise.resolve(fake.stream),
+    }),
+  );
 
   session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
 
@@ -234,4 +264,123 @@ test('it reports a malformed binary frame instead of throwing', async () => {
   session.handleMessage(new Uint8Array([]));
 
   expect(peer.closes).toEqual([1011]);
+});
+
+test('it attaches to a session and ends with detached when taken over', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const requests: AgentAttachRequest[] = [];
+  const stream: ExecStream = { ...fake.stream, session: 'main', created: false };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openAttach: (_name, request) => {
+        requests.push(request);
+
+        return Promise.resolve(stream);
+      },
+    }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main', cols: 100, rows: 30 });
+
+  await Bun.sleep(5);
+
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('replay') });
+  fake.emitEvent({ type: 'detached', reason: 'taken_over' });
+
+  await Bun.sleep(5);
+
+  expect(requests).toEqual([{ session: 'main', cols: 100, rows: 30 }]);
+
+  expect(peer.sent).toEqual([
+    { type: 'started', pid: 7, session: 'main', created: false },
+    [EXEC_CHANNELS.stdout, 'replay'],
+    { type: 'detached', reason: 'taken_over' },
+  ]);
+
+  expect(peer.closes).toEqual([1000]);
+});
+
+test('it starts a named session', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const requests: AgentExecRequest[] = [];
+  const stream: ExecStream = { ...fake.stream, session: 'main', created: true };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (_name, request) => {
+        requests.push(request);
+
+        return Promise.resolve(stream);
+      },
+    }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, session: 'main' });
+
+  await Bun.sleep(5);
+
+  expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main' }]);
+  expect(peer.sent).toEqual([{ type: 'started', pid: 7, session: 'main', created: true }]);
+});
+
+test('it refuses a session without a tty', () => {
+  const peer = buildFakePeer();
+  const session = createExecSession(peer.peer, buildBackend({}));
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false, session: 'main' });
+
+  expect(peer.sent).toHaveLength(1);
+  expect(JSON.stringify(peer.sent[0])).toContain('a session needs a tty');
+  expect(peer.closes).toEqual([1011]);
+});
+
+// A session runs on when impd loses its agent connection (a sleep, a
+// restore): the client gets a clean detach it can attach again after.
+test('a session stream that ends without exit or detached is a lost detach', async () => {
+  const peer = buildFakePeer();
+
+  const stream: ExecStream = {
+    ...buildFakeStream().stream,
+    session: 'main',
+    created: false,
+    events: readWithoutExit,
+  };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+  await Bun.sleep(10);
+
+  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost' });
+  expect(peer.closes).toEqual([1000]);
+});
+
+test('an unknown detach reason from the agent reads as lost', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const stream: ExecStream = { ...fake.stream, session: 'main', created: false };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+  await Bun.sleep(5);
+
+  fake.emitEvent({ type: 'detached', reason: 'cosmic_rays' });
+
+  await Bun.sleep(5);
+
+  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost' });
 });

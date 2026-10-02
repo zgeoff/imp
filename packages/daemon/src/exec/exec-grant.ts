@@ -15,21 +15,28 @@ export function buildGrantedBackend(
     return backend;
   }
 
+  const checkGrant = (name: string): ORPCError<'FORBIDDEN', unknown> | null => {
+    if (grant === undefined) {
+      return new ORPCError('FORBIDDEN', { message: 'the exec socket was not authorized' });
+    }
+
+    if (name !== grant.name) {
+      return new ORPCError('FORBIDDEN', { message: `the exec ticket is for imp ${grant.name}` });
+    }
+
+    return null;
+  };
+
   return {
     openExec: (name, request) => {
-      if (grant === undefined) {
-        return Promise.reject(
-          new ORPCError('FORBIDDEN', { message: 'the exec socket was not authorized' }),
-        );
-      }
+      const refused = checkGrant(name);
 
-      if (name !== grant.name) {
-        return Promise.reject(
-          new ORPCError('FORBIDDEN', { message: `the exec ticket is for imp ${grant.name}` }),
-        );
-      }
+      return refused === null ? backend.openExec(name, request) : Promise.reject(refused);
+    },
+    openAttach: (name, request) => {
+      const refused = checkGrant(name);
 
-      return backend.openExec(name, request);
+      return refused === null ? backend.openAttach(name, request) : Promise.reject(refused);
     },
     recordActivity: (name) => backend.recordActivity(name),
   };
