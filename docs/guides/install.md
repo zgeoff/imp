@@ -184,8 +184,8 @@ bash bootstrap.sh --yes --storage zfs --zfs-pool fast              # an existing
 - A later run without `--storage` keeps the env file's backend. The script refuses to switch
   backends, since the imps would stay behind on the old one.
 - ZFS takes no `--loop-file`.
-- Ubuntu 26.04 ships the 2.4 module, and the host image ships 2.3 tools. impd starts and warns about
-  the minor skew ([versions](../architecture/storage.md#versions)).
+- The host image ships the 2.4 tools, which match Ubuntu 26.04's module. On Ubuntu 24.04 (module
+  2.2) impd starts and warns about the minor skew ([versions](../architecture/storage.md#versions)).
 
 ### RAM budget
 

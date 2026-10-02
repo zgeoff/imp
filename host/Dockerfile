@@ -23,14 +23,25 @@ ARG FIRECRACKER_VERSION=v1.17.0
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
 
-# zfsutils-linux is in contrib. Only the userland: the module comes from the
-# host kernel through /dev/zfs, and impd refuses a different major version.
-RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
- && apt-get update \
+RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
-      xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
+      xfsprogs e2fsprogs squashfs-tools \
       iproute2 iptables procps util-linux kmod jq \
+ && rm -rf /var/lib/apt/lists/*
+
+# The zfs userland, 2.4 from trixie-backports (contrib), to match the module
+# Ubuntu 26.04 hosts ship; trixie itself has 2.3. Backports drop a version
+# once a newer one lands, so it comes from a dated snapshot, pinned. Only the
+# userland: the module comes from the host kernel through /dev/zfs, and impd
+# refuses a different major version (docs/architecture/storage.md#versions).
+# check-valid-until=no: a snapshot's Release file expires after a week.
+ARG ZFS_SNAPSHOT=20261001T000000Z
+ARG ZFS_VERSION=2.4.4-1~bpo13+1
+RUN echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${ZFS_SNAPSHOT} trixie-backports contrib" \
+      > /etc/apt/sources.list.d/zfs-backports.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends -t trixie-backports "zfsutils-linux=${ZFS_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI and Tailscale from their upstream apt repos.
