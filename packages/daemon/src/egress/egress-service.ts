@@ -9,7 +9,11 @@ import type { EgressSlot } from '../db/egress';
 import { findImpByName } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { createKeyedMutex } from '../imps/keyed-mutex';
-import { formatSubnet } from '../net/addressing';
+import { formatSubnet, parseIpv4 } from '../net/addressing';
+import { deriveGuestIp6 } from '../net/addressing6';
+import { readConnectedPrefixes6 } from '../net/ipv6-plan';
+import type { Ipv6Plan } from '../net/ipv6-plan';
+import { BLOCKED_RANGES6 } from '../net/ranges6';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { createDnsForward } from './dns-upstream';
@@ -20,7 +24,7 @@ import { createQueryHandler, startResolverServer } from './egress-resolver';
 import type { QueryVerdict, ResolverServer } from './egress-resolver';
 import { buildAllowRules, isNameAllowed, isTunnelAllowed, listExactNames } from './egress-rules';
 import type { AllowRules } from './egress-rules';
-import { buildElementChange, buildRuleset } from './egress-ruleset';
+import { buildElementChange, buildNat66Ruleset, buildRuleset } from './egress-ruleset';
 import { createEgressSets } from './egress-sets';
 import type { AddressAnswer } from './egress-sets';
 
@@ -43,8 +47,12 @@ export interface EgressDeps {
   readonly isGranted: (impId: string, host: string) => Promise<boolean>;
   readonly closeTunnels: (impId: string, keep: (host: string) => boolean) => void;
 
+  // the IPv6 impd resolved at start; null or left out, imps get none
+  readonly ipv6?: Ipv6Plan | null;
+
   // tests stand in for nft, conntrack and the network
   readonly runNft?: NftRunner;
+  readonly readConnected6?: () => Promise<readonly string[]>;
   readonly flushConnections?: (guestIp: string) => Promise<void>;
   readonly forward?: DnsForward;
   readonly resolveExact?: (name: string) => Promise<readonly AddressAnswer[]>;
@@ -89,7 +97,9 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const write = createNftWriter(deps.runNft ?? runNft);
   const flushConnections = deps.flushConnections ?? runConntrackFlush;
   const forward = deps.forward ?? createDnsForward(deps.config.dns);
-  const resolveExact = deps.resolveExact ?? createExactResolver(deps.config.dns);
+  const ipv6 = deps.ipv6 ?? null;
+  const readConnected6 = deps.readConnected6 ?? readConnectedPrefixes6;
+  const resolveExact = deps.resolveExact ?? createExactResolver(deps.config.dns, ipv6 !== null);
   const sets = createEgressSets({ minTtlS: MIN_TTL_S, maxTtlS: MAX_TTL_S, maxPerSlot: SET_SIZE });
   const mutex = createKeyedMutex();
 
@@ -106,15 +116,27 @@ export function createEgressService(deps: EgressDeps): EgressService {
     sweep: Timer | null;
   } = { slots: new Map(), released: new Set(), unenforced: null, server: null, sweep: null };
 
-  const buildScript = (views: ReadonlyMap<number, SlotView>): string =>
+  // an imp's /128, from its IPv4 address as its tap derives it
+  const findGuestIp6 = (guestIp: string): string | null => {
+    const ip = parseIpv4(guestIp);
+
+    return ipv6 === null || ip === null ? null : deriveGuestIp6(ipv6.prefix, ip);
+  };
+
+  const buildScript = (
+    views: ReadonlyMap<number, SlotView>,
+    connected6: readonly string[],
+  ): string =>
     buildRuleset({
       privateRanges,
+      blocked6: [...BLOCKED_RANGES6, ...(ipv6 === null ? [] : [ipv6.prefix.text]), ...connected6],
       dnsPort: deps.config.egressDnsPort,
       setSize: SET_SIZE,
       slots: [...views.values()].map((view) => ({
         slot: view.entry.slot,
         tap: `imp${String(view.entry.slot)}`,
         guestIp: view.entry.guestIp,
+        guestIp6: findGuestIp6(view.entry.guestIp),
         mode: view.entry.policy.mode,
         cidrs: view.entry.policy.mode === 'box' ? view.rules.cidrs : [],
         addresses: view.entry.policy.mode === 'box' ? sets.listAddresses(view.entry.slot) : [],
@@ -136,7 +158,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
       }
 
       if (state.unenforced === null) {
-        await write(buildScript(slots));
+        // the container's own links, read now: a network can join it later
+        const connected6 = ipv6 === null ? [] : await readConnected6();
+
+        await write(buildScript(slots, connected6));
       }
 
       for (const slot of state.slots.keys()) {
@@ -248,6 +273,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
   return {
     start: async () => {
       try {
+        if (ipv6?.nat66 === true && ipv6.uplink !== null) {
+          await write(buildNat66Ruleset(ipv6.prefix.text, ipv6.uplink));
+        }
+
         await applyTable();
       } catch (error) {
         state.unenforced = formatNftError(error);
@@ -267,6 +296,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
       const handle = createQueryHandler({
         subnet: deps.config.subnet,
+        ipv6: ipv6 !== null,
         checkName,
         writeAnswers,
         forward,
@@ -405,16 +435,36 @@ async function runConntrackFlush(guestIp: string): Promise<void> {
   }
 }
 
+// A records, and with IPv6 AAAA too; a name with no AAAA still resolves
 function createExactResolver(
   servers: readonly string[],
+  ipv6: boolean,
 ): (name: string) => Promise<readonly AddressAnswer[]> {
   const resolver = new Resolver({ timeout: 2000, tries: 2 });
 
   resolver.setServers([...servers]);
 
+  const resolveAaaa = async (name: string): Promise<readonly AddressAnswer[]> => {
+    try {
+      const records = await resolver.resolve6(name, { ttl: true });
+
+      return records.map((record) => ({ address: record.address, ttlS: record.ttl }));
+    } catch {
+      return [];
+    }
+  };
+
   return async (name) => {
     const records = await resolver.resolve4(name, { ttl: true });
 
-    return records.map((record) => ({ address: record.address, ttlS: record.ttl }));
+    const answers = records.map((record) => ({ address: record.address, ttlS: record.ttl }));
+
+    if (!ipv6) {
+      return answers;
+    }
+
+    const answers6 = await resolveAaaa(name);
+
+    return [...answers, ...answers6];
   };
 }

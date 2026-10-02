@@ -10,15 +10,15 @@ export const EgressModeSchema = z.enum(['open', 'box', 'none']);
 
 export type EgressMode = z.infer<typeof EgressModeSchema>;
 
-// One allow entry: a lowercase hostname, `*.` and a hostname for its
-// subdomains (not the name itself), or an IPv4 address or CIDR from /8 to
-// /32, the only way to allow a private address.
+// One allow entry: a lowercase hostname, `*.` and a hostname (its subdomains
+// only), an IPv4 address or CIDR from /8, or a canonical IPv6 address or CIDR
+// from /16. Only an address entry allows a private address.
 export const EgressAllowEntrySchema = z
   .string()
   .max(253)
   .refine(
-    (entry) => isHostEntry(entry) || isCidrEntry(entry),
-    'must be a lowercase hostname, *. and a hostname, or an IPv4 address or CIDR from /8',
+    (entry) => isHostEntry(entry) || isCidrEntry(entry) || isCidr6Entry(entry),
+    'must be a lowercase hostname, *. and a hostname, an IPv4 address or CIDR from /8, or a canonical IPv6 address or CIDR from /16',
   );
 
 export const EgressPolicySchema = z
@@ -57,4 +57,46 @@ function isCidrEntry(entry: string): boolean {
   const address = octets.reduce((acc, octet) => acc * 256 + octet, 0);
 
   return address % 2 ** (32 - prefix) === 0;
+}
+
+// an IPv6 address or CIDR as RFC 5952 writes it (lowercase, `::` for the
+// longest zero run), so one range has one spelling
+function isCidr6Entry(entry: string): boolean {
+  const [address = '', prefixText = '128', ...rest] = entry.split('/');
+  const prefix = Number(prefixText);
+
+  if (rest.length > 0 || !/^\d{1,3}$/.test(prefixText) || prefix < 16 || prefix > 128) {
+    return false;
+  }
+
+  if (!address.includes(':') || address.includes('.') || address.includes('%')) {
+    return false;
+  }
+
+  let canonical: string;
+
+  try {
+    canonical = new URL(`http://[${address}]/`).hostname.slice(1, -1);
+  } catch {
+    return false;
+  }
+
+  if (canonical !== address) {
+    return false;
+  }
+
+  // no host bits past the prefix
+  const value = readIpv6Value(canonical);
+
+  return value % 2n ** BigInt(128 - prefix) === 0n;
+}
+
+function readIpv6Value(canonical: string): bigint {
+  const [head = '', tail] = canonical.split('::');
+  const headGroups = head === '' ? [] : head.split(':');
+  const tailGroups = tail === undefined || tail === '' ? [] : tail.split(':');
+  const missing = 8 - headGroups.length - tailGroups.length;
+  const groups = [...headGroups, ...Array.from({ length: missing }, () => '0'), ...tailGroups];
+
+  return groups.reduce((acc, group) => (acc << 16n) + BigInt(`0x${group}`), 0n);
 }

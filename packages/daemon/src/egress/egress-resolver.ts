@@ -16,6 +16,9 @@ export type QueryVerdict = 'admit' | 'answer' | 'refuse';
 export interface ResolverDeps {
   readonly subnet: Subnet;
 
+  // imps have IPv6: AAAA answers go into the sets as A answers do
+  readonly ipv6?: boolean;
+
   // null for a slot with no imp, or one whose imp is open
   readonly checkName: (slot: number, name: string) => Promise<QueryVerdict | null>;
 
@@ -90,19 +93,19 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
       return buildEmptyReply(message, RCODE.refused, EDE_PROHIBITED);
     }
 
-    // guests have no IPv6 route out
-    if (query.type === 'AAAA') {
+    // without IPv6, guests have no route out for an AAAA answer
+    if (query.type === 'AAAA' && deps.ipv6 !== true) {
       return buildEmptyReply(message, RCODE.noError);
     }
 
     try {
       const reply = await deps.forward(message);
 
-      if (verdict === 'answer' || query.type !== 'A') {
+      if (verdict === 'answer' || (query.type !== 'A' && query.type !== 'AAAA')) {
         return reply;
       }
 
-      return await writeAnswers(deps, slot, name, reply);
+      return await writeAnswers(deps, { slot, name, type: query.type }, reply);
     } catch (error) {
       deps.log(`impd: egress: ${name} for slot ${String(slot)}: ${readErrorMessage(error)}`);
 
@@ -111,25 +114,32 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
   };
 }
 
-// The A records on the CNAME chain from the name asked for go into the set,
-// and every TTL in the reply drops to maxTtlS.
+interface AddressQuery {
+  readonly slot: number;
+  readonly name: string;
+  readonly type: 'A' | 'AAAA';
+}
+
+// The A or AAAA records on the CNAME chain from the name asked for go into
+// the set, and every TTL in the reply drops to maxTtlS.
 async function writeAnswers(
   deps: ResolverDeps,
-  slot: number,
-  name: string,
+  query: AddressQuery,
   reply: Uint8Array,
 ): Promise<Uint8Array> {
   const packet = dnsPacket.decode(Buffer.from(reply));
   const records = packet.answers ?? [];
-  const chain = readChain(name, records);
+  const chain = readChain(query.name, records);
 
   const answers: AddressAnswer[] = records.flatMap((record) =>
-    record.type === 'A' && chain.includes(normalizeName(record.name))
+    (record.type === 'A' || record.type === 'AAAA') &&
+    record.type === query.type &&
+    chain.includes(normalizeName(record.name))
       ? [{ address: record.data, ttlS: record.ttl ?? 0 }]
       : [],
   );
 
-  await deps.writeAnswers(slot, chain, answers);
+  await deps.writeAnswers(query.slot, chain, answers);
 
   return dnsPacket.encode({
     ...packet,

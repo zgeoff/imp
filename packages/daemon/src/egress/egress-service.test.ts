@@ -1,10 +1,15 @@
 import { expect, test } from 'bun:test';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { parsePrefix64 } from '../net/addressing6';
+import type { Ipv6Plan } from '../net/ipv6-plan';
 import { readRejection } from '../read-rejection';
 
-async function setupEgress(runNft?: (script: string) => Promise<void>) {
-  const options = runNft === undefined ? {} : { runNft };
+async function setupEgress(runNft?: (script: string) => Promise<void>, ipv6?: Ipv6Plan) {
+  const options = {
+    ...(runNft !== undefined && { runNft }),
+    ...(ipv6 !== undefined && { ipv6 }),
+  };
 
   const ctx = await setupImpTest(options);
 
@@ -71,7 +76,9 @@ test('a fork has its source policy in its first table', async () => {
 
   const first = ctx.nftScripts.find((script) => script.includes('chain slot1'));
 
-  expect(first).toMatch(/chain slot1 \{\n\s+ip saddr != 10\.66\.0\.6 drop\n\s+goto deny\n/v);
+  expect(first).toMatch(
+    /chain slot1 \{\n\s+ip saddr != 10\.66\.0\.6 drop\n\s+meta nfproto ipv6 drop\n\s+goto deny\n/v,
+  );
 
   const policy = await ctx.egress.readPolicy('copy');
 
@@ -276,4 +283,25 @@ test('without nft, box and none are refused, and so is a boot of such an imp', a
 
   expect(web.state).toBe('running');
   expect(ctx.logs.some((line) => line.includes('impd: egress: NO FIREWALL'))).toBeTrue();
+});
+
+test("with IPv6, a slot checks its /128, and the imps' /64 and the container's links are blocked", async () => {
+  const prefix = parsePrefix64('fd12:3456:789a::/64');
+
+  if (prefix === null) {
+    throw new Error('no prefix');
+  }
+
+  await using ctx = await setupEgress(undefined, { prefix, nat66: true, uplink: 'eth0' });
+
+  await ctx.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['2001:db8:c::/48'] } });
+
+  const table = ctx.nftScripts.findLast((script) => script.includes('chain slot0')) ?? '';
+
+  expect(table).toContain('ip6 saddr != fd12:3456:789a::a42:2 drop');
+  expect(table).toContain('fd12:3456:789a::/64, 2001:db8:a::/64 }');
+
+  expect(table).toContain(
+    'set cidr60 {\n    type ipv6_addr\n    flags interval\n    auto-merge\n    elements = { 2001:db8:c::/48 }',
+  );
 });

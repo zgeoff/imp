@@ -57,3 +57,18 @@ test('a tunnel follows the mode: open allows, none refuses, box checks the list'
 test('only the exact names can be resolved ahead of the guest', () => {
   expect(listExactNames(['github.com', '*.npmjs.org', '9.9.9.9'])).toEqual(['github.com']);
 });
+
+test('an IPv6 entry is a /128, and an IPv6 CIDR covers its range', () => {
+  const rules = buildAllowRules(['2001:db8:b::1', '2001:db8:c::/48', 'github.com']);
+
+  expect(rules.cidrs).toEqual(['2001:db8:b::1/128', '2001:db8:c::/48']);
+
+  for (const [address, allowed] of [
+    ['2001:db8:b::1', true],
+    ['2001:db8:b::2', false],
+    ['2001:db8:c:ffff::1', true],
+    ['2001:db8:d::1', false],
+  ] as const) {
+    expect({ address, allowed: isAddressAllowed(rules, address) }).toEqual({ address, allowed });
+  }
+});

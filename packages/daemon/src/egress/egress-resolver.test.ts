@@ -491,3 +491,34 @@ test('the TCP side closes an idle client and caps the clients of one slot', asyn
     server.stop();
   }
 }, 15_000);
+
+test('with IPv6, an allowed AAAA goes in as an A does; without, it gets an empty answer', async () => {
+  const answers6: readonly Answer[] = [
+    { type: 'CNAME', name: 'registry.npmjs.org', ttl: 300, data: 'npm.cdn.test' },
+    { type: 'AAAA', name: 'npm.cdn.test', ttl: 60, data: '2606:4700::6810:1' },
+    { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.1' },
+  ];
+
+  const ctx = setupHandler({
+    ipv6: true,
+    forward: (query) => Promise.resolve(buildAnswer(query, answers6)),
+  });
+
+  const reply = await ctx.sendQuery('registry.npmjs.org', GUEST, 'AAAA');
+
+  expect(reply.rcode).toBe('NOERROR');
+
+  expect(ctx.admitted).toEqual([
+    {
+      names: ['registry.npmjs.org', 'npm.cdn.test'],
+      answers: [{ address: '2606:4700::6810:1', ttlS: 60 }],
+    },
+  ]);
+
+  const without = setupHandler();
+
+  const empty = await without.sendQuery('registry.npmjs.org', GUEST, 'AAAA');
+
+  expect(empty.answers).toEqual([]);
+  expect(without.admitted).toEqual([]);
+});

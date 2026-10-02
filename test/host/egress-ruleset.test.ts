@@ -1,7 +1,12 @@
 import { expect, test } from 'bun:test';
 import { REFUSED_RANGES } from '../../packages/daemon/src/broker/tunnel-target';
-import { buildElementChange, buildRuleset } from '../../packages/daemon/src/egress/egress-ruleset';
+import {
+  buildElementChange,
+  buildNat66Ruleset,
+  buildRuleset,
+} from '../../packages/daemon/src/egress/egress-ruleset';
 import type { FirewallSlot } from '../../packages/daemon/src/egress/egress-ruleset';
+import { BLOCKED_RANGES6 } from '../../packages/daemon/src/net/ranges6';
 
 // impd's table, applied by the real nft in a fresh user and network
 // namespace. Skipped where that is not allowed, or nft is missing.
@@ -17,17 +22,36 @@ const PRIVATE = [
 ];
 
 const SLOTS: readonly FirewallSlot[] = [
-  { slot: 0, tap: 'imp0', guestIp: '10.66.0.2', mode: 'open', cidrs: [], addresses: [] },
+  {
+    slot: 0,
+    tap: 'imp0',
+    guestIp: '10.66.0.2',
+    guestIp6: 'fd12:3456:789a::a42:2',
+    mode: 'open',
+    cidrs: [],
+    addresses: [],
+  },
   {
     slot: 1,
     tap: 'imp1',
     guestIp: '10.66.0.6',
+    guestIp6: 'fd12:3456:789a::a42:6',
     mode: 'box',
-    cidrs: ['172.17.0.1/32'],
-    addresses: ['140.82.112.3'],
+    cidrs: ['172.17.0.1/32', '2001:db8:c::/48'],
+    addresses: ['140.82.112.3', '2001:db8:b::1'],
   },
-  { slot: 2, tap: 'imp2', guestIp: '10.66.0.10', mode: 'none', cidrs: [], addresses: [] },
+  {
+    slot: 2,
+    tap: 'imp2',
+    guestIp: '10.66.0.10',
+    guestIp6: null,
+    mode: 'none',
+    cidrs: [],
+    addresses: [],
+  },
 ];
+
+const BLOCKED6 = [...BLOCKED_RANGES6, 'fd12:3456:789a::/64', '2001:db8:a::/64'];
 
 function runNft(scripts: Readonly<Record<string, string>>, after: string): string {
   const result = Bun.spawnSync(['unshare', '-rn', 'bash', '-euo', 'pipefail', '-c', after], {
@@ -43,6 +67,7 @@ function runNft(scripts: Readonly<Record<string, string>>, after: string): strin
 test.skipIf(!canUnshare)('the table applies over itself, and takes element changes', () => {
   const first = buildRuleset({
     privateRanges: PRIVATE,
+    blocked6: BLOCKED6,
     dnsPort: 7053,
     setSize: 4096,
     slots: SLOTS,
@@ -51,14 +76,15 @@ test.skipIf(!canUnshare)('the table applies over itself, and takes element chang
   // slot 1 gone, as after an imp rm: its set and its map entry go with it
   const second = buildRuleset({
     privateRanges: PRIVATE,
+    blocked6: BLOCKED6,
     dnsPort: 7053,
     setSize: 4096,
     slots: SLOTS.filter((slot) => slot.slot !== 1),
   });
 
   const changes =
-    buildElementChange('add', 1, ['192.0.2.7', '192.0.2.8']) +
-    buildElementChange('delete', 1, ['140.82.112.3']);
+    buildElementChange('add', 1, ['192.0.2.7', '192.0.2.8', '2001:db8:b::2']) +
+    buildElementChange('delete', 1, ['140.82.112.3', '2001:db8:b::1']);
 
   const listed = runNft(
     { FIRST: first, CHANGES: changes, SECOND: second },
@@ -67,6 +93,7 @@ printf '%s' "$FIRST" | nft -f -
 printf '%s' "$FIRST" | nft -f -
 printf '%s' "$CHANGES" | nft -f -
 nft list set inet imp_egress allow1 | grep elements
+nft list set inet imp_egress allow61 | grep elements
 nft list map inet imp_egress slots | tr -s '\\n\\t ' ' ' | grep -o 'elements = {[^}]*}'
 printf '%s' "$SECOND" | nft -f -
 nft list map inet imp_egress slots | tr -s '\\n\\t ' ' ' | grep -o 'elements = {[^}]*}'
@@ -76,9 +103,49 @@ nft list set inet imp_egress allow1 2>&1 | head -1 || true
 
   expect(listed.split('\n').map((line) => line.trim())).toEqual([
     'elements = { 192.0.2.7, 192.0.2.8 }',
+    'elements = { 2001:db8:b::2 }',
     'elements = { "imp0" : jump slot0, "imp1" : jump slot1, "imp2" : jump slot2 }',
     'elements = { "imp0" : jump slot0, "imp2" : jump slot2 }',
     'Error: No such file or directory',
     '',
   ]);
 });
+
+test.skipIf(!canUnshare)(
+  'every slot chain checks both sources, and the NAT66 table applies',
+  () => {
+    const table = buildRuleset({
+      privateRanges: PRIVATE,
+      blocked6: BLOCKED6,
+      dnsPort: 7053,
+      setSize: 4096,
+      slots: SLOTS,
+    });
+
+    const listed = runNft(
+      { TABLE: table, NAT66: buildNat66Ruleset('fd12:3456:789a::/64', 'eth0') },
+      `
+printf '%s' "$TABLE" | nft -f -
+printf '%s' "$NAT66" | nft -f -
+printf '%s' "$NAT66" | nft -f -
+for slot in 0 1 2; do nft list chain inet imp_egress slot$slot | grep -E 'saddr|nfproto|ip6' ; done
+nft list chain ip6 imp_nat66 postrouting | grep masquerade
+`,
+    );
+
+    expect(listed.split('\n').map((line) => line.trim())).toEqual([
+      'ip saddr != 10.66.0.2 drop',
+      'ip6 saddr != fd12:3456:789a::a42:2 drop',
+      'ip6 daddr @blocked6 goto deny',
+      'ip saddr != 10.66.0.6 drop',
+      'ip6 saddr != fd12:3456:789a::a42:6 drop',
+      'ip6 daddr @cidr61 accept',
+      'ip6 daddr @blocked6 goto deny',
+      'ip6 daddr @allow61 accept',
+      'ip saddr != 10.66.0.10 drop',
+      'meta nfproto ipv6 drop',
+      'oifname "eth0" ip6 saddr fd12:3456:789a::/64 masquerade',
+      '',
+    ]);
+  },
+);

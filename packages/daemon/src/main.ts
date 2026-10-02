@@ -152,6 +152,7 @@ async function main(): Promise<void> {
   const egress = createEgressService({
     config,
     db,
+    ipv6,
     log: printLog,
     isGranted: broker.isGranted,
     closeTunnels: broker.closeTunnels,

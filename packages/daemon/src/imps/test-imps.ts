@@ -27,6 +27,7 @@ import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
+import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
@@ -99,6 +100,9 @@ interface ImpTestOptions {
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
   readonly hostCpus?: number;
+
+  // IPv6 for imps, as impd resolved it; none by default
+  readonly ipv6?: Ipv6Plan;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -199,6 +203,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     forward: () => Promise.reject(new Error('no upstream in tests')),
     resolveExact: () => Promise.resolve([]),
     now: readClock,
+    ipv6: options.ipv6 ?? null,
+    readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
   });
 
   // a system drive file, as setupSystemFiles installs it
@@ -244,6 +250,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         return Promise.resolve(true);
       },
       egress,
+      ipv6: options.ipv6 ?? null,
       ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
       hostCpus: options.hostCpus ?? 8,
       ...(options.cgroups !== undefined && { cgroups: options.cgroups }),
