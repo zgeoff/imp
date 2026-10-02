@@ -179,7 +179,7 @@ const MIGRATIONS: Record<string, Migration> = {
   },
 
   // SSH keys bound to tokens (#63); impd deletes a token's keys with it
-  '009_add_token_ssh_keys': {
+  '008_add_token_ssh_keys': {
     async up(db: Kysely<DatabaseSchema>) {
       await db.schema
         .createTable('token_ssh_keys')
