@@ -38,6 +38,7 @@ import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
+import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
@@ -103,6 +104,9 @@ interface ImpTestOptions {
   // divides by elapsed time
   readonly frozenClockMs?: number;
 
+  // the storage backend over the data dir; XFS on plain files by default
+  readonly createStorage?: (dataDir: string) => StorageBackend;
+
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
   readonly hostCpus?: number;
@@ -145,7 +149,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       return Promise.resolve();
     });
 
-  const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
+  const storage =
+    options.createStorage?.(dataDir) ?? createXfsBackend({ dataDir, cloneFile: cloneDisk });
+
   const storageGate = createStorageGate();
 
   // the host's free space as the budget sees it; a test lowers it

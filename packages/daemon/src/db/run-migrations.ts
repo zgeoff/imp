@@ -354,6 +354,7 @@ const MIGRATIONS: Record<string, Migration> = {
         .addColumn('peer_url', 'text')
         .addColumn('ticket', 'text')
         .addColumn('total_bytes', 'integer', (c) => c.notNull())
+        .addColumn('mode', 'text', (c) => c.notNull().defaultTo('files'))
         .addColumn('receipt', 'text')
         .addColumn('error', 'text')
         .addColumn('created_at', 'integer', (c) => c.notNull())

@@ -34,10 +34,11 @@ The stream is frames: a type byte, a 4-byte big-endian length, then the payload.
 | 5    | `END`      | `{}`                                                                                  |
 
 The files go in order: the image's two files (only when the target asked), each checkpoint oldest
-first, then the disk. `DATA` frames carry only the blocks `SEEK_DATA` finds, so the holes of a
-sparse disk never cross the network. The target writes each file to a sparse temp file under
-`<data>/moves`, then over the imp's disk block by block, and takes a checkpoint after each one. So
-the checkpoints share every block they shared on the source.
+first, then the disk. Between two ZFS hosts, `zfs send` streams take the place of the checkpoint and
+disk files ([ZFS](#zfs)): `DATA` frames at running offsets. `DATA` frames carry only the blocks
+`SEEK_DATA` finds, so the holes of a sparse disk never cross the network. The target writes each
+file to a sparse temp file under `<data>/moves`, then over the imp's disk block by block, and takes
+a checkpoint after each one. So the checkpoints share every block they shared on the source.
 
 The stream goes in POSTs of at most 256 MiB each (`x-imp-move-part: <n>`), so impd's request body
 limit never has to fit a whole disk. The target joins the parts into one stream. An empty POST with
@@ -45,6 +46,45 @@ limit never has to fit a whole disk. The target joins the parts into one stream.
 
 The target counts the `DATA` bytes against the ticket's byte count and stops a stream that passes
 it. It also checks each `FILE_END` sum, and that a `DATA` frame stays inside its file.
+
+## ZFS
+
+`imp move` reads the target's storage backend from `system.info` and passes it to `moves.prepare`. A
+ZFS source with a ZFS target sends `zfs send` streams; every other pair sends files, as above.
+
+### ZFS to files
+
+For an XFS target, the source snapshots the stopped disk as `@mv-<id>`, then mounts a read-only
+clone of it and of each checkpoint's snapshot in `staging/`, as a backup run does. The stream reads
+the files there. An XFS source to a ZFS target goes as files too: the target writes each over an
+empty disk dataset and takes a snapshot after each checkpoint, so they share blocks as on the
+source.
+
+### ZFS to ZFS
+
+An imp's snapshots are not in one line: a restore retires the old disk and clones a checkpoint in
+its place, so the checkpoints sit on more than one dataset, linked by origins. `zfs send -R` follows
+children, not origins, so it cannot carry them. The source takes `@mv-<id>` of the disk, then sends
+the imp's checkpoint snapshots and `@mv` in the order ZFS made them (`createtxg`), each:
+
+| When                                                  | Stream                          |
+| ----------------------------------------------------- | ------------------------------- |
+| An earlier snapshot of the set is on the same dataset | `zfs send -i <that one>`        |
+| Else, the dataset's origin is in the set              | `zfs send -i <origin>`: a clone |
+| Else                                                  | `zfs send`: full                |
+
+The header carries each stream's checkpoint, dataset number and base, never a dataset name. The
+target checks that the plan follows on, then runs `zfs recv -u` for each into
+`staging/mvin-<id>-<n>`, with `-o origin=` for a clone. It names each snapshot itself: a new
+checkpoint ID that no snapshot in its pool has. Once every stream is in, the dataset that holds
+`@mv` becomes `disks/<id>`, the others go to `retired/`, as a restore leaves them, and `@mv` goes. A
+failure destroys what staging holds.
+
+The walk never leaves the imp's own snapshots. A forked disk's first stream is full, so no other
+imp's data goes along, and the disk shares no blocks with the target's image. The byte count is
+`zfs send -nP`'s estimate with 10 % and 64 MiB to spare, since it is an estimate. Each stream is one
+file of the frame stream, hashed as it is sent; a sum that does not match fails the stream before
+its end, so `zfs recv` never takes it as whole.
 
 ## Tickets
 

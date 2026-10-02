@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import {
   createZfsCommands,
+  parseSendSize,
   parseZfsList,
   parseZfsMounts,
   parseZfsRelease,
@@ -184,4 +185,15 @@ test('it parses the space columns, with the clones of a snapshot', () => {
       clones: ['tank/imp/disks/b', 'tank/imp/staging/bk-1'],
     },
   ]);
+});
+
+// `zfs send -nP` on OpenZFS 2.2, full and incremental
+test('a send estimate is its size line', () => {
+  expect(parseSendSize('full\ttank/imp/disks/a@cp-one\t1048576\nsize\t1048576\n')).toBe(1_048_576);
+
+  expect(parseSendSize('incremental\tcp-one\ttank/imp/disks/a@cp-two\t4096\nsize\t4096\n')).toBe(
+    4096,
+  );
+
+  expect(() => parseSendSize('nothing\n')).toThrow('no size');
 });

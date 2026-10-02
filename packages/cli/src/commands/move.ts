@@ -12,7 +12,7 @@ import { nameArg } from './common-args';
 // how often `imp move` asks the source how far the send is
 const POLL_MS = 1000;
 
-type MoveClient = Pick<ImpClient, 'moves'>;
+type MoveClient = Pick<ImpClient, 'moves' | 'system'>;
 
 export interface MoveRun {
   readonly name: string;
@@ -49,7 +49,15 @@ export async function runMove(run: MoveRun): Promise<void> {
     return;
   }
 
-  const plan = await run.from.moves.prepare({ name: run.name, stop: run.stop });
+  // a ZFS source sends ZFS streams to a ZFS target, else files
+  const info = await run.to.system.info();
+
+  const plan = await run.from.moves.prepare({
+    name: run.name,
+    stop: run.stop,
+    targetStorage: info.storage.backend,
+  });
+
   const ticket = await requireTicket(run, plan.bytes);
 
   await run.from.moves.send({ name: run.name, to: ticket.peerUrl, ticket: ticket.ticket });

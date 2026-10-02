@@ -51,7 +51,8 @@ function createFakeMoves(
       resume: buildAnswer('resume'),
       abort: buildAnswer('abort'),
     },
-  } as unknown as Pick<ImpClient, 'moves'>;
+    system: { info: () => Promise.resolve({ storage: { backend: 'xfs' } }) },
+  } as unknown as Pick<ImpClient, 'moves' | 'system'>;
 }
 
 function setupRun(
@@ -97,7 +98,7 @@ test('a move prepares on the source, takes a ticket from the target, then sends'
   await runMove(ctx.run);
 
   expect(ctx.calls).toEqual([
-    'a prepare {"name":"dev","stop":false}',
+    'a prepare {"name":"dev","stop":false,"targetStorage":"xfs"}',
     'b receive {"name":"dev","bytes":10}',
     'a send {"name":"dev","to":"http://100.64.0.2:7070","ticket":"t.s"}',
     'a status {"name":"dev"}',

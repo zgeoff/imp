@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { waitWithin } from '../../process/wait-within';
 import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
-import type { LiveStorage } from '../storage-backend';
+import type { LiveStorage, MoveSource, StorageBackend } from '../storage-backend';
 import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from './fake-zfs';
 import { createZfsBackend } from './zfs-backend';
 
@@ -33,6 +33,7 @@ function setupTest(kernel = VERSION) {
       dataDir,
       root: ROOT,
       run: fake.run,
+      streams: fake.streams,
       readMounts: fake.readMounts,
       readModuleVersion: () => kernel,
       log: (message) => {
@@ -1245,4 +1246,193 @@ test('the watchdog slot sits on the root dataset, so a destroy removes it with t
 
   expect(datasetDirs.some((dir) => slot.snapshotDir.startsWith(`${dir}/`))).toBeFalse();
   expect(existsSync(slot.snapshotDir)).toBeFalse();
+});
+
+// a ZFS move's steps from `source` into `target` as imp `impId`, as the
+// stream carries them
+function sendZfsMove(source: MoveSource, target: StorageBackend, impId: string) {
+  if (source.kind !== 'zfs') {
+    throw new Error('expected ZFS steps');
+  }
+
+  const ids = ['cp-moved1', 'cp-moved2', 'cp-moved3', 'cp-moved4'];
+
+  return target.receiveMoveSnapshots(
+    impId,
+    source.steps.map((step) => ({
+      isCheckpoint: step.checkpointId !== null,
+      dataset: step.dataset,
+      base: step.base,
+    })),
+    (index) => source.steps[index]?.open().stdout ?? new ReadableStream(),
+    () => ids.shift() ?? 'cp-none',
+  );
+}
+
+test('a ZFS move sends each checkpoint incremental from the one before, then the disk', async () => {
+  await using ctx = await setupStarted();
+  await using target = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+  await ctx.createCheckpoint('a', 'cp-two');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one', 'cp-two'], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+
+  expect(steps.map((step) => [step.checkpointId, step.dataset, step.base])).toEqual([
+    ['cp-one', 0, null],
+    ['cp-two', 0, 0],
+    [null, 0, 1],
+  ]);
+
+  const received = await sendZfsMove(source, target.backend, 'a');
+
+  await source.close();
+
+  expect(received.map((checkpoint) => checkpoint.id)).toEqual(['cp-moved1', 'cp-moved2']);
+
+  expect(target.fake.listSnapshots().filter((name) => name.includes('/disks/'))).toEqual([
+    `${ROOT}/disks/a@cp-moved1`,
+    `${ROOT}/disks/a@cp-moved2`,
+  ]);
+
+  expect(target.fake.readMountedAt(target.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(target.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots().filter((name) => name.includes('@mv-'))).toEqual([]);
+});
+
+test('a restored imp moves its retired checkpoints and its disk as a clone of them', async () => {
+  await using ctx = await setupStarted();
+  await using target = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+  await ctx.createCheckpoint('a', 'cp-two');
+  await ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve());
+  await ctx.createCheckpoint('a', 'cp-three');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one', 'cp-two', 'cp-three'], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+
+  expect(steps.map((step) => [step.checkpointId, step.dataset, step.base])).toEqual([
+    ['cp-one', 0, null],
+    ['cp-two', 0, 0],
+    ['cp-three', 1, 0],
+    [null, 1, 2],
+  ]);
+
+  await sendZfsMove(source, target.backend, 'a');
+
+  await source.close();
+
+  const [retired] = target.listRetired();
+
+  expect(target.fake.readOrigin(`${ROOT}/disks/a`)).toBe(`${retired ?? ''}@cp-moved1`);
+
+  expect(target.fake.listSnapshots().filter((name) => name.startsWith(retired ?? '-'))).toEqual([
+    `${retired ?? ''}@cp-moved1`,
+    `${retired ?? ''}@cp-moved2`,
+  ]);
+});
+
+test('a forked disk starts with a full stream: nothing of the other imp goes along', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-one' });
+
+  const source = await ctx.backend.openMoveSource('b', [], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+
+  await source.close();
+
+  expect(steps.map((step) => [step.checkpointId, step.dataset, step.base])).toEqual([
+    [null, 0, null],
+  ]);
+});
+
+test('a failed receive leaves nothing in staging and no disk', async () => {
+  await using ctx = await setupStarted();
+  await using target = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+
+  const failure = await readFailure(
+    target.backend.receiveMoveSnapshots(
+      'a',
+      steps.map((step) => ({
+        isCheckpoint: step.checkpointId !== null,
+        dataset: step.dataset,
+        base: step.base,
+      })),
+      (index) =>
+        index === 0
+          ? (steps[0]?.open().stdout ?? new ReadableStream())
+          : new ReadableStream({
+              pull: (controller) => {
+                controller.error(new Error('the stream broke'));
+              },
+            }),
+      () => 'cp-new',
+    ),
+  );
+
+  await source.close();
+
+  expect(String(failure)).toContain('the stream broke');
+
+  const left = target.fake
+    .listDatasets()
+    .filter((name) => name.includes('/staging/') || name.includes('/disks/'));
+
+  expect(left).toEqual([]);
+});
+
+test('a peer plan that does not follow on is refused before any receive', async () => {
+  await using target = await setupStarted();
+
+  const failure = await readFailure(
+    target.backend.receiveMoveSnapshots(
+      'a',
+      [
+        { isCheckpoint: true, dataset: 0, base: null },
+        { isCheckpoint: false, dataset: 0, base: null },
+      ],
+      () => new ReadableStream(),
+      () => 'cp-new',
+    ),
+  );
+
+  expect(String(failure)).toContain('does not follow on');
+  expect(target.fake.commands.filter((command) => command.startsWith('zfs recv'))).toEqual([]);
+});
+
+test('a move to XFS reads read-only clones, which a GC leaves while the move holds them', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'files');
+  const swept = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false, isOrphans: true });
+
+  const paths = source.kind === 'files' ? [...source.checkpointPaths, source.diskPath] : [];
+  const mounted = paths.map((path) => ctx.fake.isReadOnlyAt(dirname(path)));
+
+  await source.close();
+
+  expect(swept).toEqual({ dropped: [], kept: [] });
+  expect(mounted).toEqual([true, true]);
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots().filter((name) => name.includes('@mv-'))).toEqual([]);
 });

@@ -1,4 +1,6 @@
+import * as z from 'zod';
 import type { CommandResult } from '../../process/run-command';
+import type { StreamRunner } from '../../process/run-stream';
 
 // the `creation` of txg 0: 2026-10-03T00:00:00Z
 export const FAKE_EPOCH_S = 1_790_985_600;
@@ -12,7 +14,14 @@ interface FakeDataset {
 interface FakeSnapshot {
   readonly txg: number;
   deferDestroy: boolean;
+
+  // what a send stream names it by, through renames and across pools
+  readonly guid: string;
 }
+
+// what the fake's `zfs send` writes: the snapshot and the one it is
+// incremental from
+const FakeStreamSchema = z.object({ guid: z.string(), baseGuid: z.string().nullable() });
 
 interface FakeZfsOptions {
   readonly root: string;
@@ -115,7 +124,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return buildFailure(`cannot create snapshot '${name}': dataset already exists`);
     }
 
-    snapshots.set(name, { txg: state.txg++, deferDestroy: false });
+    snapshots.set(name, { txg: state.txg++, deferDestroy: false, guid: Bun.randomUUIDv7() });
 
     return buildSuccess();
   };
@@ -223,7 +232,11 @@ export function createFakeZfs(options: FakeZfsOptions) {
           return buildFailure(`cannot destroy '${name}': snapshot has dependent clones`);
         }
 
-        snapshots.set(name, { txg: snapshots.get(name)?.txg ?? 0, deferDestroy: true });
+        const found = snapshots.get(name);
+
+        if (found !== undefined) {
+          found.deferDestroy = true;
+        }
 
         return buildSuccess();
       }
@@ -395,15 +408,105 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return runPromote(last);
     }
 
+    if (verb === 'destroy' && rest[0] === '-r') {
+      for (const snapshot of findSnapshotsOf(last).toReversed()) {
+        const result = runDestroy(snapshot, false);
+
+        if (result.exitCode !== 0) {
+          return result;
+        }
+      }
+
+      return runDestroy(last, false);
+    }
+
     if (verb === 'destroy') {
       return runDestroy(last, rest[0] === '-d');
+    }
+
+    // zfs send -nP [-i <base>] <snapshot>: every stream is 1 MiB
+    if (verb === 'send') {
+      return snapshots.has(last)
+        ? buildSuccess(`full\t${last}\t1048576\nsize\t1048576\n`)
+        : buildFailure(`cannot open '${last}': dataset does not exist`);
     }
 
     return buildFailure(`fake zfs: unknown command ${argv.join(' ')}`);
   };
 
+  // zfs send [-i <base>] <snapshot>: the stream names both by guid
+  const openSend = (argv: readonly string[]) => {
+    const snapshot = snapshots.get(argv.at(-1) ?? '');
+    const baseIndex = argv.indexOf('-i');
+    const base = baseIndex === -1 ? null : snapshots.get(argv[baseIndex + 1] ?? '');
+
+    if (snapshot === undefined || base === undefined) {
+      throw new Error(`fake zfs: ${argv.join(' ')}: no such snapshot`);
+    }
+
+    const stream = { guid: snapshot.guid, baseGuid: base?.guid ?? null };
+
+    return Response.json(stream).body ?? new ReadableStream();
+  };
+
+  // zfs recv -u [-o origin=<snapshot>] <dataset>@<snapshot>, as real ZFS
+  // takes a full, an incremental or a clone stream
+  const runReceive = (argv: readonly string[], stream: z.infer<typeof FakeStreamSchema>) => {
+    const target = argv.at(-1) ?? '';
+    const [dataset = '', snapshotName = ''] = target.split('@');
+    const originArg = argv.find((arg) => arg.startsWith('origin='));
+    const origin = originArg?.slice('origin='.length) ?? null;
+    const exists = datasets.has(dataset);
+
+    if (stream.baseGuid === null) {
+      if (exists) {
+        throw new Error(`cannot receive new filesystem stream: destination '${dataset}' exists`);
+      }
+
+      datasets.set(dataset, { origin: null, txg: state.txg++ });
+    } else if (exists) {
+      const latest = findSnapshotsOf(dataset)
+        .toSorted((a, b) => (snapshots.get(a)?.txg ?? 0) - (snapshots.get(b)?.txg ?? 0))
+        .at(-1);
+
+      if (latest === undefined || snapshots.get(latest)?.guid !== stream.baseGuid) {
+        throw new Error(
+          `cannot receive incremental stream: most recent snapshot of ${dataset} does not match incremental source`,
+        );
+      }
+    } else {
+      if (origin === null || snapshots.get(origin)?.guid !== stream.baseGuid) {
+        throw new Error(`cannot receive: local origin for clone ${dataset} does not exist`);
+      }
+
+      datasets.set(dataset, { origin, txg: state.txg++ });
+    }
+
+    snapshots.set(`${dataset}@${snapshotName}`, {
+      txg: state.txg++,
+      deferDestroy: false,
+      guid: stream.guid,
+    });
+  };
+
+  const streams: StreamRunner = {
+    readFrom: (argv) => {
+      commands.push(argv.join(' '));
+
+      return { stdout: openSend(argv), done: Promise.resolve(), stop: () => {} };
+    },
+    writeTo: async (argv, input) => {
+      commands.push(argv.join(' '));
+
+      const text = await new Response(input).text();
+
+      runReceive(argv, FakeStreamSchema.parse(JSON.parse(text)));
+    },
+  };
+
   return {
     commands,
+    streams,
 
     run: async (argv: readonly string[]): Promise<CommandResult> => {
       const command = argv.join(' ');
@@ -484,3 +587,5 @@ export function createFakeZfs(options: FakeZfsOptions) {
     isReadOnlyAt: (dir: string) => readOnlyDirs.has(dir),
   };
 }
+
+export type FakeZfs = ReturnType<typeof createFakeZfs>;

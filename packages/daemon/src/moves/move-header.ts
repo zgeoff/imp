@@ -30,6 +30,15 @@ const ImpSchema = z
   })
   .readonly();
 
+// a stream's checkpoint, as its place in `checkpoints`, or null for the disk
+const StreamStepSchema = z
+  .object({
+    checkpoint: z.int().nonnegative().nullable(),
+    dataset: z.int().nonnegative(),
+    base: z.int().nonnegative().nullable(),
+  })
+  .readonly();
+
 // What the target needs to rebuild the imp, as a backup manifest holds it:
 // no slot or address (the target gives new ones), no secret values
 export const MoveHeaderSchema = z
@@ -48,6 +57,10 @@ export const MoveHeaderSchema = z
 
     // oldest first, as the files follow
     checkpoints: z.array(CheckpointSchema).readonly(),
+
+    // ZFS to ZFS: the streams that follow in place of the checkpoint and
+    // disk files, in order (docs/architecture/moves.md#zfs-to-zfs)
+    streams: z.array(StreamStepSchema).readonly().nullable(),
   })
   .readonly();
 
@@ -55,7 +68,11 @@ export type MoveHeader = z.infer<typeof MoveHeaderSchema>;
 
 // `/move/offer`: which of the source's parts the target lacks
 export const MoveOfferSchema = z.object({ imageDigest: z.string() });
-export const MoveOfferReplySchema = z.object({ needsImage: z.boolean() });
+
+export const MoveOfferReplySchema = z.object({
+  needsImage: z.boolean(),
+  storage: z.enum(['xfs', 'zfs']),
+});
 
 // `/move/commit` and `/move/abort`: whether the target's copy is live
 export const MoveCommitReplySchema = z.object({ isCommitted: z.boolean() });
