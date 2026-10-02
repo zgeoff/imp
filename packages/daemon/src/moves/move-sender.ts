@@ -68,7 +68,7 @@ export interface MoveSenderDeps {
   readonly db: ImpDatabase;
   readonly dataDir: string;
   readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource' | 'resolveImpPaths'>;
-  readonly imps: Pick<Imps, 'lockImp' | 'haltImp' | 'destroyImp'>;
+  readonly imps: Pick<Imps, 'lockImp' | 'haltImp' | 'destroyImp' | 'startImp'>;
   readonly grants: Pick<Broker, 'listGrants'>;
   readonly egress: Pick<EgressService, 'readPolicy' | 'readAnswers'>;
   readonly ranges: PeerRanges;
@@ -244,6 +244,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
   // the last result per imp id, once its task and its row are gone
   const finished = new Map<string, { readonly error: string | null; readonly isDone: boolean }>();
+
+  // imps the prepare stopped while they ran; a refusal before any byte went
+  // starts them again
+  const halted = new Set<string>();
 
   const findSendRow = (impId: string) =>
     deps.db.selectFrom('move_sends').selectAll().where('imp_id', '=', impId).executeTakeFirst();
@@ -550,9 +554,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
 
     if (imp.maxMemoryMib > imp.memoryMib && !reply.keepsMaxMemory) {
-      throw new Error(
-        "the target's impd predates elastic memory and would drop the imp's max memory; upgrade it first",
-      );
+      throw new MaxMemoryRefusalError();
     }
 
     const warm = meta === null ? null : { meta, isDriveIncluded: reply.needsSystemDrive };
@@ -688,6 +690,14 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return true;
   };
 
+  const startHaltedAgain = async (imp: ImpRecord): Promise<void> => {
+    try {
+      await deps.imps.startImp(imp.name);
+    } catch (error) {
+      deps.log(`impd: move: ${imp.name}: could not start it again: ${readErrorMessage(error)}`);
+    }
+  };
+
   const startSend = (imp: ImpRecord, target: SendTarget, totalBytes: number): SendTask => {
     const peer = target.peer;
     const ticket = target.ticket;
@@ -722,10 +732,17 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           await resetSend(imp, peer, ticket);
         }
 
+        // the offer came after the prepare's halt: nothing went, so the imp
+        // runs again as it did before the move
+        if (error instanceof MaxMemoryRefusalError && halted.has(imp.id)) {
+          await startHaltedAgain(imp);
+        }
+
         // only now: a caller that sees the error sees the mark as the
         // reset left it
         task.error = message;
       } finally {
+        halted.delete(imp.id);
         finished.set(imp.id, { error: task.error, isDone: task.isDone });
         tasks.delete(imp.id);
       }
@@ -859,6 +876,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           }
 
           await deps.imps.haltImp(imp);
+
+          if (imp.state === 'running') {
+            halted.add(imp.id);
+          }
         } else if (imp.state !== 'stopped') {
           throw buildInvalidStateError(imp.state, ['stopped'], 'move');
         }
@@ -1044,5 +1065,17 @@ async function withPeerError<T>(call: () => Promise<T>): Promise<T> {
     }
 
     throw new ORPCError('BAD_GATEWAY', { message: readErrorMessage(error), cause: error });
+  }
+}
+
+// a target from before elastic memory would land an elastic imp at a fixed
+// size; its offer reply has no keepsMaxMemory
+class MaxMemoryRefusalError extends Error {
+  override name = 'MaxMemoryRefusalError';
+
+  constructor() {
+    super(
+      "the target's impd predates elastic memory and would drop the imp's max memory; upgrade it first",
+    );
   }
 }
