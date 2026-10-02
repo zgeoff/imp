@@ -74,6 +74,18 @@ A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the t
 measure. A suite file also runs on its own against a running instance:
 `bun test ./test/e2e/suites/sleep.e2e.ts`.
 
+## Daemon tests
+
+The daemon's tests need no VM. `packages/daemon/src/imps/test-imps.ts` runs the governed imp service
+over an in-memory database and a fake VMM (`fake-vmm.ts`). A test scripts what the next boot, wake,
+sleep, stop or agent check does (succeed, fail, die or hang), holds a step until it releases it, and
+restarts impd over the same database and VMs. `findBrokenInvariants` reads the raw records, because
+a read through the service repairs what it finds.
+
+The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
+path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
+the case.
+
 ## Git hooks
 
 Lefthook installs the hooks with `bun install`.
@@ -88,7 +100,7 @@ Lefthook installs the hooks with `bun install`.
 ## CI
 
 `.github/workflows/ci.yml` runs the gates on every push to `main` and every pull request, in four
-jobs:
+required jobs:
 
 | Job          | What it runs                                                                  |
 | ------------ | ----------------------------------------------------------------------------- |
@@ -96,6 +108,10 @@ jobs:
 | `checks`     | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`. |
 | `go`         | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                |
 | `shellcheck` | `bun run lint:shell`.                                                         |
+
+The `cli` job also compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64
+binary. It is not a required check. On `main`, the `release-please` job makes releases
+([RELEASING.md](../../RELEASING.md)).
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
 

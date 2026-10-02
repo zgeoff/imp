@@ -50,12 +50,12 @@ export interface Config {
   readonly subnet: Subnet;
   readonly firecrackerBin: string;
   readonly kernelPath: string;
-  readonly systemDrivePath: string;
 
   // where impd copies the kernel and the system drive from on start, so a
-  // rebuild never changes a file a running VM has open
+  // rebuild never changes a file a running VM has open; without
+  // IMP_SYSTEM_DRIVE, the drive is the one in <dataDir>/system
   readonly kernelSource: string | null;
-  readonly systemDriveSource: string | null;
+  readonly systemDriveSource: string;
 
   // the image `imps.create` uses when none is named; `ubuntu` stands in until
   // one by this name exists
@@ -100,9 +100,9 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     subnet,
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
     kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
-    systemDrivePath: join(parsed.IMP_DATA_DIR, 'system', 'imp-system.squashfs'),
     kernelSource: parsed.IMP_KERNEL ?? null,
-    systemDriveSource: parsed.IMP_SYSTEM_DRIVE ?? null,
+    systemDriveSource:
+      parsed.IMP_SYSTEM_DRIVE ?? join(parsed.IMP_DATA_DIR, 'system', 'imp-system.squashfs'),
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,

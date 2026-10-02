@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseKernelVersion, readSystemFileInfo } from './system-file-info';
+import { deriveFileSha256, parseKernelVersion, readKernelInfo } from './system-file-info';
 
 function buildImage(text: string): Uint8Array {
   return new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0, 1, 2, ...Buffer.from(text), 0, 9]);
@@ -22,24 +22,24 @@ test('it returns null for an image without a banner', () => {
   expect(parseKernelVersion(buildImage('not a kernel'))).toBeNull();
 });
 
-test('it reads the kernel version and the sha256 of both files', () => {
+test('it reads the kernel version and its sha256', () => {
+  const info = readKernelInfo(buildImage('Linux version 6.1.188 (imp@imp)'));
+
+  expect(info.version).toBe('6.1.188');
+  expect(info.sha256).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test('it streams the sha256 of a file', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'imp-system-files-'));
 
   try {
-    const kernelPath = join(dir, 'vmlinux');
-    const systemDrivePath = join(dir, 'imp-system.squashfs');
+    const path = join(dir, 'imp-system.squashfs');
 
-    writeFileSync(kernelPath, buildImage('Linux version 6.1.188 (imp@imp)'));
-    writeFileSync(systemDrivePath, 'drive');
+    writeFileSync(path, 'drive');
 
-    const info = readSystemFileInfo({ kernelPath, systemDrivePath });
+    const sha256 = await deriveFileSha256(path);
 
-    expect(info.guestKernel.version).toBe('6.1.188');
-    expect(info.guestKernel.sha256).toMatch(/^[0-9a-f]{64}$/);
-
-    expect(info.systemDrive.sha256).toBe(
-      '7062520c5a0ea9deac825278c9f4f0cbad48864b2c7d0c7f1ebccdb752afb058',
-    );
+    expect(sha256).toBe('7062520c5a0ea9deac825278c9f4f0cbad48864b2c7d0c7f1ebccdb752afb058');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

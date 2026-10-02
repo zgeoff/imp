@@ -55,6 +55,7 @@ export function createGovernedImps(deps: GovernedDeps): {
     isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,
     trySleepImp: imps.trySleepImp,
     log,
+    ...(deps.now !== undefined && { now: deps.now }),
   });
 
   holder.governor = governor;

@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-
 // What `system.info` reports about the guest kernel and the system drive
 // impd boots imps with: enough to tell which release they came from.
 export interface SystemFileInfo {
@@ -7,21 +5,22 @@ export interface SystemFileInfo {
   readonly systemDrive: { readonly sha256: string };
 }
 
-interface SystemFilePaths {
-  readonly kernelPath: string;
-  readonly systemDrivePath: string;
-}
-
 const BANNER = Buffer.from('Linux version ');
 
-// Read once at start, after setupSystemFiles: impd swaps the files only then.
-export function readSystemFileInfo(paths: Readonly<SystemFilePaths>): SystemFileInfo {
-  const kernel = readFileSync(paths.kernelPath);
+// a kernel image is small and read whole for its banner anyway
+export function readKernelInfo(image: Uint8Array): SystemFileInfo['guestKernel'] {
+  return { version: parseKernelVersion(image), sha256: deriveSha256(image) };
+}
 
-  return {
-    guestKernel: { version: parseKernelVersion(kernel), sha256: deriveSha256(kernel) },
-    systemDrive: { sha256: deriveSha256(readFileSync(paths.systemDrivePath)) },
-  };
+// streamed: a system drive can be large
+export async function deriveFileSha256(path: string): Promise<string> {
+  const hasher = new Bun.CryptoHasher('sha256');
+
+  for await (const chunk of Bun.file(path).stream()) {
+    hasher.update(chunk);
+  }
+
+  return hasher.digest('hex');
 }
 
 // The release from the banner every kernel image carries
@@ -41,6 +40,6 @@ export function parseKernelVersion(image: Uint8Array): string | null {
   return match?.[0] ?? null;
 }
 
-function deriveSha256(data: Uint8Array): string {
+export function deriveSha256(data: Uint8Array): string {
   return new Bun.CryptoHasher('sha256').update(data).digest('hex');
 }

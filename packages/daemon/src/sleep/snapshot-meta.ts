@@ -1,17 +1,22 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { release } from 'node:os';
 import * as z from 'zod';
 import type { ImpPaths } from '../storage/data-layout';
+import type { HostIdentity, VmIdentity } from './vm-identity';
 
-// What a memory snapshot is tied to (docs/sleep-findings.md gotcha 6). The
-// guest kernel and the system drive count too: the snapshot holds the guest's
-// page cache of the system drive, and its kernel in memory.
+// What a memory snapshot is tied to (docs/sleep-findings.md gotcha 6): the
+// identity of the VM that wrote it. The snapshot holds the guest kernel in
+// memory, and the guest's page cache of the system drive it reopens by path.
 const SnapshotIdentitySchema = z.object({
   firecrackerVersion: z.string(),
   snapshotVersion: z.string(),
   hostKernel: z.string(),
   guestKernel: z.string(),
   systemDrive: z.string(),
+
+  // left out by an older impd, whose snapshot then boots cold once, and for a
+  // VM booted before impd kept its identity
+  systemDrivePath: z.string().optional(),
+  agentVersion: z.string().optional(),
 });
 
 const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
@@ -26,20 +31,30 @@ export type SnapshotIdentity = z.infer<typeof SnapshotIdentitySchema>;
 
 export type SnapshotMeta = z.infer<typeof SnapshotMetaSchema>;
 
-interface IdentitySources {
-  readonly firecrackerBin: string;
-  readonly kernelPath: string;
-  readonly systemDrivePath: string;
-}
+// What a sleep records: the VM's identity. A VM booted before impd kept one
+// gets the host's Firecracker and no drive, so it boots cold once.
+export function buildSnapshotIdentity(
+  vm: Readonly<VmIdentity> | null,
+  host: Readonly<HostIdentity>,
+): SnapshotIdentity {
+  if (vm === null) {
+    return {
+      firecrackerVersion: host.firecrackerVersion,
+      snapshotVersion: host.snapshotVersion,
+      hostKernel: host.hostKernel,
+      guestKernel: 'unknown',
+      systemDrive: 'unknown',
+    };
+  }
 
-// Read once at start: impd swaps the kernel and the system drive only then.
-export function readSnapshotIdentity(sources: Readonly<IdentitySources>): SnapshotIdentity {
   return {
-    firecrackerVersion: readVersionOutput(sources.firecrackerBin, '--version'),
-    snapshotVersion: readVersionOutput(sources.firecrackerBin, '--snapshot-version'),
-    hostKernel: release(),
-    guestKernel: readFileHash(sources.kernelPath),
-    systemDrive: readFileHash(sources.systemDrivePath),
+    firecrackerVersion: vm.firecrackerVersion,
+    snapshotVersion: vm.snapshotVersion,
+    hostKernel: vm.hostKernel,
+    guestKernel: vm.guestKernel,
+    systemDrive: vm.systemDrive,
+    systemDrivePath: vm.systemDrivePath,
+    agentVersion: vm.agentVersion,
   };
 }
 
@@ -64,23 +79,27 @@ export function hasSnapshot(paths: Readonly<ImpPaths>): boolean {
   return readSnapshotMeta(paths) !== null;
 }
 
-// why the snapshot cannot be loaded here, or null when it can
-export function checkSnapshotMatch(
+// Why the snapshot cannot be loaded on this host, or null when it can. The
+// guest kernel does not count: the VM holds it in memory. The drive counts
+// only as the file the snapshot reopens, which stays while a snapshot names it.
+export function findColdBootReason(
   meta: Readonly<SnapshotIdentity>,
-  current: Readonly<SnapshotIdentity>,
+  host: Readonly<HostIdentity>,
 ): string | null {
-  const keys: readonly (keyof SnapshotIdentity)[] = [
-    'firecrackerVersion',
-    'snapshotVersion',
-    'hostKernel',
-    'guestKernel',
-    'systemDrive',
-  ];
+  const keys = ['firecrackerVersion', 'snapshotVersion', 'hostKernel'] as const;
 
   for (const key of keys) {
-    if (meta[key] !== current[key]) {
-      return `${key} changed (${meta[key]} → ${current[key]})`;
+    if (meta[key] !== host[key]) {
+      return `${key} changed (${meta[key]} → ${host[key]})`;
     }
+  }
+
+  if (meta.systemDrivePath === undefined) {
+    return 'the snapshot is from an older impd';
+  }
+
+  if (!existsSync(meta.systemDrivePath)) {
+    return `its agent drive ${meta.systemDrive.slice(0, 12)} is gone`;
   }
 
   return null;
@@ -89,23 +108,4 @@ export function checkSnapshotMatch(
 // A stopped imp boots cold, and a restored disk invalidates the memory.
 export function removeSnapshot(paths: Readonly<ImpPaths>): void {
   rmSync(paths.snapshotDir, { recursive: true, force: true });
-}
-
-function readVersionOutput(bin: string, flag: string): string {
-  try {
-    const result = Bun.spawnSync([bin, flag], { stdout: 'pipe', stderr: 'ignore' });
-    const match = /v\d+\.\d+\.\d+/.exec(result.stdout.toString());
-
-    return match?.[0] ?? 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-function readFileHash(path: string): string {
-  try {
-    return Bun.hash(readFileSync(path)).toString(16);
-  } catch {
-    return 'missing';
-  }
 }

@@ -1,8 +1,6 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
-import { setupImpTest } from './test-imps';
+import { setupImpTest, writeTestSnapshot } from './test-imps';
 
 test('a VM that died after its sleep wrote the snapshot is asleep, not stopped', async () => {
   await using ctx = await setupImpTest();
@@ -14,20 +12,7 @@ test('a VM that died after its sleep wrote the snapshot is asleep, not stopped',
   const paths = buildImpPaths(ctx.dataDir, imp.id);
 
   // impd stopped between the snapshot and the record update
-  mkdirSync(paths.snapshotDir, { recursive: true });
-  writeFileSync(paths.vmstate, 'vmstate');
-  writeFileSync(paths.memFile, 'mem');
-
-  writeSnapshotMeta(paths, {
-    firecrackerVersion: 'v1.17.0',
-    snapshotVersion: 'v12.0.0',
-    hostKernel: 'test',
-    guestKernel: 'k',
-    systemDrive: 's',
-    createdAt: Date.now() + 1000,
-    memoryMib: 2048,
-    ramMib: 300,
-  });
+  writeTestSnapshot(paths, Date.now() + 1000, ctx.readIdentity());
 
   ctx.fake.alive.clear();
 

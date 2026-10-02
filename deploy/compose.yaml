@@ -2,6 +2,7 @@
 # release image; deploy/imp-host.service is the other. Run one, not both.
 #
 #   docker compose -f deploy/compose.yaml up -d
+#   deploy/upgrade.sh --compose deploy/compose.yaml   to a new image
 #
 # /var/lib/imp on the host must be XFS with reflink (docs/guides/install.md).
 # The container refuses to start otherwise.

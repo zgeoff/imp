@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { formatCheckpoints, formatTable } from './format-output';
+import type { Imp } from '@imp/api';
+import { formatCheckpoints, formatImps, formatTable } from './format-output';
 
 test('it pads each column to its widest cell', () => {
   const table = formatTable(
@@ -25,5 +26,40 @@ test('it lists checkpoints with their size in MiB', () => {
     'ID         LABEL  CREATED                   SIZE',
     'cp-a2b3c4  clean  1970-01-01T00:00:00.000Z  3 MiB',
     'cp-d5e6f7         1970-01-01T00:00:00.000Z',
+  ]);
+});
+
+test('it notes why an imp boots cold and what it predates', () => {
+  const imp: Imp = {
+    id: 'i1',
+    name: 'dev',
+    image: 'ubuntu',
+    state: 'sleeping',
+    vcpus: 2,
+    memoryMib: 512,
+    ip: '10.0.0.2',
+    slot: 0,
+    port: 7100,
+    httpPort: 8080,
+    url: 'http://dev.imp.localhost:7080',
+    createdAt: new Date(0),
+    lastActiveAt: new Date(0),
+  };
+
+  const rows = formatImps([
+    { ...imp, coldBootReason: 'firecrackerVersion changed (v1.17.0 → v1.18.0)' },
+    { ...imp, name: 'web', state: 'running', coldBootReason: 'wake failed', outdated: ['agent'] },
+    { ...imp, name: 'db', outdated: ['kernel', 'agent'] },
+    { ...imp, name: 'old', state: 'running', outdated: ['impd'] },
+  ]).split('\n');
+
+  const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
+
+  expect(notes).toEqual([
+    'NOTE',
+    'boots cold: firecrackerVersion changed (v1.17.0 → v1.18.0)',
+    'booted cold: wake failed; outdated: agent',
+    'outdated: kernel, agent',
+    'booted by an older impd; its next wake boots cold',
   ]);
 });

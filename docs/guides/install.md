@@ -94,6 +94,23 @@ restarts and day-to-day care.
 The release image runs the compiled impd from `/usr/local/bin/impd` with the kernel and the system
 drive from `/usr/local/share/imp`. `imp info` shows the kernel version and the sha256 of both.
 
+### Get it
+
+Each release pushes the image to `ghcr.io/zgeoff/imp-host`, tagged with its version and `latest`,
+for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`imp-linux-x64`,
+`imp-linux-arm64`, `imp-darwin-x64`, `imp-darwin-arm64`), the guest kernel `vmlinux` and the system
+drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS` over
+all of them. [RELEASING.md](../../RELEASING.md) shows how to check the checksums and the provenance
+attestations.
+
+```sh
+docker pull ghcr.io/zgeoff/imp-host:latest
+gh release download -R zgeoff/imp -p 'imp-linux-x64' -p SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.local/bin/imp
+```
+
+Both deploy files run `latest`; set `IMP_HOST_IMAGE` to pin a version.
+
 ### Build it
 
 ```sh
@@ -109,10 +126,10 @@ kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-
 The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
 stamps and drive times are fixed, so the same sources give the same `vmlinux` and
 `imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/build-system-drive.sh` use the same
-stages, so the dev instance boots the same bytes as the release image. A snapshot of a sleeping imp
-restores only with the kernel and drive it was taken on, so this is what lets an upgrade that leaves
-them alone keep every imp's memory. Only these two files are reproducible; the image digest is not
-(apt packages, timestamps and the compiled impd differ per build).
+stages, so the dev instance boots the same bytes as the release image. A release that leaves them
+alone does not change which drive or kernel the imps boot, and impd keeps an older drive while a
+snapshot needs it ([upgrades](./operations.md#upgrade)). Only these two files are reproducible; the
+image digest is not (apt packages, timestamps and the compiled impd differ per build).
 
 `host/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one after a
 change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in CI by
