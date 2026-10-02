@@ -212,6 +212,8 @@ scripts/dev.sh token | imp login http://localhost:7070 --name dev
 imp hosts                                         # the saved hosts; * marks the current one
 imp host use dev                                  # make another host current
 imp --host imp ls                                 # one call to a host other than the current
+imp ls --all                                      # the imps on every saved host
+imp new web --place                               # on the saved host with the most free RAM
 imp host rm dev
 ```
 
@@ -229,7 +231,9 @@ The CLI takes the impd URL and its token from one source, the first of these tha
 5. `http://localhost:7070` with `IMP_TOKEN`, or the token in `~/.config/imp/token`.
 
 So a saved token never goes to the URL in `IMP_URL`, and `IMP_TOKEN` never goes to a host that
-`--host` or `IMP_HOST` names. An empty variable counts as unset.
+`--host` or `IMP_HOST` names. An empty variable counts as unset. `imp ls --all` and
+`imp new --place` call every saved host, each with its own token, and ignore this list
+([more than one host](./hosts.md)).
 
 | Variable          | Default     | Meaning                                                                    |
 | ----------------- | ----------- | -------------------------------------------------------------------------- |

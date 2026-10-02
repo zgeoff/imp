@@ -1,9 +1,92 @@
 # More than one host
 
-Each imp host runs its own impd, with its own imps, tokens and secrets. The CLI saves each host
-(`imp login`, `imp host ls`) and calls one at a time: the current host, or the one `--host` names.
-`imp move` takes an imp from one host to another over the tailnet: a stopped one cold, a sleeping
-one with its memory. [Moves](../architecture/moves.md) covers the stream and the tickets.
+Each imp host runs its own impd, with its own imps, images, networks, tokens and secrets. The CLI
+saves each host (`imp login`, `imp host ls`, [configuration](./configuration.md#cli)) and calls one
+at a time: the current host, or the one `--host` names. Two commands reach every saved host:
+`imp new --place` creates an imp on the host with the most free RAM, and `imp ls --all` lists the
+imps on all of them. `imp move` takes an imp from one host to another over the tailnet: a stopped
+one cold, a sleeping one with its memory. [Moves](../architecture/moves.md) covers the stream and
+the tickets.
+
+Placement and the one view run in the CLI, never in impd. Each saved host has its own token, and no
+impd holds another's, so the API of each impd stays one host's. The dashboard shows one host.
+
+## Placement
+
+```sh
+imp new dev --place                  # on the saved host with the most free RAM
+imp new dev --place --image myapp    # only hosts that have myapp
+imp new dev --place --json           # { "host": "big-box", "imp": { … } }
+```
+
+`--place` asks every saved host at once, with 5 s for each to answer, then drops each host that
+would refuse the create:
+
+| Dropped when                                                                       | Why                                                    |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| It does not answer, or refuses the token                                           | Nothing is known about it                              |
+| Its token lacks `manage` scope, or its imp patterns do not cover the name          | impd would answer `FORBIDDEN`                          |
+| Its token has imp patterns and the create has no name, `--public` or `--net`       | impd refuses each for a limited token                  |
+| Its RAM budget is below the memory: `--memory`, else the host's default            | The governor never admits it                           |
+| Its storage is low: free space under twice `IMP_DISK_RESERVE_GIB`                  | A new disk would soon reach the reserve                |
+| It has fewer cores than `--cpu-limit`                                              | impd refuses the limit                                 |
+| It lacks the image: `--image`, else the host's default image                       | Images are per host; impd never pulls one for a create |
+| It cannot enforce a `box` or `none` policy (`--policy`), as without nft            | impd answers `PRECONDITION_FAILED`                     |
+| It lacks a network that `--net` names                                              | Networks are per host                                  |
+| Its impd is older than placement: it does not report its defaults in `system.info` | Upgrade it, or name the host with `--host`             |
+
+Each dropped host gets one line on stderr, `imp: <host>: skipped: <why>`. The rest are ranked by
+free RAM, and a tie goes to the host first in name order:
+
+```text
+free = ramBudgetMib - ramUsedMib - ramReservedMib - ramSleepingMib
+```
+
+`ramSleepingMib` is the memory of every sleeping imp on the host, since any request to a sleeper
+wakes it. The score does not count the idle imps the governor could put to sleep to make room, so it
+errs low on a busy host. `imp info --json` shows each number.
+
+The CLI creates on the first host. When that host's governor turns the boot away
+(`RAM_BUDGET_EXCEEDED`), impd removes the imp before it answers, and the CLI tries the next host.
+Any other failure ends placement with that host's error, a lost connection too: the imp may exist
+there. So a placement never leaves two imps.
+
+A name that a saved host has already ends placement before any create, so the name stays unique
+across your hosts and `imp ls --all` stays clear. This check is best effort: a host that does not
+answer, or a token whose imp patterns hide the imp, can still hold the name. impd checks the name
+only on its own host.
+
+The ranking is a snapshot. Two `--place` calls at the same moment can pick the same host; its
+governor still holds the budget, and the second create moves on to the next host if it must.
+
+`--place` takes the saved hosts alone: `--host` with it is a usage error, and `IMP_URL`, `IMP_HOST`
+and `IMP_TOKEN` have no effect on it.
+
+## One view
+
+```sh
+imp ls --all          # HOST, then the columns of imp ls, for every saved host
+imp ls --all --json   # { "imps": [{ "host": "big-box", … }], "errors": [{ "host", "message" }] }
+```
+
+`imp ls --all` asks every saved host at once, with 5 s for each. It prints what came back, then one
+line on stderr for each host that failed, `imp: <host>: <error>`. With `--json` it always writes the
+whole object, `errors` included, so a script reads one answer whatever happened.
+
+| Exit code | Meaning                                              |
+| --------- | ---------------------------------------------------- |
+| 0         | Every saved host answered                            |
+| 3         | Some hosts answered and some did not: a partial list |
+| 1         | No host answered                                     |
+| 2         | A usage error, such as `--all` with `--host`         |
+
+Plain `imp ls` stays one host, and its output does not change. Like `--place`, `--all` reads the
+saved hosts alone: `--host` with it is a usage error, and `IMP_URL`, `IMP_HOST` and `IMP_TOKEN` have
+no effect on it.
+
+Each host lists the imps its saved token may see. A token with imp patterns ([tokens](./tokens.md))
+sees only the imps that match, so an imp missing from a host's rows can be one that the token's
+scope hides, not one that is absent.
 
 ## Moves
 
@@ -157,3 +240,11 @@ Add the impd API port for imp hosts to reach each other:
 Guests never reach it: their egress refuses `100.64.0.0/10`. impd reports its peer URL from its
 tailnet IP and `IMP_API_PORT`; set `IMP_PEER_URL` when the source reaches it at another address
 ([configuration](./configuration.md#impd)).
+
+## Placement limits
+
+- Names are unique per host, not across hosts. Placement refuses a name it sees elsewhere, but an
+  `imp new` with `--host`, or an imp on a host that did not answer, can make a second one.
+- Placement does not move an imp later. An imp stays on the host that created it until an
+  [`imp move`](#moves).
+- The dashboard and the API show one host each.

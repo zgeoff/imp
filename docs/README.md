@@ -46,6 +46,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp` and impd's `/mcp` endpoint, the tools a coding agent
   gets, the guard, and how exec output, timeouts and cancels work.
+- [More than one host](./guides/hosts.md): `imp new --place` on the saved host with the most free
+  RAM, and `imp ls --all` over every saved host.
 - [Private networks](./guides/networks.md): `imp net`, which imps reach which, and the
   `<imp>.<network>.internal` names.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
