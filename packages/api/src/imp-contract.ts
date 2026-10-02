@@ -17,6 +17,7 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { NameSchema } from './name-schema';
+import { MAX_CREATE_NETWORKS, NetworkSchema } from './network-schema';
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
@@ -86,6 +87,9 @@ export const impContract = {
           // null, the default, is no limit
           cpuLimit: CpuLimitSchema.nullable().optional(),
           cpuWeight: CpuWeightSchema.optional(),
+
+          // networks it joins, which must exist; host-wide callers only
+          networks: z.array(NameSchema).max(MAX_CREATE_NETWORKS).optional(),
         }),
       )
       .output(ImpSchema),
@@ -332,6 +336,23 @@ export const impContract = {
 
     // revokes it from every imp
     delete: base.input(z.object({ name: SecretNameSchema })).output(EmptySchema),
+  },
+
+  // private networks between imps (docs/guides/networks.md)
+  networks: {
+    list: base.output(z.array(NetworkSchema)),
+
+    create: base.input(NameInputSchema).output(NetworkSchema),
+
+    // its imps' connections to one another end
+    delete: base.input(NameInputSchema).output(EmptySchema),
+
+    // `name` is the imp: it and the network's other imps reach one another
+    // from now on, whatever their egress policies; joining twice is a no-op
+    join: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkSchema),
+
+    // its connections to the others end; leaving one it is not on is a no-op
+    leave: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkSchema),
   },
 
   grants: {

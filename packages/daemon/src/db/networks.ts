@@ -67,6 +67,27 @@ export async function removeNetwork(db: ImpDatabase, id: string): Promise<void> 
   await db.deleteFrom('networks').where('id', '=', id).execute();
 }
 
+// a removed network back as it was, members and all
+export async function writeNetworkWithMembers(
+  db: ImpDatabase,
+  network: Readonly<NetworkRecord>,
+  impIds: readonly string[],
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    await trx
+      .insertInto('networks')
+      .values({ id: network.id, name: network.name, created_at: network.createdAt.getTime() })
+      .execute();
+
+    if (impIds.length > 0) {
+      await trx
+        .insertInto('network_members')
+        .values(impIds.map((impId) => ({ network_id: network.id, imp_id: impId })))
+        .execute();
+    }
+  });
+}
+
 // false when the imp is on the network already
 export async function writeMember(
   db: ImpDatabase,

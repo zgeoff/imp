@@ -13,6 +13,7 @@ const ResourceKindSchema = z.enum([
   'backup',
   'token',
   'ssh-key',
+  'network',
 ]);
 
 const ResourceDataSchema = z.object({

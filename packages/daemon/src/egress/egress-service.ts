@@ -61,6 +61,7 @@ export interface EgressDeps {
   readonly runNft?: NftRunner;
   readonly readConnected6?: () => Promise<readonly string[]>;
   readonly flushConnections?: (guestIp: string) => Promise<void>;
+  readonly flushPair?: (first: string, second: string) => Promise<void>;
   readonly forward?: DnsForward;
   readonly resolveExact?: (name: string) => Promise<readonly AddressAnswer[]>;
   readonly now?: () => number;
@@ -80,6 +81,9 @@ export interface EgressService {
 
   // a destroyed imp's slot, out of the table before the slot is free
   readonly releaseSlot: (slot: number) => Promise<void>;
+
+  // a change to the networks' rows, then the table, one change at a time
+  readonly changeNetworks: <T>(change: NetworkChange<T>) => Promise<T>;
   readonly readPolicy: (name: string) => Promise<EgressPolicy>;
   readonly setPolicy: (name: string, policy: EgressPolicy) => Promise<EgressPolicy>;
 
@@ -94,6 +98,13 @@ export interface EgressService {
   readonly runSweep: () => Promise<void>;
 }
 
+// A table nft refuses runs `undo`, so the rows and the table agree. Imps the
+// change parts lose their connections to each other.
+interface NetworkChange<T> {
+  readonly write: () => Promise<T>;
+  readonly undo: (written: T) => Promise<void>;
+}
+
 interface SlotView {
   readonly entry: EgressSlot;
   readonly rules: AllowRules;
@@ -103,6 +114,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const now = deps.now ?? Date.now;
   const write = createNftWriter(deps.runNft ?? runNft);
   const flushConnections = deps.flushConnections ?? runConntrackFlush;
+  const flushPair = deps.flushPair ?? runPairFlush;
   const forward = deps.forward ?? createDnsForward(deps.config.dns);
   const ipv6 = deps.ipv6 ?? null;
   const readConnected6 = deps.readConnected6 ?? readConnectedPrefixes6;
@@ -388,6 +400,41 @@ export function createEgressService(deps: EgressDeps): EgressService {
         await applyTable();
       }),
 
+    changeNetworks: (change) =>
+      mutex.runExclusive('policy', async () => {
+        const before = listPeerPairs(state.members);
+
+        const result = await change.write();
+
+        try {
+          await applyTable();
+        } catch (error) {
+          await change.undo(result);
+
+          await tryApplyTable();
+
+          throw error;
+        }
+
+        // the table refuses their next packet already; this drops the flows
+        // conntrack still holds for them
+        const after = listPeerPairs(state.members);
+
+        for (const pair of before) {
+          if (!after.has(pair)) {
+            const [first = '', second = ''] = pair.split(' ');
+
+            try {
+              await flushPair(first, second);
+            } catch (error) {
+              deps.log(`impd: egress: ${pair}: ${readErrorMessage(error)}`);
+            }
+          }
+        }
+
+        return result;
+      }),
+
     readPolicy: async (name) => {
       const imp = await findImpByName(deps.db, name);
 
@@ -461,6 +508,39 @@ function listPeerGroups(members: readonly NetworkMember[]): NetworkPeer[][] {
   return [...byNetwork.values()].map((group) =>
     group.map((member) => ({ tap: `imp${String(member.slot)}`, guestIp: member.guestIp })),
   );
+}
+
+// every two addresses that share a network, as `low high`
+function listPeerPairs(members: readonly NetworkMember[]): Set<string> {
+  const pairs = new Set<string>();
+
+  for (const group of Map.groupBy(members, (member) => member.network).values()) {
+    for (const first of group) {
+      for (const second of group) {
+        if (first.guestIp < second.guestIp) {
+          pairs.add(`${first.guestIp} ${second.guestIp}`);
+        }
+      }
+    }
+  }
+
+  return pairs;
+}
+
+// both directions: conntrack matches -s and -d on a flow's original tuple
+async function runPairFlush(first: string, second: string): Promise<void> {
+  for (const [source, destination] of [
+    [first, second],
+    [second, first],
+  ] as const) {
+    const result = await runCommand(['conntrack', '-D', '-s', source, '-d', destination]);
+
+    if (result.exitCode !== 0 && !result.stderr.includes('0 flow entries')) {
+      throw new Error(
+        `conntrack -D -s ${source} -d ${destination} exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
+      );
+    }
+  }
 }
 
 // `conntrack -D` exits 1 when it found nothing to delete

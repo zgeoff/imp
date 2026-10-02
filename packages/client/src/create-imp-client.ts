@@ -99,6 +99,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     sessions: rpc.sessions,
     services: rpc.services,
     secrets: rpc.secrets,
+    networks: rpc.networks,
     grants: rpc.grants,
     audit: rpc.audit,
     events: rpc.events,

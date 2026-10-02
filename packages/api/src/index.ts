@@ -95,6 +95,8 @@ export { ImpSchema, ImpStateSchema } from './imp-schema';
 export type { Imp, ImpState, OutdatedPart } from './imp-schema';
 export { CONSOLE_SHELL } from './login-shell';
 export { NameSchema } from './name-schema';
+export { NetworkSchema } from './network-schema';
+export type { Network } from './network-schema';
 
 export {
   AuditEntrySchema,

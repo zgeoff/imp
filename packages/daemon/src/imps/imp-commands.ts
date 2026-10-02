@@ -35,6 +35,9 @@ interface CreateImpInput {
   readonly cpuLimit?: number | null | undefined;
   readonly cpuWeight?: number | undefined;
 
+  // the networks it joins, by id, in the insert's transaction
+  readonly networkIds?: readonly string[] | undefined;
+
   // the disk's size: IMP_DEFAULT_DISK_GIB by default, the source's size for
   // a disk that prepareDisk makes
   readonly diskMib?: number | undefined;
