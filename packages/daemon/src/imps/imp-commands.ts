@@ -43,6 +43,15 @@ interface CreateImpInput {
 
   // a fork of a template copy that has not booted yet owes the reset too
   readonly isIdentityResetPending?: boolean;
+
+  // a move keeps the imp's id, and stages it marked `receiving`
+  readonly id?: string;
+  readonly moveState?: 'receiving';
+}
+
+interface DestroyOptions {
+  // the move's own destroy of an imp it marked
+  readonly isMove?: boolean;
 }
 
 // The imp API's commands. Each takes the imp's lock for its whole run.
@@ -55,7 +64,7 @@ export interface ImpCommands {
   // `force` ends the imp's leases from leases.*, which fail it with LEASED
   // otherwise (docs/guides/leases.md#sleep-and-stop)
   readonly stopImp: (name: string, force?: boolean) => Promise<Imp>;
-  readonly destroyImp: (name: string) => Promise<void>;
+  readonly destroyImp: (name: string, options?: DestroyOptions) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
   // snapshot memory to disk and stop Firecracker
@@ -109,7 +118,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       }
 
       const diskBytes = resolveDiskBytes(context, input, image);
-      const id = Bun.randomUUIDv7();
+      const id = input.id ?? Bun.randomUUIDv7();
 
       // a template's disk holds its source's machine-id and ssh host keys; a
       // fork keeps its source's, reset or not
@@ -281,33 +290,37 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(after);
       }),
 
-    destroyImp: async (name) => {
-      await lock.withImp(name, async (imp) => {
-        const paths = context.findPaths(imp.id);
+    destroyImp: async (name, options = {}) => {
+      await lock.withImp(
+        name,
+        async (imp) => {
+          const paths = context.findPaths(imp.id);
 
-        if (imp.pid !== null) {
-          await context.vms.stopVm(imp.pid, paths, false);
-        }
+          if (imp.pid !== null) {
+            await context.vms.stopVm(imp.pid, paths, false);
+          }
 
-        // the VM is gone: an empty cgroup can go
-        await context.cgroups.remove(imp.id);
-        await context.taps.removeTap(context.findAddress(imp.slot).tap);
+          // the VM is gone: an empty cgroup can go
+          await context.cgroups.remove(imp.id);
+          await context.taps.removeTap(context.findAddress(imp.slot).tap);
 
-        // out of the firewall before another imp can take the slot
-        await context.egress.releaseSlot(imp.slot);
+          // out of the firewall before another imp can take the slot
+          await context.egress.releaseSlot(imp.slot);
 
-        const checkpoints = await listCheckpoints(context.db, imp.id);
+          const checkpoints = await listCheckpoints(context.db, imp.id);
 
-        await removeImpFiles(
-          context,
-          imp.id,
-          checkpoints.map((checkpoint) => checkpoint.id),
-        );
+          await removeImpFiles(
+            context,
+            imp.id,
+            checkpoints.map((checkpoint) => checkpoint.id),
+          );
 
-        context.admission?.release(imp.id);
+          context.admission?.release(imp.id);
 
-        await removeImp(context.db, imp.id);
-      });
+          await removeImp(context.db, imp.id);
+        },
+        options,
+      );
     },
 
     readUrls: async (name) => {

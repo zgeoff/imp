@@ -67,6 +67,11 @@ const EnvSchema = z.object({
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
   IMP_DASHBOARD_DIR: z.string().optional(),
   IMP_TAILNET_IDENTITIES: z.string().optional(),
+
+  // moves between hosts (docs/guides/hosts.md#moves): the URL a source
+  // reaches this host's API at, and an e2e host's extra range off the tailnet
+  IMP_PEER_URL: z.url().optional(),
+  IMP_MOVE_TEST_CIDR: z.cidrv4().optional(),
   ...HttpsEnvSchema.shape,
   ...TailnetNamesEnvSchema.shape,
 });
@@ -180,6 +185,10 @@ export interface Config {
   // each imp's own name on the tailnet, as a Tailscale Service
   // (docs/guides/tailscale.md#per-imp-names); null unless IMP_TAILNET_NAMES=1
   readonly tailnetNames: TailnetNamesConfig | null;
+
+  // moves between hosts: null peerUrl uses the tailnet IP and the API port;
+  // testCidr, only on an e2e host, opens moves to one range off the tailnet
+  readonly moves: { readonly peerUrl: string | null; readonly testCidr: string | null };
 }
 
 function splitList(value: string): string[] {
@@ -239,6 +248,12 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
+  if (parsed.IMP_MOVE_TEST_CIDR !== undefined && parsed.IMP_E2E !== '1') {
+    throw new Error(
+      'IMP_MOVE_TEST_CIDR opens moves off the tailnet, and only an e2e host may set it',
+    );
+  }
+
   return {
     dataDir: parsed.IMP_DATA_DIR,
     apiPort: parsed.IMP_API_PORT,
@@ -282,6 +297,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     backup: loadBackupConfig(present),
     https,
     tailnetNames: parseTailnetNamesConfig(parsed, parsed.IMP_DATA_DIR, isTailnetNode),
+    moves: { peerUrl: parsed.IMP_PEER_URL ?? null, testCidr: parsed.IMP_MOVE_TEST_CIDR ?? null },
   };
 }
 

@@ -1,5 +1,6 @@
 import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
+import { findImpByName } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { Imps } from '../imps/imp-service';
 import { deriveSlotAddress } from '../net/addressing';
@@ -33,18 +34,7 @@ export function buildTailnetNames(options: BuildTailnetNamesOptions): TailnetNam
     serve: createServiceServe(),
     findPort: (slot) => deriveSlotAddress(slot, options.config).tailnetPort,
 
-    // under the imp's lock: a create or destroy of the name finishes first
-    isImpPresent: async (name) => {
-      try {
-        return await options.imps.lockImp(name, () => Promise.resolve(true));
-      } catch (error) {
-        if (error instanceof ORPCError && error.code === 'NOT_FOUND') {
-          return false;
-        }
-
-        throw error;
-      }
-    },
+    isImpPresent: createPresenceCheck(options.imps, options.db),
     readSuffix: async () => {
       const status = await options.readTailscale();
 
@@ -54,4 +44,29 @@ export function buildTailnetNames(options: BuildTailnetNamesOptions): TailnetNam
     },
     log: options.log,
   });
+}
+
+// Under the imp's lock: a create or destroy of the name finishes first. An
+// imp the target holds a verified copy of is not this host's any more.
+export function createPresenceCheck(
+  imps: Pick<Imps, 'lockImp'>,
+  db: ImpDatabase,
+): (name: string) => Promise<boolean> {
+  return async (name) => {
+    try {
+      return await imps.lockImp(name, () => Promise.resolve(true));
+    } catch (error) {
+      if (error instanceof ORPCError && error.code === 'NOT_FOUND') {
+        return false;
+      }
+
+      if (error instanceof ORPCError && error.code === 'MOVING') {
+        const imp = await findImpByName(db, name);
+
+        return imp !== undefined && imp.moveState !== 'moved';
+      }
+
+      throw error;
+    }
+  };
 }

@@ -87,6 +87,7 @@
               "ReadableStream",
               "Headers",
               "Request",
+              "Response",
               "Blob"
             ],
             "package": "bun-types"

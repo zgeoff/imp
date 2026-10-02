@@ -18,7 +18,7 @@ Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                            |
 | `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`. |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, networks, backups, `imp gc`, and tokens.                                              |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move`, on both hosts. Host-wide: images, secrets and grants, networks, backups, `imp gc`, and tokens.                   |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses
@@ -69,14 +69,15 @@ it asked for that are not used yet.
 
 ## Each way in
 
-| Way in                   | Runs as                                                          |
-| ------------------------ | ---------------------------------------------------------------- |
-| `Authorization: Bearer`  | the token                                                        |
-| Dashboard session cookie | the token it logged in with; the audit log says `dashboard`      |
-| Exec ticket              | the caller that asked for it; it opens its one imp only          |
-| `/exec`, `/tunnel`       | a token or a tailnet identity; each start or tunnel needs `exec` |
-| SSH key                  | the key; see below                                               |
-| Tailnet peer             | the identity a rule gives it; see below                          |
+| Way in                   | Runs as                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `Authorization: Bearer`  | the token                                                                              |
+| Dashboard session cookie | the token it logged in with; the audit log says `dashboard`                            |
+| Exec ticket              | the caller that asked for it; it opens its one imp only                                |
+| `/exec`, `/tunnel`       | a token or a tailnet identity; each start or tunnel needs `exec`                       |
+| SSH key                  | the key; see below                                                                     |
+| Tailnet peer             | the identity a rule gives it; see below                                                |
+| Move ticket              | nothing but its one move's `/move/*` steps ([moves](../architecture/moves.md#tickets)) |
 
 A wrong bearer token is refused outright: it never falls through to the cookie or the tailnet. An
 `/exec` or `/tunnel` socket that a token without `exec` opens is accepted, and each start on it

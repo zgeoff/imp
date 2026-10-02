@@ -456,19 +456,22 @@ the epoch.
 
 The migrations, in order:
 
-| Migration                   | What it adds                                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                          |
-| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                              |
-| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                           |
-| `004_add_api_audit`         | `api_audit`                                                                                                 |
-| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB              |
-| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                        |
-| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                |
-| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                              |
-| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                    |
-| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies |
-| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps         |
+| Migration                   | What it adds                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                                 |
+| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                                     |
+| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                                  |
+| `004_add_api_audit`         | `api_audit`                                                                                                        |
+| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB                     |
+| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                               |
+| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                       |
+| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                                     |
+| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                           |
+| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies        |
+| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps                |
+| `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                     |
+| `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy` |
+| `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                     |
 
 ### Other modules
 

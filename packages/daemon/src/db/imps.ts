@@ -1,5 +1,12 @@
 import { PublicAuthSchema } from '@imp/api';
-import type { EgressPolicy, ImpChangeReason, ImpEventDetail, ImpState, PublicAuth } from '@imp/api';
+import type {
+  EgressPolicy,
+  ImpChangeReason,
+  ImpEventDetail,
+  ImpState,
+  MoveState,
+  PublicAuth,
+} from '@imp/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
@@ -40,6 +47,9 @@ export interface ImpRecord {
   // an imp from a template, not yet booted with its own machine-id and ssh
   // host keys (docs/guides/templates.md#identity)
   readonly isIdentityResetPending: boolean;
+
+  // set while the imp moves between hosts (moves/)
+  readonly moveState: MoveState | null;
 }
 
 // cores the VM may use (null: no limit) and its cgroup cpu.weight
@@ -71,6 +81,9 @@ export interface NewImp {
   // the networks it joins, in the insert's transaction: its first firewall
   // has them
   readonly networkIds?: readonly string[];
+
+  // a move stages the imp marked
+  readonly moveState?: MoveState;
 }
 
 export interface ImpStateChange {
@@ -144,6 +157,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
         egress_allow: JSON.stringify(imp.egress.allow),
       }),
       ...(imp.cpu !== undefined && { cpu_limit: imp.cpu.limit, cpu_weight: imp.cpu.weight }),
+      ...(imp.moveState !== undefined && { move_state: imp.moveState }),
       created_at: now,
       last_active_at: now,
     })
@@ -336,6 +350,26 @@ export async function updateImpSettings(
   return imp;
 }
 
+// sets or clears the move mark (moves/); the change goes out as `updated`
+export async function updateImpMove(
+  db: ImpDatabase,
+  id: string,
+  moveState: MoveState | null,
+): Promise<ImpRecord> {
+  const row = await db
+    .updateTable('imps')
+    .set({ move_state: moveState })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const imp = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
+
+  return imp;
+}
+
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {
   await db.updateTable('imps').set({ last_active_at: at.getTime() }).where('id', '=', id).execute();
 }
@@ -486,6 +520,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     awakeSince: toDate(row.awake_since),
     isIdentityResetPending: row.identity_reset_pending === 1,
     publicAuth: readPublicAuth(row),
+    moveState: row.move_state,
   };
 }
 

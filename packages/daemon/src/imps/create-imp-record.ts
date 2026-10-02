@@ -20,6 +20,7 @@ interface NewImpInput {
   readonly cpuWeight?: number | undefined;
   readonly isIdentityResetPending?: boolean;
   readonly networkIds?: readonly string[] | undefined;
+  readonly moveState?: 'receiving' | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -47,6 +48,7 @@ export async function createImpRecord(
         ...(input.policy !== undefined && { egress: input.policy }),
         ...(input.networkIds !== undefined && { networkIds: input.networkIds }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
+        ...(input.moveState !== undefined && { moveState: input.moveState }),
         cpu,
         ...(input.isIdentityResetPending === true && { isIdentityResetPending: true }),
       },

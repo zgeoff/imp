@@ -1,7 +1,7 @@
 import { Resolver } from 'node:dns/promises';
 import type { EgressPolicy } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { buildNotFoundError } from '../api-errors';
+import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { REFUSED_RANGES } from '../broker/tunnel-target';
 import type { Config } from '../config';
 import { listEgressSlots, readEgressPolicy, writeEgressPolicy } from '../db/egress';
@@ -528,6 +528,11 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
         if (imp === undefined || previous === undefined) {
           throw buildNotFoundError('imp', name);
+        }
+
+        // a send carries the policy it read at its start
+        if (imp.moveState !== null) {
+          throw buildMovingError(name);
         }
 
         await writeEgressPolicy(deps.db, imp.id, policy);

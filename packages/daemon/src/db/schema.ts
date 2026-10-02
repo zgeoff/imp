@@ -1,4 +1,4 @@
-import type { ApiActor, ImageSource, ImpState, Scope } from '@imp/api';
+import type { ApiActor, ImageSource, ImpState, MoveState, Scope } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -71,6 +71,9 @@ interface ImpsTable {
   public_auth: string | null;
   public_user: string | null;
   public_hash: string | null;
+
+  // set while the imp moves between hosts: nothing wakes or changes it
+  move_state: MoveState | null;
 }
 
 interface CheckpointsTable {
@@ -182,6 +185,39 @@ export interface ImpLeasesTable {
   created_at: number;
 }
 
+// The target's side of a move: one receive ticket. Only the ticket's sha256
+// is kept. The stream must start by stream_by; the commit is good until
+// commit_until, set at the receipt.
+interface MoveTicketsTable {
+  id: string;
+  secret_sha256: string;
+  name: string;
+  bytes: number;
+
+  // the imp the stream staged, once it started
+  imp_id: string | null;
+  issued_at: number;
+  stream_by: number;
+  stream_used_at: number | null;
+
+  // the receipt as sent, JSON
+  receipt: string | null;
+  commit_until: number | null;
+  committed_at: number | null;
+}
+
+// The source's side of a move: the target's URL and ticket, kept so a
+// restart can finish the commit, and the receipt once it came
+interface MoveSendsTable {
+  imp_id: string;
+  peer_url: string | null;
+  ticket: string | null;
+  total_bytes: number;
+  receipt: string | null;
+  error: string | null;
+  created_at: number;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -195,4 +231,6 @@ export interface DatabaseSchema {
   networks: NetworksTable;
   network_members: NetworkMembersTable;
   imp_leases: ImpLeasesTable;
+  move_tickets: MoveTicketsTable;
+  move_sends: MoveSendsTable;
 }

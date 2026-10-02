@@ -104,6 +104,16 @@ export { IMP_ERRORS } from './imp-errors';
 export { ImpSchema, ImpStateSchema } from './imp-schema';
 export type { Imp, ImpState, OutdatedPart } from './imp-schema';
 export { CONSOLE_SHELL } from './login-shell';
+
+export {
+  MovePlanSchema,
+  MoveStateSchema,
+  MoveStatusSchema,
+  MoveTicketSchema,
+  PeerUrlSchema,
+} from './move-schema';
+
+export type { MovePlan, MoveState, MoveStatus, MoveTicket } from './move-schema';
 export { NameSchema } from './name-schema';
 export { NetworkJoinSchema, NetworkSchema } from './network-schema';
 export type { Network, NetworkJoin } from './network-schema';
