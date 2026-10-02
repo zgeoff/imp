@@ -38,7 +38,7 @@ type viewer struct {
 	conn net.Conn
 	w    *proto.Writer
 
-	mu     sync.Mutex
+	mu    sync.Mutex
 	queue []frame
 	// queued counts the bytes in queue and in the batch being written.
 	queued int
