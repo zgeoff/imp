@@ -86,3 +86,39 @@ iptables -t raw -S PREROUTING | grep imp-egress-dns
     ]);
   },
 );
+
+test.skipIf(!canUnshare)(
+  'with an IPv6 uplink, guests get NDP to the host, forwarding out and nothing unasked in',
+  () => {
+    const out = runInNetns(`${UPLINK}
+ip -6 addr add 2001:db8:a::2/64 dev up0 nodad
+ip -6 route add default via 2001:db8:a::1
+IMP_UPLINK_MTU=1280 bash "$SETUP_NET" >/dev/null
+IMP_UPLINK_MTU=1280 bash "$SETUP_NET" >/dev/null
+ip6tables -S INPUT | grep imp+
+ip6tables -S FORWARD | grep imp+
+ip6tables -t raw -S PREROUTING | grep imp+
+ip6tables -t mangle -S FORWARD | grep imp+
+sysctl -n net.ipv6.conf.up0.accept_ra net.ipv6.conf.default.accept_ra net.ipv6.conf.default.accept_redirects net.ipv6.conf.all.forwarding
+`);
+
+    expect(out.trim().split('\n')).toEqual([
+      '-A INPUT -i imp+ -p ipv6-icmp -m icmp6 --icmpv6-type 136 -m hl --hl-eq 255 -j ACCEPT',
+      '-A INPUT -i imp+ -p ipv6-icmp -m icmp6 --icmpv6-type 135 -m hl --hl-eq 255 -j ACCEPT',
+      '-A INPUT -i imp+ -p ipv6-icmp -m icmp6 --icmpv6-type 133 -m hl --hl-eq 255 -j ACCEPT',
+      '-A INPUT -i imp+ -j DROP',
+      '-A FORWARD -i imp+ -o imp+ -j DROP',
+      '-A FORWARD -i imp+ -o up0 -j ACCEPT',
+      '-A FORWARD -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT',
+      '-A FORWARD -o imp+ -j DROP',
+      '-A FORWARD -i imp+ -j DROP',
+      '-A PREROUTING -i imp+ -m rpfilter --invert -j DROP',
+      '-A FORWARD -i imp+ -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220',
+      '-A FORWARD -o imp+ -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220',
+      '2',
+      '0',
+      '0',
+      '1',
+    ]);
+  },
+);

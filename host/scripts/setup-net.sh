@@ -39,10 +39,46 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 # connections (impd's proxy dials into guests).
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
-# The taps get IPv6 link-local addresses, which the rules above do not cover.
-# Guests get no IPv6 to the host at all.
-if ip6tables -S INPUT >/dev/null 2>&1; then
-  ip6tables -C INPUT -i imp+ -j DROP 2>/dev/null || ip6tables -A INPUT -i imp+ -j DROP
+# IPv6 (docs/architecture/networking.md#ipv6). impd decides at start whether
+# imps get it; these rules hold either way. Guests reach the host container
+# over IPv6 only for neighbour discovery with the gateway fe80::1.
+rule6() {
+  local table=$1 chain=$2
+  shift 2
+  ip6tables -t "$table" -C "$chain" "$@" 2>/dev/null || ip6tables -t "$table" -A "$chain" "$@"
+}
+out6=
+if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
+  out6=$(ip -6 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  # Forwarding stops every interface taking router advertisements, unless
+  # accept_ra=2: the uplink keeps its own. Taps take none, and no redirects.
+  if [ -n "$out6" ]; then
+    sysctl -qw "net.ipv6.conf.$out6.accept_ra=2"
+  fi
+  sysctl -qw net.ipv6.conf.default.accept_ra=0 net.ipv6.conf.default.accept_redirects=0
+  sysctl -qw net.ipv6.conf.all.forwarding=1
+
+  # Router and neighbour solicitations and neighbour adverts, as only a
+  # neighbour sends them (hop limit 255); never adverts or redirects.
+  for type in 133 135 136; do
+    ip6tables -C INPUT -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT 2>/dev/null \
+      || ip6tables -I INPUT 1 -i imp+ -p ipv6-icmp --icmpv6-type "$type" -m hl --hl-eq 255 -j ACCEPT
+  done
+  rule6 filter INPUT -i imp+ -j DROP
+
+  # No imp-to-imp traffic and nothing unasked in; out only by the uplink.
+  # Replies, packet-too-big among them, come back as RELATED.
+  rule6 filter FORWARD -i imp+ -o imp+ -j DROP
+  if [ -n "$out6" ]; then
+    rule6 filter FORWARD -i imp+ -o "$out6" -j ACCEPT
+  fi
+  rule6 filter FORWARD -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  rule6 filter FORWARD -o imp+ -j DROP
+  rule6 filter FORWARD -i imp+ -j DROP
+
+  # the reverse-path check, as for IPv4: an imp sends only from its /128
+  # (and link-local, which its tap's own fe80::/64 route passes)
+  rule6 raw PREROUTING -i imp+ -m rpfilter --invert -j DROP
 else
   echo "setup-net: no ip6tables; guest IPv6 to the host is not filtered" >&2
 fi
@@ -124,5 +160,16 @@ fi
 for dir in -i -o; do
   rule mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp[@]}"
 done
+# IPv6's header is 20 bytes longer
+if [ -n "$out6" ]; then
+  if [ -n "${IMP_UPLINK_MTU:-}" ]; then
+    clamp6=(--set-mss $((IMP_UPLINK_MTU - 60)))
+  else
+    clamp6=(--clamp-mss-to-pmtu)
+  fi
+  for dir in -i -o; do
+    rule6 mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp6[@]}"
+  done
+fi
 
-echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]}, broker :$broker_port, dns :$dns_port)"
+echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]}, broker :$broker_port, dns :$dns_port)${out6:+; IPv6 via $out6}"
