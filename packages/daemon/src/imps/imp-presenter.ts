@@ -23,6 +23,14 @@ export interface ImpUrls {
   readonly tailnet: string | null;
 }
 
+// the live leases each presented imp was shown with, by the object itself:
+// the router names their owners per caller without a second read
+const presentedLeases = new WeakMap<Imp, readonly LeaseRecord[]>();
+
+export function readPresentedLeases(imp: Imp): readonly LeaseRecord[] | undefined {
+  return presentedLeases.get(imp);
+}
+
 // Imp records as the API shows them; the URLs follow
 // docs/architecture/networking.md#urls.
 export interface ImpPresenter {
@@ -134,7 +142,11 @@ export function createImpPresenter(
       api.agentSilentSince = silentSince;
     }
 
-    return { ...api, ...readBootStatus(imp, paths, context.identity) };
+    const shown = { ...api, ...readBootStatus(imp, paths, context.identity) };
+
+    presentedLeases.set(shown, leases);
+
+    return shown;
   };
 
   return {

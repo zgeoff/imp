@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { buildLeasedError } from '../api-errors';
 import type { LeaseRecord } from '../db/leases';
-import { toCallerError, toLeaseSummary } from './caller-view';
+import { requireLeaseHolder, toCallerError, toLeaseSummary } from './caller-view';
 import { buildTestCaller } from './test-callers';
 
 const AT = new Date(1_800_000_000_000);
@@ -59,4 +59,25 @@ test('an error with nothing to hide passes as it is', () => {
   const error = new Error('boom');
 
   expect(toCallerError(error, buildTestCaller())).toBe(error);
+});
+
+test('a caller with no principal holds no lease, and sees no owner as its own', () => {
+  const node = buildTestCaller({ kind: 'tailnet', name: 'runner', principal: null, scope: 'exec' });
+  let refusal: unknown = null;
+
+  try {
+    requireLeaseHolder(node);
+  } catch (error) {
+    refusal = error;
+  }
+
+  expect(refusal).toMatchObject({ code: 'FORBIDDEN' });
+  expect(String(refusal)).toContain('cannot hold a lease');
+
+  expect(requireLeaseHolder(buildTestCaller())).toEqual({
+    principal: 'token:test-token-id',
+    display: 'test',
+  });
+
+  expect(toLeaseSummary(node, 'dev', LEASES)).toEqual({ leases: [], otherCount: 3 });
 });

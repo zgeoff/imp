@@ -1,8 +1,8 @@
 import type { Lease, LeaseSummary } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { readCallerData } from '../api-errors';
+import { buildForbiddenError, readCallerData } from '../api-errors';
 import type { LeaseRecord } from '../db/leases';
-import { isCallerAllowed } from './caller';
+import { formatCaller, isCallerAllowed } from './caller';
 import type { Caller } from './caller';
 import { hasScope } from './scopes';
 
@@ -13,6 +13,21 @@ import { hasScope } from './scopes';
 // a caller with host-wide manage sees every owner; any other its own
 function canSeeEveryOwner(caller: Readonly<Caller>): boolean {
   return caller.imps === null && hasScope(caller.scope, 'manage');
+}
+
+// who the caller's leases belong to; FORBIDDEN for a caller impd cannot
+// name for good, such as a tagged node whose whois has no stable ID
+export function requireLeaseHolder(caller: Readonly<Caller>): {
+  readonly principal: string;
+  readonly display: string;
+} {
+  if (caller.principal === null) {
+    throw buildForbiddenError(
+      `${formatCaller(caller)} has no stable identity, so it cannot hold a lease; use a token`,
+    );
+  }
+
+  return { principal: caller.principal, display: caller.display };
 }
 
 export function toApiLease(name: string, lease: Readonly<LeaseRecord>): Lease {

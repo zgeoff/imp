@@ -23,8 +23,9 @@ export interface Caller {
   readonly expiresAt: number | null;
 
   // who owns the leases it takes (docs/guides/leases.md#owners); a token
-  // through the API, a dashboard session and a key bound to it are one
-  readonly principal: string;
+  // through the API, a dashboard session and a key bound to it are one.
+  // Null for a caller impd cannot name for good, which holds no lease.
+  readonly principal: string | null;
 
   // the principal as a person reads it: the token's name, the key's comment
   // or the node's name
