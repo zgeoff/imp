@@ -1623,7 +1623,7 @@ ensure_tailscale() {
   wait_for "the tailnet node to be Running" 180 tailscale_running
   # An older image skips tailscaled without a key, which would take the
   # node off the tailnet at its next start.
-  if [ "$(docker inspect -f '{{index .Config.Labels "imp.tailscale-keyless"}}' imp-host)" != 1 ]; then
+  if [ "$(docker container inspect -f '{{index .Config.Labels "imp.tailscale-keyless"}}' imp-host)" != 1 ]; then
     warn "this imp-host image needs TAILSCALE_AUTHKEY at every start; the key stays in $ENV_FILE"
     return 0
   fi

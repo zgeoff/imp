@@ -289,7 +289,7 @@ pkgs.testers.runNixOSTest {
 
       with subtest("the key is never in the env, argv, the log or the store's env file"):
           host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
-          host.fail("docker inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")
+          host.fail("docker container inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")
           host.fail("grep -qF ${fakeKey} ${stateDir}/fake-up.log ${stateDir}/up.out")
           host.fail("journalctl -b --no-pager | grep -qF ${fakeKey}")
 
@@ -297,7 +297,7 @@ pkgs.testers.runNixOSTest {
           host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /etc/imp/imp-host.env")
           host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /etc/imp/imp-host.env")
           host.fail("grep -qF ${fakeBackupPassword} /etc/imp/imp-host.env")
-          host.fail("docker inspect imp-host | grep -qF ${fakeBackupPassword}")
+          host.fail("docker container inspect imp-host | grep -qF ${fakeBackupPassword}")
           host.fail("journalctl -b --no-pager | grep -qF ${fakeBackupPassword}")
           assert host.succeed("docker exec imp-host cat /run/imp/backup-password").strip() == "${fakeBackupPassword}"
           host.fail("docker exec imp-host sh -c 'echo x > /run/imp/backup-password'")
@@ -327,7 +327,7 @@ pkgs.testers.runNixOSTest {
           host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
           info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
           assert info == "true br-imphost", info
-          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
           assert list(nets) == ["imp-host"], list(nets)
           host.succeed("docker exec imp-host ip -6 route show default | grep -q via")
 
@@ -375,14 +375,14 @@ pkgs.testers.runNixOSTest {
           start_imp_host()
           host.succeed("grep -qx IMP_HOST_IPV6=off /etc/imp/imp-host.env")
           host.fail("docker network inspect imp-host")
-          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
           assert list(nets) == ["bridge"], list(nets)
           host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
           start_imp_host()
           host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
           info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
           assert info == "true br-imphost", info
-          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          nets = json.loads(host.succeed("docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
           assert list(nets) == ["imp-host"], list(nets)
           host.succeed(ssh_from(container, own6))
 
