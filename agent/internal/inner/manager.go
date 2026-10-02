@@ -26,22 +26,28 @@ const (
 	ExecCgroupDir = CgroupDir + "/exec"
 )
 
-// Restarts after the container dies: 1 s doubling to 30 s, and at most
-// maxRestarts in restartWindow. After `rm -rf /` every start fails, and the
-// container stays down until the next boot.
+// Restarts after the container dies: 1 s doubling to 30 s. A start that
+// fails, or a container that dies within stableAfter of its start, is a bad
+// start; after more than maxBadStarts in restartWindow the agent gives up
+// until the next boot. After `rm -rf /` every start fails.
 const (
 	minBackoff    = time.Second
 	maxBackoff    = 30 * time.Second
-	maxRestarts   = 5
+	maxBadStarts  = 5
 	restartWindow = 10 * time.Minute
+	stableAfter   = time.Minute
 	killWait      = 5 * time.Second
 )
 
 // Manager runs the inner container and starts it again when it dies. It is
 // the agent's proc.Runner for user processes.
 type Manager struct {
-	reaper *reaper.Reaper
-	cfg    Config
+	cfg       Config
+	cgroupDir string
+	// startInit starts one inner init, and rootOf names its root: a fork
+	// and /proc/<pid>/root, or a spawner in the test's own process
+	startInit func(cgroup *os.File) (*initProc, error)
+	rootOf    func(pid int) string
 
 	mu      sync.Mutex
 	current *client
@@ -50,26 +56,39 @@ type Manager struct {
 	rootMu   sync.RWMutex
 	root     *fsroot.Root
 	restarts int
-	starts   []time.Time
+	bad      badStarts
 	lastErr  string
 	stopped  bool
 	onDown   []func()
 	onUp     []func()
+	// watching counts the watch goroutines, which Stop waits for; stopCh
+	// ends a restart's backoff
+	watching sync.WaitGroup
+	stopCh   chan struct{}
 }
 
-// Start sets up the container's cgroup and starts the container. A first
-// start that fails leaves the agent up, the container down, and the
-// restarts going.
-func Start(r *reaper.Reaper, cfg Config) *Manager {
-	m := &Manager{reaper: r, cfg: cfg}
+// New makes the container's manager; Launch starts it.
+func New(r *reaper.Reaper, cfg Config) *Manager {
+	return &Manager{
+		stopCh:    make(chan struct{}),
+		cfg:       cfg,
+		cgroupDir: CgroupDir,
+		startInit: func(cgroup *os.File) (*initProc, error) {
+			return startInit(r, AgentBinary,
+				syscall.CLONE_NEWNS|syscall.CLONE_NEWPID|syscall.CLONE_NEWCGROUP, cgroup, cfg.env())
+		},
+		rootOf: func(pid int) string { return fmt.Sprintf("/proc/%d/root", pid) },
+	}
+}
+
+// Launch starts the container. A first start that fails leaves the agent
+// up, the container down, and the restarts going. The hooks must be set
+// before.
+func (m *Manager) Launch() {
 	if err := m.startOnce(); err != nil {
 		log.Printf("inner: %v", err)
-		m.mu.Lock()
-		m.lastErr = err.Error()
-		m.mu.Unlock()
 		safe.Go("inner: restart", m.restartLoop, nil)
 	}
-	return m
 }
 
 // OnDown runs fn each time the container dies, before it starts again: for
@@ -81,42 +100,51 @@ func (m *Manager) OnDown(fn func()) {
 }
 
 // OnUp runs fn each time a container starts after the first: for its
-// services.
+// files and services.
 func (m *Manager) OnUp(fn func()) {
 	m.mu.Lock()
 	m.onUp = append(m.onUp, fn)
 	m.mu.Unlock()
 }
 
-// startOnce starts one container and watches it.
+// startOnce starts one container and watches it. A failed start counts as
+// a bad one.
 func (m *Manager) startOnce() error {
-	m.mu.Lock()
-	m.starts = append(m.starts, time.Now())
-	m.mu.Unlock()
-	cg, err := os.Open(CgroupDir)
+	err := m.tryStart()
 	if err != nil {
-		return fmt.Errorf("open %s: %w", CgroupDir, err)
+		m.mu.Lock()
+		m.bad.add(time.Now())
+		m.lastErr = err.Error()
+		m.mu.Unlock()
+	}
+	return err
+}
+
+func (m *Manager) tryStart() error {
+	// what a container left behind (a cgroup that outlived the last wait,
+	// say) must not fail this one
+	m.cleanCgroup()
+	cg, err := os.Open(m.cgroupDir)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", m.cgroupDir, err)
 	}
 	defer cg.Close()
-	p, err := startInit(m.reaper, AgentBinary,
-		syscall.CLONE_NEWNS|syscall.CLONE_NEWPID|syscall.CLONE_NEWCGROUP, cg, m.cfg.env())
+	p, err := m.startInit(cg)
 	if err != nil {
 		return err
 	}
 	c, err := connect(p)
 	if err != nil {
-		p.kill()
-		cleanCgroup()
+		m.cleanCgroup()
 		return err
 	}
-	root, err := fsroot.Open(fmt.Sprintf("/proc/%d/root", p.pid))
+	root, err := fsroot.Open(m.rootOf(p.pid))
 	if err != nil {
 		c.shut()
 		p.kill()
-		cleanCgroup()
+		m.cleanCgroup()
 		return fmt.Errorf("open the container's root: %w", err)
 	}
-	p.watchExit()
 	m.rootMu.Lock()
 	m.root = root
 	m.rootMu.Unlock()
@@ -125,10 +153,15 @@ func (m *Manager) startOnce() error {
 	stopped := m.stopped
 	m.mu.Unlock()
 	log.Printf("inner: up, init pid %d", p.pid)
-	safe.Go("inner: watch", func() { m.watch(c, p) }, nil)
+	started := time.Now()
+	m.watching.Add(1)
+	safe.Go("inner: watch", func() {
+		defer m.watching.Done()
+		m.watch(c, p, started)
+	}, nil)
 	if stopped {
 		// a Stop ran during the start and missed this init
-		m.kill(p)
+		p.kill()
 	}
 	return nil
 }
@@ -136,7 +169,7 @@ func (m *Manager) startOnce() error {
 // watch waits for the container to end: its init dying, or its socket
 // closing, after which the init is killed. Either way every process in it
 // goes with its PID namespace.
-func (m *Manager) watch(c *client, p *initProc) {
+func (m *Manager) watch(c *client, p *initProc, started time.Time) {
 	select {
 	case <-p.gone:
 		log.Printf("inner: the init died (%s)", describe(p.status))
@@ -144,26 +177,24 @@ func (m *Manager) watch(c *client, p *initProc) {
 	case <-c.Down():
 		log.Printf("inner: the socket closed")
 	}
-	m.kill(p)
-	cleanCgroup()
+	p.kill()
+	m.cleanCgroup()
 	m.mu.Lock()
-	mine := m.current == c
-	if mine {
+	if m.current == c {
 		m.current, m.init = nil, nil
 	}
-	m.mu.Unlock()
-	if mine {
-		m.rootMu.Lock()
-		if m.root != nil {
-			m.root.Close()
-			m.root = nil
-		}
-		m.rootMu.Unlock()
+	if time.Since(started) < stableAfter {
+		m.bad.add(time.Now())
 	}
-	m.mu.Lock()
 	stopped := m.stopped
 	downs := append([]func(){}, m.onDown...)
 	m.mu.Unlock()
+	m.rootMu.Lock()
+	if m.root != nil {
+		m.root.Close()
+		m.root = nil
+	}
+	m.rootMu.Unlock()
 	for _, fn := range downs {
 		safe.Call("inner: on down", fn)
 	}
@@ -172,13 +203,26 @@ func (m *Manager) watch(c *client, p *initProc) {
 	}
 }
 
-// kill kills p once; watch and Stop both may.
-func (m *Manager) kill(p *initProc) {
-	p.killOnce.Do(p.kill)
+// badStarts holds the times of bad starts within restartWindow.
+type badStarts []time.Time
+
+func (b *badStarts) add(t time.Time) { *b = append(*b, t) }
+
+// exhausted drops the starts older than restartWindow and reports whether
+// more than maxBadStarts remain.
+func (b *badStarts) exhausted(now time.Time) bool {
+	kept := (*b)[:0]
+	for _, t := range *b {
+		if now.Sub(t) < restartWindow {
+			kept = append(kept, t)
+		}
+	}
+	*b = kept
+	return len(kept) > maxBadStarts
 }
 
 // restartLoop starts the container again with backoff, until it is up, the
-// manager stops, or the restarts in the window run out.
+// manager stops, or the bad starts in the window run out.
 func (m *Manager) restartLoop() {
 	backoff := minBackoff
 	for {
@@ -187,21 +231,19 @@ func (m *Manager) restartLoop() {
 			m.mu.Unlock()
 			return
 		}
-		recent := 0
-		for _, t := range m.starts {
-			if time.Since(t) < restartWindow {
-				recent++
-			}
-		}
-		if recent > maxRestarts {
-			m.lastErr = fmt.Sprintf("gave up after %d starts in %s: %s", recent, restartWindow, m.lastErr)
+		if m.bad.exhausted(time.Now()) {
+			m.lastErr = fmt.Sprintf("gave up after %d bad starts in %s: %s", len(m.bad), restartWindow, m.lastErr)
 			log.Printf("inner: %s", m.lastErr)
 			m.mu.Unlock()
 			return
 		}
 		m.mu.Unlock()
 
-		time.Sleep(backoff)
+		select {
+		case <-time.After(backoff):
+		case <-m.stopCh:
+			return
+		}
 		backoff = min(backoff*2, maxBackoff)
 
 		m.mu.Lock()
@@ -213,9 +255,6 @@ func (m *Manager) restartLoop() {
 		m.mu.Unlock()
 		if err := m.startOnce(); err != nil {
 			log.Printf("inner: restart: %v", err)
-			m.mu.Lock()
-			m.lastErr = err.Error()
-			m.mu.Unlock()
 			continue
 		}
 		m.mu.Lock()
@@ -267,12 +306,16 @@ func (m *Manager) InitPid() int {
 // a poweroff.
 func (m *Manager) Stop() {
 	m.mu.Lock()
+	if !m.stopped {
+		close(m.stopCh)
+	}
 	m.stopped = true
 	p := m.init
 	m.mu.Unlock()
 	if p != nil {
-		m.kill(p)
+		p.kill()
 	}
+	m.watching.Wait()
 }
 
 // Root is the current container's root, for the user's files. It answers
@@ -301,20 +344,20 @@ func (c Config) env() []string {
 // does not use cgroup.kill: on the guest kernel (6.1) a clone3 with
 // CLONE_INTO_CGROUP into a cgroup that was once killed got SIGKILL before it
 // could exec. The init's death ends every process in the namespace instead.
-func cleanCgroup() {
+func (m *Manager) cleanCgroup() {
 	deadline := time.Now().Add(killWait)
-	for populated() && time.Now().Before(deadline) {
+	for populated(m.cgroupDir) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if populated() {
+	if populated(m.cgroupDir) {
 		log.Printf("inner: processes outlived the init by %s", killWait)
 		return
 	}
-	removeChildren(CgroupDir)
-	if err := os.Mkdir(ExecCgroupDir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+	removeChildren(m.cgroupDir)
+	if err := os.Mkdir(filepath.Join(m.cgroupDir, "exec"), 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		log.Printf("inner: %v", err)
 	}
-	disableControllers(CgroupDir)
+	disableControllers(m.cgroupDir)
 }
 
 // disableControllers clears what the last init enabled in dir's
@@ -337,8 +380,8 @@ func disableControllers(dir string) {
 	}
 }
 
-func populated() bool {
-	b, err := os.ReadFile(CgroupDir + "/cgroup.events")
+func populated(dir string) bool {
+	b, err := os.ReadFile(dir + "/cgroup.events")
 	if err != nil {
 		return false
 	}
