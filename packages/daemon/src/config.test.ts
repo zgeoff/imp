@@ -39,6 +39,7 @@ test('it fills every setting from its default when the env is empty', () => {
     dashboardDir: null,
     backup: null,
     https: null,
+    tailnetNames: null,
   });
 });
 
@@ -203,4 +204,27 @@ test('it refuses an imp subnet that overlaps the tailnet', () => {
   expect(() => loadConfig({ IMP_SUBNET: '100.100.0.0/16' })).toThrow('overlaps');
   expect(() => loadConfig({ IMP_SUBNET: '100.127.240.0/20' })).toThrow('overlaps');
   expect(loadConfig({ IMP_SUBNET: '100.128.0.0/16' }).subnet.prefixLength).toBe(16);
+});
+
+test('tailnet names need the tailnet, and keep the OAuth file in the data dir by default', () => {
+  expect(() => loadConfig({ IMP_TAILNET_NAMES: '1' })).toThrow('needs the host on the tailnet');
+
+  const config = loadConfig({
+    IMP_DATA_DIR: '/tmp/imp',
+    TAILSCALE_AUTHKEY: 'tskey-auth-test',
+    IMP_TAILNET_NAMES: '1',
+  });
+
+  expect(config.tailnetNames).toEqual({
+    prefix: '',
+    oauthFile: '/tmp/imp/tailnet-names/oauth.json',
+  });
+
+  expect(() =>
+    loadConfig({
+      TAILSCALE_AUTHKEY: 'tskey-auth-test',
+      IMP_TAILNET_NAMES: '1',
+      IMP_TAILNET_NAME_PREFIX: 'Imp_',
+    }),
+  ).toThrow('IMP_TAILNET_NAME_PREFIX');
 });

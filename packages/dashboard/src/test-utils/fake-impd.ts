@@ -131,6 +131,7 @@ export function createFakeImpd(): FakeImpd {
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
         https: null,
+        service: null,
         tailnet: null,
       })),
       policy: os.imps.policy.handler(() => ({ mode: 'open' as const, allow: [] })),
@@ -437,6 +438,6 @@ function buildSystemInfo(): SystemInfo {
       isLow: false,
       impDiskBytes: 0,
     },
-    tailscale: { enabled: false, state: null, hostname: null, ip: null },
+    tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
   };
 }

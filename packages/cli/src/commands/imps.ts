@@ -134,7 +134,8 @@ export const holdCommand = defineCommand({
 export const urlCommand = defineCommand({
   meta: {
     name: 'url',
-    description: "Print an imp's URLs: https first when HTTPS is on, then local and tailnet",
+    description:
+      "Print an imp's URLs: https first when HTTPS is on, then its tailnet name, local and tailnet",
   },
   args: { name: nameArg },
   run: (context) =>
@@ -143,6 +144,10 @@ export const urlCommand = defineCommand({
 
       if (urls.https !== null) {
         console.log(urls.https);
+      }
+
+      if (urls.service !== null) {
+        console.log(urls.service);
       }
 
       console.log(urls.local);

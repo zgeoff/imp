@@ -43,6 +43,8 @@ import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { createStorageGate } from './storage/storage-gate';
 import { createStorageGc } from './storage/storage-gc';
+import { buildTailnetNames } from './tailnet-names/build-tailnet-names';
+import type { TailnetNames } from './tailnet-names/tailnet-names';
 import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
@@ -147,6 +149,7 @@ async function main(): Promise<void> {
   await egress.start();
 
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
+  const namesHolder: { names: TailnetNames | null } = { names: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
 
   const governed = createGovernedImps({
@@ -163,6 +166,7 @@ async function main(): Promise<void> {
     diskBudget,
     readDiskUsage: diskUsage.read,
     egress,
+    readServiceUrl: (name) => namesHolder.names?.readUrl(name) ?? null,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -193,6 +197,7 @@ async function main(): Promise<void> {
     if (isImpSetWrite(write)) {
       void proxyHolder.proxy?.syncListeners();
       void broker.applyGrants();
+      void namesHolder.names?.runSync();
     }
   });
 
@@ -248,6 +253,20 @@ async function main(): Promise<void> {
 
   const peers = createForwardedPeers(Date.now);
 
+  const tailnetNames =
+    config.tailnetNames === null
+      ? null
+      : buildTailnetNames({
+          names: config.tailnetNames,
+          config,
+          db,
+          imps,
+          readTailscale,
+          log: printLog,
+        });
+
+  namesHolder.names = tailnetNames;
+
   const api = buildApp({
     config,
     db,
@@ -269,6 +288,7 @@ async function main(): Promise<void> {
     diskBudget,
     gc,
     readTailscale,
+    readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
     isReady: () => state.ready,
     now: Date.now,
     audit,
@@ -297,6 +317,9 @@ async function main(): Promise<void> {
 
   https?.start();
 
+  // in the background: an API or tailscaled outage never holds up impd
+  void tailnetNames?.runSync();
+
   const brokerPort = await broker.listen(config.brokerPort);
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
@@ -321,6 +344,13 @@ async function main(): Promise<void> {
 
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),
+
+    ...(tailnetNames === null
+      ? []
+      : [
+          // names follow creates and destroys; this repairs what failed
+          startTicker('tailnet-names', 600_000, tailnetNames.runSync, printLog),
+        ]),
 
     // terminators follow grants; this also renews leaves near their end
     startTicker('broker', 60_000, broker.applyGrants, printLog),

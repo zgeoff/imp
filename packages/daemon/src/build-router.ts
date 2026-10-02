@@ -31,6 +31,7 @@ import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
+import type { TailnetNamesStatus } from './tailnet-names/tailnet-names';
 
 // audit rows `audit.list` gives when the caller names no limit
 const AUDIT_LIMIT = 100;
@@ -50,6 +51,9 @@ export interface RouterDeps {
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
+
+  // per-imp names on the tailnet; null when IMP_TAILNET_NAMES is off
+  readonly readTailnetNames: (() => TailnetNamesStatus) | null;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
   readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
@@ -389,6 +393,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       state: tailscale.state,
       hostname: tailscale.hostname,
       ip: tailscale.ip,
+      names: deps.readTailnetNames?.() ?? null,
     },
   };
 }

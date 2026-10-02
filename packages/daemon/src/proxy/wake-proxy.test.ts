@@ -229,3 +229,103 @@ test('the API route hands a peer handle only to the paths that resolve a caller'
     await api.stop(true);
   }
 });
+
+// What `tailscale serve` sends for a per-imp name (docs/guides/tailscale.md):
+// the service's Host, its own forwarding headers and the member's login. On
+// the imp's own port every one goes to the imp, never to impd's API.
+test('a request on an imp’s port goes to the imp whatever its Host says', async () => {
+  const toImp: Headers[] = [];
+  const toApi: string[] = [];
+
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) => {
+      toImp.push(request.headers);
+
+      return new Response('imp');
+    },
+  });
+
+  const api = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) => {
+      toApi.push(request.url);
+
+      return new Response('api');
+    },
+  });
+
+  await using ctx = await setupImpTest({
+    env: {
+      ...pickPorts(),
+      IMP_API_PORT: String(api.port),
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN: 'unused',
+    },
+  });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  try {
+    await ctx.createTestImage('ubuntu');
+
+    const imp = await ctx.imps.createImp({ name: 'box', httpPort: upstream.port });
+
+    await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
+    await proxy.syncListeners();
+
+    const port = ctx.config.portBase + imp.slot;
+    const bodies: string[] = [];
+
+    for (const host of ['box.tail1234.ts.net', 'imp.example.com', 'imp.tail1234.ts.net']) {
+      const response = await fetch(`http://127.0.0.1:${String(port)}/rpc/system/info`, {
+        method: 'POST',
+        headers: {
+          host,
+          'x-forwarded-for': '100.101.1.2',
+          'x-forwarded-proto': 'https',
+          'tailscale-user-login': 'alice@example.com',
+          cookie: 'a=1; imp_session=v1.2.secret',
+          [PEER_HEADER]: 'forged',
+        },
+      });
+
+      const body = await response.text();
+
+      bodies.push(body);
+    }
+
+    const [first] = toImp;
+
+    expect(bodies).toEqual(['imp', 'imp', 'imp']);
+    expect(toApi).toEqual([]);
+
+    expect(toImp.map((headers) => headers.get('host'))).toEqual([
+      'box.tail1234.ts.net',
+      'imp.example.com',
+      'imp.tail1234.ts.net',
+    ]);
+
+    expect(first?.get('x-forwarded-host')).toBe('box.tail1234.ts.net');
+
+    expect(first?.get('x-forwarded-for')).toMatch(
+      /^100\.101\.1\.2, (?<v4mapped>::ffff:)?127\.0\.0\.1$/v,
+    );
+
+    expect(first?.get('tailscale-user-login')).toBe('alice@example.com');
+    expect(first?.get('cookie')).toBe('a=1');
+  } finally {
+    await proxy.stop();
+    await upstream.stop(true);
+    await api.stop(true);
+  }
+});

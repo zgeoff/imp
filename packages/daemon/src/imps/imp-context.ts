@@ -62,6 +62,9 @@ export interface ImpServiceDeps {
   // configured name can be taken by an older node (`imp-1`)
   readonly readTailnetHostname?: () => Promise<string | null>;
 
+  // the imp's own tailnet name as a URL, once impd serves it
+  readonly readServiceUrl?: (name: string) => string | null;
+
   // where lifecycle events go; a bus of its own by default
   readonly events?: EventBus;
 
@@ -103,6 +106,7 @@ export interface ImpContext {
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
+  readonly readServiceUrl: (name: string) => string | null;
   readonly now: () => number;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
@@ -132,6 +136,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readRssMib: deps.readRssMib ?? readRssMib,
     readTailnetHostname: deps.readTailnetHostname,
+    readServiceUrl: deps.readServiceUrl ?? (() => null),
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     growFilesystem: deps.growFilesystem ?? growFilesystem,

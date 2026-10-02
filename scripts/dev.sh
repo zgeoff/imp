@@ -34,6 +34,9 @@
 #      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
 #      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
 #      repo. IMP_DNS_API_TOKEN, a secret, goes in .env.
+#      IMP_TAILNET_NAMES=1 turns on per-imp tailnet names, with
+#      IMP_TAILNET_NAME_PREFIX; the OAuth client comes from 1Password
+#      (write_tailnet_oauth_file in scripts/lib.sh) into <IMP_DEV_DATA>.
 #      TAILSCALE_AUTHKEY comes from the env, else 1Password
 #      (IMP_TAILSCALE_AUTHKEY_REF, default op://cloud/imp-tailscale-authkey/credential),
 #      else .env; see load_tailscale_authkey in scripts/lib.sh.
@@ -55,6 +58,7 @@ api=http://localhost:$((7070 + offset))
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
   IMP_WAKE_RESERVE_MIB IMP_SLEEP_MIN_GUEST_UPTIME_MS IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB
   IMP_DEFAULT_DISK_GIB IMP_DISK_RESERVE_GIB IMP_TAILSCALE_HOSTNAME IMP_TAILNET_IDENTITIES
+  IMP_TAILNET_NAMES IMP_TAILNET_NAME_PREFIX
   IMP_SSH_AUTHORIZED_KEYS IMP_STORAGE_BACKEND IMP_ZFS_ROOT
   IMP_DOMAIN IMP_DNS_PROVIDER IMP_DNS_API_URL IMP_ACME_DIRECTORY IMP_ACME_EMAIL IMP_HTTPS_PORT
   IMP_HTTP_PORT IMP_E2E IMP_BROKER_PORT IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
@@ -140,6 +144,11 @@ up() {
       tuning+=(-e TAILSCALE_AUTHKEY)
     fi
     [ -n "${IMP_DEV_BACKUP_ENV_FILE:-}" ] && env_file+=(--env-file "$IMP_DEV_BACKUP_ENV_FILE")
+    if [ "${IMP_TAILNET_NAMES:-}" = 1 ]; then
+      write_tailnet_oauth_file "$data/tailnet-oauth.json" \
+        || { echo "dev.sh: IMP_TAILNET_NAMES=1 but 1Password has no OAuth client" >&2; exit 1; }
+      tuning+=(-e IMP_TAILNET_OAUTH_FILE=/data/tailnet-oauth.json)
+    fi
     for var in "${tuning_vars[@]}"; do
       [ -n "${!var:-}" ] && tuning+=(-e "$var=${!var}")
     done

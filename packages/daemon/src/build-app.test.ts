@@ -33,7 +33,7 @@ test('it serves system.info from config and the database', async () => {
     bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
     firecrackerVersion: 'v1.17.0',
     ...TEST_SYSTEM_FILES,
-    tailscale: { enabled: false, state: null, hostname: null, ip: null },
+    tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
   });
 });
 
@@ -111,6 +111,7 @@ test('it reports the https URL when impd has a domain', async () => {
   expect(plainUrls).toEqual({
     local: 'http://box.imp.localhost:7080',
     https: null,
+    service: null,
     tailnet: null,
   });
 

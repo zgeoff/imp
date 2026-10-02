@@ -12,6 +12,9 @@ export interface ImpUrls {
 
   // https://<name>.<domain> when IMP_DOMAIN is set
   readonly https: string | null;
+
+  // https://<service>.<tailnet> once impd serves the imp's own name
+  readonly service: string | null;
   readonly tailnet: string | null;
 }
 
@@ -103,9 +106,10 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
     readUrls: async (imp) => {
       const local = buildLocalUrl(imp.name);
       const https = buildHttpsUrl(imp.name, context.config.https);
+      const service = context.readServiceUrl(imp.name);
 
       if (!context.config.tailscaleEnabled) {
-        return { local, https, tailnet: null };
+        return { local, https, service, tailnet: null };
       }
 
       const live =
@@ -114,7 +118,7 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       const host = live ?? context.config.tailscaleHostname;
       const port = context.findAddress(imp.slot).tailnetPort;
 
-      return { local, https, tailnet: `http://${host}:${String(port)}` };
+      return { local, https, service, tailnet: `http://${host}:${String(port)}` };
     },
   };
 }
