@@ -33,6 +33,7 @@ export const TEST_SYSTEM_FILES = {
 
 // every awake fake VM owns this much, as the governor measures it
 const FAKE_VM_RAM_MIB = 300;
+const FAKE_VM_RSS_MIB = 340;
 
 // the sha256 of the system drive every test impd starts with
 const TEST_DRIVE = 'd1'.repeat(32);
@@ -106,6 +107,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       config,
       identity,
       readRamMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RAM_MIB : null),
+      readRssMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RSS_MIB : null),
       db,
       images,
       vms: fake.startGeneration(),

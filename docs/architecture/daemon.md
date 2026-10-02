@@ -39,7 +39,37 @@ router maps each procedure of the contract in `packages/api` to a service call. 
 contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
 while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
 session request to an agent from before sessions. The token is made on first start and kept in
-`<dataDir>/token`, readable by the owner only.
+`<dataDir>/token`, readable by the owner only. `/rpc` takes POST only: a GET is what a link or an
+image on any page can make a browser send.
+
+### Dashboard
+
+impd serves the [web dashboard](../guides/dashboard.md) at `/ui/` from `IMP_DASHBOARD_DIR`, and `/`
+redirects there. The prefix keeps every dashboard route clear of `/rpc`, `/exec` and `/health`.
+Hashed files under `/ui/assets/` are cached for good; the page shell is checked on every load and
+carries a CSP that allows only impd and forbids framing.
+
+The browser never holds the API token. `POST /auth/login` takes the token once and sets the
+`imp_session` cookie: HttpOnly, SameSite=Strict, `Secure` behind TLS, 30 days. Its value is
+`v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>">`, keyed by a key derived from the token
+(HMAC-SHA256 of `imp-session-key` under the token). It survives an impd restart, and a new token
+ends every session. The cookie is host-only, with no `Domain`, so it never reaches another host
+name. `POST /auth/logout` only clears the cookie in that browser; a copied value stays valid until
+it expires or the token changes.
+
+`/rpc` takes the cookie only from the dashboard's own origin. Imps serve pages on other ports of the
+same host, and a browser counts those as the same site, so SameSite alone would let an imp's page
+call the API with the owner's session. impd accepts the cookie when `Sec-Fetch-Site` is
+`same-origin`; without that header, when `Origin` names impd's host and port. No `Origin` means no
+access. The scheme is not compared, so a TLS front such as `tailscale serve` works. Login and logout
+take the same check. `/exec` never takes the cookie: the dashboard gets an exec ticket over `/rpc`.
+
+Browsers send cookies to every port of a host, so the wake proxy removes `imp_session` from every
+request it forwards to an imp. An imp's server can still set cookies for the host. A planted
+`imp_session` on a longer path, which the browser sends first, does not lock the owner out: impd
+accepts the request when any `imp_session` value in it is valid. An imp's response can overwrite the
+real cookie or flood the cookie jar, and so log the dashboard out while it keeps doing that. It
+cannot read or use the session.
 
 ### imps: the lifecycle
 
@@ -158,8 +188,8 @@ copies.
 
 The proxy serves HTTP and WebSockets for every imp: by Host header on `IMP_PROXY_PORT`, and on one
 port per imp at `IMP_PORT_BASE + slot`. A request wakes or boots the imp, then goes to the imp's
-HTTP port. WebSockets are relayed message by message. [Networking](./networking.md#the-wake-proxy)
-has the details.
+HTTP port, without the dashboard's session cookie. WebSockets are relayed message by message.
+[Networking](./networking.md#the-wake-proxy) has the details.
 
 ### checkpoints: checkpoint, restore, fork
 

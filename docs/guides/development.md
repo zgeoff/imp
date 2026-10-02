@@ -7,6 +7,7 @@ How to check a change before you push it, and what CI and the branch rules do wi
 
 ```sh
 bun run typecheck && bun run lint && bun test
+bun run test:dashboard            # the dashboard's component tests, in their own run
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
@@ -90,6 +91,10 @@ The property tests (`*.property.test.ts`) use fast-check. On a failure it prints
 path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
 the case.
 
+## Dashboard tests
+
+The [dashboard guide](./dashboard.md#tests) covers its component tests and its Playwright run.
+
 ## Git hooks
 
 Lefthook installs the hooks with `bun install`.
@@ -105,16 +110,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                              |
-| ------------ | -------- | --------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                           |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.                             |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                            |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                     |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage. |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                       |
-| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file.                     |
+| Job          | Required | What it runs                                                                                                       |
+| ------------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                    |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, and the dashboard's tests and build. |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                     |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                              |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.          |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                         |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                |
+| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file.                              |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 

@@ -22,15 +22,29 @@ export function parseSmapsRollup(text: string): ReadonlyMap<string, number> {
 // pages. Pages a woken guest only read are clean pages of the mem file, which
 // the host can drop and read again. Null when the pid is not this Firecracker.
 export function readOwnedRamMib(pid: number, apiSocket: string): number | null {
+  const fields = readVmSmaps(pid, apiSocket);
+
+  if (fields === null) {
+    return null;
+  }
+
+  return Math.round(((fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0)) / KIB_PER_MIB);
+}
+
+// All the VM's resident pages (Rss), what `ps` shows; null as above
+export function readRssMib(pid: number, apiSocket: string): number | null {
+  const fields = readVmSmaps(pid, apiSocket);
+
+  return fields === null ? null : Math.round((fields.get('Rss') ?? 0) / KIB_PER_MIB);
+}
+
+function readVmSmaps(pid: number, apiSocket: string): ReadonlyMap<string, number> | null {
   if (!isFirecrackerAlive(pid, apiSocket)) {
     return null;
   }
 
   try {
-    const fields = parseSmapsRollup(readFileSync(`/proc/${String(pid)}/smaps_rollup`, 'utf8'));
-    const owned = (fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0);
-
-    return Math.round(owned / KIB_PER_MIB);
+    return parseSmapsRollup(readFileSync(`/proc/${String(pid)}/smaps_rollup`, 'utf8'));
   } catch {
     return null;
   }

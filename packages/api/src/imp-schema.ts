@@ -28,6 +28,10 @@ export const ImpSchema = z.object({
 
   // RAM the awake VM owns now (anonymous pages), as the governor counts it
   ramMib: z.int().nonnegative().optional(),
+
+  // the awake VM's resident memory on the host, clean pages of its memory
+  // file included; more than ramMib after a wake, until the host drops them
+  rssMib: z.int().nonnegative().optional(),
   sleptAt: z.date().optional(),
   holdUntil: z.date().optional(),
   error: z.string().optional(),

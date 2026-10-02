@@ -1,5 +1,6 @@
 import { ORPCError } from '@orpc/server';
 import type { Server, WebSocketHandler } from 'bun';
+import { removeSessionCookie } from '../auth/session-cookie';
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
@@ -308,6 +309,18 @@ function buildUpstreamHeaders(request: Request, server: ProxyServer): Headers {
 
   for (const header of socketHeaders) {
     headers.delete(header);
+  }
+
+  // The dashboard's session goes to every port of this host, imps' ports
+  // too; an imp must not get it. An imp can still set a cookie by that name
+  // and so log the dashboard out, which costs a login and nothing more.
+  const cookie = headers.get('cookie');
+  const kept = cookie === null ? null : removeSessionCookie(cookie);
+
+  if (kept === null) {
+    headers.delete('cookie');
+  } else {
+    headers.set('cookie', kept);
   }
 
   // one request per upstream connection: an idle keep-alive socket would

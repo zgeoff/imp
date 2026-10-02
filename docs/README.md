@@ -27,6 +27,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   instance and the CLI.
 - [Images](./guides/images.md): the shipped images, what a guest takes from an image, services,
   Docker in the guest, and how to make your own.
+- [Dashboard](./guides/dashboard.md): the web dashboard impd serves at `/ui/`: what it shows, the
+  login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp`, the tools a coding agent gets, the guard, and how exec
   output, timeouts and cancels work.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
