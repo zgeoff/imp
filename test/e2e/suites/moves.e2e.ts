@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as z from 'zod';
 import { startFakeUpstream } from '../lib/fake-upstream';
 import type { FakeUpstream } from '../lib/fake-upstream';
 import { resolveImageName } from '../lib/fixtures';
@@ -17,7 +18,7 @@ import {
 } from '../lib/imp-cli';
 import { createImp, holdImp, writeGuestFile } from '../lib/imps';
 import type { DevInstance } from '../lib/instance';
-import { runInContainer } from '../lib/instance';
+import { readToken, runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
@@ -35,12 +36,26 @@ const kept = `${prefix}kept`;
 const open = `${prefix}open`;
 const box = `${prefix}box`;
 const secret = `${prefix}gh`;
+const filler = `${prefix}filler`;
+const placed = `${prefix}placed`;
+const seen = `${prefix}seen`;
+
+// A's saved name beside B's, for the commands that reach every saved host
+const HOST_A = 'a';
 
 // each host's broker holds its own token for the secret, so the upstream
 // tells which broker sent a call
 const tokens = { a: `e2e-a-${randomUUID()}`, b: `e2e-b-${randomUUID()}` };
 let hosts: MoveHosts;
 let upstream: FakeUpstream;
+
+// what `imp new --place --json` and `imp ls --all --json` print, in part
+const PlacedSchema = z.object({ host: z.string(), imp: z.object({ name: z.string() }) });
+const HostImpSchema = z.object({ host: z.string(), name: z.string(), move: z.string().optional() });
+const HostImpsSchema = z.object({ imps: z.array(HostImpSchema) });
+
+// the CLI's env with both hosts saved
+let bothEnv: Readonly<Record<string, string>>;
 
 function onB(): ImpRunOptions {
   return { target: hosts.b };
@@ -57,6 +72,60 @@ function runShellOnB(name: string, script: string): Promise<string> {
 // `imp move` from A to B, as a user with both saved runs it
 function runMoveToB(name: string, ...args: readonly string[]): Promise<string> {
   return runImpWith({ env: hosts.cliEnv }, 'move', name, HOST_B, ...args);
+}
+
+// the first step of a move, as the source's own route: it marks the imp
+// `sending` and goes no further
+async function startSend(name: string): Promise<void> {
+  const env = await readImpEnv();
+
+  const prepared = await fetch(`${hosts.a.apiUrl}/rpc/moves/prepare`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${env['IMP_TOKEN'] ?? ''}`,
+    },
+    body: JSON.stringify({ json: { name, targetStorage: 'xfs' } }),
+  });
+
+  expect(prepared.status).toBe(200);
+}
+
+// both hosts saved in a CLI config of their own, so the move tests' config
+// keeps B alone
+async function writeBothHosts(): Promise<Record<string, string>> {
+  const dir = `${hosts.cliEnv['XDG_CONFIG_HOME'] ?? ''}-both`;
+
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+
+  const env = { XDG_CONFIG_HOME: dir };
+
+  for (const [name, target] of [
+    [HOST_A, hosts.a],
+    [HOST_B, hosts.b],
+  ] as const) {
+    const token = await readToken(target);
+
+    await runImpWith({ stdin: `${token}\n`, env }, 'login', target.apiUrl, '--name', name);
+  }
+
+  return env;
+}
+
+// `imp ls --all`: the table's row for the name on each host, and the JSON
+async function listAll(name: string) {
+  const table = await runImpWith({ env: bothEnv }, 'ls', '--all');
+  const json = await runImpWith({ env: bothEnv }, 'ls', '--all', '--json');
+
+  const rows = table
+    .trimEnd()
+    .split('\n')
+    .filter((row) => row.split(/\s+/v)[1] === name);
+
+  const body = HostImpsSchema.parse(JSON.parse(json));
+
+  return { rows, imps: body.imps.filter((imp) => imp.name === name) };
 }
 
 function writeUpstreamsFile(target: DevInstance): void {
@@ -93,12 +162,18 @@ beforeAll(async () => {
   writeUpstreamsFile(hosts.b);
 
   await createSecrets();
+
+  bothEnv = await writeBothHosts();
 }, 1_800_000);
 
 afterAll(async () => {
-  for (const name of [cold, kept, open, box]) {
+  for (const name of [cold, kept, open, box, placed, seen]) {
     await tryImp(['rm', name], onB());
   }
+
+  await tryImp(['rm', filler]);
+
+  rmSync(bothEnv['XDG_CONFIG_HOME'] ?? '', { recursive: true, force: true });
 
   await tryImp(['secret', 'rm', secret]);
 
@@ -143,18 +218,7 @@ test('an abort after the source marked the imp leaves it where it was', async ()
   await runImp('stop', kept);
 
   // the first step of a move, then the end a user picks
-  const env = await readImpEnv();
-
-  const prepared = await fetch(`${hosts.a.apiUrl}/rpc/moves/prepare`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${env['IMP_TOKEN'] ?? ''}`,
-    },
-    body: JSON.stringify({ json: { name: kept, targetStorage: 'xfs' } }),
-  });
-
-  expect(prepared.status).toBe(200);
+  await startSend(kept);
 
   const out = await runMoveToB(kept, '--abort');
   const onTarget = await findImp(kept, hosts.b);
@@ -165,6 +229,65 @@ test('an abort after the source marked the imp leaves it where it was', async ()
   await runImp('start', kept);
   await waitFor(`${kept} to boot on A`, () => assertState(kept, 'running'));
   await runImp('rm', kept);
+});
+
+// After the cold move B has the tiny image, so only the room tells the two
+// hosts apart. A's sleeper counts its whole memory as taken, which leaves A
+// less free RAM than B; without it the tie would go to A, first by name.
+test('imp new --place creates on the saved host with the most free RAM', async () => {
+  await createImp(filler, '--image', TINY, '--memory', '1024');
+  await runImp('sleep', filler);
+  await waitFor(`${filler} to sleep`, () => assertState(filler, 'sleeping'));
+
+  const result = await tryImp(
+    ['new', placed, '--place', '--image', TINY, '--memory', '256', '--json'],
+    {
+      env: bothEnv,
+    },
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toContain(`imp: placing on ${HOST_B}`);
+  expect(result.stderr).not.toContain('skipped');
+
+  const body = PlacedSchema.parse(JSON.parse(result.stdout));
+
+  expect(body).toEqual({ host: HOST_B, imp: { name: placed } });
+
+  const onA = await findImp(placed);
+
+  expect(onA).toBeUndefined();
+
+  await requireImp(placed, hosts.b);
+
+  // room for the warm moves' guests in both budgets
+  await runOnB('rm', placed);
+  await runImp('rm', filler);
+});
+
+test('imp ls --all shows both hosts, and the move mark while the imp moves', async () => {
+  await createImp(seen, '--image', TINY, '--memory', '256');
+  await runImp('stop', seen);
+  await startSend(seen);
+
+  const during = await listAll(seen);
+
+  expect(during.imps.map((imp) => [imp.host, imp.move])).toEqual([[HOST_A, 'sending']]);
+  expect(during.rows).toHaveLength(1);
+  expect(during.rows[0]).toStartWith(`${HOST_A} `);
+  expect(during.rows[0]).toContain(' sending');
+
+  await runMoveToB(seen, '--abort');
+  await runMoveToB(seen);
+
+  const after = await listAll(seen);
+
+  expect(after.imps.map((imp) => [imp.host, imp.move])).toEqual([[HOST_B, undefined]]);
+  expect(after.rows).toHaveLength(1);
+  expect(after.rows[0]).toStartWith(`${HOST_B} `);
+  expect(after.rows[0]).not.toContain('sending');
+
+  await runOnB('rm', seen);
 });
 
 // a mark in tmpfs and a process that only memory holds: both survive a
