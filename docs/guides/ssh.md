@@ -39,15 +39,17 @@ how it works inside impd.
    `HostName 127.0.0.1` and `Port 2222`.
 
    ```text
+   IgnoreUnknown WarnWeakCrypto
+
    Host imp
-     IgnoreUnknown WarnWeakCrypto
      WarnWeakCrypto no
    ```
 
    OpenSSH 10.1 and later warn on every connection that does not use a post-quantum key exchange.
    The gateway's SSH library has none, so `WarnWeakCrypto no` turns the warning off for this host.
    On the tailnet, the connection also runs inside WireGuard. `IgnoreUnknown` lets an older OpenSSH
-   read the file.
+   read the file. Put it at the top, before any `Host` line: OpenSSH applies it only inside a block
+   that matches, but rejects an unknown option in every block it reads.
 
 Then:
 
@@ -64,7 +66,6 @@ For an editor, give each imp its own host:
 Host box.imp
   HostName imp
   User box
-  IgnoreUnknown WarnWeakCrypto
   WarnWeakCrypto no
 ```
 

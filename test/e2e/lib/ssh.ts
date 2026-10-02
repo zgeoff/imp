@@ -26,6 +26,10 @@ async function createKey(path: string, comment: string): Promise<string> {
   return Bun.file(`${path}.pub`).text();
 }
 
+// Before any Host block: OpenSSH applies IgnoreUnknown only in a block that
+// matches, but rejects an unknown option in every block it reads
+const IGNORE_UNKNOWN = 'IgnoreUnknown WarnWeakCrypto';
+
 // a Host alias for the dev instance's gateway that logs in with one key
 function buildHostBlock(dir: string, alias: string, identity: string): string[] {
   return [
@@ -38,7 +42,6 @@ function buildHostBlock(dir: string, alias: string, identity: string): string[] 
     '  StrictHostKeyChecking accept-new',
     '  BatchMode yes',
     '  LogLevel ERROR',
-    '  IgnoreUnknown WarnWeakCrypto',
     '  WarnWeakCrypto no',
   ];
 }
@@ -71,7 +74,7 @@ export async function setupKeyClient(aliases: readonly string[]): Promise<KeyCli
     blocks.push(...buildHostBlock(dir, alias, key));
   }
 
-  writeFileSync(config, [...blocks, ''].join('\n'));
+  writeFileSync(config, [IGNORE_UNKNOWN, ...blocks, ''].join('\n'));
 
   return {
     configArgs: ['-F', config],
@@ -118,6 +121,7 @@ export async function setupSshClient(): Promise<SshClient> {
   writeFileSync(
     config,
     [
+      IGNORE_UNKNOWN,
       ...buildHostBlock(dir, SSH_HOST, key),
       ...buildHostBlock(dir, SSH_HOST_OTHER_KEY, otherKey),
       '',
