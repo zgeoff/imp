@@ -21,6 +21,7 @@ interface FakeGuest {
 interface ControllerTestOptions {
   readonly memoryMib?: number;
   readonly maxMemoryMib?: number;
+  readonly agentVersion?: string | undefined;
   readonly admits?: boolean;
   readonly busy?: readonly string[];
   readonly locked?: readonly string[];
@@ -53,6 +54,7 @@ function setupControllerTest(options: Readonly<ControllerTestOptions> = {}) {
     memoryMib: options.memoryMib ?? 512,
     maxMemoryMib: options.maxMemoryMib ?? 1536,
     paths: buildImpPaths('/data', id),
+    agentVersion: 'agentVersion' in options ? options.agentVersion : '0.17.0',
   });
 
   const imps = [buildImp('dev')];
@@ -215,6 +217,25 @@ test('a refused grow leaves the guest at its size, logged once', async () => {
   expect(ctx.grows).toHaveLength(2);
   expect(ctx.limits).toEqual(['dev 512']);
   expect(ctx.logs.filter((line) => line.includes('no room to grow'))).toHaveLength(1);
+});
+
+test('an agent from before elastic memory gets no grow, logged once, and one with no record neither', async () => {
+  for (const agentVersion of ['0.16.0', undefined]) {
+    const ctx = setupControllerTest({ agentVersion });
+
+    ctx.setupGuest('dev', { usedMib: 490 });
+
+    await ctx.controller.runTick();
+    await ctx.controller.runTick();
+
+    expect(ctx.grows).toEqual([]);
+    expect(ctx.requests).toEqual([]);
+
+    const refusals = ctx.logs.filter((line) => line.includes('not grown'));
+
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain('stop and start the imp');
+  }
 });
 
 test('a plug under way is waited for, never asked twice', async () => {

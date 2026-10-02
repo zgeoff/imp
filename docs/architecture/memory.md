@@ -29,8 +29,12 @@ The mechanism is virtio-mem.
   lifecycle lock, so that a sleep never sees its guest change size.
 - **The inner container.** User code runs in the agent's inner container, whose `memory.max` is the
   guest's memory less 64 MiB. In a guest booted with `memhp_default_state`, the agent reads
-  `MemTotal` every 250 ms and moves that limit with it, so plugged memory is the user's too. Without
-  this, the container hits its boot-time limit while the guest still has memory to give.
+  `MemTotal` every 250 ms and moves that limit with it, so plugged memory is the user's too. A raise
+  goes at once. A cut after an unplug stops at the container's use plus 64 MiB and goes on down as
+  the use falls, so a shrink never makes the kernel kill a user process to fit. A plain imp runs no
+  such loop and keeps its boot limit. The loop came in agent protocol `0.17.0`. impd grows no guest
+  whose agent is older, or whose agent version it has no record of, and logs once that a stop and a
+  start updates it: an older agent's container would be OOM-killed in memory the guest grew into.
 - **Firecracker.** Memory hot-plug came in Firecracker v1.14.0. impd is tested with v1.17.0, the
   version `host/Dockerfile` pins.
 - **Free pages.** The balloon stays at 0 for free page reporting. impd never inflates it, so its

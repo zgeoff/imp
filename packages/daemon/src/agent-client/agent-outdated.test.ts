@@ -45,6 +45,18 @@ test('an outer exec needs agent 0.16.0, and a version that is missing or does no
   expect(hasFeature(undefined, 'sessions')).toBe(true);
 });
 
+test('elastic memory needs agent 0.17.0, and a version that is missing or does not parse fails', () => {
+  const versions = [undefined, 'dev', '0.16.9', '0.17.0', '1.0.0'];
+
+  expect(versions.map((version) => hasFeature(version, 'elastic-memory'))).toEqual([
+    false,
+    false,
+    false,
+    true,
+    true,
+  ]);
+});
+
 test('the outdated error tells the user to stop and start the imp', () => {
   const error = buildAgentOutdatedError('ssh');
 

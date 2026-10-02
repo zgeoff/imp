@@ -1,3 +1,8 @@
+import {
+  buildAgentOutdatedError,
+  buildAgentUnknownError,
+  hasFeature,
+} from '../agent-client/agent-outdated';
 import type { GrowRequest } from '../governor/ram-governor';
 import type { ImpPaths } from '../storage/data-layout';
 import type { GuestMemory, VmRunner } from '../vmm/vm-runner';
@@ -25,6 +30,9 @@ export interface ElasticImp {
   readonly memoryMib: number;
   readonly maxMemoryMib: number;
   readonly paths: ImpPaths;
+
+  // the agent it booted with; undefined when impd has no record of it
+  readonly agentVersion: string | undefined;
 }
 
 export interface MemoryControllerDeps {
@@ -79,6 +87,9 @@ interface ImpState {
 
   // a refused grow is logged once until a grow goes through again
   isRefused: boolean;
+
+  // a grow its agent cannot use is logged once
+  isAgentOutdated: boolean;
 }
 
 export interface MemoryController {
@@ -115,6 +126,7 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
       stalledAtMib: null,
       lowerTo: null,
       isRefused: false,
+      isAgentOutdated: false,
     };
 
     states.set(imp.id, created);
@@ -165,6 +177,21 @@ export function createMemoryController(deps: MemoryControllerDeps): MemoryContro
     const stepMib = Math.min(GROW_STEP_MIB, capMib - memory.pluggedMib);
 
     if (stepMib <= 0) {
+      return;
+    }
+
+    if (!hasFeature(imp.agentVersion, 'elastic-memory')) {
+      if (!state.isAgentOutdated) {
+        const error =
+          imp.agentVersion === undefined
+            ? buildAgentUnknownError('elastic-memory')
+            : buildAgentOutdatedError('elastic-memory');
+
+        deps.log(`impd: ${imp.name}: memory low, not grown: ${error.detail}`);
+      }
+
+      state.isAgentOutdated = true;
+
       return;
     }
 

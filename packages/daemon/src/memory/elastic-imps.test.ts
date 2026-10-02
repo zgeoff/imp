@@ -169,6 +169,9 @@ test("memory.max follows the guest: its memory at boot, raised by a grow, the pl
 
   await using ctx = await setupElasticTest({}, root.cgroups);
 
+  // an agent that moves its container's limit with the guest
+  ctx.fake.agent.version = '0.17.0';
+
   const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
   const paths = await ctx.findPaths('dev');
 
@@ -232,4 +235,28 @@ test('after a restart, adopt allows what the guest holds before a sleep can set 
 
   expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(768));
   expect(readSnapshotMeta(paths)).toMatchObject({ pluggedMib: 512 });
+});
+
+test('an elastic imp whose agent predates elastic memory is not grown, and the log says why', async () => {
+  await using ctx = await setupElasticTest();
+
+  await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+
+  const paths = await ctx.findPaths('dev');
+
+  ctx.fake.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 0,
+    requestedMib: 0,
+    usedMib: 200,
+    unplugFloorMib: 0,
+  });
+
+  await ctx.memory.runTick();
+
+  expect(ctx.fake.guestMemory.get(paths.dir)?.pluggedMib).toBe(0);
+
+  const refusal = ctx.logs.find((line) => line.includes('dev: memory low, not grown'));
+
+  expect(refusal).toContain("the imp's agent has no elastic memory");
 });
