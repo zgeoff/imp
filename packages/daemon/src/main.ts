@@ -18,7 +18,9 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
+import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
+import { createXfsBackend } from './storage/xfs-backend';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
@@ -60,7 +62,14 @@ async function main(): Promise<void> {
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
   const token = loadOrCreateToken(config.dataDir);
-  const images = createImageService({ config, db });
+  const storage = createXfsBackend({ dataDir: config.dataDir });
+
+  // before any VM is re-adopted or woken: on ZFS the disks are mounted here
+  const live = await readLiveStorage(db);
+
+  await storage.start(live);
+
+  const images = createImageService({ config, db, storage });
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
 
@@ -70,6 +79,7 @@ async function main(): Promise<void> {
     images,
     taps: createTapDevices(),
     vms: createVmRunner(),
+    storage,
     identity: readHostIdentity(config.firecrackerBin, systemFiles),
     log: printLog,
     onImpsChanged: () => {
@@ -88,13 +98,18 @@ async function main(): Promise<void> {
   await imps.reconcileImps();
 
   // before anything can boot or sleep an imp, so the set of drives in use holds
-  const removed = await removeUnusedDrives(db, config.dataDir, systemFiles.systemDrivePath);
+  const removed = await removeUnusedDrives(
+    db,
+    config.dataDir,
+    storage.resolveImpPaths,
+    systemFiles.systemDrivePath,
+  );
 
   for (const name of removed) {
     printLog(`impd: removed system drive ${name}: no imp uses it`);
   }
 
-  const checkpoints = createCheckpointService({ config, db, imps });
+  const checkpoints = createCheckpointService({ config, db, imps, storage });
   const state = { ready: false };
 
   const api = buildApp({

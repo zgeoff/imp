@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
 import { ORPCError } from '@orpc/server';
@@ -18,6 +18,7 @@ import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths } from '../storage/data-layout';
+import type { StorageBackend } from '../storage/storage-backend';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
 const ROOTFS_SIZE = '32G';
@@ -40,12 +41,12 @@ export interface ImageService {
 
   // adds ubuntu:24.04 as `ubuntu` when there are no images at all
   readonly seedDefaultImage: () => Promise<void>;
-  readonly getRootfsPath: (image: ImageRecord) => string;
 }
 
 export interface ImageServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
+  readonly storage: StorageBackend;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
@@ -76,7 +77,6 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const work = join(deps.config.dataDir, 'images', `.build-${Bun.randomUUIDv7()}`);
     const root = join(work, 'root');
-    const image = join(work, 'rootfs.ext4');
 
     mkdirSync(root, { recursive: true, mode: 0o755 });
 
@@ -104,12 +104,15 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         JSON.stringify(buildImageRuntimeConfig(ociConfig)),
       );
 
-      await runChecked(['truncate', '-s', ROOTFS_SIZE, image]);
-      await runChecked(['mkfs.ext4', '-q', '-F', '-L', 'imp-root', '-d', root, image]);
+      // the backend gives the directory: on ZFS it is a dataset of its own
+      await deps.storage.createImage(digest, async (dir) => {
+        const image = join(dir, 'rootfs.ext4');
 
-      mkdirSync(paths.dir, { recursive: true });
-      writeFileSync(paths.config, JSON.stringify(ociConfig ?? {}, null, 2));
-      renameSync(image, paths.rootfs);
+        await runChecked(['truncate', '-s', ROOTFS_SIZE, image]);
+        await runChecked(['mkfs.ext4', '-q', '-F', '-L', 'imp-root', '-d', root, image]);
+
+        writeFileSync(join(dir, 'config.json'), JSON.stringify(ociConfig ?? {}, null, 2));
+      });
     } finally {
       await runCommand(['docker', 'rm', '-f', containerId]);
 
@@ -146,7 +149,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const uses = await countImageDigestUses(deps.db, digest);
 
     if (uses === 0) {
-      rmSync(buildImagePaths(deps.config.dataDir, digest).dir, { recursive: true, force: true });
+      await deps.storage.removeImage(digest);
     }
   };
 
@@ -248,7 +251,6 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE);
       }
     },
-    getRootfsPath: (image) => buildImagePaths(deps.config.dataDir, image.digest).rootfs,
   };
 }
 

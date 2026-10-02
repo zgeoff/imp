@@ -41,8 +41,8 @@ async function setupTest() {
     config: harness.config,
     db: harness.db,
     imps: harness.imps,
+    storage: harness.storage,
     log: () => {},
-    cloneDisk: createClone,
     freezer: {
       freeze: () => {
         events.push('freeze');

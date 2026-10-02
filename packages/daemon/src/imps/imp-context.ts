@@ -7,9 +7,8 @@ import type { SlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
 import type { HostIdentity } from '../sleep/vm-identity';
-import { buildImpPaths } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
-import { createReflinkClone } from '../storage/reflink';
+import type { StorageBackend } from '../storage/storage-backend';
 import type { VmRunner } from '../vmm/vm-runner';
 import { readOwnedRamMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
@@ -21,10 +20,8 @@ export interface ImpServiceDeps {
   readonly images: ImageService;
   readonly taps: TapDevices;
   readonly vms: VmRunner;
+  readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
-
-  // a reflink clone by default; tests on a non-XFS tmpdir copy instead
-  readonly cloneDisk?: (source: string, target: string) => Promise<void>;
 
   // the RAM governor; without one every boot is admitted
   readonly admission?: RamAdmission;
@@ -53,8 +50,8 @@ export interface ImpContext {
   readonly images: ImageService;
   readonly taps: TapDevices;
   readonly vms: VmRunner;
+  readonly storage: StorageBackend;
   readonly log: (message: string) => void;
-  readonly cloneDisk: (source: string, target: string) => Promise<void>;
   readonly admission: RamAdmission | undefined;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
@@ -75,8 +72,8 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     images: deps.images,
     taps: deps.taps,
     vms: deps.vms,
+    storage: deps.storage,
     log: deps.log ?? printLog,
-    cloneDisk: deps.cloneDisk ?? createReflinkClone,
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readTailnetHostname: deps.readTailnetHostname,
@@ -86,7 +83,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       deps.onImpsChanged?.();
     },
     tracker: createActivityTracker(),
-    findPaths: (impId) => buildImpPaths(deps.config.dataDir, impId),
+    findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
   };
 }

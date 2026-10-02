@@ -1,5 +1,4 @@
-import { mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import type { Checkpoint, Imp } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
@@ -19,8 +18,7 @@ import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
-import { buildImpPaths } from '../storage/data-layout';
-import { createReflinkClone } from '../storage/reflink';
+import type { StorageBackend } from '../storage/storage-backend';
 
 // How long the guest stays frozen at most if impd never sends thaw.
 const FREEZE_TIMEOUT_MS = 10_000;
@@ -59,11 +57,9 @@ export interface CheckpointServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
   readonly imps: ImpCheckpointHooks;
+  readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
-
-  // a reflink clone by default; tests on a non-XFS tmpdir copy instead
-  readonly cloneDisk?: (source: string, target: string) => Promise<void>;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -90,11 +86,8 @@ function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
   const log = deps.log ?? printLog;
-  const cloneDisk = deps.cloneDisk ?? createReflinkClone;
+  const storage = deps.storage;
   const freezer = deps.freezer ?? { freeze: sendFreeze, thaw: sendThaw };
-
-  const buildCheckpointDisk = (impId: string, checkpointId: string): string =>
-    join(buildImpPaths(deps.config.dataDir, impId).checkpointsDir, checkpointId, 'disk.ext4');
 
   const findCheckpointOrThrow = async (imp: ImpRecord, ref: string): Promise<CheckpointRecord> => {
     const checkpoint = await findCheckpoint(deps.db, imp.id, ref);
@@ -106,16 +99,18 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     return checkpoint;
   };
 
-  // A running disk is frozen around the clone (sync + FIFREEZE in the guest).
-  // A sleeping one wakes first: its memory image holds unwritten page cache.
-  // The caller holds the imp's lock.
-  const createConsistentClone = async (found: LockedImp, target: string, action: string) => {
-    const paths = buildImpPaths(deps.config.dataDir, found.id);
+  // Runs `task` on a consistent disk: a running one is frozen around it (sync
+  // + FIFREEZE in the guest), a sleeping one wakes first, since its memory
+  // image holds unwritten page cache. The caller holds the imp's lock.
+  const withConsistentDisk = async <T>(
+    found: LockedImp,
+    action: string,
+    task: () => Promise<T>,
+  ): Promise<T> => {
+    const paths = storage.resolveImpPaths(found.id);
 
     if (found.state === 'stopped' || found.state === 'error') {
-      await cloneDisk(paths.disk, target);
-
-      return;
+      return task();
     }
 
     const imp = found.state === 'sleeping' ? await deps.imps.requireRunningImp(found) : found;
@@ -127,7 +122,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     try {
       await freezer.freeze(paths.vsockSocket, FREEZE_TIMEOUT_MS);
 
-      await cloneDisk(paths.disk, target);
+      return await task();
     } finally {
       try {
         await freezer.thaw(paths.vsockSocket);
@@ -157,18 +152,13 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         }
 
         const id = buildCheckpointId();
-        const disk = buildCheckpointDisk(imp.id, id);
         const started = performance.now();
 
-        mkdirSync(join(disk, '..'), { recursive: true });
+        const sizeBytes = await withConsistentDisk(imp, 'checkpoint', () =>
+          storage.createCheckpoint(imp.id, id),
+        );
 
         try {
-          await createConsistentClone(imp, disk, 'checkpoint');
-
-          // allocated bytes of the clone; the extents it shares with the imp
-          // disk count in full, so this is the most it can cost, not its cost
-          const sizeBytes = statSync(disk).blocks * 512;
-
           const checkpoint = await createCheckpoint(deps.db, {
             id,
             impId: imp.id,
@@ -182,7 +172,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
           return toApiCheckpoint(checkpoint);
         } catch (error) {
-          rmSync(join(disk, '..'), { recursive: true, force: true });
+          await storage.removeCheckpoint(imp.id, id);
+
           throw error;
         }
       }),
@@ -199,18 +190,15 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       return checkpoints.map((checkpoint) => toApiCheckpoint(checkpoint));
     },
 
-    // the row goes first: a leftover directory is harmless, a row without a
-    // disk is not
+    // the row goes first: a leftover disk is harmless, a row without a disk
+    // is not
     deleteCheckpoint: (name, ref) =>
       deps.imps.lockImp(name, async (imp) => {
         const checkpoint = await findCheckpointOrThrow(imp, ref);
 
         await removeCheckpoint(deps.db, checkpoint.id);
 
-        rmSync(join(buildCheckpointDisk(imp.id, checkpoint.id), '..'), {
-          recursive: true,
-          force: true,
-        });
+        await storage.removeCheckpoint(imp.id, checkpoint.id);
       }),
 
     restoreCheckpoint: (name, ref) =>
@@ -225,28 +213,20 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           );
         }
 
-        const paths = buildImpPaths(deps.config.dataDir, imp.id);
+        const paths = storage.resolveImpPaths(imp.id);
         const wasAwake = imp.state === 'running' || imp.state === 'sleeping';
         const started = performance.now();
-        const staged = `${paths.disk}.new`;
 
-        // the clone comes first: when it fails, the imp keeps running or
-        // keeps its memory snapshot
-        rmSync(staged, { force: true });
+        // The disk is ready before the halt, so a failed clone leaves the imp
+        // as it was. The memory image holds the old disk's page cache: it goes
+        // before the swap, so a crash never pairs it with the new disk.
+        const halted = await storage.restoreCheckpoint(imp.id, checkpoint.id, async () => {
+          const stopped = await deps.imps.haltImp(imp);
 
-        try {
-          await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), staged);
-        } catch (error) {
-          rmSync(staged, { force: true });
-          throw error;
-        }
+          rmSync(paths.snapshotDir, { recursive: true, force: true });
 
-        const halted = await deps.imps.haltImp(imp);
-
-        renameSync(staged, paths.disk);
-
-        // a memory image holds the old disk's page cache; never pair them
-        rmSync(paths.snapshotDir, { recursive: true, force: true });
+          return stopped;
+        });
 
         const restored = wasAwake ? await deps.imps.bootImp(halted) : halted;
         const ms = Math.round(performance.now() - started);
@@ -272,17 +252,23 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         return deps.imps.toApi(imp);
       });
 
-      const writeForkDisk = (target: string) =>
+      const createForkDisk = (impId: string) =>
         deps.imps.lockImp(input.source, async (imp) => {
           if (input.checkpoint === undefined) {
-            await createConsistentClone(imp, target, 'fork');
+            await withConsistentDisk(imp, 'fork', () =>
+              storage.createImpDisk(impId, { kind: 'imp', impId: imp.id }),
+            );
 
             return;
           }
 
           const checkpoint = await findCheckpointOrThrow(imp, input.checkpoint);
 
-          await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), target);
+          await storage.createImpDisk(impId, {
+            kind: 'checkpoint',
+            impId: imp.id,
+            checkpointId: checkpoint.id,
+          });
         });
 
       return deps.imps.createImp({
@@ -290,7 +276,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         image: source.image,
         vcpus: source.vcpus,
         memoryMib: source.memoryMib,
-        prepareDisk: writeForkDisk,
+        prepareDisk: createForkDisk,
       });
     },
   };
