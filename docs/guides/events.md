@@ -86,9 +86,10 @@ per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
 ## The API audit log
 
 impd writes one row for each call that changes something: every procedure except the reads, plus
-each exec, console, attach and SSH session as it opens. A row has the time, the procedure, the
-caller, the imp it named, the outcome (`ok` or the error code) and how long the call took. It never
-holds the call's input, so a secret's value never reaches it.
+each exec, console, attach and SSH session as it opens, and each `imp proxy` tunnel as
+`tunnel:<port>`. A row has the time, the procedure, the caller, the imp it named, the outcome (`ok`
+or the error code) and how long the call took. It never holds the call's input, so a secret's value
+never reaches it.
 
 ```sh
 imp audit --kind api          # every imp, newest first

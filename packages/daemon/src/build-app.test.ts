@@ -566,13 +566,14 @@ async function tryTunnelSocket(
   port: string,
   query: string,
   headers: Readonly<Record<string, string>>,
+  name = 'nope',
 ): Promise<string> {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel?${query}`, { headers });
 
   const outcome = Promise.withResolvers<string>();
 
   socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'open', name: 'nope', port: 5432 }));
+    socket.send(JSON.stringify({ type: 'open', name, port: 5432 }));
   });
 
   socket.addEventListener('message', (event) => {
@@ -611,6 +612,37 @@ test('/tunnel takes the bearer header only, not a ticket', async () => {
 
     // past the auth: the imp does not exist
     expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('a tunnel open is audited as the token, with the imp and the port', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` }, 'dev');
+
+    // the row lands after the open settles
+    const deadline = Date.now() + 5000;
+    let tunnels: { readonly procedure: string; readonly actor: string }[] = [];
+
+    while (tunnels.length === 0 && Date.now() < deadline) {
+      const calls = await listApiCalls(ctx.db, 'dev', 10);
+
+      tunnels = calls.filter((call) => call.procedure.startsWith('tunnel'));
+
+      await Bun.sleep(1);
+    }
+
+    expect(tunnels.map((call) => [call.procedure, call.actor])).toEqual([['tunnel:5432', 'token']]);
   } finally {
     await server.stop(true);
   }

@@ -130,7 +130,7 @@ The governor puts its decisions on the same bus. A stream subscribes before it r
 and ends a reader that falls 1000 events behind. [Events](../guides/events.md) has the format.
 
 The audit module writes one `api_audit` row per mutation, from oRPC middleware, and per exec,
-console, attach and SSH open, after the answer. It never stores the input.
+console, attach, SSH and tunnel open, after the answer. It never stores the input.
 
 ### idle: the idle loop
 

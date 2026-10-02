@@ -9,6 +9,7 @@ import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import { Elysia } from 'elysia';
+import { withAuditedOpen } from './audit/api-audit';
 import { readCaller } from './auth/authenticate';
 import { createLogouts } from './auth/logouts';
 import { createSessionRoutes } from './auth/session-routes';
@@ -210,7 +211,22 @@ export function buildApp(deps: AppDeps) {
 
               return imp.id;
             },
-            openDial: (name, target) => deps.imps.openDial(name, target, 'tunnel'),
+
+            // audited as it opens, with the guest port: `tunnel:5432`
+            openDial: (name, target) => {
+              const port = target.address.split(':').at(-1) ?? '';
+
+              return withAuditedOpen(
+                deps.audit,
+                {
+                  procedure: `tunnel:${port}`,
+                  actor: 'token',
+                  impName: name,
+                  startedAt: deps.now(),
+                },
+                () => deps.imps.openDial(name, target, 'tunnel'),
+              );
+            },
           },
           tunnelLimits,
         );
