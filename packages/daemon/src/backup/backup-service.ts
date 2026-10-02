@@ -211,6 +211,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     await restic.setupRepository();
 
+    // a lock a crashed prune left would block the run
+    await restic.unlock();
+
     // outside the tree: the manifest is what a restore reads, and the
     // database copy would carry whatever later tables hold
     const copy = await readDatabaseCopy(deps.db, join(paths.dir, 'db.sqlite'));

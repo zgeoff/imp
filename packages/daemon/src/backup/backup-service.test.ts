@@ -231,7 +231,7 @@ test('a run freezes running imps, copies the rest as they are and lists what it 
     'imp=napping',
   ]);
 
-  expect(ctx.fake.calls).toEqual(['backup', 'forget']);
+  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget']);
 
   const manifest = await ctx.readManifest(run.snapshotId);
 
@@ -407,7 +407,15 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
   await ctx.imps.createImp({ name: 'dev' });
   await ctx.backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual(['backup', 'forget', 'unlock', 'prune', 'unlock', 'check']);
+  expect(ctx.fake.calls).toEqual([
+    'unlock',
+    'backup',
+    'forget',
+    'unlock',
+    'prune',
+    'unlock',
+    'check',
+  ]);
 
   ctx.fake.calls.length = 0;
 
@@ -415,7 +423,7 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
 
   await ctx.backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual(['backup', 'forget']);
+  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget']);
 
   ctx.fake.calls.length = 0;
   ctx.fake.state.failCheck = true;
@@ -424,7 +432,15 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
 
   await ctx.backups.runScheduled();
 
-  expect(ctx.fake.calls).toEqual(['backup', 'forget', 'unlock', 'prune', 'unlock', 'check']);
+  expect(ctx.fake.calls).toEqual([
+    'unlock',
+    'backup',
+    'forget',
+    'unlock',
+    'prune',
+    'unlock',
+    'check',
+  ]);
 
   expect(ctx.logs).toContain(
     'impd: backup: CHECK FAILED, the repository may be damaged: Fatal: pack 9f2c: ciphertext verification failed',
