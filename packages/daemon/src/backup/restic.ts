@@ -20,12 +20,22 @@ const RESTIC_HOST = 'impd';
 // `restic cat config` exits 10 when the repository does not exist yet
 const NO_REPOSITORY_EXIT = 10;
 
+// restic exits 11 when another process holds a lock it cannot share
+const LOCKED_EXIT = 11;
+
+// How long a command waits for a lock that another restic holds: a list
+// during a prune, the user's own restic, or a second host on a shared
+// repository. Longer than impd's own short commands, short of a whole prune.
+const RETRY_LOCK = '2m';
+
 const SnapshotSchema = z.object({
   id: z.string(),
   time: z.coerce.date(),
   paths: z.array(z.string()),
   tags: z.array(z.string()).nullish(),
 });
+
+const ExitErrorSchema = z.object({ message_type: z.literal('exit_error'), message: z.string() });
 
 const SummarySchema = z.object({
   message_type: z.literal('summary'),
@@ -35,6 +45,18 @@ const SummarySchema = z.object({
   files_unmodified: z.number(),
   data_added: z.number(),
 });
+
+export class ResticError extends Error {
+  override name = 'ResticError';
+
+  readonly exitCode: number;
+
+  constructor(message: string, exitCode: number) {
+    super(message);
+
+    this.exitCode = exitCode;
+  }
+}
 
 export interface ResticSnapshot {
   readonly id: string;
@@ -97,14 +119,18 @@ export function createRestic(deps: ResticDeps): Restic {
 
   // lowest CPU and IO priority, so awake imps come first
   const runRestic = (args: readonly string[]): Promise<CommandResult> =>
-    run(['nice', '-n', '19', 'ionice', '-c', '3', 'restic', ...args], env);
+    run(
+      ['nice', '-n', '19', 'ionice', '-c', '3', 'restic', '--retry-lock', RETRY_LOCK, ...args],
+      env,
+    );
 
   const runChecked = async (args: readonly string[]): Promise<string> => {
     const result = await runRestic(args);
 
     if (result.exitCode !== 0) {
-      throw new Error(
-        `restic ${args[0] ?? ''} exited ${String(result.exitCode)}: ${readLastLine(result.stderr || result.stdout)}`,
+      throw new ResticError(
+        `restic ${args[0] ?? ''} exited ${String(result.exitCode)}: ${readReason(result)}`,
+        result.exitCode,
       );
     }
 
@@ -118,8 +144,9 @@ export function createRestic(deps: ResticDeps): Restic {
       if (found.exitCode === NO_REPOSITORY_EXIT) {
         await runChecked(['init', '--quiet']);
       } else if (found.exitCode !== 0) {
-        throw new Error(
-          `restic cat config exited ${String(found.exitCode)}: ${readLastLine(found.stderr)}`,
+        throw new ResticError(
+          `restic cat config exited ${String(found.exitCode)}: ${readReason(found)}`,
+          found.exitCode,
         );
       }
     },
@@ -161,8 +188,10 @@ export function createRestic(deps: ResticDeps): Restic {
       await runChecked(['unlock', '--quiet']);
     },
 
+    // without a lock: it only reads snapshot files, and a lock would make it
+    // wait behind a prune or a check, or make them fail
     listSnapshots: async () => {
-      const stdout = await runChecked(['snapshots', '--json', '--tag', BACKUP_TAG]);
+      const stdout = await runChecked(['snapshots', '--no-lock', '--json', '--tag', BACKUP_TAG]);
 
       return parseSnapshots(stdout);
     },
@@ -222,6 +251,32 @@ function pickEnv(source: Readonly<Record<string, string | undefined>>): Record<s
   );
 }
 
-function readLastLine(text: string): string {
-  return text.trim().split('\n').at(-1) ?? '';
+// True when restic gave up waiting for another process's lock
+export function isResticLocked(error: unknown): boolean {
+  return error instanceof ResticError && error.exitCode === LOCKED_EXIT;
+}
+
+// Why restic failed, in one line. A lock failure's first line names the
+// holder, which the last line (the hint to run unlock) does not; a --json
+// command puts the message in an exit_error object.
+function readReason(result: CommandResult): string {
+  const lines = (result.stderr || result.stdout).trim().split('\n');
+  const last = lines.at(-1) ?? '';
+  const message = readExitErrorMessage(last);
+
+  if (message !== null) {
+    return message.split('\n')[0] ?? '';
+  }
+
+  return result.exitCode === LOCKED_EXIT ? (lines[0] ?? '') : last;
+}
+
+function readExitErrorMessage(line: string): string | null {
+  try {
+    const parsed = ExitErrorSchema.safeParse(JSON.parse(line));
+
+    return parsed.success ? parsed.data.message : null;
+  } catch {
+    return null;
+  }
 }

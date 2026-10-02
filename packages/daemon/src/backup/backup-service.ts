@@ -26,7 +26,7 @@ import { BackupManifestSchema } from './backup-manifest';
 import type { BackupManifest, ManifestImage, ManifestImp } from './backup-manifest';
 import { readDatabaseCopy } from './read-database-copy';
 import type { DatabaseCopy } from './read-database-copy';
-import { createRestic } from './restic';
+import { createRestic, isResticLocked } from './restic';
 import type { Restic, ResticSnapshot } from './restic';
 import { writeChangedBlocks } from './write-changed-blocks';
 
@@ -119,7 +119,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   // a run, a restore, a prune and a check never overlap
   const mutex = createKeyedMutex();
   const runExclusive = <T>(task: () => Promise<T>) => mutex.runExclusive('backup', task);
-  const retry = { failures: 0, lastFailureAt: 0 };
+
+  // pruneLocked: the last prune found another restic's lock, so the next
+  // tick tries again instead of waiting for the next run
+  const retry = { failures: 0, lastFailureAt: 0, pruneLocked: false };
 
   const isRunDue = (): boolean => {
     const at = now().getTime();
@@ -338,19 +341,27 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     }
   };
 
+  const runPrune = async (): Promise<void> => {
+    try {
+      await restic.unlock();
+      await restic.prune();
+
+      retry.pruneLocked = false;
+
+      writeState({ lastPruneAt: now() });
+    } catch (error) {
+      retry.pruneLocked = isResticLocked(error);
+
+      log(`impd: backup: PRUNE FAILED: ${readErrorMessage(error)}`);
+    }
+  };
+
   const runMaintenance = async (): Promise<void> => {
     const state = readState();
     const at = now().getTime();
 
     if (deps.backup.forget && at - (state.lastPruneAt?.getTime() ?? 0) >= PRUNE_EVERY_MS) {
-      try {
-        await restic.unlock();
-        await restic.prune();
-
-        writeState({ lastPruneAt: now() });
-      } catch (error) {
-        log(`impd: backup: PRUNE FAILED: ${readErrorMessage(error)}`);
-      }
+      await runPrune();
     }
 
     if (at - (state.lastCheckAt?.getTime() ?? 0) >= CHECK_EVERY_MS) {
@@ -663,6 +674,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     runScheduled: () =>
       runExclusive(async () => {
         if (!isRunDue()) {
+          if (retry.pruneLocked) {
+            await runPrune();
+          }
+
           return;
         }
 

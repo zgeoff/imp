@@ -18,6 +18,7 @@ import { buildImpPaths } from '../storage/data-layout';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
 import { createBackupService } from './backup-service';
+import { ResticError } from './restic';
 import type { Restic, ResticSnapshot } from './restic';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -36,7 +37,14 @@ const CONFIG: BackupConfig = {
 function createFakeRestic(repoDir: string, readNow: () => Date) {
   const snapshots: ResticSnapshot[] = [];
   const calls: string[] = [];
-  const state = { failCheck: false, failBackup: false };
+
+  // failPrune: the error the next prune throws, once
+  const state = {
+    failCheck: false,
+    failBackup: false,
+    failPrune: null as Error | null,
+  };
+
   const restores: string[] = [];
 
   const findSnapshot = (id: string): ResticSnapshot => {
@@ -82,7 +90,11 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
     prune: () => {
       calls.push('prune');
 
-      return Promise.resolve();
+      const failure = state.failPrune;
+
+      state.failPrune = null;
+
+      return failure === null ? Promise.resolve() : Promise.reject(failure);
     },
     check: () => {
       calls.push('check');
@@ -468,6 +480,67 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
 
   expect(status.points).toHaveLength(3);
   expect(status.lastCheck?.error).toContain('ciphertext verification failed');
+});
+
+test('a prune that meets a lock tries again on the next tick, not the next run', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.fake.state.failPrune = new ResticError(
+    'restic prune exited 11: unable to create lock in backend: repository is already locked by PID 7',
+    11,
+  );
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.logs.some((line) => line.includes('PRUNE FAILED'))).toBeTrue();
+
+  // the next tick, well inside the interval
+  ctx.fake.calls.length = 0;
+
+  ctx.advance(5 * 60 * 1000);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual(['unlock', 'prune']);
+
+  const status = await ctx.backups.readStatus();
+
+  expect(status.lastPruneAt).not.toBeNull();
+
+  // done: the tick after does nothing
+  ctx.fake.calls.length = 0;
+
+  ctx.advance(5 * 60 * 1000);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual([]);
+});
+
+test('a prune that fails for another reason waits for the next run', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.fake.state.failPrune = new ResticError('restic prune exited 1: Fatal: bucket full', 1);
+
+  await ctx.backups.runScheduled();
+
+  ctx.fake.calls.length = 0;
+
+  ctx.advance(5 * 60 * 1000);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual([]);
+
+  ctx.advance(HOUR_MS);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual(['unlock', 'backup', 'forget', 'unlock', 'prune']);
 });
 
 test('an imp being created is left out of the run', async () => {
