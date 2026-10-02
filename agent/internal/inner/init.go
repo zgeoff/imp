@@ -3,9 +3,11 @@ package inner
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -99,8 +101,9 @@ func setupRoot(runSize string) (*os.File, error) {
 		{"proc", "/proc", "proc", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC, ""},
 		{"sysfs", "/sys", "sysfs", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC, ""},
 		{"cgroup2", "/sys/fs/cgroup", "cgroup2", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_RELATIME, "nsdelegate"},
-		// the kernel's one devtmpfs: the agent keeps fds of what it needs
-		{"devtmpfs", "/dev", "devtmpfs", unix.MS_NOSUID, "mode=0755"},
+		// a copy of the agent's /dev, filled below: the kernel has one
+		// devtmpfs, and a node deleted inside must not go for the agent
+		{"tmpfs", "/dev", "tmpfs", unix.MS_NOSUID, "mode=0755,size=64k"},
 		{"devpts", "/dev/pts", "devpts", unix.MS_NOSUID | unix.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620,gid=5"},
 		{"shm", "/dev/shm", "tmpfs", unix.MS_NOSUID | unix.MS_NODEV, "mode=1777"},
 		// fresh every start, as /run is every boot
@@ -113,6 +116,11 @@ func setupRoot(runSize string) (*os.File, error) {
 		}
 		if err := unix.Mount(m.source, target, m.fstype, m.flags, m.data); err != nil {
 			return nil, fmt.Errorf("mount %s on %s: %w", m.fstype, m.target, err)
+		}
+		if m.target == "/dev" {
+			if err := copyDev("/dev", target); err != nil {
+				return nil, fmt.Errorf("copy /dev: %w", err)
+			}
 		}
 	}
 	if err := linkDev(n + "/dev"); err != nil {
@@ -149,9 +157,62 @@ func pivot(dir string) error {
 	return unix.Chdir("/")
 }
 
+// copyDev makes in dst the device nodes, directories and links of src, the
+// agent's devtmpfs, with their modes and owners. Mount points under it
+// (pts, shm) are left out: the container mounts its own.
+func copyDev(src, dst string) error {
+	var root unix.Stat_t
+	if err := unix.Lstat(src, &root); err != nil {
+		return err
+	}
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || p == src {
+			return err
+		}
+		var st unix.Stat_t
+		if err := unix.Lstat(p, &st); err != nil {
+			return nil
+		}
+		if st.Dev != root.Dev {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := dst + strings.TrimPrefix(p, src)
+		switch st.Mode & unix.S_IFMT {
+		case unix.S_IFDIR:
+			if err := unix.Mkdir(target, st.Mode&0o7777); err != nil && !errors.Is(err, fs.ErrExist) {
+				return err
+			}
+		case unix.S_IFLNK:
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(link, target); err != nil {
+				return err
+			}
+		case unix.S_IFCHR, unix.S_IFBLK:
+			if err := unix.Mknod(target, st.Mode, int(st.Rdev)); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+		if err := unix.Lchown(target, int(st.Uid), int(st.Gid)); err != nil {
+			return err
+		}
+		if st.Mode&unix.S_IFMT == unix.S_IFLNK {
+			return nil
+		}
+		// past the umask, which mknod and mkdir applied
+		return unix.Chmod(target, st.Mode&0o7777)
+	})
+}
+
 // linkDev points /dev/ptmx at this devpts instance and adds the links udev
-// would make. devtmpfs is shared with the agent: the links are relative or
-// go through /proc/self, so each namespace resolves them to its own.
+// would make.
 func linkDev(dev string) error {
 	links := [][2]string{
 		{"pts/ptmx", "/ptmx"},
