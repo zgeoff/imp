@@ -232,7 +232,7 @@ under the imp's lock. The guest follows:
 - **Stopped**, and a new disk before its first boot: impd runs `resize2fs` on the host, about 80 ms
   for 4 to 100 GiB. A filesystem that was not unmounted cleanly is skipped, since its journal must
   replay first; the guest grows it instead. Every cold boot also grows the filesystem to fill the
-  disk: the agent's stage 1 runs `EXT4_IOC_RESIZE_FS`, an online resize, after it mounts the disk.
+  disk: the agent runs `EXT4_IOC_RESIZE_FS`, an online resize, after it mounts the disk.
 - **Running**: impd sends `PATCH /drives/rootfs` so Firecracker reads the file's size again and
   tells the guest, then the agent's `grow` request waits for the new size and resizes
   ([protocol](./protocol.md#grow)).

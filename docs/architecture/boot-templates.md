@@ -1,9 +1,9 @@
 # Boot templates
 
 A cold boot spends most of its time in the guest kernel's boot before the agent answers. A boot
-template skips it: impd boots one guest per shape, parks it in stage 1 before it touches a user
-disk, and snapshots it. Each later cold boot of that shape restores the snapshot and gives the guest
-its own values with `claim`. `IMP_BOOT_TEMPLATES=false` turns this off.
+template skips it: impd boots one guest per shape, parks its agent before it touches a user disk,
+and snapshots it. Each later cold boot of that shape restores the snapshot and gives the guest its
+own values with `claim`. `IMP_BOOT_TEMPLATES=false` turns this off.
 
 The code is in `packages/daemon/src/templates/boot-templates.ts` (the store),
 `packages/daemon/src/vmm/template-vm.ts` (the Firecracker calls) and `agent/internal/boot/claim.go`
@@ -36,10 +36,10 @@ of one key share one build; builds run one at a time, since they share one tap (
 2. impd boots a VM with `imp.template=1` on the kernel command line and nothing else that names an
    imp. Its rootfs is `<data>/templates/placeholder.ext4`, a 1 MiB file: the snapshot records the
    drive's path, so every template names the same one.
-3. Stage 1 mounts `/proc`, `/sys` and `/dev`, and cgroup2, `/dev/pts` and `/dev/shm` on them, reads
-   the command line, and parks: it serves `ping` (with `stage: "template"`) and `claim` on the vsock
-   port, and refuses every other op. It opens no inet socket, so the kernel has made no TCP secrets
-   yet.
+3. The agent mounts its own `/proc`, `/sys`, `/dev`, cgroup2, `/run` and `/dev/pts`, makes the inner
+   container's cgroup, reads the command line, and parks: it serves `ping` (with
+   `stage: "template"`) and `claim` on the vsock port, and refuses every other op. It opens no inet
+   socket, so the kernel has made no TCP secrets yet.
 4. impd waits until the guest is `IMP_SLEEP_MIN_GUEST_UPTIME_MS` old
    ([young guests](./sleep-and-wake.md#young-guests)), pauses it and writes a full snapshot into a
    new directory. It kills the VM, digs holes in the mem file, writes `meta.json` and renames the
@@ -62,7 +62,7 @@ When the shape has a template, a cold boot:
    the parked guest waits for it.
 4. Points `rootfs` at the imp's disk with `PATCH /drives/rootfs` and its absolute path, once the
    disk is ready. The config change is how virtio-blk tells the guest the disk's new size.
-5. Sends `claim`, and waits for stage 2's ping, as a cold boot does.
+5. Sends `claim`, and waits for the booted agent's ping, as a cold boot does.
 
 Everything after that is a cold boot's: impd writes the VM identity, so the next sleep, wake, fork
 and checkpoint see a normal imp. If a step fails, impd kills the VM:
@@ -70,8 +70,8 @@ and checkpoint see a normal imp. If a step fails, impd kills the VM:
 - A step that reads only the template (the load, the resume, the parked ping) is the template's
   fault. impd removes the template, boots the kernel, and the next misses build it again. Only the
   build that failed is removed: a template rebuilt since has another `buildId` in `meta.json`.
-- A failure from the patch on (the claim, stage 2) is the imp's own. impd boots the kernel, and the
-  template stays.
+- A failure from the patch on (the claim, the rest of the boot) is the imp's own. impd boots the
+  kernel, and the template stays.
 - A disk that fails to clone, grow or download fails the create, as on a cold boot, and the template
   stays.
 
@@ -96,24 +96,24 @@ A template costs RAM while it builds and disk for its mem file, up to the whole 
 
 `claim` carries the imp's id, hostname, address, gateway, IPv6 address and gateway (when the host
 gives imps IPv6), DNS servers and MAC, the host's clock, a 64-byte seed and the identity reset flag.
-Stage 1 then:
+The parked agent then:
 
 1. Sets the clock, so nothing after stamps the template's time.
 2. Credits the seed to the entropy pool (`RNDADDENTROPY`) and reseeds the CRNG at once
    (`RNDRESEEDCRNG`). Firecracker's VMGenID also makes the kernel reseed after the restore
-   (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it. Stage 1 logs
-   `boot: claim: crng reseeded from a 64-byte seed` to the console.
+   (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it. The agent
+   logs `boot: claim: crng reseeded from a 64-byte seed` to the console.
 3. Sets `eth0`'s MAC.
 4. Waits, for up to 2 s, until `vda` reports the size in the claim's `disk_bytes`, rounded down to
    whole 512-byte sectors: the size change from the restore's `PATCH` reaches the guest as a config
    interrupt. A disk still at the wrong size after 2 s fails the claim, and impd boots the kernel.
    Then it drops `vda`'s buffers (`BLKFLSBUF`) and rereads its partition table.
-5. Answers, closes the parked listener, and goes on as a cold boot: it mounts `vda`, grows the
-   filesystem, switches root and starts stage 2.
+5. Answers, closes the parked listener, and goes on as a cold boot: it mounts `vda` at `/user`,
+   grows the filesystem and starts the [inner container](./agent.md#the-inner-container) on it.
 
-Stage 2 runs in the same process as stage 1 and takes its values from it, on a cold boot too. It
-never reads the kernel command line, which on a restored guest is the template's. When the flag is
-set, stage 2 runs the identity reset of an imp from a
+The rest of the boot runs in the same process and takes the claim's values. It never reads the
+kernel command line again, which on a restored guest is the template's. When the flag is set, it
+runs the identity reset, inside the inner container, of an imp from a
 [template image](../guides/templates.md#identity).
 
 ## RAM
@@ -155,8 +155,8 @@ checks that the TCP ISN secrets of restored imps differ, with `isn-probe` in the
 
 ## Numbers
 
-`imp new` until stage 2 answers, through the API, 288 MiB and 1 vCPU, on WSL2 (kernel 6.6). A
-dropped page cache is `echo 3 > /proc/sys/vm/drop_caches` before each create.
+`imp new` until the booted agent answers (then stage 2), through the API, 288 MiB and 1 vCPU, on
+WSL2 (kernel 6.6). A dropped page cache is `echo 3 > /proc/sys/vm/drop_caches` before each create.
 
 | Boot                     | Page cache | p50    | p95     |
 | ------------------------ | ---------- | ------ | ------- |

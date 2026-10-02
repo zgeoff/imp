@@ -20,28 +20,74 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 
 ## Boot
 
-**Stage 1** runs from the system drive:
+The agent stays on the system drive, its own world, and runs every user process in the inner
+container over the user disk:
 
-1. Mount `/proc`, `/sys` and `/dev`, then cgroup2, `/dev/pts` and `/dev/shm` on them. A
-   [boot template](./boot-templates.md#make) parks after this step.
-2. Mount `vda` on `/newroot`, and grow its filesystem to fill the disk, which the host may have
-   grown since the last boot. A failed grow is logged, and the boot goes on.
-3. Mount a fresh tmpfs on `/newroot/run`, and bind the system drive to `/newroot/run/imp/sys`.
-4. Move `/dev`, `/proc` and `/sys`, with what is mounted on them, into the new root, `switch_root`
-   to it, and go on as stage 2 in the same process. There is no exec: on a restored template, a new
-   runtime would fault in every page it touches.
+1. Mount `/proc`, `/sys`, `/dev`, cgroup2 (`nsdelegate`), a 16 MiB tmpfs on `/run` and its own
+   `/dev/pts`.
+2. Set its own `oom_score_adj` to -1000, and make `/sys/fs/cgroup/user` with every controller and a
+   `memory.max` of the guest's memory less 64 MiB. A [boot template](./boot-templates.md#make) parks
+   after this step, and goes on with its claim's values instead of the kernel command line.
+3. Mount `vda` on `/user`, and grow its filesystem if the host grew the disk.
+4. Set the hostname and bring up loopback and `eth0` through netlink. With `imp.ip6`, turn off
+   router advertisements and redirects on `eth0`, add the address with no duplicate address
+   detection, and add a default route via `imp.gw6`.
+5. Start the [inner container](#the-inner-container), then write `/etc/hostname`, `/etc/hosts` and
+   `/etc/resolv.conf` in it and read `/etc/imp/image.json`. With `imp.reset_identity=1`, write a new
+   machine-id and new ssh host keys in it, with the image's `ssh-keygen` run inside.
+6. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
+7. Listen on vsock port 1024.
 
-**Stage 2** runs in the user's root:
+The agent never execs itself on the way: on a restored template, a new runtime would fault in every
+page it touches.
 
-1. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
-   With `imp.ip6`, turn off router advertisements and redirects on `eth0`, add the address with no
-   duplicate address detection, and add a default route via `imp.gw6`.
-2. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
-3. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
-4. Make the [exec cgroup](#exec-cgroups) parent, and listen on vsock port 1024.
+The inner `/run` is a fresh tmpfs at each start, so stale pid files and sockets from the last boot
+never reach a new one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly,
+with no wrapper.
 
-`/run` is a tmpfs every boot, so stale pid files and sockets from the last boot never reach a new
-one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly, with no wrapper.
+## The inner container
+
+User code runs in a container whose root is the user disk: its own mount, PID and cgroup namespaces,
+sharing the network and the hostname with the agent. Its PID 1 is `imp-agent inner`, which the agent
+starts with `clone3` into `/sys/fs/cgroup/user`. The inner init:
+
+1. Makes `/` private and binds `/user` onto itself.
+2. Mounts on it a fresh `/proc`, `/sys`, cgroup2, a tmpfs `/dev` with a copy of the agent's device
+   nodes, `/dev/pts` (a new instance), `/dev/shm`, and a tmpfs `/run` of a tenth of memory.
+3. Binds the system drive read-only at `/run/imp/sys`, without the agent's mounts under it, so
+   `/run/imp/sys/imp-agent sftp|tar|dial-unix|listen-as-user` work in any image.
+4. Calls `pivot_root` into it and detaches the old root, so nothing of the agent's world stays
+   reachable.
+5. Moves itself into `/init`, a leaf, and enables every controller at its cgroup namespace's root.
+   That root then holds no process, and `dockerd` can make its cgroups under it.
+6. Serves the agent on a `SOCK_SEQPACKET` socket: spawn, signal, and exit reports. The fds of a
+   spawn travel as `SCM_RIGHTS`.
+
+A Go process cannot `setns` into a mount namespace, so the inner init forks every user process for
+the agent. Each exec still gets [its cgroup](#exec-cgroups), under `user/exec`. The agent opens the
+inner init's root at each start, and reads and writes user files only through
+`openat2(RESOLVE_IN_ROOT)` on it: a symlink planted in the user's files cannot lead out. The inner
+init ignores every signal it can, as the kernel delivers to a namespace's init only the signals it
+handles, and Go handles nearly all of them. `kill -TERM 1` inside does nothing.
+
+When the inner init dies (a `reboot` inside, say), every process in the container dies with it. The
+agent ends the waits of what ran there, closes the sockets it served in the inner `/run`, and starts
+the container again after 1 s, doubling to 30 s, at most 5 times in 10 minutes. After `rm -rf /`,
+every start fails: the agent stays up, `ping` reports the container down with the last error, and a
+spawn fails with `INNER_DOWN` until a checkpoint restore or a new disk. Each start runs the services
+again. Helpers and impd's runs of the agent by its system drive path start from an fd the inner init
+opened before the pivot, so they work with `/run/imp/sys` unmounted inside. The guest kernel (6.1)
+left a cgroup once killed with `cgroup.kill` killing the next process cloned into it, so the agent
+ends the container by killing its init, never with `cgroup.kill`.
+
+### Not a security boundary
+
+The container keeps user processes from taking the agent down by accident: `rm -rf /`, `kill -9 -1`,
+a reboot, a full memory. It does not keep root inside from reaching the agent on purpose. The guest
+is the user's own; the VM is the boundary. Root inside holds every capability in the one user
+namespace, so it can open `/dev/vda` (its own disk), write `/proc/sysrq-trigger`, change sysctls,
+and mount what it likes. The guest kernel has `CONFIG_MODULES` off, so there is no module to load; a
+kernel with modules would add that route.
 
 ## The reaper
 
@@ -60,13 +106,13 @@ with backoff. The services ops add, restart and remove a service and stream its 
 
 ### Exec cgroups
 
-Each non-tty exec starts in a cgroup v2 leaf of its own, `/sys/fs/cgroup/imp-exec/<n>`, through
-`clone3` with `CLONE_INTO_CGROUP`, so no child can fork before it is inside. A stop kills the leaf
-with `cgroup.kill` ([protocol](./protocol.md#exec)). The parent holds no process and enables no
-controller. A leaf goes when its exec ends, or later, once a child it left behind (a `nohup` job)
-exits: the next exec sweeps only the leaves of ended execs. When the leaf or the spawn into it
-fails, the agent logs it once and the exec runs without one, as before. When the write to
-`cgroup.kill` fails, the stop sends SIGKILL to the process group instead.
+Each non-tty exec starts in a cgroup v2 leaf of its own, `/sys/fs/cgroup/user/exec/<n>` (`/exec/<n>`
+inside the container), through `clone3` with `CLONE_INTO_CGROUP`, so no child can fork before it is
+inside. A stop kills the leaf with `cgroup.kill` ([protocol](./protocol.md#exec)). The parent holds
+no process and enables no controller. A leaf goes when its exec ends, or later, once a child it left
+behind (a `nohup` job) exits: the next exec sweeps only the leaves of ended execs. When the leaf or
+the spawn into it fails, the agent logs it once and the exec runs without one, as before. When the
+write to `cgroup.kill` fails, the stop sends SIGKILL to the process group instead.
 
 A command runs as root unless the image says otherwise, so it can move itself out of its leaf, and a
 `dockerd` started from an exec puts its containers in cgroups of its own; a stop does not reach
@@ -109,9 +155,9 @@ serves a reverse forward the same way, at a path or port the host names, bound b
 
 ## Shutdown
 
-On `shutdown` the agent thaws a frozen root, stops the services, signals every other process, syncs,
-remounts `/` read-only and reboots. With `reboot=k` on the command line, that makes Firecracker
-exit.
+On `shutdown` the agent thaws the user disk, stops the services, signals every other process, kills
+the inner init so the container does not start again, syncs, remounts `/user` read-only and reboots.
+With `reboot=k` on the command line, that makes Firecracker exit.
 
 ## Guest kernel
 

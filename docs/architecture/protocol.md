@@ -82,6 +82,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `BAD_REQUEST`    | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid.    |
 | `UNKNOWN_OP`     | The `op` is not known to this agent.                                                        |
 | `EXEC_FAILED`    | `exec` could not start the process (bad argv, cwd, or user).                                |
+| `INNER_DOWN`     | `exec` or a session found the inner container down: it starts again, or gave up.            |
 | `NO_SESSION`     | `session.attach` or `session.kill` named no session.                                        |
 | `SESSION_LIMIT`  | A new session would be the 17th.                                                            |
 | `DIAL_FAILED`    | `dial` could not connect (refused, timed out, no such socket).                              |
@@ -103,15 +104,17 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 
 ```json
 → {"op":"ping"}
-← {"ok":true,"version":"0.13.0","uptime_ms":265}
+← {"ok":true,"version":"0.13.0","uptime_ms":265,"inner":{"up":true,"restarts":0}}
 ```
 
 `uptime_ms` is `CLOCK_BOOTTIME`. The host uses `ping` as the boot-readiness probe. On a boot with
 `imp.reset_identity=1`, `identity_reset` is `ok` or `failed`; impd keeps asking for the reset until
-a boot answers `ok` ([templates](../guides/templates.md#identity)).
+a boot answers `ok` ([templates](../guides/templates.md#identity)). `inner` is the
+[inner container](./agent.md#the-inner-container): whether it runs, how often it started again after
+its init died, and `last_error`, why the last start failed. An older agent leaves it out.
 
 A guest parked in a [boot template](./boot-templates.md#make) answers with `"stage":"template"`;
-stage 2 leaves the field out.
+once it boots on, it leaves the field out.
 
 ### `claim`
 
@@ -124,7 +127,7 @@ stage 2 leaves the field out.
 
 Only a guest parked in a boot template serves it, and it refuses every op but `ping` and `claim`
 with `UNKNOWN_OP`. The guest sets its clock, entropy and MAC, waits up to 2 s for `vda` to report
-`disk_bytes`, then goes on to stage 2 with these values ([claim](./boot-templates.md#claim)). A
+`disk_bytes`, then goes on with its boot with these values ([claim](./boot-templates.md#claim)). A
 claim without a hostname and an ip is `BAD_REQUEST`; one that fails to apply, a disk still at the
 wrong size included, is `INTERNAL`, and the guest stays parked for another.
 
@@ -187,8 +190,8 @@ Grows the root filesystem to fill its disk, after the host grew the disk file an
 The guest sees the new size on its own time, so the agent polls `/sys/block/vda/size` until the disk
 has at least `disk_bytes` (10 s at most), then runs `EXT4_IOC_RESIZE_FS`, an online resize. A frozen
 filesystem would block the resize, so `grow` during a freeze fails with `FROZEN`. Every cold boot
-also grows the filesystem to fill the disk, in stage 1, before the switch of root. Since `0.5.0`: an
-older agent answers `UNKNOWN_OP`, which impd reports as `AGENT_OUTDATED`.
+also grows the filesystem to fill the disk, right after the agent mounts it. Since `0.5.0`: an older
+agent answers `UNKNOWN_OP`, which impd reports as `AGENT_OUTDATED`.
 
 ### `services.list`
 
@@ -292,9 +295,9 @@ The default env comes from `/etc/imp/image.json` (`{"env":[],"workdir":"","user"
 
 Sequence:
 
-1. The guest starts the process. If that fails, it sends RESPONSE with `EXEC_FAILED` and closes.
-   Otherwise it sends STARTED `{"pid":n}`, with the `kill_grace_ms` it applies (clamped; absent with
-   `tty` or 0).
+1. The guest starts the process. If that fails, it sends RESPONSE with `EXEC_FAILED` (or
+   `INNER_DOWN`) and closes. Otherwise it sends STARTED `{"pid":n}`, the pid inside the container,
+   with the `kill_grace_ms` it applies (clamped; absent with `tty` or 0).
 2. Both sides stream:
    - host → guest: STDIN, STDIN_EOF, RESIZE, SIGNAL.
    - guest → host: STDOUT, STDERR.
@@ -465,7 +468,7 @@ in `activity`'s `exec_sessions`; the SSH connection keeps the imp awake on its o
 
 - The agent makes a directory under `/run/imp/ssh-agent/` (mode 0700) and a socket in it (mode
   0600), both owned by the image's user, the one `exec` runs as. It hands them to the user only once
-  both exist. `/run` is a fresh tmpfs every boot.
+  both exist. `/run` is a fresh tmpfs at every container start.
 - The agent also checks each client's uid (`SO_PEERCRED`): the image's user or root. Others are
   closed.
 - Each client gets a CONNECTION with a new id and waits for an `agent.accept`. At most 16 wait; more
