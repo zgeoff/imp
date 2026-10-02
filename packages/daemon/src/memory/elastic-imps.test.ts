@@ -1,13 +1,18 @@
 import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
+import { buildMemoryMax, createCpuCgroups } from '../vmm/cpu-cgroups';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 
 // Elastic imps through the router, on the fake VMs: what create accepts, and
 // what a sleep and a wake do with the plugged memory.
-async function setupElasticTest(env: Readonly<Record<string, string>> = {}) {
-  const harness = await setupImpTest({ env });
+async function setupElasticTest(env: Readonly<Record<string, string>> = {}, cgroups?: CpuCgroups) {
+  const harness = await setupImpTest({ env, ...(cgroups !== undefined && { cgroups }) });
 
   await harness.createTestImage('ubuntu');
 
@@ -129,4 +134,102 @@ test('an imp that does not grow sleeps without asking its guest', async () => {
 
   expect(ctx.fake.guestMemory.has(paths.dir)).toBe(false);
   expect(readSnapshotMeta(paths)?.pluggedMib).toBeUndefined();
+});
+
+// a cgroup root in a temp dir with the cpu and memory controllers handed to
+// imps/, as setup-cgroups.sh leaves it
+function setupCgroupRoot() {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-elastic-cgroups-'));
+
+  mkdirSync(join(dir, 'imps'), { recursive: true });
+  writeFileSync(join(dir, 'imps', 'cgroup.subtree_control'), 'cpu memory\n');
+
+  // the cgroup writer of the impd running now; a restart gets a new one,
+  // which knows nothing of the sizes the last one set
+  const current = { cgroups: createCpuCgroups({ root: dir, log: () => {} }) };
+
+  const cgroups = new Proxy(current.cgroups, {
+    get: (_target, key: keyof CpuCgroups) => current.cgroups[key],
+  });
+
+  return {
+    cgroups,
+    restart: () => {
+      current.cgroups = createCpuCgroups({ root: dir, log: () => {} });
+    },
+    readMemoryMax: (impId: string) => readFileSync(join(dir, 'imps', impId, 'memory.max'), 'utf8'),
+    [Symbol.dispose]: () => {
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("memory.max follows the guest: its memory at boot, raised by a grow, the plug's size at wake", async () => {
+  using root = setupCgroupRoot();
+
+  await using ctx = await setupElasticTest({}, root.cgroups);
+
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+  const paths = await ctx.findPaths('dev');
+
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(256));
+
+  // 56 MiB available, under the 128 MiB mark: the next tick plugs a step
+  ctx.fake.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 0,
+    requestedMib: 0,
+    usedMib: 200,
+    unplugFloorMib: 0,
+  });
+
+  await ctx.memory.runTick();
+
+  expect(ctx.fake.guestMemory.get(paths.dir)?.pluggedMib).toBe(256);
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(512));
+
+  // the guest has nothing to spare, so it sleeps with the step plugged
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(readSnapshotMeta(paths)).toBeNull();
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(512));
+
+  // a stop forgets the size: the next cold boot starts at the memory again
+  await ctx.client.imps.stop({ name: 'dev' });
+  await ctx.client.imps.start({ name: 'dev' });
+
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(256));
+});
+
+test('after a restart, adopt allows what the guest holds before a sleep can set up its cgroup', async () => {
+  using root = setupCgroupRoot();
+
+  await using ctx = await setupElasticTest({}, root.cgroups);
+
+  const created = await ctx.client.imps.create({ name: 'dev', memoryMib: 256, maxMemoryMib: 1024 });
+  const paths = await ctx.findPaths('dev');
+
+  // 512 plugged, none of it free to unplug
+  ctx.fake.guestMemory.set(paths.dir, {
+    baseMib: 256,
+    pluggedMib: 512,
+    requestedMib: 512,
+    usedMib: 700,
+    unplugFloorMib: 512,
+  });
+
+  root.restart();
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(768));
+
+  // before any tick of the new impd's controller
+  await impd.imps.sleepImp('dev');
+
+  expect(root.readMemoryMax(created.id)).toBe(buildMemoryMax(768));
+  expect(readSnapshotMeta(paths)).toMatchObject({ pluggedMib: 512 });
 });

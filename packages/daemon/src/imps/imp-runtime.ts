@@ -157,6 +157,22 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const reconciler = createVmReconciler(context, ops);
   const lastDiskFull: { error: Error | null } = { error: null };
 
+  // An elastic guest may hold more than its memory, and a new impd's cgroup
+  // writer knows nothing of it: the limit covers what the guest holds, or the
+  // most it can, before a sleep or a snapshot sets up the cgroup again.
+  const setAdoptedMemoryLimit = async (imp: LockedImp, paths: ImpPaths): Promise<void> => {
+    if (imp.maxMemoryMib <= imp.memoryMib) {
+      return;
+    }
+
+    const pluggedMib = await context.vms.readGuestMemory(paths).then(
+      (memory) => Math.max(memory.pluggedMib, memory.requestedMib),
+      () => imp.maxMemoryMib - imp.memoryMib,
+    );
+
+    context.memoryLimit.setGuestMib(imp.id, imp.memoryMib + pluggedMib);
+  };
+
   const requireRunning: ImpRuntime['requireRunning'] = async (name, onFound) => {
     const found = await lock.findImp(name);
 
@@ -482,6 +498,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               );
 
               if (imp.pid !== null) {
+                await setAdoptedMemoryLimit(imp, paths);
+
                 context.cgroups.adopt(imp.id, imp.pid, imp.cpu, imp.memoryMib);
 
                 startCounting(context, imp, imp.pid);
