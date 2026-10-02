@@ -140,6 +140,10 @@ loopback only is reachable too. It needs no SSH key: it goes to impd with the CL
 stops it. A busy local port fails at once and names the port. impd allows 256 open connections per
 imp; a forced sleep resets the open ones, and the next one wakes the imp.
 
+`imp proxy box --reverse /tmp/app.sock:/run/user/1000/app.sock` goes the other way: a program in the
+imp reaches a socket or a port on your machine.
+[Reverse forwards](./docs/guides/reverse-forwards.md) has the details.
+
 ## Files
 
 `imp cp ./app box:/srv` copies a file or a directory into an imp, and `imp cp box:/var/log/x .`

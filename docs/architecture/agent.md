@@ -67,9 +67,9 @@ The history sits behind a `Screen` interface. A terminal emulator that keeps the
 output that the program must redraw over. Sessions live in the agent's memory: they survive a sleep
 and wake, and end with the guest.
 
-## Dial, SFTP and agent forwarding
+## Dial, SFTP, agent forwarding and reverse forwards
 
-Three pieces serve impd's [SSH gateway](../guides/ssh.md). The `dial` op connects to an address in
+These pieces serve impd's [SSH gateway](../guides/ssh.md). The `dial` op connects to an address in
 the guest and relays bytes, for port forwarding ([protocol](./protocol.md#dial)); a unix socket dial
 runs `imp-agent dial-unix` as the image's user, which hands the connected socket back. And
 `imp-agent tar`, the guest end of `imp cp` ([copying files](../guides/cp.md)), runs from the system
@@ -78,8 +78,10 @@ drive through a plain `exec`, as root. `imp-agent sftp`, run from the system dri
 starts it through a plain `exec`, as the image's user, so every image gets SFTP without an
 `sftp-server` of its own. It starts in `$HOME`. And `agent.listen` serves a socket for
 `SSH_AUTH_SOCK` under `/run/imp/ssh-agent/`, owned by the image's user, for as long as impd keeps
-the connection open; `agent.accept` relays each of its clients to the user's ssh-agent
-(`internal/sshagent`, [protocol](./protocol.md#agentlisten-and-agentaccept)).
+the connection open; `agent.accept` relays each of its clients to the user's ssh-agent. `listen`
+serves a reverse forward the same way, at a path or port the host names, bound by
+`imp-agent listen-as-user` as the image's user, which hands the listening socket back
+(`internal/listen`, [protocol](./protocol.md#listen)).
 
 ## Shutdown
 
