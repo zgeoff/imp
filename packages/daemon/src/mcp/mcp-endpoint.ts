@@ -3,6 +3,7 @@ import type { HttpTransport } from '@imp/mcp';
 import { createImpClient } from '@zgeoff/imp-client';
 import type { ExecSocket } from '@zgeoff/imp-client';
 import packageJson from '../../package.json' with { type: 'json' };
+import { isSameOrigin } from '../auth/authenticate';
 import type { Caller } from '../auth/caller';
 
 export const MCP_PATH = '/mcp';
@@ -28,6 +29,7 @@ export interface McpEndpointDeps {
 export function createMcpEndpoint(deps: Readonly<McpEndpointDeps>): HttpTransport {
   return createHttpTransport({
     version: packageJson.version,
+    isCrossOrigin,
     authenticate: async (request) => {
       const caller = await deps.findCaller(request);
 
@@ -50,4 +52,13 @@ export function createMcpEndpoint(deps: Readonly<McpEndpointDeps>): HttpTranspor
       };
     },
   });
+}
+
+// A browser names the page a request comes from in Sec-Fetch-Site or Origin,
+// and the dashboard's rule decides, Sec-Fetch-Site first. A client that is no
+// browser sends neither, and the token alone counts.
+function isCrossOrigin(request: Request): boolean {
+  const fromBrowser = request.headers.has('sec-fetch-site') || request.headers.has('origin');
+
+  return fromBrowser && !isSameOrigin(request);
 }

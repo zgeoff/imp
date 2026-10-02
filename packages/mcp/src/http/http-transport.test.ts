@@ -50,6 +50,9 @@ function setupTransportTest(options: Readonly<TransportTestOptions> = {}) {
     keepaliveMs: options.keepaliveMs ?? 5000,
     ...(options.limits !== undefined && { limits: options.limits }),
     now: () => clock.now,
+
+    // impd decides from Origin and Sec-Fetch-Site; here, a header says so
+    isCrossOrigin: (request) => request.headers.has('x-cross-origin'),
     authenticate: (request) => {
       const key = (request.headers.get('authorization') ?? '').replace(/^Bearer /, '');
       const scope = scopes[key];
@@ -318,18 +321,12 @@ test('a bad request is refused before it reaches a session', async () => {
   expect(get.headers.get('allow')).toBe('POST, DELETE');
 });
 
-test('a page on another origin is refused, however it says so', async () => {
+test('a page on another origin is refused before it is authenticated', async () => {
   await using ctx = setupTransportTest();
 
-  const byOrigin = await ctx.sendPost('alice', INITIALIZE, { origin: 'http://evil.example' });
-  const bySite = await ctx.sendPost('alice', INITIALIZE, { 'sec-fetch-site': 'cross-site' });
+  const page = await ctx.sendPost('mallory', INITIALIZE, { 'x-cross-origin': '1' });
 
-  const sameOrigin = await ctx.sendPost('alice', INITIALIZE, {
-    origin: 'http://impd.test',
-    'sec-fetch-site': 'same-origin',
-  });
-
-  expect([byOrigin.status, bySite.status, sameOrigin.status]).toEqual([403, 403, 200]);
+  expect(page.status).toBe(403);
 });
 
 test('DELETE ends a session', async () => {

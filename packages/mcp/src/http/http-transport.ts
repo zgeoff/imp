@@ -23,6 +23,10 @@ export interface HttpTransportOptions extends McpServerOptions {
   // null for a request with no caller: a 401
   readonly authenticate: (request: Request) => Promise<McpPrincipal | null>;
 
+  // true for a browser's request from a page on another origin: a 403,
+  // before the request is authenticated
+  readonly isCrossOrigin: (request: Request) => boolean;
+
   // between SSE comments, so no idle timeout ends a long call's stream
   readonly keepaliveMs?: number;
   readonly limits?: { readonly perCaller: number; readonly total: number; readonly idleMs: number };
@@ -221,7 +225,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
 
   return {
     handle: (request) => {
-      if (isCrossOrigin(request)) {
+      if (options.isCrossOrigin(request)) {
         return Promise.resolve(buildText(403, 'a page on another origin may not call MCP'));
       }
 
@@ -248,29 +252,6 @@ function buildContext(
   reply: MessageContext['reply'],
 ): MessageContext {
   return { reply, client: principal.client, guard: principal.guard, scope: principal.scope };
-}
-
-// A browser on another origin says so in Sec-Fetch-Site or Origin; a client
-// that is not a browser sends neither. The token stops a forged request on
-// its own, and this keeps a page from even trying.
-function isCrossOrigin(request: Request): boolean {
-  const site = request.headers.get('sec-fetch-site');
-
-  if (site !== null && site !== 'same-origin' && site !== 'none') {
-    return true;
-  }
-
-  const origin = request.headers.get('origin');
-
-  if (origin === null) {
-    return false;
-  }
-
-  try {
-    return new URL(origin).host !== new URL(request.url).host;
-  } catch {
-    return true;
-  }
 }
 
 // a response carries an id and no method; a progress notification the reverse

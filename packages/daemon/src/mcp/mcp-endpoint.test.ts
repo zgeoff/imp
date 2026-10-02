@@ -320,15 +320,28 @@ test('a tailnet identity needs no token, and its rule limits it', async () => {
   expect(answer).toMatchObject({ result: { structuredContent: { imps: [{ name: 'dev-a' }] } } });
 });
 
-test('a page on another origin is refused before it is authenticated', async () => {
+test('a page on another origin is refused, Sec-Fetch-Site first, as the dashboard does', async () => {
   await using ctx = await setupHttpTest();
 
   const page = startHttpClient(ctx.url, { authorization: `Bearer ${ctx.token}` });
+  const ping = { jsonrpc: '2.0', id: 0, method: 'ping' };
 
-  const response = await page.sendPost(
-    { jsonrpc: '2.0', id: 0, method: 'ping' },
+  const host = new URL(ctx.url).host;
+
+  const statuses: number[] = [];
+
+  for (const headers of [
     { origin: 'http://evil.example' },
-  );
+    { 'sec-fetch-site': 'cross-site' },
+    { 'sec-fetch-site': 'same-site', origin: `http://${host}` },
+    { 'sec-fetch-site': 'same-origin', origin: 'http://evil.example' },
+    { origin: `https://${host}` },
+  ]) {
+    const response = await page.sendPost(ping, headers);
 
-  expect(response.status).toBe(403);
+    statuses.push(response.status);
+  }
+
+  // a 400, not a 403: past the origin check, the ping has no session
+  expect(statuses).toEqual([403, 403, 403, 400, 400]);
 });
