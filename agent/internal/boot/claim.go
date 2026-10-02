@@ -130,9 +130,11 @@ func applyClaim(c proto.Claim) error {
 	if err := setMAC("eth0", c.MAC); err != nil {
 		errs = append(errs, fmt.Errorf("mac: %w", err))
 	}
-	if err := waitForDiskSize(userDisk, c.DiskBytes, diskSizeTimeout); err != nil {
-		// the grow after the mount sees whatever size the guest has
-		log.Printf("stage1: claim: %v", err)
+	// a disk still at the placeholder's size would fail the mount in stage 2;
+	// an error now lets the host boot the kernel at once
+	readSize := func() (uint64, error) { return readDiskBytes(userDisk) }
+	if err := waitForDiskSize(readSize, c.DiskBytes, diskSizeTimeout); err != nil {
+		errs = append(errs, fmt.Errorf("%s: %w", userDisk, err))
 	}
 	if err := flushDisk(userDisk); err != nil {
 		errs = append(errs, fmt.Errorf("%s: %w", userDisk, err))
@@ -181,19 +183,24 @@ func setMAC(iface, mac string) error {
 // restore's PATCH gave the disk.
 const diskSizeTimeout = 2 * time.Second
 
-// waitForDiskSize waits until dev reports at least want bytes; want 0 skips.
-func waitForDiskSize(dev string, want int64, timeout time.Duration) error {
+// sectorBytes is the unit virtio-blk reports a disk's size in.
+const sectorBytes = 512
+
+// waitForDiskSize waits until read reports at least want bytes, rounded
+// down to whole sectors; want 0 skips.
+func waitForDiskSize(read func() (uint64, error), want int64, timeout time.Duration) error {
+	want -= want % sectorBytes
 	if want <= 0 {
 		return nil
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		got, err := readDiskBytes(dev)
+		got, err := read()
 		if err == nil && int64(got) >= want {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s reports %d bytes after %s; want %d (%v)", dev, got, timeout, want, err)
+			return fmt.Errorf("reports %d bytes after %s; want %d (%v)", got, timeout, want, err)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}

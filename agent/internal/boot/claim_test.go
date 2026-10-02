@@ -111,10 +111,34 @@ func TestAddEntropyRefusesAShortSeed(t *testing.T) {
 }
 
 func TestWaitForDiskSize(t *testing.T) {
-	if err := waitForDiskSize("/nonexistent", 0, time.Millisecond); err != nil {
+	noDevice := func() (uint64, error) { return 0, errors.New("no such device") }
+	if err := waitForDiskSize(noDevice, 0, time.Millisecond); err != nil {
 		t.Fatalf("want 0 skips the wait: %v", err)
 	}
-	if err := waitForDiskSize("/nonexistent", 1, 10*time.Millisecond); err == nil {
+	if err := waitForDiskSize(noDevice, 4096, 10*time.Millisecond); err == nil {
 		t.Fatal("a device that never answers passed")
+	}
+
+	// the placeholder's 1 MiB, then the grown size once the config
+	// interrupt lands, in whole sectors
+	reads := 0
+	growing := func() (uint64, error) {
+		reads++
+		if reads < 5 {
+			return 1 << 20, nil
+		}
+		return 6<<30 - 512, nil
+	}
+	if err := waitForDiskSize(growing, 6<<30-100, time.Second); err != nil {
+		t.Fatalf("a disk that grew failed the wait: %v", err)
+	}
+	if reads != 5 {
+		t.Fatalf("read the size %d times; want 5", reads)
+	}
+
+	small := func() (uint64, error) { return 1 << 20, nil }
+	err := waitForDiskSize(small, 6<<30, 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "reports 1048576 bytes") {
+		t.Fatalf("a disk that never grew: %v", err)
 	}
 }
