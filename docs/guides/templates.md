@@ -71,6 +71,9 @@ flag only when a boot reports `ok`, so a failed reset or a boot that fails runs 
 the next boot, and later boots keep the new identity. A fork, and a restore from a backup, carry the
 flag: a fork of a copy that has not reset yet resets on its own first boot, as the copy would.
 
+A reset that fails on every boot, such as an `ssh-keygen` that ignores `-f` with `-A`, writes a new
+machine-id on each cold boot while the old host keys stay; impd logs each attempt.
+
 ## Access
 
 A template holds its source imp's disk. A token limited to some imps may create an imp from a
