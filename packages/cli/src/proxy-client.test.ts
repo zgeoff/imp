@@ -298,11 +298,11 @@ test('a port in use fails at once, names the port, and calls no impd', async () 
   const config: CliConfig = { url: 'http://127.0.0.1:1', token: TOKEN, host: null };
   const started = startProxy(config, 'box', [{ local: busy.port, remote: 5432 }], tested.io);
 
-  expect(started).rejects.toThrow(
+  const failure = await started.catch((error: unknown) => error);
+
+  expect(String(failure)).toContain(
     `local port ${String(busy.port)} is in use; map another one: imp proxy box`,
   );
-
-  await started.catch(() => null);
 
   expect(tested.checked).toEqual([]);
 });
@@ -332,9 +332,11 @@ test('an error from impd reaches the user and resets the local connection', asyn
   const proxy = await startTestProxy(fake.config, 9, tested.io);
 
   // a reset, as when the far end of a TCP connection refuses it
-  expect(sendRequest('127.0.0.1', proxy.ports[0] ?? 0, new Uint8Array(1))).rejects.toThrow(
-    'ECONNRESET',
+  const failure = await sendRequest('127.0.0.1', proxy.ports[0] ?? 0, new Uint8Array(1)).catch(
+    (error: unknown) => error,
   );
+
+  expect(String(failure)).toContain('ECONNRESET');
 
   await Bun.sleep(50);
 
