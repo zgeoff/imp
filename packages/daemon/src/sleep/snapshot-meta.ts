@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import * as z from 'zod';
+import { AgentSessionSchema } from '../agent-client/agent-requests';
 import type { ImpPaths } from '../storage/data-layout';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
@@ -25,6 +26,10 @@ const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
 
   // the RAM the VM owned when it went to sleep: what a wake reserves
   ramMib: z.int().nonnegative(),
+
+  // the guest's sessions as it went to sleep, so listing them does not wake
+  // it; left out by an older impd
+  sessions: z.array(AgentSessionSchema).readonly().optional(),
 });
 
 export type SnapshotIdentity = z.infer<typeof SnapshotIdentitySchema>;

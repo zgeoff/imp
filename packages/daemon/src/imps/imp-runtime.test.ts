@@ -216,3 +216,14 @@ test('a destroy issued while the create boots waits for it, then removes the imp
   expect(left).toBeUndefined();
   expect(ctx.fake.alive.size).toBe(0);
 });
+
+test('a session exec on an agent from before sessions fails before it connects', async () => {
+  await using ctx = await setupRunningImp();
+
+  const rejection = await ctx.imps
+    .openExec('dev', { argv: ['sh'], tty: true, session: 'main' })
+    .catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(ctx.imps.tracker.count(ctx.impId)).toBe(0);
+});

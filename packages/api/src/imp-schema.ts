@@ -32,6 +32,10 @@ export const ImpSchema = z.object({
   holdUntil: z.date().optional(),
   error: z.string().optional(),
 
+  // sessions in the imp, as last seen; left out while impd has not seen
+  // the imp's agent yet
+  sessions: z.int().nonnegative().optional(),
+
   // sleeping: why the next wake boots cold instead of restoring the memory;
   // awake: why the last boot was cold instead of a wake
   coldBootReason: z.string().optional(),

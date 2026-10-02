@@ -24,11 +24,16 @@ export interface AgentConnection {
 export class AgentError extends Error {
   readonly code: string;
 
-  constructor(code: string, message: string) {
-    super(`${code}: ${message}`);
+  // the agent's message without the code, for a client that shows the code
+  // on its own
+  readonly detail: string;
+
+  constructor(code: string, detail: string) {
+    super(`${code}: ${detail}`);
 
     this.name = 'AgentError';
     this.code = code;
+    this.detail = detail;
   }
 }
 

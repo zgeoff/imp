@@ -1,6 +1,7 @@
 import type { Imp } from '@imp/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
+import { countSessions } from '../sessions/count-sessions';
 import { readBootStatus } from './boot-status';
 import type { ImpContext } from './imp-context';
 
@@ -58,6 +59,12 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
 
     if (ramMib !== null) {
       api.ramMib = ramMib;
+    }
+
+    const sessions = countSessions(context, imp);
+
+    if (sessions !== undefined) {
+      api.sessions = sessions;
     }
 
     return { ...api, ...readBootStatus(imp, paths, context.identity) };

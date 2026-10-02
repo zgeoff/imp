@@ -2,7 +2,7 @@ import type { ImpContract } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError, toExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
-import type { ExecSession } from './open-exec-session';
+import type { ExecAttach, ExecSession, ExecStart, ExecStarted } from './open-exec-session';
 
 export interface ExecOptions {
   readonly tty?: boolean;
@@ -12,6 +12,11 @@ export interface ExecOptions {
   // the terminal size, with a tty
   readonly cols?: number;
   readonly rows?: number;
+
+  // starts this session, or attaches to it if it runs; needs a tty. A
+  // session outlives the handle: `close()` detaches, and `exit` rejects
+  // with DETACHED when impd ends the socket while the session runs on
+  readonly session?: string;
 
   // closes the session, as `close()` does
   readonly signal?: Readonly<AbortSignal>;
@@ -31,7 +36,7 @@ export interface ExecExit {
 // cancelling both ends it; `exit` rejects with an ExecError when the command
 // did not run to its exit.
 export interface ExecHandle {
-  readonly started: Promise<{ readonly pid: number }>;
+  readonly started: Promise<ExecStarted>;
   readonly stdout: ReadableStream<Uint8Array>;
   readonly stderr: ReadableStream<Uint8Array>;
   readonly exit: Promise<ExecExit>;
@@ -72,12 +77,51 @@ export const CONSOLE_SHELL = [
 
 // The socket authenticates with a single-use exec ticket, which works in a
 // browser and in Node, whose WebSocket sends no custom headers.
-export async function openExec(
+export function openExec(
   deps: Readonly<ExecDeps>,
   name: string,
   argv: readonly string[],
   options: Readonly<ExecOptions> = {},
 ): Promise<ExecHandle> {
+  const tty = options.tty ?? false;
+
+  return openHandle(deps, options, tty, {
+    name,
+    argv,
+    tty,
+    ...(options.env !== undefined && { env: options.env }),
+    ...(options.cwd !== undefined && { cwd: options.cwd }),
+    ...(options.cols !== undefined && { cols: options.cols }),
+    ...(options.rows !== undefined && { rows: options.rows }),
+    ...(options.session !== undefined && { session: options.session }),
+  });
+}
+
+export type AttachOptions = Pick<ExecOptions, 'cols' | 'rows' | 'signal' | 'maxUnreadBytes'>;
+
+// Attaches to a session that runs: stdout gets the replay of its recent
+// output, then live output. NOT_FOUND when there is no such session.
+export function openAttach(
+  deps: Readonly<ExecDeps>,
+  name: string,
+  session: string,
+  options: Readonly<AttachOptions> = {},
+): Promise<ExecHandle> {
+  return openHandle(deps, options, true, {
+    name,
+    session,
+    ...(options.cols !== undefined && { cols: options.cols }),
+    ...(options.rows !== undefined && { rows: options.rows }),
+  });
+}
+
+async function openHandle(
+  deps: Readonly<ExecDeps>,
+  options: Readonly<AttachOptions>,
+  tty: boolean,
+  start: Readonly<ExecStart | ExecAttach>,
+): Promise<ExecHandle> {
+  const name = start.name;
   const abort = options.signal;
   const callOptions = abort === undefined ? {} : { signal: abort };
 
@@ -87,9 +131,8 @@ export async function openExec(
 
   // the ticket call may have outlived an abort that it did not see
   abort?.throwIfAborted();
-  const tty = options.tty ?? false;
   const maxUnreadBytes = options.maxUnreadBytes ?? DEFAULT_MAX_UNREAD_BYTES;
-  const started = Promise.withResolvers<Settled<{ pid: number }>>();
+  const started = Promise.withResolvers<Settled<ExecStarted>>();
   const ended = Promise.withResolvers<Settled<ExecExit>>();
   const state = { ended: false, cancelled: 0 };
 
@@ -125,17 +168,9 @@ export async function openExec(
     baseUrl: deps.baseUrl,
     token: deps.token,
     ticket: issued.ticket,
-    start: {
-      name,
-      argv,
-      tty,
-      ...(options.env !== undefined && { env: options.env }),
-      ...(options.cwd !== undefined && { cwd: options.cwd }),
-      ...(options.cols !== undefined && { cols: options.cols }),
-      ...(options.rows !== undefined && { rows: options.rows }),
-    },
-    onStarted: (pid) => {
-      started.resolve({ value: { pid } });
+    start,
+    onStarted: (info) => {
+      started.resolve({ value: info });
     },
     onOutput: (channel, data) => {
       const target = channel === 'stderr' ? stderr : stdout;
@@ -252,7 +287,7 @@ export async function runCommand(
 }
 
 interface HandleParts {
-  readonly started: Promise<Settled<{ pid: number }>>;
+  readonly started: Promise<Settled<ExecStarted>>;
   readonly ended: Promise<Settled<ExecExit>>;
   readonly isEnded: () => boolean;
   readonly tty: boolean;
@@ -263,7 +298,7 @@ interface HandleParts {
 function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHandle {
   const encoder = new TextEncoder();
 
-  const waitForStart = async (): Promise<{ pid: number }> => {
+  const waitForStart = async (): Promise<ExecStarted> => {
     const result = await parts.started;
 
     if ('error' in result) {

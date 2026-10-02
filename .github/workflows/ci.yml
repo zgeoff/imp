@@ -182,6 +182,12 @@ jobs:
       - name: Run
         run: dist/imp-linux-x64 --version
 
+      # The release image compiles impd and the CLI in its own stage, with
+      # its own install: build that stage too, so a dependency the stage
+      # misses fails here and not first in a release.
+      - name: Build the release compile stage
+        run: docker build --target compile -f host/Dockerfile .
+
   # Packs @zgeoff/imp-client as the release publishes it, then installs the
   # tarball into an empty project on the oldest Node it supports.
   client:

@@ -19,11 +19,13 @@ import (
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
+	"github.com/zgeoff/imp/agent/internal/session"
 )
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
@@ -68,8 +70,10 @@ func Stage2() error {
 		log.Printf("stage2: ready on vsock port %d", server.Port)
 		return l, nil
 	}
+	launcher := launch.New(r, image)
 	srv := &server.Server{
-		Exec:     exec.NewManager(r, image),
+		Exec:     exec.NewManager(launcher),
+		Sessions: session.NewManager(launcher),
 		Services: sup,
 	}
 	// A shutdown request and a signal can race; only the first powers off.

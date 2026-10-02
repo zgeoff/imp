@@ -1,11 +1,12 @@
 import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
+import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
 import { formatImp, formatImps, formatOutput } from '../format-output';
 import { parseDuration } from '../parse-duration';
 import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
-import { jsonArg, nameArg } from './common-args';
+import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -179,21 +180,59 @@ export const execCommand = defineCommand({
   },
 });
 
+// `--no-session` parses to session: false. With no terminal on stdin, as
+// in a script, the shell runs without a session unless one is named.
 export const consoleCommand = defineCommand({
-  meta: { name: 'console', description: 'Open an interactive shell in an imp' },
-  args: { name: nameArg },
+  meta: {
+    name: 'console',
+    description:
+      'Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches)',
+  },
+  args: {
+    name: nameArg,
+    session: {
+      type: 'string',
+      description: `session to start or attach to (default ${DEFAULT_SESSION} on a terminal); --no-session for a shell that ends with the terminal`,
+    },
+    'detach-key': detachKeyArg,
+  },
   run: async (context) => {
+    const session = readConsoleSession(context.args.session, process.stdin.isTTY);
+    const detachKey = readDetachKey(context.args['detach-key']);
+
+    if (session === undefined || detachKey === undefined) {
+      return;
+    }
+
     const code = await runExec({
       host: context.host,
       name: context.args.name,
       argv: ['/bin/sh', '-c', CONSOLE_SHELL],
       tty: true,
       env: readTermEnv(),
+      ...(typeof session === 'string' && {
+        session: { name: session, attachOnly: false, detachKey },
+      }),
     });
 
     process.exit(code);
   },
 });
+
+// the named session, the default on a terminal, or null for none;
+// undefined once a bad name is reported
+export function readConsoleSession(
+  session: unknown,
+  isTerminal: boolean,
+): string | null | undefined {
+  if (session === false || (session === undefined && !isTerminal)) {
+    return null;
+  }
+
+  const name = typeof session === 'string' ? session : DEFAULT_SESSION;
+
+  return readSessionName(name);
+}
 
 // everything after `--` (main.ts keeps it from citty), else the
 // positionals after the name
@@ -203,6 +242,6 @@ function splitCommand(argv: readonly string[], positionals: readonly string[]): 
   return separator === -1 ? [...positionals] : argv.slice(separator + 1);
 }
 
-function readTermEnv(): Record<string, string> {
+export function readTermEnv(): Record<string, string> {
   return { TERM: process.env['TERM'] ?? 'xterm-256color' };
 }

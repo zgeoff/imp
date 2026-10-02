@@ -1,5 +1,8 @@
 import type { Imp } from '@imp/api';
 import type { ImpRecord } from '../db/imps';
+import { countSessions } from '../sessions/count-sessions';
+import { createSessionService } from '../sessions/session-service';
+import type { SessionService } from '../sessions/session-service';
 import type { ImpCommands } from './imp-commands';
 import { createImpCommands } from './imp-commands';
 import { createImpContext } from './imp-context';
@@ -15,7 +18,12 @@ import { createShutdownGate } from './shutdown-gate';
 export type { ImpServiceDeps } from './imp-context';
 
 // The imp API: what the router and the exec endpoint call.
-export type ImpService = ImpCommands & Pick<ImpRuntime, 'openExec' | 'recordActivity'>;
+export type ImpService = ImpCommands &
+  SessionService &
+  Pick<ImpRuntime, 'openExec' | 'openAttach' | 'recordActivity'> & {
+    // sessions impd last saw in the imp; undefined when it has not seen any
+    readonly countSessions: (imp: ImpRecord) => number | undefined;
+  };
 
 // For checkpoints/checkpoint-service.ts. `lockImp` runs `action` under the
 // imp's lifecycle lock with a fresh record; the other hooks take that record.
@@ -42,9 +50,17 @@ export function createImpService(deps: ImpServiceDeps): Imps {
   const commands = createImpCommands({ context, lock, ops, presenter });
   const runtime = createImpRuntime({ context, gate, lock, ops });
 
+  const sessions = createSessionService({
+    context,
+    lock,
+    requireRunning: runtime.requireRunning,
+  });
+
   return {
     ...commands,
     ...runtime,
+    ...sessions,
+    countSessions: (imp) => countSessions(context, imp),
     lockImp: lock.withImp,
     haltImp: ops.stopImpVm,
     bootImp: ops.startImpVm,

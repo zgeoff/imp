@@ -6,6 +6,8 @@ import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
+import { createSessionCache } from '../sessions/session-cache';
+import type { SessionCache } from '../sessions/session-cache';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -59,6 +61,7 @@ export interface ImpContext {
   readonly identity: HostIdentity;
   readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
+  readonly sessions: SessionCache;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
 }
@@ -83,6 +86,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       deps.onImpsChanged?.();
     },
     tracker: createActivityTracker(),
+    sessions: createSessionCache(),
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
   };

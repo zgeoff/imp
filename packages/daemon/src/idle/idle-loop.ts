@@ -1,10 +1,8 @@
-import { sendActivity } from '../agent-client/agent-requests';
 import type { Config } from '../config';
 import { listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpRuntime } from '../imps/imp-runtime';
-import { buildImpPaths } from '../storage/data-layout';
 import { readCpuTicks } from '../vmm/vm-stats';
 import { checkIdle } from './check-idle';
 
@@ -14,7 +12,7 @@ const TICKS_PER_SECOND = 100;
 interface IdleLoopDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'trySleepImp'>;
+  readonly imps: Pick<ImpRuntime, 'isImpBusy' | 'readActivity' | 'tracker' | 'trySleepImp'>;
   readonly log: (message: string) => void;
 }
 
@@ -48,17 +46,6 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
     return (cpuSeconds / ((now - previous.at) / 1000)) * 100;
   };
 
-  const readTcpEstablished = async (imp: ImpRecord): Promise<number> => {
-    try {
-      const activity = await sendActivity(buildImpPaths(deps.config.dataDir, imp.id).vsockSocket);
-
-      return activity.tcp_established;
-    } catch {
-      // a busy or wedged agent: the other signals decide
-      return 0;
-    }
-  };
-
   const checkImp = async (imp: ImpRecord): Promise<void> => {
     const pid = imp.pid;
 
@@ -69,7 +56,11 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
     const now = Date.now();
     const cpuPercent = readCpuPercent(imp, pid, now);
 
-    const tcpEstablished = await readTcpEstablished(imp);
+    // a busy or wedged agent: the other signals decide; a detached session
+    // keeps the imp awake only through its CPU or TCP
+    const activity = await deps.imps.readActivity(imp);
+
+    const tcpEstablished = activity?.tcp_established ?? 0;
 
     const decision = checkIdle(
       {

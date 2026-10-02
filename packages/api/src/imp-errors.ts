@@ -2,7 +2,7 @@ import * as z from 'zod';
 import { defineErrors } from './define-errors';
 import { ImpStateSchema } from './imp-schema';
 
-const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint']);
+const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint', 'session']);
 
 const ResourceDataSchema = z.object({
   kind: ResourceKindSchema,
@@ -37,4 +37,7 @@ export const IMP_ERRORS = defineErrors({
       allowed: z.array(ImpStateSchema),
     }),
   },
+
+  // the imp's agent is from before the feature; a stop and start updates it
+  AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },
 });

@@ -4,7 +4,6 @@ package exec
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,9 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/pty"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
 )
@@ -51,13 +51,12 @@ const (
 
 // Manager runs exec sessions and counts the live ones.
 type Manager struct {
-	reaper *reaper.Reaper
-	image  imagecfg.Config
-	active atomic.Int64
+	launcher *launch.Launcher
+	active   atomic.Int64
 }
 
-func NewManager(r *reaper.Reaper, image imagecfg.Config) *Manager {
-	return &Manager{reaper: r, image: image}
+func NewManager(l *launch.Launcher) *Manager {
+	return &Manager{launcher: l}
 }
 
 // Active returns the number of running exec sessions.
@@ -133,11 +132,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	s.close()
 	writer.Wait()
 
-	exit := proto.Exit{Code: st.Code}
-	if st.Signal != 0 {
-		exit = proto.Exit{Code: 128 + int(st.Signal), Signal: int(st.Signal)}
-	}
-	err = w.WriteJSON(proto.TypeExit, exit)
+	err = w.WriteJSON(proto.TypeExit, proto.ExitOf(st.Code, int(st.Signal)))
 	// The host closes once it has EXIT. Read until then: a host frame that
 	// races the exit (stdin EOF) must not hit a closed socket, or the host
 	// loses the EXIT frame to EPIPE.
@@ -172,56 +167,36 @@ type session struct {
 }
 
 func (m *Manager) start(req proto.Request) (*session, error) {
-	if len(req.Argv) == 0 {
-		return nil, errors.New("argv is empty")
-	}
-	user := req.User
-	if user == "" {
-		user = m.image.User
-	}
-	// HOME must be the user's before cwd falls back to it.
-	env, err := proc.UserEnv(proc.Merge(m.image.Env, req.Env), user)
-	if err != nil {
-		return nil, err
-	}
-	spec := proc.Spec{Argv: req.Argv, Env: env, Dir: m.cwd(req, env), User: user, TTY: req.TTY}
-
 	s := &session{stdinQ: make(chan []byte, stdinQueueChunks), done: make(chan struct{})}
-	var childEnds []*os.File
 	if req.TTY {
-		master, slave, err := openPTY()
+		p, master, err := m.launcher.StartPTY(req)
 		if err != nil {
 			return nil, err
 		}
-		cols, rows := req.Cols, req.Rows
-		if cols == 0 || rows == 0 {
-			cols, rows = 80, 24
-		}
-		if err := setWinsize(master, cols, rows); err != nil {
-			log.Printf("exec: winsize: %v", err)
-		}
-		s.tty = master
+		s.proc, s.tty = p, master
 		s.outputs = []output{{master, proto.TypeStdout}}
-		spec.Files = []*os.File{slave, slave, slave}
-		childEnds = []*os.File{slave}
-	} else {
-		var pipes [3][2]*os.File
-		for i := range pipes {
-			r, w, err := os.Pipe()
-			if err != nil {
-				closeAll(pipes[:i])
-				return nil, err
-			}
-			pipes[i] = [2]*os.File{r, w}
-		}
-		s.stdin = pipes[0][1]
-		s.outputs = []output{{pipes[1][0], proto.TypeStdout}, {pipes[2][0], proto.TypeStderr}}
-		spec.Files = []*os.File{pipes[0][0], pipes[1][1], pipes[2][1]}
-		childEnds = spec.Files
+		return s, nil
 	}
 
-	p, err := proc.Start(m.reaper, spec)
-	for _, f := range childEnds {
+	spec, err := m.launcher.Spec(req)
+	if err != nil {
+		return nil, err
+	}
+	var pipes [3][2]*os.File
+	for i := range pipes {
+		r, w, err := os.Pipe()
+		if err != nil {
+			closeAll(pipes[:i])
+			return nil, err
+		}
+		pipes[i] = [2]*os.File{r, w}
+	}
+	s.stdin = pipes[0][1]
+	s.outputs = []output{{pipes[1][0], proto.TypeStdout}, {pipes[2][0], proto.TypeStderr}}
+	spec.Files = []*os.File{pipes[0][0], pipes[1][1], pipes[2][1]}
+
+	p, err := m.launcher.Start(spec)
+	for _, f := range spec.Files {
 		f.Close()
 	}
 	if err != nil {
@@ -230,20 +205,6 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 	}
 	s.proc = p
 	return s, nil
-}
-
-// cwd picks the request's cwd, else the image workdir, else $HOME. Only an
-// explicit request cwd is allowed to fail; defaults fall back to /.
-func (m *Manager) cwd(req proto.Request, env []string) string {
-	if req.Cwd != "" {
-		return req.Cwd
-	}
-	for _, d := range []string{m.image.Workdir, proc.Get(env, "HOME")} {
-		if fi, err := os.Stat(d); d != "" && err == nil && fi.IsDir() {
-			return d
-		}
-	}
-	return "/"
 }
 
 // input applies host frames until the connection ends. If the host goes away
@@ -272,7 +233,7 @@ func (s *session) input(r *proto.Reader) {
 		case proto.TypeResize:
 			var rs proto.Resize
 			if s.tty != nil && json.Unmarshal(f.Payload, &rs) == nil {
-				setWinsize(s.tty, rs.Cols, rs.Rows)
+				pty.SetWinsize(s.tty, rs.Cols, rs.Rows)
 			}
 		case proto.TypeSignal:
 			var sig proto.Signal

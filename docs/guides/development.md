@@ -33,10 +33,11 @@ way a user would. The suites run in this order:
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
 | `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
+| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -104,16 +105,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                          |
-| ------------ | -------- | ------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                       |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.         |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                        |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                 |
-| `cli`        | yes      | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                   |
-| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file. |
+| Job          | Required | What it runs                                                                                              |
+| ------------ | -------- | --------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                           |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.                             |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                            |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                     |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage. |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                       |
+| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file.                     |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 

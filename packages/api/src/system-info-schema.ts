@@ -14,6 +14,9 @@ export const SystemInfoSchema = z.object({
   ramCommittedMib: z.int().nonnegative(),
   awakeCount: z.int().nonnegative(),
   impCount: z.int().nonnegative(),
+
+  // sessions across every imp, as last seen
+  sessionCount: z.int().nonnegative(),
   firecrackerVersion: z.string().nullable(),
 
   // the guest kernel and system drive imps boot with; version is null when

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { AgentError } from '@imp/daemon/src/agent-client/agent-connection';
 import type {
+  AgentAttachRequest,
   AgentExecRequest,
   ExecEvent,
   ExecStream,
@@ -48,13 +49,43 @@ function buildFakeAgent() {
 
     return Promise.resolve({
       ...stream,
+      session: request.session ?? null,
+      created: request.session !== undefined,
       close: () => {
         closed.push(command);
       },
     });
   };
 
-  return { openExec, requests, input, closed };
+  // `main` runs: its replay, then `taken` detaches the attach as another
+  // client would; any other session is not there
+  const attaches: AgentAttachRequest[] = [];
+
+  const openAttach = (
+    _name: string,
+    request: Readonly<AgentAttachRequest>,
+  ): Promise<ExecStream> => {
+    attaches.push(request);
+
+    if (request.session !== 'main') {
+      return Promise.reject(new AgentError('NO_SESSION', `no session "${request.session}"`));
+    }
+
+    const stream = buildScriptedStream('attach', (entry) => {
+      input.push(entry);
+    });
+
+    return Promise.resolve({
+      ...stream,
+      session: 'main',
+      created: false,
+      close: () => {
+        closed.push('attach main');
+      },
+    });
+  };
+
+  return { openExec, openAttach, requests, attaches, input, closed };
 }
 
 interface EventQueue {
@@ -80,6 +111,10 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
     emitText('stdout', 'out');
     emitText('stderr', 'err');
     emitEvent({ type: 'exit', code: 3, signal: 0 });
+  }
+
+  if (command === 'attach') {
+    emitText('stdout', 'replay');
   }
 
   if (command === 'tick') {
@@ -111,6 +146,8 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
 
   return {
     pid: 42,
+    session: null,
+    created: false,
     writeStdin: (data) => {
       const text = new TextDecoder().decode(data);
 
@@ -122,6 +159,10 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
 
       if ((command === 'wait' || command === '/bin/sh') && text.includes('\u0003')) {
         emitEvent({ type: 'exit', code: 130, signal: 2 });
+      }
+
+      if (command === 'attach' && text === 'taken') {
+        emitEvent({ type: 'detached', reason: 'taken_over' });
       }
     },
     closeStdin: () => {
@@ -151,7 +192,7 @@ async function* readUntilExit(
 
     yield event;
 
-    if (event.type === 'exit') {
+    if (event.type === 'exit' || event.type === 'detached') {
       return;
     }
   }
@@ -163,7 +204,12 @@ async function setupExecTest() {
   const harness = await setupImpTest();
 
   const agent = buildFakeAgent();
-  const built = buildTestApp(harness, harness, TEST_TOKEN, agent.openExec);
+
+  const built = buildTestApp(harness, harness, TEST_TOKEN, {
+    openExec: agent.openExec,
+    openAttach: agent.openAttach,
+  });
+
   const server = built.app.listen(0);
   const port = String(server.server?.port);
   const client = createImpClient({ url: `http://127.0.0.1:${port}`, token: TEST_TOKEN });
@@ -395,6 +441,48 @@ test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', 
   if (outcome.kind === 'unauthorized') {
     expect(toExecError(outcome).message).toContain('exec ticket');
   }
+});
+
+test('openConsole with a session starts it and reports it', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openConsole('dev', { session: 'main', cols: 100, rows: 30 });
+  const started = await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(started).toEqual({ pid: 42, session: 'main', created: true });
+  expect(ctx.requests[0]).toMatchObject({ tty: true, session: 'main', cols: 100, rows: 30 });
+});
+
+test('openAttach streams the replay and rejects with DETACHED on a takeover', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openAttach('dev', 'main', { cols: 80, rows: 24 });
+
+  const reader = handle.stdout.getReader();
+
+  const first = await reader.read();
+
+  await handle.write('taken');
+
+  const failure = await handle.exit.catch((error: unknown) => error);
+
+  expect(decoder.decode(first.value)).toBe('replay');
+  expect(ctx.attaches).toEqual([{ session: 'main', cols: 80, rows: 24 }]);
+  expect(failure).toBeInstanceOf(ExecError);
+  expect(failure).toMatchObject({ code: 'DETACHED', data: { reason: 'taken_over' } });
+});
+
+test('openAttach to no such session fails with the agent code', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openAttach('dev', 'gone');
+  const failure = await handle.exit.catch((error: unknown) => error);
+
+  expect(failure).toMatchObject({ code: 'NO_SESSION' });
 });
 
 async function waitUntil(check: () => boolean): Promise<void> {

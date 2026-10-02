@@ -39,6 +39,7 @@
       },
       "dependencies": {
         "@imp/api": "workspace:*",
+        "@imp/mcp": "workspace:*",
         "@orpc/client": "catalog:",
         "@zgeoff/imp-client": "workspace:*",
         "citty": "catalog:",
@@ -79,6 +80,18 @@
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
         "fast-check": "catalog:",
+      },
+    },
+    "packages/mcp": {
+      "name": "@imp/mcp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@imp/api": "workspace:*",
+        "@zgeoff/imp-client": "workspace:*",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@imp/daemon": "workspace:*",
       },
     },
   },
@@ -191,6 +204,8 @@
     "@imp/cli": ["@imp/cli@workspace:packages/cli"],
 
     "@imp/daemon": ["@imp/daemon@workspace:packages/daemon"],
+
+    "@imp/mcp": ["@imp/mcp@workspace:packages/mcp"],
 
     "@jest/diff-sequences": ["@jest/diff-sequences@30.5.0", "", {}, "sha512-OsqBjHXCn8cadasoAZBP6nWYvMsRhpMzGXTpxJ5aO04NlbdhIz+FVe3q49l0AwVhsz/cEmIpBes6gAFl1/dWQg=="],
 

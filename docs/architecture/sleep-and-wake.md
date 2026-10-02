@@ -101,6 +101,10 @@ A woken imp keeps its old agent and kernel until its next cold boot (`imp stop`,
 - TCP connections reset.
 - On wake the guest closes every vsock connection. An exec whose host side hangs up gets SIGHUP and
   is detached after 1 s, so it does not keep the imp awake.
+- [Sessions](./daemon.md#sessions-detachable-consoles) survive: they live in guest memory, and a
+  vsock reset only detaches their client. An imp with a client attached does not go to sleep on its
+  own; an explicit `imp sleep` or impd's stop detaches the client with `lost`, and it can attach
+  again after the wake.
 
 Anything that needs a VM wakes a sleeping imp and cold-boots a stopped one: `exec`, `console`, the
 proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the imp off.
@@ -127,7 +131,8 @@ proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the
 
 Every 2 s, an imp counts as active when it has any of these:
 
-- an open exec session or proxied connection, counted on the host;
+- an open exec session (an attached session included) or proxied connection, counted on the host; a
+  detached session counts only through its CPU and TCP;
 - established guest TCP connections, from the agent's `activity` (loopback does not count);
 - Firecracker CPU above `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about
   0.4);
@@ -285,10 +290,11 @@ through the new tap worked. The guest keeps its IP, so the new tap needs the sam
    change the disk (restore a checkpoint, fsck, mount it) while the imp sleeps. A checkpoint of a
    sleeping imp must copy the mem and vmstate files with the disk, or the daemon must wake the imp
    and use `freeze` first. impd wakes it first.
-5. **Exec sessions do not survive.** On resume the guest closes every vsock connection. Agent
+5. **Exec connections do not survive.** On resume the guest closes every vsock connection. Agent
    behavior: the process group of a foreground exec gets SIGHUP; a process that ignores SIGHUP keeps
-   running and stops counting as a session after 1 s. Background work must use `setsid`/`nohup`. TCP
-   connections in the guest also reset ([what survives](#what-survives-a-sleep)).
+   running and stops counting as a session after 1 s. A named session survives: its client is only
+   detached. Other background work must use `setsid`/`nohup`. TCP connections in the guest also
+   reset ([what survives](#what-survives-a-sleep)).
 6. **Version checks.** `firecracker --snapshot-version` prints the format this binary writes
    (`v12.0.0`); `firecracker --describe-snapshot <vmstate>` prints the format of a file. The
    snapshot is also tied to the host kernel and CPU (Firecracker docs: "Snapshots must be resumed on

@@ -177,9 +177,11 @@ export function buildTestApp(
   ctx: Readonly<AppParts>,
   impd: Readonly<Impd>,
   token = TEST_TOKEN,
-  openExec?: ImpService['openExec'],
+
+  // a fake agent's streams in place of the VM's
+  agent: Partial<Pick<ImpService, 'openExec' | 'openAttach'>> = {},
 ) {
-  const imps: ImpService = openExec === undefined ? impd.imps : { ...impd.imps, openExec };
+  const imps: ImpService = { ...impd.imps, ...agent };
 
   const checkpoints = createCheckpointService({
     config: ctx.config,

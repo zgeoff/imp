@@ -9,6 +9,7 @@
   "type": "module",
   "dependencies": {
     "@imp/api": "workspace:*",
+    "@imp/mcp": "workspace:*",
     "@orpc/client": "catalog:",
     "@zgeoff/imp-client": "workspace:*",
     "citty": "catalog:",

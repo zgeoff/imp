@@ -21,6 +21,7 @@ const ImpRowSchema = z.object({
   url: z.string(),
   lastActiveAt: z.string(),
   ramMib: z.number().optional(),
+  sessions: z.number().optional(),
 });
 
 const SystemInfoSchema = z.object({
