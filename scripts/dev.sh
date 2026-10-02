@@ -17,6 +17,8 @@
 #      IMP_KERNEL (default kernel/out/vmlinux, else .cache/vmlinux-ci) is the guest kernel.
 #      IMP_SYSTEM_DRIVE (default build/imp-system.squashfs) is the system drive.
 #      Both are repo-relative or absolute paths under the repo.
+#      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
+#      it (CI builds and loads it first, with its own cache).
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
 #      IMP_IDLE_CPU_PERCENT, IMP_RAM_BUDGET_MIB, IMP_BOOT_RESERVE_PERCENT,
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
@@ -88,7 +90,12 @@ up() {
   system=${IMP_SYSTEM_DRIVE:-$IMP_BUILD/imp-system.squashfs}
   [ -f "$kernel" ] || { echo "dev.sh: no kernel at $kernel" >&2; exit 1; }
 
-  docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+  if [ "${IMP_HOST_IMAGE_READY:-}" = 1 ]; then
+    docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 \
+      || { echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2; exit 1; }
+  else
+    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+  fi
   if [ ! -f "$system" ]; then
     echo "dev.sh: building the system drive"
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
