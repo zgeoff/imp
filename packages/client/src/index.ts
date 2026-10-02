@@ -8,7 +8,15 @@ export type {
   ImpEvent,
   ImpState,
   Scope,
+  ColdBoot,
+  ColdBootCause,
+  InvalidResumeData,
+  NoSessionData,
+  PreviousGeneration,
+  ResumeFrom,
+  ResumeResult,
   Session,
+  SessionOutput,
   SshKey,
   SystemInfo,
   Token,
@@ -45,6 +53,10 @@ export type {
 
 export { ExecError } from './exec/exec-error';
 export type { ExecClientErrorCode } from './exec/exec-error';
+export { InvalidResumeError } from './exec/invalid-resume-error';
+export { InvalidStateError } from './exec/invalid-state-error';
+export type { InvalidStateData } from './exec/invalid-state-error';
+export { NoSessionError } from './exec/no-session-error';
 export { CONSOLE_SHELL } from '@imp/api';
 
 export type {

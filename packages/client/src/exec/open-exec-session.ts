@@ -6,7 +6,7 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { DetachReason, ExecClientMessage } from '@imp/api';
+import type { DetachReason, ExecClientMessage, ResumeFrom, SessionOutput } from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkImpdAccess } from './check-impd-access';
 
@@ -22,6 +22,9 @@ export interface ExecStart {
   // starts this session, or attaches to it if it runs; needs a tty
   readonly session?: string;
   readonly killGraceMs?: number;
+
+  // with a session: the output after this byte rather than a replay
+  readonly resumeFrom?: ResumeFrom;
 }
 
 // attaches to a session that runs: its replay, then live output
@@ -30,6 +33,10 @@ export interface ExecAttach {
   readonly session: string;
   readonly cols?: number;
   readonly rows?: number;
+  readonly resumeFrom?: ResumeFrom;
+
+  // false: fail with INVALID_STATE rather than boot or wake the imp
+  readonly wake?: boolean;
 }
 
 // session is null for a plain exec; created is false for an attach to a
@@ -43,12 +50,22 @@ export interface ExecStarted {
   // after a stop signal, and the exit arrives only once it is gone. False
   // without killGraceMs, or for an imp whose agent predates it.
   readonly groupKill: boolean;
+
+  // where a session's data starts in its output; `none` for a plain exec,
+  // an imp whose agent predates offsets, or an impd from before them
+  readonly output: SessionOutput;
 }
 
 // How a session ended. Only `exit` means the command ran to the end; its
-// code is null when a signal ended the process.
+// code is null when a signal ended the process. offset, on an exit or a
+// detach of a session with offsets, is the offset after the last byte got.
 export type ExecOutcome =
-  | { readonly kind: 'exit'; readonly code: number | null; readonly signal: string | null }
+  | {
+      readonly kind: 'exit';
+      readonly code: number | null;
+      readonly signal: string | null;
+      readonly offset?: number;
+    }
 
   // impd refused the command: an unknown imp, no RAM budget, EXEC_FAILED, …
   | {
@@ -63,7 +80,7 @@ export type ExecOutcome =
   | { readonly kind: 'unreachable'; readonly detail: string }
 
   // impd ended a session socket; the session runs on (DetachReason)
-  | { readonly kind: 'detached'; readonly reason: DetachReason }
+  | { readonly kind: 'detached'; readonly reason: DetachReason; readonly offset?: number }
 
   // the connection dropped after the open, without an exit
   // closeCode 1012 (EXEC_CLOSE_RESTARTING) means impd is restarting
@@ -227,11 +244,21 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
         session: message.session ?? null,
         created: message.created ?? false,
         groupKill: message.groupKill ?? false,
+        output: message.output ?? { continuity: 'none' },
       });
     } else if (message.type === 'exit') {
-      resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
+      resolveOutcome({
+        kind: 'exit',
+        code: message.code,
+        signal: message.signal,
+        ...(message.offset !== undefined && { offset: message.offset }),
+      });
     } else if (message.type === 'detached') {
-      resolveOutcome({ kind: 'detached', reason: message.reason });
+      resolveOutcome({
+        kind: 'detached',
+        reason: message.reason,
+        ...(message.offset !== undefined && { offset: message.offset }),
+      });
     } else if (message.type === 'stdin_ack') {
       // only a tool exec gets acks, and this client starts none
     } else {
