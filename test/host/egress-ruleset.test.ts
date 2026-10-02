@@ -53,6 +53,16 @@ const SLOTS: readonly FirewallSlot[] = [
 
 const BLOCKED6 = [...BLOCKED_RANGES6, 'fd12:3456:789a::/64', '2001:db8:a::/64'];
 
+const BASE = {
+  networks: [],
+  subnet: '10.66.0.0/16',
+  dnsServers: ['1.1.1.1', '8.8.8.8'],
+  privateRanges: PRIVATE,
+  blocked6: BLOCKED6,
+  dnsPort: 7053,
+  setSize: 4096,
+};
+
 function runNft(scripts: Readonly<Record<string, string>>, after: string): string {
   const result = Bun.spawnSync(['unshare', '-rn', 'bash', '-euo', 'pipefail', '-c', after], {
     env: { ...process.env, ...scripts },
@@ -65,22 +75,10 @@ function runNft(scripts: Readonly<Record<string, string>>, after: string): strin
 }
 
 test.skipIf(!canUnshare)('the table applies over itself, and takes element changes', () => {
-  const first = buildRuleset({
-    privateRanges: PRIVATE,
-    blocked6: BLOCKED6,
-    dnsPort: 7053,
-    setSize: 4096,
-    slots: SLOTS,
-  });
+  const first = buildRuleset({ ...BASE, slots: SLOTS });
 
   // slot 1 gone, as after an imp rm: its set and its map entry go with it
-  const second = buildRuleset({
-    privateRanges: PRIVATE,
-    blocked6: BLOCKED6,
-    dnsPort: 7053,
-    setSize: 4096,
-    slots: SLOTS.filter((slot) => slot.slot !== 1),
-  });
+  const second = buildRuleset({ ...BASE, slots: SLOTS.filter((slot) => slot.slot !== 1) });
 
   const changes =
     buildElementChange('add', 1, ['192.0.2.7', '192.0.2.8', '2001:db8:b::2']) +
@@ -115,10 +113,7 @@ test.skipIf(!canUnshare)(
   'every slot chain checks both sources, and the NAT66 table applies',
   () => {
     const table = buildRuleset({
-      privateRanges: PRIVATE,
-      blocked6: BLOCKED6,
-      dnsPort: 7053,
-      setSize: 4096,
+      ...BASE,
       slots: SLOTS,
     });
 
@@ -149,3 +144,46 @@ nft list chain ip6 imp_nat66 postrouting | grep masquerade
     ]);
   },
 );
+
+test.skipIf(!canUnshare)('nft takes networks, and a member that leaves leaves its set', () => {
+  const joined = buildRuleset({
+    ...BASE,
+    slots: SLOTS,
+    networks: [
+      [
+        { tap: 'imp0', guestIp: '10.66.0.2' },
+        { tap: 'imp1', guestIp: '10.66.0.6' },
+      ],
+      [
+        { tap: 'imp1', guestIp: '10.66.0.6' },
+        { tap: 'imp2', guestIp: '10.66.0.10' },
+      ],
+    ],
+  });
+
+  const left = buildRuleset({
+    ...BASE,
+    slots: SLOTS,
+    networks: [[{ tap: 'imp1', guestIp: '10.66.0.6' }]],
+  });
+
+  const listed = runNft(
+    { JOINED: joined, LEFT: left },
+    `
+printf '%s' "$JOINED" | nft -f -
+nft list set inet imp_egress net0 | tr -s '\\n\\t ' ' ' | grep -o 'elements = {[^}]*}'
+nft list set inet imp_egress open_peer_taps | tr -s '\\n\\t ' ' ' | grep -o 'elements = {[^}]*}'
+printf '%s' "$LEFT" | nft -f -
+nft list set inet imp_egress net0 | tr -s '\\n\\t ' ' ' | grep -o 'elements = {[^}]*}'
+nft list set inet imp_egress net1 2>&1 | head -1 || true
+`,
+  );
+
+  expect(listed.split('\n').map((line) => line.trim())).toEqual([
+    'elements = { "imp0" . 10.66.0.2, "imp1" . 10.66.0.6 }',
+    'elements = { "imp0" }',
+    'elements = { "imp1" . 10.66.0.6 }',
+    'Error: No such file or directory',
+    '',
+  ]);
+});
