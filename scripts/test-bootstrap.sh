@@ -455,7 +455,13 @@ make_old_host() {
   in_container sed -i '/^IMP_HOST_\(IPV6\|SUBNET6\|NETWORK\)=/d' /etc/imp/imp-host.env
   in_container sed -i '/IMP_HOST_NETWORK/d' /etc/systemd/system/imp-host.service
   in_container systemctl daemon-reload
-  in_container systemctl restart imp-host
+  # as reload_unit does: the runs before this one restarted imp-host often
+  # enough to near systemd's start-rate limit
+  in_container systemctl reset-failed imp-host
+  if ! in_container systemctl restart imp-host; then
+    in_container journalctl -u imp-host --no-pager -n 20 >&2 || true
+    fail "[$distro] imp-host did not restart as an older host"
+  fi
   wait_for_imp_host || fail "[$distro] imp-host is not running as an older host"
 }
 
