@@ -159,7 +159,10 @@ async function main(): Promise<void> {
       : [
           startTicker(
             'backup',
-            (config.backup?.intervalS ?? 0) * 1000,
+
+            // a run is due by the time since the last one, so a restart
+            // never puts it off by a whole interval
+            Math.min(config.backup?.intervalS ?? 0, 300) * 1000,
             backups.runScheduled,
             printLog,
           ),

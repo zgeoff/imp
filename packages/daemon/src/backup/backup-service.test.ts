@@ -417,9 +417,16 @@ test('the schedule prunes once a day and checks once a week, loudly on failure',
     'check',
   ]);
 
+  // not due before an interval has passed
   ctx.fake.calls.length = 0;
 
-  ctx.advance(HOUR_MS);
+  ctx.advance(HOUR_MS / 2);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual([]);
+
+  ctx.advance(HOUR_MS / 2);
 
   await ctx.backups.runScheduled();
 

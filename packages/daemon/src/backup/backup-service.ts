@@ -72,8 +72,9 @@ export interface BackupService {
   readonly restoreBackup: (input: RestoreInput) => Promise<Imp[]>;
   readonly checkBackups: (subset?: string) => Promise<void>;
 
-  // the schedule's run: a backup, then a prune once a day and a check once a
-  // week; failures are logged
+  // The schedule's tick: when IMP_BACKUP_INTERVAL_S has passed since the last
+  // run, a backup, then a prune once a day and a check once a week. Failures
+  // are logged.
   readonly runScheduled: () => Promise<void>;
 }
 
@@ -579,6 +580,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
     runScheduled: () =>
       runExclusive(async () => {
+        const lastRunAt = readState().lastRunAt?.getTime() ?? 0;
+
+        if (now().getTime() - lastRunAt < deps.backup.intervalS * 1000) {
+          return;
+        }
+
         try {
           const run = await runBackup();
 
