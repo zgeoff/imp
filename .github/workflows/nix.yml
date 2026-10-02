@@ -9,6 +9,7 @@ on:
       - flake.lock
       - deploy/**
       - host/scripts/tailscale-up.sh
+      - scripts/check-kvm.sh
       - .github/workflows/nix.yml
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - flake.lock
       - deploy/**
       - host/scripts/tailscale-up.sh
+      - scripts/check-kvm.sh
       - .github/workflows/nix.yml
 
 permissions:
@@ -27,7 +29,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  flake-check:
+  # The module's eval check and the format; no KVM.
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      - name: Format
+        run: git ls-files -z '*.nix' | xargs -0 nix fmt -- --check
+
+      - name: Eval check
+        run: nix build -L --no-link .#checks.x86_64-linux.eval
+
+  # The NixOS VM test. It needs /dev/kvm, and nested KVM inside the VMs.
+  vm:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -36,7 +58,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # the VM check needs KVM; fail here first, and clearly
+      # first, so a runner without KVM fails in seconds with the reason
       - name: Check KVM
         run: scripts/check-kvm.sh
 
@@ -54,8 +76,5 @@ jobs:
           extra_nix_config: |
             system-features = kvm nixos-test
 
-      - name: Format
-        run: git ls-files -z '*.nix' | xargs -0 nix fmt -- --check
-
-      - name: Flake check
-        run: nix flake check -L
+      - name: VM test
+        run: nix build -L --no-link .#checks.x86_64-linux.vm
