@@ -15,6 +15,7 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 | GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
 | GitHub release `vX.Y.Z`: `SHA256SUMS`          | The sha256 of every asset above, with a provenance attestation per asset.             |
 | npm: `@zgeoff/imp-client@X.Y.Z`                | The client library, with npm provenance, once [npm](#npm) is turned on.               |
+| Tap: `Formula/imp.rb`                          | The Homebrew formula, once the [tap](#homebrew-tap) is turned on.                     |
 
 The image, `impd --version`, `imp --version` and every `package.json` carry the same version: the
 tag without the `v`. The host image, the kernel and the drive are x86_64 only, because Firecracker
@@ -47,6 +48,8 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
      `imp-host:X.Y.Z` and attests the image and every asset.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
+   - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
+     `SHA256SUMS` and pushes it to the tap. Skipped until the [tap](#homebrew-tap) is turned on.
    - **npm-pack** and **npm-publish:** after publish, npm-pack packs `@zgeoff/imp-client`, checks
      the tarball and uploads it; npm-publish, the only job with the OIDC token, publishes it. npm's
      `latest` moves only when `vX.Y.Z` is the newest release; an older one goes out under
@@ -77,6 +80,35 @@ that starts a workflow.
 
 The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
 settings, so a server pulls it without a login.
+
+## Homebrew tap
+
+`brew install zgeoff/tap/imp` installs the CLI and its shell completions from `Formula/imp.rb` in a
+second repository, `zgeoff/homebrew-tap`. `scripts/build-formula.sh <version> dist/SHA256SUMS`
+prints the formula, with each platform's binary from `releases/download/vX.Y.Z/` and its sha256 from
+`SHA256SUMS`. The release's `tap` job commits it with a token from the release App, scoped to the
+tap with contents write, and rebases onto the tap's main before the push, so other formulas in the
+tap can land in between. To turn it on:
+
+1. `zgeoff/homebrew-tap` exists already; atc's formula lives there. Install the release App
+   ([Tokens](#tokens)) on it as well.
+2. Add the Actions variable `HOMEBREW_TAP` = `homebrew-tap`: the repository name, not the full slug.
+
+With the variable or the App missing, the `tap` job is skipped and every other job still runs. A
+republish of an older release leaves the formula alone. To check a formula by hand:
+
+```sh
+scripts/build-formula.sh 1.2.3 dist/SHA256SUMS > /tmp/imp.rb && ruby -c /tmp/imp.rb
+brew install --formula /tmp/imp.rb && brew test imp     # on a machine with brew
+```
+
+## Install script
+
+`install.sh` at the repo root installs the CLI without brew:
+`curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh`. It resolves the
+release tag once, so the binary and `SHA256SUMS` come from the same release, checks the checksum,
+and checks the provenance attestation with `gh attestation verify` when `gh` is on `PATH` and logged
+in. Before the first release, it fails with `no release found`.
 
 ## npm
 
