@@ -81,6 +81,15 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       }
     }
 
+    api.cpu = imp.cpu;
+
+    // a running imp's current span counts too
+    const awakeMs =
+      imp.awakeMs +
+      (imp.awakeSince === null ? 0 : Math.max(0, Date.now() - imp.awakeSince.getTime()));
+
+    api.resources = { wakeCount: imp.wakeCount, awakeMs };
+
     const sessions = countSessions(context, imp);
 
     if (sessions !== undefined) {

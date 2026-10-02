@@ -5,6 +5,7 @@ import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
+import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import {
   isFirecrackerAlive,
@@ -33,6 +34,9 @@ export interface VmPlan {
   readonly vcpus: number;
   readonly memoryMib: number;
   readonly dns: readonly string[];
+
+  // the CPU limit's cgroup; null runs the VM unlimited
+  readonly cgroup: ImpCgroup | null;
 }
 
 interface StartedVm {
@@ -49,6 +53,7 @@ interface StartedVm {
 interface WakePlan {
   readonly firecrackerBin: string;
   readonly paths: ImpPaths;
+  readonly cgroup: ImpCgroup | null;
 }
 
 // Firecracker, behind an interface so the lifecycle can run against a fake.
@@ -57,7 +62,11 @@ export interface VmRunner {
 
   // pause, snapshot to new files, kill, rename them into place
   // (docs/architecture/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
-  readonly sleepVm: (pid: number, paths: ImpPaths) => Promise<Readonly<Record<string, number>>>;
+  readonly sleepVm: (
+    pid: number,
+    paths: ImpPaths,
+    cgroup: ImpCgroup | null,
+  ) => Promise<Readonly<Record<string, number>>>;
 
   // a new Firecracker that loads the snapshot as its first call; throws, with
   // the process gone, when the load or the agent fails
@@ -127,7 +136,11 @@ export function createVmRunner(): VmRunner {
       const timer = createMarks();
       const setMark = timer.setMark;
 
-      const pid = await startFirecracker(plan.firecrackerBin, plan.paths);
+      const pid = await startFirecracker(
+        plan.firecrackerBin,
+        plan.paths,
+        plan.cgroup?.procsPath ?? null,
+      );
 
       setMark('spawn');
 
@@ -196,7 +209,7 @@ export function createVmRunner(): VmRunner {
         });
       }
     },
-    sleepVm: async (pid, paths) => {
+    sleepVm: async (pid, paths, cgroup) => {
       const timer = createMarks();
       const setMark = timer.setMark;
       const api = createFirecrackerClient(paths.apiSocket);
@@ -205,6 +218,7 @@ export function createVmRunner(): VmRunner {
       mkdirSync(paths.snapshotDir, { recursive: true });
       rmSync(files.snapshotPath, { force: true });
       rmSync(files.memFilePath, { force: true });
+      cgroup?.liftLimit();
 
       // a pause that times out may still land: resume or kill either way
       try {
@@ -219,6 +233,8 @@ export function createVmRunner(): VmRunner {
 
         try {
           await api.resume();
+
+          cgroup?.applyLimit();
         } catch {
           // paused for good: kill it, the caller sees it gone and boots the
           // disk cold next time
@@ -261,8 +277,15 @@ export function createVmRunner(): VmRunner {
       const timer = createMarks();
       const setMark = timer.setMark;
 
+      // unlimited until the memory is in and the guest runs again
+      plan.cgroup?.liftLimit();
+
       // startFirecracker removes the stale vsock socket, which would end the load
-      const pid = await startFirecracker(plan.firecrackerBin, plan.paths);
+      const pid = await startFirecracker(
+        plan.firecrackerBin,
+        plan.paths,
+        plan.cgroup?.procsPath ?? null,
+      );
 
       setMark('spawn');
 
@@ -274,6 +297,7 @@ export function createVmRunner(): VmRunner {
           true,
         );
 
+        plan.cgroup?.applyLimit();
         setMark('load');
 
         // a ping sent while the guest resumes can hang: retry it soon

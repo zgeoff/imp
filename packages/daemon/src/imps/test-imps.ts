@@ -35,6 +35,7 @@ import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
 
@@ -88,6 +89,10 @@ interface ImpTestOptions {
 
   // each imp's tailnet name as a URL; none by default
   readonly readServiceUrl?: (name: string) => string | null;
+
+  // CPU limits: none enforced, and 8 cores, by default
+  readonly cgroups?: CpuCgroups;
+  readonly hostCpus?: number;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -233,6 +238,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       },
       egress,
       ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
+      hostCpus: options.hostCpus ?? 8,
+      ...(options.cgroups !== undefined && { cgroups: options.cgroups }),
     });
   };
 

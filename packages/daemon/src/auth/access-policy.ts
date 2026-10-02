@@ -66,6 +66,9 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
 
   // a bigger disk spends the host's disk budget, as a create does
   'imps.resizeDisk': manageImp,
+
+  // a CPU limit or weight takes from, or gives back to, the other imps
+  'imps.update': manageImp,
   'imps.fork': { scope: 'manage', on: 'imp', fields: ['source', 'name'] },
 
   'checkpoints.create': manageImp,

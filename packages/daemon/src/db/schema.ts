@@ -41,6 +41,15 @@ interface ImpsTable {
   // next wake grows it, a cold boot grows it anyway
   disk_grow_pending: Generated<number>;
   egress_allow: Generated<string>;
+
+  // cores the VM may use, null for no limit; its share under contention
+  cpu_limit: number | null;
+  cpu_weight: Generated<number>;
+  wake_count: Generated<number>;
+
+  // awake time before awake_since, which is set while the imp runs
+  awake_ms: Generated<number>;
+  awake_since: number | null;
 }
 
 interface CheckpointsTable {

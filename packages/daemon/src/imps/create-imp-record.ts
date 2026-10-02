@@ -4,6 +4,7 @@ import type { ImageRecord } from '../db/images';
 import { createImpInFreeSlot, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { countSlots } from '../net/addressing';
+import { resolveCpuSettings } from './cpu-limit';
 import type { ImpContext } from './imp-context';
 
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -15,6 +16,8 @@ interface NewImpInput {
   readonly httpPort?: number | undefined;
   readonly diskBytes?: number | undefined;
   readonly policy?: EgressPolicy | undefined;
+  readonly cpuLimit?: number | null | undefined;
+  readonly cpuWeight?: number | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -25,6 +28,8 @@ export async function createImpRecord(
   input: NewImpInput,
   image: ImageRecord,
 ): Promise<ImpRecord> {
+  const cpu = resolveCpuSettings(input, null, context.hostCpus);
+
   const name = await resolveImpName(context, input.name);
 
   try {
@@ -39,6 +44,7 @@ export async function createImpRecord(
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
         ...(input.policy !== undefined && { egress: input.policy }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
+        cpu,
       },
       {
         count: countSlots(context.config.subnet),

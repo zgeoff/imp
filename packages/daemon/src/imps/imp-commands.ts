@@ -6,12 +6,14 @@ import {
   listImps,
   removeImp,
   updateImpActivity,
+  updateImpCpu,
   updateImpDisk,
   updateImpHold,
   updateImpState,
 } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
+import { resolveCpuSettings } from './cpu-limit';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
 import { MIB, buildDiskTooSmallError, growDiskFile, readFileBytes } from './imp-disk';
@@ -29,6 +31,8 @@ interface CreateImpInput {
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
   readonly policy?: EgressPolicy | undefined;
+  readonly cpuLimit?: number | null | undefined;
+  readonly cpuWeight?: number | undefined;
 
   // the disk's size: IMP_DEFAULT_DISK_GIB by default, the source's size for
   // a disk that prepareDisk makes
@@ -65,6 +69,17 @@ export interface ImpCommands {
   // grows the disk file; the guest grows its filesystem into it now when
   // running, at its next wake when sleeping, at its next boot when stopped
   readonly resizeDisk: (name: string, diskMib: number) => Promise<Imp>;
+
+  // a running VM takes a new limit or weight at once, a sleeping or stopped
+  // one when it next starts; the vCPU count only while stopped, since a
+  // memory snapshot fixes it
+  readonly updateImp: (name: string, change: ImpUpdate) => Promise<Imp>;
+}
+
+interface ImpUpdate {
+  readonly cpuLimit?: number | null | undefined;
+  readonly cpuWeight?: number | undefined;
+  readonly vcpus?: number | undefined;
 }
 
 interface ImpCommandParts {
@@ -205,6 +220,8 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           await context.vms.stopVm(imp.pid, paths, false);
         }
 
+        // the VM is gone: an empty cgroup can go
+        await context.cgroups.remove(imp.id);
         await context.taps.removeTap(context.findAddress(imp.slot).tap);
 
         // out of the firewall before another imp can take the slot
@@ -316,6 +333,25 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         const running = await ops.requireRunningImp(held);
 
         return presenter.toApi(running);
+      }),
+
+    updateImp: (name, change) =>
+      lock.withImp(name, async (imp) => {
+        const vcpus = change.vcpus ?? imp.vcpus;
+
+        if (vcpus !== imp.vcpus && imp.state !== 'stopped') {
+          throw buildInvalidStateError(imp.state, ['stopped'], 'change the vCPU count of');
+        }
+
+        const cpu = resolveCpuSettings(change, imp.cpu, context.hostCpus);
+
+        const updated = await updateImpCpu(context.db, imp.id, cpu, vcpus);
+
+        if (updated.state === 'running') {
+          context.cgroups.apply(imp.id, cpu);
+        }
+
+        return presenter.toApi(toLockedImp(imp, updated));
       }),
   };
 }

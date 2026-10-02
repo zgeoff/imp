@@ -14,11 +14,11 @@ start impd again. A new root token ends every dashboard session.
 
 Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
-| Scope    | What it may do                                                                                                                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, images, secrets (names and grants only), the audit logs, the event stream, `imp info`.                                               |
-| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp; kill a session. |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, backups, `imp gc`, and tokens.     |
+| Scope    | What it may do                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, images, secrets (names and grants only), the audit logs, the event stream, `imp info`.                                                                 |
+| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp; kill a session.                   |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, backups, `imp gc`, and tokens. |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses

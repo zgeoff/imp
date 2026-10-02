@@ -163,6 +163,9 @@ export function buildRouter(deps: RouterDeps) {
       resizeDisk: os.imps.resizeDisk.handler((context) =>
         deps.imps.resizeDisk(context.input.name, context.input.diskMib),
       ),
+      update: os.imps.update.handler((context) =>
+        deps.imps.updateImp(context.input.name, context.input),
+      ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
       policy: os.imps.policy.handler((context) => deps.egress.readPolicy(context.input.name)),
       setPolicy: os.imps.setPolicy.handler((context) =>

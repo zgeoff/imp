@@ -159,6 +159,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
         dns: context.config.dns,
+        cgroup: context.cgroups.setup(imp.id, imp.cpu),
       });
 
       context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
@@ -205,6 +206,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     if (imp.pid !== null) {
       await context.vms.stopVm(imp.pid, paths, true);
     }
+
+    await context.cgroups.remove(imp.id);
 
     removeSnapshot(paths);
     context.admission?.release(imp.id);
@@ -263,11 +266,16 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
 
     try {
+      const cgroup = context.cgroups.setup(imp.id, imp.cpu);
+
       // the memory file is written in full before its holes are dug: no
       // pause starts unless the disk has room for it
       const timings = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, () =>
-        sleepSlots.run(() => context.vms.sleepVm(pid, paths)),
+        sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup)),
       );
+
+      // the wake makes it again
+      await context.cgroups.remove(imp.id);
 
       const booted = readVmIdentity(paths);
 
@@ -439,7 +447,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       await context.egress.requireImp(imp.id);
       await context.taps.setupTap(context.findAddress(imp.slot));
 
-      return await context.vms.wakeVm({ firecrackerBin: context.config.firecrackerBin, paths });
+      return await context.vms.wakeVm({
+        firecrackerBin: context.config.firecrackerBin,
+        paths,
+        cgroup: context.cgroups.setup(imp.id, imp.cpu),
+      });
     } catch (error) {
       return error instanceof Error ? error : new Error(readErrorMessage(error));
     }

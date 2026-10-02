@@ -128,6 +128,26 @@ export function createFakeImpd(): FakeImpd {
 
         return resized;
       }),
+      update: os.imps.update.handler((context) => {
+        registerCall('imps.update', context.input);
+
+        const imp = findImp(context.input.name);
+
+        const updated: Imp = {
+          ...imp,
+          cpu: {
+            limit:
+              context.input.cpuLimit === undefined
+                ? (imp.cpu?.limit ?? null)
+                : context.input.cpuLimit,
+            weight: context.input.cpuWeight ?? imp.cpu?.weight ?? 100,
+          },
+        };
+
+        fake.imps.splice(fake.imps.indexOf(imp), 1, updated);
+
+        return updated;
+      }),
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
         https: null,
