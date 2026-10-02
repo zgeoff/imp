@@ -91,6 +91,15 @@ Each host lists the imps its saved token may see. A token with imp patterns ([to
 sees only the imps that match, so an imp missing from a host's rows can be one that the token's
 scope hides, not one that is absent.
 
+During a [move](#moves) the imp shows on both hosts, and the NOTE column says which side each row
+is:
+
+| Mark        | Where      | Until                                                      |
+| ----------- | ---------- | ---------------------------------------------------------- |
+| `sending`   | The source | The receipt, or an abort                                   |
+| `moved`     | The source | The commit, when the source destroys its copy, or an abort |
+| `receiving` | The target | The commit, when the mark comes off, or an abort           |
+
 ## Moves
 
 ```sh
@@ -113,12 +122,12 @@ in four steps:
 4. The source checks the receipt and marks the imp `moved`. It removes the imp's per-imp tailnet
    name, asks the target to commit, then destroys its own copy.
 
-`imp ls` shows the mark in `--json` as `move`. A marked imp does not start, wake, stop, sleep,
-change or go away: each call by name fails fast with `409 MOVING` and `Retry-After: 30`. A request
-to its URL gets `503` with `Retry-After: 30`, and an SSH login an error with exit status 255. So
-neither host can wake the imp while both hold it. On the source, a move holds no lock on storage for
-its length: other imps, backups and `imp gc` go on. On the target, `imp gc` waits for the receive,
-as it does for a backup.
+`imp ls` shows the mark in the NOTE column, and in `--json` as `move`. A marked imp does not start,
+wake, stop, sleep, change or go away: each call by name fails fast with `409 MOVING` and
+`Retry-After: 30`. A request to its URL gets `503` with `Retry-After: 30`, and an SSH login an error
+with exit status 255. So neither host can wake the imp while both hold it. On the source, a move
+holds no lock on storage for its length: other imps, backups and `imp gc` go on. On the target,
+`imp gc` waits for the receive, as it does for a backup.
 
 ### What a move keeps
 

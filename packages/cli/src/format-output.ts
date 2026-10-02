@@ -133,6 +133,12 @@ export function formatCpuUse(imp: Imp): string {
 function formatNote(imp: Imp): string {
   const notes: string[] = [];
 
+  // first: during a move the imp shows on both hosts, and this says which
+  // side each row is (docs/guides/hosts.md#one-view)
+  if (imp.move !== undefined) {
+    notes.push(imp.move);
+  }
+
   if (imp.agentSilentSince !== undefined) {
     notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
   }

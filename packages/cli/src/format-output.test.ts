@@ -74,6 +74,8 @@ test('it notes why an imp boots cold and what it predates', () => {
     { ...imp, name: 'pub', public: { auth: 'token' } },
     { ...imp, name: 'open', public: { auth: 'none' } },
     { ...imp, name: 'v4', state: 'running', outdated: ['ipv6'] },
+    { ...imp, name: 'away', state: 'stopped', move: 'moved' },
+    { ...imp, name: 'here', state: 'stopped', move: 'receiving', public: { auth: 'none' } },
   ]).split('\n');
 
   const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
@@ -88,6 +90,8 @@ test('it notes why an imp boots cold and what it predates', () => {
     'public (token)',
     'public',
     'no IPv6 until its next cold boot',
+    'moved',
+    'receiving; public',
   ]);
 });
 
