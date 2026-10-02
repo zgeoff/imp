@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zgeoff/imp/agent/internal/disk"
+	"github.com/zgeoff/imp/agent/internal/inner"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 )
@@ -92,7 +93,7 @@ func (s *Server) grow(diskBytes int64) error {
 	if s.frozen {
 		return errFrozen
 	}
-	return waitAndGrow(UserMount, diskBytes, growTimeout)
+	return waitAndGrow(inner.UserRoot, diskBytes, growTimeout)
 }
 
 // thaw FITHAWs the root filesystem. Thawing an unfrozen fs is not an error.
@@ -124,12 +125,8 @@ func (s *Server) thawLocked() error {
 	return nil
 }
 
-// UserMount is the user disk's mount point in the agent's world: the inner
-// container's root.
-const UserMount = "/user"
-
 func ioctlRoot(req uint) error {
-	f, err := os.Open(UserMount)
+	f, err := os.Open(inner.UserRoot)
 	if err != nil {
 		return err
 	}
