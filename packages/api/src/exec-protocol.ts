@@ -33,6 +33,18 @@ export interface ExecFrame {
 
 const DimensionSchema = z.int().min(1).max(65_535);
 
+// A tool runs from the system drive as root, with argv as its arguments:
+// `tar` is `imp-agent tar`, the guest end of `imp cp`.
+export const EXEC_TOOLS = ['tar'] as const;
+
+export type ExecTool = (typeof EXEC_TOOLS)[number];
+
+// impd acks a tool's stdin (`stdin_ack`); its client keeps at most this
+// many bytes unacked, in frames of at most the next, so a large upload
+// cannot grow impd's memory
+export const EXEC_STDIN_WINDOW_BYTES = 1_048_576;
+export const EXEC_MAX_STDIN_FRAME_BYTES = 65_536;
+
 export const ExecStartMessageSchema = z
   .object({
     type: z.literal('start'),
@@ -44,11 +56,21 @@ export const ExecStartMessageSchema = z
     cols: DimensionSchema.optional(),
     rows: DimensionSchema.optional(),
     session: SessionNameSchema.optional(),
+    tool: z.enum(EXEC_TOOLS).optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
     path: ['tty'],
-  });
+  })
+  .refine(
+    (start) =>
+      start.tool === undefined ||
+      (!start.tty &&
+        start.session === undefined &&
+        start.env === undefined &&
+        start.cwd === undefined),
+    { message: 'a tool takes no tty, session, env or cwd', path: ['tool'] },
+  );
 
 export const ExecAttachMessageSchema = z.object({
   type: z.literal('attach'),
@@ -94,6 +116,9 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
 
   // the last message of a session socket that ends without an exit
   z.object({ type: z.literal('detached'), reason: z.enum(DETACH_REASONS) }),
+
+  // a tool's stdin bytes the agent took; sent only for a tool
+  z.object({ type: z.literal('stdin_ack'), bytes: z.int().positive() }),
 
   // code is a contract error (NOT_FOUND, RAM_BUDGET_EXCEEDED, …) or an agent
   // error (EXEC_FAILED, …); data is that error's data, as over RPC

@@ -16,8 +16,11 @@ export {
   DETACH_REASONS,
   EXEC_CHANNELS,
   EXEC_CLOSE_RESTARTING,
+  EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_PATH,
+  EXEC_STDIN_WINDOW_BYTES,
   EXEC_TICKET_PARAM,
+  EXEC_TOOLS,
   ExecAttachMessageSchema,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
@@ -32,6 +35,7 @@ export type {
   ExecClientMessage,
   ExecFrame,
   ExecServerMessage,
+  ExecTool,
 } from './exec-protocol';
 
 export {
