@@ -1,0 +1,56 @@
+name: Bootstrap
+
+# Runs deploy/bootstrap.sh twice in a systemd container on Debian 13 and
+# Ubuntu 24.04 and 26.04 (scripts/test-bootstrap.sh), and checks the second
+# run changes nothing, on XFS and on a ZFS pool. A stand-in image replaces
+# the release image, so the health check, which boots an imp, runs by hand:
+# scripts/test-bootstrap.sh --image imp-host:<tag> --health.
+on:
+  pull_request:
+    paths:
+      - deploy/**
+      - scripts/test-bootstrap.sh
+      - .github/workflows/bootstrap.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/**
+      - scripts/test-bootstrap.sh
+      - .github/workflows/bootstrap.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bootstrap-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # bootstrap.sh refuses a host without KVM; fail here first, and clearly
+      - name: Check KVM
+        run: |
+          ls -l /dev/kvm
+          grep -cwE 'vmx|svm' /proc/cpuinfo
+
+      # the ZFS leg makes a pool from the container, with this kernel's
+      # module; zfs.ko sits in linux-modules-extra on some runner kernels
+      - name: Load ZFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zfsutils-linux
+          modinfo zfs >/dev/null 2>&1 \
+            || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe zfs
+          cat /sys/module/zfs/version
+
+      - name: Test
+        run: scripts/test-bootstrap.sh --stub --zfs

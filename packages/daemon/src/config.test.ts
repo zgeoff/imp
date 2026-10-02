@@ -33,7 +33,7 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultImage: 'base',
     storageBackend: 'xfs',
     zfsRoot: null,
-    tailscaleAuthKey: null,
+    tailscaleEnabled: false,
     tailscaleHostname: 'imp',
     tailnetRules: null,
     dashboardDir: null,
@@ -59,12 +59,20 @@ test('it reads and coerces values from the env', () => {
   expect(config.subnet.prefixLength).toBe(24);
   expect(config.kernelPath).toBe('/tmp/imp/system/vmlinux');
   expect(config.kernelSource).toBe('/src/kernel/out/vmlinux');
-  expect(config.tailscaleAuthKey).toBe('tskey-auth-test');
+  expect(config.tailscaleEnabled).toBeTrue();
   expect(config.sleepMinGuestUptimeMs).toBe(0);
 });
 
+test('a node started from saved state counts as the tailnet, with no key', () => {
+  expect(loadConfig({ IMP_TAILSCALE_NODE: '1' }).tailscaleEnabled).toBeTrue();
+
+  expect(
+    loadConfig({ TAILSCALE_AUTHKEY: '', IMP_TAILSCALE_NODE: '' }).tailscaleEnabled,
+  ).toBeFalse();
+});
+
 test('it treats an empty variable as unset', () => {
-  expect(loadConfig({ TAILSCALE_AUTHKEY: '', IMP_API_PORT: '' }).tailscaleAuthKey).toBeNull();
+  expect(loadConfig({ TAILSCALE_AUTHKEY: '', IMP_API_PORT: '' }).tailscaleEnabled).toBeFalse();
 });
 
 test('it rejects invalid values', () => {

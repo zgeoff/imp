@@ -48,6 +48,7 @@ const EnvSchema = z.object({
   IMP_STORAGE_BACKEND: z.enum(['xfs', 'zfs']).default('xfs'),
   IMP_ZFS_ROOT: z.string().optional(),
   TAILSCALE_AUTHKEY: z.string().optional(),
+  IMP_TAILSCALE_NODE: z.literal('1').optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
   IMP_DASHBOARD_DIR: z.string().optional(),
   IMP_TAILNET_IDENTITIES: z.string().optional(),
@@ -119,7 +120,11 @@ export interface Config {
   // dataset mounted on dataDir, such as tank/imp
   readonly storageBackend: StorageBackendKind;
   readonly zfsRoot: string | null;
-  readonly tailscaleAuthKey: string | null;
+
+  // the host container is a tailnet node: it has a key, or the entrypoint
+  // started tailscaled from saved node state (IMP_TAILSCALE_NODE=1) after
+  // deploy/bootstrap.sh blanked the spent key
+  readonly tailscaleEnabled: boolean;
 
   // the tailnet hostname impd asks for; per-imp URLs use the name the node
   // got (http://<name>:<tailnetPort>), which differs while an older node holds it
@@ -199,7 +204,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     storageBackend: parsed.IMP_STORAGE_BACKEND,
     zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
-    tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
+    tailscaleEnabled: parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1',
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     tailnetRules: parseTailnetRules(parsed.IMP_TAILNET_IDENTITIES),
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,

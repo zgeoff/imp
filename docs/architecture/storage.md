@@ -103,7 +103,8 @@ missing under the root:
   `fallocate --dig-holes` works on ZFS too, and lz4 stores zero blocks as holes anyway.
   `primarycache=metadata` on `<root>/mem` is worth measuring on a host; it is not set.
 - The host container needs `/dev/zfs`: load the module on the host before the container starts. The
-  container has its own zfs userland, OpenZFS 2.3 from Debian trixie ([versions](#versions)).
+  container has its own zfs userland, OpenZFS 2.4 from Debian trixie-backports
+  ([versions](#versions)).
 - `<root>/reserve` holds 1 GiB back, so a destroy still runs on a full pool. To get out of a full
   pool, run `zfs set refreservation=none <root>/reserve`, destroy imps or checkpoints, then set it
   back.
@@ -112,11 +113,16 @@ missing under the root:
 
 impd compares the container's zfs userland with the host's module (`/sys/module/zfs/version`). A
 different major version stops impd; a different minor version logs a warning that names both, and
-impd starts. The image ships 2.3; Ubuntu 24.04 hosts and the CI runner run 2.2.
+impd starts. The image ships 2.4.4 from trixie-backports, pinned through a dated snapshot
+(`ZFS_SNAPSHOT` and `ZFS_VERSION` in `host/Dockerfile`), to match Ubuntu 26.04's 2.4 module. Ubuntu
+24.04 hosts and the CI runner run 2.2, two minor versions behind: impd warns there and starts. The
+pin makes the zfs userland the same on every build, not the whole image: the rest of the runtime
+stage comes from the live Debian archive. snapshot.debian.org can be slow, so a cold build of that
+layer may take minutes.
 
-The `zfs` CI job runs the image's 2.3.9 tools against the runner's 2.2.2 module. A pass covers only
+The `zfs` CI job runs the image's 2.4.4 tools against the runner's 2.2.2 module. A pass covers only
 the commands its suites run (lifecycle, checkpoints, disks, sleep, and the real-pool tests); it does
-not prove that 2.3 tools work with a 2.2 module in general.
+not prove that 2.4 tools work with a 2.2 module in general.
 
 The backend uses only what OpenZFS 0.8 had already, so every 2.x module works:
 

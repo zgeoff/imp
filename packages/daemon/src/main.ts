@@ -147,7 +147,7 @@ async function main(): Promise<void> {
   await egress.start();
 
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
-  const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
+  const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
 
   const governed = createGovernedImps({
     config,
@@ -291,7 +291,7 @@ async function main(): Promise<void> {
           config: config.https,
           dataDir: config.dataDir,
           proxy,
-          readTailscale: config.tailscaleAuthKey === null ? null : readTailscale,
+          readTailscale: config.tailscaleEnabled ? readTailscale : null,
           log: printLog,
         });
 

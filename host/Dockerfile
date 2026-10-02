@@ -27,14 +27,25 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG RESTIC_VERSION=0.19.1
 ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
 
-# zfsutils-linux is in contrib. Only the userland: the module comes from the
-# host kernel through /dev/zfs, and impd refuses a different major version.
-RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
- && apt-get update \
+RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
-      xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
+      xfsprogs e2fsprogs squashfs-tools \
       iproute2 iptables nftables conntrack procps util-linux kmod jq bzip2 \
+ && rm -rf /var/lib/apt/lists/*
+
+# The zfs userland, 2.4 from trixie-backports (contrib), to match the module
+# Ubuntu 26.04 hosts ship; trixie itself has 2.3. Backports drop a version
+# once a newer one lands, so it comes from a dated snapshot, pinned. Only the
+# userland: the module comes from the host kernel through /dev/zfs, and impd
+# refuses a different major version (docs/architecture/storage.md#versions).
+# check-valid-until=no: a snapshot's Release file expires after a week.
+ARG ZFS_SNAPSHOT=20261001T000000Z
+ARG ZFS_VERSION=2.4.4-1~bpo13+1
+RUN echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${ZFS_SNAPSHOT} trixie-backports contrib" \
+      > /etc/apt/sources.list.d/zfs-backports.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends -t trixie-backports "zfsutils-linux=${ZFS_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI and Tailscale from their upstream apt repos.
@@ -62,6 +73,9 @@ RUN curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/dow
  && rm /tmp/restic.bz2
 
 COPY host/scripts/ /usr/local/lib/imp/
+# tailscale-up.sh starts tailscaled from saved node state with no key, so
+# deploy/bootstrap.sh may blank a spent key in the env file.
+LABEL imp.tailscale-keyless="1"
 COPY host/entrypoint /usr/local/bin/imp-entrypoint
 
 EXPOSE 7070 7080

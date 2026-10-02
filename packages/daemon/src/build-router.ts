@@ -385,7 +385,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       impDiskBytes: imps.reduce((sum, imp) => sum + imp.diskBytes, 0),
     },
     tailscale: {
-      enabled: deps.config.tailscaleAuthKey !== null,
+      enabled: deps.config.tailscaleEnabled,
       state: tailscale.state,
       hostname: tailscale.hostname,
       ip: tailscale.ip,

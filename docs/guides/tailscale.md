@@ -6,8 +6,10 @@ that node on its own port. [Networking](../architecture/networking.md#urls) cove
 
 ## How it works
 
-`host/scripts/tailscale-up.sh` runs inside the host container. It does nothing unless
-`TAILSCALE_AUTHKEY` is set. Otherwise it:
+`host/scripts/tailscale-up.sh` runs inside the host container. Without `TAILSCALE_AUTHKEY` it starts
+`tailscaled` from the saved node state when there is one (step 2), waits for `Running`, and skips
+the login; `deploy/bootstrap.sh` blanks the key once the node has joined. With neither a key nor
+saved state it does nothing. With a key it:
 
 1. Replaces `/etc/resolv.conf` with public resolvers (`IMP_DNS`, default `1.1.1.1,8.8.8.8`) if it
    points at `100.100.100.100`. See [DNS](#dns).

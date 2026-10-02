@@ -10,7 +10,7 @@ bun run typecheck && bun run lint && bun test
 bun run test:dashboard            # the dashboard's component tests, in their own run
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
-bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
+bun run lint:shell                # shellcheck over scripts/, host/, kernel/, deploy/ and test/
 bun run lint:docs                 # every docs/ reference in code resolves
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/test-e2e.sh --clean       # end to end, from a clean state
@@ -216,6 +216,10 @@ run it only on push to `main`, never on pull requests. Never use the deploy box.
 so a pull request from a fork would get a privileged container with `/dev/kvm` on that runner.
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
+
+`.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
+or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It
+is not a required check.
 
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:

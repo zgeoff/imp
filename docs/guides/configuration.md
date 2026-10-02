@@ -39,7 +39,8 @@ error.
 | `IMP_FIRECRACKER_BIN`           | `firecracker`               | The Firecracker binary.                                                                                                                             |
 | `IMP_KERNEL`                    | none                        | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                     |
 | `IMP_SYSTEM_DRIVE`              | none                        | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own.    |
-| `TAILSCALE_AUTHKEY`             | none                        | Set means the host joins the tailnet; impd then reports tailnet URLs.                                                                               |
+| `TAILSCALE_AUTHKEY`             | none                        | Set, or `IMP_TAILSCALE_NODE=1`, means the host is on the tailnet; impd then reports tailnet URLs.                                                   |
+| `IMP_TAILSCALE_NODE`            | none                        | `1` when the entrypoint started `tailscaled` from saved node state, with no key. The entrypoint sets it.                                            |
 | `IMP_TAILSCALE_HOSTNAME`        | `imp`                       | The tailnet hostname to ask for.                                                                                                                    |
 | `IMP_TAILNET_IDENTITIES`        | none                        | JSON rules that give tailnet members a scope without a token ([tokens](./tokens.md#tailnet-identity)). Unset, every caller needs a token.           |
 | `IMP_DASHBOARD_DIR`             | none                        | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                    |
@@ -109,7 +110,7 @@ The host container's scripts in `host/` read these before impd starts.
 | `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
 | `IMP_SUBNET`              | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
 | `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp. Unset: path MTU.                                             |
-| `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: no tailnet.                                                                              |
+| `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                           |
 | `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
 | `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
 | `IMP_DNS`                 | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                          |
