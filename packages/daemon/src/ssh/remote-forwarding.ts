@@ -100,6 +100,9 @@ function buildKey(request: RemoteForwardRequest): string {
 export function createRemoteForwarding(deps: RemoteForwardingDeps): RemoteForwarding {
   const forwards = new Map<string, OpenForward>();
 
+  // keys whose listener is opening, so a second request for one is refused
+  const opening = new Set<string>();
+
   // open relays per forward key
   const relays = new Map<string, number>();
 
@@ -213,7 +216,7 @@ export function createRemoteForwarding(deps: RemoteForwardingDeps): RemoteForwar
           ? request.socketPath
           : `${request.bindAddr}:${String(request.bindPort)}`;
 
-      if (spec === null || forwards.has(key)) {
+      if (spec === null || forwards.has(key) || opening.has(key)) {
         writeLog(`${label}: refused`);
         reject?.();
 
@@ -221,6 +224,8 @@ export function createRemoteForwarding(deps: RemoteForwardingDeps): RemoteForwar
       }
 
       let listener: GuestListener;
+
+      opening.add(key);
 
       try {
         await deps.awake;
@@ -231,6 +236,8 @@ export function createRemoteForwarding(deps: RemoteForwardingDeps): RemoteForwar
         reject?.();
 
         return;
+      } finally {
+        opening.delete(key);
       }
 
       // the connection closed while the guest listened

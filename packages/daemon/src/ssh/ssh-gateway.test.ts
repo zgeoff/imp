@@ -1120,6 +1120,19 @@ test('ssh -R refuses another bind address and the agent sockets, and binds the r
   );
 });
 
+test('two requests for the same remote forward at once listen only once', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const settled = await Promise.allSettled([
+    openRemoteForward(client, 'localhost', 9000),
+    openRemoteForward(client, 'localhost', 9000),
+  ]);
+
+  expect(settled.map((result) => result.status).toSorted()).toEqual(['fulfilled', 'rejected']);
+  expect(ctx.listeners).toHaveLength(1);
+});
+
 test('a cancelled remote forward closes its guest listener', async () => {
   const ctx = await startTestGateway();
   const client = await openClient(ctx.gateway);
