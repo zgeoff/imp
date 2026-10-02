@@ -77,18 +77,19 @@ Host box.imp
 
 ## What works
 
-| Request                              | What happens                                                                                     |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| shell (`ssh box@imp`)                | the user's login shell from the image's `/etc/passwd`, else bash, else sh, on a pty              |
-| command (`ssh box@imp cmd`)          | `/bin/sh -c cmd`, with its exit status, or the signal that ended it                              |
-| pty and window size                  | the client's size and `TERM`; resizes follow                                                     |
-| signals                              | sent to the command's process group                                                              |
-| SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                       |
-| local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only |
-| unix socket forward (`-L` to a path) | to any socket path in the imp                                                                    |
-| env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them              |
-| remote forward (`-R`)                | refused                                                                                          |
-| agent forwarding (`-A`), X11         | refused ([#53](https://github.com/zgeoff/imp/issues/53) tracks agent forwarding)                 |
+| Request                              | What happens                                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| shell (`ssh box@imp`)                | the user's login shell from the image's `/etc/passwd`, else bash, else sh, on a pty                 |
+| command (`ssh box@imp cmd`)          | `/bin/sh -c cmd`, with its exit status, or the signal that ended it                                 |
+| pty and window size                  | the client's size and `TERM`; resizes follow                                                        |
+| signals                              | sent to the command's process group                                                                 |
+| SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                          |
+| local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only    |
+| unix socket forward (`-L` to a path) | to any socket path in the imp                                                                       |
+| env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
+| credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
+| remote forward (`-R`)                | refused                                                                                             |
+| agent forwarding (`-A`), X11         | refused ([#53](https://github.com/zgeoff/imp/issues/53) tracks agent forwarding)                    |
 
 A forward to any other host is refused as administratively prohibited. Otherwise the gateway would
 be a way into other imps, the host container or the network beyond.
