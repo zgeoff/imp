@@ -237,12 +237,18 @@ async function main(): Promise<void> {
 
   await imps.reconcileImps();
 
+  // templates this host no longer boots go first, so their drives can too
+  for (const key of imps.bootTemplates?.removeStale() ?? []) {
+    printLog(`impd: removed boot template ${key.slice(0, 12)}: this host boots something else`);
+  }
+
   // before anything can boot or sleep an imp, so the set of drives in use holds
   const removed = await removeUnusedDrives(
     db,
     config.dataDir,
     storage.resolveImpPaths,
     systemFiles.systemDrivePath,
+    imps.bootTemplates?.listDrivePaths() ?? [],
   );
 
   for (const name of removed) {
@@ -488,6 +494,13 @@ async function main(): Promise<void> {
     const settled = sleepImps
       ? await runStopStep('sleep', readLeftMs(), () => imps.sleepAllImps())
       : await runStopStep('lifecycle', readLeftMs(), () => imps.waitForLifecycle());
+
+    // a build cut short leaves a Firecracker no record knows
+    await runStopStep(
+      'templates',
+      readStepMs(),
+      () => imps.bootTemplates?.stop() ?? Promise.resolve(),
+    );
 
     if (sleepImps) {
       const sleptMs = Math.round(performance.now() - started);

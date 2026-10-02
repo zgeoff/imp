@@ -22,6 +22,8 @@ import type { CachedDiskUsage } from '../storage/disk-usage-cache';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
+import { createBootTemplates } from '../templates/boot-templates';
+import type { BootTemplates } from '../templates/boot-templates';
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { VmRunner } from '../vmm/vm-runner';
@@ -106,6 +108,10 @@ export interface ImpServiceDeps {
 
   // the most a CPU limit may be; the host's cores by default
   readonly hostCpus?: number;
+
+  // the boot templates cold boots restore (docs/architecture/boot-templates.md);
+  // by default made from the deps when IMP_BOOT_TEMPLATES is on
+  readonly templates?: BootTemplates | null;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -137,6 +143,9 @@ export interface ImpContext {
   readonly egress: ImpEgress;
   readonly cgroups: CpuCgroups;
   readonly hostCpus: number;
+
+  // null when IMP_BOOT_TEMPLATES is off: every cold boot boots the kernel
+  readonly templates: BootTemplates | null;
 
   // the latest look at each running VM (resource-sampler.ts)
   readonly resources: ResourceSampler;
@@ -196,6 +205,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     egress: deps.egress ?? NO_EGRESS,
     cgroups,
     hostCpus: deps.hostCpus ?? availableParallelism(),
+    templates: deps.templates === undefined ? createDefaultTemplates(deps, log) : deps.templates,
     resources: createResourceSampler({
       now: deps.now ?? Date.now,
       readCpuStat: cgroups.readCpuStat,
@@ -204,4 +214,26 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       readMemory,
     }),
   };
+}
+
+function createDefaultTemplates(
+  deps: Readonly<ImpServiceDeps>,
+  log: (message: string) => void,
+): BootTemplates | null {
+  if (!deps.config.bootTemplates) {
+    return null;
+  }
+
+  return createBootTemplates({
+    dataDir: deps.config.dataDir,
+    identity: deps.identity,
+    firecrackerBin: deps.config.firecrackerBin,
+    kernelPath: deps.config.kernelPath,
+    minGuestUptimeMs: deps.config.sleepMinGuestUptimeMs,
+    bootReservePercent: deps.config.bootReservePercent,
+    buildVm: deps.vms.buildTemplateVm,
+    taps: deps.taps,
+    admission: deps.admission,
+    log,
+  });
 }

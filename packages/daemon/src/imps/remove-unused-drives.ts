@@ -13,10 +13,16 @@ export async function removeUnusedDrives(
   dataDir: string,
   findPaths: (impId: string) => ImpPaths,
   currentDrivePath: string,
+  templateDrivePaths: readonly string[] = [],
 ): Promise<string[]> {
   const keep = await listDrivesInUse(db, findPaths);
 
   keep.add(basename(currentDrivePath));
+
+  // a boot template reopens its drive on every restore
+  for (const path of templateDrivePaths) {
+    keep.add(basename(path));
+  }
 
   return removeUnusedSystemDrives(dataDir, keep);
 }

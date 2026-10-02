@@ -15,6 +15,7 @@ import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import type { BootTemplates } from '../templates/boot-templates';
 import type { ActivityTracker, ConnectionKind } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
@@ -119,6 +120,9 @@ export interface ImpRuntime {
   readonly reconcileImps: () => Promise<void>;
   readonly isImpBusy: (id: string) => boolean;
   readonly tracker: ActivityTracker;
+
+  // the boot templates cold boots restore; null when IMP_BOOT_TEMPLATES is off
+  readonly bootTemplates: BootTemplates | null;
 
   // the DISK_FULL that last turned a background sleep away
   readonly readDiskFullError: () => Error | null;
@@ -456,6 +460,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     waitForLifecycle: () => lock.waitForAll(),
     isImpBusy: (id) => lock.isLocked(id),
     tracker: context.tracker,
+    bootTemplates: context.templates,
     readDiskFullError: () => lastDiskFull.error,
   };
 }

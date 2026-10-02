@@ -43,6 +43,9 @@ const EnvSchema = z.object({
   IMP_BOOT_RESERVE_PERCENT: CountSchema.pipe(z.int().max(100)).default(50),
   IMP_WAKE_RESERVE_MIB: CountSchema.default(256),
   IMP_SLEEP_MIN_GUEST_UPTIME_MS: z.coerce.number().pipe(z.int().nonnegative()).default(1500),
+
+  // false: every create boots cold, with no boot template
+  IMP_BOOT_TEMPLATES: z.enum(['true', 'false']).default('true'),
   IMP_WATCHDOG_TIMEOUT_S: CountSchema.default(60),
   IMP_WATCHDOG_ACTION: z.enum(['report', 'restart', 'snapshot']).default('report'),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
@@ -106,6 +109,10 @@ export interface Config {
   // gets its clock back (docs/architecture/sleep-and-wake.md#young-guests);
   // 0 turns the wait off
   readonly sleepMinGuestUptimeMs: number;
+
+  // a cold boot restores a boot template of its shape when there is one
+  // (docs/architecture/boot-templates.md)
+  readonly bootTemplates: boolean;
 
   // how long an agent may stay silent before the watchdog acts, and what it
   // does then (docs/architecture/sleep-and-wake.md#the-watchdog)
@@ -248,6 +255,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     bootReservePercent: parsed.IMP_BOOT_RESERVE_PERCENT,
     wakeReserveMib: parsed.IMP_WAKE_RESERVE_MIB,
     sleepMinGuestUptimeMs: parsed.IMP_SLEEP_MIN_GUEST_UPTIME_MS,
+    bootTemplates: parsed.IMP_BOOT_TEMPLATES === 'true',
     watchdogTimeoutS: parsed.IMP_WATCHDOG_TIMEOUT_S,
     watchdogAction: parsed.IMP_WATCHDOG_ACTION,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,

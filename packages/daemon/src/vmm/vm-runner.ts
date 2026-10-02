@@ -7,6 +7,7 @@ import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
 import { writeToDisk } from '../storage/write-file-durably';
+import { createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import type { InstanceState } from './firecracker-client';
@@ -19,6 +20,8 @@ import {
   stopProcess,
   waitForExit,
 } from './firecracker-process';
+import { buildTemplateVm, loadTemplateVm } from './template-vm';
+import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
 
 const AGENT_DEADLINE_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -48,7 +51,7 @@ export interface VmPlan {
   readonly isIdentityReset: boolean;
 }
 
-interface StartedVm {
+export interface StartedVm {
   readonly pid: number;
   readonly firecrackerVersion: string;
 
@@ -122,6 +125,14 @@ export interface VmRunner {
   // the rest of a wake, for a VM that loaded its snapshot under an impd that
   // died: the agent's ping, then the guest clock
   readonly finishWake: (paths: ImpPaths) => Promise<FinishedWake>;
+
+  // a boot template: a cold boot parked for a claim, snapshotted and killed
+  // (docs/architecture/boot-templates.md#make)
+  readonly buildTemplateVm: (plan: TemplateBuildPlan) => Promise<void>;
+
+  // a start from a template, in place of startVm; throws, with the process
+  // gone, when any step fails (docs/architecture/boot-templates.md#claim)
+  readonly loadTemplateVm: (plan: TemplateRestorePlan) => Promise<StartedVm>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the agent
@@ -190,42 +201,16 @@ export function createVmRunner(): VmRunner {
         const api = createFirecrackerClient(plan.paths.apiSocket);
         const versionPromise = api.getVersion();
 
-        await api.putBootSource({
-          kernelImagePath: plan.kernelPath,
+        await setupVm(api, {
+          kernelPath: plan.kernelPath,
           bootArgs: buildBootArgs(plan),
-        });
-
-        await api.putMachineConfig({ vcpuCount: plan.vcpus, memSizeMib: plan.memoryMib });
-
-        // drives enumerate in PUT order: rootfs is vda, the system drive vdb;
-        // neither is a Firecracker root device, which would add root=/dev/vda
-        await api.putDrive({
-          driveId: 'rootfs',
-          pathOnHost: plan.paths.disk,
-          isRootDevice: false,
-          isReadOnly: false,
-        });
-
-        await api.putDrive({
-          driveId: 'system',
-          pathOnHost: plan.systemDrivePath,
-          isRootDevice: false,
-          isReadOnly: true,
-        });
-
-        await api.putVsock({ guestCid: 3, udsPath: plan.paths.vsockSocket });
-
-        await api.putNetworkInterface({
-          ifaceId: 'eth0',
-          hostDevName: plan.address.tap,
+          vcpus: plan.vcpus,
+          memoryMib: plan.memoryMib,
+          diskPath: plan.paths.disk,
+          systemDrivePath: plan.systemDrivePath,
+          vsockPath: plan.paths.vsockSocket,
+          tap: plan.address.tap,
           guestMac: plan.address.guestMac,
-        });
-
-        await api.putBalloon({
-          amountMib: 0,
-          deflateOnOom: true,
-          statsPollingIntervalS: 1,
-          freePageReporting: true,
         });
 
         const firecrackerVersion = await versionPromise;
@@ -429,20 +414,7 @@ export function createVmRunner(): VmRunner {
 
       return { agentVersion: ping.version, firecrackerVersion };
     },
+    buildTemplateVm,
+    loadTemplateVm,
   };
-}
-
-// milliseconds per step, for the timing breakdown in the log
-function createMarks() {
-  const marks: Record<string, number> = {};
-  let last = performance.now();
-
-  const setMark = (step: string): void => {
-    const now = performance.now();
-
-    marks[step] = Math.round(now - last);
-    last = now;
-  };
-
-  return { marks, setMark };
 }
