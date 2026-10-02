@@ -1,4 +1,6 @@
+import type { Checkpoint } from '@imp/api';
 import type { Selectable } from 'kysely';
+import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
 
@@ -8,6 +10,7 @@ export interface CheckpointRecord {
   readonly label: string | null;
   readonly createdAt: Date;
   readonly sizeBytes: number | null;
+  readonly diskBytes: number;
 }
 
 export interface NewCheckpoint {
@@ -15,6 +18,12 @@ export interface NewCheckpoint {
   readonly impId: string;
   readonly label: string | null;
   readonly sizeBytes: number | null;
+
+  // 32 GiB when left out
+  readonly diskBytes?: number;
+
+  // now by default; a restore from backup keeps the original time
+  readonly createdAt?: Date;
 }
 
 export async function createCheckpoint(
@@ -27,13 +36,18 @@ export async function createCheckpoint(
       id: checkpoint.id,
       imp_id: checkpoint.impId,
       label: checkpoint.label,
-      created_at: Date.now(),
+      created_at: checkpoint.createdAt?.getTime() ?? Date.now(),
       size_bytes: checkpoint.sizeBytes,
+      ...(checkpoint.diskBytes !== undefined && { disk_bytes: checkpoint.diskBytes }),
     })
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  return toCheckpointRecord(row);
+  const created = toCheckpointRecord(row);
+
+  emitImpWrite(db, { kind: 'checkpointAdded', checkpoint: created });
+
+  return created;
 }
 
 // newest first
@@ -66,9 +80,19 @@ export async function findCheckpoint(
 }
 
 export async function removeCheckpoint(db: ImpDatabase, id: string): Promise<boolean> {
-  const result = await db.deleteFrom('checkpoints').where('id', '=', id).executeTakeFirst();
+  const row = await db
+    .deleteFrom('checkpoints')
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirst();
 
-  return result.numDeletedRows > 0n;
+  if (row === undefined) {
+    return false;
+  }
+
+  emitImpWrite(db, { kind: 'checkpointRemoved', checkpoint: toCheckpointRecord(row) });
+
+  return true;
 }
 
 function toCheckpointRecord(
@@ -80,5 +104,16 @@ function toCheckpointRecord(
     label: row.label,
     createdAt: new Date(row.created_at),
     sizeBytes: row.size_bytes,
+    diskBytes: row.disk_bytes,
+  };
+}
+
+export function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
+  return {
+    id: checkpoint.id,
+    createdAt: checkpoint.createdAt,
+    diskMib: Math.ceil(checkpoint.diskBytes / 1_048_576),
+    ...(checkpoint.label !== null && { label: checkpoint.label }),
+    ...(checkpoint.sizeBytes !== null && { sizeBytes: checkpoint.sizeBytes }),
   };
 }

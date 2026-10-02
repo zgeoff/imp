@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
+import packageJson from '../package.json' with { type: 'json' };
+import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
 import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 
@@ -19,7 +21,7 @@ test('it serves system.info from config and the database', async () => {
   expect(storage.availableBytes).toBeGreaterThan(0);
 
   expect(info).toEqual({
-    version: '0.0.0',
+    version: packageJson.version,
     ramBudgetMib: 16_384,
     ramUsedMib: 0,
     ramReservedMib: 0,
@@ -27,6 +29,7 @@ test('it serves system.info from config and the database', async () => {
     awakeCount: 0,
     impCount: 0,
     sessionCount: 0,
+    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
     firecrackerVersion: 'v1.17.0',
     ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
@@ -481,6 +484,39 @@ test('an exec ticket opens one socket for its imp, once', async () => {
   }
 });
 
+test('an exec on a ticket the token asked for is audited as the token', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+
+    await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    // the row lands after the open settles
+    const deadline = Date.now() + 5000;
+    let execs: { readonly actor: string }[] = [];
+
+    while (execs.length === 0 && Date.now() < deadline) {
+      const calls = await listApiCalls(ctx.db, 'dev', 10);
+
+      execs = calls.filter((call) => call.procedure === 'exec');
+
+      await Bun.sleep(1);
+    }
+
+    expect(execs.map((call) => call.actor)).toEqual(['token']);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('a bearer exec socket may start any imp', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
@@ -520,6 +556,124 @@ test('/exec rejects an expired ticket and the token in the query', async () => {
 
     expect(expired).toBe('rejected');
     expect(queryToken).toBe('rejected');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+// opens /tunnel and reports the first message for `open`, or 'rejected'
+async function tryTunnelSocket(
+  port: string,
+  query: string,
+  headers: Readonly<Record<string, string>>,
+  name = 'nope',
+): Promise<string> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel?${query}`, { headers });
+
+  const outcome = Promise.withResolvers<string>();
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'open', name, port: 5432 }));
+  });
+
+  socket.addEventListener('message', (event) => {
+    outcome.resolve(String(event.data));
+  });
+
+  socket.addEventListener('error', () => {
+    outcome.resolve('rejected');
+  });
+
+  try {
+    return await outcome.promise;
+  } finally {
+    socket.close();
+  }
+}
+
+test('/tunnel takes the bearer header only, not a ticket', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+    const ticket = await tryTunnelSocket(port, `ticket=${issued.ticket}`, {});
+    const bearer = await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` });
+
+    const message: unknown = JSON.parse(bearer);
+
+    expect(ticket).toBe('rejected');
+
+    // past the auth: the imp does not exist
+    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('a tunnel open is audited as the token, with the imp and the port', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` }, 'dev');
+
+    // the row lands after the open settles
+    const deadline = Date.now() + 5000;
+    let tunnels: { readonly procedure: string; readonly actor: string }[] = [];
+
+    while (tunnels.length === 0 && Date.now() < deadline) {
+      const calls = await listApiCalls(ctx.db, 'dev', 10);
+
+      tunnels = calls.filter((call) => call.procedure.startsWith('tunnel'));
+
+      await Bun.sleep(1);
+    }
+
+    expect(tunnels.map((call) => [call.procedure, call.actor])).toEqual([['tunnel:5432', 'token']]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('impd stopping closes tunnels with 1012', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(server.server?.port)}/tunnel`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
+
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<CloseEvent>();
+
+    socket.addEventListener('open', () => {
+      opened.resolve();
+    });
+
+    socket.addEventListener('close', closed.resolve);
+
+    await opened.promise;
+
+    ctx.closeExecSessions();
+
+    const event = await closed.promise;
+
+    expect(event.code).toBe(1012);
   } finally {
     await server.stop(true);
   }

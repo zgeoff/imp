@@ -18,13 +18,26 @@ import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths } from '../storage/data-layout';
+import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
+import type { StorageGate } from '../storage/storage-gate';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
-const ROOTFS_SIZE = '32G';
+const GIB = 1024 ** 3;
+
+// An image's ext4 holds its files and room to spare; each imp disk grows past
+// it (docs/architecture/storage.md#disk-sizes)
+const ROOTFS_MIN_BYTES = 4 * GIB;
+const ROOTFS_SPARE_BYTES = 2 * GIB;
+
+// mkfs.ext4's default: one inode per 16 KiB
+const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 const SEED_REF = 'ubuntu:24.04';
-const InspectSchema = z.array(z.object({ Id: z.string(), Config: z.unknown() })).length(1);
+
+const InspectSchema = z
+  .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
+  .length(1);
 
 export interface ImageService {
   readonly addImage: (ref: string, name?: string) => Promise<ImageRecord>;
@@ -47,9 +60,18 @@ export interface ImageServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
   readonly storage: StorageBackend;
+
+  // a build joins it until the image's row is written, a removal until its
+  // rootfs is gone
+  readonly storageGate: StorageGate;
+
+  // a build holds room for the unpacked tree and its ext4 file
+  readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
+  const storageGate = deps.storageGate;
+
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
@@ -104,12 +126,28 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         JSON.stringify(buildImageRuntimeConfig(ociConfig)),
       );
 
+      const usage = await readTreeUsage(root);
+
+      const plan = planRootfs(usage);
+
       // the backend gives the directory: on ZFS it is a dataset of its own
       await deps.storage.createImage(digest, async (dir) => {
         const image = join(dir, 'rootfs.ext4');
 
-        await runChecked(['truncate', '-s', ROOTFS_SIZE, image]);
-        await runChecked(['mkfs.ext4', '-q', '-F', '-L', 'imp-root', '-d', root, image]);
+        await runChecked(['truncate', '-s', String(plan.bytes), image]);
+
+        // the default features keep resize_inode, which an online grow needs
+        await runChecked([
+          'mkfs.ext4',
+          '-q',
+          '-F',
+          '-L',
+          'imp-root',
+          ...(plan.inodes === null ? [] : ['-N', String(plan.inodes)]),
+          '-d',
+          root,
+          image,
+        ]);
 
         writeFileSync(join(dir, 'config.json'), JSON.stringify(ociConfig ?? {}, null, 2));
       });
@@ -164,26 +202,34 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       throw new Error(`docker image inspect ${ref}: no result`);
     }
 
-    const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
-    const existing = await findImageByName(deps.db, imageName);
+    // the tree unpacked, and the ext4 file written from it
+    const buildBytes = 2 * (inspect.Size ?? 0);
+    const withRoom = deps.diskBudget.withRoom;
 
-    if (existing === undefined) {
-      return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
-    }
+    return withRoom(buildBytes, () =>
+      storageGate.join(async () => {
+        const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
+        const existing = await findImageByName(deps.db, imageName);
 
-    if (existing.digest === inspect.Id) {
-      return existing;
-    }
+        if (existing === undefined) {
+          return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
+        }
 
-    const updated = await updateImage(deps.db, existing.id, {
-      ref,
-      digest: inspect.Id,
-      sizeBytes,
-    });
+        if (existing.digest === inspect.Id) {
+          return existing;
+        }
 
-    await removeUnusedRootfs(existing.digest);
+        const updated = await updateImage(deps.db, existing.id, {
+          ref,
+          digest: inspect.Id,
+          sizeBytes,
+        });
 
-    return updated;
+        await removeUnusedRootfs(existing.digest);
+
+        return updated;
+      }),
+    );
   };
 
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
@@ -240,8 +286,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         throw buildConflictError('image', name, `image ${name} is used by ${String(users)} imp(s)`);
       }
 
-      await removeImage(deps.db, image.id);
-      await removeUnusedRootfs(image.digest);
+      await storageGate.join(async () => {
+        await removeImage(deps.db, image.id);
+        await removeUnusedRootfs(image.digest);
+      });
     },
     resolveImage,
     seedDefaultImage: async () => {
@@ -262,6 +310,42 @@ function assertImageRef(ref: string): void {
       message: `invalid image reference ${JSON.stringify(ref)}`,
     });
   }
+}
+
+interface RootfsPlan {
+  readonly bytes: number;
+
+  // null leaves mkfs.ext4 its default count
+  readonly inodes: number | null;
+}
+
+// The rootfs size for a tree: its bytes and a fifth more, plus 2 GiB, in
+// whole GiB and at least 4 GiB. A tree of many small files gets twice its
+// inode count, since a grow adds inodes only in proportion to the size.
+export function planRootfs(tree: Readonly<{ bytes: number; inodes: number }>): RootfsPlan {
+  const wanted = Math.ceil((tree.bytes * 1.2 + ROOTFS_SPARE_BYTES) / GIB) * GIB;
+  const bytes = Math.max(ROOTFS_MIN_BYTES, wanted);
+  const inodes = tree.inodes * 2;
+
+  return { bytes, inodes: inodes > bytes / BYTES_PER_INODE ? inodes : null };
+}
+
+// bytes on disk and files in the unpacked image
+async function readTreeUsage(root: string): Promise<{ bytes: number; inodes: number }> {
+  const bytes = await runChecked(['du', '-s', '-B1', root]);
+  const inodes = await runChecked(['du', '-s', '--inodes', root]);
+
+  return { bytes: parseDuCount(bytes), inodes: parseDuCount(inodes) };
+}
+
+function parseDuCount(stdout: string): number {
+  const count = Number(stdout.split(/\s/)[0]);
+
+  if (!Number.isSafeInteger(count)) {
+    throw new TypeError(`du printed ${stdout}`);
+  }
+
+  return count;
 }
 
 function readDiskUsage(path: string): number {

@@ -1,6 +1,14 @@
-import { oc } from '@orpc/contract';
+import { eventIterator, oc } from '@orpc/contract';
 import * as z from 'zod';
+import { ApiCallSchema } from './api-call-schema';
+import {
+  BackupCheckSubsetSchema,
+  BackupRestoreSchema,
+  BackupRunSchema,
+  BackupStatusSchema,
+} from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
+import { ImpEventSchema } from './event-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
@@ -15,6 +23,7 @@ import {
   SecretValueSchema,
 } from './secret-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
+import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 
 const base = oc.errors(IMP_ERRORS);
@@ -33,6 +42,9 @@ export const impContract = {
           image: NameSchema.optional(),
           vcpus: z.int().min(1).max(32).optional(),
           memoryMib: z.int().min(128).optional(),
+
+          // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
+          diskMib: z.int().min(1024).optional(),
 
           // the guest port the wake proxy forwards HTTP to (default 8080)
           httpPort: z.int().min(1).max(65_535).optional(),
@@ -65,6 +77,12 @@ export const impContract = {
       .input(z.object({ name: NameSchema, seconds: z.int().nonnegative() }))
       .output(ImpSchema),
 
+    // grows the disk; a running guest grows its filesystem at once, a
+    // sleeping one when it wakes, a stopped one when it boots
+    resizeDisk: base
+      .input(z.object({ name: NameSchema, diskMib: z.int().min(1024) }))
+      .output(ImpSchema),
+
     url: base
       .input(NameInputSchema)
       .output(z.object({ local: z.url(), https: z.url().nullable(), tailnet: z.url().nullable() })),
@@ -95,6 +113,34 @@ export const impContract = {
     delete: base
       .input(z.object({ name: NameSchema, checkpoint: CheckpointRefSchema }))
       .output(EmptySchema),
+  },
+
+  // off-host backups with restic (docs/architecture/backups.md); every call
+  // fails with PRECONDITION_FAILED when the host has no repository set
+  backups: {
+    run: base.output(BackupRunSchema),
+
+    list: base.output(BackupStatusSchema),
+
+    // One imp by name, or all of them. `at` picks the newest backup at or
+    // before it, in UTC; the newest by default. A restored imp is stopped.
+    restore: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          all: z.boolean().optional(),
+          at: z.date().optional(),
+
+          // the restored imp's name, when one other than its own
+          as: NameSchema.optional(),
+
+          // with `all`, adds the backup's imps to a host that has imps already
+          merge: z.boolean().optional(),
+        }),
+      )
+      .output(BackupRestoreSchema),
+
+    check: base.input(z.object({ subset: BackupCheckSubsetSchema.optional() })).output(EmptySchema),
   },
 
   images: {
@@ -182,10 +228,31 @@ export const impContract = {
         }),
       )
       .output(z.array(AuditEntrySchema)),
+
+    // API calls that changed something and sessions opened, newest first;
+    // those that named one imp, or all of them
+    calls: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          limit: z.int().min(1).max(1000).optional(),
+        }),
+      )
+      .output(z.array(ApiCallSchema)),
+  },
+
+  // every lifecycle event (docs/guides/events.md): first each imp as
+  // `ImpAdded`, then each event as it happens
+  events: {
+    stream: base.output(eventIterator(ImpEventSchema)),
   },
 
   system: {
     info: base.output(SystemInfoSchema),
+
+    // removes the disks, checkpoints, images and snapshots no row names;
+    // PRECONDITION_FAILED while storage operations keep it busy
+    gc: base.input(z.object({ dryRun: z.boolean().optional() })).output(StorageGcSchema),
   },
 };
 

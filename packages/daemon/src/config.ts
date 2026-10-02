@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { loadBackupConfig } from './backup/backup-config';
+import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
 import { countSlots, parseSubnet } from './net/addressing';
@@ -15,6 +17,9 @@ const EnvSchema = z.object({
   IMP_API_PORT: PortSchema.default(7070),
   IMP_PROXY_PORT: PortSchema.default(7080),
   IMP_PORT_BASE: PortSchema.default(20_000),
+
+  // 0 turns the SSH gateway off
+  IMP_SSH_PORT: z.coerce.number().pipe(z.int().min(0).max(65_535)).default(22),
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
@@ -22,8 +27,11 @@ const EnvSchema = z.object({
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
   IMP_BOOT_RESERVE_PERCENT: CountSchema.pipe(z.int().max(100)).default(50),
   IMP_WAKE_RESERVE_MIB: CountSchema.default(256),
+  IMP_SLEEP_MIN_GUEST_UPTIME_MS: z.coerce.number().pipe(z.int().nonnegative()).default(1500),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
   IMP_DEFAULT_MEMORY_MIB: CountSchema.default(2048),
+  IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
+  IMP_DISK_RESERVE_GIB: CountSchema.optional(),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
   IMP_FIRECRACKER_BIN: z.string().default('firecracker'),
@@ -45,6 +53,9 @@ export interface Config {
   readonly proxyPort: number;
   readonly portBase: number;
 
+  // the SSH gateway's port, or null when it is off
+  readonly sshPort: number | null;
+
   // the credential broker's port on every guest's gateway address
   readonly brokerPort: number;
 
@@ -61,8 +72,19 @@ export interface Config {
   // imp's memory, and the least it reserves before a wake (DESIGN 2.9)
   readonly bootReservePercent: number;
   readonly wakeReserveMib: number;
+
+  // a sleep waits until the guest has been up this long, so the next wake
+  // gets its clock back (docs/architecture/sleep-and-wake.md#young-guests);
+  // 0 turns the wait off
+  readonly sleepMinGuestUptimeMs: number;
   readonly defaultVcpus: number;
   readonly defaultMemoryMib: number;
+
+  // the disk an imp gets when `imps.create` names no size
+  readonly defaultDiskBytes: number;
+
+  // free space no write may take; null is max(5 GiB, 5 % of the filesystem)
+  readonly diskReserveBytes: number | null;
   readonly dns: readonly string[];
   readonly subnet: Subnet;
   readonly firecrackerBin: string;
@@ -95,6 +117,9 @@ export interface Config {
   // the web dashboard's built files (packages/dashboard/dist), served at /;
   // null serves a note that this impd has none
   readonly dashboardDir: string | null;
+
+  // off-host backups with restic; null when IMP_BACKUP_REPOSITORY is unset
+  readonly backup: BackupConfig | null;
 
   // imps at https://<name>.<domain> (docs/guides/https.md); null without
   // IMP_DOMAIN
@@ -129,6 +154,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     apiPort: parsed.IMP_API_PORT,
     proxyPort: parsed.IMP_PROXY_PORT,
     portBase: parsed.IMP_PORT_BASE,
+    sshPort: parsed.IMP_SSH_PORT === 0 ? null : parsed.IMP_SSH_PORT,
     brokerPort: parsed.IMP_BROKER_PORT,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
@@ -136,8 +162,12 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     idleCpuPercent: parsed.IMP_IDLE_CPU_PERCENT,
     bootReservePercent: parsed.IMP_BOOT_RESERVE_PERCENT,
     wakeReserveMib: parsed.IMP_WAKE_RESERVE_MIB,
+    sleepMinGuestUptimeMs: parsed.IMP_SLEEP_MIN_GUEST_UPTIME_MS,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,
     defaultMemoryMib: parsed.IMP_DEFAULT_MEMORY_MIB,
+    defaultDiskBytes: parsed.IMP_DEFAULT_DISK_GIB * 1024 ** 3,
+    diskReserveBytes:
+      parsed.IMP_DISK_RESERVE_GIB === undefined ? null : parsed.IMP_DISK_RESERVE_GIB * 1024 ** 3,
     dns: parsed.IMP_DNS,
     subnet,
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
@@ -151,6 +181,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     tailscaleEnabled: parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1',
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
+    backup: loadBackupConfig(present),
     https: parseHttpsConfig(parsed),
   };
 }

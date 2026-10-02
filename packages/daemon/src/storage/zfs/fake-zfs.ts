@@ -3,6 +3,7 @@ import type { CommandResult } from '../../process/run-command';
 interface FakeDataset {
   origin: string | null;
   readonly txg: number;
+  readonly properties?: Readonly<Record<string, string>>;
 }
 
 interface FakeSnapshot {
@@ -42,6 +43,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
   const datasets = new Map<string, FakeDataset>();
   const snapshots = new Map<string, FakeSnapshot>();
   const mounts = new Map<string, string>();
+  const readOnlyDirs = new Set<string>();
 
   const commands: string[] = [];
   const gates: { match: (command: string) => boolean; opened: Promise<void> }[] = [];
@@ -115,7 +117,11 @@ export function createFakeZfs(options: FakeZfsOptions) {
     return buildSuccess();
   };
 
-  const createClone = (origin: string, target: string): CommandResult => {
+  const createClone = (
+    origin: string,
+    target: string,
+    properties: Readonly<Record<string, string>>,
+  ): CommandResult => {
     if (!snapshots.has(origin)) {
       return buildFailure(`cannot open '${origin}': dataset does not exist`);
     }
@@ -128,7 +134,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return buildFailure(`cannot create '${target}': parent does not exist`);
     }
 
-    datasets.set(target, { origin, txg: state.txg++ });
+    datasets.set(target, { origin, txg: state.txg++, properties });
 
     return buildSuccess();
   };
@@ -269,13 +275,35 @@ export function createFakeZfs(options: FakeZfsOptions) {
     return buildSuccess(rows.map((row) => `${row.line}\n`).join(''));
   };
 
+  // every dataset holds 1 MiB of its own and refers to 3; a snapshot holds 64 KiB
+  const listSpace = (root: string): CommandResult => {
+    const isInTree = (name: string) => name === root || name.startsWith(`${root}/`);
+
+    const rows = [
+      ...[...datasets.keys()]
+        .filter((name) => isInTree(name))
+        .map((name) => `${name}\t1048576\t3145728\t1048576\t-`),
+      ...[...snapshots.keys()]
+        .filter((name) => isInTree(name.split('@')[0] ?? ''))
+        .map((name) => {
+          const clones = findClonesOf(name);
+
+          return `${name}\t65536\t1048576\t-\t${clones.length === 0 ? '-' : clones.join(',')}`;
+        }),
+    ];
+
+    return buildSuccess(rows.map((row) => `${row}\n`).join(''));
+  };
+
   const handleCommand = (argv: readonly string[]): CommandResult => {
     const [tool = '', verb = '', ...rest] = argv;
     const last = argv.at(-1) ?? '';
 
-    // mount -t zfs <name> <dir>
+    // mount -t zfs [-o ro] <name> <dir>; like a real legacy mount, the
+    // readonly property does not make it read-only
     if (tool === 'mount') {
-      const [, name = '', dir = ''] = rest;
+      const name = argv.at(-2) ?? '';
+      const dir = last;
 
       if (!datasets.has(name)) {
         return buildFailure(`mount: ${dir}: ${name} does not exist`);
@@ -287,10 +315,16 @@ export function createFakeZfs(options: FakeZfsOptions) {
 
       mounts.set(dir, name);
 
+      if (rest.includes('ro')) {
+        readOnlyDirs.add(dir);
+      }
+
       return buildSuccess();
     }
 
     if (tool === 'umount') {
+      readOnlyDirs.delete(verb);
+
       if (!mounts.delete(verb)) {
         return buildFailure(`umount: ${verb}: not mounted.`);
       }
@@ -302,6 +336,10 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return buildSuccess(
         `zfs-${options.userland ?? '2.2.2-0ubuntu9'}\nzfs-kmod-${options.kernel ?? '2.2.2-0ubuntu9'}\n`,
       );
+    }
+
+    if (verb === 'list' && argv.includes('name,used,referenced,usedbydataset,clones')) {
+      return listSpace(last);
     }
 
     if (verb === 'list' && argv.includes('used,available')) {
@@ -326,8 +364,19 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return createSnapshot(last);
     }
 
+    // zfs clone [-o key=value]… <snapshot> <target>
     if (verb === 'clone') {
-      return createClone(rest[0] ?? '', last);
+      const properties: Record<string, string> = {};
+
+      for (const [index, arg] of rest.entries()) {
+        const [key = '', value = ''] = arg.split('=');
+
+        if (rest[index - 1] === '-o') {
+          properties[key] = value;
+        }
+      }
+
+      return createClone(argv.at(-2) ?? '', last, properties);
     }
 
     if (verb === 'rename') {
@@ -393,7 +442,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       [...mounts.entries()]
         .map(
           ([dir, name]) =>
-            `${name} ${dir.replaceAll(' ', String.raw`\040`)} zfs rw,noatime,xattr,noacl 0 0\n`,
+            `${name} ${dir.replaceAll(' ', String.raw`\040`)} zfs ${readOnlyDirs.has(dir) ? 'ro' : 'rw'},noatime,xattr,noacl 0 0\n`,
         )
         .join(''),
 
@@ -420,7 +469,9 @@ export function createFakeZfs(options: FakeZfsOptions) {
     listDatasets: () => [...datasets.keys()].toSorted(),
     listSnapshots: () => [...snapshots.keys()].toSorted(),
     readOrigin: (name: string) => datasets.get(name)?.origin ?? null,
+    readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,
+    isReadOnlyAt: (dir: string) => readOnlyDirs.has(dir),
   };
 }

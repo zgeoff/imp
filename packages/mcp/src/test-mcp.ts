@@ -213,6 +213,7 @@ function buildEventStream() {
       session: null,
       created: true,
       writeStdin: hooks.writeStdin ?? (() => {}),
+      stdinDrained: () => Promise.resolve(),
       closeStdin: hooks.closeStdin ?? (() => {}),
       resize: () => {},
       sendSignal: hooks.sendSignal ?? (() => {}),

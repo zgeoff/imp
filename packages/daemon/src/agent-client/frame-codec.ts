@@ -12,6 +12,12 @@ export const FRAME_TYPES = {
   stderr: 9,
   exit: 10,
   detached: 11,
+
+  // dial: the target closed its side
+  stdoutEof: 12,
+
+  // agent.listen: a client of the socket waits for an agent.accept
+  connection: 13,
 } as const;
 
 export type FrameType = (typeof FRAME_TYPES)[keyof typeof FRAME_TYPES];

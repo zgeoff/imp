@@ -9,20 +9,23 @@ import {
   findCheckpoint,
   listCheckpoints,
   removeCheckpoint,
+  toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
-import { findImpByName } from '../db/imps';
+import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { toLockedImp } from '../imps/imp-lock';
 import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
+import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 
 // How long the guest stays frozen at most if impd never sends thaw.
-const FREEZE_TIMEOUT_MS = 10_000;
+export const FREEZE_TIMEOUT_MS = 10_000;
 
 // Short, typeable and global, so the existing primary key holds them without
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
@@ -50,7 +53,7 @@ export interface CheckpointService {
 }
 
 // the agent's freeze and thaw, behind an interface for tests
-interface DiskFreezer {
+export interface DiskFreezer {
   readonly freeze: (vsockPath: string, timeoutMs: number) => Promise<void>;
   readonly thaw: (vsockPath: string) => Promise<void>;
 }
@@ -62,6 +65,9 @@ export interface CheckpointServiceDeps {
   readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
+
+  // a checkpoint is thin, but none is made past the reserve
+  readonly diskBudget: Pick<DiskBudget, 'requireRoom'>;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -75,15 +81,6 @@ export function buildCheckpointId(random: () => number = Math.random): string {
 // A label is looked up the same way as an id, so it must not look like one.
 export function isValidCheckpointLabel(label: string): boolean {
   return !label.startsWith(CHECKPOINT_ID_PREFIX);
-}
-
-function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
-  return {
-    id: checkpoint.id,
-    createdAt: checkpoint.createdAt,
-    ...(checkpoint.label !== null && { label: checkpoint.label }),
-    ...(checkpoint.sizeBytes !== null && { sizeBytes: checkpoint.sizeBytes }),
-  };
 }
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
@@ -173,6 +170,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
         const started = performance.now();
 
+        await deps.diskBudget.requireRoom(0);
+
         const created = await withConsistentDisk(imp, 'checkpoint', () =>
           createWithFreshId(imp.id),
         );
@@ -185,6 +184,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
             impId: imp.id,
             label: label ?? null,
             sizeBytes: created.sizeBytes,
+            diskBytes: imp.diskBytes,
           });
 
           const ms = Math.round(performance.now() - started);
@@ -249,8 +249,22 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           return stopped;
         });
 
-        const restored = wasAwake ? await deps.imps.bootImp(halted) : halted;
+        // the disk is the checkpoint's now, at the checkpoint's size
+        const resized = await updateImpDisk(deps.db, imp.id, {
+          diskBytes: checkpoint.diskBytes,
+          isGrowPending: false,
+        });
+
+        const sized = toLockedImp(halted, resized);
+        const booted = wasAwake ? await deps.imps.bootImp(sized) : sized;
         const ms = Math.round(performance.now() - started);
+
+        // the state may be what it was, the disk is not: the stream hears of it
+        const restored = await updateImpState(deps.db, booted.id, {
+          reason: 'restored',
+          detail: { durationMs: ms, trigger: checkpoint.id },
+          state: booted.state,
+        });
 
         log(`impd: ${imp.name}: restored ${checkpoint.id} in ${String(ms)}ms`);
 

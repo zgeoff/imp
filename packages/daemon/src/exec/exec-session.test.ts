@@ -68,6 +68,7 @@ function buildFakeStream() {
     writeStdin: (data) => {
       input.push(`stdin:${new TextDecoder().decode(data)}`);
     },
+    stdinDrained: () => Promise.resolve(),
     closeStdin: () => {
       input.push('eof');
     },

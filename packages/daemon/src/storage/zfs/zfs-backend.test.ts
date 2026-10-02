@@ -632,3 +632,214 @@ test('start drops an image build a crash cut short, with its mount dir', async (
   expect(ctx.fake.listDatasets()).not.toContain(staged);
   expect(existsSync(dir)).toBeFalse();
 });
+
+// a run's copies of imp a (with checkpoint cp-1) and the image, in the tree
+async function setupBackupRun() {
+  const ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+  return ctx;
+}
+
+const BACKUP_REQUEST = {
+  runId: 'r1',
+  imps: [{ impId: 'a', checkpointIds: ['cp-1'] }],
+  imageDigests: [DIGEST],
+};
+
+test('a backup tree mounts read-only clones of the copy, checkpoints and image', async () => {
+  await using ctx = await setupBackupRun();
+
+  const tree = await ctx.backend.openBackupTree(BACKUP_REQUEST);
+
+  const treeDir = join(ctx.dataDir, 'backup', 'tree');
+
+  expect([...tree.impIds]).toEqual(['a']);
+  expect([...tree.checkpointIds]).toEqual(['cp-1']);
+  expect([...tree.imageDigests]).toEqual([DIGEST]);
+  expect(ctx.fake.readMountedAt(join(treeDir, 'imps', 'a', 'disk'))).toBe(`${ROOT}/staging/bk-a`);
+
+  const checkpointDir = join(treeDir, 'imps', 'a', 'checkpoints', 'cp-1');
+
+  expect(ctx.fake.readMountedAt(checkpointDir)).toBe(`${ROOT}/staging/bkc-cp-1`);
+  expect(ctx.fake.readMountedAt(join(treeDir, 'images', '9f2c'))).toBe(`${ROOT}/staging/bki-9f2c`);
+  expect(ctx.fake.readProperty(`${ROOT}/staging/bk-a`, 'readonly')).toBe('on');
+
+  for (const dir of [
+    join(treeDir, 'imps', 'a', 'disk'),
+    checkpointDir,
+    join(treeDir, 'images', '9f2c'),
+  ]) {
+    expect({ dir, isReadOnly: ctx.fake.isReadOnlyAt(dir) }).toEqual({ dir, isReadOnly: true });
+  }
+
+  expect(ctx.fake.isReadOnlyAt(join(ctx.dataDir, 'imps', 'a', 'disk'))).toBeFalse();
+  expect(ctx.fake.isDeferred(`${ROOT}/disks/a@bk-r1-a`)).toBeTrue();
+
+  await tree.close();
+
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots().filter((name) => name.includes('@bk-'))).toEqual([]);
+  expect(ctx.fake.readMountedAt(join(treeDir, 'imps', 'a', 'disk'))).toBeNull();
+});
+
+test('an imp destroyed while restic reads its copy goes once the tree closes', async () => {
+  await using ctx = await setupBackupRun();
+
+  const tree = await ctx.backend.openBackupTree(BACKUP_REQUEST);
+
+  await ctx.backend.removeImpDisk('a', ['cp-1']);
+  await ctx.backend.waitForReclaim();
+
+  // the staging clones hold the retired disk; a promote would take its snapshots
+  expect(ctx.listRetired()).toHaveLength(1);
+  expect(ctx.fake.commands.filter((command) => command.startsWith('zfs promote'))).toEqual([]);
+
+  await tree.close();
+  await ctx.backend.waitForReclaim();
+
+  expect(ctx.listRetired()).toEqual([]);
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+});
+
+test('a backup tree leaves out storage removed since the database copy', async () => {
+  await using ctx = await setupBackupRun();
+
+  await ctx.backend.removeCheckpoint('a', 'cp-1');
+
+  const tree = await ctx.backend.openBackupTree({
+    ...BACKUP_REQUEST,
+    imps: [...BACKUP_REQUEST.imps, { impId: 'gone', checkpointIds: [] }],
+  });
+
+  expect([...tree.impIds]).toEqual(['a']);
+  expect([...tree.checkpointIds]).toEqual([]);
+
+  await tree.close();
+});
+
+test('start drops the clones and copies of a backup run a crash cut short', async () => {
+  await using ctx = await setupBackupRun();
+
+  await ctx.backend.createBackupCopy('a', 'r2', { isReusable: true });
+  await ctx.backend.openBackupTree(BACKUP_REQUEST);
+  await ctx.restartImpd(false);
+
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots().filter((name) => name.includes('@bk-'))).toEqual([]);
+
+  const treeDisk = join(ctx.dataDir, 'backup', 'tree', 'imps', 'a', 'disk');
+
+  expect(ctx.fake.readMountedAt(treeDisk)).toBeNull();
+});
+
+test('a backup tree that fails to open releases what it made', async () => {
+  await using ctx = await setupBackupRun();
+
+  ctx.fake.failOnce((command) => command.includes('staging/bki-'));
+
+  const failure = await readFailure(ctx.backend.openBackupTree(BACKUP_REQUEST));
+
+  expect(String(failure)).toContain('failed');
+  expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+  expect(ctx.fake.listSnapshots().filter((name) => name.includes('@bk-'))).toEqual([]);
+});
+
+test('an empty disk is a dataset of its own holding a zero-length file', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.backend.createImpDisk('b', { kind: 'empty' });
+
+  expect(ctx.fake.readOrigin(`${ROOT}/disks/b`)).toBeNull();
+
+  const diskDir = ctx.diskDir('b');
+
+  expect(ctx.fake.readMountedAt(diskDir)).toBe(`${ROOT}/disks/b`);
+  expect(existsSync(join(diskDir, 'rootfs.ext4'))).toBeTrue();
+});
+
+test('dropUnnamed retires what the database does not name and leaves staging alone', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createImp('b');
+  await ctx.createCheckpoint('a', 'cp-1');
+  await ctx.createCheckpoint('a', 'cp-lost');
+
+  // an image build in flight, and the memory of an imp long gone
+  await ctx.fake.run(['zfs', 'create', `${ROOT}/staging/image-now`]);
+
+  mkdirSync(join(ctx.dataDir, 'mem', 'gone'), { recursive: true });
+
+  ctx.live.impIds.delete('b');
+  ctx.live.checkpointIds.delete('cp-lost');
+
+  const listed = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: true });
+
+  expect(listed).toEqual([
+    { kind: 'checkpoint', id: 'cp-lost' },
+    { kind: 'imp', id: 'b' },
+    { kind: 'memory', id: 'gone' },
+  ]);
+
+  expect(ctx.fake.listDatasets()).toContain(`${ROOT}/disks/b`);
+
+  const dropped = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false });
+
+  await ctx.backend.waitForReclaim();
+
+  expect(dropped).toEqual(listed);
+
+  const left = ctx.fake.listDatasets();
+
+  expect(left).not.toContain(`${ROOT}/disks/b`);
+  expect(left).toContain(`${ROOT}/disks/a`);
+  expect(left).toContain(`${ROOT}/staging/image-now`);
+  expect(existsSync(join(ctx.dataDir, 'mem', 'gone'))).toBeFalse();
+  expect(existsSync(join(ctx.dataDir, 'imps', 'b'))).toBeFalse();
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.listSnapshots()).toContain(`${ROOT}/disks/a@cp-1`);
+  expect(ctx.fake.listSnapshots()).not.toContain(`${ROOT}/disks/a@cp-lost`);
+});
+
+test('usage counts the retired checkpoints and is an upper bound under a fork', async () => {
+  await using ctx = await setupStarted();
+
+  const MIB = 1_048_576;
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-old');
+  await ctx.createCheckpoint('a', 'cp-new');
+  await ctx.backend.restoreCheckpoint('a', 'cp-old', () => Promise.resolve());
+  await ctx.createImp('c');
+
+  const imps = [
+    { impId: 'a', checkpointIds: ['cp-old', 'cp-new'] },
+    { impId: 'c', checkpointIds: [] },
+  ];
+
+  const before = await ctx.backend.measureUsage(imps);
+
+  // the fake: each dataset holds 1 MiB of its own and refers to 3
+  expect(before.imps.get('a')).toEqual({
+    exclusiveBytes: 2 * MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  expect(before.imps.get('c')).toEqual({
+    exclusiveBytes: MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-new' });
+
+  const after = await ctx.backend.measureUsage(imps);
+
+  expect(after.imps.get('a')?.isUpperBound).toBe(true);
+  expect(after.imps.get('c')?.isUpperBound).toBe(false);
+});

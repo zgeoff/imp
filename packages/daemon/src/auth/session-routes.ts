@@ -13,6 +13,9 @@ const LoginSchema = z.object({ token: z.string() });
 export interface SessionRouteDeps {
   readonly token: string;
   readonly now: () => number;
+
+  // after a logout: the dashboard's event streams end
+  readonly onLogout?: () => void;
 }
 
 // POST /auth/login with {"token": "…"} sets the session cookie; POST
@@ -50,6 +53,8 @@ export function createSessionRoutes(deps: Readonly<SessionRouteDeps>) {
       for (const cookie of buildClearedSessionCookies(isSecure(request))) {
         headers.append('set-cookie', cookie);
       }
+
+      deps.onLogout?.();
 
       return new Response(null, { status: 204, headers });
     },

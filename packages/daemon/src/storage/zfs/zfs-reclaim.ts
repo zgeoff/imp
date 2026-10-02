@@ -1,15 +1,22 @@
 import type { ZfsEntry } from './zfs-commands';
 
+interface ReclaimRoots {
+  readonly retired: string;
+
+  // impd's own short-lived clones: a restore on its way in, or a backup read
+  readonly staging: string;
+}
+
 export type ReclaimStep =
   | { readonly kind: 'destroy'; readonly name: string }
   | { readonly kind: 'promote'; readonly name: string };
 
 // The next step that frees a retired disk or image, or null when none can go
-// yet. Promoting the clone of its newest snapshot leaves it with no snapshots
-// (docs/architecture/storage.md#reclaim).
+// yet: promote the newest snapshot's clone, never one in staging, which impd
+// destroys soon (docs/architecture/storage.md#reclaim).
 export function planReclaimStep(
   entries: readonly ZfsEntry[],
-  retiredRoot: string,
+  roots: ReclaimRoots,
 ): ReclaimStep | null {
   const filesystems = entries.filter((entry) => entry.type === 'filesystem');
 
@@ -17,7 +24,7 @@ export function planReclaimStep(
     filesystems.filter((filesystem) => filesystem.origin === snapshot);
 
   for (const retired of filesystems) {
-    if (!retired.name.startsWith(`${retiredRoot}/`)) {
+    if (!retired.name.startsWith(`${roots.retired}/`)) {
       continue;
     }
 
@@ -43,7 +50,9 @@ export function planReclaimStep(
       return { kind: 'destroy', name: retired.name };
     }
 
-    const [clone] = findClones(newest.name);
+    const clone = findClones(newest.name).find(
+      (filesystem) => !filesystem.name.startsWith(`${roots.staging}/`),
+    );
 
     if (clone !== undefined) {
       return { kind: 'promote', name: clone.name };

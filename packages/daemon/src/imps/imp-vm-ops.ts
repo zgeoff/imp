@@ -1,9 +1,14 @@
 import { statSync } from 'node:fs';
+import type { ImpEventDetail } from '@imp/api';
+import { ORPCError } from '@orpc/server';
+import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
-import { updateImpActivity, updateImpState } from '../db/imps';
+import { buildAgentOutdatedApiError } from '../api-errors';
+import { updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
+import { waitForGuestAge } from '../sleep/guest-age';
 import {
   buildSnapshotIdentity,
   findColdBootReason,
@@ -22,14 +27,22 @@ import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
 // snapshot writes put the whole mem file through the page cache
-// (docs/sleep-findings.md gotcha 8): a few at a time
+// (docs/architecture/sleep-and-wake.md gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
+
+// How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
+// for it, and give way once `isWanted` turns false, or sleep it at once.
+export type YoungGuestWait =
+  | { readonly wait: false }
+  | { readonly wait: true; readonly isWanted: () => Promise<boolean> };
+
+const ALWAYS_WAIT: YoungGuestWait = { wait: true, isWanted: () => Promise.resolve(true) };
 
 // The VM side of the lifecycle. Every operation takes a LockedImp: the caller
 // holds the imp's lock, and the record it passes is fresh.
 export interface ImpVmOps {
   // moves the record to another state, checked against the lifecycle
-  readonly updateState: (imp: LockedImp, change: ImpStateChange) => Promise<LockedImp>;
+  readonly updateState: (imp: LockedImp, change: Readonly<ImpStateChange>) => Promise<LockedImp>;
 
   // the full text goes to the log, its first line to the record
   readonly writeFailure: (imp: LockedImp, error: unknown) => Promise<void>;
@@ -40,18 +53,30 @@ export interface ImpVmOps {
   // agent shutdown, then the memory goes too: a stopped imp boots cold
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
-  // snapshots the VM and stops it (DESIGN 2.8). A failed snapshot leaves the
-  // VM running; a failure after the kill stops the imp.
-  readonly sleepImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
+  // snapshots the VM and stops it (DESIGN 2.8); a failed snapshot leaves it
+  // running, a failure after the kill stops the imp. A sleep that gives way
+  // to a busy imp returns it still running.
+  readonly sleepImpVm: (
+    imp: LockedImp,
+    reason: string,
+    youngGuest?: YoungGuestWait,
+  ) => Promise<LockedImp>;
 
   // the running imp, woken or booted first
   readonly requireRunningImp: (imp: LockedImp) => Promise<LockedImp>;
+
+  // a running guest grows its filesystem into a grown disk file; a failure
+  // leaves the grow pending for the next wake, and a cold boot grows anyway
+  readonly growGuestDisk: (imp: LockedImp) => Promise<LockedImp>;
 }
 
 export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
   const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
 
-  const updateState = async (imp: LockedImp, change: ImpStateChange): Promise<LockedImp> => {
+  const updateState = async (
+    imp: LockedImp,
+    change: Readonly<ImpStateChange>,
+  ): Promise<LockedImp> => {
     if (change.state !== imp.state) {
       requireTransition(imp.state, change.state, `move to ${change.state}`);
     }
@@ -70,7 +95,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     context.log(`impd: ${imp.name}: ${message}`);
 
-    await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
+    await updateState(imp, {
+      reason: 'failed',
+      state: 'error',
+      pid: null,
+      error: message.split('\n')[0] ?? '',
+    });
   };
 
   // The identity is advisory: a VM without one sleeps into a snapshot that
@@ -140,13 +170,22 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       await updateImpActivity(context.db, imp.id, new Date());
 
-      return await updateState(imp, {
+      const running = await updateState(imp, {
+        reason: 'booted',
+        detail: {
+          durationMs: countStepsMs(vm.timings),
+          steps: vm.timings,
+          ...(reason !== null && { coldBootReason: reason }),
+        },
         state: 'running',
         pid: vm.pid,
         error: null,
         sleptAt: null,
         firecrackerVersion: vm.firecrackerVersion,
       });
+
+      // stage 1 grew the filesystem to fill the disk
+      return running.isDiskGrowPending ? await setGrowPending(running, false) : running;
     } catch (error) {
       context.admission?.release(imp.id);
 
@@ -168,7 +207,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     removeSnapshot(paths);
     context.admission?.release(imp.id);
 
-    return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
+    return imp.state === 'stopped'
+      ? imp
+      : updateState(imp, { reason: 'stopped', state: 'stopped', pid: null });
   };
 
   // the last look before the pause, under the imp's lock; nothing attaches
@@ -182,7 +223,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return seen.map((session) => setDetached(session));
   };
 
-  const sleepImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
+  const sleepImpVm = async (
+    imp: LockedImp,
+    reason: string,
+    youngGuest: YoungGuestWait = ALWAYS_WAIT,
+  ): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
     const paths = context.findPaths(imp.id);
@@ -192,14 +237,35 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       throw new Error(`${imp.name} is running without a firecracker pid`);
     }
 
+    const waitedMs = youngGuest.wait
+      ? await waitForGuestAge({
+          readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
+          minUptimeMs: context.config.sleepMinGuestUptimeMs,
+          isWanted: youngGuest.isWanted,
+        })
+      : 0;
+
+    if (waitedMs === null) {
+      context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);
+
+      return imp;
+    }
+
     const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
 
     const sessions = await readSessionsForSleep(imp, paths);
 
     const started = performance.now();
 
+    // what the event stream reports about this sleep
+    const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
+
     try {
-      const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths));
+      // the memory file is written in full before its holes are dug: no
+      // pause starts unless the disk has room for it
+      const timings = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, () =>
+        sleepSlots.run(() => context.vms.sleepVm(pid, paths)),
+      );
 
       const booted = readVmIdentity(paths);
 
@@ -217,9 +283,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       }
 
       const sleepMs = Math.round(performance.now() - started);
+      const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
+
+      slept.detail = { trigger: reason, durationMs: sleepMs, steps: timings };
 
       context.log(
-        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason}), ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
+        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
       );
     } catch (error) {
       if (context.vms.isVmAlive(pid, paths)) {
@@ -233,14 +302,25 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       removeSnapshot(paths);
       context.admission?.release(imp.id);
 
-      await updateState(imp, { state: 'stopped', pid: null });
+      await updateState(imp, {
+        reason: 'stopped',
+        detail: { trigger: reason },
+        state: 'stopped',
+        pid: null,
+      });
 
       throw error;
     }
 
     context.admission?.release(imp.id);
 
-    return updateState(imp, { state: 'sleeping', pid: null, sleptAt: new Date() });
+    return updateState(imp, {
+      reason: 'slept',
+      detail: slept.detail,
+      state: 'sleeping',
+      pid: null,
+      sleptAt: new Date(),
+    });
   };
 
   // resumes from the snapshot, or boots cold when there is none, it does not
@@ -250,10 +330,14 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);
-    const mismatch = meta === null ? 'no snapshot' : findColdBootReason(meta, context.identity);
+
+    const mismatch =
+      meta === null ? 'no snapshot it can load' : findColdBootReason(meta, context.identity);
 
     if (meta === null || mismatch !== null) {
-      context.log(`impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot'}`);
+      context.log(
+        `impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot it can load'}`,
+      );
 
       return startColdImpVm(imp, mismatch);
     }
@@ -294,13 +378,56 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     await updateImpActivity(context.db, imp.id, new Date());
 
-    return updateState(imp, {
+    const running = await updateState(imp, {
+      reason: 'woke',
+      detail: { durationMs: wakeMs, steps: woken.timings },
       state: 'running',
       pid: woken.pid,
       error: null,
       sleptAt: null,
       firecrackerVersion: woken.firecrackerVersion,
     });
+
+    if (!running.isDiskGrowPending) {
+      return running;
+    }
+
+    // the disk grew while it slept: a failed grow stays pending, the wake stands
+    return growGuestDisk(running).catch(() => running);
+  };
+
+  const setGrowPending = async (imp: LockedImp, isGrowPending: boolean): Promise<LockedImp> => {
+    const updated = await updateImpDisk(context.db, imp.id, {
+      diskBytes: imp.diskBytes,
+      isGrowPending,
+    });
+
+    return toLockedImp(imp, updated);
+  };
+
+  const growGuestDisk = async (imp: LockedImp): Promise<LockedImp> => {
+    try {
+      await context.vms.growDrive(context.findPaths(imp.id), imp.diskBytes);
+    } catch (error) {
+      const message = readErrorMessage(error);
+
+      context.log(`impd: ${imp.name}: the guest did not grow into its disk: ${message}`);
+
+      await setGrowPending(imp, true);
+
+      if (error instanceof AgentError && error.code === 'AGENT_OUTDATED') {
+        throw buildAgentOutdatedApiError(
+          "the disk grew, but the imp's agent is too old to grow its filesystem while it runs; its next boot does (stop and start the imp)",
+        );
+      }
+
+      throw new ORPCError('INTERNAL_SERVER_ERROR', {
+        message: `the disk grew, but the guest did not grow its filesystem (its next wake or boot does): ${message}`,
+        cause: error,
+      });
+    }
+
+    return imp.isDiskGrowPending ? setGrowPending(imp, false) : imp;
   };
 
   // the woken VM, or why the load or the agent failed; the VM is gone then
@@ -328,7 +455,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       context.admission?.release(imp.id);
       removeSnapshot(paths);
 
-      await updateState(imp, { state: 'error', pid, error: `could not stop: ${message}` });
+      await updateState(imp, {
+        reason: 'failed',
+        state: 'error',
+        pid,
+        error: `could not stop: ${message}`,
+      });
 
       throw error;
     }
@@ -348,7 +480,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     // snapshot no longer matches it, even if the cold boot is turned away
     removeSnapshot(paths);
 
-    const stopped = await updateState(imp, { state: 'stopped', pid: null });
+    const stopped = await updateState(imp, {
+      reason: 'stopped',
+      detail: { trigger: failure },
+      state: 'stopped',
+      pid: null,
+    });
 
     return startColdImpVm(stopped, failure);
   };
@@ -358,9 +495,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       return imp;
     }
 
+    // a wake goes through below the reserve, so a full disk never strands an
+    // imp's work; a cold boot writes the disk from the start, and waits
     if (imp.state === 'sleeping') {
       return wakeImpVm(imp);
     }
+
+    await context.diskBudget.requireRoom(0);
 
     requireTransition(imp.state, 'running', 'start');
 
@@ -371,7 +512,15 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return startImpVm(imp);
   };
 
-  return { updateState, writeFailure, startImpVm, stopImpVm, sleepImpVm, requireRunningImp };
+  return {
+    updateState,
+    writeFailure,
+    startImpVm,
+    stopImpVm,
+    sleepImpVm,
+    requireRunningImp,
+    growGuestDisk,
+  };
 }
 
 // allocated size: the mem file is sparse after --dig-holes
@@ -381,6 +530,10 @@ function readDiskMib(path: string): number {
   } catch {
     return 0;
   }
+}
+
+function countStepsMs(timings: Readonly<Record<string, number>>): number {
+  return Object.values(timings).reduce((total, ms) => total + ms, 0);
 }
 
 function formatTimings(timings: Readonly<Record<string, number>>): string {

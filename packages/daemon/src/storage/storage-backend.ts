@@ -3,15 +3,55 @@ import type { ImpPaths } from './data-layout';
 export type StorageBackendKind = 'xfs' | 'zfs';
 
 // Where a new imp disk comes from. An imp source is its live disk: the caller
-// freezes the guest around the call.
+// freezes the guest around the call. An empty disk is a zero-length file for
+// a backup restore to write into.
 export type DiskSource =
   | { readonly kind: 'image'; readonly digest: string }
   | { readonly kind: 'imp'; readonly impId: string }
-  | { readonly kind: 'checkpoint'; readonly impId: string; readonly checkpointId: string };
+  | { readonly kind: 'checkpoint'; readonly impId: string; readonly checkpointId: string }
+  | { readonly kind: 'empty' };
+
+// `isReusable` lets XFS keep last run's copy when the disk is unchanged
+interface BackupCopyOptions {
+  readonly isReusable: boolean;
+}
+
+// What one backup run reads, as its database copy names it.
+interface BackupTreeRequest {
+  readonly runId: string;
+
+  // the imps createBackupCopy copied this run
+  readonly imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[];
+  readonly imageDigests: readonly string[];
+}
+
+// The backup tree at BACKUP_TREE's paths, until close. It holds what was asked
+// for less anything removed since the database copy.
+export interface BackupTree {
+  readonly impIds: ReadonlySet<string>;
+  readonly checkpointIds: ReadonlySet<string>;
+  readonly imageDigests: ReadonlySet<string>;
+  readonly close: () => Promise<void>;
+}
 
 interface StorageUsage {
   readonly usedBytes: number;
   readonly availableBytes: number;
+}
+
+// Exclusive is what removing the imp frees; shared, what it holds with an
+// image, another imp or the backup tree. docs/architecture/storage.md has more.
+export interface ImpDiskUsage {
+  readonly exclusiveBytes: number;
+  readonly sharedBytes: number;
+  readonly isUpperBound: boolean;
+}
+
+export interface DiskUsageReport {
+  readonly imps: ReadonlyMap<string, ImpDiskUsage>;
+
+  // a pass cut short at its time limit counts only the files it read
+  readonly isPartial: boolean;
 }
 
 // What the database holds when impd starts. Anything else a backend finds is
@@ -20,6 +60,14 @@ export interface LiveStorage {
   readonly impIds: ReadonlySet<string>;
   readonly checkpointIds: ReadonlySet<string>;
   readonly imageDigests: ReadonlySet<string>;
+}
+
+// What dropUnnamed removed, or would remove in a dry run. `snapshot` is a
+// ZFS fork or backup snapshot, named in full; `memory` an imp's memory
+// snapshot outside its imp directory.
+export interface DroppedStorage {
+  readonly kind: 'imp' | 'checkpoint' | 'image' | 'snapshot' | 'memory';
+  readonly id: string;
 }
 
 // The disks, checkpoints and image rootfs files of imps (docs/architecture/
@@ -31,6 +79,14 @@ export interface StorageBackend {
   // before any VM is re-adopted or woken: mounts, finishes or undoes a restore
   // a crash cut short, and drops what `live` does not name
   readonly start: (live: LiveStorage) => Promise<void>;
+
+  // Removes what `live` does not name; staging, retired datasets and backup
+  // directories stay. The caller holds the storage gate alone, so nothing is
+  // in flight (docs/architecture/storage.md#cleanup).
+  readonly dropUnnamed: (
+    live: LiveStorage,
+    options: Readonly<{ isDryRun: boolean }>,
+  ) => Promise<DroppedStorage[]>;
 
   // the data layout, with the disk and the memory snapshot where this
   // backend keeps them
@@ -58,7 +114,24 @@ export interface StorageBackend {
     halt: () => Promise<T>,
   ) => Promise<T>;
 
+  // A crash-consistent copy of the imp's disk for the backup tree. The caller
+  // holds the imp's lock and freezes a running guest only around this call.
+  readonly createBackupCopy: (
+    impId: string,
+    runId: string,
+    options: BackupCopyOptions,
+  ) => Promise<void>;
+
+  // Lays out the backup tree under buildBackupPaths(dataDir).tree, with no imp
+  // locked: removeImpDisk and removeCheckpoint still work while restic reads.
+  readonly openBackupTree: (request: BackupTreeRequest) => Promise<BackupTree>;
+
   readonly readUsage: () => Promise<StorageUsage>;
+
+  // each imp's usage; slow on XFS, so a cache calls it now and then
+  readonly measureUsage: (
+    imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[],
+  ) => Promise<DiskUsageReport>;
 
   // waits for background work (a ZFS reclaim) to finish, before impd exits
   readonly stop: () => Promise<void>;

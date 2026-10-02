@@ -15,6 +15,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   errors, unary requests and exec streams.
 - [Storage and images](./architecture/storage.md): XFS reflinks, the data directory, checkpoints,
   restores and forks, and how an OCI image becomes an ext4 disk.
+- [Backups](./architecture/backups.md): restic, what a backup holds, a run on XFS and ZFS, the
+  schedule, restores, whole-host restore, and the repository's security.
 - [Networking](./architecture/networking.md): addressing, iptables, the wake proxy, the credential
   broker's port and the URLs.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
@@ -34,9 +36,12 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp`, the tools a coding agent gets, the guard, and how exec
   output, timeouts and cancels work.
+- [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the
   wildcard certificate, its renewal, the DNS records, and testing with Pebble.
+- [Events, audit and telemetry](./guides/events.md): `imp events` and the event stream, the API
+  audit log, and OpenTelemetry metrics and spans.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
 - [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
   `main`.

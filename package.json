@@ -1,6 +1,6 @@
 {
   "name": "@zgeoff/imp",
-  "version": "0.0.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
   "license": "MIT",
@@ -12,6 +12,12 @@
       "@ark-ui/react": "5.37.2",
       "@commitlint/cli": "21.2.0",
       "@happy-dom/global-registrator": "20.10.6",
+      "@opentelemetry/api": "1.9.1",
+      "@opentelemetry/exporter-metrics-otlp-proto": "0.222.0",
+      "@opentelemetry/exporter-trace-otlp-proto": "0.222.0",
+      "@opentelemetry/resources": "2.11.0",
+      "@opentelemetry/sdk-metrics": "2.11.0",
+      "@opentelemetry/sdk-trace-base": "2.11.0",
       "@orpc/client": "1.14.15",
       "@orpc/contract": "1.14.15",
       "@orpc/server": "1.14.15",
@@ -28,6 +34,7 @@
       "@types/bun": "1.4.2",
       "@types/react": "19.2.17",
       "@types/react-dom": "19.2.3",
+      "@types/ssh2": "1.15.6",
       "@vitejs/plugin-react": "6.0.3",
       "@xterm/addon-fit": "0.11.0",
       "@xterm/xterm": "6.0.0",
@@ -47,6 +54,7 @@
       "reflect-metadata": "0.2.2",
       "react": "19.2.7",
       "react-dom": "19.2.7",
+      "ssh2": "1.17.0",
       "tsdown": "0.23.0",
       "tslib": "2.8.1",
       "typescript": "7.0.2",
@@ -76,6 +84,7 @@
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",
     "@types/bun": "catalog:",
+    "@types/ssh2": "catalog:",
     "@zgeoff/bun-test-extended": "catalog:",
     "@zgeoff/format-codemod": "catalog:",
     "@zgeoff/oxlint-config": "catalog:",
@@ -84,9 +93,17 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "ssh2": "catalog:",
     "tslib": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"
   },
-  "packageManager": "bun@1.4.2"
+  "overrides": {
+    "@types/node": "26.6.2"
+  },
+  "packageManager": "bun@1.4.2",
+  "patchedDependencies": {
+    "ssh2@1.17.0": "patches/ssh2@1.17.0.patch",
+    "@types/ssh2@1.15.6": "patches/@types%2Fssh2@1.15.6.patch"
+  }
 }

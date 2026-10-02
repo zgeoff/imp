@@ -1,10 +1,10 @@
-import { expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { X509Certificate } from 'node:crypto';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { readImpdLoggedMs, runDevScript, runInContainer } from '../lib/instance';
-import { PEBBLE_DOMAIN, writePebbleRoot } from '../lib/pebble';
+import { PEBBLE_DOMAIN, buildPebbleEnv, isPebbleRunning, writePebbleRoot } from '../lib/pebble';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -27,6 +27,39 @@ interface ContainerResponse {
 }
 
 const TIME_MARK = 'imp-e2e-time-total:';
+
+// the harness starts Pebble only for a run that includes this suite
+const pebbleUp = isPebbleRunning();
+const pebbleEnv = buildPebbleEnv();
+
+// The instance runs with HTTPS on only for this suite, so the suites after it
+// get a plain impd. Pebble makes a new root and forgets every account on each
+// start, so impd starts without the certificate and account of an earlier run.
+beforeAll(async () => {
+  if (!pebbleUp) {
+    return;
+  }
+
+  Object.assign(process.env, pebbleEnv);
+
+  await runInContainer(['rm', '-f', '/var/lib/imp/tls/certificate.pem']);
+  await runInContainer(['rm', '-f', '/var/lib/imp/tls/attempts.json']);
+  await runInContainer(['rm', '-f', '/var/lib/imp/tls/account.json']);
+  await runDevScript('reboot');
+}, 600_000);
+
+afterAll(async () => {
+  if (!pebbleUp) {
+    return;
+  }
+
+  for (const key of Object.keys(pebbleEnv)) {
+    delete process.env[key];
+  }
+
+  // the instance goes back to HTTPS off
+  await runDevScript('reboot');
+}, 600_000);
 
 // A request from inside the host container, where the listeners answer on
 // loopback. The certificate must chain to Pebble's root and cover the URL's
@@ -71,19 +104,10 @@ async function readInContainer(url: string, hostHeader?: string): Promise<Contai
   };
 }
 
-test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
+test.skipIf(!pebbleUp)(
   'impd gets a wildcard certificate from Pebble and serves imps at https://<name>.<domain>',
   async () => {
     await writePebbleRoot();
-
-    // Pebble makes a new root on every start, so a certificate from an
-    // earlier run's Pebble does not chain to it: impd starts without one
-    await runInContainer(['rm', '-f', '/var/lib/imp/tls/certificate.pem']);
-    await runInContainer(['rm', '-f', '/var/lib/imp/tls/attempts.json']);
-
-    // it forgets every account too, so the stored account URL goes
-    await runInContainer(['rm', '-f', '/var/lib/imp/tls/account.json']);
-    await runDevScript('restart');
 
     // the bare domain is the API
     const health = await waitFor(

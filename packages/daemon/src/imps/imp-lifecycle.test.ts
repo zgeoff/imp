@@ -312,8 +312,17 @@ test('a restarted impd settles imps left in every state', async () => {
     ip: '10.66.0.41',
   });
 
-  await updateImpState(ctx.db, creatingLive.id, { state: 'creating', pid: orphanPid });
-  await updateImpState(ctx.db, creatingDead.id, { state: 'creating', pid: 99_999 });
+  await updateImpState(ctx.db, creatingLive.id, {
+    reason: 'failed',
+    state: 'creating',
+    pid: orphanPid,
+  });
+
+  await updateImpState(ctx.db, creatingDead.id, {
+    reason: 'failed',
+    state: 'creating',
+    pid: 99_999,
+  });
 
   await ctx.client.imps.sleep({ name: 'asleep' });
   await ctx.client.imps.sleep({ name: 'asleep-lost-snapshot' });
@@ -398,7 +407,7 @@ test(
       ip: '10.66.0.2',
     });
 
-    await updateImpState(ctx.db, creating.id, { state: 'creating', pid });
+    await updateImpState(ctx.db, creating.id, { reason: 'failed', state: 'creating', pid });
 
     ctx.fake.queue('stop', 'fail');
 

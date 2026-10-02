@@ -61,28 +61,30 @@ imp restore box clean             # and back
 imp fork box box-2                # a second copy to try something else in
 ```
 
-| Command                                | What it does                                             |
-| -------------------------------------- | -------------------------------------------------------- |
-| `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`) |
-| `ls`, `info`                           | list imps; show RAM use and the budget                   |
-| `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                      |
-| `console <name>`                       | open a shell in a session that outlives the terminal     |
-| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine            |
-| `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                     |
-| `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)           |
-| `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while             |
-| `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
-| `url <name>`                           | print the imp's local and tailnet URLs                   |
-| `image build`, `add`, `ls`, `rm`       | manage images                                            |
-| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest               |
-| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker      |
-| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
-| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
-| `completion bash\|zsh\|fish`           | print the shell completion script                        |
+| Command                                | What it does                                                       |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`) |
+| `ls`, `info`                           | list imps; show RAM use and the budget                             |
+| `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                                |
+| `console <name>`                       | open a shell in a session that outlives the terminal               |
+| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine                      |
+| `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                               |
+| `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)                     |
+| `disk resize <name> <size>`            | grow an imp's disk; the guest grows into it                        |
+| `gc [--dry-run]`                       | remove storage no imp, checkpoint or image names                   |
+| `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
+| `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
+| `url <name>`                           | print the imp's local and tailnet URLs                             |
+| `image build`, `add`, `ls`, `rm`       | manage images                                                      |
+| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
+| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |
+| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio               |
+| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)              |
+| `completion bash\|zsh\|fish`           | print the shell completion script                                  |
 
-`--memory` takes MiB or a unit (`512m`, `2g`). [Connectors](docs/guides/connectors.md) covers
-secrets and grants. Commands that print imps, images, checkpoints or `info` take `--json`.
-`scripts/imp` runs the CLI from the repo.
+`--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
+[Connectors](docs/guides/connectors.md) covers secrets and grants. Commands that print imps, images,
+checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
@@ -118,15 +120,30 @@ once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
 The [dashboard](./docs/guides/dashboard.md) at `http://localhost:7070/ui/` shows the same imps,
 checkpoints, images and RAM in a browser, with a console.
 
+## SSH
+
+With your public key in `/var/lib/imp/ssh/authorized_keys`, `ssh box@imp` lands in the imp `box`
+over the tailnet, and wakes it if it sleeps. `scp`, `sftp`, port forwards and editors that work over
+SSH, such as VS Code Remote SSH, work too. The [SSH guide](./docs/guides/ssh.md) has the setup.
+
+## Ports
+
+`imp proxy box 5432 3001:3000` makes port 5432 in the imp reachable at `localhost:5432` on your
+machine, and port 3000 at `localhost:3001`; a local `0` takes any free port and prints it. A
+connection wakes the imp and keeps it awake while it is open, and a server that listens on the imp's
+loopback only is reachable too. It needs no SSH key: it goes to impd with the CLI's token. Ctrl-C
+stops it. A busy local port fails at once and names the port. impd allows 256 open connections per
+imp; a forced sleep resets the open ones, and the next one wakes the imp.
+
 ## Sleep and wake
 
-An imp counts as busy while it has an open shell or command, a request in flight, an open TCP
-connection, or real CPU work. A coding agent that waits on a model API keeps its connection open, so
-it stays awake. After a quiet minute the imp sleeps.
+An imp counts as busy while it has an open shell or command, an SSH or `imp proxy` connection, a
+request in flight, an open TCP connection, or real CPU work. A coding agent that waits on a model
+API keeps its connection open, so it stays awake. After a quiet minute the imp sleeps.
 
-Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, or a `console` wakes it.
-Background processes, tmpfs contents and everything else in memory come back as they were. TCP
-connections do not survive a sleep.
+Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, a `console`, an SSH login or an
+`imp proxy` connection wakes it. Background processes, tmpfs contents and everything else in memory
+come back as they were. TCP connections do not survive a sleep.
 
 Every imp serves its port 8080 at two URLs:
 

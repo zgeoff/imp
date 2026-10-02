@@ -21,3 +21,17 @@ test('it counts open connections per imp and kind', () => {
   expect(tracker.count('a')).toBe(0);
   expect(tracker.count('b')).toBe(1);
 });
+
+test('an SSH connection counts toward the imp total', () => {
+  const tracker = createActivityTracker();
+  const closeSsh = tracker.open('a', 'ssh');
+
+  tracker.open('a', 'exec');
+
+  expect(tracker.count('a')).toBe(2);
+  expect(tracker.count('a', 'ssh')).toBe(1);
+
+  closeSsh();
+
+  expect(tracker.count('a')).toBe(1);
+});

@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, rmSync } from 'node:fs';
-import { sendResumed, sendShutdown } from '../agent-client/agent-requests';
+import { sendGrow, sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
@@ -18,6 +18,9 @@ const AGENT_DEADLINE_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
 const KILL_TIMEOUT_MS = 3000;
 const WAKE_AGENT_DEADLINE_MS = 10_000;
+
+// a sleep asks under the imp's lock: a wedged agent must not hold it long
+const UPTIME_PING_TIMEOUT_MS = 250;
 
 export interface VmPlan {
   readonly firecrackerBin: string;
@@ -53,7 +56,7 @@ export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
 
   // pause, snapshot to new files, kill, rename them into place
-  // (docs/sleep-findings.md 8); the VM keeps running when the snapshot fails
+  // (docs/architecture/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
   readonly sleepVm: (pid: number, paths: ImpPaths) => Promise<Readonly<Record<string, number>>>;
 
   // a new Firecracker that loads the snapshot as its first call; throws, with
@@ -64,6 +67,14 @@ export interface VmRunner {
   readonly stopVm: (pid: number, paths: ImpPaths, graceful: boolean) => Promise<void>;
   readonly isVmAlive: (pid: number, paths: ImpPaths) => boolean;
   readonly isAgentReady: (paths: ImpPaths) => Promise<boolean>;
+
+  // the guest's uptime from the agent's ping, without the time asleep; null
+  // when the agent does not answer within 250 ms or cannot read its clock
+  readonly readGuestUptimeMs: (paths: ImpPaths) => Promise<number | null>;
+
+  // a live VM after its disk file grew: Firecracker rereads the size, then
+  // the guest grows its filesystem into it
+  readonly growDrive: (paths: ImpPaths, diskBytes: number) => Promise<void>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the
@@ -292,6 +303,10 @@ export function createVmRunner(): VmRunner {
       }
     },
     stopVm,
+    growDrive: async (paths, diskBytes) => {
+      await createFirecrackerClient(paths.apiSocket).patchDrive('rootfs', paths.disk);
+      await sendGrow(paths.vsockSocket, diskBytes);
+    },
     isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),
     isAgentReady: async (paths) => {
       try {
@@ -300,6 +315,15 @@ export function createVmRunner(): VmRunner {
         return true;
       } catch {
         return false;
+      }
+    },
+    readGuestUptimeMs: async (paths) => {
+      try {
+        const ping = await sendPing(paths.vsockSocket, UPTIME_PING_TIMEOUT_MS);
+
+        return ping.uptime_ms ?? null;
+      } catch {
+        return null;
       }
     },
   };

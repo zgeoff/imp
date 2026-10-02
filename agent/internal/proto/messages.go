@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.2.0"
+const Version = "0.5.0"
 
 // Op names.
 const (
@@ -13,10 +13,19 @@ const (
 	OpResumed      = "resumed"
 	OpShutdown     = "shutdown"
 	OpServicesList = "services.list"
+	OpGrow         = "grow"
 
 	// sessions: exec with a session name starts or attaches one
 	OpSessionAttach = "session.attach"
 	OpSessionKill   = "session.kill"
+
+	// dial connects to an address in the guest and relays bytes
+	OpDial = "dial"
+
+	// ssh-agent forwarding: agent.listen serves a socket for the life of
+	// its connection; agent.accept relays one client of that socket
+	OpAgentListen = "agent.listen"
+	OpAgentAccept = "agent.accept"
 )
 
 // Request is the first frame on every connection. Fields beyond Op are
@@ -41,18 +50,31 @@ type Request struct {
 
 	// resumed
 	UnixMs int64 `json:"unix_ms,omitempty"`
+
+	// dial: "tcp" with "host:port", or "unix" with a socket path
+	Network string `json:"network,omitempty"`
+	Address string `json:"address,omitempty"`
+
+	// agent.accept: the listener and the connection a CONNECTION named
+	Listener   string `json:"listener,omitempty"`
+	Connection uint64 `json:"connection,omitempty"`
+
+	// grow: the disk's new size in bytes
+	DiskBytes int64 `json:"disk_bytes,omitempty"`
 }
 
 // Error codes.
 const (
-	ErrBadRequest  = "BAD_REQUEST"
-	ErrUnknownOp   = "UNKNOWN_OP"
-	ErrExecFailed  = "EXEC_FAILED"
-	ErrFrozen      = "FROZEN"
-	ErrPoweringOff = "POWERING_OFF"
-	ErrInternal    = "INTERNAL"
-	ErrNoSession   = "NO_SESSION"
-	ErrSessionCap  = "SESSION_LIMIT"
+	ErrBadRequest   = "BAD_REQUEST"
+	ErrUnknownOp    = "UNKNOWN_OP"
+	ErrExecFailed   = "EXEC_FAILED"
+	ErrFrozen       = "FROZEN"
+	ErrPoweringOff  = "POWERING_OFF"
+	ErrInternal     = "INTERNAL"
+	ErrNoSession    = "NO_SESSION"
+	ErrSessionCap   = "SESSION_LIMIT"
+	ErrDialFailed   = "DIAL_FAILED"
+	ErrNoConnection = "NO_CONNECTION"
 )
 
 type Error struct {
@@ -68,13 +90,29 @@ type ErrorResponse struct {
 }
 
 type Ping struct {
-	OK       bool   `json:"ok"`
-	Version  string `json:"version"`
-	UptimeMs int64  `json:"uptime_ms"`
+	OK      bool   `json:"ok"`
+	Version string `json:"version"`
+	// nil when the guest clock cannot be read: impd then skips its
+	// young-guest wait before a sleep
+	UptimeMs *int64 `json:"uptime_ms,omitempty"`
 }
 
 type OK struct {
 	OK bool `json:"ok"`
+}
+
+// AgentListen is the RESPONSE to agent.listen.
+type AgentListen struct {
+	OK bool `json:"ok"`
+	// Path is the socket for SSH_AUTH_SOCK.
+	Path     string `json:"path"`
+	Listener string `json:"listener"`
+}
+
+// Connection is the CONNECTION payload: a client is waiting on the socket
+// for an agent.accept with this id.
+type Connection struct {
+	ID uint64 `json:"id"`
 }
 
 type Activity struct {

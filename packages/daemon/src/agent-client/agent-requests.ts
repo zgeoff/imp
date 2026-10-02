@@ -12,10 +12,15 @@ const AgentErrorResponseSchema = z.object({
 const PingResponseSchema = z.object({
   ok: z.literal(true),
   version: z.string(),
-  uptime_ms: z.number(),
+
+  // an agent that cannot read its clock leaves it out
+  uptime_ms: z.number().optional(),
 });
 
 const OkResponseSchema = z.object({ ok: z.literal(true) });
+
+// the agent's own 10 s wait for the new size, and the resize after it
+const GROW_TIMEOUT_MS = 20_000;
 
 export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).readonly();
 
@@ -109,7 +114,7 @@ export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise
 // and AGENT_OUTDATED for an agent from before sessions.
 export async function sendSessionKill(vsockPath: string, session: string): Promise<void> {
   const response = await sendAgentRequest(vsockPath, { op: 'session.kill', session }).catch(
-    handleUnknownOp,
+    handleUnknownOp('sessions'),
   );
 
   OkResponseSchema.parse(response);
@@ -131,6 +136,19 @@ export async function sendFreeze(vsockPath: string, timeoutMs: number): Promise<
     { op: 'freeze', timeout_ms: timeoutMs },
     timeoutMs,
   );
+
+  OkResponseSchema.parse(response);
+}
+
+// After the host grew the disk: the agent waits up to 10 s for the guest to
+// see the new size, then grows the root filesystem online. AGENT_OUTDATED
+// for an agent from before it: the next cold boot grows the filesystem.
+export async function sendGrow(vsockPath: string, diskBytes: number): Promise<void> {
+  const response = await sendAgentRequest(
+    vsockPath,
+    { op: 'grow', disk_bytes: diskBytes },
+    GROW_TIMEOUT_MS,
+  ).catch(handleUnknownOp('grow'));
 
   OkResponseSchema.parse(response);
 }

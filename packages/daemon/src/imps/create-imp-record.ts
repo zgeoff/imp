@@ -1,6 +1,6 @@
 import { buildConflictError } from '../api-errors';
 import type { ImageRecord } from '../db/images';
-import { allocateSlot, createImp, findImpByName } from '../db/imps';
+import { createImpInFreeSlot, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { countSlots } from '../net/addressing';
 import type { ImpContext } from './imp-context';
@@ -12,6 +12,7 @@ interface NewImpInput {
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
+  readonly diskBytes?: number | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -25,20 +26,22 @@ export async function createImpRecord(
   const name = await resolveImpName(context, input.name);
 
   try {
-    return await context.db.transaction().execute(async (trx) => {
-      const slot = await allocateSlot(trx, countSlots(context.config.subnet));
-
-      return createImp(trx, {
+    return await createImpInFreeSlot(
+      context.db,
+      {
         id,
         name,
         imageId: image.id,
         vcpus: input.vcpus ?? context.config.defaultVcpus,
         memoryMib: input.memoryMib ?? context.config.defaultMemoryMib,
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
-        slot,
-        ip: context.findAddress(slot).guestIp,
-      });
-    });
+        ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
+      },
+      {
+        count: countSlots(context.config.subnet),
+        findIp: (slot) => context.findAddress(slot).guestIp,
+      },
+    );
   } catch (error) {
     // slot and ip come from the same transaction: only the name can clash
     if (isUniqueViolation(error)) {

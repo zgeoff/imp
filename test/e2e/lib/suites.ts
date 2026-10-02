@@ -1,6 +1,6 @@
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
-export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws';
+export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws' | 'e2e-git';
 
 export interface Suite {
   readonly name: string;
@@ -18,23 +18,43 @@ export const SUITES: readonly Suite[] = [
   { name: 'docker', prefix: 'e2e-dock-', images: ['base'] },
   { name: 'images', prefix: 'e2e-img-', images: ['base'] },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
+  { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
   { name: 'sleep', prefix: 'e2e-slp-', images: ['e2e-bare', 'e2e-ws'] },
   { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
   { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
+  { name: 'ssh', prefix: 'e2e-ssh-', images: ['e2e-tiny'] },
+  { name: 'ssh-wake', prefix: 'e2e-sshw-', images: ['e2e-tiny'] },
+  { name: 'ssh-agent', prefix: 'e2e-ssha-', images: ['e2e-git'] },
+  { name: 'proxy', prefix: 'e2e-px-', images: ['e2e-tiny'] },
+  { name: 'proxy-wake', prefix: 'e2e-pxw-', images: ['e2e-tiny'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },
+
+  // last: it reboots the instance with backups on, then off again
+  { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs: create, exec, checkpoint and restore, sleep and
-// wake by HTTP, restart, the MCP server, and the dashboard in a browser.
+// `fast` is what CI runs: exec, checkpoints, sleep, HTTP wakes, restart,
+// MCP, SSH with agent forwarding, imp proxy, and the dashboard in a browser.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
-  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp', 'dashboard'],
+  fast: [
+    'lifecycle',
+    'checkpoints',
+    'disks',
+    'sleep',
+    'restart',
+    'mcp',
+    'ssh',
+    'ssh-agent',
+    'proxy',
+    'dashboard',
+  ],
 };
 
 // generous: a suite's own waits fail long before this

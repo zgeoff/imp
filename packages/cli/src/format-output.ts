@@ -1,4 +1,16 @@
-import type { AuditEntry, Checkpoint, Image, Imp, Secret, Session } from '@imp/api';
+import type {
+  ApiCall,
+  AuditEntry,
+  BackupRun,
+  BackupStatus,
+  Checkpoint,
+  Image,
+  Imp,
+  Secret,
+  Session,
+  StorageGc,
+  SystemInfo,
+} from '@imp/api';
 
 type Row = readonly string[];
 
@@ -19,7 +31,21 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'SESSIONS', 'IP', 'URL', 'NOTE'],
+    [
+      'NAME',
+      'STATE',
+      'IMAGE',
+      'VCPUS',
+      'MEMORY',
+      'RAM',
+      'DISK',
+      'USED',
+      'SHARED',
+      'SESSIONS',
+      'IP',
+      'URL',
+      'NOTE',
+    ],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -27,12 +53,39 @@ export function formatImps(imps: readonly Imp[]): string {
       String(imp.vcpus),
       `${String(imp.memoryMib)} MiB`,
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+      formatDiskMib(imp.diskMib),
+      ...formatDiskUsage(imp.diskUsage),
       imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
       formatNote(imp),
     ]),
   );
+}
+
+// what a destroy frees, and what the imp shares; `<=` when a fork holds a
+// snapshot of it, `?` when the last pass was cut short
+function formatDiskUsage(usage: Imp['diskUsage']): [string, string] {
+  if (usage === undefined) {
+    return ['-', '-'];
+  }
+
+  const bound = usage.isUpperBound ? '<=' : '';
+  const partial = usage.isPartial ? '?' : '';
+
+  return [
+    `${bound}${formatBytesMib(usage.exclusiveBytes)}${partial}`,
+    `${formatBytesMib(usage.sharedBytes)}${partial}`,
+  ];
+}
+
+function formatBytesMib(bytes: number): string {
+  return `${String(Math.round(bytes / 1_048_576))} MiB`;
+}
+
+// GiB when whole, as sizes are given
+function formatDiskMib(mib: number): string {
+  return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
 }
 
 // what an upgrade means for the imp (docs/guides/operations.md#upgrade)
@@ -65,7 +118,7 @@ export function formatImp(imp: Imp): string {
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
   return formatTable(
-    ['ID', 'LABEL', 'CREATED', 'SIZE'],
+    ['ID', 'LABEL', 'CREATED', 'SIZE', 'DISK'],
     checkpoints.map((checkpoint) => [
       checkpoint.id,
       checkpoint.label ?? '',
@@ -73,8 +126,69 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
       checkpoint.sizeBytes === undefined
         ? ''
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
+      formatDiskMib(checkpoint.diskMib),
     ]),
   );
+}
+
+export function formatBackupStatus(status: Readonly<BackupStatus>): string {
+  const table = formatTable(
+    ['ID', 'TIME (UTC)', 'IMPS'],
+    status.points.map((point) => [
+      point.id.slice(0, 8),
+      point.time.toISOString(),
+      point.imps.join(' '),
+    ]),
+  );
+
+  const check =
+    status.lastCheck === null
+      ? 'never'
+      : `${status.lastCheck.at.toISOString()} ${status.lastCheck.error === undefined ? 'ok' : `FAILED: ${status.lastCheck.error}`}`;
+
+  return [
+    table,
+    '',
+    `last run:   ${status.lastRunAt?.toISOString() ?? 'never'}`,
+    `last prune: ${status.lastPruneAt?.toISOString() ?? 'never'}`,
+    `last check: ${check}`,
+  ].join('\n');
+}
+
+// what `imp info` says an upgrade left: the imps whose next wake boots
+// cold, and how many run each older part; an older impd does not count them
+export function formatBootStatus(
+  status: Readonly<SystemInfo['bootStatus']> | undefined,
+  impdVersion: string,
+): string {
+  if (status === undefined) {
+    return `unknown (impd ${impdVersion} predates it)`;
+  }
+
+  const notes: string[] = [];
+
+  if (status.coldBoots > 0) {
+    notes.push(`${String(status.coldBoots)} will boot cold`);
+  }
+
+  const outdated = Object.entries(status.outdated)
+    .filter(([, count]) => count > 0)
+    .map(([part, count]) => `${String(count)} ${part}`);
+
+  if (outdated.length > 0) {
+    notes.push(`outdated: ${outdated.join(', ')}`);
+  }
+
+  return notes.length === 0 ? 'none' : notes.join('; ');
+}
+
+export function formatBackupRun(run: Readonly<BackupRun>): string {
+  const lines = [
+    `backup ${run.snapshotId.slice(0, 8)}: ${String(run.imps.length)} imps, ${String(Math.round(run.dataAddedBytes / 1_048_576))} MiB added in ${String(Math.round(run.durationMs / 1000))}s`,
+    ...run.skipped.map((skip) => `left out ${skip.name}: ${skip.reason}`),
+  ];
+
+  return lines.join('\n');
 }
 
 export function formatSessions(sessions: readonly Readonly<Session>[]): string {
@@ -141,6 +255,33 @@ export function formatAudit(entries: readonly AuditEntry[]): string {
       String(entry.durationMs),
     ]),
   );
+}
+
+export function formatApiCalls(calls: readonly ApiCall[]): string {
+  return formatTable(
+    ['TIME', 'IMP', 'PROCEDURE', 'ACTOR', 'OUTCOME', 'MS'],
+    calls.map((call) => [
+      call.at.toISOString(),
+      call.imp ?? '-',
+      call.procedure,
+      call.actor,
+      call.outcome,
+      String(call.durationMs),
+    ]),
+  );
+}
+
+export function formatGc(gc: Readonly<StorageGc>): string {
+  if (gc.dropped.length === 0) {
+    return 'nothing to remove';
+  }
+
+  const table = formatTable(
+    ['KIND', 'ID'],
+    gc.dropped.map((dropped) => [dropped.kind, dropped.id]),
+  );
+
+  return gc.dryRun ? `${table}\n(dry run: nothing removed)` : table;
 }
 
 export function formatJson(value: unknown): string {

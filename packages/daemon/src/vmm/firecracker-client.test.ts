@@ -34,3 +34,38 @@ test('a call to a Firecracker that never answers fails after its timeout', async
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a drive patch sends the drive id and its path, so Firecracker rereads the size', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-'));
+  const socket = join(dir, 'api.sock');
+  const seen: { method: string; path: string; body: unknown }[] = [];
+
+  const server = Bun.serve({
+    unix: socket,
+    fetch: async (request) => {
+      seen.push({
+        method: request.method,
+        path: new URL(request.url).pathname,
+        body: await request.json(),
+      });
+
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  try {
+    await createFirecrackerClient(socket).patchDrive('rootfs', '/var/lib/imp/imps/a/disk.ext4');
+
+    expect(seen).toEqual([
+      {
+        method: 'PATCH',
+        path: '/drives/rootfs',
+        body: { drive_id: 'rootfs', path_on_host: '/var/lib/imp/imps/a/disk.ext4' },
+      },
+    ]);
+  } finally {
+    await server.stop(true);
+
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

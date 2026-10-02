@@ -1,8 +1,8 @@
-import type { Checkpoint, Image, Imp, SystemInfo } from '@imp/api';
-import { impContract } from '@imp/api';
+import type { Checkpoint, Image, Imp, ImpEvent, SystemInfo } from '@imp/api';
+import { EVENT_VERSION, impContract } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { createImpClient } from '@zgeoff/imp-client';
+import { CLIENT_VERSION, createImpClient } from '@zgeoff/imp-client';
 import { createImpd } from '../lib/impd';
 import type { Impd } from '../lib/impd';
 
@@ -11,6 +11,9 @@ import type { Impd } from '../lib/impd';
 export interface FakeImpd {
   readonly impd: Impd;
   readonly state: FakeImpdState;
+
+  // sends an event to every open stream, as impd does after a change
+  readonly emitEvent: (event: ImpEvent) => void;
 }
 
 interface FakeImpdState {
@@ -38,6 +41,14 @@ export function createFakeImpd(): FakeImpd {
     info: buildSystemInfo(),
     unauthorized: false,
     notFound: 0,
+  };
+
+  const listeners = new Set<EventListener>();
+
+  const emitEvent = (event: ImpEvent): void => {
+    for (const listener of listeners) {
+      listener(event);
+    }
   };
 
   const os = implement(impContract);
@@ -101,6 +112,16 @@ export function createFakeImpd(): FakeImpd {
         setImpState('imps.wake', context.input.name, 'running'),
       ),
       hold: os.imps.hold.handler((context) => findImp(context.input.name)),
+      resizeDisk: os.imps.resizeDisk.handler((context) => {
+        registerCall('imps.resizeDisk', context.input);
+
+        const imp = findImp(context.input.name);
+        const resized = { ...imp, diskMib: context.input.diskMib };
+
+        fake.imps.splice(fake.imps.indexOf(imp), 1, resized);
+
+        return resized;
+      }),
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
         https: null,
@@ -125,6 +146,7 @@ export function createFakeImpd(): FakeImpd {
         const checkpoint = {
           id: `cp${String(list.length + 1)}`,
           createdAt: new Date(),
+          diskMib: findImp(context.input.name).diskMib,
           ...(context.input.label !== undefined && { label: context.input.label }),
         };
 
@@ -144,6 +166,22 @@ export function createFakeImpd(): FakeImpd {
         registerCall('checkpoints.delete', context.input);
 
         return {};
+      }),
+    },
+
+    // the dashboard has no backup views yet
+    backups: {
+      run: os.backups.run.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      list: os.backups.list.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      restore: os.backups.restore.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      check: os.backups.check.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
       }),
     },
     images: {
@@ -191,9 +229,29 @@ export function createFakeImpd(): FakeImpd {
     },
     audit: {
       list: os.audit.list.handler(() => []),
+      calls: os.audit.calls.handler(() => []),
+    },
+    events: {
+      stream: os.events.stream.handler((context) =>
+        openStream(
+          (listener) => {
+            listeners.add(listener);
+
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+          fake.imps,
+          context.signal,
+        ),
+      ),
     },
     system: {
       info: os.system.info.handler(() => fake.info),
+      gc: os.system.gc.handler((context) => ({
+        dryRun: context.input.dryRun ?? false,
+        dropped: [],
+      })),
     },
   });
 
@@ -212,10 +270,68 @@ export function createFakeImpd(): FakeImpd {
     },
   });
 
-  return { impd: createImpd(client), state: fake };
+  return { impd: createImpd(client), state: fake, emitEvent };
 }
 
 const NOW = new Date('2026-10-02T12:00:00Z');
+
+type EventListener = (event: ImpEvent) => void;
+
+// the snapshot, then each event emitted until the dashboard lets go
+async function* openStream(
+  subscribe: (listener: EventListener) => () => void,
+  imps: readonly Imp[],
+  signal: AbortSignal | undefined,
+): AsyncGenerator<ImpEvent> {
+  const queue: ImpEvent[] = imps.map((imp) => ({
+    v: EVENT_VERSION,
+    at: NOW,
+    ev: 'ImpAdded',
+    reason: 'snapshot',
+    imp,
+  }));
+
+  const state = { wake: (): void => {} };
+
+  const handleEvent = (event: ImpEvent): void => {
+    queue.push(event);
+    state.wake();
+  };
+
+  const stopStream = (): void => {
+    state.wake();
+  };
+
+  const unsubscribe = subscribe(handleEvent);
+
+  signal?.addEventListener('abort', stopStream);
+
+  try {
+    for (;;) {
+      if (signal?.aborted === true) {
+        return;
+      }
+
+      const next = queue.shift();
+
+      if (next !== undefined) {
+        yield next;
+        continue;
+      }
+
+      const waiting = Promise.withResolvers<undefined>();
+
+      state.wake = () => {
+        waiting.resolve(undefined);
+      };
+
+      await waiting.promise;
+    }
+  } finally {
+    unsubscribe();
+    signal?.removeEventListener('abort', stopStream);
+  }
+}
 
 export function buildImp(overrides: Partial<Imp> & { readonly name: string }): Imp {
   return {
@@ -224,6 +340,7 @@ export function buildImp(overrides: Partial<Imp> & { readonly name: string }): I
     state: 'running',
     vcpus: 2,
     memoryMib: 2048,
+    diskMib: 32_768,
     ip: '10.66.0.2',
     slot: 0,
     port: 20_000,
@@ -248,7 +365,7 @@ export function buildImage(overrides: Partial<Image> & { readonly name: string }
 
 function buildSystemInfo(): SystemInfo {
   return {
-    version: '0.0.0',
+    version: CLIENT_VERSION,
     ramBudgetMib: 4096,
     ramUsedMib: 1024,
     ramReservedMib: 512,
@@ -256,10 +373,19 @@ function buildSystemInfo(): SystemInfo {
     awakeCount: 1,
     impCount: 2,
     sessionCount: 0,
+    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
     firecrackerVersion: 'v1.17.0',
     guestKernel: { version: null, sha256: '0' },
     systemDrive: { sha256: '0' },
-    storage: { backend: 'xfs', usedBytes: 0, availableBytes: 0 },
+    storage: {
+      backend: 'xfs',
+      usedBytes: 0,
+      availableBytes: 0,
+      reserveBytes: 0,
+      pendingBytes: 0,
+      isLow: false,
+      impDiskBytes: 0,
+    },
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   };
 }

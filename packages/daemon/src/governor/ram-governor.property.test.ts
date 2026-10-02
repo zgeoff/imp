@@ -19,6 +19,9 @@ interface ModelImp {
   lastActiveAt: number;
   held: boolean;
   busy: boolean;
+
+  // its snapshot fails: a sleep fails and leaves it awake
+  failsSleep: boolean;
 }
 
 interface AdmitOp {
@@ -32,6 +35,7 @@ type MutationOp =
   | { readonly kind: 'rss'; readonly id: string; readonly mib: number }
   | { readonly kind: 'hold'; readonly id: string; readonly on: boolean }
   | { readonly kind: 'busy'; readonly id: string; readonly on: boolean }
+  | { readonly kind: 'failSleep'; readonly id: string; readonly on: boolean }
   | { readonly kind: 'touch'; readonly id: string }
   | { readonly kind: 'stop'; readonly id: string }
   | { readonly kind: 'tick'; readonly ms: number };
@@ -55,6 +59,7 @@ const mutationArb: fc.Arbitrary<MutationOp> = fc.oneof(
   }),
   fc.record({ kind: fc.constant('hold' as const), id: idArb, on: fc.boolean() }),
   fc.record({ kind: fc.constant('busy' as const), id: idArb, on: fc.boolean() }),
+  fc.record({ kind: fc.constant('failSleep' as const), id: idArb, on: fc.boolean() }),
   fc.record({ kind: fc.constant('touch' as const), id: idArb }),
   fc.record({ kind: fc.constant('stop' as const), id: idArb }),
   fc.record({ kind: fc.constant('tick' as const), ms: fc.integer({ min: 0, max: 25_000 }) }),
@@ -72,20 +77,30 @@ const concurrentAdmitsArb = fc.uniqueArray(admitArb, {
   maxLength: 4,
 });
 
-// imps that start awake, with what they measure
+// imps that start awake, with what they measure; one in four fails to sleep
 const startArb = fc.uniqueArray(
-  fc.record({ id: idArb, rssMib: fc.integer({ min: 0, max: 400 }) }),
+  fc.record({
+    id: idArb,
+    rssMib: fc.integer({ min: 0, max: 400 }),
+    failsSleep: fc.nat({ max: 3 }).map((roll) => roll === 0),
+  }),
   { selector: (imp) => imp.id, maxLength: IMP_IDS.length },
 );
 
 // A model host for the governor. `pace` runs before each of its reads and
 // sleeps. The fake sleep refuses a held or busy imp at call time, as the real
 // one does under the imp's lock.
-function setupModel(start: readonly { readonly id: string; readonly rssMib: number }[]) {
+function setupModel(
+  start: readonly {
+    readonly id: string;
+    readonly rssMib: number;
+    readonly failsSleep?: boolean;
+  }[],
+) {
   const imps = new Map<string, ModelImp>(
     IMP_IDS.map((id) => [
       id,
-      { awake: false, rssMib: 0, lastActiveAt: 0, held: false, busy: false },
+      { awake: false, rssMib: 0, lastActiveAt: 0, held: false, busy: false, failsSleep: false },
     ]),
   );
 
@@ -96,6 +111,7 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
       lastActiveAt: index,
       held: false,
       busy: false,
+      failsSleep: imp.failsSleep ?? false,
     });
   }
 
@@ -103,7 +119,12 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
   const pacer: { pace: () => Promise<void> } = { pace: () => Promise.resolve() };
 
   // every sleep the governor asked for, with the imp's state at that moment
-  const sleepCalls: { readonly id: string; readonly eligible: boolean }[] = [];
+  const sleepCalls: {
+    readonly id: string;
+    readonly eligible: boolean;
+    readonly outcome: SleepOutcome;
+  }[] = [];
+
   const mutex = createKeyedMutex();
 
   const findImp = (id: string): ModelImp => {
@@ -123,16 +144,21 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
 
       const imp = findImp(id);
       const eligible = imp.awake && !imp.held && !imp.busy;
-
-      sleepCalls.push({ id, eligible });
+      let outcome: SleepOutcome = 'slept';
 
       if (!eligible) {
-        return 'skipped';
+        outcome = 'skipped';
+      } else if (imp.failsSleep) {
+        outcome = 'failed';
       }
 
-      imp.awake = false;
+      sleepCalls.push({ id, eligible, outcome });
 
-      return 'slept';
+      if (outcome === 'slept') {
+        imp.awake = false;
+      }
+
+      return outcome;
     },
   );
 
@@ -191,11 +217,11 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
   };
 
   // measured usage over the budget, and how many imps the governor may still
-  // sleep
+  // sleep: an imp whose sleep fails does not count
   const findRoomLeft = (): { readonly overMib: number; readonly eligibleAwake: number } => {
     const awake = [...imps.values()].filter((imp) => imp.awake);
     const usedMib = awake.reduce((sum, imp) => sum + imp.rssMib, 0);
-    const eligibleAwake = awake.filter((imp) => !imp.held && !imp.busy).length;
+    const eligibleAwake = awake.filter((imp) => !imp.held && !imp.busy && !imp.failsSleep).length;
 
     return { overMib: usedMib - BUDGET_MIB, eligibleAwake };
   };
@@ -212,6 +238,10 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
       }
       case 'busy': {
         findImp(op.id).busy = op.on;
+        break;
+      }
+      case 'failSleep': {
+        findImp(op.id).failsSleep = op.on;
         break;
       }
       case 'touch': {
@@ -278,6 +308,7 @@ test(
         for (const op of ops) {
           const awakeBefore = [...model.imps.values()].filter((imp) => imp.awake).length;
           const callsBefore = model.sleepCalls.length;
+          let rejected = false;
 
           if (op.kind === 'admit') {
             if (model.findImp(op.id).awake) {
@@ -291,6 +322,8 @@ test(
 
               expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
             } else {
+              rejected = true;
+
               const reservedMib = await model.readReservation(op.id);
 
               expect(reservedMib).toBe(0);
@@ -312,9 +345,16 @@ test(
           // even asked, and each awake imp at most once
           expect(calls.filter((call) => !call.eligible)).toEqual([]);
           expect(calls.length).toBeLessThanOrEqual(awakeBefore);
+
+          // a rejected admit gives up at a failed sleep, not after a sleep
+          // that came after it: with nothing changing inside the op, a sleep
+          // that works leaves the pick still enough
+          if (op.kind === 'admit' && rejected) {
+            expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
+          }
         }
       }),
-      { numRuns: 300 },
+      { numRuns: 1000 },
     );
   },
   SLOW_TEST_TIMEOUT_MS,

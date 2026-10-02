@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAuditEntries } from '../db/broker-audit';
@@ -20,16 +20,41 @@ interface Seen {
   readonly bodyBytes: number;
 }
 
-async function setupBroker(options: { readonly tunnelTo?: string } = {}) {
+async function setupBroker() {
   // the broker reads the file when a request comes, so it is written below
   const fixtures = mkdtempSync(join(tmpdir(), 'imp-broker-'));
   const upstreams = join(fixtures, 'upstreams.json');
 
+  // the real host past a plain tunnel, with a CA nobody trusts
+  const realCa = await loadOrCreateBrokerCa(join(fixtures, 'real-ca'));
+  const realLeaf = await realCa.issueLeaf('api.github.com');
+
+  const tunnelled: Seen[] = [];
+
+  const realHost = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    tls: { cert: realLeaf.certPem, key: realLeaf.keyPem },
+    fetch: (request) => {
+      tunnelled.push({
+        method: request.method,
+        path: new URL(request.url).pathname,
+        authorization: request.headers.get('authorization'),
+        bodyBytes: 0,
+      });
+
+      return new Response('from the real host');
+    },
+  });
+
+  const realPort = realHost.port ?? 0;
+
+  // plain tunnels stay on loopback, and port 443 goes to the real host
   const ctx = await setupImpTest({
     env: { IMP_SUBNET: '127.0.0.0/16', IMP_BROKER_TEST_UPSTREAMS: upstreams },
-    ...(options.tunnelTo !== undefined && {
-      resolveTunnelTarget: () => Promise.resolve(options.tunnelTo ?? ''),
-    }),
+    resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
+    dialTunnel: (address, port) =>
+      createConnection({ host: address, port: port === 443 ? realPort : port }),
   });
 
   await ctx.createTestImage('base');
@@ -118,9 +143,11 @@ async function setupBroker(options: { readonly tunnelTo?: string } = {}) {
   return {
     ...ctx,
     seen,
+    tunnelled,
     runCurl,
     [Symbol.asyncDispose]: async () => {
       await upstream.stop(true);
+      await realHost.stop(true);
       await ctx[Symbol.asyncDispose]();
 
       rmSync(fixtures, { recursive: true, force: true });
@@ -178,11 +205,22 @@ test('a large upload streams through and is counted', async () => {
 test('without a grant the host is tunnelled, and the guest sees the real certificate', async () => {
   await using ctx = await setupBroker();
 
-  // no grant: the tunnel's target is a public check away, so the default
-  // resolver refuses localhost outright
-  const result = await ctx.runCurl('https://api.github.com/user');
+  const placeholder = ['-H', 'Authorization: Bearer imp-broker-placeholder'];
 
-  expect(result.code).not.toBe(0);
+  // no grant: the guest reaches the real host, whose certificate the broker
+  // CA did not sign (curl's 60), and no credential is added
+  const untrusted = await ctx.runCurl('https://api.github.com/user', placeholder);
+
+  expect(untrusted.code).toBe(60);
+
+  const insecure = await ctx.runCurl('https://api.github.com/user', ['-k', ...placeholder]);
+
+  expect(insecure).toMatchObject({ code: 0, stdout: 'from the real host' });
+
+  expect(ctx.tunnelled).toEqual([
+    { method: 'GET', path: '/user', authorization: 'Bearer imp-broker-placeholder', bodyBytes: 0 },
+  ]);
+
   expect(ctx.seen).toHaveLength(0);
 });
 
@@ -201,7 +239,7 @@ test('a plain tunnel dials the checked address, and a closed egress policy refus
   const port = typeof address === 'object' && address !== null ? address.port : 0;
 
   try {
-    await using ctx = await setupBroker({ tunnelTo: '127.0.0.1' });
+    await using ctx = await setupBroker();
 
     const open = await ctx.runCurl(`http://plain.test:${String(port)}/`, ['--proxytunnel']);
 
@@ -246,10 +284,13 @@ test('a revoke stops the credential at once', async () => {
 
   await ctx.broker.removeGrant('dev', 'gh');
 
+  // now a plain tunnel: the real host's certificate, which the guest does
+  // not trust
   const after = await ctx.runCurl('https://api.github.com/b');
 
-  expect(after.code).not.toBe(0);
+  expect(after.code).toBe(60);
   expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
+  expect(ctx.tunnelled).toHaveLength(0);
 });
 
 test('bodiless answers and redirects pass through as they are', async () => {

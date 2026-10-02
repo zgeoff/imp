@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { findFreePorts } from '../net/test-free-ports';
 import type { ProxyListenOptions } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
 import type { Certificate } from './acme/cert-store';
@@ -30,12 +31,12 @@ interface ServiceTestOptions {
 }
 
 function buildConfig(): HttpsConfig {
-  const base = 32_000 + Math.floor(Math.random() * 400) * 4;
+  const ports = findFreePorts(2);
 
   return {
     domain: DOMAIN,
-    httpsPort: base,
-    httpPort: base + 1,
+    httpsPort: ports.take(),
+    httpPort: ports.take(),
     dns: { provider: 'cloudflare', apiToken: 'unused', apiUrl: null },
     acmeDirectory: 'https://acme.invalid/directory',
     acmeEmail: null,

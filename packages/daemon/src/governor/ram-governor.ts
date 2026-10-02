@@ -1,4 +1,6 @@
+import { EVENT_VERSION } from '@imp/api';
 import { buildImpOverBudgetError, buildRamBudgetError } from '../api-errors';
+import type { EventBus } from '../events/event-bus';
 import type { LockFreeSleep } from '../imps/lock-free-sleep';
 import { createSemaphore } from '../imps/semaphore';
 import { pickSleepVictims } from './pick-sleep-victims';
@@ -36,12 +38,22 @@ interface UsageTotals {
 // budget protects the host
 type WhenShort = 'giveUp' | 'sleepAll';
 
+// a GovernorDecision event, less what every one shares
+interface GovernorDecision {
+  readonly decision: 'admitted' | 'refused' | 'slept';
+  readonly name: string;
+  readonly trigger: string;
+  readonly usedMib: number;
+  readonly reserveMib?: number;
+}
+
 interface RoomOutcome {
   readonly fits: boolean;
   readonly slept: number;
 
-  // what was still missing at the last measurement
+  // what was still missing at the last measurement, and what was in use
   readonly missingMib: number;
+  readonly effectiveMib: number;
 }
 
 interface RamUsage {
@@ -85,6 +97,9 @@ export interface RamGovernorDeps {
   readonly trySleepImp: LockFreeSleep;
   readonly log: (message: string) => void;
   readonly now?: () => number;
+
+  // where its decisions go as GovernorDecision events
+  readonly events?: EventBus;
 }
 
 export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
@@ -97,6 +112,16 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
   // enforce logs that it cannot reach the budget once, not every tick
   let stuckOver = false;
+
+  const emitDecision = (decision: GovernorDecision): void => {
+    deps.events?.publish({
+      v: EVENT_VERSION,
+      at: new Date(now()),
+      ev: 'GovernorDecision',
+      budgetMib: deps.budgetMib,
+      ...decision,
+    });
+  };
 
   const readReservation = (id: string): number => {
     const reservation = reservations.get(id);
@@ -146,8 +171,8 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   };
 
   // sleeps LRU imps until `findMissing` reports nothing missing; it gives up
-  // when no eligible imp is left awake, or as `whenShort` says. An imp that
-  // was skipped or failed is not picked again in this call, so the loop ends.
+  // when no eligible imp is left awake, or as `whenShort` says. Each pass
+  // sleeps an imp or passes one for good, so it ends within 2n passes.
   const makeRoom = async (
     excludeId: string | null,
     reason: string,
@@ -164,7 +189,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       const missingMib = findMissing(usage);
 
       if (missingMib <= 0) {
-        return { fits: true, slept, missingMib };
+        return { fits: true, slept, missingMib, effectiveMib: usage.effectiveMib };
       }
 
       const time = now();
@@ -179,20 +204,30 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
       const picked = pickSleepVictims(candidates, missingMib);
 
-      if (picked.victims.length === 0 || (!picked.enough && whenShort === 'giveUp')) {
-        return { fits: false, slept, missingMib };
+      // one victim per pass: after a skip or a failure the rest of the pick is
+      // stale, and sleeping it could cost imps their memory for an admission
+      // that then gives up
+      const [id] = picked.victims;
+
+      if (id === undefined || (!picked.enough && whenShort === 'giveUp')) {
+        return { fits: false, slept, missingMib, effectiveMib: usage.effectiveMib };
       }
 
-      for (const id of picked.victims) {
-        const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
+      const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
 
-        if (outcome === 'slept') {
-          reservations.delete(id);
+      if (outcome === 'slept') {
+        reservations.delete(id);
 
-          slept += 1;
-        } else {
-          passed.add(id);
-        }
+        slept += 1;
+
+        emitDecision({
+          decision: 'slept',
+          name: usage.awake.find((imp) => imp.id === id)?.name ?? id,
+          trigger: reason,
+          usedMib: usage.effectiveMib,
+        });
+      } else {
+        passed.add(id);
       }
     }
   };
@@ -202,6 +237,14 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       admission.run(async () => {
         if (request.memoryMib > deps.budgetMib) {
           const usage = await readEffectiveUsage(request.id);
+
+          emitDecision({
+            decision: 'refused',
+            name: request.name,
+            trigger: 'admission',
+            usedMib: usage.effectiveMib,
+            reserveMib: request.reserveMib,
+          });
 
           throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
         }
@@ -216,12 +259,28 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         if (!room.fits) {
           const usage = await readEffectiveUsage(request.id);
 
+          emitDecision({
+            decision: 'refused',
+            name: request.name,
+            trigger: 'admission',
+            usedMib: usage.effectiveMib,
+            reserveMib: request.reserveMib,
+          });
+
           throw buildRamBudgetError(deps.budgetMib, usage.effectiveMib, request.reserveMib);
         }
 
         reservations.set(request.id, {
           mib: request.reserveMib,
           until: now() + RESERVATION_TTL_MS,
+        });
+
+        emitDecision({
+          decision: 'admitted',
+          name: request.name,
+          trigger: 'admission',
+          usedMib: room.effectiveMib,
+          reserveMib: request.reserveMib,
         });
       }),
 

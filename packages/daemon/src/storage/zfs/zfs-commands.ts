@@ -14,12 +14,20 @@ export interface ZfsEntry {
   readonly deferDestroy: boolean;
 }
 
+interface MountOptions {
+  readonly isReadOnly: boolean;
+}
+
 export interface ZfsCommands {
   // every filesystem and snapshot under `root`, oldest first
   readonly list: (root: string) => Promise<ZfsEntry[]>;
   readonly create: (name: string, properties?: Readonly<Record<string, string>>) => Promise<void>;
   readonly snapshot: (name: string) => Promise<void>;
-  readonly clone: (snapshot: string, target: string) => Promise<void>;
+  readonly clone: (
+    snapshot: string,
+    target: string,
+    properties?: Readonly<Record<string, string>>,
+  ) => Promise<void>;
   readonly rename: (from: string, to: string) => Promise<void>;
   readonly promote: (name: string) => Promise<void>;
   readonly destroy: (name: string) => Promise<void>;
@@ -29,15 +37,32 @@ export interface ZfsCommands {
   readonly readWritten: (snapshot: string) => Promise<number>;
   readonly readUsage: (name: string) => Promise<{ used: number; available: number }>;
 
+  // every dataset and snapshot under root with its space properties
+  readonly listSpace: (root: string) => Promise<ZfsSpace[]>;
+
   // the userland version, such as 2.2.2-0ubuntu9
   readonly readVersion: () => Promise<string>;
 
-  // legacy mountpoints: impd mounts every dataset itself
-  readonly mount: (name: string, dir: string) => Promise<void>;
+  // legacy mountpoints: impd mounts every dataset itself. A legacy mount
+  // ignores the readonly property, so a read-only mount says so itself.
+  readonly mount: (name: string, dir: string, options?: MountOptions) => Promise<void>;
   readonly unmount: (dir: string) => Promise<void>;
 }
 
 const LIST_COLUMNS = 'name,type,origin,defer_destroy';
+const SPACE_COLUMNS = 'name,used,referenced,usedbydataset,clones';
+
+// A dataset's or snapshot's space. `used` of a dataset counts its snapshots;
+// of a snapshot, the blocks only it holds. A snapshot has no usedbydataset.
+export interface ZfsSpace {
+  readonly name: string;
+  readonly used: number;
+  readonly referenced: number;
+  readonly usedByDataset: number;
+
+  // the clones of a snapshot: forks, a restore, a backup tree
+  readonly clones: readonly string[];
+}
 
 export function createZfsCommands(run: CommandRunner): ZfsCommands {
   const runChecked = async (argv: readonly string[]): Promise<string> => {
@@ -74,16 +99,11 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 
       return parseZfsList(stdout);
     },
-    create: (name, properties = {}) => {
-      const options = Object.entries(properties).flatMap(([key, value]) => [
-        '-o',
-        `${key}=${value}`,
-      ]);
-
-      return runQuiet(['zfs', 'create', ...options, name]);
-    },
+    create: (name, properties = {}) =>
+      runQuiet(['zfs', 'create', ...buildPropertyArgs(properties), name]),
     snapshot: (name) => runQuiet(['zfs', 'snapshot', name]),
-    clone: (snapshot, target) => runQuiet(['zfs', 'clone', snapshot, target]),
+    clone: (snapshot, target, properties = {}) =>
+      runQuiet(['zfs', 'clone', ...buildPropertyArgs(properties), snapshot, target]),
     rename: (from, to) => runQuiet(['zfs', 'rename', from, to]),
     promote: (name) => runQuiet(['zfs', 'promote', name]),
     destroy: (name) => runQuiet(['zfs', 'destroy', name]),
@@ -100,17 +120,62 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 
       return { used: parseBytes(used), available: parseBytes(available) };
     },
+    listSpace: async (root) => {
+      const stdout = await runChecked([
+        'zfs',
+        'list',
+        '-Hp',
+        '-r',
+        '-t',
+        'filesystem,snapshot',
+        '-o',
+        SPACE_COLUMNS,
+        root,
+      ]);
+
+      return parseZfsSpace(stdout);
+    },
     readVersion: async () => {
       const stdout = await runChecked(['zfs', 'version']);
 
       return parseZfsVersion(stdout);
     },
-    mount: (name, dir) => runQuiet(['mount', '-t', 'zfs', name, dir]),
+    mount: (name, dir, options) =>
+      runQuiet([
+        'mount',
+        '-t',
+        'zfs',
+        ...(options?.isReadOnly === true ? ['-o', 'ro'] : []),
+        name,
+        dir,
+      ]),
     unmount: (dir) => runQuiet(['umount', dir]),
   };
 }
 
+export function parseZfsSpace(stdout: string): ZfsSpace[] {
+  return stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [name = '', used = '', referenced = '', usedByDataset = '', clones = ''] =
+        line.split('\t');
+
+      return {
+        name,
+        used: parseBytes(used),
+        referenced: parseBytes(referenced),
+        usedByDataset: usedByDataset === '-' ? 0 : parseBytes(usedByDataset),
+        clones: clones === '-' || clones === '' ? [] : clones.split(','),
+      };
+    });
+}
+
 // `zfs list -H` output: one tab-separated row per dataset, `-` for no value
+function buildPropertyArgs(properties: Readonly<Record<string, string>>): string[] {
+  return Object.entries(properties).flatMap(([key, value]) => ['-o', `${key}=${value}`]);
+}
+
 export function parseZfsList(stdout: string): ZfsEntry[] {
   return stdout
     .split('\n')

@@ -9,7 +9,7 @@ export interface ImpPaths extends FirecrackerPaths {
   readonly disk: string;
   readonly snapshotDir: string;
 
-  // the memory snapshot of a sleeping imp (docs/sleep-findings.md)
+  // the memory snapshot of a sleeping imp (docs/architecture/sleep-and-wake.md)
   readonly vmstate: string;
   readonly memFile: string;
   readonly snapshotMeta: string;
@@ -69,3 +69,35 @@ export function buildSystemDrivesDir(dataDir: string): string {
 export function buildSystemDrivePath(dataDir: string, sha256: string): string {
   return join(buildSystemDrivesDir(dataDir), `${sha256}.squashfs`);
 }
+
+// What impd's backups keep on the host (docs/architecture/backups.md).
+export function buildBackupPaths(dataDir: string) {
+  const dir = join(dataDir, 'backup');
+
+  return {
+    dir,
+
+    // what restic reads: the manifest, and the disks, checkpoints and images
+    // at the same paths every run; the database copy stays outside it
+    tree: join(dir, 'tree'),
+    cache: join(dir, 'cache'),
+
+    // when forget, prune and check last ran
+    state: join(dir, 'state.json'),
+
+    // XFS: the source of each disk copy in the tree, to reuse an unchanged one
+    copies: join(dir, 'copies.json'),
+    restoreDir: join(dir, 'restore'),
+  };
+}
+
+// Paths in the backup tree, relative to it: the same on XFS and ZFS, where
+// each directory is a read-only clone of the dataset.
+export const BACKUP_TREE = {
+  manifest: 'manifest.json',
+  buildImpDir: (impId: string) => join('imps', impId),
+  buildDisk: (impId: string) => join('imps', impId, 'disk', 'rootfs.ext4'),
+  buildCheckpointDisk: (impId: string, checkpointId: string) =>
+    join('imps', impId, 'checkpoints', checkpointId, 'rootfs.ext4'),
+  buildImageDir: (digest: string) => join('images', digest.replace(/^sha256:/, '')),
+};

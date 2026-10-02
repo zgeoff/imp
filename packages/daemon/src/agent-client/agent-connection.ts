@@ -15,6 +15,11 @@ export interface AgentConnection {
   readonly send: (type: FrameType, payload?: Uint8Array) => void;
   readonly sendJson: (type: FrameType, value: unknown) => void;
 
+  // resolves once what was sent fits under the socket's buffer limit again,
+  // or the socket closed: a sender that waits for it never buffers without
+  // bound when the guest reads slower than the sender writes
+  readonly drained: () => Promise<void>;
+
   // the next frame, or null once the agent closed the connection cleanly
   readonly next: () => Promise<AgentFrame | null>;
   readonly close: () => void;
@@ -196,6 +201,24 @@ function buildConnection(socket: Socket, leftover: Uint8Array): AgentConnection 
         socket.write(encodeJsonFrame(type, value));
       }
     },
+    drained: () =>
+      new Promise((resolve) => {
+        if (socket.destroyed || socket.writableLength < socket.writableHighWaterMark) {
+          resolve();
+
+          return;
+        }
+
+        const stopWaiting = (): void => {
+          socket.off('drain', stopWaiting);
+          socket.off('close', stopWaiting);
+
+          resolve();
+        };
+
+        socket.on('drain', stopWaiting);
+        socket.on('close', stopWaiting);
+      }),
     next: readNext,
     close: () => {
       socket.destroy();

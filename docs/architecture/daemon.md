@@ -11,10 +11,10 @@ On start, impd reads its [configuration](../guides/configuration.md), copies the
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
 token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
 drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
-the API, opens the proxy listeners and the credential broker, and starts four timers: the idle loop
-every 2 s, the governor every 5 s, a proxy listener sync every 30 s, and a broker sync every 60 s.
-It adds a default image in the background; `/health` reports `ready: true` once that finishes,
-whether it worked or not.
+the API, opens the proxy listeners and the credential broker and the
+[SSH gateway](#ssh-the-gateway), and starts four timers: the idle loop every 2 s, the governor every
+5 s, a proxy listener sync every 30 s, and a broker sync every 60 s. It adds a default image in the
+background; `/health` reports `ready: true` once that finishes, whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -31,15 +31,16 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, and the exec WebSocket at `/exec`. Both take the bearer token in an `Authorization` header.
-A browser cannot set that header on a WebSocket, so `/exec` also takes a `ticket` query parameter:
-`exec.ticket` gives a single-use ticket for one existing imp, valid for 30 s. The token itself is
-never accepted in a URL, where logs and browser history would keep it; no client used the old
-`token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
-router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
-contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
-while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
-session request to an agent from before sessions. The token is made on first start and kept in
+`/rpc`, the exec WebSocket at `/exec`, and the tunnel WebSocket at `/tunnel`. Each takes the bearer
+token in an `Authorization` header. A browser cannot set that header on a WebSocket, so `/exec` also
+takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket for one existing imp,
+valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The token itself is never
+accepted in a URL, where logs and browser history would keep it; no client used the old `token`
+query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The router maps
+each procedure of the contract in `packages/api` to a service call. Errors come from the contract:
+`NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd
+stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a session
+request to an agent from before sessions. The token is made on first start and kept in
 `<dataDir>/token`, readable by the owner only. `/rpc` takes POST only: a GET is what a link or an
 image on any page can make a browser send.
 
@@ -96,7 +97,7 @@ lock, so two calls never change one imp at once.
 | `shutdown-gate.ts`    | Closed once the SIGTERM sleep pass starts. After that no VM boots or wakes.                                                                           |
 | `imp-liveness.ts`     | Marks an imp with a dead VM or a lost snapshot `stopped`, or `sleeping` when its VM died after the sleep wrote the snapshot.                          |
 | `imp-presenter.ts`    | Imp records as the API shows them, and their URLs.                                                                                                    |
-| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, and proxied requests and WebSockets.                                          |
+| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, proxied requests and WebSockets, SSH connections, and tunnels.                |
 
 - **Anything that needs a VM** wakes a sleeping imp and cold-boots a stopped one. An exec counts its
   session before the wake, so no background sleep slips in between.
@@ -112,10 +113,24 @@ lock, so two calls never change one imp at once.
 The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a boot or a wake, the
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
-a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
-an imp's lock: a victim locked by the time its turn comes is skipped. Every 5 s it also sleeps imps
-while the measured use is over the budget, all it may sleep when they cannot bring it under.
+a hold, a taken lock, an open exec session, a proxied request, an SSH connection or a tunnel is
+never picked. It never waits for an imp's lock: a victim locked by the time its turn comes is
+skipped. It sleeps one victim at a time and picks again after each, so a skip or a failed sleep
+never leads to more sleeps than the new pick needs. Every 5 s it also sleeps imps while the measured
+use is over the budget, all it may sleep when they cannot bring it under.
 [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
+
+### events: the event stream
+
+`db/imps.ts` and `db/checkpoints.ts` emit a write after each commit, with the reason its caller
+gives; no other code writes those rows. The publisher turns each write into an event in the API's
+shape, one at a time, so events keep the order of the writes, and puts it on the bus. The bus feeds
+`events.stream`, the proxy's and the broker's resync when an imp comes or goes, and the telemetry.
+The governor puts its decisions on the same bus. A stream subscribes before it reads its snapshot
+and ends a reader that falls 1000 events behind. [Events](../guides/events.md) has the format.
+
+The audit module writes one `api_audit` row per mutation, from oRPC middleware, and per exec,
+console, attach, SSH and tunnel open, after the answer. It never stores the input.
 
 ### idle: the idle loop
 
@@ -156,6 +171,36 @@ wait for the client, output stops; the agent connection then stops reading, so a
 the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
 after 30 s without an answer, so a client that vanished without a close lets go of its session.
 
+### tunnel: `imp proxy`
+
+`imp proxy <name> 5432 3001:3000` listens on local ports and opens one `/tunnel` WebSocket per TCP
+connection (`packages/api/src/tunnel-protocol.ts`). The client sends
+`{"type":"open","name":"box","port":5432}`; impd wakes the imp and dials `127.0.0.1:<port>` in the
+guest through the agent's [`dial`](./protocol.md#dial), so a server that listens on the guest's
+loopback only is reachable. impd answers `{"type":"opened"}`, or `{"type":"error","code",...}` and a
+close: `NOT_FOUND`, `DIAL_FAILED`, `AGENT_OUTDATED` for an agent from before `dial`, and
+`TUNNEL_LIMIT` past 256 open tunnels per imp.
+
+- **Bytes.** Binary messages carry the bytes both ways. `{"type":"eof"}` is a TCP half-close from
+  that side, so a client that half-closes still gets its reply.
+- **Flow control.** Neither end of a WebSocket can pause its reads, so each side acks the bytes it
+  delivered onward (`{"type":"ack","bytes":n}`), and a sender keeps at most 1 MiB unacked. impd acks
+  once the guest connection took the bytes; the CLI acks once its TCP socket did. The CLI sends at
+  most 64 KiB per message, so it passes the window by one message at most; a client that sends a
+  larger message, or holds more unacked than that, is closed with 1002, so it cannot grow impd's
+  memory.
+- **The end.** The close codes are in `tunnel-protocol.ts`. impd closes with 1000 once both sides
+  sent their eof, with 4000 when the connection in the guest ended without one (a reset, or a forced
+  sleep), with 1002 for a message that breaks the protocol, and with 1012 when impd stops. The CLI
+  resets the local connection for anything but 1000. When impd cannot be reached at all, it prints
+  one notice for a burst of failed connections, not one per connection.
+- **Activity.** An open tunnel counts as a `tunnel` connection from before the wake, so it keeps the
+  imp awake, and neither the idle loop nor the governor sleeps the imp under it.
+
+The CLI listens on 127.0.0.1 and ::1 before it calls impd, so a busy port fails at once, then checks
+the imp exists with `imps.get`, which does not wake it. Each local socket stays paused until
+`opened`.
+
 ### sessions: detachable consoles
 
 A session is a program on a pty in the guest that outlives its WebSocket
@@ -187,6 +232,44 @@ that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads t
 more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from there. A stopped imp
 has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
 copies.
+
+### ssh: the gateway
+
+The SSH gateway is in impd itself, on `ssh2`, so it reaches the lifecycle, the activity tracker and
+the agent client directly. A separate SSH server (Go's `x/crypto/ssh`) would need the exec protocol
+again and new RPCs for wakes and activity. The cost: `ssh2` has no post-quantum key exchange, and
+OpenSSH 10.1 and later warn about that ([SSH guide](../guides/ssh.md#set-up)). impd carries one
+patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward to another host is
+"administratively prohibited", not "connect failed"; and a server can open an
+`auth-agent@openssh.com` channel, for agent forwarding.
+
+- **Connections.** impd accepts each TCP connection and hands it to `ssh2`. A client must log in
+  within 30 s; at most 32 connections wait to log in, and a 33rd is dropped. Six refused logins end
+  the connection. A keepalive every 15 s drops a client that misses 3.
+- **Login.** Public keys only, from `<dataDir>/ssh/authorized_keys`, read again when the file
+  changes. The SSH user names the imp. The key check and the imp lookup give the same refusal, and
+  nothing before a verified signature for a known imp touches the imp. A login opens an `ssh`
+  connection in the activity tracker and starts the wake; channels wait for it. A failed wake
+  reaches each channel as an error on stderr and exit status 255, not as a refused login.
+- **Sessions.** A shell, a command or the `sftp` subsystem is an agent exec, as `imp exec` is: the
+  pty and its size, `TERM`, `LANG` and `LC_*`, and `SSH_CONNECTION` go with it, and resizes and
+  signals follow it. SFTP runs `/run/imp/sys/imp-agent sftp` from the system drive. Client input
+  pauses until the agent connection has taken the last chunk, so a slow guest holds back the
+  client's SSH window instead of growing impd's memory.
+- **Forwards.** `direct-tcpip` to the imp's own loopback and `direct-streamlocal` to a socket path
+  use the agent's [`dial`](./protocol.md#dial), which connects from inside the guest. The channel
+  opens only once the dial worked. Remote forwards and X11 are refused.
+- **Agent forwarding.** After an `auth-agent-req@openssh.com`, the connection's sessions get
+  `SSH_AUTH_SOCK` from one [`agent.listen`](./protocol.md#agentlisten-and-agentaccept) socket in the
+  guest, opened on first use and closed with the connection. Each client of the socket becomes an
+  `auth-agent@openssh.com` channel to the user, relayed through `agent.accept`; past 16 open
+  channels, or when the user refuses the channel, the client is closed at once. A wake starts a new
+  VM, so a session in a VM other than the socket's gets a new socket. Any failure leaves the command
+  to run without `SSH_AUTH_SOCK`, with the reason on stderr.
+- **Stop.** impd ends every SSH connection before the sleep pass, as it closes exec sessions.
+
+The code is in `ssh/`. The host key is `<dataDir>/ssh/host_key`; `ssh2`'s own ed25519 generator
+writes an unreadable key about once in 256, so impd checks each key it makes and makes another.
 
 ### proxy: the wake proxy
 
@@ -239,9 +322,10 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 ### db: SQLite
 
-The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code. It has
-three tables: `images`, `imps` and `checkpoints`. SQLite has one connection, so a promise-chain
-mutex gives it to one caller at a time. Timestamps are integer milliseconds since the epoch.
+The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code. Its
+tables are `images`, `imps`, `checkpoints`, the broker's `secrets`, `grants` and `broker_audit`, and
+`api_audit`. SQLite has one connection, so a promise-chain mutex gives it to one caller at a time.
+Timestamps are integer milliseconds since the epoch.
 
 ### process: helpers
 

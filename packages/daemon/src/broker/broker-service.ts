@@ -1,3 +1,4 @@
+import type { Socket } from 'node:net';
 import { join } from 'node:path';
 import type { AuditEntry, BrokerRule, Secret, SecretKind } from '@imp/api';
 import { ORPCError } from '@orpc/server';
@@ -96,6 +97,7 @@ export interface BrokerDeps {
   readonly installBundle?: InstallBundle;
   readonly fetch?: UpstreamFetch;
   readonly resolveTunnelTarget?: (host: string) => Promise<string>;
+  readonly dialTunnel?: (address: string, port: number) => Socket;
 }
 
 export async function createBroker(deps: BrokerDeps): Promise<Broker> {
@@ -397,6 +399,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
         openTerminator: terminators.open,
         resolveTunnelTarget: deps.resolveTunnelTarget ?? ((host) => resolveTunnelTarget(host)),
+        ...(deps.dialTunnel !== undefined && { dialTunnel: deps.dialTunnel }),
         log,
       });
 

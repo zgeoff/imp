@@ -11,15 +11,22 @@ test('it runs the acceptance set when no suite is named', () => {
     'docker',
     'images',
     'checkpoints',
+    'disks',
     'sleep',
     'scale',
     'restart',
     'tailscale',
     'mcp',
     'sessions',
+    'ssh',
+    'ssh-wake',
+    'ssh-agent',
+    'proxy',
+    'proxy-wake',
     'connectors',
     'dashboard',
     'https',
+    'backups',
   ]);
 });
 
@@ -34,9 +41,13 @@ test('it expands a set and drops duplicates', () => {
   expect(parseArgs(['--only', 'fast,sleep']).suites).toEqual([
     'lifecycle',
     'checkpoints',
+    'disks',
     'sleep',
     'restart',
     'mcp',
+    'ssh',
+    'ssh-agent',
+    'proxy',
     'dashboard',
   ]);
 });

@@ -9,6 +9,10 @@ import { MAX_HEAD_BYTES, findHeadEnd, parseConnectHead } from './connect-head';
 import type { TerminatorKey } from './terminators';
 import { TunnelRefusedError } from './tunnel-target';
 
+// what the broker does with a CONNECT no grant covers; `open` tunnels it, and
+// #26 adds the policies that refuse it
+export const EGRESS_POLICIES = ['open'] as const;
+
 // The front port every guest reaches on its own gateway. A CONNECT to a
 // granted host goes to its TLS terminator; any other is a plain tunnel to a
 // checked public address, while the imp's egress policy is `open`.
@@ -29,6 +33,9 @@ export interface BrokerFrontDeps {
   readonly openTerminator: (key: TerminatorKey) => Promise<string>;
   readonly resolveTunnelTarget: (host: string) => Promise<string>;
   readonly log: (message: string) => void;
+
+  // opens a plain tunnel's upstream socket; tests point it at a local server
+  readonly dialTunnel?: (address: string, port: number) => Socket;
 
   // smaller limits for tests
   readonly maxConnectionsPerImp?: number;
@@ -211,7 +218,9 @@ async function runConnection(
     return;
   }
 
-  startRelay(socket, createConnection({ host: address, port: head.port }), read.rest);
+  const dialTunnel = deps.dialTunnel ?? ((host, port) => createConnection({ host, port }));
+
+  startRelay(socket, dialTunnel(address, head.port), read.rest);
 }
 
 // The CONNECT head and any bytes after it, or null when the client sends

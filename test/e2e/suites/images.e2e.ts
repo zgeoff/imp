@@ -4,7 +4,14 @@ import { join } from 'node:path';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import { getThroughProxy } from '../lib/http';
-import { listImageNames, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import {
+  listImageNames,
+  readImpUrls,
+  requireImp,
+  runImp,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
 import { REPO_ROOT } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -51,11 +58,11 @@ test('an image built from images/examples/hello serves its page through the prox
   await createImp(hello, '--image', hello, '--memory', '1024');
 
   const row = await requireImp(hello);
-  const urls = await runImp('url', hello);
+  const urls = await readImpUrls(hello);
 
   const page = readFileSync(join(HELLO_DIR, 'rootfs', 'srv', 'hello', 'index.html'), 'utf8');
 
-  expect(urls.split('\n')[0]).toBe(row.url);
+  expect(urls.local).toBe(row.url);
 
   await waitFor(`${hello} to serve its page`, async () => {
     const body = await getThroughProxy(hello);

@@ -20,20 +20,27 @@ export function buildSessionValue(token: string, expiresAtMs: number): string {
 }
 
 export function isValidSession(value: string, token: string, nowMs: number): boolean {
+  return readSessionExpiry(value, token, nowMs) !== null;
+}
+
+// when a valid session expires, in ms; null for a session that is not valid
+export function readSessionExpiry(value: string, token: string, nowMs: number): number | null {
   const [version, expiry, signature, ...rest] = value.split('.');
 
   if (version !== VERSION || expiry === undefined || signature === undefined || rest.length > 0) {
-    return false;
+    return null;
   }
 
   if (!/^\d+$/.test(expiry) || Number(expiry) <= nowMs) {
-    return false;
+    return null;
   }
 
   const given = Buffer.from(signature);
   const expected = Buffer.from(buildSignature(token, expiry));
 
-  return given.length === expected.length && timingSafeEqual(given, expected);
+  return given.length === expected.length && timingSafeEqual(given, expected)
+    ? Number(expiry)
+    : null;
 }
 
 // Every session cookie value in a Cookie header, under either name. An

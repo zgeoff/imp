@@ -1,10 +1,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
 export const FAKE_AGENT_VERSION = '0.1.0';
 
-export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady';
+export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady' | 'grow';
 
 // What the next call of a step does, within the VmRunner contract; each step
 // below says what fail and die mean for it. A hang waits for releaseHangs(),
@@ -34,12 +35,16 @@ export function buildFakeVmm() {
 
   const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
+  const grows: { disk: string; diskBytes: number }[] = [];
 
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
   const usedSnapshots = new Set<string>();
 
   const counter = { nextPid: 1000, generation: 0 };
+
+  // what every fake agent reports as its uptime: old enough to sleep at once
+  const guest = { uptimeMs: 60_000 };
 
   const queues = new Map<VmStep, VmOutcome[]>();
   const holds = new Map<VmStep, { gate: PromiseWithResolvers<void>; reached: () => void }>();
@@ -163,12 +168,29 @@ export function buildFakeVmm() {
 
         return alive.has(pid);
       },
+
+      // fail: the guest did not grow; die: its agent is from before grow
+      growDrive: (paths, diskBytes) =>
+        runInGeneration(async () => {
+          const outcome = await pickOutcome('grow');
+
+          if (outcome === 'die') {
+            throw buildAgentOutdatedError('grow');
+          }
+
+          if (outcome !== 'ok') {
+            throw new FakeVmError('grow failed');
+          }
+
+          grows.push({ disk: paths.disk, diskBytes });
+        }),
       isAgentReady: () =>
         runInGeneration(async () => {
           const outcome = await pickOutcome('agentReady');
 
           return outcome === 'ok';
         }),
+      readGuestUptimeMs: () => runInGeneration(() => Promise.resolve(guest.uptimeMs)),
     };
   };
 
@@ -177,6 +199,7 @@ export function buildFakeVmm() {
     usedSnapshots,
     wakes,
     stops,
+    grows,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {
@@ -215,6 +238,11 @@ export function buildFakeVmm() {
       hangs.gate.resolve();
 
       hangs.gate = Promise.withResolvers<void>();
+    },
+
+    // the uptime every agent reports from now on
+    setGuestUptime: (uptimeMs: number) => {
+      guest.uptimeMs = uptimeMs;
     },
 
     setPace: (pace: (step: VmStep) => Promise<void>) => {

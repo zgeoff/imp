@@ -53,7 +53,7 @@ test('a size or count that is not a whole positive number is a usage error', asy
   await runCommand(newCommand, { rawArgs: ['box', '--memory', '1.5g'] });
 
   expect(stderr).toHaveBeenCalledWith(
-    'imp: not a size: 1.5g (try 512m, 2g, or MiB as a whole number)',
+    'imp: not a size: 1.5g (try 512m, 2g, 1t, or MiB as a whole number)',
   );
 
   expect(process.exitCode).toBe(2);

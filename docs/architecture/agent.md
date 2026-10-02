@@ -67,6 +67,17 @@ The history sits behind a `Screen` interface. A terminal emulator that keeps the
 output that the program must redraw over. Sessions live in the agent's memory: they survive a sleep
 and wake, and end with the guest.
 
+## Dial, SFTP and agent forwarding
+
+Three pieces serve impd's [SSH gateway](../guides/ssh.md). The `dial` op connects to an address in
+the guest and relays bytes, for port forwarding ([protocol](./protocol.md#dial)). And
+`imp-agent sftp`, run from the system drive as `/run/imp/sys/imp-agent sftp`, is an SFTP server on
+stdin and stdout (`github.com/pkg/sftp`). impd starts it through a plain `exec`, as the image's
+user, so every image gets SFTP without an `sftp-server` of its own. It starts in `$HOME`. And
+`agent.listen` serves a socket for `SSH_AUTH_SOCK` under `/run/imp/ssh-agent/`, owned by the image's
+user, for as long as impd keeps the connection open; `agent.accept` relays each of its clients to
+the user's ssh-agent (`internal/sshagent`, [protocol](./protocol.md#agentlisten-and-agentaccept)).
+
 ## Shutdown
 
 On `shutdown` the agent stops the services, signals every other process, syncs, remounts `/`

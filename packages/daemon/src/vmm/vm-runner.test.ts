@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { startFakeAgent } from '../agent-client/fake-agent';
+import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
@@ -103,4 +105,48 @@ test('a sleep whose pause and resume both fail kills the VM', async () => {
 
   expect(rejection).toBeInstanceOf(Error);
   expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBe(false);
+});
+
+test('a wedged agent gives no guest uptime within a short timeout', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
+  const paths = buildImpPaths(dir, 'vm');
+
+  mkdirSync(paths.runDir, { recursive: true });
+
+  // accepts the connection and never answers
+  const agent = await startFakeAgent(paths.vsockSocket, () => {});
+
+  try {
+    const started = performance.now();
+
+    const uptime = await createVmRunner().readGuestUptimeMs(paths);
+
+    expect(uptime).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
+  } finally {
+    agent.close();
+
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an agent that cannot read its clock gives no guest uptime', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
+  const paths = buildImpPaths(dir, 'vm');
+
+  mkdirSync(paths.runDir, { recursive: true });
+
+  const agent = await startFakeAgent(paths.vsockSocket, (socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.response, { ok: true, version: '0.1.0' }));
+  });
+
+  try {
+    const uptime = await createVmRunner().readGuestUptimeMs(paths);
+
+    expect(uptime).toBeNull();
+  } finally {
+    agent.close();
+
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

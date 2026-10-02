@@ -12,11 +12,13 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
+	"github.com/zgeoff/imp/agent/internal/sshagent"
 )
 
 // Port is the vsock port the agent listens on.
@@ -30,6 +32,7 @@ type Server struct {
 	Exec     *exec.Manager
 	Sessions *session.Manager
 	Services *services.Supervisor
+	Agents   *sshagent.Manager
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
 
@@ -118,6 +121,26 @@ func (s *Server) handle(c net.Conn) {
 		}
 		return
 	}
+	if req.Op == proto.OpDial {
+		if err := dial.Serve(req, r, w); err != nil {
+			log.Printf("dial %s %s: %v", req.Network, req.Address, err)
+		}
+		return
+	}
+	// agent.listen is long-lived but runs nothing, so it is not an exec in
+	// the activity report
+	if req.Op == proto.OpAgentListen {
+		if err := s.Agents.Listen(r, w); err != nil {
+			log.Printf("agent.listen: %v", err)
+		}
+		return
+	}
+	if req.Op == proto.OpAgentAccept {
+		if err := s.Agents.Accept(req, r, w); err != nil {
+			log.Printf("agent.accept: %v", err)
+		}
+		return
+	}
 	resp, err := s.safeUnary(req)
 	if err != nil {
 		var pe *proto.Error
@@ -145,7 +168,7 @@ func (s *Server) safeUnary(req proto.Request) (resp any, err error) {
 func (s *Server) unary(req proto.Request) (any, error) {
 	switch req.Op {
 	case proto.OpPing:
-		return proto.Ping{OK: true, Version: proto.Version, UptimeMs: uptimeMs()}, nil
+		return buildPing(unix.ClockGettime), nil
 	case proto.OpActivity:
 		return s.activity()
 	case proto.OpFreeze:
@@ -158,6 +181,11 @@ func (s *Server) unary(req proto.Request) (any, error) {
 		}
 		ts := unix.NsecToTimespec(req.UnixMs * int64(time.Millisecond))
 		return proto.OK{OK: true}, unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
+	case proto.OpGrow:
+		if req.DiskBytes <= 0 {
+			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "disk_bytes is required"}
+		}
+		return proto.OK{OK: true}, s.grow(req.DiskBytes)
 	case proto.OpServicesList:
 		return proto.ServicesList{Services: s.Services.List()}, nil
 	case proto.OpSessionKill:
@@ -173,10 +201,14 @@ func replyErr(w *proto.Writer, code, msg string) {
 	w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: code, Message: msg}})
 }
 
-func uptimeMs() int64 {
+// buildPing reports the uptime from CLOCK_BOOTTIME, or none when the clock
+// read fails: a 0 would make impd wait out a guest that is not young.
+func buildPing(clockGettime func(int32, *unix.Timespec) error) proto.Ping {
+	ping := proto.Ping{OK: true, Version: proto.Version}
 	var ts unix.Timespec
-	if unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts) != nil {
-		return 0
+	if clockGettime(unix.CLOCK_BOOTTIME, &ts) == nil {
+		ms := ts.Nano() / int64(time.Millisecond)
+		ping.UptimeMs = &ms
 	}
-	return ts.Nano() / int64(time.Millisecond)
+	return ping
 }

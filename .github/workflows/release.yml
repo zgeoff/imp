@@ -460,4 +460,5 @@ jobs:
       - name: Publish
         env:
           DIST_TAG: ${{ needs.npm-pack.outputs.dist_tag }}
-        run: npm publish npm-tarball/*.tgz --provenance --access public --tag "$DIST_TAG"
+        # ./ keeps npm from reading dir/file.tgz as a GitHub user/repo
+        run: npm publish ./npm-tarball/*.tgz --provenance --access public --tag "$DIST_TAG"

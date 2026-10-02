@@ -1,12 +1,15 @@
 import { expect, test } from 'bun:test';
+import { subscribeImpWrites } from './imp-write-feed';
 import {
   allocateSlot,
   createImp,
+  createImpInFreeSlot,
   findImpById,
   findImpByName,
   listImps,
   removeImp,
   updateImpActivity,
+  updateImpDisk,
   updateImpHold,
   updateImpState,
   updateImpStateIf,
@@ -42,6 +45,24 @@ test('it creates an imp in the creating state and finds it by name and id', asyn
   expect(byName).toEqual(imp);
   expect(byId).toEqual(imp);
   expect(missing).toBeUndefined();
+});
+
+test('a create in a free slot emits one ImpAdded, once it commits', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const writes: string[] = [];
+
+  subscribeImpWrites(ctx.db, (write) => {
+    writes.push(`${write.kind} ${write.kind === 'added' ? write.imp.name : ''}`);
+  });
+
+  await createImpInFreeSlot(
+    ctx.db,
+    { name: 'dev', imageId: ctx.image.id, vcpus: 2, memoryMib: 2048 },
+    { count: 16, findIp: (slot) => `10.66.0.${String(slot * 4 + 2)}` },
+  );
+
+  expect(writes).toEqual(['added dev']);
 });
 
 test('it allocates the lowest free slot, reusing a gap', async () => {
@@ -119,6 +140,7 @@ test('it updates the state and only the fields the change names', async () => {
   const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
 
   const running = await updateImpState(ctx.db, imp.id, {
+    reason: 'booted',
     state: 'running',
     pid: 4242,
     firecrackerVersion: 'v1.17.0',
@@ -128,7 +150,12 @@ test('it updates the state and only the fields the change names', async () => {
 
   const sleptAt = new Date('2026-10-02T00:00:00Z');
 
-  const sleeping = await updateImpState(ctx.db, imp.id, { state: 'sleeping', pid: null, sleptAt });
+  const sleeping = await updateImpState(ctx.db, imp.id, {
+    reason: 'slept',
+    state: 'sleeping',
+    pid: null,
+    sleptAt,
+  });
 
   expect(sleeping).toMatchObject({
     state: 'sleeping',
@@ -137,7 +164,11 @@ test('it updates the state and only the fields the change names', async () => {
     firecrackerVersion: 'v1.17.0',
   });
 
-  const failed = await updateImpState(ctx.db, imp.id, { state: 'error', error: 'boot timed out' });
+  const failed = await updateImpState(ctx.db, imp.id, {
+    reason: 'failed',
+    state: 'error',
+    error: 'boot timed out',
+  });
 
   expect(failed).toMatchObject({ state: 'error', error: 'boot timed out', sleptAt });
 });
@@ -166,7 +197,7 @@ test('it lists imps by name', async () => {
   const b = await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 0));
 
   await createImp(ctx.db, buildNewImp(ctx.image.id, 'a', 1));
-  await updateImpState(ctx.db, b.id, { state: 'running' });
+  await updateImpState(ctx.db, b.id, { reason: 'booted', state: 'running' });
 
   const imps = await listImps(ctx.db);
 
@@ -181,22 +212,41 @@ test('it applies a compare-and-set change only while the row matches', async () 
 
   const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
 
-  await updateImpState(ctx.db, imp.id, { state: 'running', pid: 42 });
+  await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running', pid: 42 });
 
   const stale = await updateImpStateIf(
     ctx.db,
     imp.id,
     { state: 'running', pid: 41 },
-    { state: 'stopped', pid: null },
+    { reason: 'stopped', state: 'stopped', pid: null },
   );
 
   const fresh = await updateImpStateIf(
     ctx.db,
     imp.id,
     { state: 'running', pid: 42 },
-    { state: 'stopped', pid: null },
+    { reason: 'stopped', state: 'stopped', pid: null },
   );
 
   expect(stale).toBeUndefined();
   expect(fresh).toMatchObject({ state: 'stopped', pid: null });
+});
+
+test('a new disk size emits ImpChanged resized; a pending grow alone does not', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const imp = await createWithSlot(ctx.db, ctx.image.id, 'dev');
+
+  const reasons: string[] = [];
+
+  subscribeImpWrites(ctx.db, (write) => {
+    const reason = write.kind === 'changed' ? write.reason : write.kind;
+
+    reasons.push(reason);
+  });
+
+  await updateImpDisk(ctx.db, imp.id, { diskBytes: imp.diskBytes, isGrowPending: true });
+  await updateImpDisk(ctx.db, imp.id, { diskBytes: 2 * imp.diskBytes, isGrowPending: true });
+
+  expect(reasons).toEqual(['resized']);
 });

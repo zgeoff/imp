@@ -43,6 +43,7 @@ async function setupTest() {
     db: harness.db,
     imps: harness.imps,
     storage: harness.storage,
+    diskBudget: harness.diskBudget,
     log: () => {},
     freezer: {
       freeze: () => {
@@ -366,6 +367,7 @@ test('it retries with a new id when storage holds the id already', async () => {
     config: harness.config,
     db: harness.db,
     imps: harness.imps,
+    diskBudget: harness.diskBudget,
     log: () => {},
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
     storage: {

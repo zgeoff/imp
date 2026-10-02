@@ -30,7 +30,8 @@ You need a domain in a Cloudflare zone and an API token for it.
    impd: https: got a certificate for imp.example.com, expiring 2027-01-01T00:00:00.000Z, in 21345ms
    ```
 
-4. From a tailnet member, `imp url <name>` prints the https URL first.
+4. From a tailnet member, `imp url <name>` prints the https URL. With HTTPS on, it comes first,
+   before the local and tailnet URLs; a script that wants one of those picks it by its form.
    `imp login https://imp.example.com` reaches the API, and `https://imp.example.com` opens the
    [dashboard](./dashboard.md). Over HTTPS its session cookie is `__Host-imp_session`, which no imp
    under the domain can set ([daemon](../architecture/daemon.md#dashboard)).
@@ -73,12 +74,11 @@ sidecar and no extra binary in the image.
 
 `<IMP_DATA_DIR>/tls/` is mode 0700, every file in it 0600:
 
-| File              | Holds                                                                     |
-| ----------------- | ------------------------------------------------------------------------- |
-| `account.key`     | The ACME account key. Made once and kept.                                 |
-| `account.json`    | The account's URL at the ACME directory, so a renewal reuses the account. |
-| `certificate.pem` | The certificate key, then the chain. One file, replaced by a rename.      |
-| `attempts.json`   | Failed attempts in a row, the time of the last one, and its error text.   |
+| File              | Holds                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `account.json`    | The ACME account: its key, and its URL at the ACME directory. Made once and reused. |
+| `certificate.pem` | The certificate key, then the chain. One file, replaced by a rename.                |
+| `attempts.json`   | Failed attempts in a row, the time of the last one, and its error text.             |
 
 To force a new certificate, stop the container, delete `certificate.pem` and `attempts.json`, and
 start it again.
@@ -162,12 +162,13 @@ no token. [Pebble](https://github.com/letsencrypt/pebble) is Let's Encrypt's tes
 IMP_DEV_NAME=imp-dev-https IMP_DEV_PORT_OFFSET=4500 scripts/test-e2e.sh --only https
 ```
 
-The harness starts both containers on a Docker network of their own, then starts the dev instance on
-that network with `IMP_DOMAIN=imp.test`, `IMP_DNS_PROVIDER=challtestsrv`, the Pebble directory, and
-Pebble's TLS root in `IMP_ACME_CA_FILE`. The suite waits for the certificate, checks both names on
-it, fetches an imp over https from inside the host container, sleeps it and wakes it by https, and
-checks the 404 and the redirect. It wakes the imp by https and by plain HTTP under the same
-conditions, and records both times as the client sees them.
+The harness starts both containers on a Docker network of their own. The suite then reboots the dev
+instance onto that network with `IMP_DOMAIN=imp.test`, `IMP_DNS_PROVIDER=challtestsrv`, the Pebble
+directory, and Pebble's TLS root in `IMP_ACME_CA_FILE`, and reboots it with HTTPS off when it ends,
+so the suites after it run against a plain impd. The suite waits for the certificate, checks both
+names on it, fetches an imp over https from inside the host container, sleeps it and wakes it by
+https, and checks the 404 and the redirect. It wakes the imp by https and by plain HTTP under the
+same conditions, and records both times as the client sees them.
 
 `IMP_DNS_PROVIDER=challtestsrv` exists for this test only. It writes records through challtestsrv's
 management API at `IMP_DNS_API_URL`. impd refuses it unless `IMP_E2E=1`, which only the harness

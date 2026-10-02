@@ -73,7 +73,7 @@ test('the marker is written only once start succeeds', async () => {
   expect(failure).toContain('zfs');
   expect(existsSync(join(ctx.dataDir, 'storage-backend'))).toBeFalse();
 
-  const xfs = createStorageBackend(loadConfig({ IMP_DATA_DIR: ctx.dataDir }));
+  const xfs = createStorageBackend(loadConfig({ IMP_DATA_DIR: ctx.dataDir }), 0);
 
   await xfs.start(LIVE);
 

@@ -1,6 +1,10 @@
 import { defineCommand } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
+import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
+import { diskCommand } from './commands/disk';
+import { eventsCommand } from './commands/events';
+import { gcCommand } from './commands/gc';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
 import { imageCommand } from './commands/image';
 import {
@@ -19,6 +23,7 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import { proxyCommand } from './commands/proxy';
 import {
   auditCommand,
   grantCommand,
@@ -53,16 +58,21 @@ export const mainCommand = defineCommand({
     wake: wakeCommand,
     hold: holdCommand,
     url: urlCommand,
+    proxy: proxyCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
     fork: forkCommand,
+    disk: diskCommand,
+    gc: gcCommand,
+    backup: backupCommand,
     image: imageCommand,
     secret: secretCommand,
     grant: grantCommand,
     revoke: revokeCommand,
     grants: grantsCommand,
     audit: auditCommand,
+    events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,
     login: loginCommand,

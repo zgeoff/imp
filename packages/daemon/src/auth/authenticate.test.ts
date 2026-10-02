@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { isAuthenticated, isSameOrigin } from './authenticate';
+import { isSameOrigin, readCaller } from './authenticate';
 import { buildSessionValue } from './session-cookie';
 
 const NOW = 1_800_000_000_000;
@@ -9,16 +9,19 @@ function buildRequest(headers: Readonly<Record<string, string>>): Request {
   return new Request('http://imp:7070/rpc/imps/list', { method: 'POST', headers });
 }
 
-test('it accepts the bearer token from anywhere', () => {
+test('it accepts the bearer token from anywhere, as the token, for good', () => {
   const request = buildRequest({ authorization: 'Bearer secret', origin: 'http://evil' });
 
-  expect(isAuthenticated(request, 'secret', NOW)).toBe(true);
+  expect(readCaller(request, 'secret', NOW)).toEqual({ actor: 'token', expiresAt: null });
 });
 
-test('it accepts the session from a same-origin request', () => {
+test('it accepts the session from a same-origin request, as the dashboard, until it expires', () => {
   const request = buildRequest({ cookie: SESSION, 'sec-fetch-site': 'same-origin' });
 
-  expect(isAuthenticated(request, 'secret', NOW)).toBe(true);
+  expect(readCaller(request, 'secret', NOW)).toEqual({
+    actor: 'dashboard',
+    expiresAt: NOW + 60_000,
+  });
 });
 
 test('a bad session cookie an imp planted first does not hide the real one', () => {
@@ -27,19 +30,19 @@ test('a bad session cookie an imp planted first does not hide the real one', () 
     'sec-fetch-site': 'same-origin',
   });
 
-  expect(isAuthenticated(request, 'secret', NOW)).toBe(true);
+  expect(readCaller(request, 'secret', NOW)).not.toBeNull();
 });
 
 test('it refuses the session from another port of the same host', () => {
   const request = buildRequest({ cookie: SESSION, 'sec-fetch-site': 'same-site' });
 
-  expect(isAuthenticated(request, 'secret', NOW)).toBe(false);
+  expect(readCaller(request, 'secret', NOW)).toBeNull();
 });
 
 test('it refuses an expired session', () => {
   const request = buildRequest({ cookie: SESSION, 'sec-fetch-site': 'same-origin' });
 
-  expect(isAuthenticated(request, 'secret', NOW + 60_000)).toBe(false);
+  expect(readCaller(request, 'secret', NOW + 60_000)).toBeNull();
 });
 
 test('without fetch metadata it needs an origin naming this host and port', () => {

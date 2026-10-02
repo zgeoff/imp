@@ -34,7 +34,7 @@ deploy/upgrade.sh
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
-   back, and lists the imps.
+   back, prints the boot status counts from `imp info`, and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
 disk is never touched. [Snapshot identity](../architecture/sleep-and-wake.md#snapshot-identity) has
@@ -44,6 +44,15 @@ the full rule:
   needs it, and the woken imp runs its old agent until its next cold boot.
 - A new guest kernel: memory restores, and the imp runs its old kernel until its next cold boot.
 - A new Firecracker or host kernel: every sleeping imp boots cold.
+
+An outdated kernel or agent alone never causes a cold boot: the snapshot still loads. The imp picks
+up the new part only at its next stop and start; a sleep and a wake does not clear it.
+
+`imp info` counts both kinds on its `boot status` line, over running and sleeping imps, for example
+`3 will boot cold; outdated: 2 agent`. A sleeping imp counts as a cold boot when its snapshot cannot
+load or is gone. A running imp counts when it runs an older Firecracker or an older impd booted it:
+its next sleep writes a snapshot the host cannot load. `imp info --json` has the same numbers under
+`bootStatus`.
 
 `imp ls` says what an upgrade means for each imp in its NOTE column:
 
@@ -86,6 +95,18 @@ measured use, the committed memory of awake imps, and the imp counts.
 
 To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` releases it.
 
+## Backups
+
+With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository on a schedule
+([backups](../architecture/backups.md), [settings](./configuration.md#backups)).
+
+- `imp backup ls` shows the restore points and the last prune and check.
+- `impd: backup: CHECK FAILED` in the log, or `FAILED` in `imp backup ls`, means the repository may
+  be damaged: run `imp backup check --subset 100%`, then repair it with `restic repair`
+  ([restic docs](https://restic.readthedocs.io/en/stable/077_troubleshooting.html)) from a machine
+  with the password.
+- `imp backup restore <name> --as <new>` restores next to the original; restored imps are stopped.
+
 ## Logs
 
 - `scripts/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
@@ -98,8 +119,9 @@ To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` re
 
 `scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each:
 lifecycle, Docker, bring-your-own images, checkpoints and forks, sleep and wake (with the WebSocket
-relay), the scale test, restart survival and Tailscale. [STATUS.md](../../STATUS.md) has the latest
-results. The [development guide](./development.md) lists the other checks.
+relay), the scale test, restart survival, Tailscale and the backup restore drill.
+[STATUS.md](../../STATUS.md) has the latest results. The [development guide](./development.md) lists
+the other checks.
 
 ## Troubleshooting
 

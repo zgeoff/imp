@@ -22,6 +22,9 @@ export const instance = {
   apiUrl: process.env['IMP_URL'] ?? `http://localhost:${String(7070 + offset)}`,
   proxyPort: 7080 + offset,
   impPortBase: 20_000 + offset,
+
+  // the SSH gateway, published on localhost by scripts/dev.sh
+  sshPort: 2222 + offset,
 } as const;
 
 const HealthSchema = z.object({ ready: z.boolean() });
@@ -91,6 +94,21 @@ export async function readToken(): Promise<string> {
 
 export function runInContainer(argv: readonly string[]): Promise<CommandResult> {
   return runCommand(['docker', 'exec', instance.container, ...argv]);
+}
+
+// This machine as the container sees it. Guests reach it through FORWARD
+// and MASQUERADE: #26's egress policies must keep that route open, or the
+// ssh-agent suite cannot reach its git server.
+export async function readContainerGateway(): Promise<string> {
+  const route = await runInContainer(['ip', '-4', 'route', 'show', 'default']);
+
+  const gateway = /via (?<ip>[\d.]+)/.exec(route.stdout)?.groups?.['ip'];
+
+  if (gateway === undefined) {
+    throw new Error(`no default route in ${instance.container}: ${route.stdout}`);
+  }
+
+  return gateway;
 }
 
 export async function readImpdLogTail(lines: number): Promise<string> {

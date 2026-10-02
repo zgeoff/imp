@@ -3,11 +3,14 @@ import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { Button } from '../components/button';
 import { ErrorText } from '../components/error-text';
 import { sendLogout } from '../lib/session';
+import { useImpdEvents } from '../lib/use-impd-events';
 import styles from './app-layout.module.css';
 
 export function AppLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  useImpdEvents();
 
   // the next person at this browser must not see the last one's imps
   const logout = useMutation({

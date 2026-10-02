@@ -7,6 +7,7 @@ set -euo pipefail
 # if this kernel cannot do nf_tables.
 if ! iptables -t nat -S >/dev/null 2>&1; then
   update-alternatives --set iptables /usr/sbin/iptables-legacy >/dev/null
+  update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy >/dev/null
   echo "setup-net: using iptables-legacy"
 fi
 
@@ -37,6 +38,13 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 # connections (impd's proxy dials into guests).
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
+# The taps get IPv6 link-local addresses, which the rules above do not cover.
+# Guests get no IPv6 to the host at all.
+if ip6tables -S INPUT >/dev/null 2>&1; then
+  ip6tables -C INPUT -i imp+ -j DROP 2>/dev/null || ip6tables -A INPUT -i imp+ -j DROP
+else
+  echo "setup-net: no ip6tables; guest IPv6 to the host is not filtered" >&2
+fi
 
 # A guest may not send from another imp's address: the credential broker
 # names the imp by it. A strict reverse-path check on the taps only, not a

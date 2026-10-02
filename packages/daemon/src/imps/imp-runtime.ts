@@ -1,18 +1,23 @@
-import { buildAgentOutdatedError, hasSessions } from '../agent-client/agent-outdated';
+import { openAgentAccept, openAgentListener } from '../agent-client/agent-forward-stream';
+import type { AgentListener } from '../agent-client/agent-forward-stream';
+import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
+import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentActivity } from '../agent-client/agent-requests';
+import { openDialStream } from '../agent-client/dial-stream';
+import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
-import { findImpByName, listImps, updateImpActivity } from '../db/imps';
+import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
-import type { ActivityTracker } from './activity-tracker';
+import type { ActivityTracker, ConnectionKind } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
-import type { ImpVmOps } from './imp-vm-ops';
+import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import type { ShutdownGate } from './shutdown-gate';
@@ -22,11 +27,33 @@ import type { ShutdownGate } from './shutdown-gate';
 // connections that keep them awake.
 export interface ImpRuntime {
   // the imp must be running; exec runs outside the lifecycle lock, so a
-  // long console session never blocks stop or destroy
-  readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
+  // long console session never blocks stop or destroy. `feature` fails the
+  // exec with AGENT_OUTDATED when the imp's agent is older than it.
+  readonly openExec: (
+    name: string,
+    request: AgentExecRequest,
+    feature?: AgentFeature,
+  ) => Promise<ExecStream>;
 
   // as openExec, for a session that exists
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
+
+  // as openExec, for a connection to an address inside the guest; `kind` is
+  // what it counts as while open: an SSH forward or an `imp proxy` tunnel
+  readonly openDial: (
+    name: string,
+    target: DialTarget,
+    kind: Extract<ConnectionKind, 'ssh' | 'tunnel'>,
+  ) => Promise<DialStream>;
+
+  // as openExec, for ssh-agent forwarding: a socket in the guest, and the
+  // relay for each of its clients
+  readonly openAgentListener: (name: string) => Promise<AgentListener>;
+  readonly openAgentAccept: (
+    name: string,
+    listener: string,
+    connection: number,
+  ) => Promise<DialStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
   // for the idle loop: the agent's activity, its sessions recorded on the
@@ -98,15 +125,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // A sleeping imp wakes and a stopped one boots, as for an HTTP request.
   // The stream counts from the moment the imp is found, before any wake, so
   // no background sleep slips in between the wake and the open.
-  const openStream = async (
+  const openStream = async <T extends { readonly close: () => void }>(
     name: string,
-    open: (paths: ImpPaths, imp: ImpRecord) => Promise<ExecStream>,
-  ): Promise<ExecStream> => {
+    kind: ConnectionKind,
+    open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
+  ): Promise<T> => {
     const opened = { release: () => {} };
 
     try {
       const running = await requireRunning(name, (found) => {
-        opened.release = context.tracker.open(found.id, 'exec');
+        opened.release = context.tracker.open(found.id, kind);
       });
 
       const imp = running.imp;
@@ -140,19 +168,37 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     return policy.by === 'governor' || imp.lastActiveAt.getTime() <= policy.seenActiveAt;
   };
 
+  // The governor sleeps at once: it holds admission, and the boot waiting on
+  // it matters more than a slow wake later. Other sleeps wait for a young
+  // guest, and give way if the imp turns busy or is held meanwhile.
+  const buildYoungGuestWait = (id: string, policy: SleepPolicy): YoungGuestWait => {
+    if (policy.by === 'governor') {
+      return { wait: false };
+    }
+
+    const isWanted = async (): Promise<boolean> => {
+      const fresh = await findImpById(context.db, id);
+
+      return fresh !== undefined && isSleepAllowed(fresh, policy);
+    };
+
+    return { wait: true, isWanted };
+  };
+
   // the caller holds the lock; a failure leaves the imp as sleepImpVm left it
   const sleepIfRunning = async (
     imp: LockedImp | undefined,
     reason: string,
+    youngGuest?: YoungGuestWait,
   ): Promise<SleepOutcome> => {
     if (imp?.state !== 'running') {
       return 'skipped';
     }
 
     try {
-      await ops.sleepImpVm(imp, reason);
+      const after = await ops.sleepImpVm(imp, reason, youngGuest);
 
-      return 'slept';
+      return after.state === 'sleeping' ? 'slept' : 'skipped';
     } catch (error) {
       context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
@@ -161,17 +207,15 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   };
 
   return {
-    openExec: (name, request) =>
-      openStream(name, async (paths, imp) => {
-        // fail before an old agent runs the command as a plain exec
-        const agentVersion = readVmIdentity(paths)?.agentVersion;
+    openExec: (name, request, feature) =>
+      openStream(name, 'exec', async (paths, imp) => {
+        // an old agent would run a session's command as a plain exec
+        if (request.session !== undefined) {
+          requireFeature(paths, 'sessions');
+        }
 
-        if (
-          request.session !== undefined &&
-          agentVersion !== undefined &&
-          !hasSessions(agentVersion)
-        ) {
-          throw buildAgentOutdatedError();
+        if (feature !== undefined) {
+          requireFeature(paths, feature);
         }
 
         const base = await context.readExecEnv(imp, paths.vsockSocket);
@@ -184,7 +228,21 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
         });
       }),
     openAttach: (name, request) =>
-      openStream(name, (paths) => openAttachStream(paths.vsockSocket, request)),
+      openStream(name, 'exec', (paths) => openAttachStream(paths.vsockSocket, request)),
+    openDial: (name, target, kind) =>
+      openStream(name, kind, (paths) => {
+        requireFeature(paths, 'ssh');
+
+        return openDialStream(paths.vsockSocket, target);
+      }),
+    openAgentListener: (name) =>
+      openStream(name, 'ssh', (paths) => {
+        requireFeature(paths, 'agent-forwarding');
+
+        return openAgentListener(paths.vsockSocket);
+      }),
+    openAgentAccept: (name, listener, connection) =>
+      openStream(name, 'ssh', (paths) => openAgentAccept(paths.vsockSocket, listener, connection)),
 
     readActivity: async (imp) => {
       try {
@@ -212,7 +270,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       lock.tryWithImpId,
       (imp, reason, policy) =>
         imp !== undefined && isSleepAllowed(imp, policy)
-          ? sleepIfRunning(imp, reason)
+          ? sleepIfRunning(imp, reason, buildYoungGuestWait(imp.id, policy))
           : Promise.resolve<SleepOutcome>('skipped'),
     ),
 
@@ -254,6 +312,9 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
                 `impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`,
               );
 
+              // the record does not change; the event stream still hears of it
+              await ops.updateState(imp, { reason: 'adopted', state: 'running' });
+
               return;
             }
 
@@ -272,12 +333,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               // keeps its pid, so a start or destroy kills it again
               context.log(`impd: ${imp.name}: could not stop: ${readErrorMessage(stopError)}`);
 
-              await ops.updateState(imp, { state: 'error', error });
+              await ops.updateState(imp, { reason: 'failed', state: 'error', error });
 
               return;
             }
 
-            await ops.updateState(imp, { state: 'error', pid: null, error });
+            await ops.updateState(imp, { reason: 'failed', state: 'error', pid: null, error });
           }),
         ),
       );
@@ -287,4 +348,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     isImpBusy: (id) => lock.isLocked(id),
     tracker: context.tracker,
   };
+}
+
+// fails before an old agent gets a request it cannot serve; an imp booted
+// before impd recorded agent versions has none, and its answer decides
+function requireFeature(paths: ImpPaths, feature: AgentFeature): void {
+  const agentVersion = readVmIdentity(paths)?.agentVersion;
+
+  if (agentVersion !== undefined && !hasFeature(agentVersion, feature)) {
+    throw buildAgentOutdatedError(feature);
+  }
 }

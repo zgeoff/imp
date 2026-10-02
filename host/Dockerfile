@@ -22,12 +22,16 @@ ARG FIRECRACKER_VERSION=v1.17.0
 # sha256 of firecracker-${FIRECRACKER_VERSION}-x86_64.tgz, as in the release's .sha256.txt
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
+# off-host backups (docs/architecture/backups.md); sha256 of
+# restic_${RESTIC_VERSION}_linux_amd64.bz2, as in the release's SHA256SUMS
+ARG RESTIC_VERSION=0.19.1
+ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
       xfsprogs e2fsprogs squashfs-tools \
-      iproute2 iptables procps util-linux kmod jq \
+      iproute2 iptables procps util-linux kmod jq bzip2 \
  && rm -rf /var/lib/apt/lists/*
 
 # The zfs userland, 2.4 from trixie-backports (contrib), to match the module
@@ -61,6 +65,12 @@ RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/f
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker \
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/jailer \
  && rm -rf /tmp/release-* /tmp/firecracker.tgz
+
+RUN curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
+ && echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c - \
+ && bunzip2 -c /tmp/restic.bz2 >/usr/local/bin/restic \
+ && chmod 0755 /usr/local/bin/restic \
+ && rm /tmp/restic.bz2
 
 COPY host/scripts/ /usr/local/lib/imp/
 # tailscale-up.sh starts tailscaled from saved node state with no key, so
@@ -168,6 +178,8 @@ COPY --from=agent /out/imp-system.squashfs /
 FROM bun AS compile
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml ./
+# patchedDependencies: bun install applies these
+COPY patches/ patches/
 COPY packages/ packages/
 # --ignore-scripts: the root prepare script installs git hooks. No
 # --production: the CLI builds @zgeoff/imp-client from source, and the client
@@ -178,7 +190,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 # No --target: the image's own bun (linux x64, glibc) becomes the runtime,
 # which matches the debian runtime stage and needs no download.
-RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
+# --external cpu-features: ssh2 loads this optional native module in a
+# try/catch, and --ignore-scripts leaves its .node file unbuilt.
+RUN bun build --compile --external cpu-features packages/daemon/src/main.ts --outfile /out/impd \
  && bun build --compile packages/cli/src/main.ts --outfile /out/imp
 
 # --- dashboard: the web dashboard's static files. Its own stage: the build
@@ -186,6 +200,7 @@ RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
 FROM bun AS dashboard
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
+COPY patches/ patches/
 COPY packages/ packages/
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile --ignore-scripts

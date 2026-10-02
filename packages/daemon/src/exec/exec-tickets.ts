@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import type { ApiActor } from '@imp/api';
 
 // Single-use `/exec` tickets: a browser WebSocket cannot send the bearer
 // header, and the token must never land in a URL (docs/architecture/daemon.md).
@@ -14,17 +15,23 @@ interface IssuedTicket {
   readonly expiresAt: Date;
 }
 
-export interface ExecTickets {
-  readonly issue: (name: string) => IssuedTicket;
+// the imp a ticket opens, and who asked for it, for the audit log
+interface TicketHolder {
+  readonly name: string;
+  readonly actor: ApiActor;
+}
 
-  // the imp name the ticket was issued for, or null when it is unknown,
-  // expired or used; a ticket redeems once
-  readonly redeem: (ticket: string) => string | null;
+export interface ExecTickets {
+  readonly issue: (name: string, actor: ApiActor) => IssuedTicket;
+
+  // what the ticket was issued for, or null when it is unknown, expired or
+  // used; a ticket redeems once
+  readonly redeem: (ticket: string) => TicketHolder | null;
 }
 
 interface LiveTicket {
   readonly secret: Buffer;
-  readonly name: string;
+  readonly holder: TicketHolder;
   readonly expiresAt: number;
 }
 
@@ -42,7 +49,7 @@ export function createExecTickets(now: () => number): ExecTickets {
   };
 
   return {
-    issue: (name) => {
+    issue: (name, actor) => {
       const at = now();
 
       removeExpired(at);
@@ -62,7 +69,7 @@ export function createExecTickets(now: () => number): ExecTickets {
       const secret = randomBytes(32);
       const expiresAt = at + TICKET_TTL_MS;
 
-      live.set(id, { secret, name, expiresAt });
+      live.set(id, { secret, holder: { name, actor }, expiresAt });
 
       return { ticket: `${id}.${secret.toString('base64url')}`, expiresAt: new Date(expiresAt) };
     },
@@ -89,7 +96,7 @@ export function createExecTickets(now: () => number): ExecTickets {
 
       live.delete(id);
 
-      return entry.name;
+      return entry.holder;
     },
   };
 }

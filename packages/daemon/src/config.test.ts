@@ -9,6 +9,7 @@ test('it fills every setting from its default when the env is empty', () => {
     apiPort: 7070,
     proxyPort: 7080,
     portBase: 20_000,
+    sshPort: 22,
     brokerPort: 7081,
     brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
@@ -16,8 +17,11 @@ test('it fills every setting from its default when the env is empty', () => {
     idleCpuPercent: 10,
     bootReservePercent: 50,
     wakeReserveMib: 256,
+    sleepMinGuestUptimeMs: 1500,
     defaultVcpus: 2,
     defaultMemoryMib: 2048,
+    defaultDiskBytes: 32 * 1024 ** 3,
+    diskReserveBytes: null,
     dns: ['1.1.1.1', '8.8.8.8'],
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },
     firecrackerBin: 'firecracker',
@@ -30,6 +34,7 @@ test('it fills every setting from its default when the env is empty', () => {
     tailscaleEnabled: false,
     tailscaleHostname: 'imp',
     dashboardDir: null,
+    backup: null,
     https: null,
   });
 });
@@ -41,6 +46,7 @@ test('it reads and coerces values from the env', () => {
     IMP_DNS: '9.9.9.9 , 1.0.0.1',
     IMP_SUBNET: '10.99.0.0/24',
     IMP_KERNEL: '/src/kernel/out/vmlinux',
+    IMP_SLEEP_MIN_GUEST_UPTIME_MS: '0',
     TAILSCALE_AUTHKEY: 'tskey-auth-test',
   });
 
@@ -51,6 +57,7 @@ test('it reads and coerces values from the env', () => {
   expect(config.kernelPath).toBe('/tmp/imp/system/vmlinux');
   expect(config.kernelSource).toBe('/src/kernel/out/vmlinux');
   expect(config.tailscaleEnabled).toBeTrue();
+  expect(config.sleepMinGuestUptimeMs).toBe(0);
 });
 
 test('a node started from saved state counts as the tailnet, with no key', () => {
@@ -69,6 +76,12 @@ test('it rejects invalid values', () => {
   expect(() => loadConfig({ IMP_API_PORT: 'http' })).toThrow();
   expect(() => loadConfig({ IMP_DNS: 'one.one.one.one' })).toThrow();
   expect(() => loadConfig({ IMP_SUBNET: '10.66.0.0' })).toThrow();
+});
+
+test('IMP_SSH_PORT=0 turns the SSH gateway off', () => {
+  expect(loadConfig({ IMP_SSH_PORT: '2222' }).sshPort).toBe(2222);
+  expect(loadConfig({ IMP_SSH_PORT: '0' }).sshPort).toBeNull();
+  expect(() => loadConfig({ IMP_SSH_PORT: '-1' })).toThrow();
 });
 
 test('it needs the root dataset with the zfs backend', () => {

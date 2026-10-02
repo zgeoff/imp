@@ -17,7 +17,8 @@
 #
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
-#      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites;
+#      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites (CI adds
+#      lifecycle and backups);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
 set -euo pipefail
@@ -79,7 +80,7 @@ report() {
   grep -oE 'mem file [0-9]+ MiB on disk' "$work/impd.log" | sort | uniq -c || true
   echo
   echo "zfs-host-test: the suites' own metrics, CLI round trip included"
-  grep -E '^ +(newPlusExecMs|checkpointMs|restoreMs|forkCheckpointMs|forkLiveMs|idleToSleepMs|wakeOnHttpMs): ' \
+  grep -E '^ +(newPlusExecMs|checkpointMs|restoreMs|forkCheckpointMs|forkLiveMs|idleToSleepMs|wakeOnHttpMs|backup[A-Za-z]+): ' \
     "$work/e2e.log" || true
   echo
   sudo zfs list -r -o name,used,refer,compressratio,recordsize "$pool"

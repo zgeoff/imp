@@ -25,25 +25,32 @@ harness against a real instance when a change touches the lifecycle, the agent o
 `test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
 way a user would; the dashboard suite drives it through a browser. The suites run in this order:
 
-| Suite         | What it proves                                                                       |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm     |
-| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot    |
-| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                      |
-| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                   |
-| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay        |
-| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused |
-| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
-| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
-| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
-| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory   |
-| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                   |
-| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy       |
-| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake      |
+| Suite         | What it proves                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                             |
+| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                            |
+| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                              |
+| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                                                           |
+| `disks`       | a disk past its image, grown while running, asleep and stopped; fsck after                                                   |
+| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
+| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
+| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
+| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                                                                |
+| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                               |
+| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                           |
+| `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
+| `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                            |
+| `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp              |
+| `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap |
+| `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                 |
+| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                           |
+| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
+| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
+| `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp, dashboard
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -57,10 +64,11 @@ scripts/test-e2e.sh --clean                  # wipe the dev instance's data firs
 
 The `acceptance` set is the definition of done: the tailscale suite fails without a
 `TAILSCALE_AUTHKEY`, and the timing limits fail the run. Any other set skips tailscale without a key
-and only warns about a missed limit. The https suite starts Pebble before the dev instance and needs
-no domain ([HTTPS](./https.md#testing-with-pebble)). The `fast` set takes about 3.5 minutes, most of
-it idle timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its
-defaults the scale suite alone took about 75 seconds in the last acceptance run.
+and only warns about a missed limit. The harness starts Pebble for the https suite, which needs no
+domain and reboots the instance with HTTPS on, then off again
+([HTTPS](./https.md#testing-with-pebble)). The `fast` set takes about 3.5 minutes, most of it idle
+timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its defaults
+the scale suite alone took about 75 seconds in the last acceptance run.
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev.sh`. These variables tune a run:
@@ -96,6 +104,22 @@ A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the t
 measure. A suite file also runs on its own against a running instance:
 `bun test ./test/e2e/suites/sleep.e2e.ts`.
 
+### Wake bench
+
+`scripts/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an imp
+put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
+([young guests](../architecture/sleep-and-wake.md#young-guests)). It drives impd through the CLI
+only, so it runs against any host, and it fails when the median wake passes `--limit-ms` (default
+500):
+
+```sh
+scripts/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login
+```
+
+On the WSL2 dev box (host kernel 6.6.87), the median wake was 793 ms with impd's wait off
+(`IMP_SLEEP_MIN_GUEST_UPTIME_MS=0`) and 142 ms with the default. On a host kernel with the fix, both
+should be fast; record the host's `uname -r` with the result.
+
 ## Daemon tests
 
 The daemon's tests need no VM. `packages/daemon/src/imps/test-imps.ts` runs the governed imp service
@@ -127,16 +151,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                                      |
-| ------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                                   |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                    |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                             |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                         |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                        |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                               |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints and sleep suites. |
+| Job          | Required | What it runs                                                                                                                             |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                          |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build.        |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                           |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                    |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                               |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                      |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks and sleep suites. |
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
 signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads
@@ -168,8 +192,8 @@ seconds with the reason. The job then:
    key in CI, and a missed timing limit only warns.
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
-the lifecycle, checkpoints and sleep suites on a pool in a sparse file. The job summary shows the
-ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
+the lifecycle, checkpoints, disks and sleep suites on a pool in a sparse file. The job summary shows
+the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
 `results.json`, `metrics.jsonl`, `impd.log` (the dev container's whole log) and the dashboard

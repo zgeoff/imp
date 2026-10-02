@@ -314,11 +314,13 @@ EnvironmentFile=/etc/imp/imp-host.env
 ExecStartPre=-/usr/bin/docker rm -f imp-host
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
-ExecStart=/usr/bin/docker run --rm --name imp-host \
+# --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm \
   --env-file /etc/imp/imp-host.env \
   -v /var/lib/imp:/var/lib/imp \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   ${IMP_HOST_IMAGE}
 # SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
@@ -373,6 +375,14 @@ IMP_DEFAULT_MEMORY_MIB=2048
 # be OpenZFS 2.x; impd warns when its minor version differs from the image's.
 IMP_STORAGE_BACKEND=xfs
 IMP_ZFS_ROOT=
+
+# Off-host backups with restic (docs/architecture/backups.md): unset
+# IMP_BACKUP_REPOSITORY means none. The container sees /etc/imp read-only;
+# keep the password there, mode 0600, and a copy off the host.
+IMP_BACKUP_REPOSITORY=
+IMP_BACKUP_PASSWORD_FILE=/etc/imp/restic-password
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
 
 # Set when the uplink MTU is below 1500, so guest TCP is clamped to match.
 IMP_UPLINK_MTU=
