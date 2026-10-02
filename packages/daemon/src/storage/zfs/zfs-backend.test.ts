@@ -1398,6 +1398,107 @@ test('a failed receive leaves nothing in staging and no disk', async () => {
   expect(left).toEqual([]);
 });
 
+test('a first stream that fails after its end record went in leaves nothing in staging', async () => {
+  await using ctx = await setupStarted();
+  await using target = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  const source = await ctx.backend.openMoveSource('a', ['cp-one'], 'zfs');
+
+  const steps = source.kind === 'zfs' ? source.steps : [];
+
+  // the whole stream, so `zfs recv` commits it, then an error
+  const readWholeThenFail = (index: number): ReadableStream<Uint8Array> => {
+    const reader = (steps[index]?.open().stdout ?? new ReadableStream()).getReader();
+
+    return new ReadableStream({
+      pull: async (controller) => {
+        const next = await reader.read();
+
+        if (next.done) {
+          controller.error(new Error('the sum does not match'));
+        } else {
+          controller.enqueue(next.value);
+        }
+      },
+    });
+  };
+
+  const receiveSteps = steps.map((step) => ({
+    isCheckpoint: step.checkpointId !== null,
+    dataset: step.dataset,
+    base: step.base,
+  }));
+
+  const failure = await readFailure(
+    target.backend.receiveMoveSnapshots('a', receiveSteps, readWholeThenFail, () => 'cp-new'),
+  );
+
+  const left = target.fake.listDatasets().filter((name) => name.includes('/staging/'));
+
+  // a retry finds no dataset in its way
+  const retried = await target.backend.receiveMoveSnapshots(
+    'a',
+    receiveSteps,
+    (index) => steps[index]?.open().stdout ?? new ReadableStream(),
+    () => 'cp-new',
+  );
+
+  await source.close();
+
+  expect(String(failure)).toContain('the sum does not match');
+  expect(left).toEqual([]);
+  expect(retried.map((checkpoint) => checkpoint.id)).toEqual(['cp-new']);
+});
+
+test('a failed receive destroys each clone before its origin, whatever the plan numbers them', async () => {
+  await using target = await setupStarted();
+
+  // dataset 1 comes first and dataset 0 is its clone, as a peer may number them
+  const streams = [
+    { guid: 'g-one', baseGuid: null },
+    { guid: 'g-two', baseGuid: 'g-one' },
+  ];
+
+  const failure = await readFailure(
+    target.backend.receiveMoveSnapshots(
+      'a',
+      [
+        { isCheckpoint: true, dataset: 1, base: null },
+        { isCheckpoint: false, dataset: 0, base: 0 },
+      ],
+      (index) => {
+        const whole = new TextEncoder().encode(JSON.stringify(streams[index]));
+
+        const sent = { isWhole: false };
+
+        // the whole stream, so `zfs recv` commits it, then an error
+        return new ReadableStream({
+          pull: (controller) => {
+            if (!sent.isWhole) {
+              sent.isWhole = true;
+
+              controller.enqueue(whole);
+            } else if (index === 1) {
+              controller.error(new Error('the sum does not match'));
+            } else {
+              controller.close();
+            }
+          },
+        });
+      },
+      () => 'cp-new',
+    ),
+  );
+
+  const left = target.fake.listDatasets().filter((name) => name.includes('/staging/'));
+
+  expect(String(failure)).toContain('the sum does not match');
+  expect(left).toEqual([]);
+});
+
 test('a peer plan that does not follow on is refused before any receive', async () => {
   await using target = await setupStarted();
 

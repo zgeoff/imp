@@ -110,9 +110,6 @@ export type MoveMode = 'files' | 'zfs';
 
 // One snapshot of a ZFS move, in the order the streams go
 export interface SendStep {
-  // the snapshot's own name, after the `@`
-  readonly snapshot: string;
-
   // null for the disk's own snapshot, which goes last
   readonly checkpointId: string | null;
 

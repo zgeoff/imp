@@ -197,7 +197,7 @@ async function* encodeStream(
 
     yield* part.kind === 'file'
       ? encodeFile(part.path, part.file, count, onSum)
-      : encodeCommand(part.open(), part.file, count, onSum);
+      : encodeCommand(part.open, part.file, count, onSum);
   }
 
   yield encodeJsonFrame(MOVE_FRAMES.end, {});
@@ -289,6 +289,16 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return { parts, streams, estimateBytes, close: source.close };
   };
 
+  // A close that fails leaves the move snapshot to the GC: logged, so it
+  // never hides the error the send itself ended with
+  const removeParts = async (opened: OpenedParts): Promise<void> => {
+    try {
+      await opened.close();
+    } catch (error) {
+      deps.log(`impd: move: closing the source's parts failed: ${readErrorMessage(error)}`);
+    }
+  };
+
   // the bytes a send carries: the files' data, and the streams' estimate
   // with room to spare
   const countBytes = async (imp: ImpRecord, mode: MoveMode): Promise<number> => {
@@ -309,7 +319,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
       return bytes;
     } finally {
-      await opened.close();
+      await removeParts(opened);
     }
   };
 
@@ -462,7 +472,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         deps.partBytes,
       );
     } finally {
-      await opened.close();
+      await removeParts(opened);
     }
 
     const response = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {

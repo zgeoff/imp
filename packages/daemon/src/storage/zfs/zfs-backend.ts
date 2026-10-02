@@ -720,7 +720,6 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       lastOn.set(dataset, steps.length);
 
       steps.push({
-        snapshot: readSnapshotId(snapshot),
         checkpointId: wanted.get(snapshot) ?? null,
         dataset: datasetOf.get(dataset) ?? 0,
         base,
@@ -738,19 +737,22 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     picked: readonly string[],
     buildId: () => string,
   ): string => {
-    for (let attempt = 0; attempt < ID_ATTEMPTS; attempt += 1) {
-      const id = buildId();
+    const tried = { id: '' };
 
-      if (listCheckpointSnapshots(entries, id).length === 0 && !picked.includes(id)) {
-        return id;
+    for (let attempt = 0; attempt < ID_ATTEMPTS; attempt += 1) {
+      tried.id = buildId();
+
+      if (listCheckpointSnapshots(entries, tried.id).length === 0 && !picked.includes(tried.id)) {
+        return tried.id;
       }
     }
 
-    throw new CheckpointIdTakenError(buildId());
+    throw new CheckpointIdTakenError(tried.id);
   };
 
-  // Each stream into a dataset in staging, then the disk's into place and
-  // the others retired, as a restore leaves them; a failure leaves nothing
+  // Each stream into staging, then the disk's into place and the others
+  // retired, as a restore leaves them. What a failure leaves:
+  // docs/architecture/moves.md#zfs-to-zfs
   const writeReceived = async (
     impId: string,
     steps: readonly ReceiveStep[],
@@ -773,8 +775,6 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       names.push(name);
     }
 
-    const received: string[] = [];
-
     try {
       for (const [index, step] of steps.entries()) {
         const dataset = buildStaged(step.dataset);
@@ -789,23 +789,23 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
           buildReceiveArgv(`${dataset}@${names[index] ?? ''}`, origin),
           readStep(index),
         );
-
-        if (!received.includes(dataset)) {
-          received.push(dataset);
-        }
       }
 
       return await runSerial(() => setupReceived(impId, steps, names, buildStaged));
     } catch (error) {
+      // by listing, so a stream that failed after `zfs recv` committed it
+      // goes too; newest first by createtxg, so each clone before its origin
       await runSerial(async () => {
+        const prefix = buildStaged(0).slice(0, -1);
+
         const listed = await listAll();
 
-        const left = new Set(listed.map((entry) => entry.name));
+        const left = listed.filter(
+          (entry) => entry.type !== 'snapshot' && entry.name.startsWith(prefix),
+        );
 
-        for (const dataset of received.toReversed()) {
-          if (left.has(dataset)) {
-            await zfs.destroyRecursive(dataset);
-          }
+        for (const dataset of left.toReversed()) {
+          await zfs.destroyRecursive(dataset.name);
         }
       });
 

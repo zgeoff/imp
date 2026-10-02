@@ -533,8 +533,13 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     };
 
     try {
-      // twice the data: each file sits in the temp file, then on the disk
-      await deps.diskBudget.withRoom(2 * row.bytes, async () => {
+      // files take twice the data: each sits in the temp file, then on the
+      // disk; streams go straight into `zfs recv`, and only the image's files
+      // pass through a temp file
+      const imageBytes = header.image.isIncluded ? header.image.sizeBytes : 0;
+      const room = header.streams === null ? 2 * row.bytes : row.bytes + imageBytes;
+
+      await deps.diskBudget.withRoom(room, async () => {
         const image = await requireImage(reader, header, count, temp);
 
         files.push(...image.files);
@@ -984,7 +989,8 @@ function resolvePolicy(header: MoveHeader, log: (message: string) => void): Egre
   return { mode: 'none', allow: [] };
 }
 
-// the header's streams: each checkpoint once, then the disk's last
+// the header's streams name each checkpoint once; the storage checks their
+// order, the disk's last
 function checkStreams(header: MoveHeader): NonNullable<MoveHeader['streams']> {
   const streams = header.streams ?? [];
 
@@ -992,11 +998,13 @@ function checkStreams(header: MoveHeader): NonNullable<MoveHeader['streams']> {
     stream.checkpoint === null ? [] : [stream.checkpoint],
   );
 
-  const isEach = named.length === header.checkpoints.length && new Set(named).size === named.length;
-  const isDiskLast = streams.at(-1)?.checkpoint === null && named.length === streams.length - 1;
+  const isEach =
+    named.length === header.checkpoints.length &&
+    new Set(named).size === named.length &&
+    named.every((checkpoint) => checkpoint < header.checkpoints.length);
 
-  if (!isEach || !isDiskLast) {
-    throw new MoveRequestError(400, 'the streams do not cover each checkpoint, then the disk');
+  if (!isEach) {
+    throw new MoveRequestError(400, 'the streams do not name each checkpoint once');
   }
 
   return streams;
@@ -1008,8 +1016,8 @@ interface StreamFile {
 }
 
 // One stream of the move as bytes: FILE, DATA at running offsets, FILE_END.
-// A sum that does not match fails the stream before its end, so `zfs recv`
-// never takes it as whole.
+// `zfs recv` commits at the stream's end record, not at EOF, so the last
+// DATA frame waits until FILE_END's sum matches.
 function readStreamFile(
   reader: FrameReader,
   index: number,
@@ -1017,7 +1025,12 @@ function readStreamFile(
   onEnd: (file: StreamFile) => void,
 ): ReadableStream<Uint8Array> {
   const hash = createDataHash();
-  const state = { isStarted: false, offset: 0 };
+
+  const state: { isStarted: boolean; offset: number; held: Uint8Array | null } = {
+    isStarted: false,
+    offset: 0,
+    held: null,
+  };
 
   const requireStart = async () => {
     const start = await reader.readFrame();
@@ -1034,44 +1047,70 @@ function readStreamFile(
     state.isStarted = true;
   };
 
+  // the next DATA frame's bytes, or null once FILE_END's sum holds
+  const readNext = async (): Promise<Uint8Array | null> => {
+    const frame = await reader.readFrame();
+
+    if (frame?.type === MOVE_FRAMES.fileEnd) {
+      const sha256 = FileEndSchema.parse(readJsonPayload(frame.payload)).sha256;
+
+      if (!isSameHash(sha256, hash.digest('hex'))) {
+        throw new MoveRequestError(400, `ZFS stream ${String(index)}: the sha256 does not match`);
+      }
+
+      onEnd({ sha256, bytes: state.offset });
+
+      return null;
+    }
+
+    if (frame?.type !== MOVE_FRAMES.data) {
+      throw new MoveRequestError(400, `ZFS stream ${String(index)} ended early`);
+    }
+
+    const data = readDataPayload(frame.payload);
+
+    if (data.offset !== state.offset) {
+      throw new MoveRequestError(400, `ZFS stream ${String(index)}: a DATA frame out of order`);
+    }
+
+    hash.update(frame.payload);
+
+    state.offset += data.data.length;
+
+    count.add(data.data.length);
+
+    return data.data;
+  };
+
   return new ReadableStream<Uint8Array>({
+    // a pull that enqueues nothing is not called again, so the first one
+    // reads on until it has a frame to pass
     pull: async (controller) => {
       if (!state.isStarted) {
         await requireStart();
       }
 
-      const frame = await reader.readFrame();
+      for (;;) {
+        const next = await readNext();
 
-      if (frame?.type === MOVE_FRAMES.fileEnd) {
-        const sha256 = FileEndSchema.parse(readJsonPayload(frame.payload)).sha256;
+        const held = state.held;
 
-        if (!isSameHash(sha256, hash.digest('hex'))) {
-          throw new MoveRequestError(400, `ZFS stream ${String(index)}: the sha256 does not match`);
+        state.held = next;
+
+        if (held !== null) {
+          controller.enqueue(held);
         }
 
-        onEnd({ sha256, bytes: state.offset });
+        if (next === null) {
+          controller.close();
 
-        controller.close();
+          return;
+        }
 
-        return;
+        if (held !== null) {
+          return;
+        }
       }
-
-      if (frame?.type !== MOVE_FRAMES.data) {
-        throw new MoveRequestError(400, `ZFS stream ${String(index)} ended early`);
-      }
-
-      const data = readDataPayload(frame.payload);
-
-      if (data.offset !== state.offset) {
-        throw new MoveRequestError(400, `ZFS stream ${String(index)}: a DATA frame out of order`);
-      }
-
-      hash.update(frame.payload);
-
-      state.offset += data.data.length;
-
-      count.add(data.data.length);
-      controller.enqueue(data.data);
     },
   });
 }

@@ -17,14 +17,14 @@ The cold move is what ships: a stopped imp moves, and boots cold on the target. 
 
 ## The steps
 
-| Step | Call                                                | Host   | What it does                                                                |
-| ---- | --------------------------------------------------- | ------ | --------------------------------------------------------------------------- |
-| 1    | `moves.prepare {name, stop?}`                       | source | Stops the imp when asked, marks it `sending`, counts its data bytes.        |
-| 2    | `moves.receive {name, bytes}`                       | target | Checks the name and room for twice the bytes, then issues a ticket.         |
-| 3    | `moves.send {name, to, ticket}`                     | source | Starts the send in the background; `moves.status` follows it.               |
-| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest.                                 |
-| 5    | `POST /move/receive`, one per part, then the finish | target | Reads the stream into a staged imp marked `receiving`; answers the receipt. |
-| 6    | `POST /move/commit`                                 | target | Takes the mark off. The source then destroys its copy.                      |
+| Step | Call                                                | Host   | What it does                                                                                                                                                                               |
+| ---- | --------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1    | `moves.prepare {name, stop?}`                       | source | Stops the imp when asked, marks it `sending`, counts its data bytes.                                                                                                                       |
+| 2    | `moves.receive {name, bytes}`                       | target | Checks the name and room for twice the bytes, then issues a ticket. The stream reserves twice the bytes for files, and the bytes plus the image for ZFS streams, which skip the temp file. |
+| 3    | `moves.send {name, to, ticket}`                     | source | Starts the send in the background; `moves.status` follows it.                                                                                                                              |
+| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest.                                                                                                                                                |
+| 5    | `POST /move/receive`, one per part, then the finish | target | Reads the stream into a staged imp marked `receiving`; answers the receipt.                                                                                                                |
+| 6    | `POST /move/commit`                                 | target | Takes the mark off. The source then destroys its copy.                                                                                                                                     |
 
 The CLI makes calls 1 to 3 with each host's saved token, so the two impds never share a token. The
 `moves.receive` and `moves.reissue` need `manage` on the whole host: a receive takes in an image and
@@ -93,13 +93,16 @@ target checks that the plan follows on, then runs `zfs recv -u` for each into
 `staging/mvin-<id>-<n>`, with `-o origin=` for a clone. It names each snapshot itself: a new
 checkpoint ID that no snapshot in its pool has. Once every stream is in, the dataset that holds
 `@mv` becomes `disks/<id>`, the others go to `retired/`, as a restore leaves them, and `@mv` goes. A
-failure destroys what staging holds.
+failure in staging destroys every `staging/mvin-<id>-*`, found by listing, clones first. A failure
+after the renames leaves the disk to the staged imp's removal and the retired datasets to the GC.
 
 The walk never leaves the imp's own snapshots. A forked disk's first stream is full, so no other
 imp's data goes along, and the disk shares no blocks with the target's image. The byte count is
 `zfs send -nP`'s estimate with 10 % and 64 MiB to spare, since it is an estimate. Each stream is one
-file of the frame stream, hashed as it is sent; a sum that does not match fails the stream before
-its end, so `zfs recv` never takes it as whole.
+file of the frame stream, hashed as it is sent. `zfs recv` commits when it reads the stream's end
+record, not when its input closes, so the target holds back each stream's last `DATA` frame until
+`FILE_END`'s sum matches: a stream whose sum does not match never reaches `zfs recv` whole. On the
+source, a send cut short stops `zfs send` and waits for it to exit before `@mv` goes.
 
 ## Tickets
 

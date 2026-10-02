@@ -693,6 +693,103 @@ test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', asy
   expect(left).toBeUndefined();
 });
 
+// the first FILE_END frame's sum, one hex digit changed: a frame is a type
+// byte, a 4-byte big-endian length, then the payload
+function writeWrongSum(body: Uint8Array): boolean {
+  const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+
+  for (let at = 0; at + 5 <= body.length; at += 5 + view.getUint32(at + 1)) {
+    if (body[at] === 4) {
+      const sumAt = at + 5 + '{"sha256":"'.length;
+
+      body[sumAt] = body[sumAt] === 0x30 ? 0x31 : 0x30;
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
+test('a ZFS stream whose sum does not match never commits, and the move can go again', async () => {
+  await using source = await setupZfsHost();
+  await using target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
+
+  const targetApp = buildTestApp(target.host, target.host);
+  const state = { isCorrupted: false };
+
+  const sourceApp = buildTestApp(source.host, source.host, undefined, {}, null, {
+    fetch: async (request) => {
+      if (state.isCorrupted || request.headers.get(MOVE_PART_HEADER) === null) {
+        return targetApp.moves.handle(request, SOURCE_PEER);
+      }
+
+      const read = await request.arrayBuffer();
+
+      const body = new Uint8Array(read);
+
+      state.isCorrupted = writeWrongSum(body);
+
+      const changed = new Request(request.url, {
+        method: 'POST',
+        headers: request.headers,
+        body,
+      });
+
+      return targetApp.moves.handle(changed, SOURCE_PEER);
+    },
+  });
+
+  await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const runMove = async (): Promise<MoveStatus> => {
+    const plan = await sourceApp.client.moves.prepare({
+      name: 'dev',
+      stop: true,
+      targetStorage: 'zfs',
+    });
+
+    const ticket = await targetApp.client.moves.receive({ name: 'dev', bytes: plan.bytes });
+
+    await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
+
+    for (let tries = 0; tries < 500; tries += 1) {
+      const status = await sourceApp.client.moves.status({ name: 'dev' });
+
+      if (status.isDone || status.error !== null) {
+        return status;
+      }
+
+      await Bun.sleep(10);
+    }
+
+    throw new Error('the move never ended');
+  };
+
+  const failed = await runMove();
+
+  const staged = target.zfs.listDatasets().filter((name) => name.includes('/staging/'));
+  const received = target.zfs.commands.filter((command) => command.startsWith('zfs recv'));
+
+  // nothing to clean up: `zfs recv` never saw the stream's end
+  const cleaned = target.zfs.commands.filter((command) => command.includes('/staging/mvin-'));
+
+  const absent = await findImpByName(target.host.db, 'dev');
+
+  await sourceApp.client.moves.abort({ name: 'dev' });
+
+  const retried = await runMove();
+
+  expect(state.isCorrupted).toBe(true);
+  expect(failed.error).toContain('the sha256 does not match');
+  expect(received).toHaveLength(1);
+  expect(staged).toEqual([]);
+  expect(cleaned.filter((command) => !command.startsWith('zfs recv'))).toEqual([]);
+  expect(absent).toBeUndefined();
+  expect(retried).toMatchObject({ isDone: true, error: null });
+});
+
 test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots', async () => {
   await using source = await setupImpTest();
   await using target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
