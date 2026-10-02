@@ -75,6 +75,7 @@ imp fork box box-2                # a second copy to try something else in
 | `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
 | `url <name>`                           | print the imp's local and tailnet URLs                             |
+| `policy <name> [open\|box\|none]`      | show or set what the imp may reach (`--allow` for box)             |
 | `image build`, `add`, `ls`, `rm`       | manage images                                                      |
 | `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
 | `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |

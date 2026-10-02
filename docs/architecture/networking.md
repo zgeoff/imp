@@ -13,7 +13,8 @@ broker listens on every imp's gateway.
 - An imp keeps its slot for its whole life, so the tap name and the IP survive a sleep and a
   restore. A container restart removes the taps; a wake creates the tap again before it loads the
   snapshot.
-- Guest DNS: `IMP_DNS` (default `1.1.1.1,8.8.8.8`), passed on the kernel command line.
+- Guest DNS: `IMP_DNS` (default `1.1.1.1,8.8.8.8`), passed on the kernel command line. A `box` or
+  `none` imp's queries go to impd's resolver whatever the guest asks ([Egress](#egress)).
 
 ## iptables
 
@@ -40,9 +41,82 @@ container's own network namespace and never touch the host's.
   the node's own address comes from a local address and stays.
 - `ip6tables INPUT -i imp+` drops everything. The taps get IPv6 link-local addresses, and impd's API
   and proxy listen on IPv6 too; without this rule a guest reaches them over its tap.
+- The egress resolver's port, `IMP_EGRESS_DNS_PORT` (default 7053), is accepted from the taps over
+  UDP and TCP and dropped in `raw PREROUTING` from anywhere else, as the broker's is. The rules
+  carry the comment `imp-egress-dns`.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
   smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
   records stall.
+
+## Egress
+
+Each imp has an egress policy: what it may reach directly, past the host container.
+
+| Policy | The imp reaches                                                                        |
+| ------ | -------------------------------------------------------------------------------------- |
+| `open` | anything but `169.254.0.0/16` (metadata services) and `100.64.0.0/10` (the tailnet)    |
+| `box`  | the addresses its allow-list's names resolve to, and the address ranges the list names |
+| `none` | nothing                                                                                |
+
+Hosts a [grant](../guides/connectors.md) covers stay reachable under every policy, through the
+credential broker: it dials them from the host container, which this firewall does not filter.
+`open` is the default. `imp new --policy box --allow github.com,*.npmjs.org` sets one at create, and
+`imp policy <name> box --allow …`, `open` or `none` changes it; `imp policy <name>` shows it. An
+allow entry is a hostname, `*.` and a hostname for every name under it (not the name itself), or an
+IPv4 address or CIDR, the only way a box reaches a private address. A fork and a backup restore
+carry the policy.
+
+### The firewall
+
+impd owns the nftables table `inet imp_egress` and writes it whole, in one `nft -f` transaction, at
+start and on every create, destroy and policy change; DNS answers and expiries change only its sets.
+Its `forward` chain runs before iptables' FORWARD and only drops and rejects, so setup-net's rules
+still accept what it lets through.
+
+- A verdict map sends each tap (`imp<slot>`) to its slot's chain. A tap with no entry is refused.
+- Each slot chain drops any source but the guest's own address: rpfilter passes the other addresses
+  of the guest's /30.
+- A `box` chain drops `ct state invalid`, lets established flows through, then accepts the list's
+  ranges, refuses every range the broker refuses (`REFUSED_RANGES`) and `IMP_SUBNET`, and accepts
+  the addresses in its set. Anything else is refused.
+- A refusal is a TCP reset, or ICMP admin-prohibited for anything else. A reset ends a live
+  connection at once; ICMP alone leaves it retrying.
+- IPv6 from a tap is refused: guests have no IPv6 route out.
+- impd writes a new imp's chain in the same step as its insert, before its tap comes up, and takes a
+  destroyed imp's out before its slot is free. A box or none imp does not boot or wake where nft
+  cannot run; impd logs `impd: egress: NO FIREWALL` at start and refuses those policies.
+
+### The resolver
+
+A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
+address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address.
+
+- A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
+  leaves the host. A query with more than one question is refused, and each imp has a rate limit.
+- For an allowed name, impd asks `IMP_DNS`, puts the A records on the CNAME chain from the name into
+  the imp's set, and only then replies. The chain's names count as allowed for their TTL, for a stub
+  resolver that follows the CNAME itself. AAAA gets an empty answer.
+- Each address expires at its TTL, clamped to between 5 minutes and a day, and a later answer
+  extends it. impd keeps the expiry and a sweep every 30 s deletes what is due: nftables does not
+  refresh an element's timeout on a second add before kernel 6.10. Reply TTLs drop to the cap.
+- A set holds 4096 addresses; past that the soonest to expire goes.
+- impd resolves a box's exact names when the table is built, so a guest that cached them before a
+  restart reaches them again.
+
+A change of policy applies at once, whatever the imp's state: the table is keyed by slot. A box
+keeps the addresses some name on its new list covers. When the new policy is not `open`, impd
+deletes the guest's conntrack entries, so a flow the policy now denies ends on its next packet, and
+the broker closes the imp's plain tunnels to hosts the new policy denies: they are relays in impd,
+which conntrack never sees.
+
+Known limits:
+
+- The firewall works on addresses. A CDN address that an allowed name resolved to stays allowed, for
+  its clamped TTL plus up to 30 s, and with it every other name that address serves.
+- So does DNS over HTTPS through an allowed address. DoT and DoH to public resolvers are refused by
+  construction: their addresses are in no set unless the list names them.
+- A guest that cached a wildcard name's address across an impd restart reaches it again only after
+  it asks again.
 
 ## The wake proxy
 

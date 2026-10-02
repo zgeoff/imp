@@ -79,8 +79,9 @@ sends in the header and sets the real value.
    checked, so a DNS rebind cannot swap it. It refuses loopback, private, shared (`100.64/10`, which
    holds the tailnet), link-local, multicast and reserved ranges, IPv6, and every address of the
    host container. Without these checks, a tunnel would start inside the host container and reach
-   impd's API, the wake proxy and other imps' ports. Each imp has an egress policy, `open` for now:
-   [#26](https://github.com/zgeoff/imp/issues/26) adds the policies that refuse these tunnels.
+   impd's API, the wake proxy and other imps' ports. The imp's
+   [egress policy](../architecture/networking.md#egress) decides which hosts get a tunnel: `open`
+   any, `box` those its list allows, `none` none. A tighter policy closes the tunnels it denies.
 4. **The guest's variables.** Every exec in an imp with a grant, and every command, shell and SFTP
    server that the [SSH gateway](./ssh.md) starts, gets `HTTPS_PROXY` and `https_proxy`, `NO_PROXY`
    for loopback, `NODE_USE_ENV_PROXY=1`, and `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,

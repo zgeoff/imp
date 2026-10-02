@@ -48,6 +48,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
 | `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
+| `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                     |
 | `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
