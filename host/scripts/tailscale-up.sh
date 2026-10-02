@@ -21,7 +21,8 @@ state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
 sock=/var/run/tailscale/tailscaled.sock
 
 key_file=${IMP_TAILSCALE_AUTHKEY_FILE:-}
-if [ -n "$key_file" ] && [ ! -s "$key_file" ]; then
+# A missing bind-mount source makes docker create an empty directory there.
+if [ -n "$key_file" ] && ! { [ -f "$key_file" ] && [ -s "$key_file" ]; }; then
   echo "tailscale-up: IMP_TAILSCALE_AUTHKEY_FILE $key_file is missing or empty; ignoring it" >&2
   key_file=
 fi
@@ -79,12 +80,60 @@ for _ in $(seq 50); do
   case $(backend) in NoState | "") sleep 0.1 ;; *) break ;; esac
 done
 
+# join: log in with the key. The key goes through a file so it never shows
+# in argv (ps, /proc).
+join() {
+  local auth=$key_file rc=0
+  if [ -z "$auth" ]; then
+    auth=$(mktemp)
+    chmod 0600 "$auth"
+    printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
+  fi
+  ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
+    --advertise-tags=tag:imp --accept-dns=false --timeout=60s || rc=$?
+  [ -n "$key_file" ] || rm -f "$auth"
+  if [ "$rc" != 0 ]; then
+    echo "tailscale-up: tailscale up failed with the key. A single-use key that was used already, an" \
+      "expired or revoked key, or no route to the control plane; give a new key to join" >&2
+    return 1
+  fi
+}
+
+# needs_login: the saved node cannot come back by itself.
+needs_login() { case $1 in NeedsLogin | NeedsMachineAuth | Stopped) return 0 ;; *) return 1 ;; esac; }
+
+# wait_later: the saved node is still coming up, as on a boot with no
+# network yet. tailscaled keeps trying by itself; this only joins with the
+# key if the node turns out to need a login. Every 5 s, for 30 min.
+wait_later() {
+  local state
+  for _ in $(seq 360); do
+    state=$(backend)
+    if [ "$state" = Running ]; then
+      echo "tailscale-up: the saved node is Running"
+      return 0
+    elif needs_login "$state"; then
+      if [ -n "$has_key" ]; then
+        echo "tailscale-up: the saved node is $state; joining again with the key"
+        join
+        return
+      fi
+      echo "tailscale-up: the saved node is $state; give an auth key to join again" >&2
+      return 1
+    fi
+    sleep 5
+  done
+  echo "tailscale-up: the saved node is still ${state:-unknown} after 30 min; tailscaled keeps trying" >&2
+}
+
 want_up=1
 if [ -n "$has_state" ]; then
   # Starting comes before Running when the saved state is good. A key is
   # never used over a good state: it would make a second node.
   for _ in $(seq 150); do
-    case $(backend) in Running | NeedsLogin | NeedsMachineAuth | Stopped) break ;; *) sleep 0.1 ;; esac
+    state=$(backend)
+    { [ "$state" = Running ] || needs_login "$state"; } && break
+    sleep 0.1
   done
   state=$(backend)
   if [ "$state" = Running ]; then
@@ -94,11 +143,17 @@ if [ -n "$has_state" ]; then
     if [ -n "$has_key" ] && [ "$(ts status --json | jq -r '.Self.HostName')" != "$hostname" ]; then
       want_up=1
     fi
-  elif [ -n "$has_key" ]; then
-    echo "tailscale-up: the saved node state is ${state:-unknown}, not Running; joining again with the key"
+  elif needs_login "$state"; then
+    if [ -z "$has_key" ]; then
+      echo "tailscale-up: the saved node state is $state, not Running; give an auth key to join again" >&2
+      exit 1
+    fi
+    echo "tailscale-up: the saved node state is $state, not Running; joining again with the key"
   else
-    echo "tailscale-up: the saved node state is ${state:-unknown}, not Running; give an auth key to join again" >&2
-    exit 1
+    # Starting with no way out yet (no network): the state counts as good.
+    echo "tailscale-up: the saved node is still ${state:-unknown} after 15 s; going on, and waiting for it in the background"
+    wait_later </dev/null &
+    exit 0
   fi
 elif [ "$(backend)" = Running ] \
   && [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
@@ -107,23 +162,7 @@ elif [ "$(backend)" = Running ] \
 fi
 
 if [ $want_up = 1 ]; then
-  # The key goes through a file so it never shows in argv (ps, /proc).
-  if [ -n "$key_file" ]; then
-    auth=$key_file
-  else
-    auth=$(mktemp)
-    trap 'rm -f "$auth"' EXIT
-    chmod 0600 "$auth"
-    printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
-  fi
-  if ! ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
-    --advertise-tags=tag:imp --accept-dns=false --timeout=60s; then
-    [ -n "$key_file" ] || rm -f "$auth"
-    echo "tailscale-up: tailscale up failed with the key. A single-use key that was used already, an" \
-      "expired or revoked key, or no route to the control plane; give a new key to join" >&2
-    exit 1
-  fi
-  [ -n "$key_file" ] || rm -f "$auth"
+  join || exit 1
 fi
 
 for _ in $(seq 100); do [ "$(backend)" = Running ] && break; sleep 0.1; done

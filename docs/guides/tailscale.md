@@ -19,7 +19,9 @@ does nothing. Otherwise it:
    login and never uses a key, which would make a second node; `deploy/bootstrap.sh` blanks the key
    once the node has joined. If the saved node needs a login instead (`NeedsLogin`: it logged out,
    or Tailscale deleted it after a long time offline), it goes on to step 4 with the key, and fails
-   without one.
+   without one. A saved node still `Starting` after 15 s (no network yet) counts as good: the script
+   returns, and waits in the background, for up to 30 minutes, for `Running`, or for a login it then
+   makes with the key.
 4. Runs
    `tailscale up --auth-key=file:... --hostname=${IMP_TAILSCALE_HOSTNAME:-imp} --advertise-tags=tag:imp --accept-dns=false --reset`.
    The key goes through a 0600 temp file, or the key file itself, so it never shows in argv. A node

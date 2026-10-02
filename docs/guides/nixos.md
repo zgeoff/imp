@@ -85,9 +85,10 @@ not the file:
   the ARC cap ([RAM](../architecture/host-contract.md#ram)). When the formula gives less than 512
   MiB, `imp-host` refuses to start and logs the RAM and the formula: set `ramBudgetMiB`. A start
   that keeps failing stops after five tries in five minutes.
-- The ARC cap: `zfs.arcMaxMiB`, set through `boot.extraModprobeConfig` so it holds from boot. Unset,
-  each start keeps a cap that is already set, or else sets bootstrap.sh's 10 % of RAM within 1 to 8
-  GiB.
+- The ARC cap: `zfs.arcMaxMiB`, set through `boot.extraModprobeConfig` so it holds from boot. Do not
+  also set `zfs_arc_max` in your own `boot.extraModprobeConfig` or `boot.kernelParams`: two values
+  clash, and the budget counts only `arcMaxMiB`. Unset, each start keeps a cap that is already set,
+  or else sets bootstrap.sh's 10 % of RAM within 1 to 8 GiB.
 
 ## The Tailscale key
 
@@ -103,7 +104,13 @@ to use it ([how it works](./tailscale.md#how-it-works)):
 - With no state, or a saved node that needs a login, `tailscale` joins with the key. An ephemeral
   node that stays offline long enough is deleted by Tailscale, and a reinstall can take that long,
   so keep a valid key in the file if the host may be down for a while.
-- A missing or empty key file only warns, and the node comes back from its saved state.
+- A missing or empty key file only warns, and the node comes back from its saved state. The module
+  always mounts its own copy, so docker never meets a missing source; where something else mounts
+  the key, note that docker turns a missing source into an empty directory, which `tailscale-up.sh`
+  also ignores.
+- A saved node still `Starting` after 15 s, as on a boot with no network yet, counts as good: the
+  container starts, and `tailscale-up.sh` waits for it in the background, joining with the key only
+  if it turns out to need a login.
 - A key that Tailscale refuses, such as a single-use key that joined once already, fails the join
   with a message that says so. `imp-host` keeps running without the tailnet; it does not restart in
   a loop. Put a new key in the file and restart `imp-host`.

@@ -27,8 +27,8 @@ let
     wait
   '';
 
-  # Stands in for the tailscale CLI. The saved state says "valid" (Running)
-  # or anything else (NeedsLogin); `up` reads the key file, logs its
+  # Stands in for the tailscale CLI. The saved state says "valid" (Running),
+  # "starting" (Starting) or anything else (NeedsLogin); `up` reads the key file, logs its
   # arguments and makes the state valid.
   fakeTailscale = pkgs.writeScriptBin "tailscale" ''
     #!${pkgs.bash}/bin/bash
@@ -53,8 +53,11 @@ let
       echo "$name" >"$dir/fake-hostname"
       exit 0
     fi
-    state=NeedsLogin
-    [ "$(cat "$dir/tailscaled.state" 2>/dev/null)" = valid ] && state=Running
+    case $(cat "$dir/tailscaled.state" 2>/dev/null) in
+      valid) state=Running ;;
+      starting) state=Starting ;; # no network yet
+      *) state=NeedsLogin ;;
+    esac
     name=$(cat "$dir/fake-hostname" 2>/dev/null || echo none)
     printf '{"BackendState":"%s","Self":{"HostName":"%s","TailscaleIPs":["100.64.0.1"],"DNSName":"%s.example.ts.net."}}\n' \
       "$state" "$name" "$name"
@@ -227,6 +230,16 @@ pkgs.testers.runNixOSTest {
         host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< ${fakeKey}")
         start_imp_host()
         assert len(ups()) == 3, ups()
+
+    with subtest("saved state still Starting (no network): counts as good, waits in the background"):
+        host.succeed("echo starting > ${stateDir}/tailscaled.state")
+        out = start_imp_host()
+        assert "going on, and waiting for it in the background" in out, out
+        assert len(ups()) == 3, ups()
+        # the control plane answers: the node was deleted, so it joins with the key
+        host.succeed("echo stale > ${stateDir}/tailscaled.state")
+        host.wait_until_succeeds("test $(wc -l < ${stateDir}/fake-up.log) = 4", timeout=60)
+        host.succeed("grep -q 'the saved node is NeedsLogin; joining again with the key' ${stateDir}/up.out")
 
     with subtest("the key is never in the env, argv, the log or the store's env file"):
         host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
