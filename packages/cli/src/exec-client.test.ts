@@ -6,7 +6,7 @@ import type { ExecIo } from './exec-client';
 import { startFakeImpd } from './fake-impd';
 import type { FakeImpd, FakeImpdPeer, FakeImpdReceived } from './fake-impd';
 
-const BOX = { name: 'box', argv: ['cmd'], tty: false } as const;
+const BOX = { host: null, name: 'box', argv: ['cmd'], tty: false } as const;
 
 afterEach(() => {
   mock.restore();

@@ -1,0 +1,267 @@
+import type { ExecHandle, ImpClient } from '@zgeoff/imp-client';
+import { ExecError } from '@zgeoff/imp-client';
+import { createOutputCollector } from './output-cap';
+import type { CappedOutput } from './output-cap';
+
+export interface CappedRunOptions {
+  readonly argv: readonly string[];
+  readonly stdin?: Uint8Array;
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly timeoutMs: number;
+
+  // per stream; see output-cap.ts
+  readonly maxOutputBytes: number;
+  readonly headBytes: number;
+
+  // the tool call's cancel
+  readonly signal: Readonly<AbortSignal>;
+
+  // how long SIGTERM, then SIGKILL, get before the next step
+  readonly killGraceMs: number;
+}
+
+export interface CappedRunResult {
+  // null when a signal ended the command, or it never reported an exit
+  readonly exitCode: number | null;
+  readonly signal: string | null;
+  readonly timedOut: boolean;
+  readonly stdout: CappedOutput;
+  readonly stderr: CappedOutput;
+}
+
+type Stop = 'exited' | 'timeout' | 'cancel';
+
+// how long the exec that kills what is left of a group may take
+const SWEEP_TIMEOUT_MS = 5000;
+
+// Runs a command in an imp to its exit, its deadline or a cancel, which
+// throws once the command stopped. A closed socket only sends SIGHUP, which
+// nohup ignores, so a stop signals the process group; see stopCommand.
+export async function runCapped(
+  openExec: ImpClient['openExec'],
+  name: string,
+  options: Readonly<CappedRunOptions>,
+): Promise<CappedRunResult> {
+  const deadline = AbortSignal.timeout(options.timeoutMs);
+
+  options.signal.throwIfAborted();
+
+  const handle = await openExec(name, options.argv, {
+    ...(options.cwd !== undefined && { cwd: options.cwd }),
+    ...(options.env !== undefined && { env: options.env }),
+  });
+
+  const stdout = createOutputCollector(options.maxOutputBytes, options.headBytes);
+  const stderr = createOutputCollector(options.maxOutputBytes, options.headBytes);
+
+  const reading = Promise.all([
+    drain(handle.stdout, stdout.push),
+    drain(handle.stderr, stderr.push),
+  ]);
+
+  void writeStdin(handle, options.stdin);
+
+  const stop = await waitForStop(handle, [options.signal, deadline]);
+
+  if (stop !== 'exited') {
+    await stopCommand(openExec, name, handle, options.killGraceMs);
+  }
+
+  const exit = await readExit(handle, stop);
+
+  await reading;
+
+  if (stop === 'cancel') {
+    options.signal.throwIfAborted();
+  }
+
+  return {
+    exitCode: exit?.code ?? null,
+    signal: exit?.signal ?? null,
+    timedOut: stop === 'timeout',
+    stdout: stdout.finish(),
+    stderr: stderr.finish(),
+  };
+}
+
+// the first of: the command's exit (or the session's end), the cancel, the
+// deadline. A start that fails throws, as `exit` does.
+async function waitForStop(
+  handle: Readonly<ExecHandle>,
+  [cancel, deadline]: readonly [Readonly<AbortSignal>, Readonly<AbortSignal>],
+): Promise<Stop> {
+  const stopped = Promise.withResolvers<Stop>();
+
+  const onCancel = (): void => {
+    stopped.resolve('cancel');
+  };
+
+  const onDeadline = (): void => {
+    stopped.resolve('timeout');
+  };
+
+  cancel.addEventListener('abort', onCancel, { once: true });
+  deadline.addEventListener('abort', onDeadline, { once: true });
+
+  void (async () => {
+    await waitSettled(handle.exit);
+
+    stopped.resolve('exited');
+  })();
+
+  try {
+    await handle.started;
+
+    if (cancel.aborted) {
+      return 'cancel';
+    }
+
+    if (deadline.aborted) {
+      return 'timeout';
+    }
+
+    return await stopped.promise;
+  } catch (error) {
+    handle.close();
+    throw error;
+  } finally {
+    cancel.removeEventListener('abort', onCancel);
+    deadline.removeEventListener('abort', onDeadline);
+  }
+}
+
+// SIGTERM to the process group, then SIGKILL to whatever is left of it after
+// the grace. While the leader lives, the session carries both. A leader that
+// exits on SIGTERM ends the session, so a second exec kills the rest.
+async function stopCommand(
+  openExec: ImpClient['openExec'],
+  name: string,
+  handle: Readonly<ExecHandle>,
+  graceMs: number,
+): Promise<void> {
+  const graceEnd = Date.now() + graceMs;
+
+  handle.sendSignal('SIGTERM');
+
+  const exited = await waitForExit(handle, graceMs);
+
+  if (!exited) {
+    handle.sendSignal('SIGKILL');
+
+    const killed = await waitForExit(handle, graceMs);
+
+    if (!killed) {
+      handle.close();
+    }
+
+    return;
+  }
+
+  // the rest of the group got SIGTERM with the leader, and the same grace
+  await Bun.sleep(Math.max(0, graceEnd - Date.now()));
+
+  const started = await handle.started;
+
+  await stopGroup(openExec, name, started.pid);
+}
+
+// No `--`: dash refuses it after the signal. While any of the group is left,
+// -pid is that group: the kernel never reuses a live group's id. Once it is
+// empty, a reuse within the grace would need the guest's pids to wrap.
+async function stopGroup(
+  openExec: ImpClient['openExec'],
+  name: string,
+  pid: number,
+): Promise<void> {
+  try {
+    const sweep = await openExec(name, [
+      '/bin/sh',
+      '-c',
+      `kill -KILL -${String(pid)} 2>/dev/null; true`,
+    ]);
+
+    await sweep.closeStdin();
+
+    const done = await waitForExit(sweep, SWEEP_TIMEOUT_MS);
+
+    if (!done) {
+      sweep.close();
+    }
+  } catch {
+    // the command already got SIGTERM; a failed sweep leaves only what
+    // ignored it, and the call's result stands
+  }
+}
+
+// whether the session ended within `ms`
+async function waitForExit(handle: Readonly<ExecHandle>, ms: number): Promise<boolean> {
+  const settled = (async () => {
+    await waitSettled(handle.exit);
+
+    return true;
+  })();
+
+  const timer = Promise.withResolvers<boolean>();
+
+  const timeout = setTimeout(() => {
+    timer.resolve(false);
+  }, ms);
+
+  try {
+    return await Promise.race([settled, timer.promise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// the exit, or null for a command stopped without one; a session that ended
+// for another reason (impd restarting, the imp destroyed) throws
+async function readExit(
+  handle: Readonly<ExecHandle>,
+  stop: Stop,
+): Promise<{ readonly code: number | null; readonly signal: string | null } | null> {
+  try {
+    return await handle.exit;
+  } catch (error) {
+    if (stop !== 'exited' && error instanceof ExecError && error.code === 'CLOSED') {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function drain(
+  stream: ReadableStream<Uint8Array>,
+  push: (chunk: Uint8Array) => void,
+): Promise<void> {
+  for await (const chunk of stream) {
+    push(chunk);
+  }
+}
+
+// a command that exits before reading its stdin makes the write fail; its
+// exit says what happened
+async function writeStdin(
+  handle: Readonly<ExecHandle>,
+  stdin: Uint8Array | undefined,
+): Promise<void> {
+  try {
+    if (stdin !== undefined && stdin.byteLength > 0) {
+      await handle.write(stdin);
+    }
+
+    await handle.closeStdin();
+  } catch {
+    // see above
+  }
+}
+
+async function waitSettled(promise: Promise<unknown>): Promise<void> {
+  try {
+    await promise;
+  } catch {
+    // the caller reads the outcome where it needs it
+  }
+}

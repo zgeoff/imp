@@ -15,6 +15,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'scale',
     'restart',
     'tailscale',
+    'mcp',
   ]);
 });
 
@@ -31,6 +32,7 @@ test('it expands a set and drops duplicates', () => {
     'checkpoints',
     'sleep',
     'restart',
+    'mcp',
   ]);
 });
 
