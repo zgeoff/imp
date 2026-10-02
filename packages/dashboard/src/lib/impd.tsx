@@ -30,6 +30,7 @@ function buildQueryUtils(client: ImpClient) {
     exec: client.exec,
     sessions: client.sessions,
     system: client.system,
+    tokens: client.tokens,
   });
 }
 

@@ -24,7 +24,7 @@ test('a wrong token stays on the login page with a message', async () => {
 
   const alert = await screen.findByRole('alert');
 
-  expect(alert).toHaveTextContent('That is not impd’s token.');
+  expect(alert).toHaveTextContent('impd knows no such token.');
 
   const [url, init] = fetchSpy.mock.calls[0] ?? [];
 

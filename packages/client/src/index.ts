@@ -2,12 +2,15 @@ export type {
   ApiCall,
   Checkpoint,
   DetachReason,
+  Identity,
   Image,
   Imp,
   ImpEvent,
   ImpState,
+  Scope,
   Session,
   SystemInfo,
+  Token,
 } from '@imp/api';
 
 export { ORPCError, isDefinedError, safe } from '@orpc/client';
