@@ -39,6 +39,8 @@ test('it runs the acceptance set when no suite is named', () => {
     'templates',
     'boot-templates',
     'inner',
+    'moves',
+    'moves-tailnet',
     'chaos',
     'jail',
     'backups',

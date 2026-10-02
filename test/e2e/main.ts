@@ -417,7 +417,7 @@ async function main(): Promise<number> {
 
   // one 1Password read per run, and only when a suite needs the tailnet:
   // dev.sh and the tailscale suite take the key from the env
-  if (args.suites.includes('tailscale')) {
+  if (args.suites.includes('tailscale') || args.suites.includes('moves-tailnet')) {
     process.env['IMP_TAILSCALE_OP'] = '1';
   }
 

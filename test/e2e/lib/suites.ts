@@ -47,6 +47,11 @@ export const SUITES: readonly Suite[] = [
   { name: 'boot-templates', prefix: 'e2e-bt-', images: ['e2e-ws'] },
   { name: 'inner', prefix: 'e2e-in-', images: ['e2e-tiny'] },
 
+  // a second instance beside the run's: over a Docker network, then over
+  // the tailnet; each reboots the instance onto the network and back
+  { name: 'moves', prefix: 'e2e-mv-', images: ['e2e-tiny', 'base'] },
+  { name: 'moves-tailnet', prefix: 'e2e-mvt-', images: ['e2e-tiny'] },
+
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
 
