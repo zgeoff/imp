@@ -18,6 +18,7 @@ case $daemon in
   *) run_daemon=("$daemon") ;;
 esac
 
+"$lib/setup-cgroups.sh"
 "$lib/setup-storage.sh"
 "$lib/setup-net.sh"
 # no-op without TAILSCALE_AUTHKEY or saved node state; a tailnet failure

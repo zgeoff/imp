@@ -164,7 +164,10 @@ up() {
     # container's own tailscaled starts.
     # a fixed hostname: restic counts a lock stale at once only when it
     # holds this host's name and a dead pid
+    # a private cgroup namespace: impd puts each imp's Firecracker in its own
+    # cgroup for CPU limits (host/scripts/setup-cgroups.sh)
     docker run -d --name "$name" --hostname "$name" --init --privileged --device /dev/kvm \
+      --cgroupns=private \
       --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" "${network[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \
