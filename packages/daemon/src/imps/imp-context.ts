@@ -148,6 +148,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     portBase: deps.config.portBase,
     prefix6: deps.ipv6?.prefix ?? null,
   };
+
   const log = deps.log ?? printLog;
   const cgroups = deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log });
   const readRam = deps.readRamMib;
