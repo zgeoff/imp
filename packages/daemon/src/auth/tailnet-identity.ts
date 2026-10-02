@@ -7,7 +7,7 @@ import type { Caller } from './caller';
 // from a tailnet address is asked about with `tailscale whois`, and the
 // first rule that matches the peer gives it a scope. No rule, no access.
 
-export const TailnetRuleSchema = z
+const TailnetRuleSchema = z
   .object({
     // `user:<login>`, `tag:<tag>`, or `*` for any peer
     match: z.string().regex(/^(?:user:\S+|tag:[\w-]+|\*)$/, 'must be user:<login>, tag:<tag> or *'),

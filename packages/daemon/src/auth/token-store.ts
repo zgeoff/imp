@@ -17,7 +17,7 @@ const ROOT_NAME = 'root';
 // slow hash; that is for secrets a person picks.
 const SECRET_PREFIX = 'imp_';
 
-export interface NewToken {
+interface NewToken {
   readonly name: string;
   readonly scope: Scope;
   readonly imps: readonly string[] | null;
