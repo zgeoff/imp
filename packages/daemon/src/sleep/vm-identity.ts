@@ -4,6 +4,8 @@ import type { OutdatedPart } from '@imp/api';
 import * as z from 'zod';
 import type { ImpPaths } from '../storage/data-layout';
 import type { SystemFiles } from '../storage/setup-system-files';
+import { readCpuIdentity } from './cpu-identity';
+import type { CpuIdentity } from './cpu-identity';
 
 // What a VM booted with. impd writes it at every cold boot; it holds until the
 // next one, across sleeps, wakes and impd restarts, so a sleep records what
@@ -27,12 +29,16 @@ const VmIdentitySchema = z.object({
   // the IPv6 /64 the guest got its address from; null for none, and left
   // out by an older impd
   ipv6Prefix: z.string().nullable().optional(),
+
+  // the CPU it booted on (cpu-identity.ts); left out by an older impd
+  cpuModel: z.string().optional(),
+  cpuFlags: z.string().optional(),
 });
 
 export type VmIdentity = z.infer<typeof VmIdentitySchema>;
 
 // What this host boots imps with now.
-export type HostIdentity = Omit<VmIdentity, 'agentVersion' | 'bootReason'>;
+export type HostIdentity = Omit<VmIdentity, 'agentVersion' | 'bootReason'> & CpuIdentity;
 
 // Read once at start: impd installs the kernel and the system drive only then.
 export function readHostIdentity(
@@ -41,6 +47,7 @@ export function readHostIdentity(
   ipv6Prefix: string | null = null,
 ): HostIdentity {
   return {
+    ...readCpuIdentity(),
     ipv6Prefix,
     firecrackerVersion: readVersionOutput(firecrackerBin, '--version'),
     snapshotVersion: readVersionOutput(firecrackerBin, '--snapshot-version'),

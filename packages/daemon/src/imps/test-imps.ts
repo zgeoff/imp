@@ -70,6 +70,8 @@ function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
     guestKernel: 'k',
     systemDrive: drive,
     systemDrivePath: buildSystemDrivePath(dataDir, drive),
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
   };
 }
 

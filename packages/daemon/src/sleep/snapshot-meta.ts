@@ -5,6 +5,7 @@ import { SeenSessionSchema } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
 import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';
 import { readRegularFile } from '../vmm/vm-files';
+import { findCpuChange } from './cpu-identity';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
 // What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
@@ -24,6 +25,11 @@ const SnapshotIdentitySchema = z.object({
 
   // the IPv6 /64 the guest's address is in; null for none
   ipv6Prefix: z.string().nullable().optional(),
+
+  // the CPU the guest kernel picked its code paths on; left out by an older
+  // impd, whose snapshot loads as before
+  cpuModel: z.string().optional(),
+  cpuFlags: z.string().optional(),
 });
 
 const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
@@ -71,6 +77,8 @@ export function buildSnapshotIdentity(
     systemDrivePath: vm.systemDrivePath,
     agentVersion: vm.agentVersion,
     ...(vm.ipv6Prefix !== undefined && { ipv6Prefix: vm.ipv6Prefix }),
+    ...(vm.cpuModel !== undefined && { cpuModel: vm.cpuModel }),
+    ...(vm.cpuFlags !== undefined && { cpuFlags: vm.cpuFlags }),
   };
 }
 
@@ -153,6 +161,12 @@ export function findColdBootReason(
 
   if (meta.systemDrivePath === undefined) {
     return 'the snapshot is from an older impd';
+  }
+
+  const cpuChange = findCpuChange(meta, host);
+
+  if (cpuChange !== null) {
+    return cpuChange;
   }
 
   // a guest with an address in another prefix would send from it; one with
