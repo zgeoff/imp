@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
-import { formatBytes, formatMib, formatRelativeTime } from './format';
+import { buildImp } from '../test-utils/fake-impd';
+import { formatBytes, formatCpuUse, formatDuration, formatMib, formatRelativeTime } from './format';
 
 test('it formats sizes in binary units', () => {
   expect(formatBytes(512)).toBe('512 B');
@@ -16,4 +17,30 @@ test('it formats times relative to now, past and future', () => {
   expect(formatRelativeTime(new Date(now - 3 * 3_600_000), now)).toBe('3h ago');
   expect(formatRelativeTime(new Date(now - 2 * 86_400_000), now)).toBe('2d ago');
   expect(formatRelativeTime(new Date(now + 90_000), now)).toBe('in 1m');
+});
+
+test('it formats CPU use over the limit', () => {
+  const sample = {
+    measuredAt: new Date(),
+    since: new Date(),
+    cpuPercent: 44.6,
+    cpuThrottledMs: 0,
+    netRxBytes: 0,
+    netTxBytes: 0,
+  };
+
+  const resources = { wakeCount: 1, awakeMs: 0, sample };
+
+  expect(formatCpuUse(buildImp({ name: 'a' }))).toBe('—');
+  expect(formatCpuUse(buildImp({ name: 'a', resources }))).toBe('45%');
+
+  expect(formatCpuUse(buildImp({ name: 'a', resources, cpu: { limit: 1.5, weight: 100 } }))).toBe(
+    '45% / 1.5',
+  );
+});
+
+test('it formats durations', () => {
+  expect(formatDuration(45_000)).toBe('45s');
+  expect(formatDuration(12 * 60_000)).toBe('12m');
+  expect(formatDuration(200 * 60_000)).toBe('3h 20m');
 });

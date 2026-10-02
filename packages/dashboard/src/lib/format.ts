@@ -1,3 +1,5 @@
+import type { Imp } from '@zgeoff/imp-client';
+
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'] as const;
 
 export function formatBytes(bytes: number): string {
@@ -33,4 +35,29 @@ export function formatRelativeTime(date: Readonly<Date>, nowMs: number): string 
   const amount = `${String(Math.floor(size / step.divisor))}${step.unit}`;
 
   return seconds >= 0 ? `${amount} ago` : `in ${amount}`;
+}
+
+// the last sample's CPU, in percent of one core, over the limit when there is
+// one: "45% / 1.5"
+export function formatCpuUse(imp: Imp): string {
+  const percent = imp.resources?.sample?.cpuPercent;
+  const used = percent === undefined ? '—' : `${percent.toFixed(0)}%`;
+  const limit = imp.cpu?.limit ?? null;
+
+  return limit === null ? used : `${used} / ${String(limit)}`;
+}
+
+// "45s", "12m", "3h 20m"
+export function formatDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+
+  if (minutes < 1) {
+    return `${String(Math.floor(ms / 1000))}s`;
+  }
+
+  if (minutes < 60) {
+    return `${String(minutes)}m`;
+  }
+
+  return `${String(Math.floor(minutes / 60))}h ${String(minutes % 60)}m`;
 }

@@ -113,3 +113,38 @@ test('destroying the imp goes back to the list without an error', async () => {
   // the page never asked for the imp it had just destroyed
   expect(ctx.fake.state.notFound).toBe(0);
 });
+
+test('it shows the CPU sample and sets a limit on the running imp', async () => {
+  const ctx = setupTest();
+
+  ctx.fake.state.imps[0] = buildImp({
+    name: 'web',
+    cpu: { limit: null, weight: 100 },
+    resources: {
+      wakeCount: 3,
+      awakeMs: 200 * 60_000,
+      sample: {
+        measuredAt: new Date(),
+        since: new Date(),
+        cpuPercent: 45,
+        cpuThrottledMs: 1500,
+        netRxBytes: 2048,
+        netTxBytes: 512,
+      },
+    },
+  });
+
+  renderApp(ctx.fake, '/imps/web');
+
+  await screen.findByText('2.0 KiB in, 512 B out');
+
+  expect(screen.getByText('3h 20m')).toBeInTheDocument();
+
+  await ctx.user.type(screen.getByLabelText('Limit (CPUs)'), '0.5');
+  await ctx.user.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByText('45% / 0.5');
+
+  expect(ctx.fake.state.calls).toEqual([
+    { path: 'imps.update', input: { name: 'web', cpuLimit: 0.5, cpuWeight: 100 } },
+  ]);
+});
