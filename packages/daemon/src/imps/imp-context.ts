@@ -60,15 +60,10 @@ export interface ImpContext {
   readonly tracker: ActivityTracker;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
-
-  // set once impd puts every imp to sleep to stop: no VM starts after that
-  readonly isStopping: () => boolean;
-  readonly setStopping: () => void;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
   const identityCache: { value: SnapshotIdentity | null } = { value: deps.identity ?? null };
-  const shutdown = { stopping: false };
   const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
 
   return {
@@ -93,9 +88,5 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     tracker: createActivityTracker(),
     findPaths: (impId) => buildImpPaths(deps.config.dataDir, impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
-    isStopping: () => shutdown.stopping,
-    setStopping: () => {
-      shutdown.stopping = true;
-    },
   };
 }

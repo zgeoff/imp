@@ -10,6 +10,7 @@ import { createImpPresenter } from './imp-presenter';
 import { createImpRuntime } from './imp-runtime';
 import type { ImpRuntime } from './imp-runtime';
 import { createImpVmOps } from './imp-vm-ops';
+import { createShutdownGate } from './shutdown-gate';
 
 export type { ImpServiceDeps } from './imp-context';
 
@@ -35,10 +36,11 @@ export type Imps = ImpService & ImpRuntime & ImpCheckpointHooks;
 export function createImpService(deps: ImpServiceDeps): Imps {
   const context = createImpContext(deps);
   const lock = createImpLock(context);
-  const ops = createImpVmOps(context);
+  const gate = createShutdownGate();
+  const ops = createImpVmOps(context, gate);
   const presenter = createImpPresenter(context);
   const commands = createImpCommands({ context, lock, ops, presenter });
-  const runtime = createImpRuntime({ context, lock, ops });
+  const runtime = createImpRuntime({ context, gate, lock, ops });
 
   return {
     ...commands,

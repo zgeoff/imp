@@ -23,6 +23,9 @@ export const IMP_ERRORS = defineErrors({
       requestedMib: z.int().nonnegative(),
     }),
   },
+
+  // impd is putting every imp to sleep to stop; try again once it is back
+  SERVICE_UNAVAILABLE: { message: 'impd is stopping' },
   INVALID_STATE: {
     message: 'The imp is not in a state that allows this',
     status: 409,

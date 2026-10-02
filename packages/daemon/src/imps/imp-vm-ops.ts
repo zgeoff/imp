@@ -13,6 +13,7 @@ import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
 import { createSemaphore } from './semaphore';
+import type { ShutdownGate } from './shutdown-gate';
 
 // snapshot writes put the whole mem file through the page cache
 // (docs/sleep-findings.md gotcha 8): a few at a time
@@ -41,15 +42,8 @@ export interface ImpVmOps {
   readonly requireRunningImp: (imp: LockedImp) => Promise<LockedImp>;
 }
 
-export function createImpVmOps(context: ImpContext): ImpVmOps {
+export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
   const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
-
-  // a VM started now would outlive impd's last sleep pass
-  const requireNotStopping = (): void => {
-    if (context.isStopping()) {
-      throw new Error('impd is stopping');
-    }
-  };
 
   const updateState = async (imp: LockedImp, change: ImpStateChange): Promise<LockedImp> => {
     if (change.state !== imp.state) {
@@ -70,7 +64,17 @@ export function createImpVmOps(context: ImpContext): ImpVmOps {
   };
 
   const startImpVm = async (imp: LockedImp): Promise<LockedImp> => {
-    requireNotStopping();
+    try {
+      gate.requireOpen();
+    } catch (error) {
+      // a create cut short by impd stopping shows why; any other imp keeps
+      // the state it had
+      if (imp.state === 'creating') {
+        await writeFailure(imp, error);
+      }
+
+      throw error;
+    }
 
     const paths = context.findPaths(imp.id);
     const address = context.findAddress(imp.slot);
@@ -188,7 +192,7 @@ export function createImpVmOps(context: ImpContext): ImpVmOps {
   // resumes from the snapshot, or boots cold when there is none, it does not
   // match this host, or the load fails: the disk is always the truth
   const wakeImpVm = async (imp: LockedImp): Promise<LockedImp> => {
-    requireNotStopping();
+    gate.requireOpen();
 
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);

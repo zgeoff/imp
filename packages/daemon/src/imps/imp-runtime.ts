@@ -7,6 +7,7 @@ import type { ActivityTracker } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps } from './imp-vm-ops';
+import type { ShutdownGate } from './shutdown-gate';
 
 // 'skipped' when the imp's lock is taken or it no longer qualifies
 export type SleepOutcome = 'slept' | 'skipped' | 'failed';
@@ -53,6 +54,7 @@ export interface ImpRuntime {
 
 interface ImpRuntimeParts {
   readonly context: ImpContext;
+  readonly gate: ShutdownGate;
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
 }
@@ -170,7 +172,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     // open connections do not count: impd is going away
     sleepAllImps: async () => {
-      context.setStopping();
+      parts.gate.close();
 
       // every imp, not only the running ones: a sleeping or stopped imp may be
       // waking or booting under its lock right now

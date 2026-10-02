@@ -142,7 +142,7 @@ test('impd stopping waits for a boot under way, sleeps that imp, and refuses lat
   const imp = await findImpByName(ctx.db, 'dev');
 
   expect(imp?.state).toBe('sleeping');
-  expect(later).toMatchObject({ message: 'impd is stopping' });
+  expect(later).toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: 'impd is stopping' });
 });
 
 test('a governor pass during impd stopping neither hangs nor wakes anything', async () => {
@@ -175,4 +175,16 @@ test('a governor pass during impd stopping neither hangs nor wakes anything', as
 
   expect(outcomes).toEqual(['done', 'done']);
   expect(imps.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
+});
+
+test('a create that impd stopping cuts short is recorded as an error', async () => {
+  await using ctx = await setupRunningImp();
+
+  await ctx.imps.sleepAllImps();
+
+  const rejection = await ctx.imps.createImp({ name: 'late' }).catch((error: unknown) => error);
+  const late = await findImpByName(ctx.db, 'late');
+
+  expect(rejection).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+  expect(late).toMatchObject({ state: 'error', error: 'impd is stopping' });
 });
