@@ -263,6 +263,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const host = { identity: createSystemDrive(TEST_DRIVE) };
 
+  // each limit impd sets on an imp's memory, in order
+  const memoryLimits: { impId: string; guestMib: number }[] = [];
+
   const startImpd = (identity: HostIdentity = host.identity) => {
     host.identity = identity;
 
@@ -299,6 +302,11 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       },
       egress,
       ipv6: options.ipv6 ?? null,
+      memoryLimit: {
+        setGuestMib: (impId, guestMib) => {
+          memoryLimits.push({ impId, guestMib });
+        },
+      },
       ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
       hostCpus: options.hostCpus ?? 8,
       ...(options.cgroups !== undefined && { cgroups: options.cgroups }),
@@ -341,6 +349,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     filesystemGrows,
     imps: governed.imps,
     governor: governed.governor,
+    memory: governed.memory,
+    memoryLimits,
     broker,
     egress,
     nftScripts,

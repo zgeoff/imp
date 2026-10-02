@@ -117,3 +117,70 @@ test('a template load names the imp tap and vsock socket in place of the snapsho
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the hot-plug calls send and read Firecracker’s fields, the stats in MiB', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-'));
+  const socket = join(dir, 'api.sock');
+  const seen: { method: string; path: string; body: unknown }[] = [];
+
+  // what Firecracker v1.17 answered on the dev box
+  const answers: Readonly<Record<string, unknown>> = {
+    '/hotplug/memory': {
+      block_size_mib: 2,
+      total_size_mib: 768,
+      slot_size_mib: 128,
+      plugged_size_mib: 256,
+      requested_size_mib: 0,
+    },
+    '/balloon/statistics': {
+      target_mib: 0,
+      actual_mib: 0,
+      total_memory: 1_033_113_600,
+      available_memory: 128_856_064,
+      free_memory: 197_984_256,
+    },
+  };
+
+  const server = Bun.serve({
+    unix: socket,
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+
+      seen.push({
+        method: request.method,
+        path,
+        body: request.method === 'GET' ? null : await request.json(),
+      });
+
+      return request.method === 'GET'
+        ? Response.json(answers[path])
+        : new Response(null, { status: 204 });
+    },
+  });
+
+  try {
+    const client = createFirecrackerClient(socket);
+
+    await client.putHotplugMemory({ totalSizeMib: 768, slotSizeMib: 128, blockSizeMib: 2 });
+    await client.patchHotplugMemory(512);
+
+    const hotplug = await client.getHotplugMemory();
+    const stats = await client.getBalloonStats();
+
+    expect(hotplug).toEqual({ pluggedMib: 256, requestedMib: 0 });
+    expect(stats).toEqual({ totalMib: 985, availableMib: 122 });
+
+    expect(seen.slice(0, 2)).toEqual([
+      {
+        method: 'PUT',
+        path: '/hotplug/memory',
+        body: { total_size_mib: 768, slot_size_mib: 128, block_size_mib: 2 },
+      },
+      { method: 'PATCH', path: '/hotplug/memory', body: { requested_size_mib: 512 } },
+    ]);
+  } finally {
+    await server.stop(true);
+
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

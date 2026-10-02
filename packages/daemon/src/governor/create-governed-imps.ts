@@ -1,6 +1,10 @@
 import { listImps } from '../db/imps';
 import { createImpService } from '../imps/imp-service';
 import type { ImpServiceDeps, Imps } from '../imps/imp-service';
+import { createMemoryController } from '../memory/memory-controller';
+import type { MemoryController } from '../memory/memory-controller';
+import { NO_MEMORY_LIMIT } from '../memory/memory-limit';
+import { createPluggedSizes } from '../memory/plugged-sizes';
 import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
 import { readKsmProfitMib } from '../vmm/ksm';
@@ -15,6 +19,7 @@ type GovernedDeps = Omit<ImpServiceDeps, 'admission'>;
 export function createGovernedImps(deps: GovernedDeps): {
   readonly imps: Imps;
   readonly governor: RamGovernor;
+  readonly memory: MemoryController;
 } {
   const holder: { governor: RamGovernor | null } = { governor: null };
   const readRamMib = deps.readRamMib ?? readOwnedRamMib;
@@ -28,7 +33,8 @@ export function createGovernedImps(deps: GovernedDeps): {
     },
   };
 
-  const imps = createImpService({ ...deps, readRamMib, admission });
+  const pluggedSizes = createPluggedSizes();
+  const imps = createImpService({ ...deps, readRamMib, admission, pluggedSizes });
   const ksm = deps.config.ksm;
   const readProfitMib = deps.readKsmProfitMib ?? readKsmProfitMib;
 
@@ -45,6 +51,42 @@ export function createGovernedImps(deps: GovernedDeps): {
 
     return Math.ceil((Math.max(profitMib, 0) * ksm.headroomPercent) / 100);
   };
+
+  // an open exec session or proxied request pins the imp, like a hold
+  const isBusy = (id: string) => imps.isImpBusy(id) || imps.tracker.count(id) > 0;
+
+  // elastic guests grow and shrink here (docs/architecture/memory.md)
+  const memory = createMemoryController({
+    listElastic: async () => {
+      const listed = await listImps(deps.db);
+
+      return listed.flatMap((imp) =>
+        imp.state === 'running' && imp.pid !== null && imp.maxMemoryMib > imp.memoryMib
+          ? [
+              {
+                id: imp.id,
+                name: imp.name,
+                pid: imp.pid,
+                memoryMib: imp.memoryMib,
+                maxMemoryMib: imp.maxMemoryMib,
+                paths: buildImpPaths(deps.config.dataDir, imp.id),
+              },
+            ]
+          : [],
+      );
+    },
+    vms: deps.vms,
+    isLocked: (id) => imps.isImpBusy(id),
+    isBusy,
+    tryWhileRunning: imps.tryWhileRunning,
+    admitGrow: (request) => holder.governor?.admitGrow(request) ?? Promise.resolve(true),
+    releaseGrow: admission.release,
+    limit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
+    readRamMib: (imp) => readRamMib(imp.pid, imp.paths.apiSocket),
+    setPluggedMib: pluggedSizes.write,
+    log,
+    ...(deps.now !== undefined && { now: deps.now }),
+  });
 
   const governor = createRamGovernor({
     budgetMib: deps.config.ramBudgetMib,
@@ -69,10 +111,10 @@ export function createGovernedImps(deps: GovernedDeps): {
     readRamMib,
     readHeadroomMib,
 
-    // an open exec session or proxied request pins the imp, like a hold
-    isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,
+    isBusy,
     trySleepImp: imps.trySleepImp,
     readDiskFullError: imps.readDiskFullError,
+    reclaim: memory.reclaimIdle,
     log,
     events: imps.events,
     ...(deps.now !== undefined && { now: deps.now }),
@@ -80,5 +122,5 @@ export function createGovernedImps(deps: GovernedDeps): {
 
   holder.governor = governor;
 
-  return { imps, governor };
+  return { imps, governor, memory };
 }

@@ -49,6 +49,13 @@ export const ImpSchema = z.object({
   vcpus: z.int().positive(),
   memoryMib: z.int().positive(),
 
+  // what the guest may grow to with hot-plugged memory; left out for an imp
+  // that does not grow
+  maxMemoryMib: z.int().positive().optional(),
+
+  // memory plugged into the awake guest beyond memoryMib, as last seen
+  pluggedMib: z.int().nonnegative().optional(),
+
   // the disk's size; the guest's filesystem fills it
   diskMib: z.int().positive(),
 

@@ -4,6 +4,7 @@ import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
 import { listImps, removeImp, updateImpDisk, updateImpSettings, updateImpState } from '../db/imps';
+import { resolveMaxMemoryMib } from '../memory/elastic-memory';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
 import { resolveCpuSettings } from './cpu-limit';
@@ -23,6 +24,9 @@ interface CreateImpInput {
   readonly image?: string | undefined;
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
+
+  // what the guest may grow to; memoryMib by default (docs/architecture/memory.md)
+  readonly maxMemoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
   readonly policy?: EgressPolicy | undefined;
   readonly cpuLimit?: number | null | undefined;
@@ -121,6 +125,8 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       }
 
       const diskBytes = resolveDiskBytes(context, input, image);
+      const memoryMib = input.memoryMib ?? context.config.defaultMemoryMib;
+      const maxMemoryMib = resolveMaxMemoryMib(memoryMib, input.maxMemoryMib);
       const id = input.id ?? Bun.randomUUIDv7();
 
       // a template's disk holds its source's machine-id and ssh host keys; a
@@ -129,7 +135,12 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         input.isIdentityResetPending ?? (image.source === 'imp' && input.prepareDisk === undefined);
 
       const writeRecord = () =>
-        createImpRecord(context, id, { ...input, diskBytes, isIdentityResetPending }, image);
+        createImpRecord(
+          context,
+          id,
+          { ...input, memoryMib, maxMemoryMib, diskBytes, isIdentityResetPending },
+          image,
+        );
 
       // a thin clone takes next to nothing, but none is made past the reserve
       await context.diskBudget.requireRoom(0);

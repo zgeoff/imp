@@ -14,6 +14,7 @@ export const FAKE_IMP: ImpRecord = {
   state: 'running',
   vcpus: 2,
   memoryMib: 512,
+  maxMemoryMib: 512,
   slot: 1,
   ip: '10.66.0.6',
   createdAt: new Date(0),

@@ -10,6 +10,7 @@ import { buildAgentOutdatedApiError } from '../api-errors';
 import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
+import { shrinkGuest } from '../memory/shrink-guest';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
@@ -40,6 +41,9 @@ import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
 import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
+
+// what a sleep waits under the imp's lock for an elastic guest to unplug
+const SLEEP_SHRINK_LIMIT_MS = 2000;
 
 // snapshot writes put the whole mem file through the page cache
 // (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
@@ -180,8 +184,18 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     hostSteps: Readonly<Record<string, number>>,
     diskReady: Promise<unknown>,
   ): Promise<StartedVm> => {
+    // a fresh guest holds nothing plugged; the cgroup keeps a size from
+    // before a sleep, which a wake that boots cold must not inherit
+    context.memoryLimit.setGuestMib(imp.id, imp.memoryMib);
+
     const cgroup = setupVmCgroup(imp);
-    const template = context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
+
+    // a template has no hot-plug region: an elastic imp boots the kernel
+    // (docs/architecture/memory.md#limits)
+    const template =
+      imp.maxMemoryMib > imp.memoryMib
+        ? null
+        : context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
 
     // a disk that fails is the create's failure, not the template's
     const disk = { isFailed: false };
@@ -265,6 +279,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       hostname: imp.name,
       vcpus: imp.vcpus,
       memoryMib: imp.memoryMib,
+      maxMemoryMib: imp.maxMemoryMib,
       dns: context.config.dns,
       cgroup,
       isIdentityReset: imp.isIdentityResetPending,
@@ -310,7 +325,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       id: imp.id,
       name: imp.name,
       reserveMib: Math.ceil((imp.memoryMib * context.config.bootReservePercent) / 100),
-      memoryMib: imp.memoryMib,
+      memoryMib: imp.maxMemoryMib,
     });
 
     const setupStarted = performance.now();
@@ -424,6 +439,45 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return seen.map((session) => setDetached(session));
   };
 
+  // An elastic guest gives back what it can spare before the pause, so the
+  // snapshot writes less (docs/architecture/memory.md#sleep); returns what it
+  // keeps plugged, null for an imp that does not grow.
+  const shrinkForSleep = async (imp: LockedImp, paths: ImpPaths): Promise<number | null> => {
+    if (imp.maxMemoryMib <= imp.memoryMib) {
+      return null;
+    }
+
+    try {
+      const pluggedMib = await shrinkGuest(context.vms, paths, {
+        timeLimitMs: SLEEP_SHRINK_LIMIT_MS,
+      });
+
+      context.pluggedSizes.write(imp.id, pluggedMib);
+
+      return pluggedMib;
+    } catch (error) {
+      context.log(`impd: ${imp.name}: no shrink before the sleep: ${readErrorMessage(error)}`);
+
+      return readPluggedMib(imp, paths);
+    }
+  };
+
+  // what the guest holds, or will once a plug under way ends, or the most it
+  // can when even that fails: the disk room and the wake's limit cover it
+  const readPluggedMib = async (imp: LockedImp, paths: ImpPaths): Promise<number> => {
+    if (imp.maxMemoryMib <= imp.memoryMib) {
+      return 0;
+    }
+
+    try {
+      const memory = await context.vms.readGuestMemory(paths);
+
+      return Math.max(memory.pluggedMib, memory.requestedMib);
+    } catch {
+      return imp.maxMemoryMib - imp.memoryMib;
+    }
+  };
+
   const sleepWithRoom = async (
     imp: LockedImp,
     paths: ImpPaths,
@@ -431,6 +485,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     reason: string,
     waitedMs: number,
   ): Promise<LockedImp> => {
+    const pluggedMib = await shrinkForSleep(imp, paths);
+
     const ramMib = context.readSleepRamMib(pid, paths.apiSocket) ?? 0;
 
     const sessions = await readSessionsForSleep(imp, paths);
@@ -460,6 +516,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         createdAt: Date.now(),
         memoryMib: imp.memoryMib,
         ramMib,
+        ...(pluggedMib !== null && pluggedMib > 0 && { pluggedMib }),
         sessions,
         ...(services !== null && { services }),
       });
@@ -474,8 +531,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       slept.detail = { trigger: reason, durationMs: sleepMs, steps: timings };
 
+      const plugged = pluggedMib === null ? '' : `, ${String(pluggedMib)} MiB plugged`;
+
       context.log(
-        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
+        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB${plugged}, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
       );
     } catch (error) {
       if (context.vms.isVmAlive(pid, paths)) {
@@ -529,8 +588,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
 
     // the memory file is written in full before its holes are dug: first,
-    // so no wait or pause starts unless the disk has room for it
-    const slept = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, async () => {
+    // so no wait or pause starts unless the disk has room for it. The shrink
+    // before the pause only lowers an elastic guest's plugged size.
+    const memFileMib = imp.memoryMib + (await readPluggedMib(imp, paths));
+
+    const slept = await context.diskBudget.withRoom(memFileMib * 1024 * 1024, async () => {
       const waitedMs = youngGuest.wait
         ? await waitForGuestAge({
             readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
@@ -579,8 +641,15 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       id: imp.id,
       name: imp.name,
       reserveMib: Math.max(meta.ramMib, context.config.wakeReserveMib),
-      memoryMib: imp.memoryMib,
+      memoryMib: imp.maxMemoryMib,
     });
+
+    // the load restores what the guest held plugged: the host allows it first
+    context.memoryLimit.setGuestMib(imp.id, imp.memoryMib + (meta.pluggedMib ?? 0));
+
+    if (meta.pluggedMib !== undefined) {
+      context.pluggedSizes.write(imp.id, meta.pluggedMib);
+    }
 
     const started = performance.now();
 

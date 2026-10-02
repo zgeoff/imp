@@ -39,6 +39,10 @@ export const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
   // the RAM the VM owned when it went to sleep: what a wake reserves
   ramMib: z.int().nonnegative(),
 
+  // what an elastic guest held plugged past memoryMib, which the load
+  // restores (docs/architecture/memory.md); left out when it held none
+  pluggedMib: z.int().nonnegative().optional(),
+
   // the guest's sessions as it went to sleep, so listing them does not wake
   // it; left out by an older impd
   sessions: z.array(SeenSessionSchema).readonly().optional(),

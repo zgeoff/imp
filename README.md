@@ -100,9 +100,11 @@ imp fork box box-2                # a second copy to try something else in
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
 `imp new` and `imp set` take `--cpu-limit` and `--cpu-weight`
-([CPU limits](docs/guides/cpu-limits.md)). [Connectors](docs/guides/connectors.md) covers secrets
-and grants; [tokens](docs/guides/tokens.md) covers scopes and tailnet identity. Commands that print
-imps, images, checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+([CPU limits](docs/guides/cpu-limits.md)). `--max-memory` (up to 4 × `--memory`) lets the guest grow
+under memory pressure and shrink when idle ([elastic memory](docs/architecture/memory.md)).
+[Connectors](docs/guides/connectors.md) covers secrets and grants; [tokens](docs/guides/tokens.md)
+covers scopes and tailnet identity. Commands that print imps, images, checkpoints or `info` take
+`--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown

@@ -23,6 +23,10 @@ export interface ImpRecord {
   readonly state: ImpState;
   readonly vcpus: number;
   readonly memoryMib: number;
+
+  // what the guest may grow to (docs/architecture/memory.md); memoryMib for
+  // an imp that does not grow
+  readonly maxMemoryMib: number;
   readonly slot: number;
   readonly ip: string;
   readonly createdAt: Date;
@@ -73,6 +77,9 @@ export interface NewImp {
   readonly imageId: string;
   readonly vcpus: number;
   readonly memoryMib: number;
+
+  // memoryMib when left out: the guest does not grow
+  readonly maxMemoryMib?: number;
   readonly slot: number;
   readonly ip: string;
   readonly httpPort?: number;
@@ -227,6 +234,10 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       state: 'creating',
       vcpus: imp.vcpus,
       memory_mib: imp.memoryMib,
+      max_memory_mib:
+        imp.maxMemoryMib === undefined || imp.maxMemoryMib === imp.memoryMib
+          ? null
+          : imp.maxMemoryMib,
       slot: imp.slot,
       ip: imp.ip,
       ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
@@ -668,6 +679,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     state: row.state,
     vcpus: row.vcpus,
     memoryMib: row.memory_mib,
+    maxMemoryMib: row.max_memory_mib ?? row.memory_mib,
     slot: row.slot,
     ip: row.ip,
     createdAt: new Date(row.created_at),

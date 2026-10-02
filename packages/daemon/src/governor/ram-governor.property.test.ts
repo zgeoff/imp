@@ -22,6 +22,15 @@ interface ModelImp {
 
   // its snapshot fails: a sleep fails and leaves it awake
   failsSleep: boolean;
+
+  // what an elastic guest can unplug when the governor reclaims
+  spareMib: number;
+}
+
+interface GrowOp {
+  readonly kind: 'grow';
+  readonly id: string;
+  readonly mib: number;
 }
 
 interface AdmitOp {
@@ -36,6 +45,7 @@ type MutationOp =
   | { readonly kind: 'hold'; readonly id: string; readonly on: boolean }
   | { readonly kind: 'busy'; readonly id: string; readonly on: boolean }
   | { readonly kind: 'failSleep'; readonly id: string; readonly on: boolean }
+  | { readonly kind: 'spare'; readonly id: string; readonly mib: number }
   | { readonly kind: 'touch'; readonly id: string }
   | { readonly kind: 'stop'; readonly id: string }
   | { readonly kind: 'tick'; readonly ms: number };
@@ -60,6 +70,11 @@ const mutationArb: fc.Arbitrary<MutationOp> = fc.oneof(
   fc.record({ kind: fc.constant('hold' as const), id: idArb, on: fc.boolean() }),
   fc.record({ kind: fc.constant('busy' as const), id: idArb, on: fc.boolean() }),
   fc.record({ kind: fc.constant('failSleep' as const), id: idArb, on: fc.boolean() }),
+  fc.record({
+    kind: fc.constant('spare' as const),
+    id: idArb,
+    mib: fc.integer({ min: 0, max: 300 }),
+  }),
   fc.record({ kind: fc.constant('touch' as const), id: idArb }),
   fc.record({ kind: fc.constant('stop' as const), id: idArb }),
   fc.record({ kind: fc.constant('tick' as const), ms: fc.integer({ min: 0, max: 25_000 }) }),
@@ -100,7 +115,15 @@ function setupModel(
   const imps = new Map<string, ModelImp>(
     IMP_IDS.map((id) => [
       id,
-      { awake: false, rssMib: 0, lastActiveAt: 0, held: false, busy: false, failsSleep: false },
+      {
+        awake: false,
+        rssMib: 0,
+        lastActiveAt: 0,
+        held: false,
+        busy: false,
+        failsSleep: false,
+        spareMib: 0,
+      },
     ]),
   );
 
@@ -112,6 +135,7 @@ function setupModel(
       held: false,
       busy: false,
       failsSleep: imp.failsSleep ?? false,
+      spareMib: 0,
     });
   }
 
@@ -187,6 +211,25 @@ function setupModel(
     readRamMib: (_pid, id) => (imps.get(id)?.awake === true ? findImp(id).rssMib : null),
     isBusy: (id) => findImp(id).busy,
     trySleepImp,
+
+    // idle elastic guests give back what they can spare
+    reclaim: async (excludeId) => {
+      await pacer.pace();
+
+      let freedMib = 0;
+
+      for (const [id, imp] of imps) {
+        if (imp.awake && !imp.busy && id !== excludeId) {
+          const mib = Math.min(imp.spareMib, imp.rssMib);
+
+          imp.rssMib -= mib;
+          imp.spareMib = 0;
+          freedMib += mib;
+        }
+      }
+
+      return freedMib;
+    },
     log: () => {
       // quiet
     },
@@ -242,6 +285,10 @@ function setupModel(
       }
       case 'failSleep': {
         findImp(op.id).failsSleep = op.on;
+        break;
+      }
+      case 'spare': {
+        findImp(op.id).spareMib = op.mib;
         break;
       }
       case 'touch': {
@@ -454,6 +501,71 @@ test(
         },
       ),
       { numRuns: 200 },
+    );
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
+
+const growArb: fc.Arbitrary<GrowOp> = fc.record({
+  kind: fc.constant('grow' as const),
+  id: idArb,
+  mib: fc.integer({ min: 2, max: 600 }),
+});
+
+const growOpArb = fc.oneof(growArb, mutationArb, fc.constant({ kind: 'enforce' as const }));
+
+test(
+  'a grow keeps the budget, never sleeps its grower, and sleeps only for room it then has',
+  async () => {
+    await fc.assert(
+      fc.asyncProperty(startArb, fc.array(growOpArb, { maxLength: 40 }), async (start, ops) => {
+        const model = setupModel(start);
+
+        for (const op of ops) {
+          if (op.kind === 'enforce') {
+            await model.governor.enforce();
+
+            continue;
+          }
+
+          if (op.kind !== 'grow') {
+            model.applyMutation(op);
+            continue;
+          }
+
+          if (!model.findImp(op.id).awake) {
+            continue;
+          }
+
+          const callsBefore = model.sleepCalls.length;
+
+          const admitted = await model.governor.admitGrow({
+            id: op.id,
+            name: op.id,
+            mib: op.mib,
+          });
+
+          const calls = model.sleepCalls.slice(callsBefore);
+
+          expect(calls.map((call) => call.id)).not.toContain(op.id);
+          expect(calls.filter((call) => !call.eligible)).toEqual([]);
+
+          if (admitted) {
+            const usage = await model.governor.readUsage();
+
+            expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
+          } else {
+            // refused: nothing slept for room that was not there
+            expect(calls.at(-1)?.outcome ?? 'none').not.toBe('slept');
+          }
+
+          // the guest's RSS shows the grow once the plug lands
+          if (admitted) {
+            model.findImp(op.id).rssMib += op.mib;
+          }
+        }
+      }),
+      { numRuns: 500 },
     );
   },
   SLOW_TEST_TIMEOUT_MS,

@@ -27,13 +27,22 @@ interface AdmissionRequest {
   readonly name: string | null;
   readonly reserveMib: number;
 
-  // the imp's configured memory: a guest that can grow past the whole budget
-  // is never admitted
+  // the most the guest can hold, its max memory: a guest that can grow past
+  // the whole budget is never admitted
   readonly memoryMib: number;
 
   // false: admitted only into free room, never by sleeping an imp; for work
   // no user waits on, such as a boot template's build
   readonly maySleepImps?: boolean;
+}
+
+// an elastic guest that asks to grow (docs/architecture/memory.md)
+export interface GrowRequest {
+  readonly id: string;
+  readonly name: string;
+
+  // the plug and the struct pages it costs the host
+  readonly mib: number;
 }
 
 interface UsageTotals {
@@ -96,6 +105,10 @@ export interface RamAdmission {
 export interface RamGovernor extends RamAdmission {
   readonly readUsage: () => Promise<RamUsage>;
 
+  // makes room for an elastic guest's grow as for a wake, and reserves it;
+  // false when the imp is not awake, or only busy or held imps could make room
+  readonly admitGrow: (request: GrowRequest) => Promise<boolean>;
+
   // sleeps LRU imps while measured usage is over the budget; when the imps it
   // may sleep cannot free enough, it sleeps all of them to get as close as it
   // can
@@ -127,6 +140,10 @@ export interface RamGovernorDeps {
 
   // where its decisions go as GovernorDecision events
   readonly events?: EventBus;
+
+  // the step before any sleep: elastic guests other than `excludeId` give
+  // back what they can spare; returns the MiB unplugged
+  readonly reclaim?: (excludeId: string | null) => Promise<number>;
 }
 
 export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
@@ -248,9 +265,14 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     reason: string,
     whenShort: WhenShort,
     findMissing: (usage: UsageTotals) => number,
+    protectedId: string | null = null,
   ): Promise<RoomOutcome> => {
-    const passed = new Set<string>();
+    // a growing imp counts, but is no victim for its own grow
+    const pinned = protectedId === null ? [] : [protectedId];
 
+    const passed = new Set<string>(pinned);
+
+    const reclaim = { isDone: false };
     let slept = 0;
     let diskFull = false;
 
@@ -268,6 +290,18 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           effectiveMib: usage.effectiveMib,
           protected: [],
         };
+      }
+
+      // unplugging idle elastic guests costs no imp its memory: it comes first
+      if (!reclaim.isDone && deps.reclaim !== undefined) {
+        reclaim.isDone = true;
+
+        const freedMib = await deps.reclaim(excludeId ?? protectedId);
+
+        if (freedMib > 0) {
+          deps.log(`impd: governor: unplugged ${String(freedMib)} MiB from idle imps (${reason})`);
+          continue;
+        }
       }
 
       const time = now();
@@ -296,7 +330,10 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           diskFull,
           missingMib,
           effectiveMib: usage.effectiveMib,
+
+          // the growing imp is the one asking, not one in its way
           protected: candidates
+            .filter((candidate) => candidate.id !== protectedId)
             .filter((candidate) => candidate.held || candidate.busy)
             .map((candidate) => ({
               name: candidate.name,
@@ -389,6 +426,53 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     release: (id) => {
       reservations.delete(id);
     },
+
+    admitGrow: (request) =>
+      admission.run(async () => {
+        const listed = await deps.listAwake();
+
+        // a sleep or stop got there first: no imp makes room for it
+        if (!listed.some((imp) => imp.id === request.id)) {
+          return false;
+        }
+
+        const room = await makeRoom(
+          null,
+          `to grow ${request.name}`,
+          'giveUp',
+          (usage) => usage.effectiveMib + request.mib - deps.budgetMib,
+          request.id,
+        );
+
+        const usage = await readEffectiveUsage(null);
+
+        // the imp may have gone to sleep while room was made
+        const fits = room.fits && usage.awake.some((imp) => imp.id === request.id);
+
+        emitDecision({
+          decision: fits ? 'admitted' : 'refused',
+          name: request.name,
+          trigger: 'grow',
+          usedMib: usage.effectiveMib,
+          reserveMib: request.mib,
+          ...(!fits && {
+            neededMib: readNeededMib(usage.effectiveMib, request.mib, deps.budgetMib),
+            protectedCount: room.protected.length,
+          }),
+        });
+
+        if (!fits) {
+          return false;
+        }
+
+        // the grow counts until the guest's RSS shows it
+        reservations.set(request.id, {
+          mib: (usage.byImp.get(request.id) ?? 0) + request.mib,
+          until: now() + RESERVATION_TTL_MS,
+        });
+
+        return true;
+      }),
 
     readUsage: async () => {
       const usage = await readEffectiveUsage(null);

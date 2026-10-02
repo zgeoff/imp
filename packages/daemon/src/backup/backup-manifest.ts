@@ -25,6 +25,10 @@ const ManifestImpSchema = z
     imageDigest: z.string(),
     vcpus: z.int(),
     memoryMib: z.int(),
+
+    // an elastic imp's max (docs/architecture/memory.md); null when it does
+    // not grow, left out by older manifests
+    maxMemoryMib: z.int().nullable().optional(),
     httpPort: z.int(),
     state: z.string(),
 

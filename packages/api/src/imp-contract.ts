@@ -95,6 +95,10 @@ export const impContract = {
           vcpus: z.int().min(1).max(32).optional(),
           memoryMib: z.int().min(128).optional(),
 
+          // what the guest may grow to under memory pressure, at most 4 ×
+          // memoryMib; memoryMib by default, which never grows
+          maxMemoryMib: z.int().min(128).optional(),
+
           // at least the image's filesystem; IMP_DEFAULT_DISK_GIB by default
           diskMib: z.int().min(1024).optional(),
 

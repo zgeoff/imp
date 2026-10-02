@@ -40,6 +40,10 @@ export const newCommand = defineCommand({
     image: { type: 'string', description: 'image name' },
     cpus: { type: 'string', description: 'vCPU count' },
     memory: { type: 'string', description: 'memory: MiB, or with a unit (512m, 2g)' },
+    'max-memory': {
+      type: 'string',
+      description: 'what the guest may grow to under pressure, at most 4 × memory',
+    },
     disk: { type: 'string', description: 'disk size, with a unit (64g); 32g by default' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
     policy: { type: 'string', description: 'egress policy: open (default), box or none' },
@@ -132,7 +136,9 @@ function toPlaceRequest(request: NewRequest): PlaceRequest {
   return {
     name: input.name ?? null,
     image: input.image ?? null,
-    memoryMib: input.memoryMib ?? null,
+
+    // impd refuses an elastic imp whose max passes its budget
+    memoryMib: input.maxMemoryMib ?? input.memoryMib ?? null,
     cpuLimit: input.cpuLimit ?? null,
     policyMode: input.policy?.mode ?? null,
     networks: input.networks ?? [],
@@ -158,6 +164,7 @@ interface NewArgs extends Readonly<Record<string, unknown>> {
   readonly image?: string | undefined;
   readonly cpus?: string | undefined;
   readonly memory?: string | undefined;
+  readonly 'max-memory'?: string | undefined;
   readonly disk?: string | undefined;
   readonly 'http-port'?: string | undefined;
   readonly policy?: string | undefined;
@@ -186,6 +193,7 @@ function readNewRequest(args: NewArgs): NewRequest {
     ...(args.image !== undefined && { image: args.image }),
     ...(args.cpus !== undefined && { vcpus: parseCount(args.cpus, 'cpus') }),
     ...(args.memory !== undefined && { memoryMib: parseSize(args.memory) }),
+    ...(args['max-memory'] !== undefined && { maxMemoryMib: parseSize(args['max-memory']) }),
     ...(args.disk !== undefined && { diskMib: parseSize(args.disk) }),
     ...(args['http-port'] !== undefined && {
       httpPort: parseCount(args['http-port'], 'http-port'),

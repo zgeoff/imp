@@ -7,6 +7,10 @@ import type { ImpDatabase } from '../db/open-database';
 import type { EventBus } from '../events/event-bus';
 import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
+import { NO_MEMORY_LIMIT } from '../memory/memory-limit';
+import type { MemoryLimit } from '../memory/memory-limit';
+import { createPluggedSizes } from '../memory/plugged-sizes';
+import type { PluggedSizes } from '../memory/plugged-sizes';
 import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
 import type { Ipv6Plan } from '../net/ipv6-plan';
@@ -129,6 +133,14 @@ export interface ImpServiceDeps {
   // the boot templates cold boots restore (docs/architecture/boot-templates.md);
   // by default made from the deps when IMP_BOOT_TEMPLATES is on
   readonly templates?: BootTemplates | null;
+
+  // the host's limit on each imp's memory, which follows its plugged size
+  // (memory-limit.ts); nothing enforces it by default
+  readonly memoryLimit?: MemoryLimit;
+
+  // what each awake elastic guest holds plugged, which the memory controller
+  // writes; a store of its own by default
+  readonly pluggedSizes?: PluggedSizes;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -176,6 +188,11 @@ export interface ImpContext {
 
   // the latest look at each running VM (resource-sampler.ts)
   readonly resources: ResourceSampler;
+
+  readonly memoryLimit: MemoryLimit;
+
+  // what each awake elastic guest holds plugged, as impd last saw it
+  readonly pluggedSizes: PluggedSizes;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
@@ -251,6 +268,8 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
       readNetBytes: (tap) => readGuestNetBytes(tap),
       readMemory,
     }),
+    memoryLimit: deps.memoryLimit ?? NO_MEMORY_LIMIT,
+    pluggedSizes: deps.pluggedSizes ?? createPluggedSizes(),
   };
 }
 

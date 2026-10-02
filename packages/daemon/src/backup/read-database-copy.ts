@@ -13,6 +13,7 @@ const CopyImpSchema = z.object({
   state: z.string(),
   vcpus: z.int(),
   memoryMib: z.int(),
+  maxMemoryMib: z.int().nullable(),
   httpPort: z.int(),
   egressPolicy: z.string(),
   diskBytes: z.int(),
@@ -79,8 +80,9 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
     const imps = copy
       .query(
         `SELECT id, name, image_id AS imageId, state, vcpus, memory_mib AS memoryMib,
-           http_port AS httpPort, egress_policy AS egressPolicy, egress_allow AS egressAllow,
-           disk_bytes AS diskBytes, identity_reset_pending AS identityResetPending
+           max_memory_mib AS maxMemoryMib, http_port AS httpPort, egress_policy AS egressPolicy,
+           egress_allow AS egressAllow, disk_bytes AS diskBytes,
+           identity_reset_pending AS identityResetPending
            FROM imps ORDER BY name`,
       )
       .all();

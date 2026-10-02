@@ -38,6 +38,7 @@ function buildPlan(isIdentityReset: boolean) {
     hostname: 'dev',
     vcpus: 2,
     memoryMib: 1024,
+    maxMemoryMib: 1024,
     dns: ['1.1.1.1', '8.8.8.8'],
     cgroup: null,
     isIdentityReset,
@@ -71,6 +72,16 @@ test('with IPv6, the cmdline names the /128 and the gateway fe80::1', () => {
   const args = buildBootArgs({ ...buildPlan(false), address, dns: ['1.1.1.1'] });
 
   expect(args).toContain('imp.ip6=fd12:3456:789a::a42:e/128 imp.gw6=fe80::1 imp.dns=1.1.1.1');
+});
+
+test('an elastic imp boots with hot-plugged memory onlined movable', () => {
+  const plan = { ...buildPlan(false), memoryMib: 256, dns: ['1.1.1.1'] };
+
+  expect(buildBootArgs({ ...plan, maxMemoryMib: 1024 })).toEndWith(
+    'imp.dns=1.1.1.1 memhp_default_state=online_movable',
+  );
+
+  expect(buildBootArgs({ ...plan, maxMemoryMib: 256 })).not.toContain('memhp_default_state');
 });
 
 // A Firecracker stand-in: a process whose command line names the API socket,

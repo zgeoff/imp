@@ -85,6 +85,10 @@ interface ImpsTable {
   // 1 from a warm move's commit to the imp's first wake here, which installs
   // this host's broker CA in the guest
   trust_pending: Generated<number>;
+
+  // the most the guest may grow to with hot-plugged memory; null when it
+  // stays at memory_mib (docs/architecture/memory.md)
+  max_memory_mib: number | null;
 }
 
 // an imp's last cold boots (docs/architecture/daemon.md#output-offsets)
