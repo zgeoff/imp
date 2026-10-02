@@ -248,7 +248,9 @@ VM only when `/proc/<pid>/status` shows it runs as X's jail uid, or as root (an 
 VM killed or its snapshot dropped as an orphan. The liveness check asks the same of a running imp's
 pid, so a recycled pid whose argv a jail forged counts as a lost VM, and no re-adopt moves it into
 the imp's cgroup. impd starts it without `--daemonize`, `--new-pid-ns` or `--cgroup`: the pid it
-spawns is the VM's, and impd's own cgroup writer stays the only one.
+spawns is the VM's, and impd's own cgroup writer stays the only one. With `IMP_KSM`, `ksm-exec` runs
+first, outside the chroot, and execs the jailer with the merge flag set
+([KSM](./sleep-and-wake.md#8-ksm-sharing-identical-guest-pages)).
 
 A jailed Firecracker cannot open a tap it does not own, so impd makes each tap with
 `ip tuntap add ... user <uid> group <gid>`, and makes it again when its owner differs. impd keeps

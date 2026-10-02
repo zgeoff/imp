@@ -504,14 +504,19 @@ a container ([configuration](../guides/configuration.md#impd)).
 because the kernel copies the page first, so a guest can time its writes to learn which pages
 another guest holds. Shared pages are also a Rowhammer target. imps run agent code, and a prompt
 injection can take that code over. KSM is a trade-off for a host with one owner, who accepts that
-one imp may learn what another holds. The jailer ([#27](https://github.com/zgeoff/imp/issues/27))
-does not change that: it confines Firecracker, it does not make a host safe for several owners. So
-impd does not refuse `IMP_KSM` with the jailer; `ksm-exec` then wraps the jailer from outside its
-chroot (`ksm-exec jailer ...`), and the flag survives the jailer's own exec on Linux 6.7 and later.
+one imp may learn what another holds. The jailer ([daemon](./daemon.md#the-jailer)), on by default,
+runs each Firecracker as its own uid in its own cgroup and chroot, and does not change that: ksmd
+merges physical pages whatever process, uid or namespace maps them. KSM across jails is a side
+channel across tenants, so it stays opt-in, and the jailer does not make such a host safe for
+several owners.
 
 **How the guest memory becomes mergeable.** Firecracker has no KSM setting, and its seccomp filter
 traps `prctl`. So impd starts it through `ksm-exec` (`agent/cmd/ksm-exec`), which sets
-`PR_SET_MEMORY_MERGE` and execs Firecracker in place. Every anonymous mapping Firecracker makes then
+`PR_SET_MEMORY_MERGE` and execs the jailer in place (`setsid ksm-exec jailer --id <imp> ...`), or
+Firecracker itself with `IMP_JAILER=false`. The jailer builds the chroot, drops to the imp's uid and
+execs Firecracker, with no fork; the flag belongs to the process's memory, not its uid or mounts, so
+it survives each exec. `ksm-exec` runs before the chroot exists, so the chroot needs no copy of it.
+Template builds and restores start the same way. Every anonymous mapping Firecracker makes then
 carries `VM_MERGEABLE`, guest memory included. The flag must survive the exec:
 
 | Linux | Commit       | Change                                                                 |
@@ -524,8 +529,8 @@ impd refuses to start with `IMP_KSM` on a kernel older than 6.10, or one without
 boot, wake and re-adopt it checks the merge flag: `ksm_merge_any` in `/proc/<pid>/ksm_stat` from
 Linux 6.12, else `mg` on the guest memory in `/proc/<pid>/smaps`. When the flag is missing, it logs
 it, and `imp info` counts the imp as unmergeable; when it cannot read the flag, it logs that. That
-catches the race that 6.19 fixes. Nothing can set the flag on a process from outside after its exec,
-so impd reports it and does not retry.
+catches the race that 6.19 fixes; with the jailer there are two execs, so two such windows. Nothing
+can set the flag on a process from outside after its exec, so impd reports it and does not retry.
 
 **What it saves.** Measured offline on WSL2 (2026-10-02): 3 `ubuntu` guests of 512 MiB, booted cold,
 slept, and every 4 KiB page of their mem files hashed.
