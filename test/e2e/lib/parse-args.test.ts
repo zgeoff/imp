@@ -21,6 +21,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'ssh-wake',
     'ssh-agent',
     'proxy',
+    'proxy-wake',
     'connectors',
     'dashboard',
     'https',
@@ -44,6 +45,7 @@ test('it expands a set and drops duplicates', () => {
     'mcp',
     'ssh',
     'ssh-agent',
+    'proxy',
     'dashboard',
   ]);
 });
