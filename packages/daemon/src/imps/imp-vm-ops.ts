@@ -398,8 +398,6 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       return startAfterFailedWake(imp, paths, wrong);
     }
 
-    removeSnapshotMeta(paths);
-
     const wakeMs = Math.round(performance.now() - started);
 
     context.log(
@@ -419,6 +417,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       sleptAt: null,
       firecrackerVersion: woken.firecrackerVersion,
     });
+
+    // after the record: impd dying before it leaves a sleeping imp with its
+    // snapshot, whose live VM the next reconcile adopts
+    removeSnapshotMeta(paths);
 
     if (!running.isDiskGrowPending) {
       return running;

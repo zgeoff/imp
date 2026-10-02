@@ -1,5 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
+import type { ImpPaths } from '../storage/data-layout';
+import type { InstanceState } from '../vmm/firecracker-client';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
@@ -35,6 +37,12 @@ export function buildFakeVmm() {
 
   // the version each boot and wake reports; a test may set it
   const agent = { version: FAKE_AGENT_VERSION };
+
+  // what each VM serves and does, and the pid files starts wrote; only a pid
+  // in `alive` counts
+  const vms = new Map<number, { apiSocket: string; state: InstanceState }>();
+  const pidFiles = new Map<string, number>();
+
   const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
   const grows: { disk: string; diskBytes: number }[] = [];
@@ -85,6 +93,20 @@ export function buildFakeVmm() {
     return counter.nextPid;
   };
 
+  const setVm = (pid: number, paths: Readonly<ImpPaths>, state: InstanceState): void => {
+    alive.add(pid);
+    vms.set(pid, { apiSocket: paths.apiSocket, state });
+  };
+
+  // the newest live VM on the socket: the one its API answers from
+  const findServing = (paths: Readonly<ImpPaths>) => {
+    const serving = [...vms].filter(
+      ([pid, vm]) => alive.has(pid) && vm.apiSocket === paths.apiSocket,
+    );
+
+    return serving.at(-1)?.[1];
+  };
+
   const buildRunner = (generation: number): VmRunner => {
     // a replaced impd: every later call waits forever
     const runInGeneration = async <T>(call: () => Promise<T>): Promise<T> => {
@@ -98,7 +120,7 @@ export function buildFakeVmm() {
     };
 
     // fail leaves no VM; die returns a pid whose VM is already gone
-    const startFakeVm = async (step: 'boot' | 'wake') => {
+    const startFakeVm = async (step: 'boot' | 'wake', paths: Readonly<ImpPaths>) => {
       const outcome = await pickOutcome(step);
 
       if (outcome === 'fail') {
@@ -107,19 +129,21 @@ export function buildFakeVmm() {
 
       const pid = startPid();
 
+      pidFiles.set(paths.pidFile, pid);
+
       if (outcome === 'ok') {
-        alive.add(pid);
+        setVm(pid, paths, 'Running');
       }
 
       return { pid, firecrackerVersion: 'v1.17.0', agentVersion: agent.version, timings: {} };
     };
 
     return {
-      startVm: () => runInGeneration(() => startFakeVm('boot')),
+      startVm: (plan) => runInGeneration(() => startFakeVm('boot', plan.paths)),
       wakeVm: (plan) =>
         runInGeneration(async () => {
           try {
-            const vm = await startFakeVm('wake');
+            const vm = await startFakeVm('wake', plan.paths);
 
             wakes.push(vm.pid);
 
@@ -130,10 +154,21 @@ export function buildFakeVmm() {
         }),
       sleepVm: (pid, paths) =>
         runInGeneration(async () => {
-          // fail keeps the VM running; die fails after the kill, with no snapshot
+          const vm = vms.get(pid);
+
+          // paused for the snapshot, as Firecracker is
+          if (vm !== undefined) {
+            vm.state = 'Paused';
+          }
+
+          // fail resumes the VM; die fails after the kill, with no snapshot
           const outcome = await pickOutcome('sleep');
 
           if (outcome === 'fail') {
+            if (vm !== undefined) {
+              vm.state = 'Running';
+            }
+
             throw new FakeVmError('snapshot failed');
           }
 
@@ -196,6 +231,33 @@ export function buildFakeVmm() {
           return outcome === 'ok';
         }),
       readGuestUptimeMs: () => runInGeneration(() => Promise.resolve(guest.uptimeMs)),
+      readVmState: (paths) =>
+        runInGeneration(() => Promise.resolve(findServing(paths)?.state ?? null)),
+      resumeVm: (paths) =>
+        runInGeneration(() => {
+          const vm = findServing(paths);
+
+          if (vm !== undefined) {
+            vm.state = 'Running';
+          }
+
+          return Promise.resolve();
+        }),
+      readPid: (paths) => pidFiles.get(paths.pidFile) ?? null,
+      listVms: () =>
+        [...vms]
+          .filter(([pid]) => alive.has(pid))
+          .map(([pid, vm]) => ({ pid, apiSocket: vm.apiSocket })),
+      finishWake: () =>
+        runInGeneration(async () => {
+          const outcome = await pickOutcome('agentReady');
+
+          if (outcome !== 'ok') {
+            throw new FakeVmError('the agent did not answer after the load');
+          }
+
+          return { agentVersion: agent.version, firecrackerVersion: 'v1.17.0' };
+        }),
     };
   };
 
@@ -255,13 +317,32 @@ export function buildFakeVmm() {
       pacer.pace = pace;
     },
 
-    // a Firecracker that is running without any impd knowing it yet
-    spawnOrphan: (): number => {
+    // a Firecracker that is running without any impd knowing it yet; given
+    // the imp's paths, it serves its socket in `state`, with a pid file
+    // unless the start died before it wrote one
+    spawnOrphan: (
+      orphan: {
+        readonly paths: Readonly<ImpPaths>;
+        readonly state?: InstanceState;
+        readonly pidFile?: boolean;
+      } | null = null,
+    ): number => {
       const pid = startPid();
 
       alive.add(pid);
 
+      if (orphan !== null) {
+        setVm(pid, orphan.paths, orphan.state ?? 'Running');
+
+        if (orphan.pidFile ?? true) {
+          pidFiles.set(orphan.paths.pidFile, pid);
+        }
+      }
+
       return pid;
     },
+
+    // what the VM `pid` does now, as GET / reports it
+    readState: (pid: number): InstanceState | undefined => vms.get(pid)?.state,
   };
 }

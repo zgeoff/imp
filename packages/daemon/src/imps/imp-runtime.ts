@@ -21,6 +21,7 @@ import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import { startCounting } from './read-running-imp-usage';
+import { createVmReconciler } from './reconcile-vms';
 import type { ShutdownGate } from './shutdown-gate';
 
 // What the wake proxy, the idle loop, the governor and impd's start and stop
@@ -130,6 +131,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const context = parts.context;
   const lock = parts.lock;
   const ops = parts.ops;
+  const reconciler = createVmReconciler(context, ops);
 
   const requireRunning: ImpRuntime['requireRunning'] = async (name, onFound) => {
     const found = await lock.findImp(name);
@@ -380,10 +382,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       await Promise.all(
         imps.map((listed) =>
-          lock.withImpId(listed.id, async (imp) => {
-            if (imp === undefined) {
+          lock.withImpId(listed.id, async (found) => {
+            if (found === undefined) {
               return;
             }
+
+            const imp = await reconciler.reconcileImp(found);
 
             const paths = context.findPaths(imp.id);
 
@@ -433,6 +437,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           }),
         ),
       );
+
+      await reconciler.killUnknownVms(new Set(imps.map((imp) => imp.id)));
     },
 
     waitForLifecycle: () => lock.waitForAll(),

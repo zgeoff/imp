@@ -1,4 +1,11 @@
+import * as z from 'zod';
+
 // Typed calls to the Firecracker API over its unix socket.
+
+// what the VM does: `Not started` before InstanceStart or a snapshot load
+const InstanceInfoSchema = z.object({ state: z.enum(['Not started', 'Running', 'Paused']) });
+
+export type InstanceState = z.infer<typeof InstanceInfoSchema>['state'];
 
 interface BootSource {
   readonly kernelImagePath: string;
@@ -65,6 +72,7 @@ export interface FirecrackerClient {
   // only on a fresh Firecracker process, before any other configuration
   readonly loadSnapshot: (files: SnapshotFiles, resumeVm: boolean) => Promise<void>;
   readonly getVersion: () => Promise<string>;
+  readonly getInstanceState: () => Promise<InstanceState>;
 }
 
 interface FirecrackerTimeouts {
@@ -210,6 +218,11 @@ export function createFirecrackerClient(
       }
 
       throw new Error(`firecracker GET /version: unexpected body ${text}`);
+    },
+    getInstanceState: async () => {
+      const text = await sendRequest('GET', '/');
+
+      return InstanceInfoSchema.parse(JSON.parse(text)).state;
     },
   };
 }

@@ -7,9 +7,12 @@ import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
+import type { InstanceState } from './firecracker-client';
 import {
   isFirecrackerAlive,
+  listFirecrackers,
   readLogTail,
+  readPidFile,
   startFirecracker,
   stopProcess,
   waitForExit,
@@ -56,6 +59,18 @@ interface WakePlan {
   readonly cgroup: ImpCgroup | null;
 }
 
+// a live Firecracker, by the API socket it serves
+interface FoundVm {
+  readonly pid: number;
+  readonly apiSocket: string;
+}
+
+// what the rest of a wake learned about the VM
+interface FinishedWake {
+  readonly agentVersion: string;
+  readonly firecrackerVersion: string;
+}
+
 // Firecracker, behind an interface so the lifecycle can run against a fake.
 export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
@@ -84,6 +99,19 @@ export interface VmRunner {
   // a live VM after its disk file grew: Firecracker rereads the size, then
   // the guest grows its filesystem into it
   readonly growDrive: (paths: ImpPaths, diskBytes: number) => Promise<void>;
+
+  // what the VM behind the API socket does; null when nothing answers
+  readonly readVmState: (paths: ImpPaths) => Promise<InstanceState | null>;
+  readonly resumeVm: (paths: ImpPaths) => Promise<void>;
+
+  // the pid file a start writes, and every live Firecracker: a start cut
+  // short may have left a VM without the file
+  readonly readPid: (paths: ImpPaths) => number | null;
+  readonly listVms: () => readonly FoundVm[];
+
+  // the rest of a wake, for a VM that loaded its snapshot under an impd that
+  // died: the agent's ping, then the guest clock
+  readonly finishWake: (paths: ImpPaths) => Promise<FinishedWake>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the agent
@@ -354,6 +382,28 @@ export function createVmRunner(): VmRunner {
       } catch {
         return null;
       }
+    },
+    readVmState: async (paths) => {
+      try {
+        return await createFirecrackerClient(paths.apiSocket).getInstanceState();
+      } catch {
+        return null;
+      }
+    },
+    resumeVm: (paths) => createFirecrackerClient(paths.apiSocket).resume(),
+    readPid: (paths) => readPidFile(paths.pidFile),
+    listVms: listFirecrackers,
+    finishWake: async (paths) => {
+      const ping = await waitForAgent(paths.vsockSocket, {
+        deadlineMs: WAKE_AGENT_DEADLINE_MS,
+        attemptMs: 200,
+      });
+
+      await sendResumed(paths.vsockSocket, Date.now());
+
+      const firecrackerVersion = await createFirecrackerClient(paths.apiSocket).getVersion();
+
+      return { agentVersion: ping.version, firecrackerVersion };
     },
   };
 }

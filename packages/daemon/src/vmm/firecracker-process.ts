@@ -1,4 +1,13 @@
-import { closeSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename } from 'node:path';
 
 export interface FirecrackerPaths {
   readonly apiSocket: string;
@@ -114,5 +123,54 @@ export function readLogTail(logFile: string, lines = 20): string {
     return readFileSync(logFile, 'utf8').trimEnd().split('\n').slice(-lines).join('\n');
   } catch {
     return '(no log)';
+  }
+}
+
+// The pid a start wrote, or null without a readable file. impd can die
+// before it writes one: listFirecrackers finds those.
+export function readPidFile(pidFile: string): number | null {
+  try {
+    const pid = Number(readFileSync(pidFile, 'utf8').trim());
+
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+// Every live Firecracker in this process's PID namespace, by the API socket
+// it serves: what /proc/<pid>/cmdline says.
+export function listFirecrackers(): { readonly pid: number; readonly apiSocket: string }[] {
+  const found: { pid: number; apiSocket: string }[] = [];
+
+  for (const entry of readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+
+    const pid = Number(entry);
+    const argv = readCommandLine(pid);
+    const flag = argv.indexOf('--api-sock');
+    const apiSocket = argv[flag + 1];
+
+    if (
+      basename(argv[0] ?? '') === 'firecracker' &&
+      flag !== -1 &&
+      apiSocket !== undefined &&
+      isFirecrackerAlive(pid, apiSocket)
+    ) {
+      found.push({ pid, apiSocket });
+    }
+  }
+
+  return found;
+}
+
+// empty when the process is gone or not ours to read
+function readCommandLine(pid: number): string[] {
+  try {
+    return readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').split('\0');
+  } catch {
+    return [];
   }
 }
