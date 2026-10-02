@@ -49,6 +49,57 @@ stops, calls fail with `SERVICE_UNAVAILABLE`, and while it restarts, `fetch` can
 `{ retryUnavailable: { attempts, delayMs } }` to wait for it to come back. `RAM_BUDGET_EXCEEDED` is
 never retried.
 
+## Run commands
+
+`imp.run` runs a command to its exit and collects its output. Without `stdin`, stdin closes at once.
+
+```ts
+const result = await imp.run('dev', ['sh', '-c', 'uname -a; cat'], { stdin: 'hi\n' });
+
+console.log(result.code, new TextDecoder().decode(result.stdout));
+```
+
+`imp.openExec` streams instead. `stdout` and `stderr` are `ReadableStream`s that end with the
+session. `write` takes a string or bytes and waits while the socket's buffer is full, so a writer in
+a loop keeps to the network's pace.
+
+```ts
+const tail = await imp.openExec('dev', ['tail', '-f', '/var/log/app.log']);
+
+for await (const chunk of tail.stdout) {
+  process.stdout.write(chunk);
+}
+```
+
+`imp.openConsole` opens the root user's login shell with a tty, as `imp console` does. With
+[xterm.js](https://xtermjs.org):
+
+```ts
+const shell = await imp.openConsole('dev', { cols: term.cols, rows: term.rows });
+
+term.onData((data) => void shell.write(data));
+term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+
+const reader = shell.stdout.getReader();
+
+for (let read = await reader.read(); !read.done; read = await reader.read()) {
+  term.write(read.value);
+}
+```
+
+With a tty, `sendSignal('SIGINT')` and `sendSignal('SIGQUIT')` send ^C and ^\ as keys, so they reach
+the foreground job; other signals, and every signal without a tty, go to the process. `close()`, or
+the `signal` option's abort, ends the session.
+
+The socket authenticates with a single-use exec ticket from `exec.ticket`, so the token never goes
+in a URL; a browser behind a proxy that adds the token works the same way.
+
+`exit` resolves with `{ code, signal }`, where `code` is null when a signal ended the command. When
+the command did not run to its exit, `exit` rejects with an `ExecError` whose `code` is impd's (as
+in the table below, plus `EXEC_FAILED` when the command cannot start) or one of `UNAUTHORIZED`,
+`UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`, `BAD_MESSAGE`, `CLOSED` and `LOCAL_ERROR`. Its
+`data` is impd's error data.
+
 ## Errors
 
 A failed call throws an `ORPCError`. impd's errors carry a `code` and typed `data`:

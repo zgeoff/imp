@@ -15,6 +15,7 @@ interface ExecStart {
   readonly argv: readonly string[];
   readonly tty: boolean;
   readonly env?: Readonly<Record<string, string>>;
+  readonly cwd?: string;
   readonly cols?: number;
   readonly rows?: number;
 }
@@ -25,12 +26,18 @@ export type ExecOutcome =
   | { readonly kind: 'exit'; readonly code: number | null; readonly signal: string | null }
 
   // impd refused the command: an unknown imp, no RAM budget, EXEC_FAILED, …
-  | { readonly kind: 'failed'; readonly code: string | null; readonly message: string }
+  | {
+      readonly kind: 'failed';
+      readonly code: string | null;
+      readonly message: string;
+      readonly data?: unknown;
+    }
   | { readonly kind: 'unauthorized' }
   | { readonly kind: 'unreachable'; readonly detail: string }
 
   // the connection dropped after the open, without an exit
-  | { readonly kind: 'closed'; readonly reason: string }
+  // closeCode 1012 (EXEC_CLOSE_RESTARTING) means impd is restarting
+  | { readonly kind: 'closed'; readonly reason: string; readonly closeCode?: number }
   | { readonly kind: 'bad_message'; readonly detail: string }
 
   // a callback threw, such as EPIPE on stdout
@@ -183,7 +190,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     } else if (message.type === 'exit') {
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
     } else {
-      resolveOutcome({ kind: 'failed', code: message.code ?? null, message: message.message });
+      resolveOutcome({
+        kind: 'failed',
+        code: message.code ?? null,
+        message: message.message,
+        ...(message.data !== undefined && { data: message.data }),
+      });
     }
   };
 
@@ -242,7 +254,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     const reason = event.reason === '' ? `code ${String(event.code)}` : event.reason;
 
     if (state.opened) {
-      resolveOutcome({ kind: 'closed', reason });
+      resolveOutcome({ kind: 'closed', reason, closeCode: event.code });
 
       return;
     }

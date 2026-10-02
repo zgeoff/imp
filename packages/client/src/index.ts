@@ -7,3 +7,15 @@ export type { ImpClient, ImpClientOptions } from './create-imp-client';
 export type { RequireAwakeOptions } from './require-awake';
 export { openExecSession } from './exec/open-exec-session';
 export type { ExecOutcome, ExecSession, ExecSessionOptions } from './exec/open-exec-session';
+export { ExecError } from './exec/exec-error';
+export type { ExecClientErrorCode } from './exec/exec-error';
+export { CONSOLE_SHELL } from './exec/open-exec';
+
+export type {
+  ConsoleOptions,
+  ExecExit,
+  ExecHandle,
+  ExecOptions,
+  RunOptions,
+  RunResult,
+} from './exec/open-exec';
