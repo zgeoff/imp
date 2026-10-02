@@ -33,7 +33,10 @@
 #      HTTPS (docs/guides/https.md) passes through the same way: IMP_DOMAIN,
 #      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
 #      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
-#      repo. IMP_DNS_API_TOKEN, a secret, goes in .env like TAILSCALE_AUTHKEY.
+#      repo. IMP_DNS_API_TOKEN, a secret, goes in .env.
+#      TAILSCALE_AUTHKEY comes from the env, else 1Password
+#      (IMP_TAILSCALE_AUTHKEY_REF, default op://cloud/imp-tailscale-authkey/credential),
+#      else .env; see read_tailscale_authkey in scripts/lib.sh.
 #      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
 #      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
 #      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
@@ -128,9 +131,16 @@ up() {
   else
     docker rm -f "$name" >/dev/null 2>&1 || true
     mkdir -p "$data"
-    # .env holds TAILSCALE_AUTHKEY; docker reads it, so it is never echoed
+    # docker reads .env itself, so its secrets are never echoed
     local env_file=() tuning=() var
     [ -f "$IMP_ROOT/.env" ] && env_file=(--env-file "$IMP_ROOT/.env")
+    # the Tailscale key from the env, 1Password or .env (lib.sh); -e with no
+    # value copies it from this environment, so it never lands in argv
+    TAILSCALE_AUTHKEY=$(read_tailscale_authkey)
+    if [ -n "$TAILSCALE_AUTHKEY" ]; then
+      export TAILSCALE_AUTHKEY
+      tuning+=(-e TAILSCALE_AUTHKEY)
+    fi
     [ -n "${IMP_DEV_BACKUP_ENV_FILE:-}" ] && env_file+=(--env-file "$IMP_DEV_BACKUP_ENV_FILE")
     for var in "${tuning_vars[@]}"; do
       [ -n "${!var:-}" ] && tuning+=(-e "$var=${!var}")
