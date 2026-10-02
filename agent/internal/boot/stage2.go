@@ -19,6 +19,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
@@ -68,8 +69,9 @@ func Stage2() error {
 		log.Printf("stage2: ready on vsock port %d", server.Port)
 		return l, nil
 	}
+	launcher := launch.New(r, image)
 	srv := &server.Server{
-		Exec:     exec.NewManager(r, image),
+		Exec:     exec.NewManager(launcher),
 		Services: sup,
 	}
 	// A shutdown request and a signal can race; only the first powers off.
