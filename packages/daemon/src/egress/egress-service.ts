@@ -23,13 +23,14 @@ import type { DnsForward } from './dns-upstream';
 import { createNftWriter, formatNftError, runNft } from './egress-firewall';
 import type { NftRunner } from './egress-firewall';
 import { createQueryHandler, startResolverServer } from './egress-resolver';
-import type { QueryVerdict, ResolverServer } from './egress-resolver';
+import type { QueryVerdict, RateLimit, ResolverServer } from './egress-resolver';
 import { buildAllowRules, isNameAllowed, isTunnelAllowed, listExactNames } from './egress-rules';
 import type { AllowRules } from './egress-rules';
 import { buildElementChange, buildRuleset } from './egress-ruleset';
 import type { NetworkPeer } from './egress-ruleset';
 import { createEgressSets } from './egress-sets';
 import type { AddressAnswer } from './egress-sets';
+import { resolveNetworkName } from './network-names';
 
 // impd's clamp on an answer's TTL, and the size of a box imp's set
 const MIN_TTL_S = 300;
@@ -37,9 +38,12 @@ const MAX_TTL_S = 86_400;
 const SET_SIZE = 4096;
 const SWEEP_MS = 30_000;
 
-// a box imp's queries: a burst, then this many a second
-const QUERY_BURST = 500;
-const QUERIES_PER_SECOND = 100;
+// a box or none imp's queries: a burst, then this many a second
+const CLOSED_RATE: RateLimit = { burst: 500, perSecond: 100 };
+
+// An open imp on a network sends every query through impd, so it gets more:
+// it reaches any server directly anyway.
+const OPEN_RATE: RateLimit = { burst: 2000, perSecond: 1000 };
 
 export interface EgressDeps {
   readonly config: Pick<Config, 'subnet' | 'dns' | 'egressDnsPort'>;
@@ -227,8 +231,13 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const checkName = async (slot: number, name: string): Promise<QueryVerdict | null> => {
     const view = state.slots.get(slot);
 
-    if (view === undefined || view.entry.policy.mode === 'open') {
+    if (view === undefined) {
       return null;
+    }
+
+    // an open imp on a network asks through impd, for its peers' names
+    if (view.entry.policy.mode === 'open') {
+      return 'answer';
     }
 
     if (
@@ -315,11 +324,14 @@ export function createEgressService(deps: EgressDeps): EgressService {
       const handle = createQueryHandler({
         subnet: deps.config.subnet,
         ipv6: ipv6 !== null,
+        resolveLocal: (slot, query) =>
+          resolveNetworkName(state.members, deps.config.subnet, { slot, ...query }),
         checkName,
         writeAnswers,
         forward,
         maxTtlS: MIN_TTL_S,
-        rate: { burst: QUERY_BURST, perSecond: QUERIES_PER_SECOND },
+        readRate: (slot) =>
+          state.slots.get(slot)?.entry.policy.mode === 'open' ? OPEN_RATE : CLOSED_RATE,
         now,
         log: deps.log,
       });

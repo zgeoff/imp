@@ -1,5 +1,5 @@
 import * as dnsPacket from 'dns-packet';
-import type { DecodedPacket } from 'dns-packet';
+import type { Answer, DecodedPacket } from 'dns-packet';
 
 // DNS replies the resolver writes itself, byte by byte: dns-packet cannot
 // encode an Extended DNS Error (RFC 8914).
@@ -9,10 +9,11 @@ const QR = 0x80_00;
 const OPCODE_MASK = 0x78_00;
 const RD = 0x01_00;
 const RA = 0x00_80;
+const AA = 0x04_00;
 const TYPE_OPT = 41;
 const EDE_OPTION = 15;
 
-export const RCODE = { noError: 0, formErr: 1, servFail: 2, refused: 5 } as const;
+export const RCODE = { noError: 0, formErr: 1, servFail: 2, nxDomain: 3, refused: 5 } as const;
 
 // RFC 8914's "Prohibited": the name is outside the imp's policy
 export const EDE_PROHIBITED = 18;
@@ -81,6 +82,17 @@ export function buildEmptyReply(message: Uint8Array, rcode: number, ede?: number
   reply.set(opt, HEADER_BYTES + question.byteLength);
 
   return reply;
+}
+
+// impd's own answer, as the authority for the name
+export function buildLocalReply(query: DnsQuery, answers: readonly Answer[]): Uint8Array {
+  return dnsPacket.encode({
+    type: 'response',
+    id: query.id,
+    flags: ((query.packet.flags ?? 0) & RD) | RA | AA,
+    questions: query.packet.questions ?? [],
+    answers: [...answers],
+  });
 }
 
 // the first question's bytes, or none when it uses compression or runs

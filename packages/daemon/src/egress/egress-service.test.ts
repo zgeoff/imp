@@ -113,7 +113,7 @@ test('the resolver admits the list, its aliases and nothing else; granted hosts 
 
   expect(ctx.nftScripts.at(-1)).toBe('add element inet imp_egress allow0 { 104.16.0.1 }\n');
 
-  // the alias now; open: not the resolver's; none: only granted hosts; no
+  // the alias now; open: forwarded as it is; none: only granted hosts; no
   // imp: refused
   const after = [
     await ctx.egress.checkName(0, 'npm.cdn.test'),
@@ -123,7 +123,7 @@ test('the resolver admits the list, its aliases and nothing else; granted hosts 
     await ctx.egress.checkName(9, 'registry.npmjs.org'),
   ];
 
-  expect(after).toEqual(['admit', null, 'answer', 'refuse', null]);
+  expect(after).toEqual(['admit', 'answer', 'answer', 'refuse', null]);
 });
 
 test('admitted addresses survive a rebuild, and the sweep deletes them when due', async () => {

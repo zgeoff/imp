@@ -8,9 +8,17 @@ import { createDnsForward } from './dns-upstream';
 import { createQueryHandler, startResolverServer } from './egress-resolver';
 import type { QueryVerdict, ResolverDeps } from './egress-resolver';
 import type { AddressAnswer } from './egress-sets';
+import { resolveNetworkName } from './network-names';
 
 // slot 1's guest is 10.66.0.6; 10.66.0.7 is the same /30's broadcast
 const GUEST = '10.66.0.6';
+const SUBNET = parseSubnet('10.66.0.0/16');
+
+// slot 1 shares lab with web in slot 0; slot 2 is on no network
+const MEMBERS = [
+  { network: 'lab', impId: 'b', name: 'box', slot: 1, guestIp: GUEST },
+  { network: 'lab', impId: 'w', name: 'web', slot: 0, guestIp: '10.66.0.2' },
+];
 
 function buildQuery(name: string, type: 'A' | 'AAAA' = 'A', edns = true): Uint8Array {
   return dnsPacket.encode({
@@ -77,7 +85,8 @@ function setupHandler(overrides: Partial<ResolverDeps> = {}) {
   };
 
   const deps: ResolverDeps = {
-    subnet: parseSubnet('10.66.0.0/16'),
+    subnet: SUBNET,
+    resolveLocal: (slot, query) => resolveNetworkName(MEMBERS, SUBNET, { slot, ...query }),
     checkName: (slot, name) => {
       const verdict = slot === 1 ? (verdicts[name] ?? 'refuse') : null;
 
@@ -94,7 +103,7 @@ function setupHandler(overrides: Partial<ResolverDeps> = {}) {
       return Promise.resolve(buildAnswer(query, NPM_ANSWERS));
     },
     maxTtlS: 86_400,
-    rate: { burst: 100, perSecond: 10 },
+    readRate: () => ({ burst: 100, perSecond: 10 }),
     now: () => 0,
     log: () => {},
     ...overrides,
@@ -225,7 +234,7 @@ test('AAAA gets an empty answer, and a host the broker serves adds nothing', asy
 
 test('past the burst a slot is refused until its bucket refills', async () => {
   const clock = { now: 0 };
-  const ctx = setupHandler({ rate: { burst: 2, perSecond: 1 }, now: () => clock.now });
+  const ctx = setupHandler({ readRate: () => ({ burst: 2, perSecond: 1 }), now: () => clock.now });
   const rcodes = [];
 
   for (let query = 0; query < 3; query += 1) {
@@ -244,7 +253,7 @@ test('past the burst a slot is refused until its bucket refills', async () => {
 });
 
 test('a rate-limited query is plain REFUSED, with no EDE 18', async () => {
-  const ctx = setupHandler({ rate: { burst: 1, perSecond: 1 } });
+  const ctx = setupHandler({ readRate: () => ({ burst: 1, perSecond: 1 }) });
 
   await ctx.handle(GUEST, buildQuery('registry.npmjs.org'));
 
@@ -254,6 +263,61 @@ test('a rate-limited query is plain REFUSED, with no EDE 18', async () => {
   expect(readReply(limited).rcode).toBe('REFUSED');
   expect(readEde(limited)).toBeNull();
   expect(readEde(denied)).toBe(18);
+});
+
+test("a peer's name is impd's to answer, whatever the policy refuses", async () => {
+  const ctx = setupHandler();
+
+  const raw = await ctx.handle(GUEST, buildQuery('Web.Lab.Internal.'));
+
+  const reply = readReply(raw);
+
+  expect(reply.rcode).toBe('NOERROR');
+  expect(reply.flag_aa).toBe(true);
+
+  expect(reply.answers).toEqual([
+    expect.objectContaining({ type: 'A', name: 'web.lab.internal', data: '10.66.0.2' }),
+  ]);
+
+  expect(ctx.forwarded).toEqual([]);
+});
+
+test("with IPv6 on, AAAA for a peer's name is no data and never goes upstream", async () => {
+  const ctx = setupHandler({ ipv6: true });
+
+  const reply = await ctx.sendQuery('web.lab.internal', GUEST, 'AAAA');
+
+  expect(reply.rcode).toBe('NOERROR');
+  expect(reply.answers).toEqual([]);
+  expect(ctx.forwarded).toEqual([]);
+});
+
+test('a network name the guest may not see is NXDOMAIN, and never goes upstream', async () => {
+  const ctx = setupHandler();
+
+  // slot 2 is on no network; slot 1 asks for a peer that does not exist
+  const outsider = await ctx.sendQuery('web.lab.internal', '10.66.0.10');
+  const missing = await ctx.sendQuery('nobody.lab.internal');
+
+  expect([outsider.rcode, missing.rcode]).toEqual(['NXDOMAIN', 'NXDOMAIN']);
+  expect(ctx.forwarded).toEqual([]);
+  expect(ctx.admitted).toEqual([]);
+});
+
+test("each slot's rate is its own", async () => {
+  const ctx = setupHandler({
+    readRate: (slot) => (slot === 1 ? { burst: 1, perSecond: 0 } : { burst: 5, perSecond: 0 }),
+  });
+
+  const rcodes = [];
+
+  for (const source of [GUEST, GUEST, '10.66.0.10', '10.66.0.10']) {
+    const reply = await ctx.sendQuery('web.lab.internal', source);
+
+    rcodes.push(reply.rcode);
+  }
+
+  expect(rcodes).toEqual(['NOERROR', 'REFUSED', 'NXDOMAIN', 'NXDOMAIN']);
 });
 
 test('replies carry at most maxTtlS', async () => {
@@ -338,11 +402,12 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
 
   const handle = createQueryHandler({
     subnet: parseSubnet('127.0.0.0/16'),
+    resolveLocal: () => null,
     checkName: () => Promise.resolve('admit'),
     writeAnswers: () => Promise.resolve(),
     forward: createDnsForward(['127.0.0.1'], upstream.port),
     maxTtlS: 86_400,
-    rate: { burst: 100, perSecond: 100 },
+    readRate: () => ({ burst: 100, perSecond: 100 }),
     now: Date.now,
     log: () => {},
   });
@@ -451,11 +516,12 @@ function openTcpClient(port: number, from: string) {
 test('the TCP side closes an idle client and caps the clients of one slot', async () => {
   const handle = createQueryHandler({
     subnet: parseSubnet('127.0.0.0/16'),
+    resolveLocal: () => null,
     checkName: () => Promise.resolve('refuse'),
     writeAnswers: () => Promise.resolve(),
     forward: () => Promise.reject(new Error('no upstream')),
     maxTtlS: 300,
-    rate: { burst: 100, perSecond: 100 },
+    readRate: () => ({ burst: 100, perSecond: 100 }),
     now: Date.now,
     log: () => {},
   });

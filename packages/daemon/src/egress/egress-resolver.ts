@@ -3,15 +3,21 @@ import type { Answer } from 'dns-packet';
 import { findGuestSlot } from '../net/addressing';
 import type { Subnet } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
-import { EDE_PROHIBITED, RCODE, buildEmptyReply, readQuery } from './dns-messages';
+import { EDE_PROHIBITED, RCODE, buildEmptyReply, buildLocalReply, readQuery } from './dns-messages';
 import type { DnsForward } from './dns-upstream';
 import { normalizeName } from './egress-rules';
 import type { AddressAnswer } from './egress-sets';
+import type { LocalAnswer } from './network-names';
 
 // What the resolver does with a name: `admit` forwards it and lets the
 // answer's addresses into the imp's set, `answer` forwards it and adds
 // nothing (a host the broker serves), `refuse` never asks upstream.
 export type QueryVerdict = 'admit' | 'answer' | 'refuse';
+
+export interface RateLimit {
+  readonly burst: number;
+  readonly perSecond: number;
+}
 
 export interface ResolverDeps {
   readonly subnet: Subnet;
@@ -19,7 +25,14 @@ export interface ResolverDeps {
   // imps have IPv6: AAAA answers go into the sets as A answers do
   readonly ipv6?: boolean;
 
-  // null for a slot with no imp, or one whose imp is open
+  // impd's own answer for a network name (network-names.ts), or null for a
+  // name it passes on; asked before checkName, so one never goes upstream
+  readonly resolveLocal: (
+    slot: number,
+    query: Readonly<{ name: string; type: string }>,
+  ) => LocalAnswer | null;
+
+  // null for a slot with no imp
   readonly checkName: (slot: number, name: string) => Promise<QueryVerdict | null>;
 
   // resolves once the addresses are in nft
@@ -33,7 +46,9 @@ export interface ResolverDeps {
   // the longest TTL a reply carries: a guest asks again within it, so an
   // impd restart, which empties the sets, costs a guest at most that long
   readonly maxTtlS: number;
-  readonly rate: { readonly burst: number; readonly perSecond: number };
+
+  // a slot's query rate, which its policy sets
+  readonly readRate: (slot: number) => RateLimit;
   readonly now: () => number;
   readonly log: (message: string) => void;
 }
@@ -49,12 +64,9 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
   // a bucket per slot: a burst, then perSecond
   const tryTakeToken = (slot: number): boolean => {
     const now = deps.now();
-    const bucket = tokens.get(slot) ?? { level: deps.rate.burst, at: now };
-
-    const level = Math.min(
-      deps.rate.burst,
-      bucket.level + ((now - bucket.at) / 1000) * deps.rate.perSecond,
-    );
+    const rate = deps.readRate(slot);
+    const bucket = tokens.get(slot) ?? { level: rate.burst, at: now };
+    const level = Math.min(rate.burst, bucket.level + ((now - bucket.at) / 1000) * rate.perSecond);
 
     if (level < 1) {
       tokens.set(slot, { level, at: now });
@@ -86,6 +98,13 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
     }
 
     const name = normalizeName(query.name);
+    const local = deps.resolveLocal(slot, { name, type: query.type });
+
+    if (local !== null) {
+      return local.kind === 'nxdomain'
+        ? buildEmptyReply(message, RCODE.nxDomain)
+        : buildLocalReply(query, local.records);
+    }
 
     const verdict = await deps.checkName(slot, name);
 
