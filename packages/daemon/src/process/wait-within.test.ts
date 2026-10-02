@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
 import { waitWithin } from './wait-within';
 
 test('it reports whether the promise settled in time and passes a rejection on', async () => {
@@ -8,5 +10,8 @@ test('it reports whether the promise settled in time and passes a rejection on',
   const failed = waitWithin(Promise.reject(new Error('boom')), 50);
 
   expect([quick, slow]).toEqual([true, false]);
-  expect(failed).rejects.toThrow('boom');
+
+  const error = await readRejection(failed);
+
+  expect(readErrorMessage(error)).toBe('boom');
 });

@@ -13,7 +13,10 @@ comes next.
 
 ## Acceptance
 
-`scripts/acceptance.sh --clean` passed twice in a row on 2026-10-02 (WSL2 dev box, nested KVM).
+The acceptance run passed twice in a row from a clean state on 2026-10-02 (WSL2 dev box, nested
+KVM), with the script that `scripts/test-e2e.sh` has since replaced. Each section below is now the
+harness suite with the same number: shell is `lifecycle`, byo-image is `images`, checkpoint-fork is
+`checkpoints`, sleep-wake is `sleep`, and the rest keep their names.
 
 | Section           | Run 1  | Run 2  |
 | ----------------- | ------ | ------ |
@@ -76,12 +79,8 @@ From the milestone work:
   boots every sleeping imp cold ([#10](https://github.com/zgeoff/imp/issues/10)).
 - A wake right after another wake or exec (under about 1 s apart) takes 650–850 ms instead of about
   80 ms. Normal idle timeouts never hit it ([#33](https://github.com/zgeoff/imp/issues/33)).
-- The WebSocket relay through the wake proxy was tested by hand, not in an end-to-end script
-  ([#3](https://github.com/zgeoff/imp/issues/3)).
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
-- `scripts/e2e-*.sh` and the prototype `smoke-*.sh` / `proto-sleep.sh` scripts overlap with
-  `scripts/acceptance.sh` ([#3](https://github.com/zgeoff/imp/issues/3)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 

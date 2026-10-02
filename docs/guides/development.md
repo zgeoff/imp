@@ -10,12 +10,72 @@ bun run typecheck && bun run lint && bun test
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
-scripts/acceptance.sh --clean     # end to end, from a clean state
+scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
 
-`bun run lint:shell` needs shellcheck 0.11.0 on `PATH`, the version CI pins. Run
-`scripts/acceptance.sh` against a real instance when a change touches the lifecycle, the agent or
-the host; [STATUS.md](../../STATUS.md) has the latest results.
+`bun run lint:shell` needs shellcheck 0.11.0 on `PATH`, the version CI pins. Run the end-to-end
+harness against a real instance when a change touches the lifecycle, the agent or the host;
+[STATUS.md](../../STATUS.md) has the latest results.
+
+## End-to-end tests
+
+`scripts/test-e2e.sh` brings up the dev instance (`scripts/dev.sh`), then runs each suite in
+`test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
+way a user would. The suites run in this order:
+
+| Suite         | What it proves                                                                       |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm     |
+| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot    |
+| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                      |
+| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                   |
+| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay        |
+| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused |
+| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
+| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
+
+```sh
+scripts/test-e2e.sh                          # the acceptance set: every suite
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart
+scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
+scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
+```
+
+| Flag      | Effect                                                                                              |
+| --------- | --------------------------------------------------------------------------------------------------- |
+| `--only`  | Comma-separated suites or sets. `acceptance` (the default) is every suite; `fast` is the CI subset. |
+| `--clean` | Logs the instance out of the tailnet, removes the container and wipes its data dir.                 |
+| `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                      |
+| `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                            |
+
+The `acceptance` set is the definition of done: the tailscale suite fails without a
+`TAILSCALE_AUTHKEY`, and the timing limits fail the run. Any other set skips tailscale without a key
+and only warns about a missed limit. The `fast` set takes about 3.5 minutes, most of it idle
+timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its defaults
+the scale suite alone took about 75 seconds in the last acceptance run.
+
+`IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
+`scripts/dev.sh`. These variables tune a run:
+
+| Variable                | Default | Effect                                                   |
+| ----------------------- | ------- | -------------------------------------------------------- |
+| `E2E_RAM_BUDGET_MIB`    | 6144    | impd's RAM budget                                        |
+| `E2E_IDLE_TIMEOUT_S`    | 10      | impd's idle timeout                                      |
+| `E2E_SCALE_COUNT`       | 30      | imps the scale suite creates                             |
+| `E2E_SCALE_MEMORY_MIB`  | 512     | memory of each scale imp                                 |
+| `E2E_SCALE_FILL_MIB`    | 256     | tmpfs each scale imp fills                               |
+| `E2E_MAX_NEW_MS`        | 3000    | limit for `imp new` plus the first exec                  |
+| `E2E_MAX_CHECKPOINT_MS` | 500     | limit for a checkpoint of a running imp, as impd logs it |
+
+The scale suite needs the budget plus 2 GiB of free host memory, and free disk on the data volume
+for a memory snapshot of each imp (count × memory). It restarts the instance with a 600 s idle
+timeout, so the RAM governor, not idleness, decides which imps sleep; the suites after it keep that
+timeout. On a smaller machine, lower the budget and the count, for example
+`E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`.
+
+A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the timings the suites
+measure. A suite file also runs on its own against a running instance:
+`bun test ./test/e2e/suites/sleep.e2e.ts`.
 
 ## Daemon tests
 

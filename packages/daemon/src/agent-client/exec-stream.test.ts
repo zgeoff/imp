@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readRejection } from '../read-rejection';
 import { sendPing } from './agent-requests';
 import { openExecStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
@@ -137,7 +138,9 @@ test('it rejects with the agent error when exec cannot start', async () => {
 
   const opening = openExecStream(vsock.path, { argv: ['nope'], tty: false });
 
-  expect(opening).rejects.toMatchObject({ code: 'EXEC_FAILED' });
+  const error = await readRejection(opening);
+
+  expect(error).toMatchObject({ code: 'EXEC_FAILED' });
 });
 
 test('it refuses a handshake the agent does not accept', async () => {
@@ -153,7 +156,9 @@ test('it refuses a handshake the agent does not accept', async () => {
   });
 
   try {
-    expect(sendPing(path, 500)).rejects.toThrow();
+    const error = await readRejection(sendPing(path, 500));
+
+    expect(error).toBeInstanceOf(Error);
   } finally {
     server.close();
 

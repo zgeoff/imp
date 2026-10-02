@@ -120,7 +120,7 @@ and sleep and wake.
 bun run typecheck && bun run lint && bun test
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && go test -race ./...)
-scripts/acceptance.sh --clean     # end to end, from a clean state
+scripts/test-e2e.sh --clean       # end to end, from a clean state (--only fast for the CI subset)
 ```
 
 CI runs the gates on every push and pull request; the

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { loadConfig } from '../config';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
 import { buildSystemDrivesDir } from './data-layout';
 import { removeUnusedSystemDrives } from './remove-unused-system-drives';
 import { setupSystemFiles } from './setup-system-files';
@@ -71,7 +73,9 @@ test('without IMP_SYSTEM_DRIVE the drive in the data dir is the source', async (
 
     const config = loadConfig({ IMP_DATA_DIR: dir, IMP_KERNEL: `${dir}/vmlinux` });
 
-    expect(setupSystemFiles(config)).rejects.toThrow('imp-system.squashfs does not exist');
+    const error = await readRejection(setupSystemFiles(config));
+
+    expect(readErrorMessage(error)).toContain('imp-system.squashfs does not exist');
 
     mkdirSync(dirname(config.systemDriveSource), { recursive: true });
     writeFileSync(config.systemDriveSource, 'hand-placed drive');

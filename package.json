@@ -62,7 +62,8 @@
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
     "tslib": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "zod": "catalog:"
   },
   "packageManager": "bun@1.4.2"
 }
