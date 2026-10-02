@@ -8,29 +8,51 @@ import { createZfsBackend } from './zfs/zfs-backend';
 // names the backend that wrote the data dir; a switch would orphan every disk
 const MARKER_FILE = 'storage-backend';
 
+// The marker is written once start succeeds: on ZFS, start checks that the
+// dataset is mounted on the data dir, so the marker never lands under it.
 export function createStorageBackend(config: Config): StorageBackend {
   checkStorageMarker(config.dataDir, config.storageBackend);
 
-  if (config.storageBackend === 'zfs' && config.zfsRoot !== null) {
-    return createZfsBackend({ dataDir: config.dataDir, root: config.zfsRoot });
-  }
+  const backend = buildBackend(config);
 
-  return createXfsBackend({ dataDir: config.dataDir });
+  return {
+    ...backend,
+    start: async (live) => {
+      await backend.start(live);
+
+      writeStorageMarker(config.dataDir, config.storageBackend);
+    },
+  };
 }
 
-// Refuses a data dir another backend wrote, and marks a new one.
+function buildBackend(config: Config): StorageBackend {
+  if (config.storageBackend === 'xfs') {
+    return createXfsBackend({ dataDir: config.dataDir });
+  }
+
+  if (config.zfsRoot === null) {
+    throw new Error('IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT');
+  }
+
+  return createZfsBackend({ dataDir: config.dataDir, root: config.zfsRoot });
+}
+
+// Refuses a data dir another backend wrote.
 export function checkStorageMarker(dataDir: string, kind: StorageBackendKind): void {
   const marker = join(dataDir, MARKER_FILE);
-  const isMarked = existsSync(marker);
-  const recorded = isMarked ? readFileSync(marker, 'utf8').trim() : readUnmarked(dataDir);
+  const recorded = existsSync(marker) ? readFileSync(marker, 'utf8').trim() : readUnmarked(dataDir);
 
   if (recorded !== null && recorded !== kind) {
     throw new Error(
       `${dataDir} holds ${recorded} storage, but IMP_STORAGE_BACKEND is ${kind}; moving imps between backends is not supported`,
     );
   }
+}
 
-  if (!isMarked) {
+export function writeStorageMarker(dataDir: string, kind: StorageBackendKind): void {
+  const marker = join(dataDir, MARKER_FILE);
+
+  if (!existsSync(marker)) {
     writeFileSync(marker, `${kind}\n`);
   }
 }

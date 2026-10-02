@@ -1,8 +1,19 @@
-import { mkdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  statfsSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildImagePaths, buildImpPaths } from './data-layout';
 import { createReflinkClone } from './reflink';
 import type { DiskSource, StorageBackend } from './storage-backend';
+
+// an image directory being written, renamed into place once complete
+const STAGING_PREFIX = '.new-';
 
 interface XfsBackendDeps {
   readonly dataDir: string;
@@ -34,19 +45,36 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   return {
     kind: 'xfs',
-    start: () => Promise.resolve(),
+
+    // an image build that a crash cut short leaves its staging dir
+    start: () => {
+      const imagesDir = join(deps.dataDir, 'images');
+      const names = existsSync(imagesDir) ? readdirSync(imagesDir) : [];
+
+      for (const name of names.filter((entry) => entry.startsWith(STAGING_PREFIX))) {
+        rmSync(join(imagesDir, name), { recursive: true, force: true });
+      }
+
+      return Promise.resolve();
+    },
     resolveImpPaths,
 
     createImage: async (digest, write) => {
-      const target = buildImagePaths(deps.dataDir, digest).dir;
-      const staged = join(deps.dataDir, 'images', `.new-${Bun.randomUUIDv7()}`);
+      const paths = buildImagePaths(deps.dataDir, digest);
+      const staged = join(deps.dataDir, 'images', `${STAGING_PREFIX}${Bun.randomUUIDv7()}`);
 
       mkdirSync(staged, { recursive: true });
 
       try {
         await write(staged);
 
-        renameSync(staged, target);
+        // impd before the storage backends wrote config.json first, so a
+        // crash could leave the directory with no rootfs
+        if (!existsSync(paths.rootfs)) {
+          rmSync(paths.dir, { recursive: true, force: true });
+        }
+
+        renameSync(staged, paths.dir);
       } finally {
         rmSync(staged, { recursive: true, force: true });
       }
