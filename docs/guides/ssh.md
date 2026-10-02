@@ -7,10 +7,17 @@ how it works inside impd.
 
 ## Set up
 
-1. Add your public key to `authorized_keys` in the `ssh` directory of the data directory:
-   `/var/lib/imp/ssh/authorized_keys` on a server, and in the host container. The file and its
-   directory must not be writable by group or others. impd reads the file again when it changes, so
-   a new key works on the next login.
+1. Bind your public key to a token, or add it to `authorized_keys`. A key bound to a token gets only
+   that token's imps ([keys bound to tokens](#keys-bound-to-tokens)):
+
+   ```sh
+   imp token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
+   ```
+
+   A key in `authorized_keys` gets every imp. The file is in the `ssh` directory of the data
+   directory: `/var/lib/imp/ssh/authorized_keys` on a server, and in the host container. The file
+   and its directory must not be writable by group or others. impd reads the file again when it
+   changes, so a new key works on the next login.
 
    ```sh
    # a server: /var/lib/imp is the host's bind mount
@@ -65,17 +72,46 @@ Host box.imp
 
 - The SSH user names the imp. Commands run as the image's user (its `USER`, else root), as with
   `imp exec`.
-- Every key in `authorized_keys` gives `exec` and tunnels on every imp, whatever
-  [tokens](./tokens.md) exist: the file is the host owner's. The API audit log names the key by its
-  comment.
+- A login needs `exec` on the imp it names. A key bound to a token has that token's scope and imps.
+  Every key in `authorized_keys` has `exec` and tunnels on every imp, whatever [tokens](./tokens.md)
+  exist: the file is the host owner's.
+- The API audit log names a bound key's login by its token, and a file key's as `key <comment>`. A
+  token name has no space, so the two never look alike.
 - A line with options (`from=`, `command=`, `restrict`, ...) is skipped, and impd logs why. The
   gateway cannot enforce options, so it does not grant what they would limit. ed25519, ECDSA and RSA
   keys work. FIDO (`sk-`) and DSA keys do not.
-- An unknown imp and an unknown key get the same `Permission denied (publickey)`, so nobody can
-  probe for imp names. A refused login wakes nothing.
-- Tailscale identity for SSH logins (checked with `tailscale whois`, as Tailscale SSH does), and
-  keys tied to scoped tokens, are not built yet. The API takes a
-  [tailnet identity](./tokens.md#tailnet-identity) already.
+- An unknown imp, an unknown key and a key without `exec` on the imp get the same
+  `Permission denied (publickey)`, so nobody can probe for imp names. A refused login wakes nothing.
+- Tailscale identity for SSH logins (checked with `tailscale whois`, as Tailscale SSH does) is not
+  built yet. The API takes a [tailnet identity](./tokens.md#tailnet-identity) already.
+
+## Keys bound to tokens
+
+A key bound to a [token](./tokens.md) logs in as that token: its scope and its imp patterns hold,
+and the audit log names it.
+
+```sh
+imp token new laptop --scope exec --imps 'dev-*' --ssh-key ~/.ssh/id_ed25519.pub
+imp token key add laptop ~/.ssh/id_rsa.pub   # bind another key
+imp token key ls laptop                      # SHA256:... comment
+imp token key rm laptop SHA256:...           # unbind one
+```
+
+- A login needs `exec` on the imp it names. Every channel of the login, a shell, a command, SFTP,
+  `-L` and `-R` forwards and `-A`, runs on that one imp, so the login check covers them all. A
+  `read` token's key opens nothing.
+- A key binds to one token at most, and a token holds up to 16 keys. The same rules as
+  `authorized_keys` apply: no options, and no FIDO or DSA keys.
+- impd refuses to bind a key that `authorized_keys` lists, and says to delete the line first. A
+  binding that stood next to the line would hand the key back its full access the moment the binding
+  was removed. A bound key added to the file later still logs in only as its token.
+- Removing the key, or its token, ends the logins made with it at once.
+- A token cannot change once made, so a login keeps the scope it was checked with. Change a key's
+  reach by binding it to another token.
+
+To move a key from `authorized_keys` to a token: delete its line, then bind it. With every key
+moved, `IMP_SSH_AUTHORIZED_KEYS=false` turns the file off: impd then reads it only to refuse
+bindings, and only bound keys log in.
 
 ## What works
 
@@ -133,7 +169,7 @@ git push                      # signed by your agent
   way to tell it.
 
 > **WARNING:** Forward your agent only to an imp whose other users you trust with your keys. Every
-> SSH login runs as the same image user, so any key in `authorized_keys` can use your forwarded
+> SSH login runs as the same image user, so any key that logs in to the imp can use your forwarded
 > agent while you are connected, and so can root in the imp: in images that run as root, that is
 > every command. They cannot copy your key, but they can sign with it until you disconnect.
 > `ssh-add -c` makes your agent ask before each use.

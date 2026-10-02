@@ -17,6 +17,7 @@ error.
 | `IMP_PROXY_PORT`                | `7080`                      | The wake proxy with Host-header routing.                                                                                                            |
 | `IMP_PORT_BASE`                 | `20000`                     | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                    |
 | `IMP_SSH_PORT`                  | `22`                        | The [SSH gateway](./ssh.md), on IPv4 in the container's namespace. `0` turns it off.                                                                |
+| `IMP_SSH_AUTHORIZED_KEYS`       | `true`                      | `false`: keys in `<data>/ssh/authorized_keys` log in nowhere; only [keys bound to tokens](./ssh.md#keys-bound-to-tokens) do.                        |
 | `IMP_BROKER_PORT`               | `7081`                      | The credential broker on every guest's gateway ([connectors](./connectors.md)). Only guests reach it.                                               |
 | `IMP_EGRESS_DNS_PORT`           | `7053`                      | The egress resolver on every guest's gateway ([egress](../architecture/networking.md#egress)). Only guests reach it.                                |
 | `IMP_BROKER_TEST_UPSTREAMS`     | none                        | Tests only: a file of fake upstreams for granted hosts ([development](./development.md#end-to-end-tests)). impd logs each load.                     |
@@ -152,14 +153,14 @@ impd tuning passes through an allowlist. When set on your machine, `dev.sh` pass
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_TAILNET_IDENTITIES`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
-variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
-`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and
-`IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker
-network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
-the keys in your own shell never reach the container. Other impd variables keep their defaults in
-the dev container. A ZFS dev instance needs the zfs module on the machine;
-`scripts/zfs-host-test.sh` runs one on a throwaway pool.
+`IMP_TAILNET_IDENTITIES`, `IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to
+impd, the `IMP_BACKUP_*` variables, and the HTTPS settings except the token: `IMP_DOMAIN`,
+`IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`,
+`IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the
+container on that Docker network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the
+repository's `AWS_*` keys, so the keys in your own shell never reach the container. Other impd
+variables keep their defaults in the dev container. A ZFS dev instance needs the zfs module on the
+machine; `scripts/zfs-host-test.sh` runs one on a throwaway pool.
 
 ## CLI
 

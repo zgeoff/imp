@@ -266,11 +266,16 @@ patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward t
 - **Connections.** impd accepts each TCP connection and hands it to `ssh2`. A client must log in
   within 30 s; at most 32 connections wait to log in, and a 33rd is dropped. Six refused logins end
   the connection. A keepalive every 15 s drops a client that misses 3.
-- **Login.** Public keys only, from `<dataDir>/ssh/authorized_keys`, read again when the file
-  changes. The SSH user names the imp. The key check and the imp lookup give the same refusal, and
-  nothing before a verified signature for a known imp touches the imp. A login opens an `ssh`
-  connection in the activity tracker and starts the wake; channels wait for it. A failed wake
-  reaches each channel as an error on stderr and exit status 255, not as a refused login.
+- **Login.** Public keys only: keys bound to tokens, held in memory by the token store, then
+  `<dataDir>/ssh/authorized_keys`, read again when the file changes (unless
+  `IMP_SSH_AUTHORIZED_KEYS=false`). A bound key wins over the same key in the file. The SSH user
+  names the imp, and the login needs `exec` on it, checked against the name before the imp lookup
+  and against the imp after. The key check, the scope check and the imp lookup give the same
+  refusal, and nothing before a verified signature for a known imp touches the imp. Removing a bound
+  key or its token ends its connections through the same revocation signals as the API's sockets. A
+  login opens an `ssh` connection in the activity tracker and starts the wake; channels wait for it.
+  A failed wake reaches each channel as an error on stderr and exit status 255, not as a refused
+  login.
 - **Sessions.** A shell, a command or the `sftp` subsystem is an agent exec, as `imp exec` is: the
   pty and its size, `TERM`, `LANG` and `LC_*`, and `SSH_CONNECTION` go with it, and resizes and
   signals follow it. SFTP runs `/run/imp/sys/imp-agent sftp` from the system drive. Client input

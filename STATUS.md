@@ -118,8 +118,8 @@ From the milestone work:
 - Scoped tokens and tailnet identity ([#29](https://github.com/zgeoff/imp/issues/29)): the `tokens`
   e2e suite (3.5–4.8 s) checks scopes and imp patterns through the CLI. The `tailscale` suite's
   tailnet identity case passed once on the dev box (suite 31.4 s with it), with a rule for any
-  member. SSH logins still go by `authorized_keys` only: every key there has `exec` on every imp,
-  and keys tied to scoped tokens are not built.
+  member. SSH keys bind to tokens ([#63](https://github.com/zgeoff/imp/issues/63)); keys left in
+  `authorized_keys` still have `exec` on every imp until `IMP_SSH_AUTHORIZED_KEYS=false`.
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 
