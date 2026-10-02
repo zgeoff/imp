@@ -70,9 +70,11 @@ cold boot away.
 A cold boot writes `vm.json` in the imp's directory: what the VM booted with. It holds the
 Firecracker version, the snapshot format, the host kernel (`uname -r`), the sha256 of the guest
 kernel and of the system drive, the drive's path, the agent's protocol version from its first
-`ping`, and why the boot was cold when it replaced a wake. The file stays through sleeps, wakes and
-impd restarts, so a re-adopted VM that booted on an older drive still says so. Each sleep copies it
-into `meta.json`, with the imp's memory size and the RAM the VM owned at sleep.
+`ping`, and why the boot was cold when it replaced a wake (the next sleep clears that). It is
+written next to the old file and renamed over it; a failed write is logged and the boot goes on. The
+file stays through sleeps, wakes and impd restarts, so a re-adopted VM that booted on an older drive
+still says so. Each sleep copies it into `meta.json`, with the imp's memory size and the RAM the VM
+owned at sleep.
 
 A wake loads the snapshot only when all of these hold. Otherwise it boots the disk cold:
 

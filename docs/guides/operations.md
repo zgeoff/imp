@@ -23,7 +23,7 @@ asleep. [Sleep and wake](../architecture/sleep-and-wake.md#restarts) has the det
 ## Upgrade
 
 `deploy/upgrade.sh` moves a server to a new release image. Pass `--compose deploy/compose.yaml` when
-the host runs under compose; the default is the systemd unit.
+the host runs under compose; the default is the systemd unit. It needs `docker`, `curl` and `jq`.
 
 ```sh
 deploy/upgrade.sh
@@ -31,8 +31,8 @@ deploy/upgrade.sh
 
 1. It pulls `IMP_HOST_IMAGE` (from the environment, else `/etc/imp/imp-host.env`). It stops there
    when the host already runs that image.
-2. It sleeps every awake imp through the API, one at a time. If one fails to sleep, it stops and the
-   host keeps the old image. The stop would sleep them too, but only within its 120 s.
+2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
+   stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
    back, and lists the imps.
 
@@ -47,15 +47,20 @@ the full rule:
 
 `imp ls` says what an upgrade means for each imp in its NOTE column:
 
-| NOTE                    | Meaning                                                                   |
-| ----------------------- | ------------------------------------------------------------------------- |
-| `boots cold: <reason>`  | A sleeping imp whose snapshot cannot load; its next wake boots the disk.  |
-| `booted cold: <reason>` | An awake imp whose last wake became a cold boot, and why.                 |
-| `outdated: agent`       | The imp runs an older agent, kernel or Firecracker than the host has now. |
+| NOTE                                                | Meaning                                                                                         |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `boots cold: <reason>`                              | A sleeping imp whose snapshot cannot load; its next wake boots the disk.                        |
+| `booted cold: <reason>`                             | An awake imp whose last wake became a cold boot, and why. Its next sleep clears it.             |
+| `outdated: agent`                                   | The imp runs an older agent, kernel or Firecracker than the host has now.                       |
+| `booted by an older impd; its next wake boots cold` | An awake imp whose VM an impd from before this scheme booted. Its snapshot cannot name a drive. |
 
 To pick up the new agent or kernel in an outdated imp, run `imp stop <name>` and `imp start <name>`.
 It loses its memory, not its disk. impd deletes the old drive on its next start, once no imp uses
 it.
+
+An impd from before this scheme kept the drive at `/var/lib/imp/system/imp-system.squashfs`, and a
+VM it booted still runs from that file. impd leaves the file alone. Remove it once no such VM runs:
+`imp ls` shows none with `booted by an older impd`.
 
 **Roll back** with `docker tag <old image ID> <image>` and the same restart. A rollback to an impd
 from before this upgrade scheme (the first release with `system/drives/`) does not match the hashes

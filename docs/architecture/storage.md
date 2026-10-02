@@ -43,7 +43,9 @@ impd copies the guest kernel and the system drive into `system/` on start.
   stays, and a sleeping imp still wakes with its memory and its old agent.
 - **Pruning.** On start, after it re-adopts the VMs, impd deletes every drive that is not the
   current one and that no snapshot and no live VM names. An imp leaves an old drive behind once it
-  boots cold, or is stopped or destroyed, and the next start removes it.
+  boots cold, or is stopped or destroyed, and the next start removes it. Drives are matched by file
+  name, so a moved data dir keeps them. impd never touches the old `system/imp-system.squashfs`
+  ([operations](../guides/operations.md#upgrade)).
 
 ## Checkpoints, restores and forks
 
