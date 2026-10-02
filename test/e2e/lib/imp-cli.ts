@@ -8,6 +8,13 @@ const IMP_SCRIPT = join(REPO_ROOT, 'scripts', 'imp');
 // The CLI's JSON output, with only the fields the suites read. Dates arrive
 // as ISO strings.
 const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stopped', 'error']);
+const SampleSchema = z.object({ cpuThrottledMs: z.number() });
+
+const ResourcesSchema = z.object({
+  wakeCount: z.number(),
+  awakeMs: z.number(),
+  sample: SampleSchema.optional(),
+});
 
 const ImpRowSchema = z.object({
   id: z.string(),
@@ -26,6 +33,8 @@ const ImpRowSchema = z.object({
   diskUsage: z
     .object({ exclusiveBytes: z.number(), sharedBytes: z.number(), isPartial: z.boolean() })
     .optional(),
+  cpu: z.object({ limit: z.number().nullable(), weight: z.number() }).optional(),
+  resources: ResourcesSchema.optional(),
 });
 
 const NameFailureSchema = z.object({ name: z.string(), error: z.string() });
@@ -38,6 +47,7 @@ const SystemInfoSchema = z.object({
   awakeCount: z.number(),
   impCount: z.number(),
   storage: z.object({ backend: z.enum(['xfs', 'zfs']) }),
+  cpu: z.object({ hostCpus: z.number(), limitsEnforced: z.boolean() }).optional(),
   tailscale: z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),

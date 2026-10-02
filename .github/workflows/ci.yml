@@ -273,6 +273,21 @@ jobs:
       - name: Check KVM
         run: scripts/check-kvm.sh
 
+      # The cpu suite fails in CI unless a private cgroup namespace gets the
+      # cpu controller. Docker's containers live under system.slice: hand cpu
+      # down to it, then show what a container gets. Never fails by itself; the
+      # image is host/Dockerfile's runtime base, pinned the same.
+      - name: Hand the cpu controller to containers
+        run: |
+          for dir in /sys/fs/cgroup /sys/fs/cgroup/system.slice; do
+            if ! grep -qw cpu "$dir/cgroup.subtree_control"; then
+              echo +cpu | sudo tee "$dir/cgroup.subtree_control" >/dev/null || true
+            fi
+          done
+          docker run --rm --cgroupns=private \
+            debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
+            cat /sys/fs/cgroup/cgroup.controllers || true
+
       # /mnt is the runner's larger temp disk; the XFS file goes there when
       # the image has one. CI must not pass --clean to the harness: it
       # refuses to wipe a data dir outside .data/ that holds no imp.xfs, and
