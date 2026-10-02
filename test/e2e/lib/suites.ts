@@ -39,6 +39,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'tokens', prefix: 'e2e-tok-', images: ['e2e-tiny'] },
   { name: 'egress', prefix: 'e2e-eg-', images: ['e2e-tiny'] },
   { name: 'ipv6', prefix: 'e2e-v6-', images: ['e2e-tiny', 'e2e-ra'] },
+  { name: 'networks', prefix: 'e2e-net-', images: ['e2e-tiny'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
   { name: 'templates', prefix: 'e2e-tpl-', images: ['e2e-git'] },
 
