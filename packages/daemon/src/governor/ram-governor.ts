@@ -1,5 +1,6 @@
 import { EVENT_VERSION } from '@imp/api';
-import { buildImpOverBudgetError, buildRamBudgetError } from '../api-errors';
+import { buildImpOverBudgetError, buildRamBudgetError, readNeededMib } from '../api-errors';
+import type { ProtectedImp } from '../api-errors';
 import type { EventBus } from '../events/event-bus';
 import type { LockFreeSleep } from '../imps/lock-free-sleep';
 import { createSemaphore } from '../imps/semaphore';
@@ -52,6 +53,8 @@ interface GovernorDecision {
   readonly trigger: string;
   readonly usedMib: number;
   readonly reserveMib?: number;
+  readonly neededMib?: number;
+  readonly protectedCount?: number;
 }
 
 interface RoomOutcome {
@@ -64,6 +67,9 @@ interface RoomOutcome {
   // what was still missing at the last measurement, and what was in use
   readonly missingMib: number;
   readonly effectiveMib: number;
+
+  // the awake imps it could not sleep, at the last pass
+  readonly protected: readonly ProtectedImp[];
 }
 
 interface RamUsage {
@@ -140,6 +146,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     request: AdmissionRequest,
     decision: 'admitted' | 'refused',
     usedMib: number,
+    refusal?: Pick<GovernorDecision, 'neededMib' | 'protectedCount'>,
   ): void => {
     if (request.name !== null) {
       emitDecision({
@@ -148,6 +155,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         trigger: 'admission',
         usedMib,
         reserveMib: request.reserveMib,
+        ...refusal,
       });
     }
   };
@@ -214,6 +222,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       diskFull: false,
       missingMib,
       effectiveMib: usage.effectiveMib,
+      protected: [],
     };
   };
 
@@ -237,7 +246,14 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       const missingMib = findMissing(usage);
 
       if (missingMib <= 0) {
-        return { fits: true, slept, diskFull, missingMib, effectiveMib: usage.effectiveMib };
+        return {
+          fits: true,
+          slept,
+          diskFull,
+          missingMib,
+          effectiveMib: usage.effectiveMib,
+          protected: [],
+        };
       }
 
       const time = now();
@@ -260,7 +276,21 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       const [victim] = picked.victims;
 
       if (victim === undefined || (!picked.enough && whenShort === 'giveUp')) {
-        return { fits: false, slept, diskFull, missingMib, effectiveMib: usage.effectiveMib };
+        return {
+          fits: false,
+          slept,
+          diskFull,
+          missingMib,
+          effectiveMib: usage.effectiveMib,
+          protected: candidates
+            .filter((candidate) => candidate.held || candidate.busy)
+            .map((candidate) => ({
+              name: candidate.name,
+              ramMib: candidate.ramMib,
+              leased: candidate.held,
+              busy: candidate.busy,
+            })),
+        };
       }
 
       const outcome = await deps.trySleepImp(victim.id, reason, { by: 'governor' });
@@ -290,7 +320,11 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         if (request.memoryMib > deps.budgetMib) {
           const usage = await readEffectiveUsage(request.id);
 
-          emitAdmission(request, 'refused', usage.effectiveMib);
+          emitAdmission(request, 'refused', usage.effectiveMib, {
+            neededMib: readNeededMib(usage.effectiveMib, request.memoryMib, deps.budgetMib),
+            protectedCount: 0,
+          });
+
           throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
         }
 
@@ -317,8 +351,17 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         if (!room.fits) {
           const usage = await readEffectiveUsage(request.id);
 
-          emitAdmission(request, 'refused', usage.effectiveMib);
-          throw buildRamBudgetError(deps.budgetMib, usage.effectiveMib, request.reserveMib);
+          emitAdmission(request, 'refused', usage.effectiveMib, {
+            neededMib: readNeededMib(usage.effectiveMib, request.reserveMib, deps.budgetMib),
+            protectedCount: room.protected.length,
+          });
+
+          throw buildRamBudgetError({
+            budgetMib: deps.budgetMib,
+            usedMib: usage.effectiveMib,
+            requestedMib: request.reserveMib,
+            protected: room.protected,
+          });
         }
 
         reservations.set(request.id, {

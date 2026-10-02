@@ -77,6 +77,13 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'imps.update': manageImp,
   'imps.fork': { scope: 'manage', on: 'imp', fields: ['source', 'name'] },
 
+  // as imps.hold: a lease keeps the imp awake, and each caller touches only
+  // its own; list may leave out the imp and shows the caller's imps only
+  'leases.acquire': execImp,
+  'leases.renew': execImp,
+  'leases.release': execImp,
+  'leases.list': { scope: 'exec', on: 'any', audit: false },
+
   'checkpoints.create': manageImp,
   'checkpoints.list': readImp,
   'checkpoints.restore': manageImp,

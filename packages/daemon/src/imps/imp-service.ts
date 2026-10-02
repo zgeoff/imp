@@ -17,6 +17,8 @@ import type { ImpCommands } from './imp-commands';
 import { createImpCommands } from './imp-commands';
 import { createImpContext } from './imp-context';
 import type { ImpServiceDeps } from './imp-context';
+import { createImpLeases } from './imp-leases';
+import type { ImpLeases } from './imp-leases';
 import { createImpLock } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { createImpPresenter } from './imp-presenter';
@@ -31,6 +33,7 @@ export type { ImpServiceDeps } from './imp-context';
 
 // The imp API: what the router and the exec and tunnel endpoints call.
 export type ImpService = ImpCommands &
+  ImpLeases &
   SessionService &
   ServiceApi &
   Pick<
@@ -92,7 +95,8 @@ export function createImpService(deps: ImpServiceDeps): Imps {
 
   const resourceListeners = new Set<ResourceListener>();
 
-  const commands = createImpCommands({ context, lock, ops, presenter });
+  const leases = createImpLeases({ context, lock, ops, presenter });
+  const commands = createImpCommands({ context, lock, ops, presenter, leases });
   const runtime = createImpRuntime({ context, gate, lock, ops });
 
   const sessions = createSessionService({
@@ -103,6 +107,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
 
   return {
     ...commands,
+    ...leases,
     ...runtime,
     ...sessions,
     ...createServiceApi({
