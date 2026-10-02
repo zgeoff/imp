@@ -2,20 +2,26 @@
 
 ## [0.15.0](https://github.com/zgeoff/imp/compare/v0.14.0...v0.15.0) (2026-10-02)
 
-
 ### Features
 
-* **api:** add the leases contract, the leased error and capacity data ([bb1aa0f](https://github.com/zgeoff/imp/commit/bb1aa0f5d2080d922ce5fa232e99e6892a4b87ef))
-* **cli:** force imp sleep and imp stop past an imp's leases ([bfd4429](https://github.com/zgeoff/imp/commit/bfd44290840c0b2ac9351c8aebb4467fe6bd4d76))
-* **daemon:** derive a lease principal for each caller ([11a3490](https://github.com/zgeoff/imp/commit/11a34903f94ae7d0c7502ea090237edfd313eea2))
-* **daemon:** serve leases, refuse leased sleeps and name protected imps ([d1e475d](https://github.com/zgeoff/imp/commit/d1e475d7a673bd76a120a5de02e26bdd8bcb33bf))
-* **daemon:** store each owner's leases in imp_leases ([31c5895](https://github.com/zgeoff/imp/commit/31c58958dda8917b53b185054f7c071cdc830463))
-
+- **api:** add the leases contract, the leased error and capacity data
+  ([bb1aa0f](https://github.com/zgeoff/imp/commit/bb1aa0f5d2080d922ce5fa232e99e6892a4b87ef))
+- **cli:** force imp sleep and imp stop past an imp's leases
+  ([bfd4429](https://github.com/zgeoff/imp/commit/bfd44290840c0b2ac9351c8aebb4467fe6bd4d76))
+- **daemon:** derive a lease principal for each caller
+  ([11a3490](https://github.com/zgeoff/imp/commit/11a34903f94ae7d0c7502ea090237edfd313eea2))
+- **daemon:** serve leases, refuse leased sleeps and name protected imps
+  ([d1e475d](https://github.com/zgeoff/imp/commit/d1e475d7a673bd76a120a5de02e26bdd8bcb33bf))
+- **daemon:** store each owner's leases in imp_leases
+  ([31c5895](https://github.com/zgeoff/imp/commit/31c58958dda8917b53b185054f7c071cdc830463))
 
 ### Bug Fixes
 
-* **daemon:** end forced leases after the sleep, and pass no-op sleeps ([e7fc0f9](https://github.com/zgeoff/imp/commit/e7fc0f99ebfd0d49f6d38e264c45e5f6e72c5078)), closes [#96](https://github.com/zgeoff/imp/issues/96)
-* **daemon:** give a tagged node with no stable id no lease principal ([e5b6579](https://github.com/zgeoff/imp/commit/e5b657982268bc5da9a8813473c4da3a69f9970a))
+- **daemon:** end forced leases after the sleep, and pass no-op sleeps
+  ([e7fc0f9](https://github.com/zgeoff/imp/commit/e7fc0f99ebfd0d49f6d38e264c45e5f6e72c5078)), closes
+  [#96](https://github.com/zgeoff/imp/issues/96)
+- **daemon:** give a tagged node with no stable id no lease principal
+  ([e5b6579](https://github.com/zgeoff/imp/commit/e5b657982268bc5da9a8813473c4da3a69f9970a))
 
 ## [0.14.0](https://github.com/zgeoff/imp/compare/v0.13.1...v0.14.0) (2026-10-02)
 
