@@ -14,8 +14,13 @@ import { SessionNameSchema } from './session-schema';
 export const EXEC_PATH = '/exec';
 export const EXEC_TICKET_PARAM = 'ticket';
 
-// impd closes every exec socket with this code when it stops or restarts
+// impd closes every exec socket with this code when it stops or restarts;
+// tunnel sockets too
 export const EXEC_CLOSE_RESTARTING = 1012;
+
+// a tunnel whose agent connection ended: a forced sleep, a stop, a vsock
+// reset. The next connection wakes the imp again.
+export const TUNNEL_CLOSE_LOST = 4000;
 
 export const EXEC_CHANNELS = {
   stdin: 0,

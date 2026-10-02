@@ -15,6 +15,7 @@ export {
   EXEC_CLOSE_RESTARTING,
   EXEC_PATH,
   EXEC_TICKET_PARAM,
+  TUNNEL_CLOSE_LOST,
   ExecAttachMessageSchema,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
@@ -31,6 +32,14 @@ export type {
   ExecServerMessage,
 } from './exec-protocol';
 
+export {
+  TUNNEL_PATH,
+  TUNNEL_WINDOW_BYTES,
+  TunnelClientMessageSchema,
+  TunnelServerMessageSchema,
+} from './tunnel-protocol';
+
+export type { TunnelClientMessage, TunnelServerMessage } from './tunnel-protocol';
 export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema } from './image-schema';
 export type { Image } from './image-schema';
