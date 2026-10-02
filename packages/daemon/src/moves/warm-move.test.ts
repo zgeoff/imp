@@ -233,8 +233,14 @@ test('a system drive the target lacks goes along, and one whose sum is not its n
   expect(kept).toMatchObject({ state: 'sleeping', moveState: null });
 });
 
-test("a snapshot that opens a drive off the target's own path is refused", async () => {
-  await using ctx = await setupWarmTest();
+test("a snapshot that opens a drive off the target's own path is refused, and frees the slot with no abort", async () => {
+  await using ctx = await setupWarmTest({
+    // the source's abort never arrives: the refusal alone frees the slot
+    hook: (request, forward) =>
+      request.url.endsWith(MOVE_PATHS.abort)
+        ? Promise.reject(new Error('the source is gone'))
+        : forward(),
+  });
 
   const vmIdentity = ctx.source.storage.resolveImpPaths(ctx.impId).vmIdentity;
   const vm = VmIdentitySchema.parse(JSON.parse(readFileSync(vmIdentity, 'utf8')));
@@ -245,7 +251,7 @@ test("a snapshot that opens a drive off the target's own path is refused", async
   const staged = await findImpByName(ctx.target.db, 'dev');
   const isFree = await ctx.isTargetSlotFree();
 
-  expect(status.error).toContain("the snapshot's drive is not at");
+  expect(status.error).toContain('did not confirm the abort');
   expect(staged).toBeUndefined();
   expect(isFree).toBe(true);
 });

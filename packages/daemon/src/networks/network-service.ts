@@ -1,5 +1,5 @@
 import type { Network, NetworkJoin } from '@imp/api';
-import { buildConflictError, buildNotFoundError } from '../api-errors';
+import { buildConflictError, buildMovingError, buildNotFoundError } from '../api-errors';
 import { listEgressSlots } from '../db/egress';
 import { findImpByName } from '../db/imps';
 import {
@@ -167,7 +167,19 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
 
     joinNetwork: async (networkName, impName) => {
       const network = await requireNetwork(networkName);
-      const impId = await requireImpId(impName);
+      const imp = await findImpByName(db, impName);
+
+      if (imp === undefined) {
+        throw buildNotFoundError('imp', impName);
+      }
+
+      // a marked imp is on its way to a host without this network, and a
+      // join after a warm move's network check would slip past it
+      if (imp.moveState !== null) {
+        throw buildMovingError(impName);
+      }
+
+      const impId = imp.id;
 
       await deps.egress.changeNetworks({
         write: () => writeMember(db, network.id, impId),
