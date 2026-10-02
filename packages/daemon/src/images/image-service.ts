@@ -89,7 +89,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return InspectSchema.parse(JSON.parse(stdout))[0];
   };
 
-  // OCI image → sparse ext4 (DESIGN 2.5); returns the rootfs size on disk
+  // OCI image → sparse ext4
+  // (docs/architecture/storage.md#images-any-oci-image); returns the rootfs
+  // size on disk
   const buildRootfs = async (ref: string, digest: string, ociConfig: unknown): Promise<number> => {
     const paths = buildImagePaths(deps.config.dataDir, digest);
 

@@ -349,9 +349,9 @@ async function main(): Promise<void> {
 
   void setupDefaultImage();
 
-  // SIGTERM and SIGINT (container stop): every running imp goes to sleep, so
-  // a container restart keeps memory. SIGHUP (impd restart in place): VMs keep
-  // running and the next impd re-adopts them (DESIGN 2.8).
+  // SIGTERM and SIGINT (container stop): every running imp goes to sleep, so a container
+  // restart keeps memory. SIGHUP (impd restart in place): VMs keep running and the next impd
+  // re-adopts them (docs/architecture/sleep-and-wake.md#restarts).
   const stop = async (sleepImps: boolean) => {
     const started = performance.now();
     const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));

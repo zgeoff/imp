@@ -159,7 +159,8 @@ test('stop keeps the disk, exec boots a stopped imp and /run starts empty', asyn
 
   expect(stopped).toBe('stopped');
 
-  // exec boots a stopped imp, as an HTTP request does (DESIGN.md 2.8)
+  // exec boots a stopped imp, as an HTTP request does
+  // (docs/architecture/sleep-and-wake.md#what-survives-a-sleep)
   const persisted = await runInImp(name, 'cat', '/root/persist');
   const booted = await readState(name);
   const run = await runShellInImp(name, 'test -e /run/stale && echo stale || echo fresh');

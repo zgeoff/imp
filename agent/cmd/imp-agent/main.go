@@ -1,6 +1,6 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
 // from the system drive (stage 1); it switches root to the user disk and
-// re-execs itself as "imp-agent stage2". See docs/architecture/agent.md ("Boot").
+// re-execs itself as "imp-agent stage2". See docs/architecture/agent.md#boot.
 // "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
 // for the agent's dial op, and "imp-agent tar" is the guest end of `imp cp`.

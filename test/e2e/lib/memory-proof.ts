@@ -6,7 +6,7 @@ import { waitFor } from './wait-for';
 
 // Only guest memory holds it: a token on a tmpfs served by a background httpd,
 // its pid and start time, and the boot id. A cold boot loses it all; sleep and
-// wake keep it all (docs/architecture/sleep-and-wake.md, finding 1).
+// wake keep it all (docs/architecture/sleep-and-wake.md#1-result).
 export interface MemoryProof {
   readonly name: string;
   readonly token: string;

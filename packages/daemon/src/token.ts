@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// The root token (DESIGN 2.10, docs/guides/tokens.md): made on first start
+// The root token (docs/guides/tokens.md): made on first start
 // and kept in `<dataDir>/token`, readable by the owner only. It has every
 // scope; made tokens live in the database.
 export function loadOrCreateToken(dataDir: string): string {

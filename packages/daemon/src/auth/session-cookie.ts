@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// The dashboard's session (docs/architecture/daemon.md, Dashboard): the
+// The dashboard's session (docs/architecture/daemon.md#dashboard): the
 // token it was made with, by id, and an expiry, signed with a key derived
 // from the root token, so the browser never holds a token
 const SESSION_COOKIE = 'imp_session';

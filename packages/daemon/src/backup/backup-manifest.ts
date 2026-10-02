@@ -38,7 +38,7 @@ const ManifestImpSchema = z
     usedBytes: z.int().nonnegative().optional(),
 
     // the egress policy's mode and allow-list, and the names of the secrets
-    // granted: never a value (docs/architecture/backups.md#manifest)
+    // granted: never a value (docs/architecture/backups.md#the-manifest)
     egressPolicy: z.string().default('open'),
     egressAllow: z.array(z.string()).readonly().default([]),
     grants: z.array(z.string()).readonly().default([]),
@@ -59,7 +59,7 @@ const ManifestImageSchema = z
   .readonly();
 
 // What a restore needs to rebuild each imp, and nothing more: no tokens, no
-// secrets, no slots or addresses (docs/architecture/backups.md#manifest).
+// secrets, no slots or addresses (docs/architecture/backups.md#the-manifest).
 // Paths are relative to the backup tree.
 export const BackupManifestSchema = z
   .object({

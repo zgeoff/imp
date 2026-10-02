@@ -76,7 +76,8 @@ export interface Config {
   readonly idleCpuPercent: number;
 
   // the RAM the governor reserves before a cold boot, as a percentage of the
-  // imp's memory, and the least it reserves before a wake (DESIGN 2.9)
+  // imp's memory, and the least it reserves before a wake
+  // (docs/architecture/sleep-and-wake.md#the-ram-governor)
   readonly bootReservePercent: number;
   readonly wakeReserveMib: number;
 

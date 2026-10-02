@@ -51,7 +51,8 @@ export interface ImpCommands {
   readonly destroyImp: (name: string) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
-  // snapshot memory to disk and stop Firecracker (DESIGN 2.8)
+  // snapshot memory to disk and stop Firecracker
+  // (docs/architecture/sleep-and-wake.md#sleep)
   readonly sleepImp: (name: string) => Promise<Imp>;
 
   // a sleeping imp resumes from its snapshot, a stopped one boots cold; an

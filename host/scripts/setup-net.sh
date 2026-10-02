@@ -1,6 +1,7 @@
 #!/bin/bash
-# Host-side NAT and isolation for imp taps (docs/architecture/networking.md, "iptables"). Idempotent.
-# Runs inside the host container's own network namespace.
+# Host-side NAT and isolation for imp taps
+# (docs/architecture/networking.md#iptables). Idempotent. Runs inside the host
+# container's own network namespace.
 set -euo pipefail
 
 # Debian's iptables defaults to the nf_tables backend. Fall back to legacy
