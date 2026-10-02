@@ -81,8 +81,9 @@ last error, and a spawn fails with `INNER_DOWN`. A container that ran a while st
 often it dies.
 
 After `rm -rf /` inside, the container stays up but has nothing to run: an exec fails at once with
-`EXEC_FAILED`. A checkpoint restore brings the files back. If the init then dies, every start fails
-and the agent gives up as above.
+`EXEC_FAILED`. A checkpoint restore brings the files back. If the init then dies, the container
+starts again over the empty root: the init is the agent binary from the system drive, and it makes
+its own mount points.
 
 The inner init's socket is close-on-exec, so no process it starts holds it, and it sets its own
 `oom_score_adj` back to 0 before it starts anything: the agent's -1000 must not reach the

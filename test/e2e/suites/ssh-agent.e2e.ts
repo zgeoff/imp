@@ -6,7 +6,7 @@ import { utils } from 'ssh2';
 import { resolveImageName } from '../lib/fixtures';
 import { startGitSshServer } from '../lib/git-ssh-server';
 import type { GitSshServer } from '../lib/git-ssh-server';
-import { readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
+import { readInfo, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp } from '../lib/imps';
 import { readContainerGateway, runChecked, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -263,6 +263,57 @@ test('a forced sleep ends the socket, and the next session listens again', async
     expect(after.stdout).toContain('imp-e2e-laptop (ED25519)');
 
     await waitGone(dirname(first));
+  } finally {
+    await master.stop();
+  }
+});
+
+// A reboot inside starts the inner container again, and its /run with the
+// socket goes: the guest ends the listener, and the connection's next
+// session gets a new socket in the new container.
+test('a restart of the container inside ends the socket, and the next session listens again', async () => {
+  const control = join(client.dir, 'control-restart');
+  const env = { SSH_AUTH_SOCK: laptop.socket };
+  const muxArgs = [...client.configArgs, '-A', '-S', control, `${name}@${SSH_HOST}`];
+
+  const master = startSsh(
+    client,
+    ['-A', '-M', '-S', control, '-N', `${name}@${SSH_HOST}`],
+    undefined,
+    env,
+  );
+
+  try {
+    await waitFor('the control socket', () => runChecked(['test', '-S', control]));
+
+    const before = await runCommand(['ssh', ...muxArgs, 'echo "$SSH_AUTH_SOCK"; ssh-add -l'], {
+      env,
+    });
+
+    const [first = ''] = before.stdout.split('\n');
+
+    expect(before.stdout).toContain('imp-e2e-laptop (ED25519)');
+
+    await tryImp(['exec', name, '--', 'sudo', 'reboot', '-f']);
+    await waitGone(dirname(first));
+
+    // impd hears of the ended listener over its stream, a moment after
+    const after = await waitFor('a session with a new socket', async () => {
+      const result = await runCommand(['ssh', ...muxArgs, 'echo "$SSH_AUTH_SOCK"; ssh-add -l'], {
+        env,
+      });
+
+      const [second = ''] = result.stdout.split('\n');
+
+      if (second === first) {
+        throw new Error(`the session got the old socket ${first}`);
+      }
+
+      return { second, stdout: result.stdout };
+    });
+
+    expect(after.second).toStartWith('/run/imp/ssh-agent/');
+    expect(after.stdout).toContain('imp-e2e-laptop (ED25519)');
   } finally {
     await master.stop();
   }

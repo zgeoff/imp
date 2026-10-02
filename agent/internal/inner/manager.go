@@ -29,7 +29,8 @@ const (
 // Restarts after the container dies: 1 s doubling to 30 s. A start that
 // fails, or a container that dies within stableAfter of its start, is a bad
 // start; after more than maxBadStarts in restartWindow the agent gives up
-// until the next boot. After `rm -rf /` every start fails.
+// until the next boot. A root wiped by `rm -rf /` still starts: the init
+// needs nothing from it.
 const (
 	minBackoff    = time.Second
 	maxBackoff    = 30 * time.Second
