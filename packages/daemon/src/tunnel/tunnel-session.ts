@@ -21,6 +21,10 @@ export interface TunnelPeer {
 }
 
 export interface TunnelBackend {
+  // the imp's id, which the limit counts by, so a recreated imp starts at
+  // zero; throws NOT_FOUND, and never wakes the imp
+  readonly findImpId: (name: string) => Promise<string>;
+
   // a connection inside the imp, counted as a tunnel while open
   readonly openDial: (name: string, target: DialTarget) => Promise<DialStream>;
 }
@@ -31,24 +35,24 @@ export interface TunnelSession {
   readonly handleClose: () => void;
 }
 
-// open tunnels per imp name, shared by every tunnel socket
+// open tunnels per imp id, shared by every tunnel socket
 export interface TunnelLimits {
   // a release to call once, or null when the imp is at the limit
-  readonly tryOpen: (name: string) => (() => void) | null;
+  readonly tryOpen: (impId: string) => (() => void) | null;
 }
 
 export function createTunnelLimits(max = MAX_TUNNELS_PER_IMP): TunnelLimits {
   const counts = new Map<string, number>();
 
   return {
-    tryOpen: (name) => {
-      const count = counts.get(name) ?? 0;
+    tryOpen: (impId) => {
+      const count = counts.get(impId) ?? 0;
 
       if (count >= max) {
         return null;
       }
 
-      counts.set(name, count + 1);
+      counts.set(impId, count + 1);
 
       let released = false;
 
@@ -59,12 +63,12 @@ export function createTunnelLimits(max = MAX_TUNNELS_PER_IMP): TunnelLimits {
 
         released = true;
 
-        const left = (counts.get(name) ?? 1) - 1;
+        const left = (counts.get(impId) ?? 1) - 1;
 
         if (left === 0) {
-          counts.delete(name);
+          counts.delete(impId);
         } else {
-          counts.set(name, left);
+          counts.set(impId, left);
         }
       };
     },
@@ -134,6 +138,10 @@ export function createTunnelSession(
   };
 
   const stopWithError = (error: unknown): void => {
+    if (state.phase === 'closed') {
+      return;
+    }
+
     send(buildErrorMessage(error));
     stopTunnel(CLOSE_NORMAL, 'tunnel failed');
   };
@@ -206,7 +214,24 @@ export function createTunnelSession(
   };
 
   const openTunnel = async (name: string, port: number): Promise<void> => {
-    const release = limits.tryOpen(name);
+    state.phase = 'opening';
+
+    let impId: string;
+
+    try {
+      impId = await backend.findImpId(name);
+    } catch (error) {
+      stopWithError(error);
+
+      return;
+    }
+
+    // the peer went away during the lookup
+    if (state.phase !== 'opening') {
+      return;
+    }
+
+    const release = limits.tryOpen(impId);
 
     if (release === null) {
       stopWithError(
@@ -219,7 +244,6 @@ export function createTunnelSession(
     }
 
     state.release = release;
-    state.phase = 'opening';
 
     let stream: DialStream;
 

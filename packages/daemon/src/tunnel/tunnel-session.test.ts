@@ -79,6 +79,7 @@ type FakeDial = ReturnType<typeof createFakeDial>;
 function startTunnel(
   open: (target: DialTarget) => Promise<DialStream>,
   limits: TunnelLimits = createTunnelLimits(),
+  impId = 'imp-1',
 ) {
   const sent: unknown[] = [];
   const binary: string[] = [];
@@ -97,7 +98,7 @@ function startTunnel(
         closed.reason = reason;
       },
     },
-    { openDial: (_name, target) => open(target) },
+    { findImpId: () => Promise.resolve(impId), openDial: (_name, target) => open(target) },
     limits,
   );
 
@@ -261,12 +262,34 @@ test('the open tunnels of an imp stop at the limit, and a closed one frees its p
   expect(third.sent).toEqual([{ type: 'opened' }]);
 });
 
+test('the limit counts by imp id, so an imp recreated under the same name starts at zero', async () => {
+  const limits = createTunnelLimits(1);
+  const old = startTunnel(() => Promise.resolve(createFakeDial().stream), limits, 'old-id');
+  const recreated = startTunnel(() => Promise.resolve(createFakeDial().stream), limits, 'new-id');
+
+  old.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+  recreated.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+
+  await waitUntil(() => old.sent.length === 1 && recreated.sent.length === 1);
+
+  expect([old.sent, recreated.sent]).toEqual([[{ type: 'opened' }], [{ type: 'opened' }]]);
+});
+
 test('a client that goes while the imp wakes gets its dial closed', async () => {
   const dial = createFakeDial();
   const pending = Promise.withResolvers<DialStream>();
-  const tunnel = startTunnel(() => pending.promise);
+  const dialing = { started: false };
+
+  const tunnel = startTunnel(() => {
+    dialing.started = true;
+
+    return pending.promise;
+  });
 
   tunnel.session.handleMessage({ type: 'open', name: 'box', port: 80 });
+
+  await waitUntil(() => dialing.started);
+
   tunnel.session.handleClose();
   pending.resolve(dial.stream);
 

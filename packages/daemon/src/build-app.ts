@@ -180,7 +180,14 @@ export function buildApp(deps: AppDeps) {
             },
             close: peer.close,
           },
-          { openDial: (name, target) => deps.imps.openDial(name, target, 'tunnel') },
+          {
+            findImpId: async (name) => {
+              const imp = await deps.imps.getImp(name);
+
+              return imp.id;
+            },
+            openDial: (name, target) => deps.imps.openDial(name, target, 'tunnel'),
+          },
           tunnelLimits,
         );
 
