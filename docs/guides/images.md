@@ -24,13 +24,16 @@ imp image build images/examples/hello --name hello
 uploads it to impd, which runs `docker build` on the host Docker and tags the result `imp/<name>`.
 Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the context.
 
-- **What goes up.** The CLI follows `.dockerignore` with Docker's rules, or
-  `<Dockerfile>.dockerignore` when there is one. The Dockerfile and the ignore file always go, as
-  with the docker CLI. Symlinks stay links, and files keep their modes. A progress line shows on a
+- **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
+  `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
+  `.dockerignore` is an ordinary file, and the ignore file can leave itself out. The Dockerfile
+  always goes, because docker reads it from the context, so `COPY .` copies it even when the ignore
+  file matches it. Symlinks stay links, and files keep their modes. A progress line shows on a
   terminal.
-- **The stream.** The tar goes out as it is made, to `POST /images/build`. impd writes it to a temp
-  file under `<IMP_DATA_DIR>/uploads`, never into memory, builds from it, and deletes it. It clears
-  that directory when it starts.
+- **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
+  the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
+  under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
+  starts. When the client goes, impd kills the build and frees its slot and its disk room.
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
   `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
@@ -51,8 +54,10 @@ absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its
 An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
 `--build-arg BASE=...` to stack on another base; use `docker build` and `imp image add` for that.
 
-The SDK has the same upload: `client.buildImage(name, context, { dockerfile })`, where `context` is
-a tar as a `Blob`, bytes or a `ReadableStream`. It throws an `ORPCError` as a contract call would.
+The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
+`context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
+only that much disk; without it, impd holds the whole limit. It throws an `ORPCError` as a contract
+call would.
 
 ## What the guest takes from the image
 
