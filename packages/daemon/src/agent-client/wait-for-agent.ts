@@ -10,8 +10,8 @@ export interface WaitOptions {
   // how long one ping may take (default 1000)
   readonly attemptMs?: number;
 
-  // wait for stage 1 parked in a boot template (true) or for stage 2
-  // (false); any answer when left out
+  // wait for an agent parked in a boot template (true) or for one that
+  // booted on (false); any answer when left out
   readonly isParked?: boolean;
 }
 

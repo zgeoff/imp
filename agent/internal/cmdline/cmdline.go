@@ -19,7 +19,7 @@ type Params struct {
 	DNS []string
 	// ResetIdentity is set on the first boot of an imp made from a template.
 	ResetIdentity bool
-	// Template is set on the cold boot that makes a boot template: stage 1
+	// Template is set on the cold boot that makes a boot template: the agent
 	// waits for a claim instead of mounting the user disk.
 	Template bool
 	// Raw holds every imp.* key (without the prefix), including unknown ones.

@@ -23,7 +23,7 @@ import type { DiskBudget } from '../storage/disk-budget';
 import { BASE_BOOT_ARGS, VM_DEVICES } from '../vmm/configure-vm';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 
-// The cmdline of every template: stage 1 parks for a claim, and nothing in
+// The cmdline of every template: the agent parks for a claim, and nothing in
 // it names an imp (docs/architecture/boot-templates.md#make)
 const TEMPLATE_BOOT_ARGS = [...BASE_BOOT_ARGS, 'imp.template=1'].join(' ');
 

@@ -15,7 +15,7 @@ import type { StartedVm } from './vm-runner';
 const AGENT_DEADLINE_MS = 15_000;
 const KILL_TIMEOUT_MS = 3000;
 
-// the stage-2 ping after a claim: a cold boot's stage 2, without the kernel
+// the ping after a claim: the rest of a cold boot, without the kernel
 const CLAIMED_AGENT_DEADLINE_MS = 10_000;
 
 // a restore's agent answers within tens of ms: ping often, not on a
@@ -67,7 +67,7 @@ export interface TemplateRestorePlan {
   readonly claim: Omit<Claim, 'unixMs' | 'diskBytes'>;
 }
 
-// Boots the stub VM, waits for stage 1 to park and the guest to be old
+// Boots the stub VM, waits for its agent to park and the guest to be old
 // enough, then pauses it and writes a full snapshot. The VM is gone after,
 // whatever happens.
 export async function buildTemplateVm(plan: Readonly<TemplateBuildPlan>): Promise<void> {
@@ -128,7 +128,7 @@ export async function buildTemplateVm(plan: Readonly<TemplateBuildPlan>): Promis
 
 // A failed restore. `isTemplateFault` when the step that failed reads only
 // the template: the load, the resume and the parked guest's ping. The disk,
-// the patch, the claim and stage 2 are the imp's own.
+// the patch, the claim and the boot after it are the imp's own.
 export class TemplateRestoreError extends Error {
   readonly isTemplateFault: boolean;
 
@@ -194,7 +194,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
     marks.setMark('disk');
 
     // the config change is how virtio-blk tells the guest the disk's size;
-    // stage 1 waits for it before it touches the disk
+    // the parked agent waits for it before it touches the disk
     await api.patchDrive(VM_DEVICES.drives.rootfs, plan.diskPath);
 
     marks.setMark('patch');
@@ -209,7 +209,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
       isParked: false,
     });
 
-    marks.setMark('stage2');
+    marks.setMark('agent');
 
     const firecrackerVersion = await api.getVersion();
 

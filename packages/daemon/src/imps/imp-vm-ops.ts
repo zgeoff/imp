@@ -338,7 +338,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         );
       }
 
-      // stage 1 grew the filesystem to fill the disk
+      // the agent grew the filesystem to fill the disk
       return reset.isDiskGrowPending ? await setGrowPending(reset, false) : reset;
     } catch (error) {
       context.admission?.release(imp.id);

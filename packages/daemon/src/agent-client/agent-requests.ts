@@ -22,7 +22,7 @@ const PingResponseSchema = z.object({
   // set on a boot that asked for an identity reset (docs/guides/templates.md#identity)
   identity_reset: z.enum(['ok', 'failed']).optional(),
 
-  // stage 1 waiting in a boot template for its claim
+  // an agent parked in a boot template, waiting for its claim
   stage: z.literal('template').optional(),
 });
 
@@ -120,7 +120,7 @@ export interface Claim {
   readonly dns: readonly string[];
   readonly mac: string;
 
-  // the disk's size as the host made it: stage 1 waits for the guest to see it
+  // the disk's size as the host made it: the parked agent waits to see it
   readonly diskBytes: number;
   readonly unixMs: number;
   readonly seed: Uint8Array;

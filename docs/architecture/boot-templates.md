@@ -155,8 +155,8 @@ checks that the TCP ISN secrets of restored imps differ, with `isn-probe` in the
 
 ## Numbers
 
-`imp new` until the booted agent answers (then stage 2), through the API, 288 MiB and 1 vCPU, on
-WSL2 (kernel 6.6). A dropped page cache is `echo 3 > /proc/sys/vm/drop_caches` before each create.
+`imp new` until the booted agent answers, through the API, 288 MiB and 1 vCPU, on WSL2 (kernel 6.6).
+A dropped page cache is `echo 3 > /proc/sys/vm/drop_caches` before each create.
 
 | Boot                     | Page cache | p50    | p95     |
 | ------------------------ | ---------- | ------ | ------- |
@@ -173,27 +173,27 @@ The `boot-templates` e2e suite times 10 `imp new` runs through the CLI and write
 `metrics.jsonl` (`bootTemplateNewMs`, `bootTemplateNewSpansP50Ms`). The CLI's wall time on WSL2 was
 601 ms p50 and 775 ms p95. The p50 of each span:
 
-| Span               | p50    | What it is                                                      |
-| ------------------ | ------ | --------------------------------------------------------------- |
-| `cli`              | 230 ms | the CLI process and the API round trip: wall time less impd's   |
-| `record`           | 12 ms  | the image lookup, the disk budget and the imp's row             |
-| `clone`            | 46 ms  | the slot's firewall and the disk clone                          |
-| `size`             | 64 ms  | the disk grown past the image, its filesystem grown on the host |
-| `admit` + `setup`  | 7 ms   | the RAM governor, the tap and the cgroup                        |
-| `spawn`            | 35 ms  | Firecracker started                                             |
-| `load` to `resume` | 5 ms   | the snapshot load, `PATCH /drives/rootfs` and the resume        |
-| `parked` + `claim` | 46 ms  | the parked guest's first ping, then `claim`                     |
-| `stage2`           | 120 ms | stage 1 mounts and grows the disk, switches root; stage 2 up    |
-| `finish`           | 22 ms  | the VM identity, the imp's state and the reply                  |
+| Span               | p50    | What it is                                                         |
+| ------------------ | ------ | ------------------------------------------------------------------ |
+| `cli`              | 230 ms | the CLI process and the API round trip: wall time less impd's      |
+| `record`           | 12 ms  | the image lookup, the disk budget and the imp's row                |
+| `clone`            | 46 ms  | the slot's firewall and the disk clone                             |
+| `size`             | 64 ms  | the disk grown past the image, its filesystem grown on the host    |
+| `admit` + `setup`  | 7 ms   | the RAM governor, the tap and the cgroup                           |
+| `spawn`            | 35 ms  | Firecracker started                                                |
+| `load` to `resume` | 5 ms   | the snapshot load, `PATCH /drives/rootfs` and the resume           |
+| `parked` + `claim` | 46 ms  | the parked guest's first ping, then `claim`                        |
+| `agent`            | 120 ms | the agent mounts and grows the disk, and boots on until it answers |
+| `finish`           | 22 ms  | the VM identity, the imp's state and the reply                     |
 
 impd's own part (`created in`) was 371 ms. impd logs it per create with the step spans on the boot's
 line.
 
-Since then, the disk is cloned and grown while the template restores, and stage 2 runs in the stage
-1 process with the system mounts made before the template parks. impd's part is now 276-300 ms p50.
-`imp new` through the compiled CLI is about 350 ms end to end: the CLI's own start and round trip
-add about 70 ms (about 100 ms for `scripts/imp`, which runs the CLI from source). The e2e `cli` span
-also counts the test process that spawns the CLI, so it reads higher.
+Since then, the disk is cloned and grown while the template restores, and the agent boots on in the
+process that parked, with its system mounts made before the template parks. impd's part is now
+276-300 ms p50. `imp new` through the compiled CLI is about 350 ms end to end: the CLI's own start
+and round trip add about 70 ms (about 100 ms for `scripts/imp`, which runs the CLI from source). The
+e2e `cli` span also counts the test process that spawns the CLI, so it reads higher.
 
 The grow of a new disk past the image's filesystem is a known cost: with `--disk 4g`, the image's
 own size, impd's part was 272 ms before the overlap, against 345 ms with the default disk. A default
