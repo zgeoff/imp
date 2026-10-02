@@ -20,6 +20,11 @@ export interface ExecOptions {
 
   // a session that outlives the CLI: closing it detaches (needs a tty)
   readonly session?: SessionOptions;
+
+  // runs in the imp's agent, outside its container: `imp exec --agent`.
+  // The SDK passes the start through as it is, and leaves the field out of
+  // its types on purpose.
+  readonly outer?: boolean;
 }
 
 interface SessionOptions {
@@ -154,6 +159,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
             tty: options.tty,
             ...(options.env !== undefined && { env: { ...options.env } }),
             ...(session !== null && { session: session.name }),
+            ...(options.outer === true && { outer: true }),
             ...size,
           };
 

@@ -283,6 +283,11 @@ export const execCommand = defineCommand({
   args: {
     name: nameArg,
     tty: { type: 'boolean', alias: 't', description: 'run on a terminal' },
+    agent: {
+      type: 'boolean',
+      description:
+        "run as root in the imp's agent, outside its container, with busybox (host-wide manage scope)",
+    },
   },
   run: async (context) => {
     const argv = splitCommand(process.argv, context.args._.slice(1));
@@ -298,6 +303,7 @@ export const execCommand = defineCommand({
       argv,
       tty: context.args.tty === true,
       ...(context.args.tty === true && { env: readTermEnv() }),
+      ...(context.args.agent === true && { outer: true }),
     });
 
     process.exit(code);

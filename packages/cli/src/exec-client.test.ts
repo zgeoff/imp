@@ -83,6 +83,30 @@ test('it streams output and stdin and exits with the command code', async () => 
   ]);
 });
 
+test('an exec in the agent sends outer through to impd', async () => {
+  await using impd = startFakeImpd(
+    startThen((peer, message) => {
+      if (message['type'] === 'start') {
+        peer.send({ type: 'exit', code: 0, signal: null });
+      }
+    }),
+  );
+
+  const ctx = setupIo(impd);
+
+  const exitCode = await runExec({ ...BOX, argv: ['ls', '/user'], outer: true }, ctx.io);
+
+  expect(exitCode).toBe(0);
+
+  expect(impd.received[0]).toEqual({
+    type: 'start',
+    name: 'box',
+    argv: ['ls', '/user'],
+    tty: false,
+    outer: true,
+  });
+});
+
 test('it exits 128 + n for a signal, a numbered one included', async () => {
   for (const [signal, expected] of [
     ['SIGKILL', 137],
