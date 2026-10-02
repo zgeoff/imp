@@ -155,6 +155,11 @@ pkgs.testers.runNixOSTest {
       # 3 GiB is below what the formula needs, so imp-host refuses to start
       # until ramBudgetMiB is set; the test switches to this.
       specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
+      # the same with IPv6 off, to switch a running host off and on again
+      specialisation.noipv6.configuration.services.imp = {
+        ramBudgetMiB = 1024;
+        ipv6.enable = pkgs.lib.mkForce false;
+      };
     };
 
   nodes.own = {
@@ -360,10 +365,26 @@ pkgs.testers.runNixOSTest {
           host.wait_for_open_port(9998)
           host.wait_for_open_port(9999)
           for family in ["", "-6"]:
-              gateway = host.succeed(f"docker exec imp-host ip {family} route show default | awk '{{print $3}}'").strip()
+              gateway = host.succeed(f"docker exec imp-host ip {family} route show default | awk '/^default/ {{print $3; exit}}'").strip()
               connect = f"docker exec imp-host timeout 5 bash -c 'exec 3<>/dev/tcp/{gateway}/{{}}'"
               host.succeed(connect.format(9998))
               host.fail(connect.format(9999))
+
+      with subtest("ipv6 off, then on again, on a running host"):
+          host.succeed("/run/booted-system/specialisation/noipv6/bin/switch-to-configuration test")
+          start_imp_host()
+          host.succeed("grep -qx IMP_HOST_IPV6=off /etc/imp/imp-host.env")
+          host.fail("docker network inspect imp-host")
+          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          assert list(nets) == ["bridge"], list(nets)
+          host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
+          start_imp_host()
+          host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
+          info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
+          assert info == "true br-imphost", info
+          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          assert list(nets) == ["imp-host"], list(nets)
+          host.succeed(ssh_from(container, own6))
 
       with subtest("none: no imp rules on the host; the platform's firewall stays"):
           ruleset = json.loads(host.succeed("nft -j list ruleset"))["nftables"]

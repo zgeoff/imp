@@ -94,6 +94,21 @@ let
       uplink = "eth0.100";
       routerAdverts = "kernel";
     };
+    networking.dhcpcd.IPv6rs = false;
+  };
+  ipv6KernelDhcpcd = host {
+    services.imp.ipv6 = {
+      enable = true;
+      uplink = "eth0";
+      routerAdverts = "kernel";
+    };
+  };
+  ipv6NoIp6tables = host {
+    services.imp.ipv6 = {
+      enable = true;
+      routerAdverts = "handled";
+    };
+    virtualisation.docker.daemon.settings.ip6tables = false;
   };
   ipv6KernelNoUplink = host {
     services.imp.ipv6 = {
@@ -224,13 +239,13 @@ let
       lib.hasInfix ''
         chain forward {
           type filter hook forward priority filter - 1; policy accept;
-          iifname { "br-imphost", "docker0" } ip daddr { 10.42.0.0/16, 10.43.0.0/16 } drop
-          iifname { "br-imphost", "docker0" } ip6 daddr { fd42::/64 } drop
+          iifname { "br-imphost", "docker0" } ip daddr { 10.42.0.0/16, 10.43.0.0/16 } ct direction original drop
+          iifname { "br-imphost", "docker0" } ip6 daddr { fd42::/64 } ct direction original drop
         }'' ipv6Cfg.networking.nftables.tables.imp-forward.content
       && ipv6Cfg.networking.nftables.tables.imp-forward.family == "inet"
     ))
-    (expect "ipv6: forwarding from both bridges is admitted" (
-      ipv6Rules == ''iifname { "br-imphost", "docker0" } accept comment "imp: imp-host's egress"''
+    (expect "ipv6: forwarding from imp-host's bridge alone is admitted" (
+      ipv6Rules == ''iifname { "br-imphost" } accept comment "imp: imp-host's egress"''
     ))
     (expect "no forwardDeny, no table" (!(filterOnly.config.networking.nftables.tables ? imp-forward)))
     (expect "no bridge is trusted for input" (
@@ -249,6 +264,12 @@ let
     (expect "kernel router adverts: accept_ra 2 on the uplink, by the slash form" (
       failed ipv6Kernel == [ ]
       && ipv6Kernel.config.boot.kernel.sysctl."net/ipv6/conf/eth0.100/accept_ra" == 2
+    ))
+    (expect "kernel router adverts beside dhcpcd's soliciting are refused" (
+      lib.any (lib.hasInfix "dhcpcd runs on eth0") (failed ipv6KernelDhcpcd)
+    ))
+    (expect "ipv6 with ip6tables off is refused" (
+      lib.any (lib.hasInfix "Docker 27.0 or later with ip6tables on") (failed ipv6NoIp6tables)
     ))
     (expect "kernel router adverts need the uplink" (
       lib.any (lib.hasInfix "needs services.imp.ipv6.uplink") (failed ipv6KernelNoUplink)

@@ -229,22 +229,42 @@ let
       ]
     ) (lib.attrValues config.systemd.network.networks);
   raKept = staticRoute6 || networkdKeepsRa || cfg.ipv6.routerAdverts != null;
+  # NixOS's dhcpcd solicits router adverts itself (ipv6rs) and may set
+  # accept_ra back, so "kernel" needs it off on the uplink.
+  dhcpcdOnUplink =
+    let
+      uplink = config.networking.interfaces.${cfg.ipv6.uplink} or { useDHCP = null; };
+    in
+    config.networking.dhcpcd.enable
+    && !config.networking.useNetworkd
+    && (if uplink.useDHCP != null then uplink.useDHCP else config.networking.useDHCP);
+  kernelRaClear =
+    cfg.ipv6.routerAdverts != "kernel"
+    || cfg.ipv6.uplink == null
+    || !dhcpcdOnUplink
+    || config.networking.dhcpcd.IPv6rs == false;
+  # check_docker_ipv6 in bootstrap.sh: Docker writes the NAT66 and forward
+  # rules itself from 27.0, unless ip6tables is off.
+  dockerIpv6 =
+    lib.versionAtLeast config.virtualisation.docker.package.version "27.0"
+    && (config.virtualisation.docker.daemon.settings.ip6tables or true) != false;
 
-  # Forwarding from imp-host's bridges. Where networking.firewall filters it,
-  # the module admits it; nothing is trusted for input, so imps reach no host
-  # service through the bridges. The denied ranges drop in a chain of their
-  # own: a drop in any forward chain is final, and NixOS's chain accepts
-  # ICMPv6 before any rule of ours could run.
+  # Forwarding from imp-host's bridge. Where networking.firewall filters it,
+  # the module admits imp-host's bridge alone (br-imphost with IPv6, else
+  # docker0); nothing is trusted for input. The denied ranges drop in a
+  # chain of their own, from either bridge: a drop in any forward chain is
+  # final, and NixOS's chain accepts ICMPv6 before any rule of ours could
+  # run. Only new flows drop, so the replies of a flow from a denied range
+  # (a pod that reaches a public imp) still pass.
   forwardFilter = config.networking.firewall.filterForward && config.networking.nftables.enable;
-  bridgeSet = "{ ${
-    lib.concatMapStringsSep ", " (name: ''"${name}"'') (lib.optional ipv6 hostBridge ++ [ "docker0" ])
-  } }";
+  nftSet = names: "{ ${lib.concatMapStringsSep ", " (name: ''"${name}"'') names} }";
+  acceptSet = nftSet [ (if ipv6 then hostBridge else "docker0") ];
+  denySet = nftSet (lib.optional ipv6 hostBridge ++ [ "docker0" ]);
   denied = lib.partition (cidr: lib.hasInfix ":" cidr) cfg.forwardDeny;
   denyRule =
     family: cidrs:
-    lib.optional (
-      cidrs != [ ]
-    ) "iifname ${bridgeSet} ${family} daddr { ${lib.concatStringsSep ", " cidrs} } drop";
+    lib.optional (cidrs != [ ])
+      "iifname ${denySet} ${family} daddr { ${lib.concatStringsSep ", " cidrs} } ct direction original drop";
   denyRules = denyRule "ip" denied.wrong ++ denyRule "ip6" denied.right;
 
   # bootstrap.sh's ruleset for hostFirewall = "own", for the SSH ports.
@@ -439,9 +459,11 @@ in
           Who keeps the host's router adverts once forwarding is on, when
           neither a static networking.defaultGateway6 nor networkd's
           IPv6AcceptRA = true on `uplink` does. kernel: the kernel takes
-          them, and the module sets accept_ra = 2 on `uplink`. handled: a
-          client such as dhcpcd (the NixOS default) or NetworkManager takes
-          them, and its config keeps them with forwarding on.
+          them, and the module sets accept_ra = 2 on `uplink`; dhcpcd must
+          not solicit them there (networking.dhcpcd.IPv6rs = false). handled:
+          a client such as dhcpcd (the NixOS default) or NetworkManager takes
+          them, and its config keeps them with forwarding on; check
+          `ip -6 route show default` half an hour after imp-host starts.
         '';
       };
     };
@@ -512,6 +534,14 @@ in
         message = "services.imp.ipv6.routerAdverts = \"kernel\" needs services.imp.ipv6.uplink, the interface to set accept_ra = 2 on";
       }
       {
+        assertion = kernelRaClear;
+        message = "services.imp.ipv6.routerAdverts = \"kernel\": dhcpcd runs on ${toString cfg.ipv6.uplink} and solicits router adverts itself, and may set accept_ra back. Set networking.dhcpcd.IPv6rs = false, or use \"handled\"";
+      }
+      {
+        assertion = !ipv6 || dockerIpv6;
+        message = "services.imp.ipv6 needs Docker 27.0 or later with ip6tables on (virtualisation.docker.daemon.settings.ip6tables not false), which writes the network's NAT66 and forward rules";
+      }
+      {
         assertion = cfg.forwardDeny == [ ] || config.networking.nftables.enable;
         message = "services.imp.forwardDeny needs networking.nftables.enable = true, for its table";
       }
@@ -545,7 +575,7 @@ in
       options zfs zfs_arc_max=${toString (cfg.zfs.arcMaxMiB * 1024 * 1024)}
     '';
 
-    networking.firewall.extraForwardRules = lib.mkIf forwardFilter ''iifname ${bridgeSet} accept comment "imp: imp-host's egress"'';
+    networking.firewall.extraForwardRules = lib.mkIf forwardFilter ''iifname ${acceptSet} accept comment "imp: imp-host's egress"'';
     networking.nftables.tables.imp-forward = lib.mkIf (cfg.forwardDeny != [ ]) {
       family = "inet";
       content = ''
