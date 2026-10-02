@@ -71,6 +71,7 @@ disk_empty=/var/disk-empty.img
 disk_ext4=/var/disk-ext4.img
 zfs_pool=impt$$
 storage_args=()
+extra_args=()
 
 log() { echo "test-bootstrap: $*"; }
 fail() {
@@ -182,7 +183,7 @@ in_container() { docker exec "$container" "$@"; }
 
 bootstrap() {
   local mode=$1 before after rc=0 out
-  local args=("$mode" "${storage_args[@]}" --image "$image" --image-archive /mnt/archive/image.tar)
+  local args=("$mode" "${storage_args[@]}" "${extra_args[@]}" --image "$image" --image-archive /mnt/archive/image.tar)
   [ -n "$health" ] || args+=(--skip-health)
   # The stub never starts tailscaled, so it can carry a fake key; the real
   # image would try to join with it.
@@ -259,6 +260,34 @@ check_firewall_drops() {
   fi
 }
 
+# check_host_firewall_none: --host-firewall none takes out the imp table and
+# its unit, a later run keeps none, and a table that comes back is drift.
+check_host_firewall_none() {
+  log "[$distro] --host-firewall none"
+  extra_args=(--host-firewall none)
+  expect_exit 2 --check
+  grep -qF "would: remove imp-firewall.service and the inet imp_host table" <<<"$LAST_OUTPUT" \
+    || fail "[$distro] --check did not plan the firewall's removal"
+  bootstrap --yes || fail "[$distro] the run with --host-firewall none failed"
+  in_container test ! -e /etc/systemd/system/imp-firewall.service || fail "[$distro] imp-firewall.service is left"
+  in_container test ! -e /etc/imp/firewall.nft || fail "[$distro] /etc/imp/firewall.nft is left"
+  ! in_container nft list table inet imp_host >/dev/null 2>&1 || fail "[$distro] the inet imp_host table is left"
+  ! in_container nft list ruleset | grep -qE 'hook input .*policy drop' \
+    || fail "[$distro] an input chain with policy drop is left"
+  in_container grep -qx IMP_HOST_FIREWALL=none /etc/imp/imp-host.env || fail "[$distro] the env file does not say none"
+  wait_for_imp_host || fail "[$distro] imp-host is not running with --host-firewall none"
+
+  extra_args=()
+  log "[$distro] the env file keeps none"
+  expect_exit 0 --check
+  log "[$distro] a table that comes back is drift, and --yes refuses it"
+  in_container nft add table inet imp_host
+  expect_exit 2 --check
+  expect_exit 1 --yes
+  grep -qF "run with --host-firewall none to remove it" <<<"$LAST_OUTPUT" || fail "[$distro] no hint for the drift"
+  in_container nft delete table inet imp_host
+}
+
 run_distro() {
   local distro=$1
   start_container "$distro"
@@ -312,6 +341,8 @@ run_distro() {
   log "[$distro] second run"
   bootstrap --yes || fail "[$distro] the second run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the second run changed something"
+
+  check_host_firewall_none
 
   teardown
   log "[$distro] passed"
