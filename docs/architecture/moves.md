@@ -7,12 +7,21 @@ page covers the protocol: `packages/daemon/src/moves/`.
 ## Scope
 
 A stopped imp moves cold, and boots cold on the target. A sleeping imp moves warm, with its memory,
-between hosts that can load it ([warm moves](#warm-moves)). Not yet built:
+between hosts that can load it ([warm moves](#warm-moves)).
 
-- The whole `imp move` flow (tickets, receipt, commit) on a real ZFS pool, and between two impds in
-  the end-to-end tests. On real ZFS the CI `zfs` job runs the backend's steps (a ZFS-to-ZFS send of
+Two end-to-end suites run the whole `imp move` flow between two impds on one machine. `moves` puts
+the second host on a Docker network and allows it with `IMP_MOVE_TEST_CIDR`: cold and warm moves, an
+abort, and an open and a box imp that keep their tmpfs and processes and reach DNS, HTTP and the
+broker right after the wake. `moves-tailnet` makes both hosts `tag:imp` nodes, each with its own
+`IMP_TAILSCALE_HOSTNAME`: the real peer check and, with `IMP_E2E_TAILNET_NAMES=1`, the handover of a
+per-imp tailnet name. Not yet built or tested:
+
+- The whole flow on a real ZFS pool. The CI `zfs` job runs the backend's steps (a ZFS-to-ZFS send of
   a restored imp, an XFS-style receive); the full flow runs on a fake ZFS only
   (`packages/daemon/src/moves/move-service.test.ts`).
+- What needs a second machine: a warm move refused for a real mismatch of CPU, kernel or Firecracker
+  (one machine has one of each, so only faked facts reach it), clock skew against the ticket
+  windows, a real WAN link's MTU and bandwidth over a long stream, and two physical pools.
 
 ## The steps
 

@@ -26,42 +26,44 @@ harness against a real instance when a change touches the lifecycle, the agent o
 `test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
 way a user would; the dashboard suite drives it through a browser. The suites run in this order:
 
-| Suite            | What it proves                                                                                                                                |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lifecycle`      | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                                              |
-| `docker`         | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                                             |
-| `images`         | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                                               |
-| `checkpoints`    | checkpoint, restore (running and stopped), forks, labels, deletion                                                                            |
-| `disks`          | a disk past its image, grown while running, asleep and stopped; fsck after                                                                    |
-| `sleep`          | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                                 |
-| `scale`          | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                                          |
-| `restart`        | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                                         |
-| `tailscale`      | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                      |
-| `mcp`            | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                |
-| `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                            |
-| `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                      |
-| `services`       | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove        |
-| `ssh`            | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                                   |
-| `ssh-wake`       | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                                             |
-| `ssh-agent`      | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp                               |
-| `reverse`        | `imp proxy --reverse` and `ssh -R`: a socket and a port on this machine from the imp, refusals, sleep and wake, keep-awake                    |
-| `proxy`          | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap                  |
-| `proxy-wake`     | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                                  |
-| `cp`             | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                                       |
-| `connectors`     | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                                            |
-| `dashboard`      | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                                                |
-| `https`          | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                                               |
-| `tokens`         | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token                     |
-| `leases`         | two owners on one imp, `LEASED` and a forced sleep, expiry then an idle sleep, a hold; with a budget up to 2048 MiB, a refusal's names        |
-| `egress`         | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                                      |
-| `networks`       | two imps on a network across open and box, names, a peer DNS port, a reset on leave                                                           |
-| `ipv6`           | a /128 per imp, NAT66 and a routed /64, policies over IPv6, packet-too-big, a guest's router advertisement                                    |
-| `cpu`            | CPU limits: half a core holds a busy guest, again after a sleep and a wake, `imp set` at once, `imp top`, `docker exec` after the cgroup move |
-| `templates`      | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm                          |
-| `boot-templates` | a cold boot restored from a boot template: its own name, MAC, disk size and TCP ISN secret; a sleep and wake after                            |
-| `inner`          | the inner container: PID 1 inside, signals, `kill -9 -1`, a memory hog, a reboot and the listeners after it, `rm -rf /`, a wiped root         |
-| `chaos`          | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                                         |
-| `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                               |
+| Suite            | What it proves                                                                                                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle`      | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                                                                                                    |
+| `docker`         | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                                                                                                   |
+| `images`         | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                                                                                                     |
+| `checkpoints`    | checkpoint, restore (running and stopped), forks, labels, deletion                                                                                                                                  |
+| `disks`          | a disk past its image, grown while running, asleep and stopped; fsck after                                                                                                                          |
+| `sleep`          | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                                                                                       |
+| `scale`          | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                                                                                                |
+| `restart`        | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                                                                                               |
+| `tailscale`      | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                                                                            |
+| `mcp`            | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                                                                      |
+| `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                                                                                  |
+| `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                                                                            |
+| `services`       | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove                                                              |
+| `ssh`            | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                                                                                         |
+| `ssh-wake`       | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                                                                                                   |
+| `ssh-agent`      | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp                                                                                     |
+| `reverse`        | `imp proxy --reverse` and `ssh -R`: a socket and a port on this machine from the imp, refusals, sleep and wake, keep-awake                                                                          |
+| `proxy`          | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap                                                                        |
+| `proxy-wake`     | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                                                                                        |
+| `cp`             | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                                                                                             |
+| `connectors`     | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                                                                                                  |
+| `dashboard`      | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                                                                                                      |
+| `https`          | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                                                                                                     |
+| `tokens`         | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token                                                                           |
+| `leases`         | two owners on one imp, `LEASED` and a forced sleep, expiry then an idle sleep, a hold; with a budget up to 2048 MiB, a refusal's names                                                              |
+| `egress`         | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                                                                                            |
+| `networks`       | two imps on a network across open and box, names, a peer DNS port, a reset on leave                                                                                                                 |
+| `ipv6`           | a /128 per imp, NAT66 and a routed /64, policies over IPv6, packet-too-big, a guest's router advertisement                                                                                          |
+| `cpu`            | CPU limits: half a core holds a busy guest, again after a sleep and a wake, `imp set` at once, `imp top`, `docker exec` after the cgroup move                                                       |
+| `templates`      | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm                                                                                |
+| `boot-templates` | a cold boot restored from a boot template: its own name, MAC, disk size and TCP ISN secret; a sleep and wake after                                                                                  |
+| `inner`          | the inner container: PID 1 inside, signals, `kill -9 -1`, a memory hog, a reboot and the listeners after it, `rm -rf /`, a wiped root                                                               |
+| `moves`          | `imp move` to a second instance on a Docker network: cold with a checkpoint, an abort, warm moves of an open and a box imp that keep tmpfs and processes and reach DNS, HTTP and the broker at once |
+| `moves-tailnet`  | `imp move` between two tailnet nodes: the real peer check, and a per-imp tailnet name that goes with its imp                                                                                        |
+| `chaos`          | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                                                                                               |
+| `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                                                                                     |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
@@ -85,6 +87,11 @@ instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble))
 takes about 4.5 minutes, most of it idle timeouts in the sleep suite and the jail suite's two
 reboots. The full set adds docker, images, scale and tailscale; at its defaults the scale suite
 alone took about 75 seconds in the last acceptance run.
+
+The moves suites start a second instance, `<IMP_DEV_NAME>-mv-b`, with its data in
+`<IMP_DEV_DATA>-mv-b`, and reboot the run's instance onto a network of their own and back. Each
+instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's memory.
+`moves-tailnet` needs a Tailscale key, as the tailscale suite does.
 
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default
