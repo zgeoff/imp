@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/reaper"
+	"golang.org/x/sys/unix"
 )
 
 // The reaper runs a process-wide wait4 loop, so the package shares one.
@@ -72,4 +74,76 @@ func TestFailedStartKeepsLastExit(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("the service did not restart twice")
+}
+
+// TestLogOpenRefusesAFIFO puts a FIFO at a service's log. With no reader,
+// a blocking open would hold the service's loop; with one, the open works
+// and the regular-file check must refuse it.
+func TestLogOpenRefusesAFIFO(t *testing.T) {
+	for _, withReader := range []bool{false, true} {
+		s := newSupervisor(t)
+		svc := &service{def: Def{Name: "fifo"}}
+		if err := unix.Mkfifo(s.logPath(svc), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if withReader {
+			r, err := os.OpenFile(s.logPath(svc), os.O_RDONLY|unix.O_NONBLOCK, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+		}
+		err := checkLogOpenFails(t, s, svc)
+		if withReader && !errors.Is(err, fsroot.ErrNotRegular) {
+			t.Fatalf("with a reader: %v, want %v", err, fsroot.ErrNotRegular)
+		}
+	}
+}
+
+func checkLogOpenFails(t *testing.T, s *Supervisor, svc *service) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		f, err := s.openLog(svc)
+		if err == nil {
+			f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("openLog opened a FIFO")
+		}
+		return err
+	case <-time.After(5 * time.Second):
+		t.Fatal("openLog blocked on a FIFO")
+		return nil
+	}
+}
+
+// TestLogIsBlockingForTheService: the service gets its log without
+// O_NONBLOCK, as it would get any file.
+func TestLogIsBlockingForTheService(t *testing.T) {
+	s := newSupervisor(t)
+	f, err := s.openLog(&service{def: Def{Name: "plain"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// not f.Fd(), which clears the flag itself
+	conn, err := f.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var flags int
+	if err := conn.Control(func(fd uintptr) { flags, err = unix.FcntlInt(fd, unix.F_GETFL, 0) }); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if flags&unix.O_NONBLOCK != 0 {
+		t.Fatal("the log is open with O_NONBLOCK")
+	}
 }
