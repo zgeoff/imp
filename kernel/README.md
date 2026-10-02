@@ -20,7 +20,8 @@ Output: `kernel/out/vmlinux` (uncompressed ELF, what Firecracker x86_64 boots) a
   `KVER` (6.1.188, 6.1 LTS) and `KSHA256`; change both there to bump. Override once with
   `KVER=... KSHA256=...`.
 - Fixed `KBUILD_BUILD_*` values keep the build time, user and host out of the image, so the same
-  sources and toolchain give the same bytes (`host/check-reproducible.sh`).
+  sources and toolchain give the same bytes (`host/check-reproducible.sh`). The release kernel stage
+  uses the same paths, so `kernel/out/vmlinux` matches the release image's.
 - Sources and the object tree live in `kernel/.build/` (gitignored), so a rerun is incremental. On a
   16-core box: first build about 8.5 minutes, a config-only change about 30 seconds.
 - The script exits non-zero if a symbol in the fragment does not reach the final config (unmet

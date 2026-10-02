@@ -8,9 +8,9 @@ the filesystems, sets up the network, supervises services, reaps zombies, and se
 ## Two drives
 
 - `vda` is the user rootfs (ext4, read-write), a clone of an image ([storage](./storage.md)).
-- `vdb` is the imp system drive (squashfs, read-only). It holds `imp-agent`.
-  `scripts/build-system-drive.sh` builds it for the dev instance; the `agent` stage of
-  `host/Dockerfile` builds it for the release image.
+- `vdb` is the imp system drive (squashfs, read-only). It holds `imp-agent`. The `agent` stage of
+  `host/Dockerfile` builds it, for the release image and, through `scripts/build-system-drive.sh`,
+  for the dev instance: the same bytes either way.
 
 The kernel command line is `root=/dev/vdb rootfstype=squashfs ro init=/imp-agent`, plus `imp.*`
 parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`.

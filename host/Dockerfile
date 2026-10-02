@@ -81,41 +81,54 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # --- kernel: vmlinux from kernel/version and the config files only, so a
-# change anywhere else never reruns the long build ---
+# change anywhere else never reruns the long build. The paths match
+# kernel/build.sh (kernel/ at /k), so both builds give the same vmlinux. ---
 FROM kernel-builder AS kernel
 WORKDIR /k
 COPY kernel/version ./
 RUN . ./version \
+ && mkdir .build \
  && curl -fsSL --retry 3 -o linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KVER}.tar.xz" \
  && echo "${KSHA256}  linux.tar.xz" | sha256sum -c - \
- && mkdir src && tar -xf linux.tar.xz -C src --strip-components=1 \
+ && tar -xf linux.tar.xz -C .build \
  && rm linux.tar.xz
 COPY kernel/config-base kernel/docker.fragment kernel/make-vmlinux.sh ./
 # Empty JOBS means every core; host/check-reproducible.sh varies it.
 ARG JOBS=
-RUN ./make-vmlinux.sh /k/src /k/obj /k/out && rm -rf /k/obj /k/src
+RUN . ./version \
+ && ./make-vmlinux.sh "/k/.build/linux-${KVER}" /k/.build/obj /k/out \
+ && rm -rf /k/.build
 
-# --- agent: the static guest agent and the system drive that holds it ---
+# --- agent: the static guest agent, imp-agentctl, and the system drive that
+# holds the agent. scripts/build-system-drive.sh builds the same stage for
+# the dev instance. ---
 FROM golang:1.26.8-trixie@sha256:eae2aaa6add2936cbf350dd0d2628b363461542f0c4b3c0b558957e0f2997379 AS agent
 
+ARG DEBIAN_SNAPSHOT=20261001T000000Z
 ARG DEBIAN_FRONTEND=noninteractive
-# mksquashfs pinned by version: the drive's bytes depend on it
-RUN apt-get update \
- && apt-get install -y --no-install-recommends squashfs-tools=1:4.6.1-1 \
+# mksquashfs from a dated snapshot: the drive's bytes depend on its version.
+# check-valid-until=no: a snapshot's Release file expires after a week.
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+ && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} trixie main" \
+      > /etc/apt/sources.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends squashfs-tools \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src/agent
 COPY agent/go.mod agent/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY agent/ ./
-# -buildvcs=false and -trimpath keep git state and paths out of the binary.
+# -buildvcs=false and -trimpath keep git state and paths out of the binaries.
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o /out/imp-agent ./cmd/imp-agent
+    for cmd in imp-agent imp-agentctl; do \
+      CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o "/out/$cmd" "./cmd/$cmd" || exit 1; \
+    done
 
-# The same layout as scripts/build-system-drive.sh: the drive is mounted
-# read-only as the initial root, so stage 1's mountpoints must exist in it.
-# Fixed times and one processor make the drive the same bytes for the same
-# agent, so an upgrade that leaves the agent alone keeps every snapshot valid.
+# The drive is mounted read-only as the initial root, so stage 1's
+# mountpoints must exist in it. Fixed times and one processor make the drive
+# the same bytes for the same agent, so an upgrade that leaves the agent
+# alone keeps every snapshot valid.
 RUN d=$(mktemp -d) && chmod 755 "$d" \
  && mkdir -p "$d/dev" "$d/proc" "$d/sys" "$d/newroot" \
  && cp /out/imp-agent "$d/imp-agent" \
@@ -123,8 +136,13 @@ RUN d=$(mktemp -d) && chmod 755 "$d" \
       -no-xattrs -mkfs-time 0 -all-time 0 -processors 1 \
  && rm -rf "$d"
 
-# --- system-files: the guest kernel and the system drive alone, for
-# `--output` (host/check-reproducible.sh, release assets) ---
+# --- system-drive: the agent binaries and the drive, for `--output`
+# (scripts/build-system-drive.sh) ---
+FROM scratch AS system-drive
+COPY --from=agent /out/ /
+
+# --- system-files: the guest kernel and the system drive, for `--output`
+# (host/check-reproducible.sh, release assets) and the release image ---
 FROM scratch AS system-files
 COPY --from=kernel /k/out/vmlinux /
 COPY --from=agent /out/imp-system.squashfs /
@@ -157,6 +175,8 @@ LABEL org.opencontainers.image.title="imp-host" \
 
 COPY --from=system-files / /usr/local/share/imp/
 COPY --from=compile /out/impd /out/imp /usr/local/bin/
+# the CLI in the container finds impd's token with no IMP_TOKEN
+RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 
 # IMP_STORAGE_LOOP=0: /var/lib/imp must be a host XFS mount. A loop file in
 # the container layer would vanish, with every imp, when the container goes.
