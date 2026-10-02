@@ -36,9 +36,10 @@ of one key share one build; builds run one at a time, since they share one tap (
 2. impd boots a VM with `imp.template=1` on the kernel command line and nothing else that names an
    imp. Its rootfs is `<data>/templates/placeholder.ext4`, a 1 MiB file: the snapshot records the
    drive's path, so every template names the same one.
-3. Stage 1 mounts `/proc`, `/sys` and `/dev`, reads the command line, and parks: it serves `ping`
-   (with `stage: "template"`) and `claim` on the vsock port, and refuses every other op. It opens no
-   inet socket, so the kernel has made no TCP secrets yet.
+3. Stage 1 mounts `/proc`, `/sys` and `/dev`, and cgroup2, `/dev/pts` and `/dev/shm` on them, reads
+   the command line, and parks: it serves `ping` (with `stage: "template"`) and `claim` on the vsock
+   port, and refuses every other op. It opens no inet socket, so the kernel has made no TCP secrets
+   yet.
 4. impd waits until the guest is `IMP_SLEEP_MIN_GUEST_UPTIME_MS` old
    ([young guests](./sleep-and-wake.md#young-guests)), pauses it and writes a full snapshot into a
    new directory. It kills the VM, digs holes in the mem file, writes `meta.json` and renames the
@@ -100,9 +101,9 @@ Stage 1 then:
 5. Answers, closes the parked listener, and goes on as a cold boot: it mounts `vda`, grows the
    filesystem, switches root and starts stage 2.
 
-Stage 1 hands stage 2 its values as JSON in argv, on a cold boot too. Stage 2 never reads the kernel
-command line, which on a restored guest is the template's. Without the handoff it fails closed: no
-hostname and no network. When the flag is set, stage 2 runs the identity reset of an imp from a
+Stage 2 runs in the same process as stage 1 and takes its values from it, on a cold boot too. It
+never reads the kernel command line, which on a restored guest is the template's. When the flag is
+set, stage 2 runs the identity reset of an imp from a
 [template image](../guides/templates.md#identity).
 
 ## RAM

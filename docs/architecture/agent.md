@@ -26,8 +26,9 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 2. Mount `vda` on `/newroot`, and grow its filesystem to fill the disk, which the host may have
    grown since the last boot. A failed grow is logged, and the boot goes on.
 3. Mount a fresh tmpfs on `/newroot/run`, and bind the system drive to `/newroot/run/imp/sys`.
-4. Move `/dev`, `/proc` and `/sys` into the new root, `switch_root` to it, and re-exec
-   `/run/imp/sys/imp-agent stage2`. PID 1 stays the agent.
+4. Move `/dev`, `/proc` and `/sys` into the new root, `switch_root` to it, and go on as stage 2 in
+   the same process. There is no exec: on a restored template, a new runtime would fault in every
+   page it touches.
 
 **Stage 2** runs in the user's root:
 

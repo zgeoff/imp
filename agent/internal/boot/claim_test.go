@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -102,20 +101,6 @@ func TestClaimParamsNeverCarryTheTemplateFlag(t *testing.T) {
 	p := claimParams(proto.Claim{ID: "a", Hostname: "web", IP: "10.66.0.2/30", GW: "10.66.0.1", IP6: "fd00::2/128", GW6: "fe80::1", DNS: []string{"1.1.1.1"}, ResetIdentity: true})
 	if p.Template || p.Hostname != "web" || p.IP != "10.66.0.2/30" || p.IP6 != "fd00::2/128" || p.GW6 != "fe80::1" || !p.ResetIdentity || p.Raw["id"] != "a" {
 		t.Fatalf("params = %+v", p)
-	}
-}
-
-func TestReadHandoff(t *testing.T) {
-	want := cmdline.Params{Hostname: "web", IP: "10.66.0.2/30", GW: "10.66.0.1", IP6: "fd00::2/128", GW6: "fe80::1", DNS: []string{"1.1.1.1"}}
-	got := readHandoff([]string{"imp-agent", "stage2", want.Encode()})
-	if got.Hostname != want.Hostname || got.IP != want.IP || got.IP6 != want.IP6 || got.GW6 != want.GW6 || got.DNS[0] != "1.1.1.1" {
-		t.Fatalf("handoff = %+v", got)
-	}
-	// fail closed: no values means no network, not the template's cmdline
-	for _, args := range [][]string{{"imp-agent", "stage2"}, {"imp-agent", "stage2", "{"}} {
-		if p := readHandoff(args); p.IP != "" || p.Hostname != "" {
-			t.Fatalf("%v gave %+v", args, p)
-		}
 	}
 }
 

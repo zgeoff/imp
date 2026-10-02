@@ -2,7 +2,6 @@
 package cmdline
 
 import (
-	"encoding/json"
 	"os"
 	"strings"
 )
@@ -97,23 +96,4 @@ func split(line string) []string {
 		out = append(out, cur.String())
 	}
 	return out
-}
-
-// Encode is how stage 1 hands the parameters to stage 2, as one argv entry:
-// after a template restore the kernel cmdline is the template's, so stage 2
-// never reads it (docs/architecture/boot-templates.md#claim).
-func (p Params) Encode() string {
-	b, err := json.Marshal(p)
-	if err != nil {
-		// a struct of strings always marshals
-		panic(err)
-	}
-	return string(b)
-}
-
-// Decode reads what Encode wrote.
-func Decode(s string) (Params, error) {
-	var p Params
-	err := json.Unmarshal([]byte(s), &p)
-	return p, err
 }

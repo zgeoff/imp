@@ -37,14 +37,15 @@ const ExecCgroupRoot = "/sys/fs/cgroup/imp-exec"
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
 // the hostname and network, starts services, and serves the host on vsock.
-// It returns only on failure.
-func Stage2() error {
+// It returns only on failure. Stage 1 calls it in the same process after the
+// switch of root: an exec would start the runtime again, which on a restored
+// boot template costs a fault for every page it touches.
+func Stage2(params cmdline.Params) error {
 	r := reaper.New()
 
 	if err := mountSystem(); err != nil {
 		return err
 	}
-	params := readHandoff(os.Args)
 	// Problems below are logged, not fatal: an agent that answers on vsock
 	// with a broken network is still reachable to debug.
 	if err := setHostname(params.Hostname); err != nil {
@@ -255,20 +256,4 @@ func listenVsock() (net.Listener, error) {
 	}
 	log.Printf("ready on vsock port %d", server.Port)
 	return l, nil
-}
-
-// readHandoff is what stage 1 passed: the cmdline's values on a cold boot,
-// a claim's after a template restore. Without them stage 2 fails closed: no
-// hostname, no network, never the template's cmdline.
-func readHandoff(args []string) cmdline.Params {
-	if len(args) < 3 {
-		log.Printf("stage2: no parameters from stage 1; the network stays down")
-		return cmdline.Params{}
-	}
-	params, err := cmdline.Decode(args[2])
-	if err != nil {
-		log.Printf("stage2: parameters from stage 1: %v; the network stays down", err)
-		return cmdline.Params{}
-	}
-	return params
 }
