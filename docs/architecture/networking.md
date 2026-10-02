@@ -2,7 +2,7 @@
 
 Every imp gets its own tap device and its own /30, routed through the host container. No two imps
 share a layer-2 network, so they cannot see each other. The wake proxy gives each imp an HTTP URL on
-the host and on the tailnet.
+the host and on the tailnet. The credential broker listens on every imp's gateway.
 
 ## Addressing
 
@@ -22,7 +22,10 @@ container's own network namespace and never touch the host's.
 - `MASQUERADE` for the imp subnet out of the container's default route.
 - `FORWARD -i imp+ -o imp+ DROP`: no imp-to-imp traffic.
 - `INPUT -i imp+` drops everything except replies to connections the container opened (the proxy
-  dials into guests).
+  dials into guests), and the credential broker's port, `IMP_BROKER_PORT`. That rule is inserted
+  first, above the drop.
+- Strict reverse-path filtering (`rp_filter=1` on `all` and `default`, set before any tap exists): a
+  guest cannot send with another imp's address. The broker names the imp by its address.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
   smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
   records stall.
@@ -43,6 +46,15 @@ The proxy forwards HTTP and WebSockets to an imp's HTTP port. The port is set at
   in the guest that would keep it awake.
 - Errors are short HTML pages: 404 for an unknown imp, 503 when it could not wake, 502 when nothing
   answers on the port.
+
+## The credential broker
+
+Guests reach the broker on their gateway at `IMP_BROKER_PORT` (default 7081), through `HTTPS_PROXY`.
+It takes `CONNECT` only. A granted host goes to a TLS terminator that adds the credential; any other
+host gets a plain tunnel to a checked public address. A tunnel starts inside the host container,
+past the `INPUT` drop, so it refuses every private, shared, loopback and link-local range, IPv6, and
+the container's own addresses. The broker also drops a guest that dials another imp's gateway. The
+[connectors guide](../guides/connectors.md) has the whole design.
 
 ## URLs
 
