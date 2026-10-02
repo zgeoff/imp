@@ -7,6 +7,8 @@ import type { Config } from '../config';
 import { listEgressSlots, readEgressPolicy, writeEgressPolicy } from '../db/egress';
 import type { EgressSlot } from '../db/egress';
 import { findImpByName } from '../db/imps';
+import { listNetworkMembers } from '../db/networks';
+import type { NetworkMember } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import { createKeyedMutex } from '../imps/keyed-mutex';
 import { formatSubnet, parseIpv4 } from '../net/addressing';
@@ -25,6 +27,7 @@ import type { QueryVerdict, ResolverServer } from './egress-resolver';
 import { buildAllowRules, isNameAllowed, isTunnelAllowed, listExactNames } from './egress-rules';
 import type { AllowRules } from './egress-rules';
 import { buildElementChange, buildRuleset } from './egress-ruleset';
+import type { NetworkPeer } from './egress-ruleset';
 import { createEgressSets } from './egress-sets';
 import type { AddressAnswer } from './egress-sets';
 
@@ -110,11 +113,21 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
   const state: {
     slots: Map<number, SlotView>;
+
+    // the networks' members, released slots left out
+    members: readonly NetworkMember[];
     released: Set<number>;
     unenforced: string | null;
     server: ResolverServer | null;
     sweep: Timer | null;
-  } = { slots: new Map(), released: new Set(), unenforced: null, server: null, sweep: null };
+  } = {
+    slots: new Map(),
+    members: [],
+    released: new Set(),
+    unenforced: null,
+    server: null,
+    sweep: null,
+  };
 
   // an imp's /128, from its IPv4 address as its tap derives it
   const findGuestIp6 = (guestIp: string): string | null => {
@@ -126,8 +139,12 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const buildScript = (
     views: ReadonlyMap<number, SlotView>,
     connected6: readonly string[],
+    members: readonly NetworkMember[],
   ): string =>
     buildRuleset({
+      networks: listPeerGroups(members),
+      subnet: formatSubnet(deps.config.subnet),
+      dnsServers: deps.config.dns,
       privateRanges,
       blocked6: [...BLOCKED_RANGES6, ...(ipv6 === null ? [] : [ipv6.prefix.text]), ...connected6],
       dnsPort: deps.config.egressDnsPort,
@@ -157,11 +174,15 @@ export function createEgressService(deps: EgressDeps): EgressService {
         }
       }
 
+      const allMembers = await listNetworkMembers(deps.db);
+
+      const members = allMembers.filter((member) => slots.has(member.slot));
+
       if (state.unenforced === null) {
         // the container's own links, read now: a network can join it later
         const connected6 = ipv6 === null ? [] : await readConnected6();
 
-        await write(buildScript(slots, connected6));
+        await write(buildScript(slots, connected6, members));
       }
 
       for (const slot of state.slots.keys()) {
@@ -171,6 +192,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
       }
 
       state.slots = slots;
+      state.members = members;
     });
 
   // after a failed apply: nft may still refuse, and keeps its last table
@@ -418,6 +440,15 @@ export function createEgressService(deps: EgressDeps): EgressService {
     writeAnswers,
     runSweep,
   };
+}
+
+// each network's members, by the tap each sends from
+function listPeerGroups(members: readonly NetworkMember[]): NetworkPeer[][] {
+  const byNetwork = Map.groupBy(members, (member) => member.network);
+
+  return [...byNetwork.values()].map((group) =>
+    group.map((member) => ({ tap: `imp${String(member.slot)}`, guestIp: member.guestIp })),
+  );
 }
 
 // `conntrack -D` exits 1 when it found nothing to delete

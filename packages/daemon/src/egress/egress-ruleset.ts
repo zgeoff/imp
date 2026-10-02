@@ -6,6 +6,11 @@ import type { EgressMode } from '@imp/api';
 const EGRESS_TABLE = 'inet imp_egress';
 const NAT66_TABLE = 'ip6 imp_nat66';
 
+// the packet mark of traffic between two imps on one network: setup-net.sh
+// accepts it ahead of its imp-to-imp DROP. Set with an OR, so a bit someone
+// else uses survives.
+const PEER_MARK = '0x01000000';
+
 // open imps reach anything but these: cloud metadata services, and the
 // shared range that holds the tailnet
 const OPEN_BLOCKED_RANGES: readonly string[] = ['169.254.0.0/16', '100.64.0.0/10'];
@@ -25,8 +30,24 @@ export interface FirewallSlot {
   readonly addresses: readonly string[];
 }
 
+// one imp on a network, by the tap it sends from
+export interface NetworkPeer {
+  readonly tap: string;
+  readonly guestIp: string;
+}
+
 export interface RulesetInput {
   readonly slots: readonly FirewallSlot[];
+
+  // each network's imps, which reach one another whatever their policies
+  readonly networks: readonly (readonly NetworkPeer[])[];
+
+  // IMP_SUBNET: a query to an imp is for a peer's own DNS server
+  readonly subnet: string;
+
+  // the guests' resolvers (IMP_DNS): an open imp on a network asks impd
+  // through them for its peers' names
+  readonly dnsServers: readonly string[];
 
   // what a box may not reach unless its list names it: REFUSED_RANGES and
   // the imp subnet
@@ -46,6 +67,10 @@ export function buildRuleset(input: RulesetInput): string {
   const box = input.slots.filter((slot) => slot.mode === 'box');
   const redirected = input.slots.filter((slot) => slot.mode !== 'open');
 
+  const peerTaps = new Set(input.networks.flatMap((peers) => peers.map((peer) => peer.tap)));
+
+  const openPeers = input.slots.filter((slot) => slot.mode === 'open' && peerTaps.has(slot.tap));
+
   const lines = [
     `table ${EGRESS_TABLE} {}`,
     `delete table ${EGRESS_TABLE}`,
@@ -57,6 +82,20 @@ export function buildRuleset(input: RulesetInput): string {
       'ifname',
       redirected.map((slot) => formatTap(slot.tap)),
       [],
+    ),
+    ...buildSet(
+      'open_peer_taps',
+      'ifname',
+      openPeers.map((slot) => formatTap(slot.tap)),
+      [],
+    ),
+    ...input.networks.flatMap((peers, index) =>
+      buildSet(
+        `net${String(index)}`,
+        'ifname . ipv4_addr',
+        peers.map((peer) => `${formatTap(peer.tap)} . ${peer.guestIp}`),
+        [],
+      ),
     ),
     ...box.flatMap((slot) => buildBoxSets(slot, input.setSize)),
 
@@ -77,6 +116,14 @@ export function buildRuleset(input: RulesetInput): string {
     '  chain forward {',
     '    type filter hook forward priority filter - 1; policy accept;',
     '    iifname != "imp*" accept',
+
+    // both ends on one network, each from its own tap; any other imp to imp
+    // packet, IPv6 included, is refused before a policy could accept it
+    ...input.networks.map(
+      (_peers, index) =>
+        `    iifname . ip saddr @net${String(index)} oifname . ip daddr @net${String(index)} meta mark set meta mark | ${PEER_MARK} accept`,
+    ),
+    '    oifname "imp*" goto deny',
     '    iifname vmap @slots',
 
     // a tap with no slot
@@ -84,7 +131,14 @@ export function buildRuleset(input: RulesetInput): string {
     '  }',
     '  chain dns {',
     '    type nat hook prerouting priority dstnat - 1; policy accept;',
-    `    iifname @dns_taps meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 redirect to :${String(input.dnsPort)}`,
+
+    // a query to an imp is for a peer's own server
+    `    iifname @dns_taps meta nfproto ipv4 ip daddr != ${input.subnet} meta l4proto { tcp, udp } th dport 53 redirect to :${String(input.dnsPort)}`,
+    ...(input.dnsServers.length === 0
+      ? []
+      : [
+          `    iifname @open_peer_taps ip daddr { ${input.dnsServers.join(', ')} } meta l4proto { tcp, udp } th dport 53 redirect to :${String(input.dnsPort)}`,
+        ]),
     '  }',
     '}',
   ];
