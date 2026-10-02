@@ -53,3 +53,24 @@ export async function checkMergeFlag(
 
   context.mergeFlags.clearLost(imp.id);
 }
+
+// After a restart: with IMP_KSM, as checkMergeFlag. Without it, a VM that an
+// impd with IMP_KSM started keeps its merge flag until the imp restarts, and
+// ksmd merges it again whenever it runs; impd says so once, at the adopt.
+export async function checkAdoptedMergeFlag(
+  context: ImpContext,
+  imp: Readonly<{ id: string; name: string }>,
+  pid: number,
+): Promise<void> {
+  if (context.config.ksm !== null) {
+    await checkMergeFlag(context, imp, pid);
+
+    return;
+  }
+
+  if ((await context.checkGuestMerge(pid)) === true) {
+    context.log(
+      `impd: ${imp.name}: its VM keeps the KSM merge flag with IMP_KSM off, until the imp restarts`,
+    );
+  }
+}

@@ -26,7 +26,7 @@ import type { ImpPaths } from '../storage/data-layout';
 import type { BootTemplates } from '../templates/boot-templates';
 import { isJailedFirecracker } from '../vmm/firecracker-process';
 import type { ActivityTracker, ConnectionKind } from './activity-tracker';
-import { checkMergeFlag } from './check-merge-flag';
+import { checkAdoptedMergeFlag } from './check-merge-flag';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
@@ -482,7 +482,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
                 startCounting(context, imp, imp.pid);
 
-                await checkMergeFlag(context, imp, imp.pid);
+                await checkAdoptedMergeFlag(context, imp, imp.pid);
               }
 
               if (ready) {

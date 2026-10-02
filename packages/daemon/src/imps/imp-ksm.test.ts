@@ -111,3 +111,23 @@ test('a merge flag impd cannot read is logged, not counted as lost', async () =>
   expect(info.ksm?.unmergeable).toBe(0);
   expect(ctx.harness.logs.some((line) => line.includes('cannot read whether KSM'))).toBe(true);
 });
+
+// a log line about a VM that kept the merge flag with IMP_KSM off
+function isStale(line: string): boolean {
+  return line.includes('keeps the KSM merge flag');
+}
+
+test('without IMP_KSM, an adopted VM that keeps the merge flag is logged once', async () => {
+  await using ctx = await setupKsmTest({ mergeable: true });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  expect(ctx.harness.logs.filter(isStale)).toEqual([]);
+
+  // an impd with IMP_KSM started the VM; this one adopts it
+  await ctx.harness.restartImpd().imps.reconcileImps();
+
+  expect(ctx.harness.logs.filter(isStale)).toEqual([
+    'impd: dev: its VM keeps the KSM merge flag with IMP_KSM off, until the imp restarts',
+  ]);
+});
