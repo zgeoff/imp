@@ -17,6 +17,7 @@ import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readSnapshotIdentity } from './sleep/snapshot-meta';
 import { setupSystemFiles } from './storage/setup-system-files';
+import { readSystemFileInfo } from './storage/system-file-info';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
@@ -97,6 +98,7 @@ async function main(): Promise<void> {
     governor,
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
+    systemFiles: readSystemFileInfo(config),
     readTailscale,
     isReady: () => state.ready,
   });

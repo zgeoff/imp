@@ -10,6 +10,11 @@ import { setupImpTest } from './imps/test-imps';
 
 const TOKEN = 'test-token';
 
+const SYSTEM_FILES = {
+  guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+  systemDrive: { sha256: 'b'.repeat(64) },
+};
+
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });
 
@@ -26,6 +31,7 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
       imps: harness.imps,
     }),
     firecrackerVersion: 'v1.17.0',
+    systemFiles: SYSTEM_FILES,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
   });
@@ -68,6 +74,7 @@ test('it serves system.info from config and the database', async () => {
     awakeCount: 0,
     impCount: 0,
     firecrackerVersion: 'v1.17.0',
+    ...SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   });
 });

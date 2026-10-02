@@ -11,6 +11,7 @@ import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
+import type { SystemFileInfo } from './storage/system-file-info';
 
 export interface RouterDeps {
   readonly config: Config;
@@ -20,6 +21,7 @@ export interface RouterDeps {
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
   readonly firecrackerVersion: string | null;
+  readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
 }
 
@@ -114,6 +116,8 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     awakeCount: running.length,
     impCount: imps.length,
     firecrackerVersion: deps.firecrackerVersion,
+    guestKernel: deps.systemFiles.guestKernel,
+    systemDrive: deps.systemFiles.systemDrive,
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
       ...tailscale,
