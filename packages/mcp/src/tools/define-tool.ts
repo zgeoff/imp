@@ -122,16 +122,21 @@ function buildErrorResult(text: string): ToolResult {
 // the agent can tell what to do next
 function formatErrorText(error: unknown): string {
   if (error instanceof ORPCError) {
-    return `${String(error.code)}: ${error.message}`;
+    return formatCoded(String(error.code), error.message);
   }
 
   if (error instanceof ExecError) {
-    return `${error.code}: ${error.message}`;
+    return formatCoded(error.code, error.message);
   }
 
   if (error instanceof GuardError) {
-    return `GUARD: ${error.message}`;
+    return formatCoded('GUARD', error.message);
   }
 
   return error instanceof Error ? error.message : String(error);
+}
+
+// the agent's own messages may already lead with the code
+function formatCoded(code: string, message: string): string {
+  return message.startsWith(`${code}: `) ? message : `${code}: ${message}`;
 }

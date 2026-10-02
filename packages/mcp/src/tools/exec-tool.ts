@@ -66,7 +66,7 @@ export const EXEC_TOOL: Tool = defineTool({
   description: [
     'Run a command in an imp and wait for it to exit. A sleeping imp wakes and a stopped one boots first.',
     'Returns the exit code, stdout and stderr. A non-zero exit is a normal result, not a tool error.',
-    'At the timeout, or on a cancel, the command and every process it started get SIGTERM, then SIGKILL 2 s later; timedOut is then true.',
+    'At the timeout, or on a cancel, the command and every process it started get SIGTERM, and 2 s later SIGKILL goes to whatever is left; timedOut is then true.',
     'For a server or a job longer than the timeout, start it in the background and return at once: `nohup CMD >/tmp/job.log 2>&1 &`, then read the log with later calls. A process that calls setsid escapes the stop.',
   ].join(' '),
   input: ExecInput,

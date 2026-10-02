@@ -98,15 +98,20 @@ function buildWriteStream(path: string, store: (data: Uint8Array) => void) {
   });
 }
 
-// `echo TEXT`, `fail` (stderr and exit 3), `flood N` (N bytes that start
-// with HEAD and end with TAIL), `cat` (echoes stdin), `sleepy` (runs until
-// SIGTERM) and `stubborn` (ignores SIGTERM, as a trap or nohup'd child would)
+// `echo TEXT`, `kill …` (exits 0), `fail` (stderr and exit 3), `flood N` (N
+// bytes from HEAD to TAIL), `cat` (echoes stdin), `sleepy` (runs until
+// SIGTERM) and `stubborn` (ignores SIGTERM, as a trap or a nohup'd child does)
 function buildShellStream(command: string, recordSignal: (signal: number) => void) {
   const stream = buildEventStream();
   const [verb = '', ...rest] = command.split(' ');
 
   if (verb === 'echo') {
     stream.emitText('stdout', `${rest.join(' ')}\n`);
+    stream.emit({ type: 'exit', code: 0, signal: 0 });
+  }
+
+  // the sweep that kills what is left of a stopped command's group
+  if (verb === 'kill') {
     stream.emit({ type: 'exit', code: 0, signal: 0 });
   }
 

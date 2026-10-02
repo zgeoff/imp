@@ -104,6 +104,13 @@ test('a timeout sends SIGTERM to the command and reports timedOut', async () => 
   });
 
   expect(ctx.guest.signals).toEqual(['sleepy:15']);
+
+  // the leader exited on SIGTERM, so a second exec kills what is left
+  expect(ctx.guest.requests[1]?.argv).toEqual([
+    '/bin/sh',
+    '-c',
+    'kill -KILL -42 2>/dev/null; true',
+  ]);
 });
 
 test('a command that ignores SIGTERM gets SIGKILL after the grace', async () => {
@@ -119,6 +126,9 @@ test('a command that ignores SIGTERM gets SIGKILL after the grace', async () => 
 
   expect(result.structuredContent).toMatchObject({ timedOut: true, signal: 'SIGKILL' });
   expect(ctx.guest.signals).toEqual(['stubborn:15', 'stubborn:9']);
+
+  // the session carried SIGKILL to the whole group: no sweep
+  expect(ctx.guest.requests).toHaveLength(1);
 });
 
 test('a cancelled exec stops the command and gets no response', async () => {
