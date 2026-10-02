@@ -62,10 +62,51 @@ test('start sweeps image builds a crash cut short', async () => {
   mkdirSync(join(ctx.dataDir, 'images', '.new-crashed'), { recursive: true });
   mkdirSync(ctx.imageDir, { recursive: true });
 
-  await ctx.backend.start({ impIds: new Set(), checkpointIds: new Set(), imageDigests: new Set() });
+  await ctx.backend.start({
+    impIds: new Set(),
+    checkpointIds: new Set(),
+    imageDigests: new Set(['sha256:abc']),
+  });
 
   expect(readdirSync(join(ctx.dataDir, 'images'))).toEqual(['abc']);
   expect(existsSync(ctx.imageDir)).toBeTrue();
+});
+
+test('dropUnnamed removes what the database does not name, and a dry run only lists it', async () => {
+  using ctx = setupTest();
+
+  await ctx.backend.createImage('sha256:abc', writeImage);
+  await ctx.backend.createImage('sha256:old', writeImage);
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('gone', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+  await ctx.backend.createCheckpoint('a', 'cp-lost');
+
+  // an image build in flight keeps its hidden directory
+  mkdirSync(join(ctx.dataDir, 'images', '.build-now'), { recursive: true });
+
+  const live = {
+    impIds: new Set(['a']),
+    checkpointIds: new Set(['cp-1']),
+    imageDigests: new Set(['sha256:abc']),
+  };
+
+  const listed = await ctx.backend.dropUnnamed(live, { isDryRun: true });
+
+  expect(listed).toEqual([
+    { kind: 'image', id: 'old' },
+    { kind: 'imp', id: 'gone' },
+    { kind: 'checkpoint', id: 'cp-lost' },
+  ]);
+
+  expect(existsSync(ctx.backend.resolveImpPaths('gone').disk)).toBeTrue();
+
+  const dropped = await ctx.backend.dropUnnamed(live, { isDryRun: false });
+
+  expect(dropped).toEqual(listed);
+  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['.build-now', 'abc']);
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual(['a']);
+  expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir)).toEqual(['cp-1']);
 });
 
 // imp a cloned from the image, with checkpoint cp-1

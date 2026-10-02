@@ -13,6 +13,8 @@ import type { SessionCache } from '../sessions/session-cache';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
+import { createStorageGate } from '../storage/storage-gate';
+import type { StorageGate } from '../storage/storage-gate';
 import type { VmRunner } from '../vmm/vm-runner';
 import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
@@ -51,6 +53,9 @@ export interface ImpServiceDeps {
   // caller's own: the credential broker's proxy and CA variables
   readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
 
+  // every imp operation joins it under the imp's lock (storage-gate.ts)
+  readonly storageGate?: StorageGate;
+
   // grows a disk's filesystem on the host while no VM has it open; false
   // leaves the grow to the guest's next boot (imp-disk.ts)
   readonly growFilesystem?: (disk: string) => Promise<boolean>;
@@ -73,6 +78,7 @@ export interface ImpContext {
   readonly now: () => number;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
+  readonly storageGate: StorageGate;
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
@@ -98,6 +104,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
+    storageGate: deps.storageGate ?? createStorageGate(),
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),

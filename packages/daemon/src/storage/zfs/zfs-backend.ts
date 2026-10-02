@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createKeyedMutex } from '../../imps/keyed-mutex';
 import { printLog } from '../../process/print-log';
@@ -12,7 +20,7 @@ import {
   buildSnapshotPaths,
 } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
-import type { DiskSource, LiveStorage, StorageBackend } from '../storage-backend';
+import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from '../storage-backend';
 import { createZfsCommands, parseZfsMounts, parseZfsRelease } from './zfs-commands';
 import type { CommandRunner, ZfsEntry } from './zfs-commands';
 import { planReclaimStep } from './zfs-reclaim';
@@ -35,6 +43,15 @@ const FORK_SNAPSHOT = /@fork-[^@]+$/;
 
 // `@bk-<run>-<imp>`: a backup run's copy of a disk, gone once the run ends
 const BACKUP_SNAPSHOT = /@bk-[^@]+$/;
+
+// what removeLeftovers removes, in this order
+interface LeftoverPlan {
+  readonly snapshots: readonly ZfsEntry[];
+  readonly disks: readonly ZfsEntry[];
+  readonly images: readonly ZfsEntry[];
+  readonly impDirs: readonly string[];
+  readonly memDirs: readonly string[];
+}
 
 interface ZfsBackendDeps {
   readonly dataDir: string;
@@ -278,12 +295,9 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
   };
 
-  // Drops what the database no longer names. Snapshots go first: a retire
-  // renames the dataset they are on.
-  const removeLeftovers = async (live: LiveStorage): Promise<void> => {
-    const entries = await listAll();
-
-    const names = new Set(entries.map((entry) => entry.name));
+  // What the database no longer names: snapshots not yet marked, disks and
+  // images, and the directories of imps with no row.
+  const planLeftovers = (entries: readonly ZfsEntry[], live: LiveStorage): LeftoverPlan => {
     const liveDigests = new Set([...live.imageDigests].map((digest) => toDigestHex(digest)));
 
     const isDead = (snapshot: ZfsEntry) =>
@@ -292,35 +306,101 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       (CHECKPOINT_SNAPSHOT.test(snapshot.name) &&
         !live.checkpointIds.has(readSnapshotId(snapshot.name)));
 
-    for (const snapshot of entries) {
-      if (snapshot.type === 'snapshot' && !snapshot.deferDestroy && isDead(snapshot)) {
-        await zfs.destroyDeferred(snapshot.name);
+    const snapshots = entries.filter(
+      (entry) => entry.type === 'snapshot' && !entry.deferDestroy && isDead(entry),
+    );
+
+    const disks = listChildren(entries, datasets.disks).filter(
+      (disk) => !live.impIds.has(disk.name.slice(datasets.disks.length + 1)),
+    );
+
+    const images = listChildren(entries, datasets.images).filter(
+      (image) => !liveDigests.has(image.name.slice(datasets.images.length + 1)),
+    );
+
+    const listDeadDirs = (dir: string) =>
+      (existsSync(dir) ? readdirSync(dir) : []).filter((id) => !live.impIds.has(id));
+
+    return {
+      snapshots,
+      disks,
+      images,
+      impDirs: listDeadDirs(join(deps.dataDir, 'imps')),
+      memDirs: listDeadDirs(join(deps.dataDir, 'mem')),
+    };
+  };
+
+  const toDropped = (plan: LeftoverPlan): DroppedStorage[] => [
+    ...plan.snapshots.map((snapshot) =>
+      CHECKPOINT_SNAPSHOT.test(snapshot.name)
+        ? { kind: 'checkpoint' as const, id: readSnapshotId(snapshot.name) }
+        : { kind: 'snapshot' as const, id: snapshot.name },
+    ),
+    ...plan.images.map((image) => ({
+      kind: 'image' as const,
+      id: image.name.slice(datasets.images.length + 1),
+    })),
+    ...[
+      ...new Set([
+        ...plan.disks.map((disk) => disk.name.slice(datasets.disks.length + 1)),
+        ...plan.impDirs,
+      ]),
+    ].map((impId) => ({ kind: 'imp' as const, id: impId })),
+    ...plan.memDirs.map((impId) => ({ kind: 'memory' as const, id: impId })),
+  ];
+
+  // Drops what the database no longer names. Snapshots go first: a retire
+  // renames the dataset they are on. The caller runs it serially.
+  const removeLeftovers = async (
+    live: LiveStorage,
+    isDryRun: boolean,
+  ): Promise<DroppedStorage[]> => {
+    const entries = await listAll();
+
+    const names = new Set(entries.map((entry) => entry.name));
+
+    const plan = planLeftovers(entries, live);
+
+    if (isDryRun) {
+      return toDropped(plan);
+    }
+
+    for (const snapshot of plan.snapshots) {
+      await zfs.destroyDeferred(snapshot.name);
+    }
+
+    for (const disk of plan.disks) {
+      await removeMount(buildDiskDir(disk.name.slice(datasets.disks.length + 1)));
+      await removeDataset(disk.name);
+    }
+
+    for (const image of plan.images) {
+      await removeMount(buildImageDir(image.name.slice(datasets.images.length + 1)));
+
+      // a crash between the rename and the snapshot leaves an image without one
+      if (names.has(`${image.name}@base`)) {
+        await zfs.destroyDeferred(`${image.name}@base`);
+      }
+
+      await removeDataset(image.name);
+    }
+
+    // an imp's directory holds its disk's mount point: never one in use
+    const mounted = [...parseZfsMounts(readMounts()).keys()];
+
+    for (const impId of plan.impDirs) {
+      const dir = buildImpPaths(deps.dataDir, impId).dir;
+
+      if (!mounted.some((mount) => mount.startsWith(`${dir}/`))) {
+        rmSync(dir, { recursive: true, force: true });
       }
     }
 
-    for (const disk of listChildren(entries, datasets.disks)) {
-      const impId = disk.name.slice(datasets.disks.length + 1);
-
-      if (!live.impIds.has(impId)) {
-        await removeMount(buildDiskDir(impId));
-        await removeDataset(disk.name);
-      }
+    for (const impId of plan.memDirs) {
+      rmSync(join(deps.dataDir, 'mem', impId), { recursive: true, force: true });
     }
 
-    for (const image of listChildren(entries, datasets.images)) {
-      const digest = image.name.slice(datasets.images.length + 1);
-
-      if (!liveDigests.has(digest)) {
-        await removeMount(buildImageDir(digest));
-
-        // a crash between the rename and the snapshot leaves an image without one
-        if (names.has(`${image.name}@base`)) {
-          await zfs.destroyDeferred(`${image.name}@base`);
-        }
-
-        await removeDataset(image.name);
-      }
-    }
+    return toDropped(plan);
   };
 
   const setupMounts = async (): Promise<void> => {
@@ -373,10 +453,20 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         await createMissingDatasets();
         await setupMount(datasets.mem, join(deps.dataDir, 'mem'));
         await resolveStaging();
-        await removeLeftovers(live);
+        await removeLeftovers(live, false);
         await runReclaim(runReclaimStep);
         await setupMounts();
       }),
+
+    dropUnnamed: async (live, options) => {
+      const dropped = await runSerial(() => removeLeftovers(live, options.isDryRun));
+
+      if (!options.isDryRun) {
+        startReclaim();
+      }
+
+      return dropped;
+    },
 
     resolveImpPaths,
 

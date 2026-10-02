@@ -47,6 +47,14 @@ export interface LiveStorage {
   readonly imageDigests: ReadonlySet<string>;
 }
 
+// What dropUnnamed removed, or would remove in a dry run. `snapshot` is a
+// ZFS fork or backup snapshot, named in full; `memory` an imp's memory
+// snapshot outside its imp directory.
+export interface DroppedStorage {
+  readonly kind: 'imp' | 'checkpoint' | 'image' | 'snapshot' | 'memory';
+  readonly id: string;
+}
+
 // The disks, checkpoints and image rootfs files of imps (docs/architecture/
 // storage.md). XFS clones files with reflink; ZFS keeps each disk in a
 // dataset, a checkpoint as a snapshot and a fork as a clone.
@@ -56,6 +64,14 @@ export interface StorageBackend {
   // before any VM is re-adopted or woken: mounts, finishes or undoes a restore
   // a crash cut short, and drops what `live` does not name
   readonly start: (live: LiveStorage) => Promise<void>;
+
+  // Removes what `live` does not name; staging, retired datasets and backup
+  // directories stay. The caller holds the storage gate alone, so nothing is
+  // in flight (docs/architecture/storage.md#cleanup).
+  readonly dropUnnamed: (
+    live: LiveStorage,
+    options: Readonly<{ isDryRun: boolean }>,
+  ) => Promise<DroppedStorage[]>;
 
   // the data layout, with the disk and the memory snapshot where this
   // backend keeps them

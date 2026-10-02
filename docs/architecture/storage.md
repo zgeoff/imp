@@ -240,3 +240,29 @@ without `--image` uses `IMP_DEFAULT_IMAGE` (default `base`), else `ubuntu`.
 
 The [images guide](../guides/images.md) covers what an image can contain: services, Docker in the
 guest, and how to make your own.
+
+## Cleanup
+
+A crash, or a removal that failed halfway, can leave storage that no row names: an imp's disk and
+directory, a checkpoint, an image, a ZFS fork or backup snapshot, a memory snapshot. One sweep,
+`dropUnnamed`, removes it on both backends: at start, every hour, and on `imp gc`.
+`imp gc --dry-run` lists what would go. On ZFS a disk or image is retired, and the reclaim frees it
+once no clone needs its blocks.
+
+A sweep while impd runs must never take storage that is about to get its row: a checkpoint's
+snapshot exists before its row, an image build takes minutes, a fork's disk is made under its
+source's lock. So every operation that touches storage joins a gate from before its first storage
+call until its rows commit (`storage-gate.ts`): each imp operation under the imp's lock, an image
+build or removal, and a backup run for its whole run. The GC runs only once nothing is in flight,
+and operations that start meanwhile wait for it, which takes well under a second. A GC that waits
+holds nothing back: `imp gc` gives up after 30 s with PRECONDITION_FAILED, the hourly pass after 10
+minutes, and a backup run keeps it waiting for as long as it runs.
+
+At runtime the sweep leaves alone:
+
+- `staging/` (ZFS) and hidden `images/.new-*` and `images/.build-*` directories (XFS): builds and
+  restores in flight. Start clears them, as [crash recovery](#crash-recovery) says.
+- `retired/` (ZFS): the reclaim owns it.
+- `backup/tree` and `backup/restore`: a backup run or a restore owns them.
+- Image templates that have a name. `imp image rm` removes one that no imp uses; the GC takes only
+  an image directory with no row.

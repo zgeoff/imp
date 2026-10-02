@@ -25,6 +25,8 @@ import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { createStorageGate } from '../storage/storage-gate';
+import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
@@ -109,7 +111,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     });
 
   const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
-  const images = createImageService({ config, db, storage });
+  const storageGate = createStorageGate();
+  const images = createImageService({ config, db, storage, storageGate });
 
   const printTestLog = (message: string): void => {
     logs.push(message);
@@ -171,6 +174,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       storage,
       now: readClock,
       readExecEnv: broker.readExecEnv,
+      storageGate,
       growFilesystem: (disk) => {
         filesystemGrows.push(disk);
 
@@ -202,6 +206,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     broker,
     bundleInstalls,
     storage,
+    storageGate,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -225,7 +230,10 @@ export type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now' | 'broker'>;
+type AppParts = Pick<
+  ImpTest,
+  'config' | 'db' | 'images' | 'storage' | 'storageGate' | 'now' | 'broker'
+>;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
 // that calls it without a socket, a no-op freeze and thaw, and `openExec` in
@@ -262,6 +270,12 @@ export function buildTestApp(
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,
+    gc: createStorageGc({
+      db: ctx.db,
+      storage: ctx.storage,
+      storageGate: ctx.storageGate,
+      log: () => {},
+    }),
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
     now: ctx.now,

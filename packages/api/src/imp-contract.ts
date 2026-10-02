@@ -23,6 +23,7 @@ import {
   SecretValueSchema,
 } from './secret-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
+import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 
 const base = oc.errors(IMP_ERRORS);
@@ -248,6 +249,10 @@ export const impContract = {
 
   system: {
     info: base.output(SystemInfoSchema),
+
+    // removes the disks, checkpoints, images and snapshots no row names;
+    // PRECONDITION_FAILED while storage operations keep it busy
+    gc: base.input(z.object({ dryRun: z.boolean().optional() })).output(StorageGcSchema),
   },
 };
 

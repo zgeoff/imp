@@ -248,6 +248,10 @@ export function createFakeImpd(): FakeImpd {
     },
     system: {
       info: os.system.info.handler(() => fake.info),
+      gc: os.system.gc.handler((context) => ({
+        dryRun: context.input.dryRun ?? false,
+        dropped: [],
+      })),
     },
   });
 

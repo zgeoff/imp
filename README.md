@@ -71,6 +71,7 @@ imp fork box box-2                # a second copy to try something else in
 | `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                               |
 | `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)                     |
 | `disk resize <name> <size>`            | grow an imp's disk; the guest grows into it                        |
+| `gc [--dry-run]`                       | remove storage no imp, checkpoint or image names                   |
 | `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
 | `url <name>`                           | print the imp's local and tailnet URLs                             |

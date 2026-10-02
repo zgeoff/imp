@@ -22,6 +22,7 @@ import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { StorageBackend } from './storage/storage-backend';
+import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
 
 // audit rows `audit.list` gives when the caller names no limit
@@ -43,6 +44,7 @@ export interface RouterDeps {
   readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind' | 'readUsage'>;
+  readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly audit: ApiAudit;
 }
@@ -250,6 +252,7 @@ export function buildRouter(deps: RouterDeps) {
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
+      gc: os.system.gc.handler((context) => deps.gc.runGc(context.input.dryRun ?? false)),
     },
   });
 }

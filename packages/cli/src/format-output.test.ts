@@ -3,6 +3,7 @@ import type { Imp } from '@imp/api';
 import {
   formatBootStatus,
   formatCheckpoints,
+  formatGc,
   formatImps,
   formatSessions,
   formatTable,
@@ -178,4 +179,20 @@ test('it says an older impd does not report boot status', () => {
   const status = formatBootStatus(undefined, '0.1.0');
 
   expect(status).toBe('unknown (impd 0.1.0 predates it)');
+});
+
+test('a gc lists what it removed, and says when a dry run removed nothing', () => {
+  const dropped = [
+    { kind: 'imp', id: 'lost' },
+    { kind: 'checkpoint', id: 'cp-a2b3c4' },
+  ] as const;
+
+  expect(formatGc({ dryRun: false, dropped: [...dropped] }).split('\n')).toEqual([
+    'KIND        ID',
+    'imp         lost',
+    'checkpoint  cp-a2b3c4',
+  ]);
+
+  expect(formatGc({ dryRun: true, dropped: [...dropped] })).toContain('dry run: nothing removed');
+  expect(formatGc({ dryRun: false, dropped: [] })).toBe('nothing to remove');
 });

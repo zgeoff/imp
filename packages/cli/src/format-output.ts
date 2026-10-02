@@ -9,6 +9,7 @@ import type {
   Secret,
   Session,
   SystemInfo,
+  StorageGc,
 } from '@imp/api';
 
 type Row = readonly string[];
@@ -233,6 +234,19 @@ export function formatApiCalls(calls: readonly ApiCall[]): string {
       String(call.durationMs),
     ]),
   );
+}
+
+export function formatGc(gc: Readonly<StorageGc>): string {
+  if (gc.dropped.length === 0) {
+    return 'nothing to remove';
+  }
+
+  const table = formatTable(
+    ['KIND', 'ID'],
+    gc.dropped.map((dropped) => [dropped.kind, dropped.id]),
+  );
+
+  return gc.dryRun ? `${table}\n(dry run: nothing removed)` : table;
 }
 
 export function formatJson(value: unknown): string {

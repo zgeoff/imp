@@ -4,6 +4,7 @@ import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
 import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
+import { gcCommand } from './commands/gc';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
 import { imageCommand } from './commands/image';
 import {
@@ -63,6 +64,7 @@ export const mainCommand = defineCommand({
     restore: restoreCommand,
     fork: forkCommand,
     disk: diskCommand,
+    gc: gcCommand,
     backup: backupCommand,
     image: imageCommand,
     secret: secretCommand,

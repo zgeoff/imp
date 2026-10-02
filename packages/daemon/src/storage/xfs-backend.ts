@@ -14,7 +14,7 @@ import { basename, dirname, join } from 'node:path';
 import * as z from 'zod';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { createReflinkClone } from './reflink';
-import type { DiskSource, StorageBackend } from './storage-backend';
+import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from './storage-backend';
 
 // The source disk of each copy in the backup tree. A sleeping or stopped
 // imp's disk with the same inode and ctime is unchanged since, so the copy
@@ -26,7 +26,8 @@ const CopiesSchema = z.record(
 
 type Copies = z.infer<typeof CopiesSchema>;
 
-// an image directory being written, renamed into place once complete
+// an image directory being written, renamed into place once complete; a
+// hidden name, as image-service's `.build-` work directories
 const STAGING_PREFIX = '.new-';
 
 interface XfsBackendDeps {
@@ -97,20 +98,78 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     return true;
   };
 
+  // Image directories, imp directories and checkpoints the database does not
+  // name. Hidden entries are image builds in flight, which only start drops.
+  const planLeftovers = (live: LiveStorage): DroppedStorage[] => {
+    const liveDigests = new Set(
+      [...live.imageDigests].map((digest) => basename(buildImagePaths(deps.dataDir, digest).dir)),
+    );
+
+    const impIds = listEntries(join(deps.dataDir, 'imps'));
+
+    const checkpoints = impIds
+      .filter((impId) => live.impIds.has(impId))
+      .flatMap((impId) => listEntries(resolveImpPaths(impId).checkpointsDir))
+      .filter((checkpointId) => !live.checkpointIds.has(checkpointId));
+
+    return [
+      ...listEntries(join(deps.dataDir, 'images'))
+        .filter((name) => !name.startsWith('.') && !liveDigests.has(name))
+        .map((name) => ({ kind: 'image' as const, id: name })),
+      ...impIds
+        .filter((impId) => !live.impIds.has(impId))
+        .map((impId) => ({ kind: 'imp' as const, id: impId })),
+      ...checkpoints.map((checkpointId) => ({ kind: 'checkpoint' as const, id: checkpointId })),
+    ];
+  };
+
+  const removeLeftover = (dropped: DroppedStorage, live: LiveStorage): void => {
+    if (dropped.kind === 'image') {
+      rmSync(join(deps.dataDir, 'images', dropped.id), { recursive: true, force: true });
+    }
+
+    if (dropped.kind === 'imp') {
+      rmSync(resolveImpPaths(dropped.id).dir, { recursive: true, force: true });
+    }
+
+    if (dropped.kind === 'checkpoint') {
+      for (const impId of live.impIds) {
+        rmSync(join(resolveImpPaths(impId).checkpointsDir, dropped.id), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+  };
+
+  const removeUnnamed = (live: LiveStorage, isDryRun: boolean): DroppedStorage[] => {
+    const dropped = planLeftovers(live);
+
+    if (!isDryRun) {
+      for (const leftover of dropped) {
+        removeLeftover(leftover, live);
+      }
+    }
+
+    return dropped;
+  };
+
   return {
     kind: 'xfs',
 
     // an image build that a crash cut short leaves its staging dir
-    start: () => {
+    start: (live) => {
       const imagesDir = join(deps.dataDir, 'images');
-      const names = existsSync(imagesDir) ? readdirSync(imagesDir) : [];
 
-      for (const name of names.filter((entry) => entry.startsWith(STAGING_PREFIX))) {
+      for (const name of listEntries(imagesDir).filter((entry) => entry.startsWith('.'))) {
         rmSync(join(imagesDir, name), { recursive: true, force: true });
       }
 
+      removeUnnamed(live, false);
+
       return Promise.resolve();
     },
+    dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options.isDryRun)),
     resolveImpPaths,
 
     createImage: async (digest, write) => {
@@ -320,6 +379,10 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       });
     },
   };
+}
+
+function listEntries(dir: string): string[] {
+  return existsSync(dir) ? readdirSync(dir) : [];
 }
 
 // drops each entry of `dir` that `keep` does not name

@@ -19,6 +19,8 @@ import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
+import { createStorageGate } from '../storage/storage-gate';
+import type { StorageGate } from '../storage/storage-gate';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
 const GIB = 1024 ** 3;
@@ -55,9 +57,15 @@ export interface ImageServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
   readonly storage: StorageBackend;
+
+  // a build joins it until the image's row is written, a removal until its
+  // rootfs is gone
+  readonly storageGate?: StorageGate;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
+  const storageGate = deps.storageGate ?? createStorageGate();
+
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
@@ -188,26 +196,28 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       throw new Error(`docker image inspect ${ref}: no result`);
     }
 
-    const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
-    const existing = await findImageByName(deps.db, imageName);
+    return storageGate.join(async () => {
+      const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
+      const existing = await findImageByName(deps.db, imageName);
 
-    if (existing === undefined) {
-      return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
-    }
+      if (existing === undefined) {
+        return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
+      }
 
-    if (existing.digest === inspect.Id) {
-      return existing;
-    }
+      if (existing.digest === inspect.Id) {
+        return existing;
+      }
 
-    const updated = await updateImage(deps.db, existing.id, {
-      ref,
-      digest: inspect.Id,
-      sizeBytes,
+      const updated = await updateImage(deps.db, existing.id, {
+        ref,
+        digest: inspect.Id,
+        sizeBytes,
+      });
+
+      await removeUnusedRootfs(existing.digest);
+
+      return updated;
     });
-
-    await removeUnusedRootfs(existing.digest);
-
-    return updated;
   };
 
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
@@ -264,8 +274,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         throw buildConflictError('image', name, `image ${name} is used by ${String(users)} imp(s)`);
       }
 
-      await removeImage(deps.db, image.id);
-      await removeUnusedRootfs(image.digest);
+      await storageGate.join(async () => {
+        await removeImage(deps.db, image.id);
+        await removeUnusedRootfs(image.digest);
+      });
     },
     resolveImage,
     seedDefaultImage: async () => {

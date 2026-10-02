@@ -21,6 +21,8 @@ import { readErrorMessage } from '../read-error-message';
 import { BACKUP_TREE, buildBackupPaths } from '../storage/data-layout';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { BackupTree, StorageBackend } from '../storage/storage-backend';
+import { createStorageGate } from '../storage/storage-gate';
+import type { StorageGate } from '../storage/storage-gate';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
 import type { BackupManifest, ManifestImage, ManifestImp } from './backup-manifest';
@@ -104,6 +106,9 @@ export interface BackupServiceDeps {
   readonly freezer?: DiskFreezer;
   readonly log?: (message: string) => void;
   readonly now?: () => Date;
+
+  // a run joins it: its copies, snapshots and tree are storage no row names
+  readonly storageGate?: StorageGate;
 }
 
 // PRECONDITION_FAILED when impd has no repository set
@@ -120,6 +125,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   const storage = deps.storage;
   const paths = buildBackupPaths(deps.dataDir);
   const restic = deps.restic ?? createRestic({ config: deps.backup, cacheDir: paths.cache });
+  const storageGate = deps.storageGate ?? createStorageGate();
 
   // a run, a restore, a prune and a check never overlap
   const mutex = createKeyedMutex();
@@ -245,7 +251,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     };
   };
 
-  const runBackup = async (): Promise<BackupRun> => {
+  const runBackup = (): Promise<BackupRun> => storageGate.join(runJoinedBackup);
+
+  const runJoinedBackup = async (): Promise<BackupRun> => {
     const started = performance.now();
     const runId = Bun.randomUUIDv7();
 

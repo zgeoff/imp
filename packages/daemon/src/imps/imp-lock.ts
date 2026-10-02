@@ -57,6 +57,10 @@ export function toLockedImp(held: LockedImp, next: ImpRecord): LockedImp {
 export function createImpLock(context: ImpContext): ImpLock {
   const mutex = createKeyedMutex();
 
+  // under the imp's lock, inside the storage gate: the GC never runs while an
+  // operation may have storage its rows do not name yet
+  const runJoined = <T>(task: () => Promise<T>) => context.storageGate.join(task);
+
   // the lock is held: a dead VM can be marked stopped right away
   const readLocked = async (id: string): Promise<LockedImp | undefined> => {
     const imp = await findImpById(context.db, id);
@@ -85,34 +89,42 @@ export function createImpLock(context: ImpContext): ImpLock {
     withImp: async (name, action) => {
       const found = await findImp(name);
 
-      return mutex.runExclusive(found.id, async () => {
-        const imp = await readLocked(found.id);
+      return mutex.runExclusive(found.id, () =>
+        runJoined(async () => {
+          const imp = await readLocked(found.id);
 
-        if (imp === undefined) {
-          throw buildNotFoundError('imp', name);
-        }
+          if (imp === undefined) {
+            throw buildNotFoundError('imp', name);
+          }
 
-        return action(imp);
-      });
+          return action(imp);
+        }),
+      );
     },
     withImpId: (id, action) =>
-      mutex.runExclusive(id, async () => {
-        const imp = await readLocked(id);
+      mutex.runExclusive(id, () =>
+        runJoined(async () => {
+          const imp = await readLocked(id);
 
-        return action(imp);
-      }),
+          return action(imp);
+        }),
+      ),
     withNewImp: (id, insert, action) =>
-      mutex.runExclusive(id, async () => {
-        const imp = await insert();
+      mutex.runExclusive(id, () =>
+        runJoined(async () => {
+          const imp = await insert();
 
-        return action({ ...imp, [LOCKED]: true });
-      }),
+          return action({ ...imp, [LOCKED]: true });
+        }),
+      ),
     tryWithImpId: (id, action) =>
-      mutex.tryRunExclusive(id, async () => {
-        const imp = await readLocked(id);
+      mutex.tryRunExclusive(id, () =>
+        runJoined(async () => {
+          const imp = await readLocked(id);
 
-        return action(imp);
-      }),
+          return action(imp);
+        }),
+      ),
     isLocked: (id) => mutex.isLocked(id),
     waitForAll: () => mutex.waitForAll(),
   };

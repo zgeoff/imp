@@ -56,6 +56,8 @@ export {
 } from './tunnel-protocol';
 
 export type { TunnelClientMessage, TunnelServerMessage } from './tunnel-protocol';
+export { DroppedStorageSchema, StorageGcSchema } from './storage-schema';
+export type { DroppedStorage, StorageGc } from './storage-schema';
 export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema } from './image-schema';
 export type { Image } from './image-schema';
