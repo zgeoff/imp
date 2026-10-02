@@ -36,6 +36,7 @@ test('it serves system.info from config and the database', async () => {
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
     cpu: { hostCpus: 8, limitsEnforced: false },
     public: null,
+    features: { sessionOffsets: false, leases: true },
   });
 });
 

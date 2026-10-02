@@ -3,21 +3,14 @@ import type { EgressPolicy, Imp } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
-import {
-  listImps,
-  removeImp,
-  updateImpActivity,
-  updateImpDisk,
-  updateImpHold,
-  updateImpSettings,
-  updateImpState,
-} from '../db/imps';
+import { listImps, removeImp, updateImpDisk, updateImpSettings, updateImpState } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
 import { resolveCpuSettings } from './cpu-limit';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
 import { MIB, buildDiskTooSmallError, growDiskFile, readFileBytes } from './imp-disk';
+import type { ImpLeases } from './imp-leases';
 import { checkLiveness } from './imp-liveness';
 import { toLockedImp } from './imp-lock';
 import type { ImpLock } from './imp-lock';
@@ -58,20 +51,20 @@ export interface ImpCommands {
   readonly listImps: () => Promise<Imp[]>;
   readonly getImp: (name: string) => Promise<Imp>;
   readonly startImp: (name: string) => Promise<Imp>;
-  readonly stopImp: (name: string) => Promise<Imp>;
+
+  // `force` ends the imp's leases from leases.*, which fail it with LEASED
+  // otherwise (docs/guides/leases.md#sleep-and-stop)
+  readonly stopImp: (name: string, force?: boolean) => Promise<Imp>;
   readonly destroyImp: (name: string) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
   // snapshot memory to disk and stop Firecracker
-  // (docs/architecture/sleep-and-wake.md#sleep)
-  readonly sleepImp: (name: string) => Promise<Imp>;
+  // (docs/architecture/sleep-and-wake.md#sleep); `force` as for stopImp
+  readonly sleepImp: (name: string, force?: boolean) => Promise<Imp>;
 
   // a sleeping imp resumes from its snapshot, a stopped one boots cold; an
   // imp in error boots cold too, unless restartError is false
   readonly wakeImp: (name: string, restartError?: boolean) => Promise<Imp>;
-
-  // keeps the imp awake until now + seconds; 0 releases; wakes it if needed
-  readonly holdImp: (name: string, seconds: number) => Promise<Imp>;
 
   // grows the disk file; the guest grows its filesystem into it now when
   // running, at its next wake when sleeping, at its next boot when stopped
@@ -95,6 +88,7 @@ interface ImpCommandParts {
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
   readonly presenter: ImpPresenter;
+  readonly leases: Pick<ImpLeases, 'requireUnleased'>;
 }
 
 export function createImpCommands(parts: ImpCommandParts): ImpCommands {
@@ -102,6 +96,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
   const lock = parts.lock;
   const ops = parts.ops;
   const presenter = parts.presenter;
+  const leases = parts.leases;
 
   return {
     createImp: async (input) => {
@@ -266,8 +261,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(running);
       }),
 
-    stopImp: (name) =>
-      lock.withImp(name, async (imp) => {
+    stopImp: (name, force = false) =>
+      lock.withImp(name, async (found) => {
+        const imp = await leases.requireUnleased(found, force);
+
         if (imp.state === 'stopped') {
           return presenter.toApi(imp);
         }
@@ -314,8 +311,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       return presenter.readUrls(imp);
     },
 
-    sleepImp: (name) =>
-      lock.withImp(name, async (imp) => {
+    sleepImp: (name, force = false) =>
+      lock.withImp(name, async (found) => {
+        const imp = await leases.requireUnleased(found, force);
+
         const asleep = imp.state === 'sleeping' ? imp : await ops.sleepImpVm(imp, 'requested');
 
         return presenter.toApi(asleep);
@@ -381,25 +380,6 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         const resized = await ops.growGuestDisk(grown);
 
         return presenter.toApi(resized);
-      }),
-
-    holdImp: (name, seconds) =>
-      lock.withImp(name, async (imp) => {
-        const until = seconds > 0 ? new Date(context.now() + seconds * 1000) : null;
-
-        const updated = await updateImpHold(context.db, imp.id, until);
-
-        const held = toLockedImp(imp, updated);
-
-        if (until === null) {
-          return presenter.toApi(held);
-        }
-
-        await updateImpActivity(context.db, imp.id, new Date());
-
-        const running = await ops.requireRunningImp(held);
-
-        return presenter.toApi(running);
       }),
 
     updateImp: (name, change) =>

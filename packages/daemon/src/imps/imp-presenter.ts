@@ -1,6 +1,8 @@
 import type { Imp } from '@imp/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
+import { listLeases } from '../db/leases';
+import type { LeaseRecord } from '../db/leases';
 import type { HttpsConfig } from '../https/https-config';
 import { countSessions } from '../sessions/count-sessions';
 import { readBootStatus } from './boot-status';
@@ -37,7 +39,9 @@ export function createImpPresenter(
   const buildLocalUrl = (name: string): string =>
     `http://${name}.imp.localhost:${String(context.config.proxyPort)}`;
 
-  const toApiImp = (imp: ImpRecord, imageName: string): Imp => {
+  // `leases` are the imp's live ones, shown as a count: who owns them is
+  // the router's to show, per caller (auth/caller-view.ts)
+  const toApiImp = (imp: ImpRecord, imageName: string, leases: readonly LeaseRecord[]): Imp => {
     const api: Imp = {
       id: imp.id,
       name: imp.name,
@@ -63,9 +67,12 @@ export function createImpPresenter(
       api.public = { auth: imp.publicAuth };
     }
 
-    if (imp.holdUntil !== null) {
+    // a hold that ended holds nothing
+    if (imp.holdUntil !== null && imp.holdUntil.getTime() > context.now()) {
       api.holdUntil = imp.holdUntil;
     }
+
+    api.leases = { leases: [], otherCount: leases.length };
 
     if (imp.error !== null) {
       api.error = imp.error;
@@ -132,16 +139,30 @@ export function createImpPresenter(
 
   return {
     toApi: async (imp) => {
-      const image = await findImageById(context.db, imp.imageId);
+      const [image, leases] = await Promise.all([
+        findImageById(context.db, imp.imageId),
+        listLeases(context.db, context.now(), [imp.id]),
+      ]);
 
-      return toApiImp(imp, image?.name ?? 'unknown');
+      return toApiImp(imp, image?.name ?? 'unknown', leases);
     },
     toApiList: async (imps) => {
-      const images = await listImages(context.db);
+      const [images, leases] = await Promise.all([
+        listImages(context.db),
+        listLeases(
+          context.db,
+          context.now(),
+          imps.map((imp) => imp.id),
+        ),
+      ]);
 
       const names = new Map(images.map((image) => [image.id, image.name]));
 
-      return imps.map((imp) => toApiImp(imp, names.get(imp.imageId) ?? 'unknown'));
+      const byImp = Map.groupBy(leases, (lease) => lease.impId);
+
+      return imps.map((imp) =>
+        toApiImp(imp, names.get(imp.imageId) ?? 'unknown', byImp.get(imp.id) ?? []),
+      );
     },
     readUrls: async (imp) => {
       const local = buildLocalUrl(imp.name);

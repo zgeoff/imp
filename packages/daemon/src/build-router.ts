@@ -1,5 +1,5 @@
 import { EVENT_VERSION, impContract } from '@imp/api';
-import type { Image, ImpEvent, SystemInfo } from '@imp/api';
+import type { Image, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
 import { buildForbiddenError } from './api-errors';
@@ -8,6 +8,7 @@ import type { ApiAudit } from './audit/api-audit';
 import { checkAccess, findAccess, isAuditedProcedure } from './auth/access-policy';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
+import { isLeaseVisible, toApiLease, toCallerError, toLeaseSummary } from './auth/caller-view';
 import { isImpAllowed } from './auth/imp-patterns';
 import { hasScope } from './auth/scopes';
 import type { TokenStore } from './auth/token-store';
@@ -113,9 +114,13 @@ export function buildRouter(deps: RouterDeps) {
       };
 
       if (!isAuditedProcedure(procedure)) {
-        requireAccess();
+        try {
+          requireAccess();
 
-        return options.next();
+          return await options.next();
+        } catch (error) {
+          throw toCallerError(error, caller);
+        }
       }
 
       const startedAt = deps.now();
@@ -137,7 +142,9 @@ export function buildRouter(deps: RouterDeps) {
         return result;
       } catch (error) {
         deps.audit.record(buildCall(null), error);
-        throw error;
+
+        // a refusal names only the leases and imps the caller may see
+        throw toCallerError(error, caller);
       }
     });
 
@@ -157,6 +164,27 @@ export function buildRouter(deps: RouterDeps) {
     const imps = await deps.imps.listImps();
 
     return imps.filter((imp) => isImpAllowed(caller.imps, imp.name));
+  };
+
+  // The presenter shows an imp's leases as a count; the caller sees its own,
+  // or every owner with host-wide manage
+  const toCallerImps = async (caller: Readonly<Caller>, imps: readonly Imp[]): Promise<Imp[]> => {
+    const byImp = await deps.imps.readLeases(imps.map((imp) => imp.id));
+
+    return imps.map((imp) => ({
+      ...imp,
+      leases: toLeaseSummary(caller, imp.name, byImp.get(imp.id) ?? []),
+    }));
+  };
+
+  const toCallerImp = async (caller: Readonly<Caller>, imp: Imp | Promise<Imp>): Promise<Imp> => {
+    const [shown] = await toCallerImps(caller, [await imp]);
+
+    if (shown === undefined) {
+      throw new Error('an imp went missing on its way out');
+    }
+
+    return shown;
   };
 
   const requireBackups = (): BackupService => {
@@ -194,29 +222,60 @@ export function buildRouter(deps: RouterDeps) {
 
         const networkIds = await deps.networks.resolveNetworkIds(networks ?? []);
 
-        return deps.imps.createImp({ ...input, networkIds });
+        return toCallerImp(caller, deps.imps.createImp({ ...input, networkIds }));
       }),
-      list: os.imps.list.handler((context) => listCallerImps(context.context.caller)),
-      get: os.imps.get.handler((context) => deps.imps.getImp(context.input.name)),
+      list: os.imps.list.handler(async (context) => {
+        const caller = context.context.caller;
+
+        const imps = await listCallerImps(caller);
+
+        return toCallerImps(caller, imps);
+      }),
+      get: os.imps.get.handler((context) =>
+        toCallerImp(context.context.caller, deps.imps.getImp(context.input.name)),
+      ),
       destroy: os.imps.destroy.handler(async (context) => {
         await deps.imps.destroyImp(context.input.name);
 
         return {};
       }),
-      start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
-      stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
-      sleep: os.imps.sleep.handler((context) => deps.imps.sleepImp(context.input.name)),
+      start: os.imps.start.handler((context) =>
+        toCallerImp(context.context.caller, deps.imps.startImp(context.input.name)),
+      ),
+      stop: os.imps.stop.handler((context) =>
+        toCallerImp(
+          context.context.caller,
+          deps.imps.stopImp(context.input.name, context.input.force ?? false),
+        ),
+      ),
+      sleep: os.imps.sleep.handler((context) =>
+        toCallerImp(
+          context.context.caller,
+          deps.imps.sleepImp(context.input.name, context.input.force ?? false),
+        ),
+      ),
       wake: os.imps.wake.handler((context) =>
-        deps.imps.wakeImp(context.input.name, context.input.restartError),
+        toCallerImp(
+          context.context.caller,
+          deps.imps.wakeImp(context.input.name, context.input.restartError),
+        ),
       ),
-      hold: os.imps.hold.handler((context) =>
-        deps.imps.holdImp(context.input.name, context.input.seconds),
-      ),
+      hold: os.imps.hold.handler((context) => {
+        const caller = context.context.caller;
+
+        return toCallerImp(
+          caller,
+          deps.imps.holdImp(context.input.name, context.input.seconds, caller),
+        );
+      }),
       resizeDisk: os.imps.resizeDisk.handler((context) =>
-        deps.imps.resizeDisk(context.input.name, context.input.diskMib),
+        toCallerImp(
+          context.context.caller,
+          deps.imps.resizeDisk(context.input.name, context.input.diskMib),
+        ),
       ),
       update: os.imps.update.handler((context) =>
-        deps.imps.updateImp(context.input.name, context.input),
+        toCallerImp(context.context.caller, deps.imps.updateImp(context.input.name, context.input)),
       ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
       policy: os.imps.policy.handler((context) => deps.egress.readPolicy(context.input.name)),
@@ -228,7 +287,7 @@ export function buildRouter(deps: RouterDeps) {
       unexpose: os.imps.unexpose.handler(async (context) => {
         await exposure.unexpose(context.input.name);
 
-        return deps.imps.getImp(context.input.name);
+        return toCallerImp(context.context.caller, deps.imps.getImp(context.input.name));
       }),
 
       // a fork gets its source's grants, as it gets its disk
@@ -237,7 +296,68 @@ export function buildRouter(deps: RouterDeps) {
 
         await deps.broker.createForkGrants(context.input.source, imp.name);
 
-        return imp;
+        return toCallerImp(context.context.caller, imp);
+      }),
+    },
+    leases: {
+      acquire: os.leases.acquire.handler(async (context) => {
+        const input = context.input;
+        const caller = context.context.caller;
+
+        const acquired = await deps.imps.acquireLease(
+          input.name,
+          caller,
+          input.label,
+          input.ttlSeconds,
+        );
+
+        return toApiLease(acquired.name, acquired.lease);
+      }),
+      renew: os.leases.renew.handler(async (context) => {
+        const input = context.input;
+        const caller = context.context.caller;
+
+        const renewed = await deps.imps.renewLease(
+          input.name,
+          caller,
+          input.label,
+          input.ttlSeconds,
+        );
+
+        return toApiLease(renewed.name, renewed.lease);
+      }),
+      release: os.leases.release.handler(async (context) => {
+        const input = context.input;
+        const caller = context.context.caller;
+
+        const released = await deps.imps.releaseLease(input.name, caller, input.label);
+
+        return { released };
+      }),
+
+      // the caller's imps only, and on them the leases it may see
+      list: os.leases.list.handler(async (context) => {
+        const caller = context.context.caller;
+        const name = context.input.name;
+        const label = context.input.label;
+
+        requireNamedImp(caller, name, 'exec');
+
+        if (name !== undefined) {
+          await deps.imps.getImp(name);
+        }
+
+        const leases = await deps.imps.listLeases();
+
+        return leases
+          .filter(
+            (each) =>
+              (name === undefined || each.name === name) &&
+              (label === undefined || each.lease.label === label) &&
+              isCallerAllowed(caller, 'exec', each.name) &&
+              isLeaseVisible(caller, each.lease),
+          )
+          .map((each) => toApiLease(each.name, each.lease));
       }),
     },
     checkpoints: {
@@ -248,7 +368,10 @@ export function buildRouter(deps: RouterDeps) {
         deps.checkpoints.listCheckpoints(context.input.name),
       ),
       restore: os.checkpoints.restore.handler((context) =>
-        deps.checkpoints.restoreCheckpoint(context.input.name, context.input.checkpoint),
+        toCallerImp(
+          context.context.caller,
+          deps.checkpoints.restoreCheckpoint(context.input.name, context.input.checkpoint),
+        ),
       ),
       delete: os.checkpoints.delete.handler(async (context) => {
         await deps.checkpoints.deleteCheckpoint(context.input.name, context.input.checkpoint);
@@ -539,6 +662,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     },
     cpu: deps.imps.readCpuHost(),
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
+    features: { sessionOffsets: false, leases: true },
   };
 }
 
@@ -575,9 +699,13 @@ export function toApiImage(image: ImageRecord): Image {
   };
 }
 
-// an audit list may name one imp, which must be the caller's
-function requireNamedImp(caller: Readonly<Caller>, name: string | undefined): void {
-  if (name !== undefined && !isCallerAllowed(caller, 'read', name)) {
+// an audit or lease list may name one imp, which must be the caller's
+function requireNamedImp(
+  caller: Readonly<Caller>,
+  name: string | undefined,
+  scope: Scope = 'read',
+): void {
+  if (name !== undefined && !isCallerAllowed(caller, scope, name)) {
     throw buildForbiddenError(`${formatCaller(caller)} may not touch imp ${name}`);
   }
 }
