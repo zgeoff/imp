@@ -129,11 +129,12 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   are not held and not busy, until it fits. An imp whose lock is taken by the time its turn comes is
   skipped, not waited for ([background sleeps](#background-sleeps)), and impd picks again without
   it. If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
-  with `RAM_BUDGET_EXCEEDED`. When the imps impd may sleep cannot make room between them, it sleeps
-  none of them: a request that cannot fit does not cost other imps their memory.
+  with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room:
+  a request that cannot fit does not cost other imps their memory. A sleep already done when a later
+  victim is skipped is kept ([#47](https://github.com/zgeoff/imp/issues/47)).
 - **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget. When the
   imps it may sleep cannot bring usage under the budget, it sleeps all of them to get as close as it
-  can, and logs once that usage stays over.
+  can. It logs each pass that sleeps an imp, and once when none is left.
 
 Enforcement trades availability for the host. A governor sleep ignores the idle timeout, so it can
 sleep an imp that served a request a moment ago, even when that does not reach the budget. The
