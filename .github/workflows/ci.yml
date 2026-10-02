@@ -418,7 +418,8 @@ jobs:
             || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
           sudo modprobe zfs zfs_arc_max=1073741824
           echo 1073741824 | sudo tee /sys/module/zfs/parameters/zfs_arc_max >/dev/null
-          zfs version
+          # zfsutils 2.2.2-0ubuntu9.5 and later refuse to run as a user
+          sudo zfs version
 
       # the unit part runs here, in its own temp dir, so a failure names it
       - name: ZFS backend tests
