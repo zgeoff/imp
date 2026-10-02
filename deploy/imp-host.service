@@ -4,6 +4,7 @@
 #   install -m 0644 deploy/imp-host.service /etc/systemd/system/
 #   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
 #   systemctl daemon-reload && systemctl enable --now imp-host
+#   deploy/upgrade.sh   to a new image
 #
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
 [Unit]

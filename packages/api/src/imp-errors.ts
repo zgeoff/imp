@@ -2,7 +2,7 @@ import * as z from 'zod';
 import { defineErrors } from './define-errors';
 import { ImpStateSchema } from './imp-schema';
 
-const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint']);
+const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint', 'session']);
 
 const ResourceDataSchema = z.object({
   kind: ResourceKindSchema,
@@ -14,6 +14,9 @@ const ResourceDataSchema = z.object({
 export const IMP_ERRORS = defineErrors({
   NOT_FOUND: { message: 'Not found', data: ResourceDataSchema },
   CONFLICT: { message: 'Already exists', data: ResourceDataSchema },
+
+  // an exec ticket used for another imp
+  FORBIDDEN: { message: 'Not allowed' },
   RAM_BUDGET_EXCEEDED: {
     message: 'Not enough RAM budget, even after sleeping idle imps',
     status: 503,
@@ -34,4 +37,7 @@ export const IMP_ERRORS = defineErrors({
       allowed: z.array(ImpStateSchema),
     }),
   },
+
+  // the imp's agent is from before the feature; a stop and start updates it
+  AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },
 });

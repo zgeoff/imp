@@ -1,64 +1,32 @@
 #!/usr/bin/env bun
-import { defineCommand, runCommand, runMain } from 'citty';
-import packageJson from '../package.json' with { type: 'json' };
-import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
-import { imageCommand } from './commands/image';
-import {
-  consoleCommand,
-  execCommand,
-  forkCommand,
-  holdCommand,
-  lsCommand,
-  newCommand,
-  rmCommand,
-  sleepCommand,
-  startCommand,
-  stopCommand,
-  urlCommand,
-  wakeCommand,
-} from './commands/imps';
-import { infoCommand } from './commands/info';
+import { runMain } from 'citty';
+import { mainCommand } from './command-tree';
+import { splitHostFlag } from './host-flag';
+import { checkHostName } from './host-store';
+import { printError } from './run-action';
 
-const main = defineCommand({
-  meta: {
-    name: 'imp',
-    version: packageJson.version,
-    description: 'Persistent Linux microVMs that sleep when idle and wake on request',
-  },
-  subCommands: {
-    new: newCommand,
-    ls: lsCommand,
-    rm: rmCommand,
-    start: startCommand,
-    stop: stopCommand,
-    exec: execCommand,
-    console: consoleCommand,
-    sleep: sleepCommand,
-    wake: wakeCommand,
-    hold: holdCommand,
-    url: urlCommand,
-    checkpoint: checkpointCommand,
-    checkpoints: checkpointsCommand,
-    restore: restoreCommand,
-    fork: forkCommand,
-    image: imageCommand,
-    info: infoCommand,
-  },
-});
+// runMain shows help when --help appears anywhere, and citty would parse
+// the command's own flags, so it sees only the arguments before `--`;
+// `imp exec` reads the command after it from process.argv
+try {
+  const split = splitHostFlag(process.argv.slice(2));
+  const separator = split.args.indexOf('--');
+  const args = separator === -1 ? [...split.args] : split.args.slice(0, separator);
 
-// runMain shows help when --help appears anywhere, so arguments after `--`
-// (the command for `imp exec`) bypass it
-const rawArgs = process.argv.slice(2);
-const separator = rawArgs.indexOf('--');
-const ownArgs = separator === -1 ? rawArgs : rawArgs.slice(0, separator);
+  // citty hands a subcommand only its own arguments, never `data`, so
+  // `--host` goes last for the command that runs (define-command.ts); with
+  // no subcommand, --version and --help need their flag alone
+  const hasSubcommand = args.some((arg) => !arg.startsWith('-'));
 
-if (ownArgs.length === rawArgs.length || ownArgs.some((arg) => arg === '--help' || arg === '-h')) {
-  await runMain(main, { rawArgs: ownArgs });
-} else {
-  try {
-    await runCommand(main, { rawArgs });
-  } catch (error) {
-    console.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+  if (split.host !== null) {
+    const host = checkHostName(split.host);
+
+    if (hasSubcommand) {
+      args.push(`--host=${host}`);
+    }
   }
+
+  await runMain(mainCommand, { rawArgs: args });
+} catch (error) {
+  printError(error);
 }

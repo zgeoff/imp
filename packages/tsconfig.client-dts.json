@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.base.json",
+  // The published types of packages/client (its tsdown.config.ts). It sits
+  // here because the dts plugin uses this file's directory as rootDir, which
+  // must hold @imp/api too: that package is bundled, so its declarations are
+  // emitted with the client's. No Bun globals, and the DOM a browser sees.
+  "compilerOptions": {
+    "lib": ["ES2024", "DOM"],
+    "types": []
+  },
+  "include": ["client/src", "api/src"],
+  "exclude": ["**/*.test.ts"]
+}

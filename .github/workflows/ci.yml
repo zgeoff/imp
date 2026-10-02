@@ -92,6 +92,14 @@ jobs:
       - name: Test
         run: bun test
 
+      # its own run: the component tests register a DOM that must not reach
+      # the daemon's tests (bunfig.toml pathIgnorePatterns)
+      - name: Test Dashboard
+        run: bun run test:dashboard
+
+      - name: Build Dashboard
+        run: bun run build:dashboard
+
   go:
     runs-on: ubuntu-latest
     permissions:
@@ -182,8 +190,279 @@ jobs:
       - name: Run
         run: dist/imp-linux-x64 --version
 
-  # Main-only jobs (the release, the KVM end-to-end suite) go below with
-  # `if: github.event_name == 'push'` and `needs:` on the gates above.
+      # The release image compiles impd and the CLI in its own stage, with
+      # its own install: build that stage too, so a dependency the stage
+      # misses fails here and not first in a release.
+      - name: Build the release compile stage
+        run: docker build --target compile -f host/Dockerfile .
+
+  # Packs @zgeoff/imp-client as the release publishes it, then installs the
+  # tarball into an empty project on the oldest Node it supports.
+  client:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Pack
+        id: pack
+        run: echo "tarball=$(scripts/pack-client.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Check the package
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: scripts/check-client-package.sh "$TARBALL"
+
+  # Boots real microVMs: the fast end-to-end set (scripts/test-e2e.sh --only
+  # fast) against a dev instance on the runner's own KVM. A required check,
+  # and release-please waits for it (docs/guides/development.md, "CI").
+  e2e:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # a cache miss rebuilds the guest kernel, about 10 minutes on 4 cores
+    timeout-minutes: 25
+    env:
+      # the fast set at reduced size for a 4-core, 16 GB runner
+      E2E_RAM_BUDGET_MIB: 4096
+      IMP_DEFAULT_MEMORY_MIB: 1024
+      IMP_KERNEL: .cache/ci/vmlinux
+      IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
+      # sparse, so only what the imps write takes disk
+      IMP_STORAGE_GIB: 40
+      IMP_HOST_IMAGE_READY: 1
+      # PRs read the caches main writes; their own writes would only crowd
+      # the repo's cache quota
+      WRITE_CACHE: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # first, so a runner without KVM fails before any build
+      - name: Check KVM
+        run: scripts/check-kvm.sh
+
+      # /mnt is the runner's larger temp disk; the XFS file goes there when
+      # the image has one. CI must not pass --clean to the harness: it
+      # refuses to wipe a data dir outside .data/ that holds no imp.xfs, and
+      # a fresh runner has nothing to clean.
+      - name: Pick the data dir
+        run: |
+          df -h / /mnt || true
+          if mountpoint -q /mnt; then
+            data=/mnt/imp-e2e
+          else
+            data=$GITHUB_WORKSPACE/.data/ci
+          fi
+          sudo mkdir -p "$data"
+          sudo chown "$(id -u):$(id -g)" "$data"
+          echo "IMP_DEV_DATA=$data" >> "$GITHUB_ENV"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build kernel, system drive and host image
+        uses: ./.github/actions/e2e-build
+        with:
+          write-cache: ${{ env.WRITE_CACHE }}
+
+      # The dashboard suite's browser. The locked Playwright pins its Chromium
+      # build, so its version keys the cache; on a miss the suite downloads it.
+      - name: Read the Playwright version
+        id: playwright
+        working-directory: packages/dashboard
+        run:
+          echo "version=$(bun -p "require('@playwright/test/package.json').version")"
+          >>"$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
+      # outside acceptance a missed timing limit only warns.
+      - name: End-to-end tests
+        run: scripts/test-e2e.sh --only fast
+
+      # The steps below also run after a failure or a timeout, with or
+      # without a container, so none of them may fail the job.
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p .cache/e2e
+          docker logs imp-dev >.cache/e2e/impd.log 2>&1 || true
+          du -h "$IMP_DEV_DATA/imp.xfs" || true
+          df -h / /mnt || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-results
+          # the dashboard suite's Playwright traces and screenshots
+          path: |
+            .cache/e2e/
+            packages/dashboard/.test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # the runner is thrown away, so no sleeping imps to keep
+      - name: Remove the dev instance
+        if: always()
+        run: docker rm -f imp-dev || true
+
+  # The ZFS storage backend on real pools: scripts/test-zfs.sh runs its tests
+  # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
+  # ships; then scripts/zfs-host-test.sh runs real imps on a second such pool
+  # through the lifecycle, checkpoints and sleep suites and prints the ZFS
+  # timings. Not a required check; the fake zfs in the unit tests runs in
+  # `checks` either way.
+  zfs:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # a cache miss rebuilds the guest kernel, about 10 minutes on 4 cores
+    timeout-minutes: 30
+    env:
+      # as the e2e job: reduced sizes for a 4-core, 16 GB runner
+      E2E_RAM_BUDGET_MIB: 4096
+      IMP_DEFAULT_MEMORY_MIB: 1024
+      IMP_KERNEL: .cache/ci/vmlinux
+      IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
+      IMP_HOST_IMAGE_READY: 1
+      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep
+      IMP_ZFS_TEST_UNIT: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check KVM
+        run: scripts/check-kvm.sh
+
+      # the pool files go on /mnt, the runner's larger temp disk, when it has one
+      - name: Pick the work dir
+        run: |
+          df -h / /mnt || true
+          if mountpoint -q /mnt; then
+            work=/mnt/imp-zfs
+          else
+            work=$RUNNER_TEMP/imp-zfs
+          fi
+          sudo mkdir -p "$work"
+          sudo chown "$(id -u):$(id -g)" "$work"
+          echo "IMP_ZFS_TEST_DIR=$work" >> "$GITHUB_ENV"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # ARC defaults to half of RAM; capped, as deploy/bootstrap.sh does, so
+      # the guests keep theirs
+      - name: Install ZFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zfsutils-linux
+          # zfs.ko sits in linux-modules-extra on some runner kernels
+          modinfo zfs >/dev/null 2>&1 \
+            || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe zfs zfs_arc_max=1073741824
+          echo 1073741824 | sudo tee /sys/module/zfs/parameters/zfs_arc_max >/dev/null
+          zfs version
+
+      # the unit part runs here, in its own temp dir, so a failure names it
+      - name: ZFS backend tests
+        run: sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR= scripts/test-zfs.sh
+
+      # reads the caches only: the required e2e job writes the same scopes on
+      # push, and two writers at once can fail its build
+      - name: Build kernel, system drive and host image
+        uses: ./.github/actions/e2e-build
+        with:
+          write-cache: false
+
+      - name: Imps on ZFS
+        run: scripts/zfs-host-test.sh
+
+      # also after a failed suite: the script writes the summary either way
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "Nested KVM on a shared runner, a pool in a sparse file and a 1 GiB ARC: these"
+            echo "numbers do not compare directly with the XFS ones in STATUS.md."
+            echo
+            echo '```text'
+            cat "$IMP_ZFS_TEST_DIR/summary.txt" 2>/dev/null || echo "no summary: the run stopped before it"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # also after a failure or a timeout, so none of these may fail the job
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p .cache/e2e
+          cp "$IMP_ZFS_TEST_DIR"/{impd.log,e2e.log,summary.txt} .cache/e2e/ 2>/dev/null || true
+          docker logs imp-zfs >>.cache/e2e/impd.log 2>&1 || true
+          df -h / /mnt || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zfs-e2e-results
+          path: .cache/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Main-only jobs go below with `if: github.event_name == 'push'` and
+  # `needs:` on the gates above.
 
   # A release takes two runs of this job (RELEASING.md):
   # - after a releasable commit lands on main, release-please opens or updates
@@ -198,7 +477,7 @@ jobs:
   # the PR, CI runs on it, and the job turns on auto-merge.
   release-please:
     if: github.event_name == 'push' && vars.RELEASE_APP_ID != ''
-    needs: [gitleaks, checks, go, shellcheck, cli]
+    needs: [gitleaks, checks, go, shellcheck, cli, client, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write

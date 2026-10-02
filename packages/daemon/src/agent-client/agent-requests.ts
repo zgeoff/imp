@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { handleUnknownOp } from './agent-outdated';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
 
@@ -16,15 +17,36 @@ const PingResponseSchema = z.object({
 
 const OkResponseSchema = z.object({ ok: z.literal(true) });
 
+export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).readonly();
+
+export const AgentSessionSchema = z
+  .object({
+    name: z.string(),
+    pid: z.int(),
+    argv: z.array(z.string()).readonly(),
+    state: z.enum(['running', 'exited']),
+    attached: z.boolean(),
+    cols: z.int(),
+    rows: z.int(),
+    started_unix_ms: z.int(),
+    exit: AgentExitSchema.optional(),
+  })
+  .readonly();
+
 const ActivityResponseSchema = z.object({
   tcp_established: z.int().nonnegative(),
   exec_sessions: z.int().nonnegative(),
   load1: z.number(),
+
+  // an agent from before sessions leaves it out
+  sessions: z.array(AgentSessionSchema).readonly().default([]),
 });
 
 export type AgentPing = z.infer<typeof PingResponseSchema>;
 
 export type AgentActivity = z.infer<typeof ActivityResponseSchema>;
+
+export type AgentSession = z.infer<typeof AgentSessionSchema>;
 
 // throws AgentError when the frame is a RESPONSE carrying an `error`
 export function requireNoAgentError(frame: AgentFrame): void {
@@ -81,6 +103,16 @@ export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise
   const response = await sendAgentRequest(vsockPath, { op: 'activity' }, timeoutMs);
 
   return ActivityResponseSchema.parse(response);
+}
+
+// Throws AgentError NO_SESSION when the imp has no session of that name,
+// and AGENT_OUTDATED for an agent from before sessions.
+export async function sendSessionKill(vsockPath: string, session: string): Promise<void> {
+  const response = await sendAgentRequest(vsockPath, { op: 'session.kill', session }).catch(
+    handleUnknownOp,
+  );
+
+  OkResponseSchema.parse(response);
 }
 
 // After a wake: the guest clock stopped while the VM slept.

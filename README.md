@@ -26,7 +26,7 @@ also need Docker, [Bun](https://bun.sh) and Go.
 git clone https://github.com/zgeoff/imp && cd imp
 kernel/build.sh       # the guest kernel, about 9 minutes the first time
 scripts/dev.sh up     # builds and starts the host container that runs impd
-export IMP_TOKEN=$(scripts/dev.sh token)
+scripts/dev.sh token | scripts/imp login http://localhost:7070 --name dev
 ```
 
 To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
@@ -34,6 +34,11 @@ To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
 ```sh
 TAILSCALE_AUTHKEY=tskey-auth-…
 ```
+
+On a laptop that talks to an impd elsewhere, only the CLI is needed, with
+`imp login https://imp.example.ts.net` to point it there. There is no release yet, so for now link
+`scripts/imp` from a checkout onto your `PATH`. From the first release, `install.sh` installs the
+binary, and once the Homebrew tap is set up, so does `brew install zgeoff/tap/imp`.
 
 The [install guide](./docs/guides/install.md) has the details.
 
@@ -61,15 +66,54 @@ imp fork box box-2                # a second copy to try something else in
 | `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`) |
 | `ls`, `info`                           | list imps; show RAM use and the budget                   |
 | `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                      |
-| `console <name>`                       | open a shell                                             |
+| `console <name>`                       | open a shell in a session that outlives the terminal     |
+| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine            |
 | `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                     |
 | `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)           |
 | `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while             |
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
+| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
+| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
+| `completion bash\|zsh\|fish`           | print the shell completion script                        |
 
-`ls` and `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+`--memory` takes MiB or a unit (`512m`, `2g`). Commands that print imps, images, checkpoints or
+`info` take `--json`. `scripts/imp` runs the CLI from the repo.
+
+Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
+size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
+`imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n ended it,
+and set these codes themselves:
+
+| Code | When                                                                                 |
+| ---- | ------------------------------------------------------------------------------------ |
+| 2    | a usage error, such as no command after `--`                                         |
+| 127  | the command could not start (`EXEC_FAILED`)                                          |
+| 141  | the CLI's own output closed, as in `imp exec box -- cat big \| head`                 |
+| 254  | another terminal attached to the session and took it over                            |
+| 255  | imp failed: impd unreachable, a rejected token, an unknown imp, a dropped connection |
+
+`imp console box` starts the session `main`, or attaches to it if it runs (`--session <name>` names
+another, `--no-session` gives a shell that ends with the terminal). Without a terminal on stdin, as
+in a script, it runs without a session unless `--session` names one. Ctrl-] detaches
+(`--detach-key ctrl-<key>` or `none`; Escape, Backspace, Tab, Enter and Return cannot be the key),
+and closing the terminal does too: the shell keeps running in the imp, and through a sleep.
+`imp sessions box` lists the sessions without waking the imp, `imp attach box [main]` shows the
+session's recent output and goes on live from any machine, and `imp sessions kill box main` ends
+one. One terminal is attached at a time: a new attach takes the session over. When impd restarts,
+the imp sleeps, or the connection drops under an attached terminal, the CLI attaches again by itself
+for up to 60 s, waiting 1 s, then 2 s, then 4 s and at most 8 s between tries. Meanwhile the detach
+key still detaches and Ctrl-C gives up (130); other keys wait for the session. It does not attach
+again once another terminal attached. A detach exits 0.
+
+A signal to the CLI (Ctrl-C without `-t`, SIGTERM, SIGHUP) goes to the command, except in a session,
+where it detaches; a second one ends the session with 128 + n, so the CLI stops even when the
+command ignores it or impd stopped answering. A signal before the command starts ends the session at
+once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
+
+The [dashboard](./docs/guides/dashboard.md) at `http://localhost:7070/ui/` shows the same imps,
+checkpoints, images and RAM in a browser, with a console.
 
 ## Sleep and wake
 
@@ -120,7 +164,7 @@ and sleep and wake.
 bun run typecheck && bun run lint && bun test
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && go test -race ./...)
-scripts/acceptance.sh --clean     # end to end, from a clean state
+scripts/test-e2e.sh --clean       # end to end, from a clean state (--only fast for the CI subset)
 ```
 
 CI runs the gates on every push and pull request; the

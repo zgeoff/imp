@@ -2,9 +2,21 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": ["@stylistic/eslint-plugin", "@zgeoff/oxlint-config"],
   "workspaces": {
-    ".": {},
+    ".": {
+      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts"],
+      "project": ["test/**/*.ts"]
+    },
     "packages/*": {
       "project": ["src/**/*.ts"]
+    },
+    "packages/dashboard": {
+      "entry": ["augment-bun-test.ts", "e2e/*.e2e.ts"],
+      "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"]
+    },
+    "packages/client": {
+      "project": ["src/**/*.ts"],
+      // the bundled @imp/api declarations import it
+      "ignoreDependencies": ["zod"]
     }
   }
 }

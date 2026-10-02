@@ -1,27 +1,90 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { checkHostName, readHostConfig, resolveConfigDir } from './host-store';
+import type { CliEnv } from './host-store';
+import { UsageError } from './usage-error';
 
 export interface CliConfig {
   readonly url: string;
   readonly token: string | null;
+
+  // the saved host the URL and token came from, or null for IMP_URL and the
+  // local default
+  readonly host: string | null;
 }
 
-// IMP_TOKEN wins over the token file, so a one-off call can target another
-// impd without touching ~/.config/imp/token.
-export function loadCliConfig(env: Readonly<Record<string, string | undefined>>): CliConfig {
-  const url = env['IMP_URL'] ?? 'http://localhost:7070';
-  const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
-  const tokenPath = join(configHome, 'imp', 'token');
-  const envToken = env['IMP_TOKEN'];
+const DEFAULT_URL = 'http://localhost:7070';
 
-  if (envToken !== undefined && envToken !== '') {
-    return { url, token: envToken };
+// The impd to call and its token, always from one source, so a token never
+// goes to an impd it was not saved for. The order is in
+// docs/guides/configuration.md#cli; the tests cover every combination.
+export function loadCliConfig(env: CliEnv, host: string | null): CliConfig {
+  const envToken = readVariable(env, 'IMP_TOKEN');
+  const named = host === null ? readHostVariable(env) : checkHostName(host);
+
+  if (named !== null) {
+    if (envToken !== null) {
+      console.error(`imp: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
+    }
+
+    return loadSavedHost(env, named);
   }
 
-  if (existsSync(tokenPath)) {
-    return { url, token: readFileSync(tokenPath, 'utf8').trim() };
+  const envUrl = readVariable(env, 'IMP_URL');
+
+  if (envUrl !== null) {
+    if (!isHttpUrl(envUrl)) {
+      throw new UsageError(`IMP_URL is not an http(s) URL: ${envUrl}`);
+    }
+
+    return { url: envUrl, token: envToken, host: null };
   }
 
-  return { url, token: null };
+  const config = readHostConfig(env);
+
+  if (config.current !== null) {
+    const saved = loadSavedHost(env, config.current);
+
+    return { ...saved, token: envToken ?? saved.token };
+  }
+
+  return { url: DEFAULT_URL, token: envToken ?? readTokenFile(env), host: null };
+}
+
+export function isHttpUrl(url: string): boolean {
+  return /^https?:$/.test(URL.parse(url)?.protocol ?? '');
+}
+
+function loadSavedHost(env: CliEnv, name: string): CliConfig {
+  const saved = readHostConfig(env).hosts[name];
+
+  if (saved === undefined) {
+    throw new UsageError(
+      `no saved host ${name} (see imp host ls, or imp login <url> --name ${name})`,
+    );
+  }
+
+  return { url: saved.url, token: saved.token, host: name };
+}
+
+function readHostVariable(env: CliEnv): string | null {
+  const name = readVariable(env, 'IMP_HOST');
+
+  if (name?.includes('://') === true) {
+    throw new UsageError('IMP_HOST names a saved host; use IMP_URL');
+  }
+
+  return name === null ? null : checkHostName(name);
+}
+
+function readTokenFile(env: CliEnv): string | null {
+  const path = join(resolveConfigDir(env), 'token');
+
+  return existsSync(path) ? readFileSync(path, 'utf8').trim() : null;
+}
+
+function readVariable(env: CliEnv, name: string): string | null {
+  const value = env[name];
+
+  return value === undefined || value === '' ? null : value;
 }

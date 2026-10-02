@@ -13,7 +13,10 @@ comes next.
 
 ## Acceptance
 
-`scripts/acceptance.sh --clean` passed twice in a row on 2026-10-02 (WSL2 dev box, nested KVM).
+The acceptance run passed twice in a row from a clean state on 2026-10-02 (WSL2 dev box, nested
+KVM), with the script that `scripts/test-e2e.sh` has since replaced. Each section below is now the
+harness suite with the same number: shell is `lifecycle`, byo-image is `images`, checkpoint-fork is
+`checkpoints`, sleep-wake is `sleep`, and the rest keep their names.
 
 | Section           | Run 1  | Run 2  |
 | ----------------- | ------ | ------ |
@@ -26,6 +29,10 @@ comes next.
 | 6 scale           | 75.5 s | 75.2 s |
 | 7 restart         | 9.2 s  | 12.3 s |
 | 8 tailscale       | 6.4 s  | 4.4 s  |
+| 9 mcp             | 11.3 s | 11.4 s |
+
+Section 9 came after the acceptance runs, with the MCP server (#20); its times are from two runs on
+2026-10-02 against the same dev box, with `E2E_RAM_BUDGET_MIB=2048`.
 
 Scale test (section 6): RAM budget 6144 MiB, 30 imps of 512 MiB, each filling 256 MiB of tmpfs. At
 most 19 imps were awake at once; 21–22 were asleep after all 30 existed. Peak usage was 3167–3168
@@ -71,14 +78,16 @@ From the milestone work:
 
 ## Known gaps
 
+- An upgrade across an agent change was tested on the dev instance (`scripts/dev.sh down`, then `up`
+  on a new drive), not on a server with `deploy/upgrade.sh`. A new Firecracker or host kernel still
+  boots every sleeping imp cold ([#10](https://github.com/zgeoff/imp/issues/10)).
 - A wake right after another wake or exec (under about 1 s apart) takes 650–850 ms instead of about
   80 ms. Normal idle timeouts never hit it ([#33](https://github.com/zgeoff/imp/issues/33)).
-- The WebSocket relay through the wake proxy was tested by hand, not in an end-to-end script
-  ([#3](https://github.com/zgeoff/imp/issues/3)).
+- The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
+  fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
+  restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
-- `scripts/e2e-*.sh` and the prototype `smoke-*.sh` / `proto-sleep.sh` scripts overlap with
-  `scripts/acceptance.sh` ([#3](https://github.com/zgeoff/imp/issues/3)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 

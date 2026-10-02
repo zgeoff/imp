@@ -46,8 +46,8 @@ waiting would deadlock. The type of the governor's sleep admits only a try-lock.
 
 ## Wake
 
-1. impd reads `meta.json` and compares it with this host. On no snapshot or any difference, it boots
-   the disk cold instead.
+1. impd reads `meta.json` and checks it against this host ([snapshot identity](#snapshot-identity)).
+   On no snapshot or a snapshot that cannot load, it boots the disk cold instead.
 2. It reserves RAM: the larger of what the VM owned at sleep and `IMP_WAKE_RESERVE_MIB`.
 3. It creates the tap if it is gone (a container restart removes taps).
 4. It starts Firecracker, which first removes a stale `vsock.sock` ([gotcha 1](#4-gotchas)), and
@@ -67,10 +67,33 @@ cold boot away.
 
 ### Snapshot identity
 
-`meta.json` records the Firecracker version, the snapshot format, the host kernel (`uname -r`), and
-hashes of the guest kernel and the system drive. The snapshot holds the guest kernel in memory and
-the guest's page cache of the system drive, so either change means a cold boot. It also records the
-imp's memory size and the RAM the VM owned at sleep.
+A cold boot writes `vm.json` in the imp's directory: what the VM booted with. It holds the
+Firecracker version, the snapshot format, the host kernel (`uname -r`), the sha256 of the guest
+kernel and of the system drive, the drive's path, the agent's protocol version from its first
+`ping`, and why the boot was cold when it replaced a wake (the next sleep clears that). It is
+written next to the old file and renamed over it; a failed write is logged and the boot goes on. The
+file stays through sleeps, wakes and impd restarts, so a re-adopted VM that booted on an older drive
+still says so. Each sleep copies it into `meta.json`, with the imp's memory size and the RAM the VM
+owned at sleep.
+
+A wake loads the snapshot only when all of these hold. Otherwise it boots the disk cold:
+
+| What changed since the VM booted | Wake                                                  |
+| -------------------------------- | ----------------------------------------------------- |
+| The Firecracker version          | cold boot                                             |
+| The snapshot format              | cold boot                                             |
+| The host kernel                  | cold boot                                             |
+| The system drive (the agent)     | restores while the drive file is kept, else cold boot |
+| The guest kernel                 | restores: the snapshot holds the kernel in memory     |
+| `meta.json` without a drive path | cold boot: the snapshot is from an older impd         |
+
+The snapshot reopens the system drive by path, and its page cache holds blocks of those bytes, so
+impd keeps every drive a snapshot names ([storage](./storage.md#system-files)). After a load, the
+agent must answer with the protocol version `meta.json` recorded; anything else is not the VM that
+went to sleep, and impd boots cold.
+
+A woken imp keeps its old agent and kernel until its next cold boot (`imp stop`, then `imp start`).
+`imp ls` shows both cases in its NOTE column ([operations](../guides/operations.md#upgrade)).
 
 ## What survives a sleep
 
@@ -78,6 +101,10 @@ imp's memory size and the RAM the VM owned at sleep.
 - TCP connections reset.
 - On wake the guest closes every vsock connection. An exec whose host side hangs up gets SIGHUP and
   is detached after 1 s, so it does not keep the imp awake.
+- [Sessions](./daemon.md#sessions-detachable-consoles) survive: they live in guest memory, and a
+  vsock reset only detaches their client. An imp with a client attached does not go to sleep on its
+  own; an explicit `imp sleep` or impd's stop detaches the client with `lost`, and it can attach
+  again after the wake.
 
 Anything that needs a VM wakes a sleeping imp and cold-boots a stopped one: `exec`, `console`, the
 proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the imp off.
@@ -104,7 +131,8 @@ proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the
 
 Every 2 s, an imp counts as active when it has any of these:
 
-- an open exec session or proxied connection, counted on the host;
+- an open exec session (an attached session included) or proxied connection, counted on the host; a
+  detached session counts only through its CPU and TCP;
 - established guest TCP connections, from the agent's `activity` (loopback does not count);
 - Firecracker CPU above `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about
   0.4);
@@ -129,8 +157,18 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   are not held and not busy, until it fits. An imp whose lock is taken by the time its turn comes is
   skipped, not waited for ([background sleeps](#background-sleeps)), and impd picks again without
   it. If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
-  with `RAM_BUDGET_EXCEEDED`.
-- **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget.
+  with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room:
+  a request that cannot fit does not cost other imps their memory. A sleep already done when a later
+  victim is skipped is kept ([#47](https://github.com/zgeoff/imp/issues/47)).
+- **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget. When the
+  imps it may sleep cannot bring usage under the budget, it sleeps all of them to get as close as it
+  can. It logs each pass that sleeps an imp, and once when none is left.
+
+Enforcement trades availability for the host. A governor sleep ignores the idle timeout, so it can
+sleep an imp that served a request a moment ago, even when that does not reach the budget. The
+budget protects the host, which the imps share with everything else on it, so impd takes back what
+it can. While usage stays over, every boot and wake fails with `RAM_BUDGET_EXCEEDED`, so an imp it
+slept does not wake only to go to sleep again.
 
 ## Findings
 
@@ -252,10 +290,11 @@ through the new tap worked. The guest keeps its IP, so the new tap needs the sam
    change the disk (restore a checkpoint, fsck, mount it) while the imp sleeps. A checkpoint of a
    sleeping imp must copy the mem and vmstate files with the disk, or the daemon must wake the imp
    and use `freeze` first. impd wakes it first.
-5. **Exec sessions do not survive.** On resume the guest closes every vsock connection. Agent
+5. **Exec connections do not survive.** On resume the guest closes every vsock connection. Agent
    behavior: the process group of a foreground exec gets SIGHUP; a process that ignores SIGHUP keeps
-   running and stops counting as a session after 1 s. Background work must use `setsid`/`nohup`. TCP
-   connections in the guest also reset ([what survives](#what-survives-a-sleep)).
+   running and stops counting as a session after 1 s. A named session survives: its client is only
+   detached. Other background work must use `setsid`/`nohup`. TCP connections in the guest also
+   reset ([what survives](#what-survives-a-sleep)).
 6. **Version checks.** `firecracker --snapshot-version` prints the format this binary writes
    (`v12.0.0`); `firecracker --describe-snapshot <vmstate>` prints the format of a file. The
    snapshot is also tied to the host kernel and CPU (Firecracker docs: "Snapshots must be resumed on

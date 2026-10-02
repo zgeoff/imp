@@ -1,10 +1,12 @@
+import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
+import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
-import { formatImps, formatJson } from '../format-output';
+import { formatImp, formatImps, formatOutput } from '../format-output';
 import { parseDuration } from '../parse-duration';
+import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
-
-const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
+import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -16,57 +18,56 @@ export const newCommand = defineCommand({
     },
     image: { type: 'string', description: 'image name' },
     cpus: { type: 'string', description: 'vCPU count' },
-    memory: { type: 'string', description: 'memory in MiB' },
+    memory: { type: 'string', description: 'memory: MiB, or with a unit (512m, 2g)' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
+    json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.create({
         ...(context.args.name !== undefined && { name: context.args.name }),
         ...(context.args.image !== undefined && { image: context.args.image }),
-        ...(context.args.cpus !== undefined && { vcpus: Number(context.args.cpus) }),
-        ...(context.args.memory !== undefined && { memoryMib: Number(context.args.memory) }),
+        ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
+        ...(context.args.memory !== undefined && { memoryMib: parseSize(context.args.memory) }),
         ...(context.args['http-port'] !== undefined && {
-          httpPort: Number(context.args['http-port']),
+          httpPort: parseCount(context.args['http-port'], 'http-port'),
         }),
       });
 
-      console.log(`${imp.name} ${imp.url}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
-  args: { json: { type: 'boolean', description: 'print JSON' } },
+  args: { json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imps = await client.imps.list();
 
-      const output = context.args.json === true ? formatJson(imps) : formatImps(imps);
-
-      console.log(output);
+      console.log(formatOutput(imps, context.args.json, formatImps));
     }),
 });
 
 export const startCommand = defineCommand({
   meta: { name: 'start', description: 'Boot a stopped imp' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.start({ name: context.args.name });
 
-      console.log(`${imp.name} ${imp.state}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const stopCommand = defineCommand({
   meta: { name: 'stop', description: 'Shut an imp down (its disk stays, its memory does not)' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.stop({ name: context.args.name });
 
-      console.log(`${imp.name} ${imp.state}`);
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
@@ -74,30 +75,30 @@ export const rmCommand = defineCommand({
   meta: { name: 'rm', description: 'Destroy an imp and its disk and checkpoints' },
   args: { name: nameArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       await client.imps.destroy({ name: context.args.name });
     }),
 });
 
 export const sleepCommand = defineCommand({
   meta: { name: 'sleep', description: 'Snapshot an imp to disk and free its RAM' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.sleep({ name: context.args.name });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
 export const wakeCommand = defineCommand({
   meta: { name: 'wake', description: 'Resume a sleeping or stopped imp' },
-  args: { name: nameArg },
+  args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.wake({ name: context.args.name });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
@@ -108,7 +109,7 @@ export const holdCommand = defineCommand({
     duration: { type: 'positional', description: 'e.g. 90s, 15m, 2h', required: true },
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.hold({
         name: context.args.name,
         seconds: parseDuration(context.args.duration),
@@ -122,7 +123,7 @@ export const urlCommand = defineCommand({
   meta: { name: 'url', description: "Print an imp's URLs" },
   args: { name: nameArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const urls = await client.imps.url({ name: context.args.name });
 
       console.log(urls.local);
@@ -139,16 +140,17 @@ export const forkCommand = defineCommand({
     source: { type: 'positional', description: 'imp to fork', required: true },
     name: { type: 'positional', description: 'name of the new imp', required: true },
     from: { type: 'string', description: 'checkpoint id or label (default: the live disk)' },
+    json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.fork({
         source: context.args.source,
         name: context.args.name,
         ...(context.args.from !== undefined && { checkpoint: context.args.from }),
       });
 
-      console.log(formatImps([imp]));
+      console.log(formatOutput(imp, context.args.json, formatImp));
     }),
 });
 
@@ -159,7 +161,7 @@ export const execCommand = defineCommand({
     tty: { type: 'boolean', alias: 't', description: 'run on a terminal' },
   },
   run: async (context) => {
-    const argv = splitCommand(context.rawArgs, context.args._.slice(1));
+    const argv = splitCommand(process.argv, context.args._.slice(1));
 
     if (argv.length === 0) {
       console.error('imp: exec needs a command: imp exec <name> -- cmd args');
@@ -167,6 +169,7 @@ export const execCommand = defineCommand({
     }
 
     const code = await runExec({
+      host: context.host,
       name: context.args.name,
       argv,
       tty: context.args.tty === true,
@@ -177,40 +180,68 @@ export const execCommand = defineCommand({
   },
 });
 
-// The login shell from the image's /etc/passwd, else bash, else sh. Plain
-// sh, because the image may have neither awk nor getent.
-const CONSOLE_SHELL = [
-  'shell=',
-  'while IFS=: read -r user _ _ _ _ _ login; do',
-  '  if [ "$user" = root ]; then shell=$login; break; fi',
-  'done < /etc/passwd',
-  '[ -x "$shell" ] || shell=/bin/bash',
-  '[ -x "$shell" ] || shell=/bin/sh',
-  'exec "$shell" -l',
-].join('\n');
-
+// `--no-session` parses to session: false. With no terminal on stdin, as
+// in a script, the shell runs without a session unless one is named.
 export const consoleCommand = defineCommand({
-  meta: { name: 'console', description: 'Open an interactive shell in an imp' },
-  args: { name: nameArg },
+  meta: {
+    name: 'console',
+    description:
+      'Open a shell in an imp, in a session that outlives the terminal (ctrl-] detaches)',
+  },
+  args: {
+    name: nameArg,
+    session: {
+      type: 'string',
+      description: `session to start or attach to (default ${DEFAULT_SESSION} on a terminal); --no-session for a shell that ends with the terminal`,
+    },
+    'detach-key': detachKeyArg,
+  },
   run: async (context) => {
+    const session = readConsoleSession(context.args.session, process.stdin.isTTY);
+    const detachKey = readDetachKey(context.args['detach-key']);
+
+    if (session === undefined || detachKey === undefined) {
+      return;
+    }
+
     const code = await runExec({
+      host: context.host,
       name: context.args.name,
       argv: ['/bin/sh', '-c', CONSOLE_SHELL],
       tty: true,
       env: readTermEnv(),
+      ...(typeof session === 'string' && {
+        session: { name: session, attachOnly: false, detachKey },
+      }),
     });
 
     process.exit(code);
   },
 });
 
-// everything after `--`, else the positionals after the name
-function splitCommand(rawArgs: readonly string[], positionals: readonly string[]): string[] {
-  const separator = rawArgs.indexOf('--');
+// the named session, the default on a terminal, or null for none;
+// undefined once a bad name is reported
+export function readConsoleSession(
+  session: unknown,
+  isTerminal: boolean,
+): string | null | undefined {
+  if (session === false || (session === undefined && !isTerminal)) {
+    return null;
+  }
 
-  return separator === -1 ? [...positionals] : rawArgs.slice(separator + 1);
+  const name = typeof session === 'string' ? session : DEFAULT_SESSION;
+
+  return readSessionName(name);
 }
 
-function readTermEnv(): Record<string, string> {
+// everything after `--` (main.ts keeps it from citty), else the
+// positionals after the name
+function splitCommand(argv: readonly string[], positionals: readonly string[]): string[] {
+  const separator = argv.indexOf('--');
+
+  return separator === -1 ? [...positionals] : argv.slice(separator + 1);
+}
+
+export function readTermEnv(): Record<string, string> {
   return { TERM: process.env['TERM'] ?? 'xterm-256color' };
 }

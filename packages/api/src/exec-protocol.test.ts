@@ -40,6 +40,8 @@ test('it parses each client control message', () => {
     { type: 'stdin_eof' },
     { type: 'resize', cols: 120, rows: 40 },
     { type: 'signal', signal: 'SIGINT' },
+    { type: 'start', name: 'dev', argv: ['bash'], tty: true, session: 'main' },
+    { type: 'attach', name: 'dev', session: 'main', cols: 80, rows: 24 },
   ];
 
   for (const message of messages) {
@@ -62,4 +64,38 @@ test('it parses an exit message ended by a signal', () => {
   const message = { type: 'exit', code: null, signal: 'SIGKILL' } as const;
 
   expect(ExecServerMessageSchema.parse(message)).toEqual(message);
+});
+
+test('it rejects a session without a tty and a bad session name', () => {
+  const noTty = ExecClientMessageSchema.safeParse({
+    type: 'start',
+    name: 'dev',
+    argv: ['bash'],
+    tty: false,
+    session: 'main',
+  });
+
+  const badName = ExecClientMessageSchema.safeParse({
+    type: 'attach',
+    name: 'dev',
+    session: '-Main',
+  });
+
+  expect(noTty.success).toBe(false);
+  expect(badName.success).toBe(false);
+});
+
+test('it parses the session server messages', () => {
+  const messages = [
+    { type: 'started', pid: 7, session: 'main', created: true },
+    { type: 'detached', reason: 'taken_over' },
+  ] as const;
+
+  for (const message of messages) {
+    expect(ExecServerMessageSchema.parse(message)).toEqual(message);
+  }
+
+  expect(ExecServerMessageSchema.safeParse({ type: 'detached', reason: 'bored' }).success).toBe(
+    false,
+  );
 });

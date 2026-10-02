@@ -16,10 +16,16 @@
 #      IMP_DEV_DATA (default <repo>/.data/dev) holds the sparse XFS file.
 #      IMP_KERNEL (default kernel/out/vmlinux, else .cache/vmlinux-ci) is the guest kernel.
 #      IMP_SYSTEM_DRIVE (default build/imp-system.squashfs) is the system drive.
+#      Without it, every up rebuilds the default drive from agent/; the docker
+#      cache makes that a no-op when the agent is unchanged.
 #      Both are repo-relative or absolute paths under the repo.
+#      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
+#      it (CI builds and loads it first, with its own cache).
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
 #      IMP_IDLE_CPU_PERCENT, IMP_RAM_BUDGET_MIB, IMP_BOOT_RESERVE_PERCENT,
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
+#      IMP_STORAGE_BACKEND=zfs with IMP_ZFS_ROOT runs on a ZFS dataset instead
+#      of the XFS file (scripts/zfs-host-test.sh; the host needs the module).
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -31,7 +37,8 @@ api=http://localhost:$((7070 + offset))
 
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
-  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME)
+  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
+  IMP_STORAGE_BACKEND IMP_ZFS_ROOT)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -88,11 +95,16 @@ up() {
   system=${IMP_SYSTEM_DRIVE:-$IMP_BUILD/imp-system.squashfs}
   [ -f "$kernel" ] || { echo "dev.sh: no kernel at $kernel" >&2; exit 1; }
 
-  docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
-  if [ ! -f "$system" ]; then
-    echo "dev.sh: building the system drive"
+  if [ "${IMP_HOST_IMAGE_READY:-}" = 1 ]; then
+    docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 \
+      || { echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2; exit 1; }
+  else
+    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+  fi
+  if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
   fi
+  [ -f "$system" ] || { echo "dev.sh: no system drive at $system" >&2; exit 1; }
 
   if is_running; then
     echo "dev.sh: $name already running"
@@ -120,11 +132,13 @@ up() {
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
+      -e IMP_DASHBOARD_DIR=/src/packages/dashboard/dist \
       "$IMP_HOST_IMAGE" >/dev/null
     echo "dev.sh: started $name"
   fi
   wait_ready
   echo "dev.sh: impd ready on $api (token: scripts/dev.sh token)"
+  echo "dev.sh: dashboard on $api/ui/ (bun run build:dashboard to build it)"
 }
 
 # down gives impd time to sleep every imp (SIGTERM), so memory survives

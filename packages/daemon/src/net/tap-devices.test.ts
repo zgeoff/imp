@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { CommandResult } from '../process/run-command';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
 import { deriveSlotAddress, parseSubnet } from './addressing';
 import { createTapDevices } from './tap-devices';
 
@@ -49,5 +51,7 @@ test('it fails on any other ip error', async () => {
 
   const failing = buildFakeIp({ tuntap: 'Operation not permitted' });
 
-  expect(createTapDevices(failing.run).setupTap(ADDRESS)).rejects.toThrow('not permitted');
+  const error = await readRejection(createTapDevices(failing.run).setupTap(ADDRESS));
+
+  expect(readErrorMessage(error)).toContain('not permitted');
 });

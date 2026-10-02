@@ -1,8 +1,19 @@
-import { EXEC_CHANNELS, ExecClientMessageSchema, decodeExecFrame, encodeExecFrame } from '@imp/api';
-import type { ExecServerMessage } from '@imp/api';
+import {
+  DETACH_REASONS,
+  EXEC_CHANNELS,
+  ExecClientMessageSchema,
+  decodeExecFrame,
+  encodeExecFrame,
+} from '@imp/api';
+import type { DetachReason, ExecServerMessage } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
-import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import type {
+  AgentAttachRequest,
+  AgentExecRequest,
+  ExecEvent,
+  ExecStream,
+} from '../agent-client/exec-stream';
 import { readErrorMessage } from '../read-error-message';
 import { findSignalName, findSignalNumber } from './signal-names';
 
@@ -19,6 +30,7 @@ export interface ExecPeer {
 
 export interface ExecBackend {
   readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
+  readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 }
 
@@ -36,9 +48,9 @@ export interface ExecSession {
 const HIGH_WATER_BYTES = 1_048_576;
 const DRAIN_POLL_MS = 100;
 
-// One `/exec` WebSocket (packages/api exec-protocol): `start` opens an agent
-// exec stream, then stdin and control go to the agent and output and the
-// exit come back.
+// One `/exec` WebSocket (packages/api exec-protocol): `start` or `attach`
+// opens an agent stream, then stdin and control go to the agent and output
+// and the exit come back. A session socket can end with `detached` instead.
 export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSession {
   // messages that arrive between `start` and `started` wait in `pending`
   const state: {
@@ -60,6 +72,12 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
   };
 
   const sendEvent = (event: ExecEvent): void => {
+    if (event.type === 'detached') {
+      send({ type: 'detached', reason: readDetachReason(event.reason) });
+
+      return;
+    }
+
     if (event.type === 'exit') {
       const signalled = event.signal !== 0;
 
@@ -97,21 +115,29 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
   const drainOutput = async (stream: ExecStream): Promise<void> => {
     try {
-      let exited = false;
+      let ended: 'exited' | 'detached' | null = null;
 
       for await (const event of stream.events()) {
         sendEvent(event);
 
-        exited ||= event.type === 'exit';
+        if (event.type === 'exit' || event.type === 'detached') {
+          ended = event.type === 'exit' ? 'exited' : 'detached';
+        }
 
         await waitForPeerDrain();
       }
 
-      // a stream that ends without an exit frame lost the agent connection
-      if (exited) {
-        peer.close(1000, 'exited');
-      } else {
+      // A stream that ends without an exit or detached frame lost the agent
+      // connection. A session runs on; its client may attach again. A plain
+      // exec got SIGHUP from the agent, so it failed.
+      if (ended !== null) {
+        peer.close(1000, ended);
+      } else if (stream.session === null) {
         sendFailure(new Error('the agent connection closed before the process exited'));
+      } else {
+        send({ type: 'detached', reason: 'lost' });
+
+        peer.close(1000, 'detached');
       }
     } catch (error) {
       sendFailure(error);
@@ -122,11 +148,11 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     }
   };
 
-  const runStream = async (request: AgentExecRequest): Promise<void> => {
+  const runStream = async (open: () => Promise<ExecStream>): Promise<void> => {
     let stream: ExecStream;
 
     try {
-      stream = await backend.openExec(state.name, request);
+      stream = await open();
     } catch (error) {
       sendFailure(error);
 
@@ -141,7 +167,11 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
     state.stream = stream;
 
-    send({ type: 'started', pid: stream.pid });
+    send({
+      type: 'started',
+      pid: stream.pid,
+      ...(stream.session !== null && { session: stream.session, created: stream.created }),
+    });
 
     for (const message of state.pending.splice(0)) {
       handleMessage(message);
@@ -161,7 +191,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
     const control = parsed.data;
 
-    if (control.type === 'start') {
+    if (control.type === 'start' || control.type === 'attach') {
       if (state.starting) {
         sendFailure(new Error('exec already started'));
 
@@ -171,6 +201,19 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       state.starting = true;
       state.name = control.name;
 
+      const size = {
+        ...(control.cols !== undefined && { cols: control.cols }),
+        ...(control.rows !== undefined && { rows: control.rows }),
+      };
+
+      if (control.type === 'attach') {
+        const request: AgentAttachRequest = { session: control.session, ...size };
+
+        void runStream(() => backend.openAttach(control.name, request));
+
+        return;
+      }
+
       const request: AgentExecRequest = {
         argv: control.argv,
         tty: control.tty,
@@ -178,11 +221,11 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
           env: Object.entries(control.env).map(([key, value]) => `${key}=${value}`),
         }),
         ...(control.cwd !== undefined && { cwd: control.cwd }),
-        ...(control.cols !== undefined && { cols: control.cols }),
-        ...(control.rows !== undefined && { rows: control.rows }),
+        ...(control.session !== undefined && { session: control.session }),
+        ...size,
       };
 
-      void runStream(request);
+      void runStream(() => backend.openExec(control.name, request));
 
       return;
     }
@@ -250,13 +293,32 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
 function isStartMessage(message: unknown): boolean {
   return (
-    typeof message === 'object' && message !== null && 'type' in message && message.type === 'start'
+    typeof message === 'object' &&
+    message !== null &&
+    'type' in message &&
+    (message.type === 'start' || message.type === 'attach')
   );
 }
 
+// the agent's reasons are the API's; one it does not know reads as lost
+function readDetachReason(reason: string): DetachReason {
+  return DETACH_REASONS.find((known) => known === reason) ?? 'lost';
+}
+
 function buildErrorMessage(error: unknown): ExecServerMessage {
-  if (error instanceof ORPCError || error instanceof AgentError) {
-    return { type: 'error', code: String(error.code), message: error.message };
+  if (error instanceof ORPCError) {
+    const data: unknown = error.data;
+
+    return {
+      type: 'error',
+      code: String(error.code),
+      message: error.message,
+      ...(data !== undefined && { data }),
+    };
+  }
+
+  if (error instanceof AgentError) {
+    return { type: 'error', code: error.code, message: error.detail };
   }
 
   return { type: 'error', message: readErrorMessage(error) };

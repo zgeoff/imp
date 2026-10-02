@@ -9,10 +9,11 @@ starts and stops Firecracker, and keeps the RAM of awake imps under the budget. 
 
 On start, impd reads its [configuration](../guides/configuration.md), copies the guest kernel and
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
-token, and re-adopts any Firecracker processes that are still alive. Then it serves the API, opens
-the proxy listeners and starts three timers: the idle loop every 2 s, the governor every 5 s, and a
-proxy listener sync every 30 s. It adds a default image in the background; `/health` reports
-`ready: true` once that finishes, whether it worked or not.
+token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
+drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
+the API, opens the proxy listeners and starts three timers: the idle loop every 2 s, the governor
+every 5 s, and a proxy listener sync every 30 s. It adds a default image in the background;
+`/health` reports `ready: true` once that finishes, whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -29,11 +30,46 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, and the exec WebSocket at `/exec`. Both need the bearer token in an `Authorization` header
-or a `token` query parameter. The router maps each procedure of the contract in `packages/api` to a
-service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`,
-`RAM_BUDGET_EXCEEDED`, and `SERVICE_UNAVAILABLE` while impd stops. The token is made on first start
-and kept in `<dataDir>/token`, readable by the owner only.
+`/rpc`, and the exec WebSocket at `/exec`. Both take the bearer token in an `Authorization` header.
+A browser cannot set that header on a WebSocket, so `/exec` also takes a `ticket` query parameter:
+`exec.ticket` gives a single-use ticket for one existing imp, valid for 30 s. The token itself is
+never accepted in a URL, where logs and browser history would keep it; no client used the old
+`token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
+router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
+contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
+while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
+session request to an agent from before sessions. The token is made on first start and kept in
+`<dataDir>/token`, readable by the owner only. `/rpc` takes POST only: a GET is what a link or an
+image on any page can make a browser send.
+
+### Dashboard
+
+impd serves the [web dashboard](../guides/dashboard.md) at `/ui/` from `IMP_DASHBOARD_DIR`, and `/`
+redirects there. The prefix keeps every dashboard route clear of `/rpc`, `/exec` and `/health`.
+Hashed files under `/ui/assets/` are cached for good; the page shell is checked on every load and
+carries a CSP that allows only impd and forbids framing.
+
+The browser never holds the API token. `POST /auth/login` takes the token once and sets the
+`imp_session` cookie: HttpOnly, SameSite=Strict, `Secure` behind TLS, 30 days. Its value is
+`v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>">`, keyed by a key derived from the token
+(HMAC-SHA256 of `imp-session-key` under the token). It survives an impd restart, and a new token
+ends every session. The cookie is host-only, with no `Domain`, so it never reaches another host
+name. `POST /auth/logout` only clears the cookie in that browser; a copied value stays valid until
+it expires or the token changes.
+
+`/rpc` takes the cookie only from the dashboard's own origin. Imps serve pages on other ports of the
+same host, and a browser counts those as the same site, so SameSite alone would let an imp's page
+call the API with the owner's session. impd accepts the cookie when `Sec-Fetch-Site` is
+`same-origin`; without that header, when `Origin` names impd's host and port. No `Origin` means no
+access. The scheme is not compared, so a TLS front such as `tailscale serve` works. Login and logout
+take the same check. `/exec` never takes the cookie: the dashboard gets an exec ticket over `/rpc`.
+
+Browsers send cookies to every port of a host, so the wake proxy removes `imp_session` from every
+request it forwards to an imp. An imp's server can still set cookies for the host. A planted
+`imp_session` on a longer path, which the browser sends first, does not lock the owner out: impd
+accepts the request when any `imp_session` value in it is valid. An imp's response can overwrite the
+real cookie or flood the cookie jar, and so log the dashboard out while it keeps doing that. It
+cannot read or use the session.
 
 ### imps: the lifecycle
 
@@ -74,8 +110,8 @@ lifecycle asks it for room. It reserves RAM, sleeps the least recently active im
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
 a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
 an imp's lock: a victim locked by the time its turn comes is skipped. Every 5 s it also sleeps imps
-while the measured use is over the budget. [Sleep and wake](./sleep-and-wake.md#the-ram-governor)
-has the rules and the numbers.
+while the measured use is over the budget, all it may sleep when they cannot bring it under.
+[Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
 ### idle: the idle loop
 
@@ -95,9 +131,11 @@ out: 10 s, or 120 s for a snapshot create or load.
 
 ### sleep: snapshot metadata
 
-The sleep module writes and reads `snapshot/meta.json`. It records what a memory snapshot is tied
-to: the Firecracker version, the snapshot format, the host kernel, and hashes of the guest kernel
-and the system drive. A wake compares them with the current values and boots cold on any difference.
+The sleep module writes and reads `vm.json`, what a VM booted with, and `snapshot/meta.json`, which
+copies it at each sleep: the Firecracker version, the snapshot format, the host kernel, the sha256
+of the guest kernel and of the system drive, the drive's path and the agent's protocol version. A
+wake checks the snapshot against this host and boots cold when it cannot load
+([snapshot identity](./sleep-and-wake.md#snapshot-identity)).
 
 ### agent-client: the vsock client
 
@@ -111,14 +149,47 @@ exec that the agent does not start within 10 s fails and closes its connection.
 Each `/exec` WebSocket becomes one exec session. The session opens an agent exec stream, forwards
 stdin, resizes and signals to the guest, and sends output and the exit back. When too many bytes
 wait for the client, output stops; the agent connection then stops reading, so a slow client slows
-the guest process instead of growing impd's memory.
+the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
+after 30 s without an answer, so a client that vanished without a close lets go of its session.
+
+### sessions: detachable consoles
+
+A session is a program on a pty in the guest that outlives its WebSocket
+([protocol](./protocol.md#sessions)). On `/exec`, a `start` with a `session` name starts the
+session, or attaches to it if it runs; `attach` attaches to one that exists. The socket gets
+`started` (with `session` and `created`), the replay of recent output, then live output. Closing the
+socket detaches: the program keeps running.
+
+One client is attached at a time. A new attach takes the session over, and the client attached
+before gets `detached` with `taken_over`; a client too far behind gets `slow`. When impd loses the
+agent connection without an exit or a detach (the imp went to sleep, a vsock reset), the socket gets
+`detached` with `lost` and closes with 1000: the session runs on, and the client may attach again. A
+plain exec in that case still fails with 1011, because the agent sent its process SIGHUP. Read-only
+viewers, which watch without taking the session over, are future work.
+
+An attached socket counts as an exec connection, so it keeps the imp awake. A detached session holds
+no connection: it keeps the imp awake only through its CPU or TCP use
+([idle detection](./sleep-and-wake.md#idle-detection)).
+
+The code is in `sessions/`: the list and kill service, the in-memory copy of each awake imp's
+sessions, and the count `imp ls` shows. An imp woken with an agent from before sessions keeps it
+until its next cold boot; a session request to it fails with `AGENT_OUTDATED`. impd checks the agent
+version it recorded at boot before a session exec, so an old agent never runs the command as a plain
+exec. An attach or a kill that the old agent answers with `UNKNOWN_OP` fails the same way.
+
+`sessions.list` never wakes an imp. The idle loop reads every awake imp's sessions from `activity`
+every 2 s and keeps them in memory; a list of an awake imp asks the agent again, and falls back to
+that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads the sessions once
+more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from there. A stopped imp
+has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
+copies.
 
 ### proxy: the wake proxy
 
 The proxy serves HTTP and WebSockets for every imp: by Host header on `IMP_PROXY_PORT`, and on one
 port per imp at `IMP_PORT_BASE + slot`. A request wakes or boots the imp, then goes to the imp's
-HTTP port. WebSockets are relayed message by message. [Networking](./networking.md#the-wake-proxy)
-has the details.
+HTTP port, without the dashboard's session cookie. WebSockets are relayed message by message.
+[Networking](./networking.md#the-wake-proxy) has the details.
 
 ### checkpoints: checkpoint, restore, fork
 
@@ -140,8 +211,8 @@ agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 ### storage: the data layout
 
 The storage module knows where every file under `/var/lib/imp` lives, makes reflink clones (it fails
-instead of a full copy), and copies the kernel and system drive into place on start. A changed file
-is written next to the old one and renamed over it, so a VM that has the old file open keeps it.
+instead of a full copy), and copies the kernel and system drive into place on start
+([system files](./storage.md#system-files)).
 
 ### net: taps and the tailnet
 

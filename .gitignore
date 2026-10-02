@@ -8,3 +8,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+/packages/client/dist/
+/packages/dashboard/dist/
+/packages/dashboard/.test-results/

@@ -11,6 +11,7 @@ export const FRAME_TYPES = {
   stdout: 8,
   stderr: 9,
   exit: 10,
+  detached: 11,
 } as const;
 
 export type FrameType = (typeof FRAME_TYPES)[keyof typeof FRAME_TYPES];

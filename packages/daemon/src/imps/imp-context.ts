@@ -6,13 +6,13 @@ import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
-import { readSnapshotIdentity } from '../sleep/snapshot-meta';
-import type { SnapshotIdentity } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
+import { createSessionCache } from '../sessions/session-cache';
+import type { SessionCache } from '../sessions/session-cache';
+import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
-import { createReflinkClone } from '../storage/reflink';
+import type { StorageBackend } from '../storage/storage-backend';
 import type { VmRunner } from '../vmm/vm-runner';
-import { readOwnedRamMib } from '../vmm/vm-stats';
+import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
 
@@ -22,17 +22,16 @@ export interface ImpServiceDeps {
   readonly images: ImageService;
   readonly taps: TapDevices;
   readonly vms: VmRunner;
+  readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
-
-  // a reflink clone by default; tests on a non-XFS tmpdir copy instead
-  readonly cloneDisk?: (source: string, target: string) => Promise<void>;
 
   // the RAM governor; without one every boot is admitted
   readonly admission?: RamAdmission;
 
-  // what a snapshot is tied to; read from the system files when left out
-  readonly identity?: SnapshotIdentity;
+  // what this host boots imps with, which a snapshot must match to load
+  readonly identity: HostIdentity;
   readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
+  readonly readRssMib?: (pid: number, apiSocket: string) => number | null;
 
   // after a create or a destroy: the proxy opens or closes the imp's port
   readonly onImpsChanged?: () => void;
@@ -54,21 +53,22 @@ export interface ImpContext {
   readonly images: ImageService;
   readonly taps: TapDevices;
   readonly vms: VmRunner;
+  readonly storage: StorageBackend;
   readonly log: (message: string) => void;
-  readonly cloneDisk: (source: string, target: string) => Promise<void>;
   readonly admission: RamAdmission | undefined;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
+  readonly readRssMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly now: () => number;
-  readonly readIdentity: () => SnapshotIdentity;
+  readonly identity: HostIdentity;
   readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
+  readonly sessions: SessionCache;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
-  const identityCache: { value: SnapshotIdentity | null } = { value: deps.identity ?? null };
   const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
 
   return {
@@ -77,22 +77,20 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     images: deps.images,
     taps: deps.taps,
     vms: deps.vms,
+    storage: deps.storage,
     log: deps.log ?? printLog,
-    cloneDisk: deps.cloneDisk ?? createReflinkClone,
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
+    readRssMib: deps.readRssMib ?? readRssMib,
     readTailnetHostname: deps.readTailnetHostname,
     now: deps.now ?? Date.now,
-    readIdentity: () => {
-      identityCache.value ??= readSnapshotIdentity(deps.config);
-
-      return identityCache.value;
-    },
+    identity: deps.identity,
     emitChanged: () => {
       deps.onImpsChanged?.();
     },
     tracker: createActivityTracker(),
-    findPaths: (impId) => buildImpPaths(deps.config.dataDir, impId),
+    sessions: createSessionCache(),
+    findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
   };
 }

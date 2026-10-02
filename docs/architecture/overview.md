@@ -71,12 +71,14 @@ This page gives the shape and the main decisions. The other architecture pages g
 
 ## Control plane and API
 
-- Bun workspaces: `packages/api` (the oRPC contract and zod schemas), `packages/daemon` (impd) and
-  `packages/cli` (the `imp` CLI).
+- Bun workspaces: `packages/api` (the oRPC contract and zod schemas), `packages/daemon` (impd),
+  `packages/cli` (the `imp` CLI) and `packages/client` (`@zgeoff/imp-client`, the typed client on
+  npm for browsers, Bun and Node).
 - Control calls are oRPC procedures over HTTP at `/rpc`. Exec and console use a WebSocket at
   `/exec`, because they need two-way streams. `/health` answers without auth.
-- Auth: impd makes a bearer token on first start and stores it in `/var/lib/imp/token`. The proxy is
-  open to anything that can reach it; the tailnet ACL is the boundary.
+- Auth: impd makes a bearer token on first start and stores it in `/var/lib/imp/token`. A browser
+  opens `/exec` with a single-use ticket from `exec.ticket` instead of the token. The proxy is open
+  to anything that can reach it; the tailnet ACL is the boundary.
 - State is in SQLite through Kysely on `bun:sqlite`. Migrations live in code.
 
 ## Repo layout
@@ -86,13 +88,15 @@ agent/            Go guest agent (PID 1, vsock server)
 packages/api      oRPC contract and shared types
 packages/daemon   impd
 packages/cli      imp CLI
+packages/client   @zgeoff/imp-client, the typed client published to npm
 images/base       thin base image
 images/dev        example dev image
 host/             host container Dockerfile (dev and release), entrypoint, storage, network
                   and tailnet setup
 deploy/           compose file, systemd unit and env file for the release image
 kernel/           guest kernel config and build
-scripts/          acceptance.sh and dev helpers
+scripts/          dev helpers and test-e2e.sh, the end-to-end harness's entry point
+test/e2e/         end-to-end suites, their helpers and fixture images
 docs/             this documentation
 ```
 

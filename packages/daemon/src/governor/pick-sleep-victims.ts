@@ -8,14 +8,22 @@ export interface VictimCandidate {
   readonly busy: boolean;
 }
 
-// The least recently active imps whose RAM together frees `needMib`, oldest
-// first; null when every eligible imp together is not enough.
+export interface SleepVictims {
+  // oldest first
+  readonly victims: string[];
+
+  // false when every eligible imp together frees less than asked: `victims`
+  // then lists all of them
+  readonly enough: boolean;
+}
+
+// The least recently active imps whose RAM together frees `needMib`.
 export function pickSleepVictims(
   candidates: readonly VictimCandidate[],
   needMib: number,
-): string[] | null {
+): SleepVictims {
   if (needMib <= 0) {
-    return [];
+    return { victims: [], enough: true };
   }
 
   const eligible = candidates
@@ -31,9 +39,9 @@ export function pickSleepVictims(
     freed += candidate.ramMib;
 
     if (freed >= needMib) {
-      return victims;
+      return { victims, enough: true };
     }
   }
 
-  return null;
+  return { victims, enough: false };
 }

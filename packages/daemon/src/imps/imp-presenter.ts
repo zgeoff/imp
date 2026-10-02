@@ -1,6 +1,8 @@
 import type { Imp } from '@imp/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
+import { countSessions } from '../sessions/count-sessions';
+import { readBootStatus } from './boot-status';
 import type { ImpContext } from './imp-context';
 
 export interface ImpUrls {
@@ -48,16 +50,28 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       api.error = imp.error;
     }
 
-    const ramMib =
-      imp.state === 'running' && imp.pid !== null
-        ? context.readRamMib(imp.pid, context.findPaths(imp.id).apiSocket)
-        : null;
+    const paths = context.findPaths(imp.id);
 
-    if (ramMib !== null) {
-      api.ramMib = ramMib;
+    if (imp.state === 'running' && imp.pid !== null) {
+      const ramMib = context.readRamMib(imp.pid, paths.apiSocket);
+      const rssMib = context.readRssMib(imp.pid, paths.apiSocket);
+
+      if (ramMib !== null) {
+        api.ramMib = ramMib;
+      }
+
+      if (rssMib !== null) {
+        api.rssMib = rssMib;
+      }
     }
 
-    return api;
+    const sessions = countSessions(context, imp);
+
+    if (sessions !== undefined) {
+      api.sessions = sessions;
+    }
+
+    return { ...api, ...readBootStatus(imp, paths, context.identity) };
   };
 
   return {

@@ -20,12 +20,14 @@ test('it fills every setting from its default when the env is empty', () => {
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },
     firecrackerBin: 'firecracker',
     kernelPath: '/var/lib/imp/system/vmlinux',
-    systemDrivePath: '/var/lib/imp/system/imp-system.squashfs',
     kernelSource: null,
-    systemDriveSource: null,
+    systemDriveSource: '/var/lib/imp/system/imp-system.squashfs',
     defaultImage: 'base',
+    storageBackend: 'xfs',
+    zfsRoot: null,
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
+    dashboardDir: null,
   });
 });
 
@@ -56,6 +58,15 @@ test('it rejects invalid values', () => {
   expect(() => loadConfig({ IMP_API_PORT: 'http' })).toThrow();
   expect(() => loadConfig({ IMP_DNS: 'one.one.one.one' })).toThrow();
   expect(() => loadConfig({ IMP_SUBNET: '10.66.0.0' })).toThrow();
+});
+
+test('it needs the root dataset with the zfs backend', () => {
+  expect(() => loadConfig({ IMP_STORAGE_BACKEND: 'zfs' })).toThrow('needs IMP_ZFS_ROOT');
+  expect(() => loadConfig({ IMP_STORAGE_BACKEND: 'btrfs' })).toThrow();
+
+  const config = loadConfig({ IMP_STORAGE_BACKEND: 'zfs', IMP_ZFS_ROOT: 'tank/imp' });
+
+  expect(config).toMatchObject({ storageBackend: 'zfs', zfsRoot: 'tank/imp' });
 });
 
 test('it rejects a port base that cannot fit every slot', () => {

@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import type { Imp } from '@imp/api';
-import { isRamBudgetError } from '../api-errors';
+import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
+import { listCheckpoints } from '../db/checkpoints';
 import { listImps, removeImp, updateImpActivity, updateImpHold } from '../db/imps';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
@@ -18,8 +19,8 @@ interface CreateImpInput {
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
 
-  // fills the new imp's disk; a reflink clone of the image rootfs by default
-  readonly prepareDisk?: (target: string) => Promise<void>;
+  // creates the new imp's disk; a clone of the image rootfs by default
+  readonly prepareDisk?: (impId: string) => Promise<void>;
 }
 
 // The imp API's commands. Each takes the imp's lock for its whole run.
@@ -35,8 +36,9 @@ export interface ImpCommands {
   // snapshot memory to disk and stop Firecracker (DESIGN 2.8)
   readonly sleepImp: (name: string) => Promise<Imp>;
 
-  // a sleeping imp resumes from its snapshot, a stopped one boots cold
-  readonly wakeImp: (name: string) => Promise<Imp>;
+  // a sleeping imp resumes from its snapshot, a stopped one boots cold; an
+  // imp in error boots cold too, unless restartError is false
+  readonly wakeImp: (name: string, restartError?: boolean) => Promise<Imp>;
 
   // keeps the imp awake until now + seconds; 0 releases; wakes it if needed
   readonly holdImp: (name: string, seconds: number) => Promise<Imp>;
@@ -78,8 +80,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           await (
             input.prepareDisk ??
-            ((disk) => context.cloneDisk(context.images.getRootfsPath(image), disk))
-          )(paths.disk);
+            ((impId) =>
+              context.storage.createImpDisk(impId, { kind: 'image', digest: image.digest }))
+          )(imp.id);
         } catch (error) {
           await ops.writeFailure(imp, error);
 
@@ -98,8 +101,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           // the governor turned the boot away before any tap or VM existed: a
           // create that cannot run leaves no imp behind
           if (isRamBudgetError(error)) {
-            rmSync(paths.dir, { recursive: true, force: true });
-
+            await removeImpFiles(context, imp.id, []);
             await removeImp(context.db, imp.id);
 
             context.emitChanged();
@@ -156,7 +158,14 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         await context.taps.removeTap(context.findAddress(imp.slot).tap);
 
-        rmSync(paths.dir, { recursive: true, force: true });
+        const checkpoints = await listCheckpoints(context.db, imp.id);
+
+        await removeImpFiles(
+          context,
+          imp.id,
+          checkpoints.map((checkpoint) => checkpoint.id),
+        );
+
         context.admission?.release(imp.id);
 
         await removeImp(context.db, imp.id);
@@ -178,8 +187,12 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(asleep);
       }),
 
-    wakeImp: (name) =>
+    wakeImp: (name, restartError = true) =>
       lock.withImp(name, async (imp) => {
+        if (imp.state === 'error' && !restartError) {
+          throw buildInvalidStateError(imp.state, ['running', 'sleeping', 'stopped'], 'wake');
+        }
+
         const running = await ops.requireRunningImp(imp);
 
         return presenter.toApi(running);
@@ -204,4 +217,19 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(running);
       }),
   };
+}
+
+// The disk goes through the backend first: on ZFS a dataset is mounted inside
+// the imp's directory, and rm -r fails on it.
+async function removeImpFiles(
+  context: ImpContext,
+  impId: string,
+  checkpointIds: readonly string[],
+): Promise<void> {
+  const paths = context.findPaths(impId);
+
+  await context.storage.removeImpDisk(impId, checkpointIds);
+
+  rmSync(paths.dir, { recursive: true, force: true });
+  rmSync(paths.snapshotDir, { recursive: true, force: true });
 }

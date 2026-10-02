@@ -12,7 +12,7 @@ test('a VM that died after its sleep wrote the snapshot is asleep, not stopped',
   const paths = buildImpPaths(ctx.dataDir, imp.id);
 
   // impd stopped between the snapshot and the record update
-  writeTestSnapshot(paths, Date.now() + 1000);
+  writeTestSnapshot(paths, Date.now() + 1000, ctx.readIdentity());
 
   ctx.fake.alive.clear();
 

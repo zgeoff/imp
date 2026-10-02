@@ -15,9 +15,13 @@ import type { ImpDatabase } from '../db/open-database';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createImageService } from '../images/image-service';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
+import type { SnapshotIdentity } from '../sleep/snapshot-meta';
+import type { HostIdentity } from '../sleep/vm-identity';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFakeVmm } from './fake-vmm';
+import type { ImpService } from './imp-service';
 
 export const TEST_TOKEN = 'test-token';
 
@@ -29,14 +33,22 @@ export const TEST_SYSTEM_FILES = {
 
 // every awake fake VM owns this much, as the governor measures it
 const FAKE_VM_RAM_MIB = 300;
+const FAKE_VM_RSS_MIB = 340;
 
-const TEST_IDENTITY = {
-  firecrackerVersion: 'v1.17.0',
-  snapshotVersion: 'v12.0.0',
-  hostKernel: 'test',
-  guestKernel: 'k',
-  systemDrive: 's',
-};
+// the sha256 of the system drive every test impd starts with
+const TEST_DRIVE = 'd1'.repeat(32);
+
+// what a host with `drive` installed in `dataDir` boots imps with
+function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
+  return {
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    guestKernel: 'k',
+    systemDrive: drive,
+    systemDrivePath: buildSystemDrivePath(dataDir, drive),
+  };
+}
 
 interface ImpTestOptions {
   readonly env?: Readonly<Record<string, string>>;
@@ -48,16 +60,15 @@ interface ImpTestOptions {
   readonly onLog?: (message: string) => void;
 }
 
-// The governed imp service over an in-memory database, fake VMs and taps,
-// in a fresh data dir. `restartImpd` starts a new impd on the same database,
-// data dir and VMs, as a process restart would.
+// The governed imp service over an in-memory database, fake VMs and taps, in
+// a fresh data dir. `restartImpd` starts a new impd on the same database, data
+// dir and VMs, as a restart would; given an identity, as an upgrade would.
 export async function setupImpTest(options: ImpTestOptions = {}) {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-test-`);
 
   const db = await openDatabase(':memory:');
 
   const config = loadConfig({ IMP_DATA_DIR: dataDir, ...options.env });
-  const images = createImageService({ config, db });
   const fake = buildFakeVmm();
   const taps: string[] = [];
   const logs: string[] = [];
@@ -74,11 +85,29 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       return Promise.resolve();
     });
 
-  const startImpd = () =>
-    createGovernedImps({
+  const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
+  const images = createImageService({ config, db, storage });
+
+  // a system drive file, as setupSystemFiles installs it
+  const createSystemDrive = (drive: string): HostIdentity => {
+    const identity = buildTestIdentity(dataDir, drive);
+
+    mkdirSync(buildSystemDrivesDir(dataDir), { recursive: true });
+    writeFileSync(identity.systemDrivePath, drive);
+
+    return identity;
+  };
+
+  const host = { identity: createSystemDrive(TEST_DRIVE) };
+
+  const startImpd = (identity: HostIdentity = host.identity) => {
+    host.identity = identity;
+
+    return createGovernedImps({
       config,
-      identity: TEST_IDENTITY,
+      identity,
       readRamMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RAM_MIB : null),
+      readRssMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RSS_MIB : null),
       db,
       images,
       vms: fake.startGeneration(),
@@ -94,9 +123,10 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         logs.push(message);
         options.onLog?.(message);
       },
-      cloneDisk,
+      storage,
       now: readClock,
     });
+  };
 
   const governed = startImpd();
 
@@ -117,12 +147,14 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     logs,
     imps: governed.imps,
     governor: governed.governor,
-    cloneDisk,
+    storage,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
     },
     restartImpd: startImpd,
+    createSystemDrive,
+    readIdentity: () => host.identity,
     createTestImage,
     async [Symbol.asyncDispose]() {
       fake.releaseHangs();
@@ -138,18 +170,27 @@ type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'cloneDisk'>;
+type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now'>;
 
-// The HTTP app over `impd`, the harness's or one after a restart, and
-// an oRPC client that calls it without a socket. The checkpoint service's
-// freeze and thaw do nothing.
-export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, token = TEST_TOKEN) {
+// The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
+// that calls it without a socket, a no-op freeze and thaw, and `openExec` in
+// place of the guest agent, which the fake VMs do not run.
+export function buildTestApp(
+  ctx: Readonly<AppParts>,
+  impd: Readonly<Impd>,
+  token = TEST_TOKEN,
+
+  // a fake agent's streams in place of the VM's
+  agent: Partial<Pick<ImpService, 'openExec' | 'openAttach'>> = {},
+) {
+  const imps: ImpService = { ...impd.imps, ...agent };
+
   const checkpoints = createCheckpointService({
     config: ctx.config,
     db: ctx.db,
     imps: impd.imps,
+    storage: ctx.storage,
     log: () => {},
-    cloneDisk: ctx.cloneDisk,
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
@@ -157,14 +198,16 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
     config: ctx.config,
     db: ctx.db,
     token: TEST_TOKEN,
-    imps: impd.imps,
+    imps,
     images: ctx.images,
     governor: impd.governor,
     checkpoints,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
+    storage: ctx.storage,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
+    now: ctx.now,
   });
 
   const link = new RPCLink({
@@ -178,20 +221,19 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
   return { app: built.app, closeExecSessions: built.closeExecSessions, client };
 }
 
-// a memory snapshot as a sleep at `createdAt` under `firecrackerVersion`
+// a memory snapshot as a sleep at `createdAt` by a VM with `identity`
 // leaves it
 export function writeTestSnapshot(
   paths: Readonly<ImpPaths>,
   createdAt: number,
-  firecrackerVersion = TEST_IDENTITY.firecrackerVersion,
+  identity: Readonly<SnapshotIdentity>,
 ): void {
   mkdirSync(paths.snapshotDir, { recursive: true });
   writeFileSync(paths.vmstate, 'vmstate');
   writeFileSync(paths.memFile, 'mem');
 
   writeSnapshotMeta(paths, {
-    ...TEST_IDENTITY,
-    firecrackerVersion,
+    ...identity,
     createdAt,
     memoryMib: 2048,
     ramMib: FAKE_VM_RAM_MIB,

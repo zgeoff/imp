@@ -1,67 +1,28 @@
 import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
-import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { sendPing } from './agent-requests';
-import { openExecStream } from './exec-stream';
+import { readRejection } from '../read-rejection';
+import { sendActivity, sendPing, sendSessionKill } from './agent-requests';
+import { openAttachStream, openExecStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
-import {
-  FRAME_TYPES,
-  createFrameDecoder,
-  decodeJsonPayload,
-  encodeFrame,
-  encodeJsonFrame,
-} from './frame-codec';
-import type { AgentFrame } from './frame-codec';
+import { startFakeAgent } from './fake-agent';
+import type { FakeAgentHandler } from './fake-agent';
+import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
-type FakeAgent = (socket: Socket, request: AgentFrame, frames: readonly AgentFrame[]) => void;
-
-// A unix socket that answers the Firecracker CONNECT handshake, then hands
-// each decoded frame to `agent`.
-async function setupFakeVsock(agent: FakeAgent) {
+// a fake agent in a fresh directory
+async function setupFakeVsock(agent: FakeAgentHandler) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vsock-'));
   const path = join(dir, 'vsock.sock');
-  const received: AgentFrame[] = [];
 
-  const server = createServer((socket) => {
-    const decoder = createFrameDecoder();
-    let handshaken = false;
-    let request: AgentFrame | null = null;
-
-    socket.on('data', (chunk: Uint8Array) => {
-      let bytes = chunk;
-
-      if (!handshaken) {
-        const newline = bytes.indexOf(10);
-
-        handshaken = true;
-
-        socket.write('OK 1073741824\n');
-
-        bytes = bytes.subarray(newline + 1);
-      }
-
-      for (const frame of decoder.push(bytes)) {
-        received.push(frame);
-
-        request ??= frame;
-
-        agent(socket, request, received);
-      }
-    });
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(path, resolve);
-  });
+  const fake = await startFakeAgent(path, agent);
 
   return {
     path,
-    received,
+    received: fake.received,
     [Symbol.dispose]() {
-      server.close();
+      fake.close();
 
       rmSync(dir, { recursive: true, force: true });
     },
@@ -137,7 +98,9 @@ test('it rejects with the agent error when exec cannot start', async () => {
 
   const opening = openExecStream(vsock.path, { argv: ['nope'], tty: false });
 
-  expect(opening).rejects.toMatchObject({ code: 'EXEC_FAILED' });
+  const error = await readRejection(opening);
+
+  expect(error).toMatchObject({ code: 'EXEC_FAILED' });
 });
 
 test('it refuses a handshake the agent does not accept', async () => {
@@ -153,7 +116,9 @@ test('it refuses a handshake the agent does not accept', async () => {
   });
 
   try {
-    expect(sendPing(path, 500)).rejects.toThrow();
+    const error = await readRejection(sendPing(path, 500));
+
+    expect(error).toBeInstanceOf(Error);
   } finally {
     server.close();
 
@@ -177,4 +142,104 @@ test('an exec fails and closes its connection when STARTED never comes', async (
   expect(rejection).toMatchObject({ message: 'agent did not answer within 50 ms' });
 
   await closed.promise;
+});
+
+test('it attaches to a session: STARTED, the replay, then detached', async () => {
+  using vsock = await setupFakeVsock((socket, _request, frames) => {
+    if (frames.length === 1) {
+      socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42, session: 'main' }));
+      socket.write(encodeFrame(FRAME_TYPES.stdout, new TextEncoder().encode('replay')));
+      socket.end(encodeJsonFrame(FRAME_TYPES.detached, { reason: 'taken_over' }));
+    }
+  });
+
+  const stream = await openAttachStream(vsock.path, { session: 'main', cols: 80, rows: 24 });
+  const events = await collectEvents(stream);
+
+  expect(stream).toMatchObject({ pid: 42, session: 'main', created: false });
+
+  expect(events).toEqual([
+    { type: 'stdout', data: new TextEncoder().encode('replay') },
+    { type: 'detached', reason: 'taken_over' },
+  ]);
+
+  expect(decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() })).toEqual({
+    op: 'session.attach',
+    session: 'main',
+    cols: 80,
+    rows: 24,
+  });
+});
+
+test('a session request to an agent from before sessions fails', async () => {
+  const closed = Promise.withResolvers<void>();
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.on('close', () => {
+      closed.resolve();
+    });
+
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
+  });
+
+  const opening = openExecStream(vsock.path, { argv: ['sh'], tty: true, session: 'main' });
+
+  const error = await readRejection(opening);
+
+  expect(error).toMatchObject({ code: 'AGENT_OUTDATED' });
+
+  await closed.promise;
+});
+
+test('a plain exec stream has no session', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
+  });
+
+  const stream = await openExecStream(vsock.path, { argv: ['true'], tty: false });
+
+  expect(stream).toMatchObject({ session: null, created: false });
+
+  stream.close();
+});
+
+test('activity from an agent before sessions lists none', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, { tcp_established: 0, exec_sessions: 0, load1: 0 }),
+    );
+  });
+
+  const activity = await sendActivity(vsock.path);
+
+  expect(activity.sessions).toEqual([]);
+});
+
+test('a kill of no session rejects with NO_SESSION', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'NO_SESSION', message: 'no session "main"' },
+      }),
+    );
+  });
+
+  const error = await readRejection(sendSessionKill(vsock.path, 'main'));
+
+  expect(error).toMatchObject({ code: 'NO_SESSION' });
+});
+
+test('an attach or a kill on an agent from before sessions fails as AGENT_OUTDATED', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'UNKNOWN_OP', message: 'unknown op' },
+      }),
+    );
+  });
+
+  const attach = await readRejection(openAttachStream(vsock.path, { session: 'main' }));
+  const kill = await readRejection(sendSessionKill(vsock.path, 'main'));
+
+  expect([attach, kill]).toMatchObject([{ code: 'AGENT_OUTDATED' }, { code: 'AGENT_OUTDATED' }]);
 });

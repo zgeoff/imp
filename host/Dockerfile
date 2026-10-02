@@ -23,10 +23,13 @@ ARG FIRECRACKER_VERSION=v1.17.0
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+# zfsutils-linux is in contrib. Only the userland: the module comes from the
+# host kernel through /dev/zfs, and impd refuses a different major version.
+RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
-      xfsprogs e2fsprogs squashfs-tools \
+      xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
       iproute2 iptables procps util-linux kmod jq \
  && rm -rf /var/lib/apt/lists/*
 
@@ -152,14 +155,27 @@ FROM bun AS compile
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml ./
 COPY packages/ packages/
-# --ignore-scripts: the root prepare script installs git hooks
+# --ignore-scripts: the root prepare script installs git hooks. No
+# --production: the CLI builds @zgeoff/imp-client from source, and the client
+# bundles @imp/api for npm, so it lists it only as a devDependency. The
+# binaries carry only what they import, so dev dependencies never ship.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile --production --ignore-scripts
+    bun install --frozen-lockfile --ignore-scripts
 
 # No --target: the image's own bun (linux x64, glibc) becomes the runtime,
 # which matches the debian runtime stage and needs no download.
 RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
  && bun build --compile packages/cli/src/main.ts --outfile /out/imp
+
+# --- dashboard: the web dashboard's static files. Its own stage: the build
+# needs the dev dependencies (vite) that the compile stage leaves out. ---
+FROM bun AS dashboard
+WORKDIR /src
+COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
+COPY packages/ packages/
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile --ignore-scripts
+RUN bun run --cwd packages/dashboard build
 
 # --- release: the runtime with everything baked in; nothing from the repo
 # is mounted. The default target. impd reports its package.json version;
@@ -175,6 +191,7 @@ LABEL org.opencontainers.image.title="imp-host" \
 
 COPY --from=system-files / /usr/local/share/imp/
 COPY --from=compile /out/impd /out/imp /usr/local/bin/
+COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
 # the CLI in the container finds impd's token with no IMP_TOKEN
 RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 
@@ -183,4 +200,5 @@ RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/tok
 ENV IMP_DAEMON=/usr/local/bin/impd \
     IMP_KERNEL=/usr/local/share/imp/vmlinux \
     IMP_SYSTEM_DRIVE=/usr/local/share/imp/imp-system.squashfs \
+    IMP_DASHBOARD_DIR=/usr/local/share/imp/dashboard \
     IMP_STORAGE_LOOP=0

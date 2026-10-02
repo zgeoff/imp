@@ -50,10 +50,10 @@ imp runs on one Linux machine, in one host container, in one of two ways:
 5. Give the CLI the token:
 
    ```sh
-   export IMP_TOKEN=$(scripts/dev.sh token)
+   scripts/dev.sh token | scripts/imp login http://localhost:7070 --name dev
    ```
 
-   Or write it to `~/.config/imp/token` once.
+   Or `export IMP_TOKEN=$(scripts/dev.sh token)` in each shell.
 
 6. Check it:
 
@@ -70,8 +70,10 @@ restarts and day-to-day care.
 
 ## What `dev.sh up` does
 
-- Builds the `dev` target of `host/Dockerfile` as the host image, and `build/imp-system.squashfs`
-  (the agent's system drive) when it is missing.
+- Builds the `dev` target of `host/Dockerfile` as the host image, and rebuilds
+  `build/imp-system.squashfs` (the agent's system drive) from `agent/`, so a changed agent reaches
+  the next imp. The Docker cache makes the rebuild take about half a second when the agent is
+  unchanged. With `IMP_SYSTEM_DRIVE` set, it uses that drive as it is.
 - Starts the container with `--privileged --device /dev/kvm`, the Docker socket, and the repo
   mounted at `/src` and at its own path.
 - Keeps data in `.data/dev/imp.xfs`, a sparse XFS file that the container loop-mounts on
@@ -200,6 +202,40 @@ scripts/test-bootstrap.sh --image imp-host:<tag> --health     # a release image;
 
 Nothing has run on a real OVH or Vultr server yet.
 
+## The CLI on another machine
+
+The `imp` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
+release attaches it to the GitHub release.
+
+**NOTE:** imp has no release yet. Until the first one, run the CLI from a checkout (`scripts/imp`,
+which needs Bun). `install.sh` works from the first release. `brew install` works once the owner has
+also set up the tap ([RELEASING.md](../../RELEASING.md#homebrew-tap)).
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
+brew install zgeoff/tap/imp                                                  # with completions
+```
+
+`install.sh` checks the binary against the release's `SHA256SUMS` before it installs it, and checks
+its provenance attestation too when the `gh` CLI is on `PATH` and logged in. `IMP_INSTALL_VERSION`
+pins a release and `IMP_INSTALL_DIR` picks the directory.
+
+macOS quarantines a binary downloaded with a browser, and Gatekeeper then refuses to run it. Clear
+the flag once (Homebrew and `install.sh` use curl, which sets no quarantine flag):
+
+```sh
+xattr -d com.apple.quarantine ./imp-darwin-arm64
+```
+
+Then point it at an impd and its token (impd writes the token to `<IMP_DATA_DIR>/token`):
+
+```sh
+imp login https://imp.example.ts.net
+imp ls
+```
+
+[Configuration](./configuration.md#cli) covers saved hosts, `--host` and shell completions.
+
 ## Run the release image
 
 The release image runs the compiled impd from `/usr/local/bin/impd` with the kernel and the system
@@ -237,10 +273,10 @@ kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-
 The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
 stamps and drive times are fixed, so the same sources give the same `vmlinux` and
 `imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/build-system-drive.sh` use the same
-stages, so the dev instance boots the same bytes as the release image. A snapshot of a sleeping imp
-restores only with the kernel and drive it was taken on, so this is what lets an upgrade that leaves
-them alone keep every imp's memory. Only these two files are reproducible; the image digest is not
-(apt packages, timestamps and the compiled impd differ per build).
+stages, so the dev instance boots the same bytes as the release image. A release that leaves them
+alone does not change which drive or kernel the imps boot, and impd keeps an older drive while a
+snapshot needs it ([upgrades](./operations.md#upgrade)). Only these two files are reproducible; the
+image digest is not (apt packages, timestamps and the compiled impd differ per build).
 
 `host/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one after a
 change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in CI by
