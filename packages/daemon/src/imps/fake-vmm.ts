@@ -166,6 +166,11 @@ export function buildFakeVmm() {
       queues.set(step, [...(queues.get(step) ?? []), ...outcomes]);
     },
 
+    // every later call succeeds
+    clearQueues: () => {
+      queues.clear();
+    },
+
     // every call of `step` waits until release()
     hold: (step: VmStep): Hold => {
       const reached = Promise.withResolvers<void>();
