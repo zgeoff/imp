@@ -195,3 +195,80 @@ test.skipIf(!ready && !config.acceptance)(
     }
   },
 );
+
+// Per-imp names need an OAuth client with the services scope and the
+// tailnet policy for tag:imp-svc (docs/guides/tailscale.md#per-imp-names)
+const NAMES_BLOCKED =
+  'per-imp names need the Tailscale Services OAuth client and tailnet policy; set IMP_E2E_TAILNET_NAMES=1 once they exist';
+
+const namesReady = ready && process.env['IMP_E2E_TAILNET_NAMES'] === '1';
+
+if (!namesReady) {
+  console.log(`    ${NAMES_BLOCKED}; skipped`);
+}
+
+test.skipIf(!namesReady)(
+  'an imp answers at its own tailnet name, which wakes it and goes with it',
+  async () => {
+    const named = `${prefix}n`;
+
+    // a prefix of its own, so no device or real service shares the name
+    process.env['IMP_TAILNET_NAMES'] = '1';
+    process.env['IMP_TAILNET_NAME_PREFIX'] = 'e2e-';
+
+    try {
+      await runDevScript('reboot');
+      await waitForTailnetIp();
+      await createImp(named, '--image', TINY, '--memory', '512');
+
+      const live = await waitFor(
+        `${named}'s tailnet name`,
+        async () => {
+          const urls = await readImpUrls(named);
+
+          expect(urls.service).not.toBeNull();
+
+          return urls.service ?? '';
+        },
+        { timeoutMs: 120_000 },
+      );
+
+      expect(live).toStartWith(`https://e2e-${named}.`);
+
+      const plain = live.replace(/^https:/v, 'http:');
+
+      // the first HTTPS request waits for the name's certificate
+      for (const url of [plain, live]) {
+        await waitFor(
+          `${url} over the tailnet`,
+          async () => {
+            const body = await readTailnetBody(url);
+
+            expect(body).toBe('e2e-tiny-ok');
+          },
+          { timeoutMs: 120_000 },
+        );
+      }
+
+      await runImp('sleep', named);
+      await waitFor(`${named} to sleep`, () => assertState(named, 'sleeping'));
+
+      const woken = await readTailnetBody(live);
+
+      expect(woken).toBe('e2e-tiny-ok');
+
+      await runImp('rm', named);
+
+      await waitFor(`${named}'s name to go`, async () => {
+        const info = await readInfo();
+
+        expect(info.tailscale.names).toEqual({ live: 0, failed: [] });
+      });
+    } finally {
+      delete process.env['IMP_TAILNET_NAMES'];
+      delete process.env['IMP_TAILNET_NAME_PREFIX'];
+
+      await runDevScript('reboot');
+    }
+  },
+);

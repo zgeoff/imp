@@ -28,6 +28,9 @@ const ImpRowSchema = z.object({
     .optional(),
 });
 
+const NameFailureSchema = z.object({ name: z.string(), error: z.string() });
+const TailnetNamesSchema = z.object({ live: z.number(), failed: z.array(NameFailureSchema) });
+
 const SystemInfoSchema = z.object({
   ramBudgetMib: z.number(),
   ramUsedMib: z.number(),
@@ -39,6 +42,7 @@ const SystemInfoSchema = z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),
     ip: z.string().nullable(),
+    names: TailnetNamesSchema.nullable().default(null),
   }),
 });
 
@@ -138,6 +142,9 @@ export function runShellInImp(name: string, script: string): Promise<string> {
 
 export interface ImpUrls {
   readonly https: string | null;
+
+  // the imp's own tailnet name, https://<service>.<tailnet>.ts.net
+  readonly service: string | null;
   readonly local: string;
   readonly tailnet: string | null;
 }
@@ -154,10 +161,11 @@ export async function readImpUrls(name: string): Promise<ImpUrls> {
     throw new Error(`imp url ${name} printed no local URL: ${stdout}`);
   }
 
-  const https = lines.find((line) => line.startsWith('https://')) ?? null;
+  const service = lines.find((line) => /^https:\/\/[\w\-]+\.[\w\-]+\.ts\.net$/v.test(line)) ?? null;
+  const https = lines.find((line) => line !== service && line.startsWith('https://')) ?? null;
   const tailnet = lines.find((line) => line !== local && line.startsWith('http://')) ?? null;
 
-  return { https, local, tailnet };
+  return { https, service, local, tailnet };
 }
 
 export async function listImps(): Promise<readonly ImpRow[]> {
