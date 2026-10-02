@@ -67,7 +67,11 @@ class Imp < Formula
   end
 
   def install
-    bin.install Dir["imp-*"].first => "imp"
+    # a bare download may arrive without +x, and the completions below run
+    # the binary before Homebrew fixes modes
+    binary = Dir["imp-*"].first
+    chmod 0755, binary
+    bin.install binary => "imp"
     generate_completions_from_executable(bin/"imp", "completion")
   end
 
