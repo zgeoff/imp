@@ -54,6 +54,71 @@ test('the inner init is PID 1 of what an exec sees', async () => {
   expect(agent).toBe('ok');
 });
 
+test('no process inside holds the inner init socket', async () => {
+  const own = await runShellInImp(name, String.raw`ls /proc/self/fd | tr "\n" " "`);
+
+  // ls's own fd 3 is its directory
+  expect(own.trim()).toBe('0 1 2 3');
+
+  // the httpd service, and everything else, has no fd on the init's socket
+  const socket = await runShellInImp(name, 'readlink /proc/1/fd/3');
+
+  const holders = await runShellInImp(
+    name,
+    `for p in /proc/[0-9]*; do [ "$p" = /proc/1 ] || ls -l "$p/fd" 2>/dev/null; done | grep -c '${socket}' || true`,
+  );
+
+  expect(socket).toStartWith('socket:');
+  expect(holders).toBe('0');
+});
+
+test('a memory hog inside meets the OOM killer, and the container stays up', async () => {
+  const before = await readInitStart();
+  const adj = await runShellInImp(name, 'cat /proc/self/oom_score_adj');
+
+  expect(adj).toBe('0');
+
+  const hog = await tryImp(['exec', name, '--', 'awk', 'BEGIN { s = "x"; while (1) s = s s }']);
+
+  expect(hog.exitCode).toBe(137);
+
+  await waitForExec(name);
+
+  const after = await readInitStart();
+
+  expect(after).toBe(before);
+});
+
+test("the system drive is read-only inside, and the agent's /run is not there", async () => {
+  const write = await tryImp(['exec', name, '--', 'touch', '/run/imp/sys/x']);
+  const runs = await runShellInImp(name, "grep -c ' /run ' /proc/mounts");
+
+  const agentRun = await runShellInImp(
+    name,
+    "grep ' /run ' /proc/mounts | grep -c size=16384k || true",
+  );
+
+  expect(write.exitCode).not.toBe(0);
+  expect(runs).toBe('1');
+  expect(agentRun).toBe('0');
+});
+
+test('an exec gets its cgroup even after the exec parent is removed inside', async () => {
+  await runShellInImp(
+    name,
+    [
+      // out of its own leaf first, which would keep the parent busy
+      'echo $$ > /sys/fs/cgroup/init/cgroup.procs',
+      'rmdir /sys/fs/cgroup/exec/* 2>/dev/null',
+      'rmdir /sys/fs/cgroup/exec',
+    ].join('\n'),
+  );
+
+  const cgroup = await runInImp(name, 'cat', '/proc/self/cgroup');
+
+  expect(cgroup).toMatch(/^0::\/exec\/\d+$/v);
+});
+
 test('signals to PID 1 from inside are ignored', async () => {
   const before = await readInitStart();
 
@@ -105,6 +170,19 @@ test('a reboot inside starts the container again, not the guest', async () => {
   expect(marker).toBe('kept');
   expect(devNull).toBe('back');
   expect(uptimeAfter).toBeGreaterThanOrEqual(uptimeBefore);
+
+  // the service comes back, once
+  await waitFor(`httpd in ${name} after the restart`, async () => {
+    const pids = await runShellInImp(name, 'pidof httpd || true');
+
+    expect(pids.split(' ').filter((pid) => pid !== '')).toHaveLength(1);
+  });
+
+  await Bun.sleep(3000);
+
+  const pids = await runShellInImp(name, 'pidof httpd || true');
+
+  expect(pids.split(' ').filter((pid) => pid !== '')).toHaveLength(1);
 });
 
 test('imp cp works with the system drive unmounted inside', async () => {
@@ -138,7 +216,8 @@ test('rm -rf / inside leaves the agent answering and a checkpoint restores it', 
 
   const state = await readState(name);
 
-  expect(broken.exitCode).not.toBe(0);
+  expect(broken.exitCode).toBe(127);
+  expect(broken.stderr).toContain('EXEC_FAILED');
   expect(tookMs).toBeLessThan(10_000);
   expect(state).toBe('running');
 
