@@ -95,6 +95,10 @@ child gets no SIGTERM, only SIGKILL at the end of the 2 s. It does not reach a p
 itself to another cgroup (commands run as root unless the image says otherwise), or the containers
 of a `dockerd` started from an exec ([exec cgroups](../architecture/agent.md#exec-cgroups)).
 
+`imp_exec` runs only in the imp's container. It has no way to run a command in the imp's agent, as
+`imp exec --agent` does ([operations](./operations.md#a-broken-container)), and refuses an `outer`
+field. The SDK's exec types leave it out too.
+
 Only exec and the file tools stop on a cancel. A create, fork or restore that impd has started runs
 to its end, and its result is sent despite the cancel, so the agent learns the name of what it made.
 

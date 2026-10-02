@@ -14,11 +14,11 @@ start impd again. A new root token ends every dashboard session.
 
 Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
-| Scope    | What it may do                                                                                                                                                                                                                                                                                        |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                                   |
-| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`.        |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move` from this host. Host-wide: images, secrets and grants, networks, backups, `imp gc`, tokens, and taking in an `imp move`. |
+| Scope    | What it may do                                                                                                                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                                                       |
+| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`.                            |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move` from this host. Host-wide: images, secrets and grants, networks, backups, `imp gc`, tokens, taking in an `imp move`, and `imp exec --agent`. |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses
@@ -35,9 +35,11 @@ such as `dev-*`. Such a token:
 - sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, in
   `imp net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
   it.
-- cannot make host-wide calls, whatever its scope: images, secrets and grants, networks, backups and
-  tokens. A grant hands a host secret to an imp, so a `dev-*` token could otherwise grant itself any
-  secret; a network reaches every imp on it. It cannot pass `--net` to `imp new` either.
+- cannot make host-wide calls, whatever its scope: images, secrets and grants, networks, backups,
+  tokens and `imp exec --agent`, which runs as root outside the imp's container
+  ([outer exec](../architecture/agent.md#outer-exec)). A grant hands a host secret to an imp, so a
+  `dev-*` token could otherwise grant itself any secret; a network reaches every imp on it. It
+  cannot pass `--net` to `imp new` either.
 
 A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
 reserve, the count of imps, awake and in all, and the storage: used and free space, the reserve, and

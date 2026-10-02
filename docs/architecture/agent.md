@@ -8,7 +8,8 @@ the filesystems, sets up the network, supervises services, reaps zombies, and se
 ## Two drives
 
 - `vda` is the user rootfs (ext4, read-write), a clone of an image ([storage](./storage.md)).
-- `vdb` is the imp system drive (squashfs, read-only). It holds `imp-agent`. The `agent` stage of
+- `vdb` is the imp system drive (squashfs, read-only). It holds `imp-agent`, and a static busybox
+  with a link per applet in `/bin` for [outer execs](#outer-exec). The `agent` stage of
   `host/Dockerfile` builds it, for the release image and, through `scripts/build-system-drive.sh`,
   for the dev instance: the same bytes either way.
 
@@ -26,8 +27,10 @@ container over the user disk:
 1. Mount `/proc`, `/sys`, `/dev`, cgroup2 (`nsdelegate`), a 16 MiB tmpfs on `/run` and its own
    `/dev/pts`.
 2. Set its own `oom_score_adj` to -1000, and make `/sys/fs/cgroup/user` with every controller and a
-   `memory.max` of the guest's memory less 64 MiB. A [boot template](./boot-templates.md#make) parks
-   after this step, and goes on with its claim's values instead of the kernel command line.
+   `memory.max` of the guest's memory less 64 MiB. Make `/sys/fs/cgroup/outer` with a `memory.max`
+   of 32 MiB, and a tmpfs of 8 MiB on `/run/outer`, for [outer execs](#outer-exec). A
+   [boot template](./boot-templates.md#make) parks after this step, and goes on with its claim's
+   values instead of the kernel command line.
 3. Mount `vda` on `/user`, and grow its filesystem if the host grew the disk.
 4. Set the hostname and bring up loopback and `eth0` through netlink. With `imp.ip6`, turn off
    router advertisements and redirects on `eth0`, add the address with no duplicate address
@@ -106,6 +109,32 @@ namespace, so it can open `/dev/vda` (its own disk), write `/proc/sysrq-trigger`
 and mount what it likes. The guest kernel has `CONFIG_MODULES` off, so there is no module to load; a
 kernel with modules would add that route.
 
+## Outer exec
+
+`imp exec --agent` runs a command as root in the agent's own world, outside the container
+([protocol](./protocol.md#execouter)): to see why the container is down, read its cgroups, or look
+at `/user` after an `rm -rf /` inside. It works while the container is down. The system drive has
+busybox 1.37.0, static on musl, built from its pinned tarball with `host/busybox.config` (no servers
+or daemons, `nc -l` included, download clients, `tc` or account tools). The env is `PATH=/bin`, and
+`HOME` and `TMPDIR` are `/run/outer`.
+
+- **Limits.** Each outer exec, tty or not, starts in a leaf of `/sys/fs/cgroup/outer` or not at all,
+  so its 32 MiB `memory.max` holds for everything it starts. The agent writes the limit again before
+  each outer exec, in case a root shell removed the cgroup. The command starts as
+  `imp-agent outer <path> <argv...>`, which sets its `oom_score_adj` back to 0 and execs the command
+  in place. Without it, the command would inherit the agent's -1000, and the OOM killer could not
+  end it even inside its cgroup.
+- **Who may run one.** Only a caller with host-wide `manage` scope, never an exec ticket
+  ([tokens](../guides/tokens.md)). impd audits it as `exec-agent` and sends an `AgentExec` event for
+  each one the agent takes ([events](../guides/events.md)). MCP and the SDK do not offer it.
+- **What it is not.** It is not a new boundary. Root inside the container already holds every
+  capability in the guest, and an outer exec only gives the host's admin the same reach, from
+  outside a container that may be broken. The limits guard against accidents, not against the
+  caller.
+- **Seen inside.** The container binds the system drive at `/run/imp/sys`, so user code sees
+  `/run/imp/sys/bin/busybox` too: read-only, `nosuid`, and a shell even in a `FROM scratch` image.
+  It gives a non-root user no privilege.
+
 ## The reaper
 
 The agent is PID 1, so it inherits every orphan in the guest and must reap it. One loop owns every
@@ -133,7 +162,8 @@ write to `cgroup.kill` fails, the stop sends SIGKILL to the process group instea
 
 A command runs as root unless the image says otherwise, so it can move itself out of its leaf, and a
 `dockerd` started from an exec puts its containers in cgroups of its own; a stop does not reach
-those. A tty exec has no leaf: its session leader owns the terminal's process group.
+those. A tty exec has no leaf: its session leader owns the terminal's process group. An
+[outer exec](#outer-exec) has one either way, for its memory limit, and never runs without it.
 
 ## Sessions
 

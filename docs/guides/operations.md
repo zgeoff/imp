@@ -163,6 +163,31 @@ The API is `system.gc` with `{ dryRun?, orphans? }`. It returns `dryRun`, `dropp
 test to the chaos suite and the backup restore drill. [STATUS.md](../../STATUS.md) has the latest
 results. The development guide lists the other checks.
 
+## A broken container
+
+User code runs in a container inside the guest
+([agent](../architecture/agent.md#the-inner-container)). When it is down, or its root was wiped,
+`imp exec` fails with `INNER_DOWN` or `EXEC_FAILED`. `imp exec --agent` runs a command as root in
+the agent's own world instead, with busybox, while the container is down too. It needs a token with
+host-wide `manage` scope.
+
+```sh
+imp exec --agent box -- cat /sys/fs/cgroup/user/cgroup.events   # is anything left inside?
+imp exec --agent box -- ls -A /user                              # the user disk
+imp exec --agent box -- dmesg
+imp exec --agent -t box -- sh                                    # a shell
+```
+
+The user disk is at `/user`. A shell there follows the symlinks it finds, and those are the user's:
+`cp x /user/link`, where `link` points at `/run`, writes into the agent's world, not the disk. Read
+the disk with care, and copy files in and out with `imp cp`, which resolves paths inside the
+container. Each command shares 32 MiB of memory with the other outer execs. An imp whose agent
+predates protocol `0.16.0` refuses it with `AGENT_OUTDATED`: stop and start the imp to update its
+agent.
+
+An outer shell is root in the agent's world. It can kill or ptrace the agent, or `reboot` the guest,
+and either one ends the imp.
+
 ## Troubleshooting
 
 | Symptom                                   | Cause and fix                                                                                                            |
