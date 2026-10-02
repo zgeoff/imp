@@ -71,6 +71,7 @@ cold instead.
 | The same `IMP_BROKER_PORT`                            | Running processes keep `HTTPS_PROXY`.                                                                                                                          |
 | The same `IMP_DNS`, for an `open` imp                 | An open imp asks those servers itself; a `box` or `none` imp asks the host's resolver.                                                                         |
 | A source tap with the slot's MAC                      | The guest knows its gateway by that MAC. A tap made before taps took their slot's MAC keeps a random one until a host restart: move such an imp with `--stop`. |
+| The imp on no private network                         | The guest holds its peers' addresses, which belong to other imps on the target: `imp net leave` first.                                                         |
 | No IPv6 address in the imp                            | Its address is in the source's /64. `auto` makes a prefix per host; copy `<data>/net/ipv6-ula` to give two hosts the same one.                                 |
 
 The target's broker CA goes into the guest at its first wake. A process that loaded the source's CA

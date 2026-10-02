@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
+import { writeMember, writeNetwork } from '../db/networks';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
@@ -384,4 +385,21 @@ test("a tap with a MAC from before slot MACs refuses a warm move, and the target
   expect(rejection).toMatchObject({ code: 'PRECONDITION_FAILED' });
   expect(String(rejection)).toContain('has a MAC from before slot MACs');
   expect(ctx.target.removedTaps).toContain(`imp${String(ctx.slot)}`);
+});
+
+test('an imp on a private network is refused a warm move', async () => {
+  await using ctx = await setupWarmTest();
+
+  const network = await writeNetwork(ctx.source.db, 'lab');
+
+  await writeMember(ctx.source.db, network?.id ?? '', ctx.impId);
+
+  const facts = await ctx.targetApp.client.moves.facts();
+
+  const refused = await readRejection(
+    ctx.sourceApp.client.moves.prepare({ name: 'dev', target: facts }),
+  );
+
+  expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(String(refused)).toContain('it is on private networks (lab)');
 });
