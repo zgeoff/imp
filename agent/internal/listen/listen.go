@@ -91,6 +91,9 @@ type listener struct {
 
 	// removes what the listener made
 	cleanup func()
+	// inTmpfs: its socket file is on a tmpfs, which goes when the
+	// container does
+	inTmpfs bool
 
 	mu      sync.Mutex
 	next    uint64
@@ -232,7 +235,7 @@ func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, erro
 		return proto.Listening{}, err
 	}
 	path := filepath.Join(dir, name)
-	ln, err := m.listenOwn(path, dir, name, uid, gid)
+	ln, err := m.listenOwn(l, path, dir, name, uid, gid)
 	if err != nil {
 		m.fsys.RemoveAll(dir)
 		return proto.Listening{}, err
@@ -248,12 +251,13 @@ func (m *Manager) openOwn(l *listener, root, name string) (proto.Listening, erro
 	return proto.Listening{Path: path}, nil
 }
 
-func (m *Manager) listenOwn(path, dir, name string, uid, gid uint32) (net.Listener, error) {
+func (m *Manager) listenOwn(l *listener, path, dir, name string, uid, gid uint32) (net.Listener, error) {
 	d, err := m.fsys.Dir(dir)
 	if err != nil {
 		return nil, err
 	}
 	defer d.Close()
+	l.inTmpfs = onTmpfs(int(d.Fd()))
 	at := fmt.Sprintf("/proc/self/fd/%d/%s", d.Fd(), name)
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: at, Net: "unix"})
 	if err != nil {
@@ -273,18 +277,36 @@ func (m *Manager) listenOwn(path, dir, name string, uid, gid uint32) (net.Listen
 	return ln, nil
 }
 
-// CloseAll ends every listener: the container they served in is gone.
-// impd opens them again in the next one.
-func (m *Manager) CloseAll() {
+// CloseLost ends the listeners whose socket file went with a dead
+// container: those on a tmpfs, as /run and /dev are. Their clients end, and the client
+// opens them again in the next container. A TCP port lives in the guest's
+// one network namespace, and a socket file on the user disk stays, so
+// those listeners go on serving the next container.
+func (m *Manager) CloseLost() {
 	m.mu.Lock()
-	all := make([]*listener, 0, len(m.listeners))
+	var lost []*listener
 	for _, l := range m.listeners {
-		all = append(all, l)
+		if l.inTmpfs {
+			lost = append(lost, l)
+		}
 	}
 	m.mu.Unlock()
-	for _, l := range all {
+	for _, l := range lost {
 		m.close(l)
 	}
+}
+
+// onTmpfs reports whether the directory open at fd is on a tmpfs. Every
+// tmpfs the user reaches is a mount of the container, made again or gone at
+// its next start; the user disk is not one. The fd, not the path, decides,
+// so a link such as /var/run -> /run counts as what it leads to.
+func onTmpfs(fd int) bool {
+	var st unix.Statfs_t
+	if err := unix.Fstatfs(fd, &st); err != nil {
+		log.Printf("listen: statfs: %v", err)
+		return false
+	}
+	return st.Type == unix.TMPFS_MAGIC
 }
 
 // openBound binds network and address as the image's user.
@@ -298,6 +320,7 @@ func (m *Manager) openBound(l *listener, network, address string) (proto.Listeni
 		return proto.Listening{}, err
 	}
 	l.ln, l.checkPeer, l.uid = b.Listener, network == "unix", uid
+	l.inTmpfs = network == "unix" && onTmpfs(b.Dir)
 	l.cleanup = b.Close
 	if network == "tcp" {
 		return proto.Listening{Port: b.Port}, nil

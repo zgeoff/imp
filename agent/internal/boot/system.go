@@ -88,7 +88,7 @@ func Run() error {
 	// it. A new container gets its files set and its image config read
 	// again, as at boot, and its services.
 	mgr.OnDown(func() {
-		listener.CloseAll()
+		listener.CloseLost()
 		sup.Suspend()
 	})
 	mgr.OnUp(func() {
