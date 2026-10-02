@@ -74,12 +74,15 @@ imp fork box box-2                # a second copy to try something else in
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
+| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest               |
+| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker      |
 | `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
 | `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
 | `completion bash\|zsh\|fish`           | print the shell completion script                        |
 
-`--memory` takes MiB or a unit (`512m`, `2g`). Commands that print imps, images, checkpoints or
-`info` take `--json`. `scripts/imp` runs the CLI from the repo.
+`--memory` takes MiB or a unit (`512m`, `2g`). [Connectors](docs/guides/connectors.md) covers
+secrets and grants. Commands that print imps, images, checkpoints or `info` take `--json`.
+`scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
@@ -129,6 +132,9 @@ Every imp serves its port 8080 at two URLs:
 
 - `http://<name>.imp.localhost:7080` on the host
 - `http://<tailnet-host>:<port>` on your tailnet; `imp url` prints it
+
+With a domain of your own (`IMP_DOMAIN`), it is also at `https://<name>.<domain>` on your tailnet,
+with a certificate impd gets and renews ([HTTPS](./docs/guides/https.md)).
 
 ## The RAM budget
 

@@ -94,6 +94,14 @@ function ImpDetails(props: ImpDetailsProps) {
       </dd>
       <dt>URL</dt>
       <dd>
+        {urls.data?.https !== undefined && urls.data.https !== null && (
+          <>
+            <a href={urls.data.https} target="_blank" rel="noreferrer">
+              {urls.data.https}
+            </a>
+            {' · '}
+          </>
+        )}
         <a href={imp.url} target="_blank" rel="noreferrer">
           {imp.url}
         </a>

@@ -2,6 +2,7 @@ import { impContract } from '@imp/api';
 import type { Image, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
+import type { Broker } from './broker/broker-service';
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import type { ImageRecord } from './db/images';
@@ -15,6 +16,9 @@ import type { TailscaleStatus } from './net/tailscale-status';
 import type { StorageBackend } from './storage/storage-backend';
 import type { SystemFileInfo } from './storage/system-file-info';
 
+// audit rows `audit.list` gives when the caller names no limit
+const AUDIT_LIMIT = 100;
+
 export interface RouterDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
@@ -22,6 +26,7 @@ export interface RouterDeps {
   readonly images: ImageService;
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
+  readonly broker: Broker;
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
@@ -52,7 +57,15 @@ export function buildRouter(deps: RouterDeps) {
         deps.imps.holdImp(context.input.name, context.input.seconds),
       ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
-      fork: os.imps.fork.handler((context) => deps.checkpoints.forkImp(context.input)),
+
+      // a fork gets its source's grants, as it gets its disk
+      fork: os.imps.fork.handler(async (context) => {
+        const imp = await deps.checkpoints.forkImp(context.input);
+
+        await deps.broker.createForkGrants(context.input.source, imp.name);
+
+        return imp;
+      }),
     },
     checkpoints: {
       create: os.checkpoints.create.handler((context) =>
@@ -111,6 +124,33 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+    },
+    secrets: {
+      add: os.secrets.add.handler((context) => deps.broker.addSecret(context.input)),
+      list: os.secrets.list.handler(() => deps.broker.listSecrets()),
+      delete: os.secrets.delete.handler(async (context) => {
+        await deps.broker.deleteSecret(context.input.name);
+
+        return {};
+      }),
+    },
+    grants: {
+      add: os.grants.add.handler(async (context) => {
+        await deps.broker.addGrant(context.input.name, context.input.secret);
+
+        return {};
+      }),
+      delete: os.grants.delete.handler(async (context) => {
+        await deps.broker.removeGrant(context.input.name, context.input.secret);
+
+        return {};
+      }),
+      list: os.grants.list.handler((context) => deps.broker.listGrants(context.input.name)),
+    },
+    audit: {
+      list: os.audit.list.handler((context) =>
+        deps.broker.listAudit(context.input.name ?? null, context.input.limit ?? AUDIT_LIMIT),
+      ),
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),

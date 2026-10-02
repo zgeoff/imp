@@ -86,7 +86,7 @@ export const loginCommand = defineCommand({
         url: context.args.url,
         name: context.args.name ?? null,
         verify: context.args.verify,
-        readToken,
+        readToken: () => readToken(),
         warn: (message) => {
           console.error(`imp: ${message}`);
         },

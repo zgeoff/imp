@@ -25,6 +25,7 @@ This page gives the shape and the main decisions. The other architecture pages g
  │  impd (bun)                                                        │
  │   ├─ rpc        oRPC router (control) + WebSocket (exec streams)   │
  │   ├─ proxy      wake-on-request HTTP/WebSocket proxy               │
+ │   ├─ broker     credential connectors: CONNECT proxy on gateways   │
  │   ├─ imps       lifecycle service, one state machine per imp       │
  │   ├─ governor   RAM budget; idle loop sleeps quiet imps            │
  │   ├─ vmm        Firecracker API client (HTTP over unix socket)     │

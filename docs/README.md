@@ -15,7 +15,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   errors, unary requests and exec streams.
 - [Storage and images](./architecture/storage.md): XFS reflinks, the data directory, checkpoints,
   restores and forks, and how an OCI image becomes an ext4 disk.
-- [Networking](./architecture/networking.md): addressing, iptables, the wake proxy and the URLs.
+- [Networking](./architecture/networking.md): addressing, iptables, the wake proxy, the credential
+  broker's port and the URLs.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
 
@@ -27,11 +28,15 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   instance and the CLI.
 - [Images](./guides/images.md): the shipped images, what a guest takes from an image, services,
   Docker in the guest, and how to make your own.
+- [Credential connectors](./guides/connectors.md): `imp secret` and `imp grant`, the host-side
+  broker that adds tokens to an imp's requests, and where secrets live.
 - [Dashboard](./guides/dashboard.md): the web dashboard impd serves at `/ui/`: what it shows, the
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp`, the tools a coding agent gets, the guard, and how exec
   output, timeouts and cancels work.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
+- [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the
+  wildcard certificate, its renewal, the DNS records, and testing with Pebble.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
 - [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
   `main`.

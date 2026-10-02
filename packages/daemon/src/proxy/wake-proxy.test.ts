@@ -122,7 +122,7 @@ test('the proxy keeps the dashboard session cookie from an imp over HTTP', async
   await using ctx = await setupCookieTest();
 
   const response = await fetch(`http://127.0.0.1:${String(ctx.port)}/`, {
-    headers: { cookie: 'a=1; imp_session=v1.2.secret; b=2' },
+    headers: { cookie: 'a=1; imp_session=v1.2.secret; __Host-imp_session=v1.2.secret; b=2' },
   });
 
   await response.text();

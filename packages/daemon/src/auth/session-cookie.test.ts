@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import {
-  buildClearedSessionCookie,
+  buildClearedSessionCookies,
   buildSessionCookie,
   buildSessionValue,
   isValidSession,
@@ -49,19 +49,36 @@ test('it reads every session from a cookie header among other cookies', () => {
   expect(readSessionCookies(null)).toEqual([]);
 });
 
-test('it removes only the session from a cookie header', () => {
+test('it removes only the session, under either name, from a cookie header', () => {
   expect(removeSessionCookie('a=1; imp_session=v1.2.abc; b=x=y')).toBe('a=1; b=x=y');
-  expect(removeSessionCookie('imp_session=v1.2.abc')).toBeNull();
+  expect(removeSessionCookie('a=1; __Host-imp_session=v1.2.abc')).toBe('a=1');
+  expect(removeSessionCookie('imp_session=v1.2.abc; __Host-imp_session=v1.2.abc')).toBeNull();
   expect(removeSessionCookie('imp_session_other=1')).toBe('imp_session_other=1');
 });
 
-test('it sets an http-only strict cookie, secure behind TLS', () => {
+test('it reads the session under either name', () => {
+  expect(readSessionCookies('__Host-imp_session=s; imp_session=p')).toEqual(['s', 'p']);
+});
+
+test('it sets an http-only strict cookie, a __Host- one behind TLS', () => {
   expect(buildSessionCookie('v', false)).toBe(
     'imp_session=v; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict',
   );
 
-  expect(buildSessionCookie('v', true)).toEndWith('; Secure');
-  expect(buildClearedSessionCookie(false)).toStartWith('imp_session=; Path=/; Max-Age=0;');
+  expect(buildSessionCookie('v', true)).toBe(
+    '__Host-imp_session=v; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict; Secure',
+  );
+});
+
+test('a logout clears the plain cookie, and over TLS the __Host- one too', () => {
+  expect(buildClearedSessionCookies(false)).toEqual([
+    'imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+  ]);
+
+  expect(buildClearedSessionCookies(true)).toEqual([
+    'imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+    '__Host-imp_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure',
+  ]);
 });
 
 test('the signature keys on a key derived from the token, not the token', () => {

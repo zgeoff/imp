@@ -3,7 +3,7 @@ import { isAuthorized } from '../token';
 import { isSameOrigin } from './authenticate';
 import {
   SESSION_MAX_AGE_S,
-  buildClearedSessionCookie,
+  buildClearedSessionCookies,
   buildSessionCookie,
   buildSessionValue,
 } from './session-cookie';
@@ -45,10 +45,13 @@ export function createSessionRoutes(deps: Readonly<SessionRouteDeps>) {
         return Response.json({ error: 'cross-origin' }, { status: 403 });
       }
 
-      return new Response(null, {
-        status: 204,
-        headers: { 'set-cookie': buildClearedSessionCookie(isSecure(request)) },
-      });
+      const headers = new Headers();
+
+      for (const cookie of buildClearedSessionCookies(isSecure(request))) {
+        headers.append('set-cookie', cookie);
+      }
+
+      return new Response(null, { status: 204, headers });
     },
   };
 }

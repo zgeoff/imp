@@ -86,8 +86,15 @@ From the milestone work:
 - The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
   fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
   restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
+- HTTPS on a domain ([#16](https://github.com/zgeoff/imp/issues/16)) is tested against Pebble only
+  (the `https` suite: certificate in about 100 ms, an imp over https, a wake over https), not with a
+  real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider, and public
+  exposure (`imp url --public`) is not built ([#52](https://github.com/zgeoff/imp/issues/52)).
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
+- Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
+  in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
+  its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 

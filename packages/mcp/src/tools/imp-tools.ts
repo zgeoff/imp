@@ -114,7 +114,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   defineTool({
     name: 'imp_url',
     description:
-      "The imp's HTTP URLs: `local` on the imp host, and `tailnet` when impd is on a tailnet. A request wakes a sleeping imp and goes to its httpPort.",
+      "The imp's HTTP URLs: `local` on the imp host, `https` when impd has a domain, and `tailnet` when impd is on a tailnet. A request wakes a sleeping imp and goes to its httpPort.",
     input: NameOnly,
     annotations: { title: 'Get URLs', readOnlyHint: true, openWorldHint: false },
     run: async (input, context) => {

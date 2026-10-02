@@ -31,14 +31,18 @@ interface KeyResult {
   readonly end: 'enter' | 'cancel' | null;
 }
 
-// The token for `imp login`: the first line of piped stdin, else typed at a
-// prompt that does not echo. Never an argument, which would land in the
-// shell history and in `ps`.
-export async function readToken(): Promise<string> {
+// A token for `imp login` or `imp secret add`: the first line of piped
+// stdin, else typed at a prompt that does not echo. Never an argument,
+// which would land in the shell history and in `ps`.
+export async function readToken(prompt = 'token: '): Promise<string> {
   if (process.stdin.isTTY) {
-    return readHiddenToken(process.stdin, (text) => {
-      process.stderr.write(text);
-    });
+    return readHiddenToken(
+      process.stdin,
+      (text) => {
+        process.stderr.write(text);
+      },
+      prompt,
+    );
   }
 
   const piped = await Bun.stdin.text();
@@ -49,7 +53,11 @@ export async function readToken(): Promise<string> {
 // Raw mode turns echo off. Every way out (Enter, Ctrl-C, a signal from
 // elsewhere) puts the terminal back first, so a cancelled prompt never
 // leaves the shell without echo.
-export function readHiddenToken(input: TokenInput, write: (text: string) => void): Promise<string> {
+export function readHiddenToken(
+  input: TokenInput,
+  write: (text: string) => void,
+  prompt = 'token: ',
+): Promise<string> {
   const settled = Promise.withResolvers<string>();
   let token = '';
 
@@ -86,7 +94,7 @@ export function readHiddenToken(input: TokenInput, write: (text: string) => void
     }
   };
 
-  write('token: ');
+  write(prompt);
 
   for (const signal of SIGNALS) {
     process.on(signal, onSignal);

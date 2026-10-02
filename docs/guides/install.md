@@ -13,6 +13,10 @@ imp runs on one Linux machine, in one host container, in one of two ways:
 
 - `/dev/kvm`: bare metal, or a VM with nested virtualization (WSL2 works).
 - Docker. The host container is privileged and mounts the Docker socket.
+- A host kernel with the iptables `rpfilter` and `addrtype` matches (`xt_rpfilter`, `xt_addrtype`).
+  The host container loads its rules into its own network namespace, and the guard against spoofed
+  guest addresses and the broker's port rule need both. Most distribution kernels and WSL2 have
+  them; `setup-net.sh` fails at start without them.
 - [Bun](https://bun.sh) for the CLI, and Go for the guest agent.
 - Disk for the sparse XFS file. `IMP_STORAGE_GIB` (default 200) sets its apparent size; it uses only
   what imps write.

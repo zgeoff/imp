@@ -99,6 +99,44 @@ test('a login trades the token for a session the API accepts from its own page',
   expect(imps).toEqual([]);
 });
 
+test('behind TLS the session is a __Host- cookie, and a logout clears both names', async () => {
+  await using ctx = await setupTest();
+
+  // the wake proxy's HTTPS listener sets x-forwarded-proto on the bare domain
+  const login = await ctx.send('/auth/login', {
+    method: 'POST',
+    headers: {
+      origin: ORIGIN,
+      'content-type': 'application/json',
+      'x-forwarded-proto': 'https',
+    },
+    body: JSON.stringify({ token: TEST_TOKEN }),
+  });
+
+  const setCookie = login.headers.get('set-cookie') ?? '';
+
+  expect(setCookie).toStartWith('__Host-imp_session=v1.');
+  expect(setCookie).toEndWith('; Secure');
+
+  const browser = buildBrowserClient(ctx.app, {
+    cookie: setCookie.split(';')[0] ?? '',
+    'sec-fetch-site': 'same-origin',
+  });
+
+  const imps = await browser.imps.list();
+
+  expect(imps).toEqual([]);
+
+  const logout = await ctx.send('/auth/logout', {
+    method: 'POST',
+    headers: { origin: ORIGIN, 'x-forwarded-proto': 'https' },
+  });
+
+  const cleared = logout.headers.getSetCookie().map((cookie) => cookie.split(';')[0]);
+
+  expect(cleared).toEqual(['imp_session=', '__Host-imp_session=']);
+});
+
 test('a login with the wrong token or from another origin sets nothing', async () => {
   await using ctx = await setupTest();
 

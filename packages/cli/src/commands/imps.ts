@@ -126,6 +126,10 @@ export const urlCommand = defineCommand({
     runAction(context.host, async (client) => {
       const urls = await client.imps.url({ name: context.args.name });
 
+      if (urls.https !== null) {
+        console.log(urls.https);
+      }
+
       console.log(urls.local);
 
       if (urls.tailnet !== null) {
