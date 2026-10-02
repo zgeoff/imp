@@ -41,6 +41,7 @@ import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
 import { readPresentedLeases } from './imps/imp-presenter';
 import type { ImpService } from './imps/imp-service';
+import type { MoveService } from './moves/move-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { NetworkService } from './networks/network-service';
 import type { DiskBudget } from './storage/disk-budget';
@@ -69,6 +70,7 @@ export interface RouterDeps {
 
   // null when no repository is set
   readonly backups: BackupService | null;
+  readonly moves: Omit<MoveService, 'handle' | 'recover'>;
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
@@ -390,6 +392,23 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+    },
+    moves: {
+      prepare: os.moves.prepare.handler((context) =>
+        deps.moves.prepare(context.input.name, context.input.stop === true),
+      ),
+      receive: os.moves.receive.handler((context) =>
+        deps.moves.issueTicket(context.input.name, context.input.bytes),
+      ),
+      send: os.moves.send.handler((context) =>
+        deps.moves.send(context.input.name, context.input.to, context.input.ticket),
+      ),
+      status: os.moves.status.handler((context) => deps.moves.readStatus(context.input.name)),
+      reissue: os.moves.reissue.handler((context) => deps.moves.reissueTicket(context.input.name)),
+      resume: os.moves.resume.handler((context) =>
+        deps.moves.resume(context.input.name, context.input.ticket),
+      ),
+      abort: os.moves.abort.handler((context) => deps.moves.abort(context.input.name)),
     },
     backups: {
       run: os.backups.run.handler(() => requireBackups().runBackup()),

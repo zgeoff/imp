@@ -11,8 +11,9 @@ import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import type { ExecSocket } from '@zgeoff/imp-client';
 import { Elysia } from 'elysia';
+import * as z from 'zod';
 import type { ListenSpec } from './agent-client/listener-stream';
-import { buildForbiddenError } from './api-errors';
+import { MOVING_RETRY_AFTER_S, buildForbiddenError } from './api-errors';
 import { withAuditedOpen } from './audit/api-audit';
 import { resolveCaller } from './auth/authenticate';
 import type { CallerSources } from './auth/authenticate';
@@ -33,6 +34,7 @@ import { createExecTickets } from './exec/exec-tickets';
 import { createInProcessSocket } from './exec/in-process-socket';
 import type { BuildContextRoute } from './images/build-context-route';
 import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
+import type { MoveService } from './moves/move-service';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
 import { createReverseForwards } from './reverse/reverse-forwards';
@@ -62,6 +64,9 @@ export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
 
   // `POST /images/build`: a build context streamed from the client
   readonly buildContexts: BuildContextRoute;
+
+  // `POST /move/*`: another host's side of a move (docs/architecture/moves.md)
+  readonly moves: MoveService;
 }
 
 interface SocketEntry<Session> {
@@ -171,7 +176,11 @@ export function buildApp(deps: AppDeps) {
       context: { caller, ends: readEnds(caller) },
     });
 
-    return handled.matched ? handled.response : new Response('not found', { status: 404 });
+    if (!handled.matched) {
+      return new Response('not found', { status: 404 });
+    }
+
+    return withRetryAfter(handled.response);
   };
 
   // an `/exec` socket in process, for the MCP endpoint's execs: its ticket
@@ -276,6 +285,20 @@ export function buildApp(deps: AppDeps) {
         context.server?.timeout(context.request, 0);
 
         return deps.buildContexts.handle(context.request, caller, toApiImage);
+      },
+      { parse: 'none' },
+    )
+
+    // A move ticket in the Authorization header, from a tailnet address on
+    // the connected socket, never one a proxy forwarded. A stream runs for as
+    // long as the disk takes, so no idle timeout ends it.
+    .post(
+      '/move/:step',
+      (context) => {
+        context.server?.timeout(context.request, 0);
+        const peer = context.server?.requestIP(context.request)?.address ?? null;
+
+        return deps.moves.handle(context.request, peer);
       },
       { parse: 'none' },
     )
@@ -503,4 +526,30 @@ function readBufferedAmount(socket: object): number {
   const amount: unknown = Reflect.apply(read, socket, []);
 
   return typeof amount === 'number' ? amount : 0;
+}
+
+const MovingBodySchema = z.object({ json: z.object({ code: z.literal('MOVING') }) });
+
+// A MOVING error says when to ask again in its data and, for a client that
+// reads only HTTP, in Retry-After
+async function withRetryAfter(response: Response): Promise<Response> {
+  if (response.status !== 409) {
+    return response;
+  }
+
+  try {
+    const body: unknown = await response.clone().json();
+
+    if (!MovingBodySchema.safeParse(body).success) {
+      return response;
+    }
+  } catch {
+    return response;
+  }
+
+  const headers = new Headers(response.headers);
+
+  headers.set('retry-after', String(MOVING_RETRY_AFTER_S));
+
+  return new Response(response.body, { status: response.status, headers });
 }

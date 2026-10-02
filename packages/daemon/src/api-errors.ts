@@ -53,6 +53,18 @@ export function buildAgentOutdatedApiError(message: string) {
   return new ORPCError('AGENT_OUTDATED', { status: 409, message });
 }
 
+// how long a caller waits before it asks again about a moving imp
+export const MOVING_RETRY_AFTER_S = 30;
+
+// a move holds no lock while it sends: every other change fails at once
+export function buildMovingError(name: string) {
+  return new ORPCError('MOVING', {
+    status: 409,
+    message: `${name} is moving between hosts; try again in ${String(MOVING_RETRY_AFTER_S)} s`,
+    data: { retryAfterS: MOVING_RETRY_AFTER_S },
+  });
+}
+
 export function buildStoppingError() {
   return new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is stopping' });
 }

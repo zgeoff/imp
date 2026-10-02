@@ -94,4 +94,11 @@ export const IMP_ERRORS = defineErrors({
 
   // the imp's agent is from before the feature; a stop and start updates it
   AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },
+
+  // the imp is moving to or from another host; try again after retryAfterS
+  MOVING: {
+    message: 'The imp is moving between hosts',
+    status: 409,
+    data: z.object({ retryAfterS: z.int().positive() }),
+  },
 });

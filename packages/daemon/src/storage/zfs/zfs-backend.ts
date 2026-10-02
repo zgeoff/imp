@@ -643,6 +643,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     },
 
     resolveImpPaths,
+    findCheckpointFile: () => null,
 
     createImage: async (digest, write) => {
       const staged = `${datasets.staging}/image-${Bun.randomUUIDv7()}`;

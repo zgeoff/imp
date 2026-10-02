@@ -45,7 +45,16 @@ test('it fills every setting from its default when the env is empty', () => {
     backup: null,
     https: null,
     tailnetNames: null,
+    moves: { peerUrl: null, testCidr: null },
   });
+});
+
+test('a move test range off the tailnet needs an e2e host', () => {
+  expect(() => loadConfig({ IMP_MOVE_TEST_CIDR: '172.30.0.0/16' })).toThrow(/only an e2e host/);
+
+  const config = loadConfig({ IMP_MOVE_TEST_CIDR: '172.30.0.0/16', IMP_E2E: '1' });
+
+  expect(config.moves.testCidr).toBe('172.30.0.0/16');
 });
 
 test('it reads and coerces values from the env', () => {

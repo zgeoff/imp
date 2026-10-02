@@ -27,6 +27,7 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import { moveCommand } from './commands/move';
 import { netCommand } from './commands/networks';
 import { proxyCommand } from './commands/proxy';
 import {
@@ -79,6 +80,7 @@ export const mainCommand = defineCommand({
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
     fork: forkCommand,
+    move: moveCommand,
     disk: diskCommand,
     gc: gcCommand,
     backup: backupCommand,

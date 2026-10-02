@@ -27,6 +27,8 @@ import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
+import { createMoveService } from '../moves/move-service';
+import type { MoveServiceDeps } from '../moves/move-service';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createNetworkService } from '../networks/network-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
@@ -366,6 +368,9 @@ export function buildTestApp(
 
   // tailnet identity, off by default
   tailnet: AppDeps['tailnet'] = null,
+
+  // a move test's fetch to the other host, and its hooks
+  moveOptions: Partial<Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted'>> = {},
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
 
@@ -399,6 +404,24 @@ export function buildTestApp(
     diskBudget: ctx.diskBudget,
     audit,
     now: ctx.now,
+  });
+
+  const moves = createMoveService({
+    config: ctx.config,
+    db: ctx.db,
+    dataDir: ctx.config.dataDir,
+    storage: ctx.storage,
+    storageGate: ctx.storageGate,
+    diskBudget: ctx.diskBudget,
+    imps: impd.imps,
+    grants: ctx.broker,
+    egress: ctx.egress,
+    readTailnetIp: () => Promise.resolve(null),
+    releaseName: () => Promise.resolve(),
+    onCommitted: () => {},
+    ...moveOptions,
+    now: ctx.now,
+    log: () => {},
   });
 
   const built = buildApp({
@@ -437,6 +460,7 @@ export function buildTestApp(
     log: ctx.log,
     audit,
     buildContexts,
+    moves,
   });
 
   const link = new RPCLink({
@@ -447,7 +471,7 @@ export function buildTestApp(
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
-  return { app: built.app, closeExecSessions: built.closeExecSessions, client, peers };
+  return { app: built.app, closeExecSessions: built.closeExecSessions, client, peers, moves };
 }
 
 // a memory snapshot as a sleep at `createdAt` by a VM with `identity`

@@ -122,6 +122,10 @@ export interface StorageBackend {
   // backend keeps them
   readonly resolveImpPaths: (impId: string) => ImpPaths;
 
+  // a checkpoint's disk as a file a move can read while the imp is marked;
+  // null where a checkpoint is no plain file (ZFS keeps it in a snapshot)
+  readonly findCheckpointFile: (impId: string, checkpointId: string) => string | null;
+
   // `write` puts rootfs.ext4 and config.json in the directory it gets; the
   // backend then makes it the image's directory
   readonly createImage: (digest: string, write: (dir: string) => Promise<void>) => Promise<void>;

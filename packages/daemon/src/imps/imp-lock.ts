@@ -1,4 +1,4 @@
-import { buildNotFoundError } from '../api-errors';
+import { buildMovingError, buildNotFoundError } from '../api-errors';
 import { findImpById, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpContext } from './imp-context';
@@ -12,13 +12,23 @@ const LOCKED = Symbol('locked');
 // one, so the VM operations that take it cannot run without the lock.
 export type LockedImp = ImpRecord & { readonly [LOCKED]: true };
 
+interface WithImpOptions {
+  // the move's own steps, which act on an imp they marked
+  readonly isMove?: boolean;
+}
+
 export interface ImpLock {
   // the imp by name, checked for a dead VM or a lost snapshot, without the lock
   readonly findImp: (name: string) => Promise<ImpRecord>;
 
   // runs `action` under the imp's lock with a fresh record; NOT_FOUND when
-  // the imp is gone by the time the lock is free
-  readonly withImp: <T>(name: string, action: (imp: LockedImp) => Promise<T>) => Promise<T>;
+  // the imp is gone by the time the lock is free, MOVING while it moves
+  // between hosts, unless `isMove` says the move itself calls
+  readonly withImp: <T>(
+    name: string,
+    action: (imp: LockedImp) => Promise<T>,
+    options?: WithImpOptions,
+  ) => Promise<T>;
   readonly withImpId: <T>(
     id: string,
     action: (imp: LockedImp | undefined) => Promise<T>,
@@ -86,7 +96,7 @@ export function createImpLock(context: ImpContext): ImpLock {
 
   return {
     findImp,
-    withImp: async (name, action) => {
+    withImp: async (name, action, options = {}) => {
       const found = await findImp(name);
 
       return mutex.runExclusive(found.id, () =>
@@ -95,6 +105,10 @@ export function createImpLock(context: ImpContext): ImpLock {
 
           if (imp === undefined) {
             throw buildNotFoundError('imp', name);
+          }
+
+          if (imp.moveState !== null && options.isMove !== true) {
+            throw buildMovingError(imp.name);
           }
 
           return action(imp);

@@ -86,6 +86,10 @@ export function createImpPresenter(
       api.error = imp.error;
     }
 
+    if (imp.moveState !== null) {
+      api.move = imp.moveState;
+    }
+
     const diskUsage = context.readDiskUsage(imp.id);
 
     if (diskUsage !== undefined) {

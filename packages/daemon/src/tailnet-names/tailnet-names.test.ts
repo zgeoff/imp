@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
-import { findImpByName } from '../db/imps';
+import { updateImpMove } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { deriveSlotAddress } from '../net/addressing';
+import { createPresenceCheck } from './build-tailnet-names';
 import { listServeEntries } from './service-serve';
 import type { ServiceServe } from './service-serve';
 import type { ServicesApi, TailnetService } from './services-api';
@@ -114,7 +115,7 @@ async function setupNames(hostId = HOST) {
       api: fake.api,
       serve: serve.serve,
       findPort: (slot) => deriveSlotAddress(slot, ctx.config).tailnetPort,
-      isImpPresent: async (name) => (await findImpByName(ctx.db, name)) !== undefined,
+      isImpPresent: createPresenceCheck(ctx.imps, ctx.db),
       readSuffix: () => Promise.resolve('tail1234.ts.net'),
       log: (line) => {
         logs.push(line);
@@ -229,6 +230,30 @@ test('a destroyed imp’s service is cleared, then deleted; others stay', async 
   ]);
 
   expect(ctx.names.readStatus()).toEqual({ live: 0, failed: [] });
+});
+
+test('a moving imp keeps its service until the target holds a verified copy', async () => {
+  await using ctx = await setupNames();
+
+  const imp = await ctx.imps.createImp({ name: 'box' });
+
+  await ctx.names.runSync();
+
+  await updateImpMove(ctx.db, imp.id, 'sending');
+
+  ctx.fake.calls.length = 0;
+
+  await ctx.names.runSync();
+
+  const whileSending = [...ctx.fake.calls];
+
+  await updateImpMove(ctx.db, imp.id, 'moved');
+
+  await ctx.names.runSync();
+
+  expect(whileSending).toEqual(['list']);
+  expect(ctx.fake.calls.slice(1)).toEqual(['list', 'clear svc:box', 'delete svc:box']);
+  expect(ctx.fake.services.has('svc:box')).toBe(false);
 });
 
 test('a second host never removes the first one’s services', async () => {

@@ -326,6 +326,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     },
     dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options)),
     resolveImpPaths,
+    findCheckpointFile: buildCheckpointDisk,
 
     createImage,
 

@@ -268,6 +268,31 @@ export function createFakeImpd(): FakeImpd {
       }),
     },
 
+    // the dashboard has no moves
+    moves: {
+      prepare: os.moves.prepare.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      receive: os.moves.receive.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      send: os.moves.send.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      status: os.moves.status.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      reissue: os.moves.reissue.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      resume: os.moves.resume.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      abort: os.moves.abort.handler(() => {
+        throw new Error('not in the fake');
+      }),
+    },
+
     // the dashboard shows no services yet
     services: {
       list: os.services.list.handler(() => ({ services: [], recorded: true })),

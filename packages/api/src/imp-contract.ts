@@ -17,6 +17,7 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
+import { MovePlanSchema, MoveStatusSchema, MoveTicketSchema, PeerUrlSchema } from './move-schema';
 import { NameSchema } from './name-schema';
 import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
 import {
@@ -215,6 +216,43 @@ export const impContract = {
     list: base
       .input(z.object({ name: NameSchema.optional(), label: LeaseLabelSchema.optional() }))
       .output(z.array(LeaseSchema)),
+  },
+
+  // moves between hosts (docs/guides/hosts.md#moves); each is a call on
+  // one host, and the CLI runs them in turn
+  moves: {
+    // the source: marks the imp `sending` (it must be stopped; `stop` stops
+    // it first) and counts what a send would carry
+    prepare: base
+      .input(z.object({ name: NameSchema, stop: z.boolean().optional() }))
+      .output(MovePlanSchema),
+
+    // the target: a ticket for one stream of `bytes` bytes into imp `name`
+    receive: base
+      .input(z.object({ name: NameSchema, bytes: z.int().nonnegative() }))
+      .output(MoveTicketSchema),
+
+    // the source: sends the imp to `to` with the target's ticket, in the
+    // background; `status` follows it
+    send: base
+      .input(z.object({ name: NameSchema, to: PeerUrlSchema, ticket: z.string() }))
+      .output(MoveStatusSchema),
+
+    status: base.input(z.object({ name: NameSchema })).output(MoveStatusSchema),
+
+    // the target: a fresh commit ticket for an imp it holds `receiving`,
+    // for a source whose ticket ran out
+    reissue: base.input(z.object({ name: NameSchema })).output(MoveTicketSchema),
+
+    // the source: finishes a move a crash or a lost commit cut short, with a
+    // reissued ticket when the old one ran out
+    resume: base
+      .input(z.object({ name: NameSchema, ticket: z.string().optional() }))
+      .output(MoveStatusSchema),
+
+    // the source: undoes a move the target has not committed; the target's
+    // copy goes first. Refused once the target has committed.
+    abort: base.input(z.object({ name: NameSchema })).output(MoveStatusSchema),
   },
 
   checkpoints: {

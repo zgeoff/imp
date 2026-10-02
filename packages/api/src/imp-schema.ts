@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { PublicAuthSchema } from './exposure-schema';
 import { LeaseSummarySchema } from './lease-schema';
+import { MoveStateSchema } from './move-schema';
 import { NameSchema } from './name-schema';
 
 export const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stopped', 'error']);
@@ -110,6 +111,10 @@ export const ImpSchema = z.object({
   // the cgroup cpu.weight; left out by an impd from before CPU limits
   cpu: z.object({ limit: z.number().positive().nullable(), weight: z.int() }).optional(),
   resources: ImpResourcesSchema.optional(),
+
+  // set while the imp moves to or from another host; nothing wakes or
+  // changes it then
+  move: MoveStateSchema.optional(),
 });
 
 export type Imp = z.infer<typeof ImpSchema>;

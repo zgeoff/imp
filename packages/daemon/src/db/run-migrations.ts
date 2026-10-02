@@ -327,6 +327,39 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // moves between hosts (docs/guides/hosts.md#moves)
+  '014_add_moves': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('imps').addColumn('move_state', 'text').execute();
+
+      await db.schema
+        .createTable('move_tickets')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('secret_sha256', 'text', (c) => c.notNull().unique())
+        .addColumn('name', 'text', (c) => c.notNull())
+        .addColumn('bytes', 'integer', (c) => c.notNull())
+        .addColumn('imp_id', 'text')
+        .addColumn('issued_at', 'integer', (c) => c.notNull())
+        .addColumn('stream_by', 'integer', (c) => c.notNull())
+        .addColumn('stream_used_at', 'integer')
+        .addColumn('receipt', 'text')
+        .addColumn('commit_until', 'integer')
+        .addColumn('committed_at', 'integer')
+        .execute();
+
+      await db.schema
+        .createTable('move_sends')
+        .addColumn('imp_id', 'text', (c) => c.primaryKey())
+        .addColumn('peer_url', 'text')
+        .addColumn('ticket', 'text')
+        .addColumn('total_bytes', 'integer', (c) => c.notNull())
+        .addColumn('receipt', 'text')
+        .addColumn('error', 'text')
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

@@ -21,6 +21,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   proxy, the credential broker's port and the URLs.
 - [Host contract](./architecture/host-contract.md): what the host under the container must give, the
   two installers, the RAM budget, and who owns the host firewall.
+- [Moves](./architecture/moves.md): a move between hosts: the steps, the stream, the tickets, the
+  fence that keeps one host's copy live, and recovery.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
 
@@ -52,6 +54,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [Copying files](./guides/cp.md): `imp cp` into and out of an imp, what a copy keeps, how it works,
   and its safety rules.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
+- [More than one host](./guides/hosts.md): `imp move`, what a move keeps, the URLs, tickets,
+  failures and limits.
 - [Tokens and identities](./guides/tokens.md): scopes, imp patterns, `imp token`, and tailnet
   identity.
 - [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the

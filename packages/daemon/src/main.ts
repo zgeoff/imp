@@ -26,6 +26,8 @@ import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
+import { MOVE_PART_BYTES } from './moves/move-parts';
+import { createMoveService } from './moves/move-service';
 import {
   checkHostRules6,
   readIpv6DefaultRoute,
@@ -310,6 +312,33 @@ async function main(): Promise<void> {
 
   namesHolder.names = tailnetNames;
 
+  const moves = createMoveService({
+    config,
+    db,
+    dataDir: config.dataDir,
+    storage,
+    storageGate,
+    diskBudget,
+    imps,
+    grants: broker,
+    egress,
+    readTailnetIp: async () => {
+      const status = await readTailscale();
+
+      return status.ip;
+    },
+    releaseName: async () => {
+      await tailnetNames?.runSync();
+    },
+    onCommitted: () => {
+      void tailnetNames?.runSync();
+    },
+    now: Date.now,
+    log: printLog,
+  });
+
+  await moves.recover();
+
   const api = buildApp({
     config,
     db,
@@ -341,13 +370,14 @@ async function main(): Promise<void> {
     log: printLog,
     audit,
     buildContexts: createBuildContextRoute({ config, images, diskBudget, audit, now: Date.now }),
+    moves,
   });
 
   // Bun refuses a larger body before any route sees it; the slack leaves the
   // build route room to answer 413 itself
   const app = api.app.listen({
     port: config.apiPort,
-    maxRequestBodySize: config.buildContextMaxBytes + BODY_SLACK_BYTES,
+    maxRequestBodySize: Math.max(config.buildContextMaxBytes, MOVE_PART_BYTES) + BODY_SLACK_BYTES,
   });
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);

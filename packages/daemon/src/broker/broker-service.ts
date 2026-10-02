@@ -2,7 +2,7 @@ import type { Socket } from 'node:net';
 import { join } from 'node:path';
 import type { AuditEntry, BrokerRule, Secret, SecretKind } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { buildConflictError, buildNotFoundError } from '../api-errors';
+import { buildConflictError, buildMovingError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';
 import { listAuditEntries, writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';
@@ -377,6 +377,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     addGrant: async (impName, secretName) => {
       const imp = await requireImp(impName);
+
+      // a send carries the grants it read at its start; a target's staged
+      // imp takes the ones the stream named
+      if (imp.moveState === 'sending' || imp.moveState === 'moved') {
+        throw buildMovingError(impName);
+      }
+
       const secret = await requireSecret(secretName);
 
       await requireNoClash(imp, secret.name, secret.rules);
@@ -385,6 +392,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
     removeGrant: async (impName, secretName) => {
       const imp = await requireImp(impName);
+
+      if (imp.moveState !== null) {
+        throw buildMovingError(impName);
+      }
 
       if (!(await removeGrant(db, imp.id, secretName))) {
         throw buildNotFoundError('grant', `${impName}/${secretName}`);
