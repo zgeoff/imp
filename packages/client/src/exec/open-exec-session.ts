@@ -1,13 +1,14 @@
 import {
   EXEC_CHANNELS,
   EXEC_PATH,
+  EXEC_TICKET_PARAM,
   ExecServerMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
 import type { ExecClientMessage } from '@imp/api';
+import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkImpdAccess } from './check-impd-access';
-import { buildImpdUrl } from './impd-url';
 
 interface ExecStart {
   readonly name: string;
@@ -38,6 +39,9 @@ export type ExecOutcome =
 export interface ExecSessionOptions {
   readonly baseUrl: string;
   readonly token: string | null;
+
+  // from `exec.ticket`, for a socket that cannot send the bearer header
+  readonly ticket?: string;
   readonly start: ExecStart;
   readonly onStarted: (pid: number) => void;
   readonly onOutput: (channel: 'stdout' | 'stderr', data: Uint8Array) => void;
@@ -45,6 +49,9 @@ export interface ExecSessionOptions {
   // a browser WebSocket takes no headers (it uses an exec ticket), so the
   // runtime that opens the socket is the caller's choice
   readonly connect: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
+
+  // for the check that tells a rejected token from an unreachable impd
+  readonly fetch?: (request: Request) => Promise<Response>;
 }
 
 export interface ExecSession {
@@ -79,9 +86,13 @@ class BadMessageError extends Error {
 // no stdio and nothing Bun-only: the caller wires the socket, output, stdin
 // and signals, and maps the outcome to messages and an exit code.
 export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSession {
-  const url = buildImpdUrl(options.baseUrl, EXEC_PATH);
+  const url = resolveImpdUrl(options.baseUrl, EXEC_PATH);
 
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+
+  if (options.ticket !== undefined) {
+    url.searchParams.set(EXEC_TICKET_PARAM, options.ticket);
+  }
 
   const headers: Record<string, string> =
     options.token === null ? {} : { authorization: `Bearer ${options.token}` };
@@ -212,7 +223,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   // Bun reports a refused upgrade (a 401 among others) as an error and a
   // close with no HTTP status, so a close before `open` asks impd why
   const resolveRefusal = async (reason: string): Promise<void> => {
-    const access = await checkImpdAccess(options.baseUrl, options.token);
+    const access = await checkImpdAccess(options.baseUrl, options.token, options.fetch);
 
     if (access === 'unauthorized') {
       resolveOutcome({ kind: 'unauthorized' });

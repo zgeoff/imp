@@ -1,19 +1,11 @@
-import type { ImpContract } from '@imp/api';
-import { createORPCClient } from '@orpc/client';
-import { RPCLink } from '@orpc/client/fetch';
-import type { ContractRouterClient } from '@orpc/contract';
+import { createImpClient as createClient } from '@zgeoff/imp-client';
+import type { ImpClient } from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
-import { buildImpdUrl } from './impd-url';
 
-export type ImpClient = ContractRouterClient<ImpContract>;
+export type { ImpClient } from '@zgeoff/imp-client';
 
 export function createImpClient(): ImpClient {
   const config = loadCliConfig(process.env);
 
-  const link = new RPCLink({
-    url: buildImpdUrl(config.url, '/rpc').href,
-    headers: config.token === null ? {} : { authorization: `Bearer ${config.token}` },
-  });
-
-  return createORPCClient(link);
+  return createClient({ url: config.url, ...(config.token !== null && { token: config.token }) });
 }

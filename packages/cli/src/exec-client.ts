@@ -1,9 +1,9 @@
 import { writeSync } from 'node:fs';
 import { constants } from 'node:os';
 import type { Readable } from 'node:stream';
+import { openExecSession } from '@zgeoff/imp-client';
+import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
-import { openExecSession } from './exec-session';
-import type { ExecOutcome, ExecSessionOptions } from './exec-session';
 import { TOKEN_HINT } from './run-action';
 import { UsageError } from './usage-error';
 
