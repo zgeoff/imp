@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.4.0](https://github.com/zgeoff/imp/compare/v0.3.0...v0.4.0) (2026-10-02)
+
+### Features
+
+- **cli:** add imp events and imp audit --kind api ([#38](https://github.com/zgeoff/imp/issues/38))
+  ([d740737](https://github.com/zgeoff/imp/commit/d7407372dbb4ff39f7411c2a8807f465bcc51a0f))
+- **cli:** imp proxy forwards local ports into an imp
+  ([8e98e4c](https://github.com/zgeoff/imp/commit/8e98e4c560d12bc6a9487dbc5a4fcc4fbd7d58c4)), closes
+  [#25](https://github.com/zgeoff/imp/issues/25)
+- **cli:** imp proxy forwards local ports into an imp
+  ([#25](https://github.com/zgeoff/imp/issues/25))
+  ([2f020f9](https://github.com/zgeoff/imp/commit/2f020f9df167f2ed7db6a940296297e61c33da67))
+- **daemon:** export opentelemetry metrics and spans when asked
+  ([#38](https://github.com/zgeoff/imp/issues/38))
+  ([a0699ac](https://github.com/zgeoff/imp/commit/a0699acadf1ce185f06940a5748b6229b14aed2f))
+- **daemon:** stream imp lifecycle events and audit api calls
+  ([#38](https://github.com/zgeoff/imp/issues/38))
+  ([1f84fbc](https://github.com/zgeoff/imp/commit/1f84fbcc39402e0bab78039fbfbf6872fc5a4ed6))
+- **dashboard:** follow impd's event stream in place of a 2 s poll
+  ([#38](https://github.com/zgeoff/imp/issues/38))
+  ([bd35934](https://github.com/zgeoff/imp/commit/bd3593448eccb67ea933a137fbcfcfc86f06d013))
+- stream imp events, audit api calls and export metrics
+  ([1072ade](https://github.com/zgeoff/imp/commit/1072adec1cea5914b21cc216193ffa712b5df175)), closes
+  [#38](https://github.com/zgeoff/imp/issues/38)
+
+### Bug Fixes
+
+- **cli:** proxy close codes, bad json, port hints and retries
+  ([#25](https://github.com/zgeoff/imp/issues/25))
+  ([5859d87](https://github.com/zgeoff/imp/commit/5859d87c08b228221c04f9cace689bec741d8f1c))
+- **daemon:** close a tunnel that passes its window ([#25](https://github.com/zgeoff/imp/issues/25))
+  ([990949d](https://github.com/zgeoff/imp/commit/990949dcbf195787d4f71fbb789a84c6ed644a56))
+- **daemon:** count the tunnel cap by imp id, not name
+  ([#25](https://github.com/zgeoff/imp/issues/25))
+  ([74cefa2](https://github.com/zgeoff/imp/commit/74cefa2c6a8d9240f1e9dd78ea5d3cc9f9db89cc))
+
 ## [0.3.0](https://github.com/zgeoff/imp/compare/v0.2.2...v0.3.0) (2026-10-02)
 
 ### Features
