@@ -320,6 +320,15 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # test/host/ as root: the real nft and iptables in fresh namespaces,
+      # packets between veth pairs included. Plain `bun test` skips them on
+      # runners that restrict unprivileged namespaces; here a skip fails.
+      - name: Host networking tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nftables
+          sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun test test/host/
+
       - name: Build kernel, system drive and host image
         uses: ./.github/actions/e2e-build
         with:
