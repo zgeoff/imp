@@ -222,11 +222,13 @@ function openTunnel(socket: Socket, target: TunnelTarget, notices: TunnelNotices
       if (state.unacked <= TUNNEL_WINDOW_BYTES && state.opened) {
         socket.resume();
       }
-    } else {
+    } else if (message.type === 'error') {
       state.reported = true;
 
       notices.writeNotice(`${label}: ${message.code ?? 'error'}: ${message.message}`);
       socket.destroy();
+    } else {
+      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
     }
   };
 

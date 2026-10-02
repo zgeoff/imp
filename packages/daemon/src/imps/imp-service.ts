@@ -25,7 +25,10 @@ export type { ImpServiceDeps } from './imp-context';
 // The imp API: what the router and the exec and tunnel endpoints call.
 export type ImpService = ImpCommands &
   SessionService &
-  Pick<ImpRuntime, 'openExec' | 'openAttach' | 'openDial' | 'recordActivity'> & {
+  Pick<
+    ImpRuntime,
+    'openExec' | 'openAttach' | 'openDial' | 'openListener' | 'openAccept' | 'recordActivity'
+  > & {
     // sessions impd last saw in the imp; undefined when it has not seen any
     readonly countSessions: (imp: ImpRecord) => number | undefined;
     readonly readBootStatus: (imp: ImpRecord) => BootStatus;
