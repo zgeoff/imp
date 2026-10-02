@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/zgeoff/imp/compare/v0.6.0...v0.7.0) (2026-10-02)
+
+### Features
+
+- **security:** egress policy per imp
+  ([e4ab5ab](https://github.com/zgeoff/imp/commit/e4ab5ab493708681e1a9945c6acffd82bf3e1435)), closes
+  [#26](https://github.com/zgeoff/imp/issues/26)
+
+### Bug Fixes
+
+- **daemon:** serialize slot changes with policy rollbacks
+  ([#26](https://github.com/zgeoff/imp/issues/26))
+  ([70bd00a](https://github.com/zgeoff/imp/commit/70bd00a17312b67380ce85e4ef6fb77e8395b4f1))
+
 ## [0.6.0](https://github.com/zgeoff/imp/compare/v0.5.0...v0.6.0) (2026-10-02)
 
 ### Features
