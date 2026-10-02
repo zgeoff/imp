@@ -31,11 +31,15 @@ async function setupRestoreTest() {
   return { ...harness, client: app.client, templates, waitForTemplate };
 }
 
-test('the first boot of a shape boots the kernel; the next restores its template', async () => {
+test('the second boot of a shape builds its template; the next restores it', async () => {
   await using ctx = await setupRestoreTest();
 
+  await ctx.client.imps.create({ name: 'once' });
+
+  expect(ctx.fake.templateBuilds).toEqual([]);
+
   await ctx.client.imps.create({ name: 'first' });
-  await ctx.waitForTemplate();
+  await ctx.imps.bootTemplates?.stop();
   await ctx.client.imps.create({ name: 'second' });
 
   const key = buildTemplateKey(ctx.readIdentity(), SHAPE);
@@ -43,7 +47,7 @@ test('the first boot of a shape boots the kernel; the next restores its template
   const second = await findImpByName(ctx.db, 'second');
 
   expect(ctx.fake.templateBuilds).toEqual([SHAPE]);
-  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first']);
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['once', 'first']);
 
   expect(ctx.fake.restores).toEqual([
     {
@@ -66,7 +70,7 @@ test('the first boot of a shape boots the kernel; the next restores its template
   expect(broken).toEqual([]);
 });
 
-test('a template that fails to restore goes, and the imp boots the kernel', async () => {
+test('a restore that fails in the template removes it; the imp boots the kernel', async () => {
   await using ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
@@ -84,12 +88,23 @@ test('a template that fails to restore goes, and the imp boots the kernel', asyn
   const failedLog = ctx.logs.find((line) => line.includes('failed, booting the kernel'));
 
   expect(failedLog).toContain(key.slice(0, 12));
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).not.toContain(key);
+});
 
-  // the miss behind the discard built it again
+test('a restore that fails after the claim keeps the template for the next imp', async () => {
+  await using ctx = await setupRestoreTest();
+
+  await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
 
-  expect(ctx.fake.templateBuilds).toHaveLength(2);
-  expect(readdirSync(join(ctx.dataDir, 'templates'))).toContain(key);
+  ctx.fake.queue('claim', 'fail');
+
+  await ctx.client.imps.create({ name: 'second' });
+  await ctx.client.imps.create({ name: 'third' });
+
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first', 'second']);
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['third']);
+  expect(ctx.fake.templateBuilds).toHaveLength(1);
 });
 
 test('a restore claims the identity reset an imp owes, and a done reset clears it', async () => {
@@ -111,6 +126,8 @@ test('a shape with no template yet never waits for its build', async () => {
   await using ctx = await setupRestoreTest();
 
   const held = ctx.fake.hold('template');
+
+  await ctx.client.imps.create({ name: 'once' });
 
   const created = await ctx.client.imps.create({ name: 'first' });
 

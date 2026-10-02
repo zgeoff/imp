@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
-import { runImp, runInImp, runShellInImp } from '../lib/imp-cli';
+import { requireImp, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
 import { readImpdLogTail, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -21,6 +21,7 @@ const GIB_KIB = 1024 * 1024;
 const first = `${prefix}a`;
 const second = `${prefix}b`;
 const third = `${prefix}c`;
+const spare = `${prefix}x`;
 
 // two guests that share the kernel's net_secret print values within a few
 // hundred of each other; isn-probe's own noise is well under this
@@ -52,8 +53,12 @@ async function readMac(name: string): Promise<string> {
   return stdout.trim();
 }
 
-test('the first boot of a shape makes its template; later boots restore it', async () => {
+test('the second boot of a shape makes its template; later boots restore it', async () => {
   await createShaped(first);
+
+  // the second miss of the key starts the build
+  await createShaped(spare);
+  await removeImps(spare);
 
   await waitFor(
     'the boot template of the shape',
@@ -76,6 +81,16 @@ test('the first boot of a shape makes its template; later boots restore it', asy
 
   expect(log).toContain(`${second}: restored boot template`);
   expect(log).toContain(`${third}: restored boot template`);
+
+  // the guest's own word that the claim reseeded its CRNG
+  const found = await requireImp(second);
+
+  const consoleLog = await runInContainer([
+    'cat',
+    `/var/lib/imp/imps/${found.id}/run/firecracker.log`,
+  ]);
+
+  expect(consoleLog.stdout).toContain('stage1: claim: crng reseeded from a 64-byte seed');
 });
 
 test('a restored imp has its own name, MAC, address and disk size', async () => {

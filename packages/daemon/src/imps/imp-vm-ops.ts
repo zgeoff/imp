@@ -26,6 +26,7 @@ import {
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import type { VmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import { TemplateRestoreError } from '../vmm/template-vm';
 import type { StartedVm } from '../vmm/vm-runner';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
@@ -140,7 +141,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
   // A cold boot: a restore of the shape's boot template when one is ready,
   // else the kernel's boot. A template that fails to restore goes, and the
-  // imp boots the kernel (docs/architecture/boot-templates.md#claim).
+  // imp boots the kernel (docs/architecture/boot-templates.md#restore).
   const startColdVm = async (
     imp: LockedImp,
     paths: ImpPaths,
@@ -169,10 +170,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
             gw6: address.guestIp6 === null ? null : GATEWAY_IP6,
             dns: context.config.dns,
             mac: address.guestMac,
+            diskBytes: statSync(paths.disk).size,
             seed: randomBytes(CLAIM_SEED_BYTES),
             isIdentityReset: imp.isIdentityResetPending,
           },
         });
+
+        context.templates?.reportRestored(template);
 
         context.log(
           `impd: ${imp.name}: restored boot template ${template.key.slice(0, 12)} as pid ${String(vm.pid)} ${formatTimings({ ...hostSteps, ...vm.timings })}`,
@@ -184,7 +188,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
           `impd: ${imp.name}: boot template ${template.key.slice(0, 12)} failed, booting the kernel: ${readErrorMessage(error)}`,
         );
 
-        context.templates?.discard(template.key);
+        // a failure of the imp's own (its disk, its claim) leaves the template
+        const isTemplateFault = error instanceof TemplateRestoreError && error.isTemplateFault;
+
+        context.templates?.reportFailure(template, isTemplateFault);
       }
     }
 

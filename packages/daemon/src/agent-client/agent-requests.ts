@@ -119,6 +119,9 @@ export interface Claim {
   readonly gw6: string | null;
   readonly dns: readonly string[];
   readonly mac: string;
+
+  // the disk's size as the host made it: stage 1 waits for the guest to see it
+  readonly diskBytes: number;
   readonly unixMs: number;
   readonly seed: Uint8Array;
   readonly isIdentityReset: boolean;
@@ -138,6 +141,7 @@ export async function sendClaim(vsockPath: string, claim: Readonly<Claim>): Prom
         ...(claim.gw6 !== null && { gw6: claim.gw6 }),
         dns: claim.dns,
         mac: claim.mac,
+        disk_bytes: claim.diskBytes,
         unix_ms: claim.unixMs,
         seed: Buffer.from(claim.seed).toString('base64'),
         reset_identity: claim.isIdentityReset,

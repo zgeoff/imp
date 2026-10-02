@@ -7,7 +7,7 @@ import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
 import { writeToDisk } from '../storage/write-file-durably';
-import { createMarks, setupVm } from './configure-vm';
+import { BASE_BOOT_ARGS, VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import type { InstanceState } from './firecracker-client';
@@ -140,9 +140,7 @@ export interface VmRunner {
 // (docs/architecture/agent.md#two-drives).
 export function buildBootArgs(plan: Readonly<VmPlan>): string {
   return [
-    'console=ttyS0 reboot=k panic=1 pci=off',
-    'i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd',
-    'root=/dev/vdb rootfstype=squashfs ro init=/imp-agent',
+    ...BASE_BOOT_ARGS,
     `imp.id=${plan.impId}`,
     `imp.hostname=${plan.hostname}`,
     `imp.ip=${plan.address.guestIp}/${String(plan.address.prefixLength)}`,
@@ -370,7 +368,11 @@ export function createVmRunner(): VmRunner {
     },
     stopVm,
     growDrive: async (paths, diskBytes) => {
-      await createFirecrackerClient(paths.apiSocket).patchDrive('rootfs', paths.disk);
+      await createFirecrackerClient(paths.apiSocket).patchDrive(
+        VM_DEVICES.drives.rootfs,
+        paths.disk,
+      );
+
       await sendGrow(paths.vsockSocket, diskBytes);
     },
     isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),

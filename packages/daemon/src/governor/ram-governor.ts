@@ -26,6 +26,10 @@ interface AdmissionRequest {
   // the imp's configured memory: a guest that can grow past the whole budget
   // is never admitted
   readonly memoryMib: number;
+
+  // false: admitted only into free room, never by sleeping an imp; for work
+  // no user waits on, such as a boot template's build
+  readonly maySleepImps?: boolean;
 }
 
 interface UsageTotals {
@@ -176,6 +180,24 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     return { awake, byImp, usedMib, effectiveMib };
   };
 
+  // what fits without sleeping anything
+  const readFreeRoom = async (
+    excludeId: string,
+    findMissing: (usage: UsageTotals) => number,
+  ): Promise<RoomOutcome> => {
+    const usage = await readEffectiveUsage(excludeId);
+
+    const missingMib = findMissing(usage);
+
+    return {
+      fits: missingMib <= 0,
+      slept: 0,
+      diskFull: false,
+      missingMib,
+      effectiveMib: usage.effectiveMib,
+    };
+  };
+
   // sleeps LRU imps until `findMissing` reports nothing missing; it gives up
   // when no eligible imp is left awake, or as `whenShort` says. Each pass
   // sleeps an imp or passes one for good, so it ends within 2n passes.
@@ -258,12 +280,13 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
         }
 
-        const room = await makeRoom(
-          request.id,
-          `to make room for ${request.name}`,
-          'giveUp',
-          (usage) => usage.effectiveMib + request.reserveMib - deps.budgetMib,
-        );
+        const findMissing = (usage: UsageTotals) =>
+          usage.effectiveMib + request.reserveMib - deps.budgetMib;
+
+        const room =
+          request.maySleepImps === false
+            ? await readFreeRoom(request.id, findMissing)
+            : await makeRoom(request.id, `to make room for ${request.name}`, 'giveUp', findMissing);
 
         const diskFull = room.diskFull ? (deps.readDiskFullError?.() ?? null) : null;
 

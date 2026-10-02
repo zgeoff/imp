@@ -94,7 +94,7 @@ test('a template load names the imp tap and vsock socket in place of the snapsho
 
     await api.loadSnapshot(files, {
       resumeVm: false,
-      overrides: { hostDevName: 'imp-tap3', vsockPath: '/run/imp/a/vsock.sock' },
+      overrides: { ifaceId: 'eth0', hostDevName: 'imp-tap3', vsockPath: '/run/imp/a/vsock.sock' },
     });
 
     await api.loadSnapshot(files, { resumeVm: true });

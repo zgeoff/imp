@@ -5,7 +5,7 @@ import { waitForAgent } from '../agent-client/wait-for-agent';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
 import { writeToDisk } from '../storage/write-file-durably';
-import { createMarks, setupVm } from './configure-vm';
+import { VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import { readLogTail, startFirecracker, stopProcess, waitForExit } from './firecracker-process';
@@ -122,6 +122,20 @@ export async function buildTemplateVm(plan: Readonly<TemplateBuildPlan>): Promis
   }
 }
 
+// A failed restore. `isTemplateFault` when the step that failed reads only
+// the template: the load, the resume and the parked guest's ping. The
+// patch, the claim and stage 2 also touch the imp's disk and values.
+export class TemplateRestoreError extends Error {
+  readonly isTemplateFault: boolean;
+
+  constructor(message: string, isTemplateFault: boolean, cause: unknown) {
+    super(message, { cause });
+
+    this.name = 'TemplateRestoreError';
+    this.isTemplateFault = isTemplateFault;
+  }
+}
+
 // Loads the template paused, points its rootfs at the imp's disk (the
 // config change is how the guest learns the disk's size), resumes it and
 // claims it. The process is gone when any step fails.
@@ -137,6 +151,8 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
   marks.setMark('spawn');
 
+  const step = { isTemplateFault: true };
+
   try {
     const api = createFirecrackerClient(plan.paths.apiSocket);
 
@@ -144,15 +160,23 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
       { snapshotPath: plan.vmstate, memFilePath: plan.memFile },
       {
         resumeVm: false,
-        overrides: { hostDevName: plan.tap, vsockPath: plan.paths.vsockSocket },
+        overrides: {
+          ifaceId: VM_DEVICES.iface,
+          hostDevName: plan.tap,
+          vsockPath: plan.paths.vsockSocket,
+        },
       },
     );
 
     marks.setMark('load');
 
-    await api.patchDrive('rootfs', plan.diskPath);
+    step.isTemplateFault = false;
+
+    await api.patchDrive(VM_DEVICES.drives.rootfs, plan.diskPath);
 
     marks.setMark('patch');
+
+    step.isTemplateFault = true;
 
     await api.resume();
 
@@ -166,6 +190,8 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
     });
 
     marks.setMark('parked');
+
+    step.isTemplateFault = false;
 
     await sendClaim(plan.paths.vsockSocket, { ...plan.claim, unixMs: Date.now() });
 
@@ -195,9 +221,10 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
     await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
 
-    throw new Error(
+    throw new TemplateRestoreError(
       `template restore failed: ${readErrorMessage(error)}\n${readLogTail(plan.paths.logFile, 5)}`,
-      { cause: error },
+      step.isTemplateFault,
+      error,
     );
   }
 }

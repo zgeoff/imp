@@ -124,9 +124,15 @@ func applyClaim(c proto.Claim) error {
 	}
 	if err := addEntropy(c.Seed); err != nil {
 		errs = append(errs, fmt.Errorf("entropy: %w", err))
+	} else {
+		log.Printf("stage1: claim: crng reseeded from a %d-byte seed", len(c.Seed))
 	}
 	if err := setMAC("eth0", c.MAC); err != nil {
 		errs = append(errs, fmt.Errorf("mac: %w", err))
+	}
+	if err := waitForDiskSize(userDisk, c.DiskBytes, diskSizeTimeout); err != nil {
+		// the grow after the mount sees whatever size the guest has
+		log.Printf("stage1: claim: %v", err)
 	}
 	if err := flushDisk(userDisk); err != nil {
 		errs = append(errs, fmt.Errorf("%s: %w", userDisk, err))
@@ -169,6 +175,41 @@ func setMAC(iface, mac string) error {
 		return err
 	}
 	return netlink.LinkSetHardwareAddr(link, hw)
+}
+
+// diskSizeTimeout bounds the wait for virtio-blk to report the size the
+// restore's PATCH gave the disk.
+const diskSizeTimeout = 2 * time.Second
+
+// waitForDiskSize waits until dev reports at least want bytes; want 0 skips.
+func waitForDiskSize(dev string, want int64, timeout time.Duration) error {
+	if want <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		got, err := readDiskBytes(dev)
+		if err == nil && int64(got) >= want {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s reports %d bytes after %s; want %d (%v)", dev, got, timeout, want, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func readDiskBytes(dev string) (uint64, error) {
+	f, err := os.OpenFile(dev, os.O_RDONLY, 0)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	var size uint64
+	if err := ioctlPtr(f.Fd(), unix.BLKGETSIZE64, unsafe.Pointer(&size)); err != nil {
+		return 0, fmt.Errorf("BLKGETSIZE64: %w", err)
+	}
+	return size, nil
 }
 
 // flushDisk drops the block device's buffers and rereads its partition
