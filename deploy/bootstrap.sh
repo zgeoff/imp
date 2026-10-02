@@ -509,8 +509,11 @@ resolve_storage() {
     env_root=$(sed -n 's/^IMP_ZFS_ROOT=//p' "$ENV_FILE" | tail -n 1)
   fi
   storage=${storage:-${env_storage:-xfs}}
-  if [ -n "$env_storage" ] && [ "$storage" != "$env_storage" ]; then
-    die "$ENV_FILE says IMP_STORAGE_BACKEND=$env_storage; switching backends would leave every imp behind"
+  # The template says xfs, so an env file copied from it says nothing about
+  # where imps live. XFS imps live on the /var/lib/imp mount, which ZFS
+  # refuses below; ZFS imps live in IMP_ZFS_ROOT.
+  if [ "$env_storage" = zfs ] && [ -n "$env_root" ] && [ "$storage" = xfs ]; then
+    die "$ENV_FILE says IMP_STORAGE_BACKEND=zfs on $env_root; switching backends would leave every imp behind"
   fi
   log "storage: $storage"
   [ "$storage" = zfs ] || return 0
