@@ -6,7 +6,7 @@ import { utils } from 'ssh2';
 import { resolveImageName } from '../lib/fixtures';
 import { startGitSshServer } from '../lib/git-ssh-server';
 import type { GitSshServer } from '../lib/git-ssh-server';
-import { requireImp, runImp, runShellInImp } from '../lib/imp-cli';
+import { readInfo, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { createImp } from '../lib/imps';
 import { readContainerGateway, runChecked, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -41,8 +41,8 @@ afterAll(async () => {
 });
 
 // `ssh -A box@imp SCRIPT`, with the agent on this machine
-function runForwarded(script: string, agentSocket = laptop.socket) {
-  return runSsh(client, name, ['-A', script], { env: { SSH_AUTH_SOCK: agentSocket } });
+function runForwarded(script: string) {
+  return runSsh(client, name, ['-A', script], { env: { SSH_AUTH_SOCK: laptop.socket } });
 }
 
 function checkExists(path: string): Promise<string> {
@@ -110,16 +110,48 @@ test('only the image user and root reach the socket', async () => {
   expect(result.stdout).toContain('root=0\n');
 });
 
-test('without an agent on this machine, ssh-add in the imp fails at once', async () => {
-  const result = await runForwarded(
-    'start=$(date +%s); ssh-add -l; echo "code=$? seconds=$(( $(date +%s) - start ))"',
-    join(client.dir, 'no-agent.sock'),
+// OpenSSH asks for forwarding only when it has an agent, so the connection
+// starts with one that then goes away; the guest socket must still be there
+test('when the agent on this machine is gone, ssh-add in the imp fails at once', async () => {
+  const gone = await startLocalSshAgent(client, 'gone');
+
+  const control = join(client.dir, 'control-gone');
+  const env = { SSH_AUTH_SOCK: gone.socket };
+
+  const master = startSsh(
+    client,
+    ['-A', '-M', '-S', control, '-N', `${name}@${SSH_HOST}`],
+    undefined,
+    env,
   );
 
-  const [, code, seconds] = /code=(?<code>\d+) seconds=(?<seconds>\d+)/.exec(result.stdout) ?? [];
+  try {
+    await waitFor('the control socket', () => runChecked(['test', '-S', control]));
 
-  expect(Number(code)).not.toBe(0);
-  expect(Number(seconds)).toBeLessThan(3);
+    await gone[Symbol.asyncDispose]();
+
+    const result = await runCommand(
+      [
+        'ssh',
+        ...client.configArgs,
+        '-A',
+        '-S',
+        control,
+        `${name}@${SSH_HOST}`,
+        'echo "$SSH_AUTH_SOCK"; start=$(date +%s); ssh-add -l; echo "code=$? seconds=$(( $(date +%s) - start ))"',
+      ],
+      { env },
+    );
+
+    const [socket = ''] = result.stdout.split('\n');
+    const [, code, seconds] = /code=(?<code>\d+) seconds=(?<seconds>\d+)/.exec(result.stdout) ?? [];
+
+    expect(socket).toStartWith('/run/imp/ssh-agent/');
+    expect(Number(code)).not.toBe(0);
+    expect(Number(seconds)).toBeLessThan(3);
+  } finally {
+    await master.stop();
+  }
 });
 
 test('the socket goes when the connection ends', async () => {
@@ -227,8 +259,14 @@ test('the key never reaches the imp: not its disk, not its slept memory', async 
 
   const dir = `/var/lib/imp/imps/${imp.id}`;
 
+  const info = await readInfo();
+
+  // the disk is a file on both backends: disk.ext4 on XFS, and on ZFS the
+  // one file in the imp's mounted disk dataset (storage/data-layout.ts)
+  const disk = info.storage.backend === 'zfs' ? `${dir}/disk/rootfs.ext4` : `${dir}/disk.ext4`;
+
   const inMemory = await countMatches(`${dir}/snapshot/mem`, patterns, 'Linux version');
-  const onDisk = await countMatches(`${dir}/disk.ext4`, patterns, 'dev:x:1000:');
+  const onDisk = await countMatches(disk, patterns, 'dev:x:1000:');
 
   const none = { control: true, text: '0', seed: '0' };
 

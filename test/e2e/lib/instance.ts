@@ -96,9 +96,9 @@ export function runInContainer(argv: readonly string[]): Promise<CommandResult> 
   return runCommand(['docker', 'exec', instance.container, ...argv]);
 }
 
-// The container's default gateway: this machine as the container sees it.
-// The broker dials it, and guests reach it through the host container's
-// FORWARD and MASQUERADE rules, as they reach any address outside.
+// This machine as the container sees it. Guests reach it through FORWARD
+// and MASQUERADE: #26's egress policies must keep that route open, or the
+// ssh-agent suite cannot reach its git server.
 export async function readContainerGateway(): Promise<string> {
   const route = await runInContainer(['ip', '-4', 'route', 'show', 'default']);
 

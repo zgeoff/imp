@@ -134,18 +134,24 @@ export interface LocalSshAgent extends AsyncDisposable {
   readonly keyPath: string;
 }
 
-export async function startLocalSshAgent(client: SshClient): Promise<LocalSshAgent> {
-  const socket = join(client.dir, 'agent.sock');
-  const keyPath = join(client.dir, 'laptop');
+// The shell runs the agent until its stdin closes: when the suite's process
+// ends, even without afterAll, the pipe closes and the agent goes with it.
+const AGENT_WRAPPER = 'ssh-agent -D -a "$1" & agent=$!; cat >/dev/null; kill "$agent"';
 
-  const publicKey = await createKey(keyPath, 'imp-e2e-laptop');
+// `label` names the socket, the key file and the key's comment
+export async function startLocalSshAgent(
+  client: SshClient,
+  label = 'laptop',
+): Promise<LocalSshAgent> {
+  const socket = join(client.dir, `${label}.sock`);
+  const keyPath = join(client.dir, `${label}-key`);
 
-  // -D: in the foreground, so the suite owns the process
-  const agent = Bun.spawn(['ssh-agent', '-D', '-a', socket], { stdout: 'ignore', stderr: 'pipe' });
+  const publicKey = await createKey(keyPath, `imp-e2e-${label}`);
 
-  // a run that bails skips afterAll; the agent still goes with the process
-  process.once('exit', () => {
-    agent.kill();
+  const agent = Bun.spawn(['sh', '-c', AGENT_WRAPPER, 'sh', socket], {
+    stdin: 'pipe',
+    stdout: 'ignore',
+    stderr: 'ignore',
   });
 
   await waitForSocket(socket);
@@ -156,7 +162,7 @@ export async function startLocalSshAgent(client: SshClient): Promise<LocalSshAge
     publicKey,
     keyPath,
     [Symbol.asyncDispose]: async () => {
-      agent.kill();
+      await agent.stdin.end();
 
       await agent.exited;
     },
