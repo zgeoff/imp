@@ -4,49 +4,55 @@ name: Release
 # and the CLI binaries, the guest kernel, the system drive and SHA256SUMS to
 # the GitHub release.
 #
-# - Called by ci.yml with the tag release-please just created.
+# - Started by ci.yml's release-please job with the tag it just created.
 # - Run by hand with a tag to republish an existing release. Every step is
 #   safe to repeat: assets upload with --clobber, and `latest` moves only
 #   when the tag is the newest release.
 # - Run by hand with no tag for a dry run of the current commit: it builds,
 #   checks, pushes imp-host:dryrun-<sha> and attests it, but uploads nothing
 #   to a release and leaves `latest` alone.
+#
+# Nothing is pushed until every CLI binary has passed on its own platform.
 on:
-  workflow_call:
-    inputs:
-      tag:
-        description: Release tag (vX.Y.Z) to build and publish
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (vX.Y.Z) to republish; empty for a dry run
+        description: Release tag (vX.Y.Z) to build and publish; empty for a dry run
         required: false
         type: string
         default: ''
 
 permissions: {}
 
+# one run per release; a second run for the same tag waits for the first
+concurrency:
+  group: release-${{ inputs.tag || github.sha }}
+  cancel-in-progress: false
+
 env:
   LEFTHOOK: 0
   IMAGE: ghcr.io/${{ github.repository_owner }}/imp-host
 
 jobs:
-  # Builds the assets and the image in one job, on one builder, so the guest
-  # kernel builds once and the image's copy of it can be checked against the
-  # asset. The gha cache keeps the kernel layer for the next release.
-  build:
+  assets:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
-      packages: write
-      attestations: write
-      id-token: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      push_tag: ${{ steps.version.outputs.push_tag }}
     steps:
+      - name: Check tag
+        if: inputs.tag != ''
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag $TAG is not vX.Y.Z" >&2
+            exit 1
+          fi
+
       # a republish builds the tag, never main's head
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -55,18 +61,14 @@ jobs:
           persist-credentials: false
 
       # A release's version is its tag without the v; package.json must agree,
-      # which the image check below enforces. A dry run takes package.json's
-      # version and pushes under a tag of its own.
+      # which the image check enforces. A dry run takes package.json's version
+      # and pushes under a tag of its own.
       - name: Version
         id: version
         env:
           TAG: ${{ inputs.tag }}
         run: |
           if [ -n "$TAG" ]; then
-            if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "tag $TAG is not vX.Y.Z" >&2
-              exit 1
-            fi
             version=${TAG#v}
             push_tag=$version
           else
@@ -92,23 +94,12 @@ jobs:
       - name: Expose GitHub runtime
         uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
 
+      # mode=max keeps the kernel layer, for the image job and the next
+      # release
       - name: Build assets
-        run: scripts/build-release-assets.sh --cache-from type=gha,scope=imp-host
-
-      # Loads into the runner's docker, so the image checked is the image
-      # pushed. mode=max caches every stage, the kernel included.
-      - name: Build image
-        env:
-          IMP_VERSION: ${{ steps.version.outputs.version }}
-          IMP_RELEASE_IMAGE: ${{ env.IMAGE }}
         run: >-
-          host/build-release.sh --cache-from type=gha,scope=imp-host --cache-to
-          type=gha,scope=imp-host,mode=max
-
-      - name: Check image
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: host/check-release-image.sh "$IMAGE:$VERSION" "$VERSION" dist/SHA256SUMS
+          scripts/build-release-assets.sh --cache-from type=gha,scope=system-files --cache-to
+          type=gha,scope=system-files,mode=max
 
       - name: Upload assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -118,43 +109,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      # The digest comes from the registry, after the push, so the
-      # attestation names exactly what was pushed.
-      - name: Push image
-        id: push
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          PUSH_TAG: ${{ steps.version.outputs.push_tag }}
-        run: |
-          if [ "$PUSH_TAG" != "$VERSION" ]; then
-            docker tag "$IMAGE:$VERSION" "$IMAGE:$PUSH_TAG"
-          fi
-          docker push "$IMAGE:$PUSH_TAG"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$PUSH_TAG")
-          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
-
-      - name: Attest image
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
-      - name: Attest assets
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-checksums: dist/SHA256SUMS
-
-  # Each CLI binary runs on its own platform; the build cross-compiled them.
+  # Each CLI binary runs on its own platform; the assets job cross-compiled
+  # them.
   smoke:
-    needs: build
+    needs: assets
     strategy:
       fail-fast: false
       matrix:
@@ -180,7 +138,7 @@ jobs:
       - name: Check the binary and its checksum
         env:
           BIN: imp-${{ matrix.target }}
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.assets.outputs.version }}
         run: |
           cd dist
           grep "  $BIN\$" SHA256SUMS | shasum -a 256 -c -
@@ -191,8 +149,88 @@ jobs:
             exit 1
           fi
 
+  # Builds the image from the same commit, with the kernel and the drive from
+  # the assets job's cache, then checks the image's copies against
+  # SHA256SUMS before anything is pushed.
+  image:
+    needs: [assets, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          persist-credentials: false
+
+      - name: Download assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Expose GitHub runtime
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+
+      # Loads into the runner's docker, so the image checked is the image
+      # pushed.
+      - name: Build image
+        env:
+          IMP_VERSION: ${{ needs.assets.outputs.version }}
+          IMP_RELEASE_IMAGE: ${{ env.IMAGE }}
+        run: >-
+          host/build-release.sh --cache-from type=gha,scope=system-files --cache-from
+          type=gha,scope=imp-host --cache-to type=gha,scope=imp-host,mode=max
+
+      - name: Check image
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+        run: host/check-release-image.sh "$IMAGE:$VERSION" "$VERSION" dist/SHA256SUMS
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # The digest comes from the registry, after the push, so the
+      # attestation names exactly what was pushed.
+      - name: Push image
+        id: push
+        env:
+          VERSION: ${{ needs.assets.outputs.version }}
+          PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+        run: |
+          if [ "$PUSH_TAG" != "$VERSION" ]; then
+            docker tag "$IMAGE:$VERSION" "$IMAGE:$PUSH_TAG"
+          fi
+          docker push "$IMAGE:$PUSH_TAG"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$PUSH_TAG" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
   publish:
-    needs: [build, smoke]
+    needs: [assets, image]
     if: inputs.tag != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -227,7 +265,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-          VERSION: ${{ needs.build.outputs.version }}
+          VERSION: ${{ needs.assets.outputs.version }}
         run: |
           newest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
           if [ "$TAG" != "$newest" ]; then
