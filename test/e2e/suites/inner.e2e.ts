@@ -319,6 +319,98 @@ test('imp cp works with the system drive unmounted inside', async () => {
   expect(readFileSync(join(local, 'copied'), 'utf8').trim()).toBe('through-the-agent-fd');
 });
 
+// a token the suite makes, and removes once the test ends
+async function withToken<T>(
+  args: readonly string[],
+  use: (secret: string) => Promise<T>,
+): Promise<T> {
+  const token = `${prefix}t`;
+
+  await tryImp(['token', 'rm', token]);
+
+  const made = await runImp('token', 'new', token, ...args);
+
+  const secret = made.trim();
+
+  try {
+    return await use(secret);
+  } finally {
+    await tryImp(['token', 'rm', token]);
+  }
+}
+
+// docs/architecture/agent.md#outer-exec
+test('exec --agent runs a shell as root outside the container, for host-wide manage only', async () => {
+  const events = await startImp(['events', name]);
+
+  const sink: TextSink = { text: '' };
+  const collecting = collectText(events.stdout, sink);
+
+  try {
+    // the shell computes the line, so the terminal's echo of the input
+    // does not match it
+    const shell = await tryImp(['exec', '--agent', '-t', name, '--', 'sh'], {
+      stdin: 'echo outer-$((20 + 22)) $(id -u) $(cat /proc/self/oom_score_adj)\nexit\n',
+    });
+
+    const cgroup = await runImp('exec', '--agent', name, '--', 'cat', '/proc/self/cgroup');
+    const container = await runInImp(name, 'cat', '/proc/self/cgroup');
+
+    expect(shell.exitCode).toBe(0);
+    expect(shell.stdout).toContain('outer-42 0 0');
+    expect(cgroup.trim()).toMatch(/^0::\/outer\/\d+$/);
+    expect(container.trim()).not.toContain('outer');
+
+    await waitFor('the AgentExec event', () => {
+      expect(sink.text).toContain('"ev":"AgentExec"');
+    });
+  } finally {
+    events.kill();
+
+    await collecting;
+  }
+
+  const execToken = await withToken(['--scope', 'exec'], (secret) =>
+    tryImp(['exec', '--agent', name, '--', 'true'], { token: secret }),
+  );
+
+  const oneImpManage = await withToken(['--scope', 'manage', '--imps', name], (secret) =>
+    tryImp(['exec', '--agent', name, '--', 'true'], { token: secret }),
+  );
+
+  for (const refused of [execToken, oneImpManage]) {
+    expect(refused.exitCode).toBe(255);
+    expect(refused.stderr).toContain('FORBIDDEN');
+  }
+});
+
+test('a memory hog outside the container meets the OOM killer in its 32 MiB', async () => {
+  const hog = await tryImp([
+    'exec',
+    '--agent',
+    name,
+    '--',
+    'awk',
+    'BEGIN { s = "x"; while (1) s = s s }',
+  ]);
+
+  const events = await runImp(
+    'exec',
+    '--agent',
+    name,
+    '--',
+    'cat',
+    '/sys/fs/cgroup/outer/memory.events',
+  );
+
+  const kills = Number(/^oom_kill (?<count>\d+)$/m.exec(events)?.groups?.['count']);
+
+  expect(hog.exitCode).toBe(137);
+  expect(kills).toBeGreaterThan(0);
+
+  await runInImp(name, 'true');
+});
+
 test('rm -rf / inside leaves the agent answering and a checkpoint restores it', async () => {
   await runImp('checkpoint', name);
 
@@ -343,6 +435,22 @@ test('rm -rf / inside leaves the agent answering and a checkpoint restores it', 
   expect(broken.stderr).toContain('EXEC_FAILED');
   expect(tookMs).toBeLessThan(10_000);
   expect(state).toBe('running');
+
+  // the agent's world still runs commands, and shows the wiped disk and the
+  // container's cgroup
+  const left = await runImp('exec', '--agent', name, '--', 'ls', '-A', '/user');
+
+  const events = await runImp(
+    'exec',
+    '--agent',
+    name,
+    '--',
+    'cat',
+    '/sys/fs/cgroup/user/cgroup.events',
+  );
+
+  expect(left.split('\n')).not.toContain('etc');
+  expect(events).toContain('populated');
 
   await runImp('restore', name, checkpoint.id);
   await waitForExec(name);
