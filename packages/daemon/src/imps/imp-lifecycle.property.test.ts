@@ -1,12 +1,12 @@
 import { expect, spyOn, test } from 'bun:test';
-import { existsSync } from 'node:fs';
 import fc from 'fast-check';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { FakeVmError } from './fake-vmm';
 import type { VmOutcome, VmStep } from './fake-vmm';
-import { buildTestApp, findBrokenInvariants, setupImpTest, writeTestSnapshot } from './test-imps';
+import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 const NAMES = ['a', 'b', 'c', 'd'] as const;
 
@@ -205,13 +205,15 @@ test(
                   break;
                 }
                 case 'outdate': {
-                  // a snapshot from another firecracker: its wake boots cold
+                  // firecracker changed under the snapshot: its wake boots
+                  // cold. Only the version moves, as on a real upgrade.
                   const imp = await findImpByName(ctx.db, op.name);
 
                   const paths = buildImpPaths(ctx.dataDir, imp?.id ?? '');
+                  const meta = readSnapshotMeta(paths);
 
-                  if (existsSync(paths.snapshotMeta)) {
-                    writeTestSnapshot(paths, Date.now(), 'v0.1.0');
+                  if (meta !== null) {
+                    writeSnapshotMeta(paths, { ...meta, firecrackerVersion: 'v0.1.0' });
                   }
 
                   break;
