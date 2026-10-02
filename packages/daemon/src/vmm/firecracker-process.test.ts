@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isFirecrackerAlive, listFirecrackers, readPidFile } from './firecracker-process';
@@ -16,7 +16,9 @@ async function startStandIn(apiSocket: string) {
 
   const deadline = Date.now() + 10_000;
 
-  while (!isFirecrackerAlive(child.pid, apiSocket)) {
+  // the socket is in bash's own command line before the exec renames it, so
+  // wait for the name too
+  while (!isFirecrackerAlive(child.pid, apiSocket) || !isRenamed(child.pid)) {
     if (Date.now() > deadline) {
       throw new Error('the stand-in never started');
     }
@@ -25,6 +27,14 @@ async function startStandIn(apiSocket: string) {
   }
 
   return child;
+}
+
+function isRenamed(pid: number): boolean {
+  try {
+    return readFileSync(`/proc/${String(pid)}/cmdline`, 'utf8').startsWith('firecracker\0');
+  } catch {
+    return false;
+  }
 }
 
 test('/proc shows every live firecracker with the socket it serves', async () => {
