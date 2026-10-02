@@ -196,7 +196,7 @@ afterAll(async () => {
 }, 600_000);
 
 test.skipIf(!KSM_READY)(
-  'two guests that hold the same pages merge them across each other, and their Pss falls',
+  'two guests that hold the same pages merge them across each other, and their Pss grows half a fill less than unmerged',
   async () => {
     const cpuBefore = readKsmdCpuMs();
 
