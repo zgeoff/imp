@@ -13,10 +13,17 @@ try {
   const separator = split.args.indexOf('--');
   const args = separator === -1 ? [...split.args] : split.args.slice(0, separator);
 
-  // citty hands a command only the arguments after its name, so `--host`
-  // goes last, where the command that runs sees it (define-command.ts)
+  // citty hands a subcommand only its own arguments, never `data`, so
+  // `--host` goes last for the command that runs (define-command.ts); with
+  // no subcommand, --version and --help need their flag alone
+  const hasSubcommand = args.some((arg) => !arg.startsWith('-'));
+
   if (split.host !== null) {
-    args.push(`--host=${checkHostName(split.host)}`);
+    const host = checkHostName(split.host);
+
+    if (hasSubcommand) {
+      args.push(`--host=${host}`);
+    }
   }
 
   await runMain(mainCommand, { rawArgs: args });

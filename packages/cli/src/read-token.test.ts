@@ -49,6 +49,18 @@ test('it reads up to Enter with echo off, handles backspace, and restores the te
   expect(ctx.listeners.size).toBe(0);
 });
 
+test('arrow keys, Esc, Tab and bracketed-paste markers never enter the token', async () => {
+  const ctx = setupTest();
+  const token = readHiddenToken(ctx.input, ctx.write);
+
+  ctx.type('\u001B[200~pas\u001B[Dte\u001B[201~');
+  ctx.type('\u001BOA\t\u001B-x\u0001\r');
+
+  const value = await token;
+
+  expect(value).toBe('pastex');
+});
+
 test('Ctrl-C cancels and restores the terminal', async () => {
   const ctx = setupTest();
   const token = readHiddenToken(ctx.input, ctx.write);

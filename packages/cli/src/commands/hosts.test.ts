@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readHostConfig, resolveConfigPath, writeHostConfig } from '../host-store';
@@ -190,7 +190,10 @@ test('--host picks a saved host, and a 401 names it', async () => {
 
   expect(result).toEqual({
     stdout: '',
-    stderr: `imp: unauthorized: work (${ctx.impd.url}) refused the token; run imp login ${ctx.impd.url} --name work\n`,
+    stderr: [
+      'imp: note: IMP_TOKEN is ignored; work uses its saved token\n',
+      `imp: unauthorized: work (${ctx.impd.url}) refused the token; run imp login ${ctx.impd.url} --name work\n`,
+    ].join(''),
     code: 1,
   });
 
@@ -212,4 +215,28 @@ test('--host picks a saved host, and a 401 names it', async () => {
     stderr: 'imp: --host needs a saved host name (see imp host ls)\n',
     code: 2,
   });
+});
+
+test('--host leaves --version and --help to work alone', async () => {
+  await using ctx = setupTest();
+
+  const version = await ctx.run(['--host', 'work', '--version']);
+  const help = await ctx.run(['--host', 'work', '--help']);
+
+  expect(version).toMatchObject({ stderr: '', code: 0 });
+  expect(version.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+  expect(help.stdout).toContain('--host');
+  expect(help.code).toBe(0);
+});
+
+test('exec prints one line, not a stack, when config.json cannot be read', async () => {
+  await using ctx = setupTest();
+
+  mkdirSync(resolveConfigPath(ctx.env), { recursive: true });
+
+  const exec = await ctx.run(['exec', 'box', '--', 'true']);
+
+  expect(exec.code).toBe(255);
+  expect(exec.stderr.trimEnd().split('\n')).toHaveLength(1);
+  expect(exec.stderr).toContain('EISDIR');
 });

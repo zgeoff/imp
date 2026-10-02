@@ -1,11 +1,13 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,6 +62,20 @@ test('a rewrite keeps mode 0600 even over a stale temp file', () => {
 
   expect(statSync(ctx.path).mode & 0o777).toBe(0o600);
   expect(readHostConfig(ctx.env).current).toBeNull();
+});
+
+test('a symlinked config.json stays a link, and the file it points at gets the write', () => {
+  using ctx = setupTest();
+
+  const target = join(ctx.path, '..', '..', 'dotfiles-config.json');
+
+  mkdirSync(join(ctx.path, '..'), { recursive: true });
+  writeFileSync(target, '{}', { mode: 0o600 });
+  symlinkSync(target, ctx.path);
+  writeHostConfig(ctx.env, CONFIG);
+
+  expect(lstatSync(ctx.path).isSymbolicLink()).toBeTrue();
+  expect(readHostConfig(ctx.env)).toEqual(CONFIG);
 });
 
 test('it warns when others can read the file, without changing it', () => {

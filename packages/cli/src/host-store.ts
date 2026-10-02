@@ -1,4 +1,15 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as z from 'zod';
@@ -88,17 +99,40 @@ export function readHostConfig(env: CliEnv): HostConfig {
 // crash leaves the old file or the new one and no other user can read the
 // tokens at any point.
 export function writeHostConfig(env: CliEnv, config: HostConfig): void {
-  const dir = resolveConfigDir(env);
-  const path = resolveConfigPath(env);
-  const temp = `${path}.${String(process.pid)}.tmp`;
+  mkdirSync(resolveConfigDir(env), { recursive: true, mode: 0o700 });
 
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // a symlinked config.json (dotfiles) stays a link: the rename replaces
+  // the file it points at
+  const path = resolveWritePath(resolveConfigPath(env));
+  const temp = `${path}.${String(process.pid)}.tmp`;
 
   // `wx` creates the file, so the mode applies; a temp file a crash left
   // behind could carry another mode, so it goes first
   rmSync(temp, { force: true });
-  writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+
+  const fd = openSync(temp, 'wx', 0o600);
+
+  // synced before the rename, so a crash never leaves an empty config
+  try {
+    writeSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+
   renameSync(temp, path);
+}
+
+function resolveWritePath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return path;
+    }
+
+    throw error;
+  }
 }
 
 // the file holds tokens: say so when someone else can read it, but leave the

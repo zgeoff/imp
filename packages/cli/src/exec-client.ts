@@ -6,7 +6,6 @@ import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { formatUnauthorized } from './run-action';
-import { UsageError } from './usage-error';
 
 export interface ExecOptions {
   // the saved host `--host` named, or null
@@ -60,11 +59,8 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
   try {
     config = loadCliConfig(io.env, options.host);
   } catch (error) {
-    if (!(error instanceof UsageError)) {
-      throw error;
-    }
-
-    console.error(`imp: ${error.message}`);
+    // a usage error, or a config.json that cannot be read (EACCES, EISDIR)
+    console.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
 
     return Promise.resolve(IMP_FAILED_CODE);
   }

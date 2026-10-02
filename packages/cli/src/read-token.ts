@@ -21,6 +21,11 @@ const BACKSPACE = new Set(['\u007F', '\b']);
 
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
 
+// an arrow key, a function key or a bracketed-paste marker (ESC [ 200 ~):
+// CSI and SS3 sequences, else ESC and the one key after it
+// oxlint-disable-next-line no-control-regex -- matching ESC is the point
+const ESCAPE_SEQUENCE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|O.|.)?/gu;
+
 interface KeyResult {
   readonly token: string;
   readonly end: 'enter' | 'cancel' | null;
@@ -97,7 +102,7 @@ export function readHiddenToken(input: TokenInput, write: (text: string) => void
 function applyKeys(start: string, keys: string): KeyResult {
   let token = start;
 
-  for (const key of keys) {
+  for (const key of keys.replaceAll(ESCAPE_SEQUENCE, '')) {
     if (ENTER.has(key)) {
       return { token, end: 'enter' };
     }
@@ -106,8 +111,19 @@ function applyKeys(start: string, keys: string): KeyResult {
       return { token, end: 'cancel' };
     }
 
-    token = BACKSPACE.has(key) ? token.slice(0, -1) : `${token}${key}`;
+    if (BACKSPACE.has(key)) {
+      token = token.slice(0, -1);
+    } else if (!isControl(key)) {
+      token = `${token}${key}`;
+    }
   }
 
   return { token, end: null };
+}
+
+// below space, and DEL: never part of a token
+function isControl(key: string): boolean {
+  const code = key.codePointAt(0) ?? 0;
+
+  return code < 0x20 || code === 0x7f;
 }

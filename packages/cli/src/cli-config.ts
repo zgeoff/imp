@@ -23,6 +23,10 @@ export function loadCliConfig(env: CliEnv, host: string | null): CliConfig {
   const named = host === null ? readHostVariable(env) : checkHostName(host);
 
   if (named !== null) {
+    if (envToken !== null) {
+      console.error(`imp: note: IMP_TOKEN is ignored; ${named} uses its saved token`);
+    }
+
     return loadSavedHost(env, named);
   }
 

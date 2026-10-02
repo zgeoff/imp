@@ -53,6 +53,8 @@ async function runLogin(env: CliEnv, options: LoginOptions): Promise<string> {
     await verifyToken(options.url, token);
   }
 
+  // read again after the prompt; two logins at the same moment can still
+  // lose one host, as the config has no lock
   const config = readHostConfig(env);
 
   writeHostConfig(env, {

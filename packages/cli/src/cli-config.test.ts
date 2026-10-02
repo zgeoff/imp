@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -128,6 +128,34 @@ for (const testCase of CASES) {
     expect(config).toEqual(testCase.want);
   });
 }
+
+test('a current host that is no longer saved is an error, not the local impd', () => {
+  using ctx = setupTest({ current: 'gone' });
+
+  expect(() => loadCliConfig({ XDG_CONFIG_HOME: ctx.dir }, null)).toThrow('no saved host gone');
+});
+
+test('an IMP_HOST that is not a host name is a usage error', () => {
+  using ctx = setupTest();
+
+  expect(() => loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_HOST: 'a b' }, null)).toThrow(
+    'not a host name: a b',
+  );
+});
+
+test('IMP_TOKEN next to a named host gets a note on stderr', () => {
+  using ctx = setupTest();
+
+  const stderr = spyOn(console, 'error').mockImplementation(() => {
+    // captured
+  });
+
+  loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_TOKEN: 'env-token' }, 'work');
+
+  expect(stderr).toHaveBeenCalledWith('imp: note: IMP_TOKEN is ignored; work uses its saved token');
+
+  stderr.mockRestore();
+});
 
 test('an unknown --host or IMP_HOST is a usage error', () => {
   using ctx = setupTest();
