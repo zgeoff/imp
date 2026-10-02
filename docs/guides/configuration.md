@@ -13,10 +13,10 @@ error.
 | Variable                    | Default           | Meaning                                                                                                                                          |
 | --------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `IMP_DATA_DIR`              | `/var/lib/imp`    | The data directory ([layout](../architecture/storage.md#the-data-directory)).                                                                    |
-| `IMP_API_PORT`              | `7070`            | The control API: `/rpc`, `/exec` and `/health`.                                                                                                  |
+| `IMP_API_PORT`              | `7070`            | The control API: `/rpc`, `/exec`, `/health` and the dashboard.                                                                                   |
 | `IMP_PROXY_PORT`            | `7080`            | The wake proxy with Host-header routing.                                                                                                         |
 | `IMP_PORT_BASE`             | `20000`           | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                 |
-| `IMP_BROKER_PORT`           | `7081`            | The credential broker on every guest's gateway ([connectors](./connectors.md)). Never published; the host container's setup opens it to guests.  |
+| `IMP_BROKER_PORT`           | `7081`            | The credential broker on every guest's gateway ([connectors](./connectors.md)). Only guests reach it.                                            |
 | `IMP_BROKER_TEST_UPSTREAMS` | none              | Tests only: a file of fake upstreams for granted hosts ([development](./development.md#end-to-end-tests)). impd logs each load.                  |
 | `IMP_RAM_BUDGET_MIB`        | `16384`           | The RAM budget for awake imps.                                                                                                                   |
 | `IMP_IDLE_TIMEOUT_S`        | `60`              | Seconds with no activity before an imp sleeps.                                                                                                   |
@@ -35,6 +35,7 @@ error.
 | `IMP_SYSTEM_DRIVE`          | none              | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own. |
 | `TAILSCALE_AUTHKEY`         | none              | Set means the host joins the tailnet; impd then reports tailnet URLs.                                                                            |
 | `IMP_TAILSCALE_HOSTNAME`    | `imp`             | The tailnet hostname to ask for.                                                                                                                 |
+| `IMP_DASHBOARD_DIR`         | none              | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                 |
 
 [Sleep and wake](../architecture/sleep-and-wake.md#the-ram-governor) explains the RAM and idle
 settings.

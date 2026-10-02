@@ -25,14 +25,15 @@ export const SUITES: readonly Suite[] = [
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
+  { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
 // `fast` is what CI runs: create, exec, checkpoint and restore, sleep and
-// wake by HTTP, restart, and the MCP server.
+// wake by HTTP, restart, the MCP server, and the dashboard in a browser.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
-  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp'],
+  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp', 'dashboard'],
 };
 
 // generous: a suite's own waits fail long before this

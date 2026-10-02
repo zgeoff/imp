@@ -52,13 +52,17 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
 
     const paths = context.findPaths(imp.id);
 
-    const ramMib =
-      imp.state === 'running' && imp.pid !== null
-        ? context.readRamMib(imp.pid, paths.apiSocket)
-        : null;
+    if (imp.state === 'running' && imp.pid !== null) {
+      const ramMib = context.readRamMib(imp.pid, paths.apiSocket);
+      const rssMib = context.readRssMib(imp.pid, paths.apiSocket);
 
-    if (ramMib !== null) {
-      api.ramMib = ramMib;
+      if (ramMib !== null) {
+        api.ramMib = ramMib;
+      }
+
+      if (rssMib !== null) {
+        api.rssMib = rssMib;
+      }
     }
 
     const sessions = countSessions(context, imp);

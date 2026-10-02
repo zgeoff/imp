@@ -115,6 +115,9 @@ where it detaches; a second one ends the session with 128 + n, so the CLI stops 
 command ignores it or impd stopped answering. A signal before the command starts ends the session at
 once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
 
+The [dashboard](./docs/guides/dashboard.md) at `http://localhost:7070/ui/` shows the same imps,
+checkpoints, images and RAM in a browser, with a console.
+
 ## Sleep and wake
 
 An imp counts as busy while it has an open shell or command, a request in flight, an open TCP

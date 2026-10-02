@@ -18,6 +18,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'mcp',
     'sessions',
     'connectors',
+    'dashboard',
   ]);
 });
 
@@ -35,6 +36,7 @@ test('it expands a set and drops duplicates', () => {
     'sleep',
     'restart',
     'mcp',
+    'dashboard',
   ]);
 });
 

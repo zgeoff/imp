@@ -1,0 +1,38 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav a.active {
+  color: var(--text);
+}
+
+.nav > :last-child {
+  margin-left: auto;
+}
+
+.brand {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
