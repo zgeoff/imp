@@ -1,4 +1,12 @@
-import { copyFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { BackupRestore, BackupRun, BackupStatus, Imp, ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
@@ -122,6 +130,11 @@ export function buildBackupsOffError(): ORPCError<'PRECONDITION_FAILED', undefin
   });
 }
 
+interface RestoredSizes {
+  readonly diskBytes: number;
+  readonly usedBytes?: number | undefined;
+}
+
 export function createBackupService(deps: BackupServiceDeps): BackupService {
   const log = deps.log ?? printLog;
   const now = deps.now ?? (() => new Date());
@@ -202,6 +215,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     return { state: imp.state, synced: true };
   };
 
+  // a sparse disk's blocks, which restic restores sparse again
+  const readTreeUsedBytes = (file: string): number => statSync(join(paths.tree, file)).blocks * 512;
+
   const buildManifest = (
     runId: string,
     copy: DatabaseCopy,
@@ -232,6 +248,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
             .map((grant) => grant.secretName),
           disk: BACKUP_TREE.buildDisk(imp.id),
           diskBytes: imp.diskBytes,
+          usedBytes: readTreeUsedBytes(BACKUP_TREE.buildDisk(imp.id)),
           checkpoints: copy.checkpoints
             .filter(
               (checkpoint) => checkpoint.impId === imp.id && tree.checkpointIds.has(checkpoint.id),
@@ -242,6 +259,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
               createdAt: new Date(checkpoint.createdAt),
               disk: BACKUP_TREE.buildCheckpointDisk(imp.id, checkpoint.id),
               diskBytes: checkpoint.diskBytes,
+              usedBytes: readTreeUsedBytes(BACKUP_TREE.buildCheckpointDisk(imp.id, checkpoint.id)),
             })),
         })),
       images: copy.images
@@ -498,10 +516,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const created = { id: null as string | null };
 
     // One file at a time, each gone once written: ten checkpoints never sit
-    // on the host as ten full disks at once. Its disk size is the most it
-    // can take, held before restic fetches it.
-    const writeRestoredFile = (file: string, disk: string, diskBytes: number) =>
-      diskBudget.withRoom(diskBytes, async () => {
+    // on the host as ten full disks at once. It holds twice the file's blocks
+    // (restic's sparse copy, then the disk), or an older manifest's disk size.
+    const writeRestoredFile = (file: string, disk: string, sizes: RestoredSizes) => {
+      const bytes = sizes.usedBytes === undefined ? sizes.diskBytes : 2 * sizes.usedBytes;
+
+      return diskBudget.withRoom(bytes, async () => {
         const fileDir = dirname(file);
 
         await restic.restore(point.id, join(base, fileDir), join(workDir, fileDir), []);
@@ -512,6 +532,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           rmSync(join(workDir, fileDir), { recursive: true, force: true });
         }
       });
+    };
 
     const writeRestoredDisk = async (impId: string) => {
       created.id = impId;
@@ -521,7 +542,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       const disk = storage.resolveImpPaths(impId).disk;
 
       for (const checkpoint of imp.checkpoints) {
-        await writeRestoredFile(checkpoint.disk, disk, checkpoint.diskBytes);
+        await writeRestoredFile(checkpoint.disk, disk, checkpoint);
 
         const made = await createCheckpointDisk(impId);
 
@@ -535,7 +556,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         });
       }
 
-      await writeRestoredFile(imp.disk, disk, imp.diskBytes);
+      await writeRestoredFile(imp.disk, disk, imp);
 
       await updateImpEgressPolicy(
         deps.db,

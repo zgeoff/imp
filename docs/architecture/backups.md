@@ -46,8 +46,10 @@ The paths are the same every run, so restic finds each file it read the run befo
 
 `manifest.json` is everything a restore reads: each imp's name, image digest, vCPUs, memory, HTTP
 port, state, egress policy, the names of the secrets granted to it, its checkpoints oldest first
-with labels and times, and each image's name, ref and digest. It holds no tokens or secret values,
-and no slots or addresses: a restore takes new ones.
+with labels and times, and each image's name, ref and digest. Each disk and checkpoint has its size
+(`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which a restore holds twice in
+the [disk budget](./storage.md#disk-budget); a manifest from before `usedBytes` falls back to the
+size. It holds no tokens or secret values, and no slots or addresses: a restore takes new ones.
 
 The database itself stays on the host. Each run starts with `VACUUM INTO <data>/backup/db.sqlite`,
 one consistent read of the database, and backs up only what that copy names. The copy stays out of

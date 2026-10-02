@@ -11,6 +11,9 @@ const ManifestCheckpointSchema = z
 
     // a manifest from before disk sizes had 32 GiB disks only
     diskBytes: z.int().positive().default(LEGACY_DISK_BYTES),
+
+    // the blocks the file held in the tree; older manifests leave it out
+    usedBytes: z.int().nonnegative().optional(),
   })
   .readonly();
 
@@ -32,6 +35,7 @@ const ManifestImpSchema = z
     // the database's size; the disk file in the tree has the size it had
     // when copied, which a resize during the run can pass
     diskBytes: z.int().positive().default(LEGACY_DISK_BYTES),
+    usedBytes: z.int().nonnegative().optional(),
 
     // the broker's policy for hosts no grant covers, and the names of the
     // secrets granted: never a value (docs/architecture/backups.md#manifest)

@@ -807,7 +807,15 @@ test('a restore holds the storage gate for its image and room for each file', as
   await using source = await setupTest();
 
   await source.createDevImp();
-  await source.backups.runBackup();
+
+  const run = await source.backups.runBackup();
+  const manifest = await source.readManifest(run.snapshotId);
+
+  const usedBytes = manifest.imps[0]?.usedBytes ?? -1;
+
+  // what the disk file held in the tree, not its 32 GiB apparent size
+  expect(usedBytes).toBeGreaterThan(0);
+  expect(usedBytes).toBeLessThan(1024 ** 2);
 
   await using fresh = await setupTest(source.repoDir);
 
@@ -818,6 +826,7 @@ test('a restore holds the storage gate for its image and room for each file', as
   rmSync(join(fresh.dataDir, 'images', 'base'), { recursive: true });
 
   const seen: string[] = [];
+  const held: number[] = [];
 
   // a GC would wait for each of these, so no image dir is taken before its row
   fresh.fake.state.onRestore = async (dir) => {
@@ -828,9 +837,16 @@ test('a restore holds the storage gate for its image and room for each file', as
     seen.push(
       `${kind} joined=${String(fresh.storageGate.countInFlight() > 0)} held=${String(status.pendingBytes > 0)}`,
     );
+
+    // twice a file's blocks: restic's sparse copy, then the disk
+    if (dir === dirname(manifest.imps[0]?.disk ?? '')) {
+      held.push(status.pendingBytes);
+    }
   };
 
   await fresh.backups.restoreBackup({ name: 'dev' });
+
+  expect(held).toEqual([2 * usedBytes]);
 
   expect(new Set(seen)).toEqual(
     new Set(['image joined=true held=true', 'file joined=true held=true']),

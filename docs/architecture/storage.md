@@ -275,13 +275,13 @@ One ledger in impd takes each write's estimate off the free space until the writ
 lock, so two writes never pass on the same reading. A write that would leave less than the reserve
 fails with `DISK_FULL` (HTTP 507), before it touches anything:
 
-| Write                                 | Estimate                                                                        |
-| ------------------------------------- | ------------------------------------------------------------------------------- |
-| sleep                                 | the imp's memory: the file is full size until its holes are dug                 |
-| image build                           | twice the Docker image: the tree, and the ext4 file from it                     |
-| restore from backup                   | each file's disk size while restic fetches and writes it; twice an image's size |
-| create, fork                          | 0: a thin clone                                                                 |
-| checkpoint, resize, start, backup run | 0: refused only once the reserve is reached                                     |
+| Write                                 | Estimate                                                                                                              |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| sleep                                 | the imp's memory: the file is full size until its holes are dug                                                       |
+| image build                           | twice the Docker image: the tree, and the ext4 file from it                                                           |
+| restore from backup                   | twice each file's blocks while restic fetches and writes it (an older manifest: the disk size); twice an image's size |
+| create, fork                          | 0: a thin clone                                                                                                       |
+| checkpoint, resize, start, backup run | 0: refused only once the reserve is reached                                                                           |
 
 A wake is never refused: its disk and memory exist already, and a full disk must not strand an imp's
 work. A sleep that is refused leaves its imp running, as any failed sleep does; the governor turns
