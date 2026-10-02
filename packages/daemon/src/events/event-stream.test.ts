@@ -146,3 +146,31 @@ test('a stream ends at its abort and at its end time, and lets go of the bus', a
   expect(Date.now() - startedAt).toBeGreaterThanOrEqual(45);
   expect(listeners).toEqual(['subscribed', 'unsubscribed', 'subscribed', 'unsubscribed']);
 });
+
+test('a stream that ends with a 30-day session stays open after the snapshot', async () => {
+  const bus = createEventBus();
+
+  const controller = new AbortController();
+
+  const stream = openEventStream({
+    bus,
+    readSnapshot: () => Promise.resolve([buildDecision('snapshot')]),
+    signal: controller.signal,
+    endsAt: Date.now() + 30 * 86_400_000,
+    now: Date.now,
+  });
+
+  const first = await stream.next();
+
+  // past the 1 ms an overflowed setTimeout would have waited
+  await Bun.sleep(20);
+
+  bus.publish(buildDecision('later'));
+
+  const second = await stream.next();
+
+  controller.abort();
+
+  expect(first.value).toMatchObject({ name: 'snapshot' });
+  expect(second).toMatchObject({ done: false, value: { name: 'later' } });
+});

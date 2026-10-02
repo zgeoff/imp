@@ -1,4 +1,5 @@
 import type { ImpEvent } from '@imp/api';
+import { startTimerAt } from '../process/start-timer-at';
 import type { EventBus } from './event-bus';
 
 // events one subscriber may fall behind by before its stream ends
@@ -52,10 +53,9 @@ export async function* openEventStream(options: EventStreamOptions): AsyncGenera
 
   options.signal?.addEventListener('abort', stopStream);
 
-  const timer =
-    options.endsAt === null
-      ? null
-      : setTimeout(stopStream, Math.max(0, options.endsAt - options.now()));
+  // a dashboard session's stream ends with it, 30 days on
+  const cancelTimer =
+    options.endsAt === null ? null : startTimerAt(stopStream, options.endsAt, { now: options.now });
 
   try {
     const snapshot = await options.readSnapshot();
@@ -85,9 +85,6 @@ export async function* openEventStream(options: EventStreamOptions): AsyncGenera
   } finally {
     unsubscribe();
     options.signal?.removeEventListener('abort', stopStream);
-
-    if (timer !== null) {
-      clearTimeout(timer);
-    }
+    cancelTimer?.();
   }
 }
