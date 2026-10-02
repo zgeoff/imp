@@ -471,3 +471,36 @@ func inCwd(t *testing.T, name string) string {
 	}
 	return filepath.Join(dir, name)
 }
+
+// A socket's directory is judged by where it is, not by its path: a link
+// such as Debian's /var/run -> /run leads onto a tmpfs.
+func TestOnlySocketsOnATmpfsGoWithTheContainer(t *testing.T) {
+	tmpfs, err := os.MkdirTemp("/dev/shm", "imp-listen-")
+	if err != nil {
+		t.Skip("no tmpfs at /dev/shm:", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpfs) })
+	disk := t.TempDir()
+	if onDir(t, disk) {
+		t.Skip("the test's temp dir is itself on a tmpfs")
+	}
+	varRun := filepath.Join(disk, "var-run")
+	if err := os.Symlink(tmpfs, varRun); err != nil {
+		t.Fatal(err)
+	}
+	for dir, want := range map[string]bool{tmpfs: true, varRun: true, disk: false} {
+		if got := onDir(t, dir); got != want {
+			t.Errorf("%s: on a tmpfs %v, want %v", dir, got, want)
+		}
+	}
+}
+
+func onDir(t *testing.T, dir string) bool {
+	t.Helper()
+	d, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	return onTmpfs(int(d.Fd()))
+}

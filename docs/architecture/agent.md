@@ -71,13 +71,14 @@ init ignores every signal it can, as the kernel delivers to a namespace's init o
 handles, and Go handles nearly all of them. `kill -TERM 1` inside does nothing.
 
 When the inner init dies (a `reboot` inside, say), every process in the container dies with it. The
-agent ends the waits of what ran there, closes the sockets it served in the inner `/run`, ends the
-services' supervision, and starts the container again after 1 s, doubling to 30 s. Each new
-container gets its `/etc` files written and its image config read again, and its services started. A
-start that fails, or a container that dies within a minute of its start, is a bad start: after more
-than 5 in 10 minutes the agent gives up until the next boot, `ping` reports the container down with
-the last error, and a spawn fails with `INNER_DOWN`. A container that ran a while starts again
-however often it dies.
+agent ends the waits of what ran there, closes the sockets it served on a tmpfs inside (`/run`,
+`/dev`), whose files went with it, ends the services' supervision, and starts the container again
+after 1 s, doubling to 30 s. TCP ports and sockets on the user disk stay open. Each new container
+gets its `/etc` files written and its image config read again, and its services started. A start
+that fails, or a container that dies within a minute of its start, is a bad start: after more than 5
+in 10 minutes the agent gives up until the next boot, `ping` reports the container down with the
+last error, and a spawn fails with `INNER_DOWN`. A container that ran a while starts again however
+often it dies.
 
 After `rm -rf /` inside, the container stays up but has nothing to run: an exec fails at once with
 `EXEC_FAILED`. A checkpoint restore brings the files back. If the init then dies, every start fails
