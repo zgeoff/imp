@@ -271,7 +271,16 @@ func (x *extractor) writeFile(rel string, hdr *tar.Header, content io.Reader) er
 }
 
 func fillFile(f *os.File, hdr *tar.Header, content io.Reader, owner *Owner) error {
-	if _, err := io.Copy(f, content); err != nil {
+	written, err := writeSparse(f, content)
+	if err != nil {
+		return err
+	}
+	// a cut archive ends the content early; the file must not land padded
+	if written != hdr.Size {
+		return fmt.Errorf("the archive ended %d bytes into a %d-byte file", written, hdr.Size)
+	}
+	// a file that ends in a hole has its size only from this
+	if err := f.Truncate(hdr.Size); err != nil {
 		return err
 	}
 	if err := f.Chown(owner.UID, owner.GID); err != nil {
@@ -282,6 +291,45 @@ func fillFile(f *os.File, hdr *tar.Header, content io.Reader, owner *Owner) erro
 		return err
 	}
 	return setTimes(int(f.Fd()), hdr.ModTime)
+}
+
+// holeBlock is the size of the blocks writeSparse checks for zeros: the
+// page size, and the block size of ext4 and xfs
+const holeBlock = 4096
+
+// writeSparse writes content to f, seeking over each all-zero block, so a
+// sparse file stays sparse in the imp. It returns the bytes it read.
+func writeSparse(f *os.File, content io.Reader) (int64, error) {
+	buf := make([]byte, holeBlock)
+	var written int64
+	for {
+		n, err := io.ReadFull(content, buf)
+		if n > 0 {
+			if werr := writeBlock(f, buf[:n]); werr != nil {
+				return written, werr
+			}
+			written += int64(n)
+		}
+		// a short last block, or a cut archive, which the caller's size
+		// check tells apart
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return written, nil
+		}
+		if err != nil {
+			return written, err
+		}
+	}
+}
+
+func writeBlock(f *os.File, block []byte) error {
+	for _, b := range block {
+		if b != 0 {
+			_, err := f.Write(block)
+			return err
+		}
+	}
+	_, err := f.Seek(int64(len(block)), io.SeekCurrent)
+	return err
 }
 
 func setTimes(fd int, modTime time.Time) error {

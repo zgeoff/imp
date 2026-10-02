@@ -323,3 +323,49 @@ func TestWithNoOwnerTheCopyTakesTheDirectorysOwner(t *testing.T) {
 		}
 	}
 }
+
+// zeros in the archive become holes, and a file that ends in zeros keeps its
+// size
+func TestZerosBecomeHoles(t *testing.T) {
+	dir := t.TempDir()
+	content := "head" + strings.Repeat("\x00", 1<<20) + "tail" + strings.Repeat("\x00", 1<<20)
+	archive := buildArchive(t, fileEntry("sparse", content))
+
+	if err := Extract(dir, archive, ownOwner(), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(dir, "sparse")
+	if readFile(t, path) != content {
+		t.Fatal("the content changed")
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Blocks*512 >= int64(len(content))/2 {
+		t.Fatalf("%d bytes allocated for %d", st.Blocks*512, len(content))
+	}
+}
+
+// an archive cut inside a file fails it, and what was there stays
+func TestACutArchiveLeavesTheFileAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	full := buildArchive(t, fileEntry("f", strings.Repeat("x", 10_000))).Bytes()
+	cut := bytes.NewReader(full[:512+5_000])
+
+	if err := Extract(dir, cut, ownOwner(), io.Discard); err == nil {
+		t.Fatal("a cut archive extracted")
+	}
+
+	if got := readFile(t, filepath.Join(dir, "f")); got != "old" {
+		t.Fatalf("the file became %d bytes", len(got))
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("%d entries; a temp file was left", len(entries))
+	}
+}

@@ -27,7 +27,8 @@ error.
 - **Hard links:** a copy out of the imp makes each linked name its own file. A hard link in an
   archive is made only when it points to a file of the same copy.
 - **Sockets, devices and FIFOs:** left out, with a warning.
-- **Sparse files:** copied whole; the holes become zeros.
+- **Sparse files:** a copy into the imp makes a hole of each all-zero 4 KiB block, so a sparse file
+  stays sparse. A copy out of the imp writes the zeros.
 - **Owner:** what a copy into the imp makes belongs to the owner of the directory it lands in, so a
   copy into `/etc` belongs to root and one into `/home/dev` to `dev`. `--owner` (`user`, `uid`,
   `user:group` or `uid:gid`) sets another. A directory that was there already keeps its owner and
