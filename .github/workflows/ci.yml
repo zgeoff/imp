@@ -182,6 +182,12 @@ jobs:
       - name: Run
         run: dist/imp-linux-x64 --version
 
+      # The release image compiles impd and the CLI in its own stage, with
+      # its own install: build that stage too, so a dependency the stage
+      # misses fails here and not first in a release.
+      - name: Build the release compile stage
+        run: docker build --target compile -f host/Dockerfile .
+
   # Packs @zgeoff/imp-client as the release publishes it, then installs the
   # tarball into an empty project on the oldest Node it supports.
   client:
@@ -216,9 +222,8 @@ jobs:
         run: scripts/check-client-package.sh "$TARBALL"
 
   # Boots real microVMs: the fast end-to-end set (scripts/test-e2e.sh --only
-  # fast) against a dev instance on the runner's own KVM. Not a required
-  # check and not in release-please's needs until it has proven stable on
-  # GitHub's runners; docs/guides/development.md ("CI") says what to flip.
+  # fast) against a dev instance on the runner's own KVM. A required check,
+  # and release-please waits for it (docs/guides/development.md, "CI").
   e2e:
     runs-on: ubuntu-24.04
     permissions:
@@ -355,7 +360,7 @@ jobs:
   # the PR, CI runs on it, and the job turns on auto-merge.
   release-please:
     if: github.event_name == 'push' && vars.RELEASE_APP_ID != ''
-    needs: [gitleaks, checks, go, shellcheck, cli, client]
+    needs: [gitleaks, checks, go, shellcheck, cli, client, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write
