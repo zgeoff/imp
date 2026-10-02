@@ -22,6 +22,7 @@ import type { Caller } from './caller';
 // characters), so a dashboard session can name it.
 export const ROOT_TOKEN_ID = 'root';
 const ROOT_NAME = 'root';
+const ROOT_PRINCIPAL = 'root';
 
 // A made token is `imp_<id>.<secret>`: the id finds the entry, and the
 // secret's SHA-256 is compared in constant time. 256 random bits need no
@@ -121,6 +122,10 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     imps: null,
     tokenId: ROOT_TOKEN_ID,
     expiresAt: null,
+
+    // the root token and a root dashboard session
+    principal: ROOT_PRINCIPAL,
+    display: ROOT_NAME,
   };
 
   const findByName = (name: string): TokenRecord | null =>
@@ -383,5 +388,10 @@ function toCaller(record: Readonly<TokenRecord>): Caller {
     imps: record.imps,
     tokenId: record.id,
     expiresAt: null,
+
+    // by id, not name: a deleted token's id never comes back, so a new token
+    // with its name holds none of its leases
+    principal: `token:${record.id}`,
+    display: record.name,
   };
 }

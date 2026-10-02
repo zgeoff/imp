@@ -1,5 +1,6 @@
 import type { Caller } from '../auth/caller';
 import type { BoundSshKey } from '../auth/token-store';
+import { formatKeyFingerprint } from './authorized-keys';
 import type { AuthorizedKey, AuthorizedKeys } from './authorized-keys';
 
 // A key a client offers, and who a login with it runs as.
@@ -43,12 +44,16 @@ export function createLoginKeys(deps: Readonly<LoginKeysDeps>): LoginKeys {
 // A file key has every imp. It is named `key <comment>`: a token name has
 // no space, so the audit log never mixes the two up.
 function buildFileCaller(key: Readonly<AuthorizedKey>): Caller {
+  const display = key.comment === '' ? key.type : key.comment;
+
   return {
     kind: 'ssh',
-    name: `key ${key.comment === '' ? key.type : key.comment}`,
+    name: `key ${display}`,
     scope: 'manage',
     imps: null,
     tokenId: null,
     expiresAt: null,
+    principal: `key:${formatKeyFingerprint(key.blob)}`,
+    display,
   };
 }
