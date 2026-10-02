@@ -12,6 +12,25 @@ ensure_host_image() {
   fi
 }
 
+# read_host_privileges prints the imp-host container's privilege arguments
+# (deploy/imp-host.args.json), one word per line: privileges, with the
+# repo's seccomp profile for the one in /etc/imp, then each probed entry's
+# args where its path exists here.
+read_host_privileges() {
+  local args=$IMP_ROOT/deploy/imp-host.args.json
+  jq -r --arg seccomp "seccomp=$IMP_ROOT/deploy/imp-host.seccomp.json" '
+    (.privileges[][] | if . == "seccomp=/etc/imp/imp-host.seccomp.json" then $seccomp else . end),
+    (.probed[] | "\(.path)\t\(.args | join(" "))")' "$args" |
+    while IFS=$'\t' read -r word probed; do
+      if [ -z "$probed" ]; then
+        printf '%s\n' "$word"
+      elif [ -e "$word" ]; then
+        # shellcheck disable=SC2086 # plain words (render-imp-host.ts checks)
+        printf '%s\n' $probed
+      fi
+    done
+}
+
 # load_tailscale_authkey exports TAILSCALE_AUTHKEY from the first source that
 # has one and returns 1 when none does: the env var; then a 1Password read of
 # IMP_TAILSCALE_AUTHKEY_REF (default op://cloud/imp-tailscale-authkey/credential)

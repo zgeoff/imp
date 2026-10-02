@@ -1,8 +1,37 @@
 {
-  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service and bootstrap.sh's copy; deploy/nixos/module.nix reads this file. A word $NAME (unbraced) is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md).",
+  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/module.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host-contract.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md).",
+  "privileges": [
+    ["--init", "--cgroupns=private", "--cap-drop", "ALL"],
+    ["--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "--cap-add", "MKNOD"],
+    ["--cap-add", "CHOWN", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL"],
+    ["--cap-add", "SYS_PTRACE", "--cap-add", "DAC_OVERRIDE", "--cap-add", "FOWNER"],
+    ["--cap-add", "FSETID"],
+    ["--security-opt", "apparmor=unconfined"],
+    ["--security-opt", "seccomp=/etc/imp/imp-host.seccomp.json"],
+    ["--device", "/dev/kvm", "--device", "/dev/net/tun"],
+    ["--sysctl", "net.ipv4.ip_forward=1"]
+  ],
+  "probed": [
+    {
+      "path": "/dev/zfs",
+      "args": ["--device", "/dev/zfs"]
+    },
+    {
+      "path": "/proc/sys/net/ipv6",
+      "args": [
+        "--sysctl",
+        "net.ipv6.conf.all.forwarding=1",
+        "--sysctl",
+        "net.ipv6.conf.default.accept_ra=0",
+        "--sysctl",
+        "net.ipv6.conf.default.accept_redirects=0",
+        "--sysctl",
+        "net.ipv6.conf.default.disable_ipv6=0"
+      ]
+    }
+  ],
   "lines": [
     ["--rm", "--name", "imp-host", "--hostname", "imp-host"],
-    ["--init", "--privileged", "--device", "/dev/kvm", "--cgroupns=private"],
     ["--env-file", "/etc/imp/imp-host.env"],
     ["$IMP_HOST_NETWORK"],
     ["-v", "/var/lib/imp:/var/lib/imp"],

@@ -79,6 +79,8 @@ EOF
 readonly IMP_DIR=/etc/imp
 readonly ENV_FILE=$IMP_DIR/imp-host.env
 readonly FIREWALL_FILE=$IMP_DIR/firewall.nft
+readonly SECCOMP_FILE=$IMP_DIR/imp-host.seccomp.json
+readonly SECCOMP_IN_IMAGE=/usr/local/share/imp/deploy/imp-host.seccomp.json
 readonly DATA_DIR=/var/lib/imp
 readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:latest
 # Docker's apt signing key (https://docs.docker.com/engine/install/ubuntu/).
@@ -530,6 +532,11 @@ ExecStartPre=-/usr/bin/docker rm -f imp-host
 # Keep it equal to create_host_network in deploy/bootstrap.sh and the
 # networks block of deploy/compose.yaml.
 ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
+# The probed args (such as --device /dev/zfs) whose path this host has, into
+# IMP_HOST_PROBED; systemd reads the file again for ExecStart.
+RuntimeDirectory=imp-host
+EnvironmentFile=-/run/imp-host/probed.env
+ExecStartPre=/bin/sh -c 'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; [ -e /proc/sys/net/ipv6 ] && a="$$a --sysctl net.ipv6.conf.all.forwarding=1 --sysctl net.ipv6.conf.default.accept_ra=0 --sysctl net.ipv6.conf.default.accept_redirects=0 --sysctl net.ipv6.conf.default.disable_ipv6=0"; echo "IMP_HOST_PROBED=$$a" >/run/imp-host/probed.env'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
@@ -539,7 +546,15 @@ ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docke
 # The arguments come from deploy/imp-host.args.json: edit that, then run
 # bun run render:deploy (the NixOS module reads the same file).
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
-  --init --privileged --device /dev/kvm --cgroupns=private \
+  --init --cgroupns=private --cap-drop ALL \
+  --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add MKNOD \
+  --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add KILL \
+  --cap-add SYS_PTRACE --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --cap-add FSETID \
+  --security-opt apparmor=unconfined \
+  --security-opt seccomp=/etc/imp/imp-host.seccomp.json \
+  --device /dev/kvm --device /dev/net/tun \
+  --sysctl net.ipv4.ip_forward=1 \
   --env-file /etc/imp/imp-host.env \
   $IMP_HOST_NETWORK \
   -v /var/lib/imp:/var/lib/imp \
@@ -547,6 +562,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   $IMP_PUBLIC_PORTS \
+  $IMP_HOST_PROBED \
   ${IMP_HOST_IMAGE}
 # SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
 # to 120 s, and systemd waits a little longer before it kills anything.
@@ -1582,6 +1598,17 @@ ensure_imp() {
   local run_image
   run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
   ensure_image "${run_image:-$DEFAULT_IMAGE}"
+  # The unit's seccomp profile, from the image it runs: Docker's default plus
+  # pivot_root for the jailer (docs/architecture/host-contract.md#privileges).
+  # A dry run pulls nothing, so it may have no image to read.
+  local seccomp
+  if dry && ! docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
+    change "write $SECCOMP_FILE from the image" true
+  else
+    seccomp=$(docker run --rm "${run_image:-$DEFAULT_IMAGE}" cat "$SECCOMP_IN_IMAGE") \
+      || die "${run_image:-$DEFAULT_IMAGE} has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
+    put_file "$SECCOMP_FILE" 644 "$seccomp" && changed=1
+  fi
 
   if [ -n "$changed" ]; then
     change "restart imp-host" reload_unit imp-host

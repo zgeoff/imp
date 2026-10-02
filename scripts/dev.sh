@@ -192,8 +192,13 @@ up() {
     # holds this host's name and a dead pid
     # a private cgroup namespace: impd puts each imp's Firecracker in its own
     # cgroup for CPU limits (host/scripts/setup-cgroups.sh)
-    docker run -d --name "$name" --hostname "$name" --init --privileged --device /dev/kvm \
-      --cgroupns=private \
+    # The deploy's privileges, not --privileged. The dev instance keeps its
+    # XFS in a loop file: loop-control, and every loop device (b 7:*), for
+    # the node setup-storage.sh makes.
+    local privileges
+    mapfile -t privileges < <(read_host_privileges)
+    docker run -d --name "$name" --hostname "$name" "${privileges[@]}" \
+      --device /dev/loop-control --device-cgroup-rule 'b 7:* rmw' \
       --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" "${network[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \

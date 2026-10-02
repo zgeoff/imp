@@ -140,11 +140,10 @@ let
   xfsCfg = xfsHost.config;
   unit = zfsCfg.systemd.services.imp-host;
   ownCfg = ownFirewall.config;
+  hostArgs = lib.importJSON ../../imp-host.args.json;
   # the env words ($IMP_PUBLIC_PORTS) are options, empty here
   sharedArgs = lib.escapeShellArgs (
-    lib.filter (word: !(lib.hasPrefix "$" word)) (
-      lib.flatten (lib.importJSON ../../imp-host.args.json).lines
-    )
+    lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten hostArgs.lines)
   );
 
   expect = name: cond: if cond then name else throw "eval check failed: ${name}";
@@ -203,7 +202,24 @@ let
     (expect "docker" zfsCfg.virtualisation.docker.enable)
     (expect "imp-host needs the dataset" (lib.elem "imp-zfs-dataset.service" unit.requires))
     (expect "the args come from deploy/imp-host.args.json" (
-      lib.hasInfix "/bin/docker run ${sharedArgs} " unit.serviceConfig.ExecStart
+      lib.hasPrefix "/bin/docker run --init " (
+        lib.removePrefix "${zfsCfg.virtualisation.docker.package}" unit.serviceConfig.ExecStart
+      )
+      && lib.hasInfix " ${sharedArgs} " unit.serviceConfig.ExecStart
+    ))
+    (expect "no --privileged" (!(lib.hasInfix "--privileged" unit.serviceConfig.ExecStart)))
+    (expect "the privileges come from deploy/imp-host.args.json" (
+      lib.hasInfix "--cap-drop ALL --cap-add SYS_ADMIN" unit.serviceConfig.ExecStart
+    ))
+    (expect "the seccomp profile comes from the store" (
+      lib.hasInfix "seccomp=/nix/store/" unit.serviceConfig.ExecStart
+    ))
+    (expect "IPv6 sysctls by default" (
+      lib.hasInfix "net.ipv6.conf.default.accept_ra=0" unit.serviceConfig.ExecStart
+    ))
+    (expect "zfs passes /dev/zfs" (lib.hasInfix "--device /dev/zfs" unit.serviceConfig.ExecStart))
+    (expect "xfs passes no /dev/zfs" (
+      !(lib.hasInfix "/dev/zfs" xfsCfg.systemd.services.imp-host.serviceConfig.ExecStart)
     ))
     (expect "publicPorts publish before the image" (
       lib.hasSuffix "-p 443:7443 -p 80:7480 ghcr.io/zgeoff/imp-host:latest" publicHost.config.systemd.services.imp-host.serviceConfig.ExecStart
