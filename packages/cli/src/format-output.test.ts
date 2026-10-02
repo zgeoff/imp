@@ -8,6 +8,7 @@ import {
   formatIdentity,
   formatImps,
   formatSessions,
+  formatSshKey,
   formatTable,
   formatTokens,
 } from './format-output';
@@ -249,19 +250,26 @@ test('the imp list shows what a destroy frees and what the imp shares', () => {
   ]);
 });
 
+const LAPTOP_KEY = { fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' };
+
 test('it lists tokens with their scope and imps, and * for every imp', () => {
   const createdAt = new Date('2026-10-02T00:00:00Z');
 
   const text = formatTokens([
-    { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'], createdAt },
-    { name: 'ops', scope: 'manage', imps: null, createdAt },
+    { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'], sshKeys: [LAPTOP_KEY], createdAt },
+    { name: 'ops', scope: 'manage', imps: null, sshKeys: [], createdAt },
   ]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toEqual([
-    'NAME  SCOPE   IMPS        CREATED',
-    'ci    exec    dev-*,ci-*  2026-10-02T00:00:00.000Z',
-    'ops   manage  *           2026-10-02T00:00:00.000Z',
+    'NAME  SCOPE   IMPS        SSH KEYS  CREATED',
+    'ci    exec    dev-*,ci-*  1         2026-10-02T00:00:00.000Z',
+    'ops   manage  *           0         2026-10-02T00:00:00.000Z',
   ]);
+});
+
+test('it prints a key as ssh-keygen -l does', () => {
+  expect(formatSshKey(LAPTOP_KEY)).toBe('SHA256:abc me@laptop');
+  expect(formatSshKey({ ...LAPTOP_KEY, comment: '' })).toBe('SHA256:abc');
 });
 
 test('it names the caller and what it may do, and who made each api call', () => {

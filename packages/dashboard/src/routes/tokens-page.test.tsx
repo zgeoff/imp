@@ -34,7 +34,13 @@ test('it deletes a token after a confirm', async () => {
   const fake = createFakeImpd();
   const user = userEvent.setup();
 
-  fake.state.tokens.push({ name: 'old', scope: 'read', imps: null, createdAt: new Date() });
+  fake.state.tokens.push({
+    name: 'old',
+    scope: 'read',
+    imps: null,
+    sshKeys: [],
+    createdAt: new Date(),
+  });
 
   renderApp(fake, '/tokens');
 
@@ -70,4 +76,22 @@ test('the nav links to tokens for the root token', async () => {
   const link = await screen.findByRole('link', { name: 'Tokens' });
 
   expect(link).toBeInTheDocument();
+});
+
+test('it lists the SSH keys bound to each token', async () => {
+  const fake = createFakeImpd();
+
+  fake.state.tokens.push({
+    name: 'laptop',
+    scope: 'exec',
+    imps: ['dev-*'],
+    sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
+    createdAt: new Date(),
+  });
+
+  renderApp(fake, '/tokens');
+
+  const row = await screen.findByRole('row', { name: /laptop/ });
+
+  expect(within(row).getByText('me@laptop SHA256:abc')).toBeInTheDocument();
 });

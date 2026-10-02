@@ -47,6 +47,7 @@ async function setupTest(tailnet = false) {
     rootToken: ROOT,
     now: () => NOW,
     onRemove: () => {},
+    isFileKey: () => false,
   });
 
   const sources: CallerSources = {

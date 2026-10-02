@@ -91,6 +91,16 @@ export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';
-export { IdentitySchema, ImpPatternSchema, ScopeSchema, TokenSchema } from './token-schema';
-export type { Identity, Scope, Token } from './token-schema';
+
+export {
+  IdentitySchema,
+  ImpPatternSchema,
+  MAX_SSH_KEYS,
+  ScopeSchema,
+  SshKeySchema,
+  SshPublicKeySchema,
+  TokenSchema,
+} from './token-schema';
+
+export type { Identity, Scope, SshKey, Token } from './token-schema';
 export type { SystemInfo } from './system-info-schema';

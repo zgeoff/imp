@@ -26,6 +26,65 @@ async function createKey(path: string, comment: string): Promise<string> {
   return Bun.file(`${path}.pub`).text();
 }
 
+// a Host alias for the dev instance's gateway that logs in with one key
+function buildHostBlock(dir: string, alias: string, identity: string): string[] {
+  return [
+    `Host ${alias}`,
+    '  HostName 127.0.0.1',
+    `  Port ${String(instance.sshPort)}`,
+    `  IdentityFile ${identity}`,
+    '  IdentitiesOnly yes',
+    `  UserKnownHostsFile ${join(dir, 'known_hosts')}`,
+    '  StrictHostKeyChecking accept-new',
+    '  BatchMode yes',
+    '  LogLevel ERROR',
+    '  IgnoreUnknown WarnWeakCrypto',
+    '  WarnWeakCrypto no',
+  ];
+}
+
+export interface KeyClient extends SshClient {
+  // each alias's public key file, to bind to a token
+  readonly publicKeyPaths: ReadonlyMap<string, string>;
+}
+
+// Keys that authorized_keys does not list, one Host alias each, for binding
+// to tokens (docs/guides/ssh.md#keys-bound-to-tokens)
+export async function setupKeyClient(aliases: readonly string[]): Promise<KeyClient> {
+  const scratch = join(REPO_ROOT, '.cache', 'e2e');
+
+  mkdirSync(scratch, { recursive: true });
+
+  const dir = mkdtempSync(join(scratch, 'ssh-keys-'));
+  const config = join(dir, 'config');
+
+  const publicKeyPaths = new Map<string, string>();
+
+  const blocks: string[] = [];
+
+  for (const alias of aliases) {
+    const key = join(dir, alias);
+
+    await createKey(key, alias);
+
+    publicKeyPaths.set(alias, `${key}.pub`);
+    blocks.push(...buildHostBlock(dir, alias, key));
+  }
+
+  writeFileSync(config, [...blocks, ''].join('\n'));
+
+  return {
+    configArgs: ['-F', config],
+    dir,
+    publicKeyPaths,
+    cleanup: () => {
+      rmSync(dir, { recursive: true, force: true });
+
+      return Promise.resolve();
+    },
+  };
+}
+
 // A key for the dev instance's gateway, authorized in its data directory,
 // and an ssh config for the gateway's published port. The config turns off
 // OpenSSH's post-quantum warning, which ssh2 cannot satisfy.
@@ -56,25 +115,13 @@ export async function setupSshClient(): Promise<SshClient> {
     throw new Error(`could not authorize the suite's key: ${added.stderr.trim()}`);
   }
 
-  const buildHostBlock = (alias: string, identity: string): string[] => [
-    `Host ${alias}`,
-    '  HostName 127.0.0.1',
-    `  Port ${String(instance.sshPort)}`,
-    `  IdentityFile ${identity}`,
-    '  IdentitiesOnly yes',
-    `  UserKnownHostsFile ${join(dir, 'known_hosts')}`,
-    '  StrictHostKeyChecking accept-new',
-    '  BatchMode yes',
-    '  LogLevel ERROR',
-    '  IgnoreUnknown WarnWeakCrypto',
-    '  WarnWeakCrypto no',
-  ];
-
   writeFileSync(
     config,
-    [...buildHostBlock(SSH_HOST, key), ...buildHostBlock(SSH_HOST_OTHER_KEY, otherKey), ''].join(
-      '\n',
-    ),
+    [
+      ...buildHostBlock(dir, SSH_HOST, key),
+      ...buildHostBlock(dir, SSH_HOST_OTHER_KEY, otherKey),
+      '',
+    ].join('\n'),
   );
 
   return {

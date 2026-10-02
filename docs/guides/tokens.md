@@ -48,7 +48,7 @@ Only a `manage` token with no patterns manages tokens.
 
 ```sh
 imp token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdout
-imp token ls                                   # names, scopes, imps; never secrets
+imp token ls                                   # names, scopes, imps, SSH keys; never secrets
 imp token whoami                               # who impd takes this CLI for
 imp token rm ci
 ```
@@ -61,8 +61,8 @@ The dashboard has a **Tokens** page for a `manage` token with no patterns. It sh
 new token once, with a copy button.
 
 Removing a token ends what it opened at once: its dashboard sessions, its event streams, its open
-`/exec` and `/tunnel` sockets (close code 1008), and exec tickets it asked for that are not used
-yet.
+`/exec` and `/tunnel` sockets (close code 1008), the SSH logins made with its keys, and exec tickets
+it asked for that are not used yet.
 
 ## Each way in
 
@@ -81,9 +81,10 @@ fails with `FORBIDDEN` over the socket. A refused WebSocket upgrade has no statu
 
 ### SSH keys
 
-Each key in `authorized_keys` gives `exec` and tunnels (`ssh -L`) on every imp. The file is the host
-owner's, like the root token. The audit log names the key by its comment. Keys tied to a scoped
-token are a later step.
+A key bound to a token logs in as that token, with its scope and imps; the login needs `exec` on the
+imp. Each key in `authorized_keys` gives `exec` and tunnels (`ssh -L`) on every imp: the file is the
+host owner's, like the root token. [Keys bound to tokens](./ssh.md#keys-bound-to-tokens) covers
+binding, moving keys out of the file, and `IMP_SSH_AUTHORIZED_KEYS`.
 
 ### MCP
 

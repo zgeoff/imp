@@ -10,6 +10,7 @@ test('it fills every setting from its default when the env is empty', () => {
     proxyPort: 7080,
     portBase: 20_000,
     sshPort: 22,
+    sshAuthorizedKeys: true,
     brokerPort: 7081,
     egressDnsPort: 7053,
     brokerTestUpstreams: null,
@@ -76,6 +77,12 @@ test('IMP_SSH_PORT=0 turns the SSH gateway off', () => {
   expect(loadConfig({ IMP_SSH_PORT: '2222' }).sshPort).toBe(2222);
   expect(loadConfig({ IMP_SSH_PORT: '0' }).sshPort).toBeNull();
   expect(() => loadConfig({ IMP_SSH_PORT: '-1' })).toThrow();
+});
+
+test('IMP_SSH_AUTHORIZED_KEYS=false turns the authorized_keys file off', () => {
+  expect(loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'false' }).sshAuthorizedKeys).toBeFalse();
+  expect(loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'true' }).sshAuthorizedKeys).toBeTrue();
+  expect(() => loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'no' })).toThrow();
 });
 
 test('it needs the root dataset with the zfs backend', () => {

@@ -177,6 +177,27 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // SSH keys bound to tokens (#63); impd deletes a token's keys with it
+  '009_add_token_ssh_keys': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('token_ssh_keys')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('token_id', 'text', (c) => c.notNull().references('tokens.id'))
+        .addColumn('fingerprint', 'text', (c) => c.notNull().unique())
+        .addColumn('public_key', 'text', (c) => c.notNull())
+        .addColumn('comment', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createIndex('token_ssh_keys_token_id')
+        .on('token_ssh_keys')
+        .column('token_id')
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

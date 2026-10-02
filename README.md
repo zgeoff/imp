@@ -61,28 +61,28 @@ imp restore box clean             # and back
 imp fork box box-2                # a second copy to try something else in
 ```
 
-| Command                                | What it does                                                       |
-| -------------------------------------- | ------------------------------------------------------------------ |
-| `new [name]`                           | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`) |
-| `ls`, `info`                           | list imps; show RAM use and the budget                             |
-| `exec <name> -- cmd`                   | run a command (`-t` for a terminal)                                |
-| `console <name>`                       | open a shell in a session that outlives the terminal               |
-| `sessions <name>`, `attach <name>`     | list sessions; attach to one from any machine                      |
-| `checkpoint`, `checkpoints`, `restore` | save, list and roll back disk states                               |
-| `fork <source> <name>`                 | copy an imp's disk, or a checkpoint (`--from`)                     |
-| `disk resize <name> <size>`            | grow an imp's disk; the guest grows into it                        |
-| `gc [--dry-run]`                       | remove storage no imp, checkpoint or image names                   |
-| `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
-| `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
-| `url <name>`                           | print the imp's local and tailnet URLs                             |
-| `policy <name> [open\|box\|none]`      | show or set what the imp may reach (`--allow` for box)             |
-| `image build`, `add`, `ls`, `rm`       | manage images                                                      |
-| `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
-| `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |
-| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio               |
-| `token new`, `ls`, `rm`, `whoami`      | scoped API tokens, limited to some imps if you like                |
-| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)              |
-| `completion bash\|zsh\|fish`           | print the shell completion script                                  |
+| Command                                  | What it does                                                           |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| `new [name]`                             | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`)     |
+| `ls`, `info`                             | list imps; show RAM use and the budget                                 |
+| `exec <name> -- cmd`                     | run a command (`-t` for a terminal)                                    |
+| `console <name>`                         | open a shell in a session that outlives the terminal                   |
+| `sessions <name>`, `attach <name>`       | list sessions; attach to one from any machine                          |
+| `checkpoint`, `checkpoints`, `restore`   | save, list and roll back disk states                                   |
+| `fork <source> <name>`                   | copy an imp's disk, or a checkpoint (`--from`)                         |
+| `disk resize <name> <size>`              | grow an imp's disk; the guest grows into it                            |
+| `gc [--dry-run]`                         | remove storage no imp, checkpoint or image names                       |
+| `sleep`, `wake`, `hold <name> <time>`    | sleep by hand; keep an imp awake for a while                           |
+| `start`, `stop`, `rm`                    | boot cold, shut down, destroy                                          |
+| `url <name>`                             | print the imp's local and tailnet URLs                                 |
+| `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
+| `image build`, `add`, `ls`, `rm`         | manage images                                                          |
+| `secret add`, `ls`, `rm`                 | store API tokens in impd, never in a guest                             |
+| `grant`, `revoke`, `grants`, `audit`     | let an imp use a token through the host-side broker                    |
+| `mcp --prefix <p>`                       | serve imps to a coding agent as MCP tools over stdio                   |
+| `token new`, `ls`, `rm`, `key`, `whoami` | scoped API tokens and their SSH keys, limited to some imps if you like |
+| `login <url>`, `host ls`, `use`, `rm`    | save impd hosts and their tokens; pick one (`--host`)                  |
+| `completion bash\|zsh\|fish`             | print the shell completion script                                      |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
 [Connectors](docs/guides/connectors.md) covers secrets and grants; [tokens](docs/guides/tokens.md)
@@ -125,9 +125,11 @@ checkpoints, images and RAM in a browser, with a console.
 
 ## SSH
 
-With your public key in `/var/lib/imp/ssh/authorized_keys`, `ssh box@imp` lands in the imp `box`
-over the tailnet, and wakes it if it sleeps. `scp`, `sftp`, port forwards and editors that work over
-SSH, such as VS Code Remote SSH, work too. The [SSH guide](./docs/guides/ssh.md) has the setup.
+With your public key bound to a token
+(`imp token new laptop --scope exec --ssh-key ~/.ssh/id_ed25519.pub`) or in
+`/var/lib/imp/ssh/authorized_keys`, `ssh box@imp` lands in the imp `box` over the tailnet, and wakes
+it if it sleeps. `scp`, `sftp`, port forwards and editors that work over SSH, such as VS Code Remote
+SSH, work too. The [SSH guide](./docs/guides/ssh.md) has the setup.
 
 ## Ports
 

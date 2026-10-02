@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { utils } from 'ssh2';
+import { formatKeyFingerprint } from './authorized-keys';
 
 // The gateway's files live in <dataDir>/ssh, owner-only.
 export function setupSshDir(dataDir: string): string {
@@ -54,7 +54,5 @@ export function readFingerprint(privateKey: string): string {
     throw parsed;
   }
 
-  const digest = createHash('sha256').update(parsed.getPublicSSH()).digest('base64');
-
-  return `SHA256:${digest.replace(/=+$/, '')}`;
+  return formatKeyFingerprint(parsed.getPublicSSH());
 }

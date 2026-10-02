@@ -22,6 +22,10 @@ const EnvSchema = z.object({
 
   // 0 turns the SSH gateway off
   IMP_SSH_PORT: z.coerce.number().pipe(z.int().min(0).max(65_535)).default(22),
+
+  // false: <data>/ssh/authorized_keys logs nobody in; only keys bound to
+  // tokens do
+  IMP_SSH_AUTHORIZED_KEYS: z.enum(['true', 'false']).default('true'),
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
   IMP_EGRESS_DNS_PORT: PortSchema.default(7053),
@@ -58,6 +62,9 @@ export interface Config {
 
   // the SSH gateway's port, or null when it is off
   readonly sshPort: number | null;
+
+  // whether a key in <data>/ssh/authorized_keys logs in
+  readonly sshAuthorizedKeys: boolean;
 
   // the credential broker's port on every guest's gateway address
   readonly brokerPort: number;
@@ -167,6 +174,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     proxyPort: parsed.IMP_PROXY_PORT,
     portBase: parsed.IMP_PORT_BASE,
     sshPort: parsed.IMP_SSH_PORT === 0 ? null : parsed.IMP_SSH_PORT,
+    sshAuthorizedKeys: parsed.IMP_SSH_AUTHORIZED_KEYS === 'true',
     brokerPort: parsed.IMP_BROKER_PORT,
     egressDnsPort: parsed.IMP_EGRESS_DNS_PORT,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,

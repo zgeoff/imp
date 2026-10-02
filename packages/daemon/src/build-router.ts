@@ -332,10 +332,19 @@ export function buildRouter(deps: RouterDeps) {
           name: context.input.name,
           scope: context.input.scope,
           imps: context.input.imps ?? null,
+          sshKeys: context.input.sshKeys ?? [],
         }),
       ),
       delete: os.tokens.delete.handler(async (context) => {
         await deps.tokens.remove(context.input.name);
+
+        return {};
+      }),
+      addKey: os.tokens.addKey.handler((context) =>
+        deps.tokens.addKey(context.input.name, context.input.key),
+      ),
+      removeKey: os.tokens.removeKey.handler(async (context) => {
+        await deps.tokens.removeKey(context.input.name, context.input.fingerprint);
 
         return {};
       }),

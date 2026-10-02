@@ -274,6 +274,7 @@ export function createFakeImpd(): FakeImpd {
           name: context.input.name,
           scope: context.input.scope,
           imps: context.input.imps ?? null,
+          sshKeys: [],
           createdAt: NOW,
         };
 
@@ -288,6 +289,16 @@ export function createFakeImpd(): FakeImpd {
           fake.tokens.findIndex((token) => token.name === context.input.name),
           1,
         );
+
+        return {};
+      }),
+      addKey: os.tokens.addKey.handler((context) => {
+        registerCall('tokens.addKey', context.input);
+
+        return { fingerprint: 'SHA256:fake', type: 'ssh-ed25519', comment: '' };
+      }),
+      removeKey: os.tokens.removeKey.handler((context) => {
+        registerCall('tokens.removeKey', context.input);
 
         return {};
       }),

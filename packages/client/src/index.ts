@@ -9,6 +9,7 @@ export type {
   ImpState,
   Scope,
   Session,
+  SshKey,
   SystemInfo,
   Token,
 } from '@imp/api';

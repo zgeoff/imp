@@ -33,6 +33,8 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
+import { createAuthorizedKeys } from './ssh/authorized-keys';
+import { setupSshDir } from './ssh/host-key';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { createDiskBudget } from './storage/disk-budget';
@@ -229,11 +231,19 @@ async function main(): Promise<void> {
   const audit = createApiAudit({ db, now: Date.now, log: printLog });
   const revocations = createRevocations();
 
+  // a key in this file cannot be bound to a token, so the gateway and the
+  // token store read the same one
+  const authorizedKeys = createAuthorizedKeys(
+    join(setupSshDir(config.dataDir), 'authorized_keys'),
+    printLog,
+  );
+
   const tokens = await loadTokenStore({
     db,
     rootToken: token,
     now: Date.now,
     onRemove: revocations.revoke,
+    isFileKey: authorizedKeys.isListed,
   });
 
   const peers = createForwardedPeers(Date.now);
@@ -291,7 +301,17 @@ async function main(): Promise<void> {
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
 
-  const ssh = await startSsh({ config, db, imps, log: printLog, audit, now: Date.now });
+  const ssh = await startSsh({
+    config,
+    db,
+    imps,
+    authorizedKeys,
+    tokens,
+    revocations,
+    log: printLog,
+    audit,
+    now: Date.now,
+  });
 
   const idle = createIdleLoop({ config, db, imps, log: printLog });
 

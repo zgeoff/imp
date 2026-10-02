@@ -168,7 +168,7 @@ export function handleSession(session: Session, context: SshConnectionContext): 
         context.impName,
         request,
         program.feature,
-        context.keyName,
+        context.actor,
       );
     } catch (error) {
       channel.stderr.write(`imp: ${formatFailure(error)}${newline}`);

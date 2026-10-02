@@ -2,11 +2,13 @@ import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { Server } from 'ssh2';
 import type { AuthContext, ClientInfo, Connection } from 'ssh2';
+import { isCallerAllowed } from '../auth/caller';
+import type { Caller } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
 import { createAgentForwarding } from './agent-forwarding';
-import type { AuthorizedKeys } from './authorized-keys';
 import { formatFailure } from './channel-io';
 import { handleForward, resolveSocketTarget, resolveTcpTarget } from './forward-channel';
+import type { LoginKeys } from './login-keys';
 import { handleSession } from './session-channel';
 import type { SshBackend, SshConnectionContext } from './ssh-connection-context';
 
@@ -27,8 +29,11 @@ const KEEPALIVE_COUNT_MAX = 3;
 
 export interface SshGatewayDeps {
   readonly hostKey: string;
-  readonly authorizedKeys: AuthorizedKeys;
+  readonly keys: LoginKeys;
   readonly backend: SshBackend;
+
+  // aborts when the token or key with this id is removed; null for none
+  readonly readRevocation: (id: string | null) => AbortSignal | null;
   readonly log: (message: string) => void;
 }
 
@@ -45,15 +50,16 @@ interface PendingSocket {
   readonly timer: Timer;
 }
 
-// a full login with its imp and the key's name, a key query to accept, or
+// a full login with its imp and who it runs as, a key query to accept, or
 // a refusal
 type LoginOutcome = Login | 'query' | 'rejected';
 
 interface Login {
   readonly imp: ImpRecord;
+  readonly caller: Caller;
 
-  // the key's comment in authorized_keys, which the audit log names
-  readonly keyName: string;
+  // the bound key's id; null for a key in authorized_keys
+  readonly keyId: string | null;
 }
 
 // The SSH gateway: `ssh <imp>@<host>` lands in the imp, waking it if needed.
@@ -222,23 +228,23 @@ function handleClient(
 
     onAuthenticated();
 
-    deps.log(`impd: ssh: ${granted.imp.name}: login from ${info.ip}`);
+    deps.log(`impd: ssh: ${granted.imp.name}: login from ${info.ip} as ${granted.caller.name}`);
 
     handleLogin(client, granted, buildSshEnv(info, socket), deps);
   });
 }
 
-// An unknown user and an unknown key get the same answer, so nobody can
-// probe for imp names. A key query is answered from the key alone. Any key
-// in authorized_keys logs in to any imp. Nothing here wakes the imp.
+// An unknown user, an unknown key and a key without `exec` on the imp get
+// one answer, so nobody can probe for imp names; a key query, whatever its
+// scope, is answered from the key alone. Nothing here wakes the imp.
 async function checkLogin(ctx: AuthContext, deps: SshGatewayDeps): Promise<LoginOutcome> {
   if (ctx.method !== 'publickey') {
     return 'rejected';
   }
 
-  const key = deps.authorizedKeys.find(ctx.key.data);
+  const found = deps.keys.findKey(ctx.key.data);
 
-  if (key === null) {
+  if (found === null) {
     return 'rejected';
   }
 
@@ -246,13 +252,24 @@ async function checkLogin(ctx: AuthContext, deps: SshGatewayDeps): Promise<Login
     return 'query';
   }
 
-  if (!key.verify(ctx.blob, ctx.signature, ctx.hashAlgo)) {
+  if (!found.key.verify(ctx.blob, ctx.signature, ctx.hashAlgo)) {
+    return 'rejected';
+  }
+
+  // Checked once, for the whole connection: every channel runs on this imp.
+  // That holds only because a token never changes (token-store.test.ts).
+  // Before the lookup, so the time taken shows nothing of which imps exist.
+  if (!isCallerAllowed(found.caller, 'exec', ctx.username)) {
     return 'rejected';
   }
 
   const imp = await deps.backend.findImp(ctx.username);
 
-  return imp === undefined ? 'rejected' : { imp, keyName: key.comment || `${key.type} key` };
+  if (imp === undefined || !isCallerAllowed(found.caller, 'exec', imp.name)) {
+    return 'rejected';
+  }
+
+  return { imp, caller: found.caller, keyId: found.keyId };
 }
 
 // An authenticated connection counts as activity until it closes. It starts
@@ -293,7 +310,7 @@ function handleLogin(
 
   const context: SshConnectionContext = {
     impName: imp.name,
-    keyName: granted.keyName,
+    actor: { kind: granted.caller.kind, name: granted.caller.name },
     backend,
     awake,
     sshEnv,
@@ -306,8 +323,11 @@ function handleLogin(
     await backend.recordActivity(imp.name).catch(() => null);
   };
 
+  const stopWatching = handleRevocations(client, [granted.caller.tokenId, granted.keyId], deps);
+
   client.on('close', () => {
     release();
+    stopWatching();
 
     agent.stop();
     void updateLastActive();
@@ -340,4 +360,32 @@ function buildSshEnv(info: ClientInfo, socket: Socket): readonly string[] {
     `SSH_CONNECTION=${client} ${socket.localAddress ?? ''} ${localPort}`,
     `SSH_CLIENT=${client} ${localPort}`,
   ];
+}
+
+// Removing the token or the key behind a login ends the connection. One that
+// logged in just before the removal gets a signal that is aborted already.
+function handleRevocations(
+  client: Connection,
+  ids: readonly (string | null)[],
+  deps: SshGatewayDeps,
+): () => void {
+  const signals = ids.map((id) => deps.readRevocation(id)).filter((signal) => signal !== null);
+
+  const stopClient = (): void => {
+    client.end();
+  };
+
+  for (const signal of signals) {
+    if (signal.aborted) {
+      stopClient();
+    } else {
+      signal.addEventListener('abort', stopClient, { once: true });
+    }
+  }
+
+  return () => {
+    for (const signal of signals) {
+      signal.removeEventListener('abort', stopClient);
+    }
+  };
 }

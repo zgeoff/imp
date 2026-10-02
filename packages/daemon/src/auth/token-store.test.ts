@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
+import { impContract } from '@imp/api';
+import { utils } from 'ssh2';
 import { setupTestDatabase } from '../db/test-database';
+import { readRejection } from '../read-rejection';
+import { formatKeyFingerprint } from '../ssh/authorized-keys';
+import { createEd25519Key } from '../ssh/host-key';
 import { ROOT_TOKEN_ID, loadTokenStore, readBearer } from './token-store';
 
 const NOW = 1_800_000_000_000;
@@ -9,6 +14,9 @@ async function setupTest() {
 
   const removed: string[] = [];
 
+  // the blobs authorized_keys lists, in base64
+  const fileKeys = new Set<string>();
+
   const load = () =>
     loadTokenStore({
       db: database.db,
@@ -17,9 +25,10 @@ async function setupTest() {
       onRemove: (id) => {
         removed.push(id);
       },
+      isFileKey: (blob) => fileKeys.has(blob.toString('base64')),
     });
 
-  return { ...database, removed, load, tokens: await load() };
+  return { ...database, removed, fileKeys, load, tokens: await load() };
 }
 
 test('the root token stays valid as root, with every scope', async () => {
@@ -59,7 +68,7 @@ test('a made token is stored hashed, survives a restart and authenticates', asyn
   });
 
   expect(restarted.list()).toEqual([
-    { name: 'ci', scope: 'exec', imps: ['dev-*'], createdAt: new Date(NOW) },
+    { name: 'ci', scope: 'exec', imps: ['dev-*'], sshKeys: [], createdAt: new Date(NOW) },
   ]);
 });
 
@@ -107,4 +116,182 @@ test('a bearer header gives its secret', () => {
   expect(readBearer('Bearer abc')).toBe('abc');
   expect(readBearer('Basic abc')).toBeNull();
   expect(readBearer(null)).toBeNull();
+});
+
+// a public key line with a comment, its fingerprint and its blob
+function createPublicKey(comment: string) {
+  const line = `${createEd25519Key().public} ${comment}`;
+  const parsed = utils.parseKey(line);
+
+  if (parsed instanceof Error) {
+    throw parsed;
+  }
+
+  const blob = parsed.getPublicSSH();
+
+  return { line, blob, fingerprint: formatKeyFingerprint(blob) };
+}
+
+test('a key bound to a token logs in as that token, after a restart too', async () => {
+  await using ctx = await setupTest();
+
+  const laptop = createPublicKey('me@laptop');
+  const desk = createPublicKey('me@desk');
+
+  await ctx.tokens.create({ name: 'dev', scope: 'exec', imps: ['dev-*'], sshKeys: [laptop.line] });
+
+  const added = await ctx.tokens.addKey('dev', desk.line);
+
+  expect(added).toEqual({ fingerprint: desk.fingerprint, type: 'ssh-ed25519', comment: 'me@desk' });
+
+  const restarted = await ctx.load();
+
+  expect(restarted.list()[0]?.sshKeys).toEqual([
+    { fingerprint: laptop.fingerprint, type: 'ssh-ed25519', comment: 'me@laptop' },
+    { fingerprint: desk.fingerprint, type: 'ssh-ed25519', comment: 'me@desk' },
+  ]);
+
+  const bound = restarted.findSshKey(laptop.blob);
+
+  expect(bound?.caller).toMatchObject({ kind: 'ssh', name: 'dev', scope: 'exec', imps: ['dev-*'] });
+  expect(bound?.caller.tokenId).toBe(ctx.tokens.findSshKey(laptop.blob)?.caller.tokenId ?? '');
+  expect(restarted.findSshKey(createPublicKey('other').blob)).toBeNull();
+});
+
+test('a key binds once: not twice, not to two tokens, and not while authorized_keys lists it', async () => {
+  await using ctx = await setupTest();
+
+  const key = createPublicKey('me@laptop');
+  const listed = createPublicKey('in the file');
+
+  ctx.fileKeys.add(listed.blob.toString('base64'));
+
+  await ctx.tokens.create({ name: 'a', scope: 'read', imps: null, sshKeys: [key.line] });
+  await ctx.tokens.create({ name: 'b', scope: 'read', imps: null });
+
+  const [again, twice, inFile, unknown] = await Promise.all([
+    readRejection(ctx.tokens.addKey('b', key.line)),
+    readRejection(
+      ctx.tokens.create({
+        name: 'c',
+        scope: 'read',
+        imps: null,
+        sshKeys: [listed.line, listed.line],
+      }),
+    ),
+    readRejection(ctx.tokens.addKey('b', listed.line)),
+    readRejection(ctx.tokens.addKey('nobody', key.line)),
+  ]);
+
+  expect(again).toMatchObject({ code: 'CONFLICT' });
+  expect(twice).toMatchObject({ code: 'CONFLICT' });
+  expect(inFile).toMatchObject({ code: 'CONFLICT' });
+  expect(String(inFile)).toContain('delete that line, then bind it');
+  expect(unknown).toMatchObject({ code: 'NOT_FOUND' });
+  expect(ctx.tokens.list().map((token) => token.name)).toEqual(['a', 'b']);
+});
+
+test('a bound key that authorized_keys lists later stays bound until its line goes', async () => {
+  await using ctx = await setupTest();
+
+  const key = createPublicKey('me@laptop');
+
+  await ctx.tokens.create({ name: 'a', scope: 'exec', imps: ['dev-*'], sshKeys: [key.line] });
+
+  ctx.fileKeys.add(key.blob.toString('base64'));
+
+  const [unbind, remove] = await Promise.all([
+    readRejection(ctx.tokens.removeKey('a', key.fingerprint)),
+    readRejection(ctx.tokens.remove('a')),
+  ]);
+
+  expect(unbind).toMatchObject({ code: 'CONFLICT' });
+  expect(remove).toMatchObject({ code: 'CONFLICT' });
+  expect(String(unbind)).toContain('delete that line, then unbind it');
+  expect(ctx.tokens.findSshKey(key.blob)?.caller.name).toBe('a');
+  expect(ctx.removed).toEqual([]);
+
+  ctx.fileKeys.clear();
+
+  await ctx.tokens.remove('a');
+
+  expect(ctx.tokens.findSshKey(key.blob)).toBeNull();
+});
+
+test('a line that is not a plain public key binds nothing', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.tokens.create({ name: 'ci', scope: 'read', imps: null });
+
+  const key = createPublicKey('x');
+
+  const failures = await Promise.all(
+    ['not a key', `restrict ${key.line}`, 'ssh-dss AAAA', 'ssh-ed25519 !!!'].map((line) =>
+      readRejection(ctx.tokens.addKey('ci', line)),
+    ),
+  );
+
+  for (const failure of failures) {
+    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+  }
+});
+
+test('a token holds at most 16 keys', async () => {
+  await using ctx = await setupTest();
+
+  const lines = Array.from({ length: 16 }, (_, index) => createPublicKey(String(index)).line);
+
+  await ctx.tokens.create({ name: 'ci', scope: 'read', imps: null, sshKeys: lines });
+
+  const failure = await readRejection(ctx.tokens.addKey('ci', createPublicKey('17').line));
+
+  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+});
+
+test('removing a key or its token reports the ids, and the key binds again with a new id', async () => {
+  await using ctx = await setupTest();
+
+  const key = createPublicKey('me@laptop');
+
+  await ctx.tokens.create({ name: 'a', scope: 'exec', imps: null, sshKeys: [key.line] });
+
+  const first = ctx.tokens.findSshKey(key.blob)?.keyId ?? '';
+
+  await ctx.tokens.removeKey('a', key.fingerprint);
+
+  expect(ctx.tokens.findSshKey(key.blob)).toBeNull();
+  expect(ctx.removed).toEqual([first]);
+
+  await ctx.tokens.addKey('a', key.line);
+
+  const second = ctx.tokens.findSshKey(key.blob)?.keyId;
+  const tokenId = ctx.tokens.findSshKey(key.blob)?.caller.tokenId ?? '';
+
+  expect(second).not.toBe(first);
+
+  await ctx.tokens.remove('a');
+
+  expect(ctx.tokens.findSshKey(key.blob)).toBeNull();
+  expect(ctx.removed).toEqual([first, tokenId]);
+
+  // the key is free for another token
+  await ctx.tokens.create({ name: 'b', scope: 'read', imps: null, sshKeys: [key.line] });
+
+  const missing = await readRejection(ctx.tokens.removeKey('a', key.fingerprint));
+
+  expect(missing).toMatchObject({ code: 'NOT_FOUND' });
+});
+
+// An ssh login checks its token once, at login (ssh-gateway.ts checkLogin).
+// A procedure that changes a token, such as a tokens.update, must revoke its
+// live connections, as delete does; add it here only with that.
+test('no token procedure changes a token in place', () => {
+  expect(Object.keys(impContract.tokens).toSorted()).toEqual([
+    'addKey',
+    'create',
+    'delete',
+    'list',
+    'removeKey',
+    'whoami',
+  ]);
 });

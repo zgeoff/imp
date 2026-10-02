@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Scope, Token } from '@zgeoff/imp-client';
+import type { Scope, SshKey, Token } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { Button } from '../components/button';
 import { ConfirmDialog } from '../components/confirm-dialog';
@@ -101,6 +101,7 @@ export function TokensPage() {
               <th>Token</th>
               <th>Scope</th>
               <th>Imps</th>
+              <th>SSH keys</th>
               <th>Made</th>
               <th aria-label="Actions" />
             </tr>
@@ -111,6 +112,7 @@ export function TokensPage() {
                 <td>{token.name}</td>
                 <td>{token.scope}</td>
                 <td>{token.imps === null ? 'every imp' : token.imps.join(', ')}</td>
+                <td>{formatSshKeys(token.sshKeys)}</td>
                 <td>{formatRelativeTime(token.createdAt, nowMs)}</td>
                 <td className={tableStyles['actions']}>
                   <Button
@@ -190,4 +192,15 @@ function readImpPatterns(form: FormData): string[] {
     .split(',')
     .map((pattern) => pattern.trim())
     .filter((pattern) => pattern !== '');
+}
+
+// each key by its comment and fingerprint; `imp token key add` binds them
+function formatSshKeys(keys: readonly SshKey[]): string {
+  if (keys.length === 0) {
+    return 'none';
+  }
+
+  return keys
+    .map((key) => (key.comment === '' ? key.fingerprint : `${key.comment} ${key.fingerprint}`))
+    .join(', ');
 }
