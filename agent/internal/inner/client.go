@@ -16,7 +16,7 @@ import (
 )
 
 // ErrDown is the error for a spawn or signal when the container is gone.
-var ErrDown = errors.New("the inner container is down")
+var ErrDown = proc.ErrDown
 
 // pendingCall waits for one reply. register runs in the read loop as the
 // reply arrives, before the loop reads on: a spawn's waiter must exist
@@ -202,22 +202,48 @@ func (c *client) signal(pid int, sig syscall.Signal, group bool) error {
 // Down closes when the container's socket does.
 func (c *client) Down() <-chan struct{} { return c.down }
 
-// startInit forks the inner init from agent, with flags, env and in cgroup, and
-// returns its outer pid, its reaped status and the agent's end of the
-// socket.
-func startInit(r *reaper.Reaper, agent string, cloneflags uintptr, cgroup *os.File, env []string) (int, <-chan reaper.Status, int, error) {
+// initProc is a started inner init.
+type initProc struct {
+	pid int
+	// pidfd kills it without a race with the pid's reuse
+	pidfd int
+	died  <-chan reaper.Status
+	// sock is the agent's end of the socket
+	sock int
+	// reaped is set once connect took a status from died
+	reaped bool
+	// gone, once set by watchExit, closes when the init is reaped, with
+	// status
+	gone     chan struct{}
+	status   reaper.Status
+	killOnce sync.Once
+}
+
+// watchExit takes over died: from now on gone tells the init's end, to any
+// number of waiters.
+func (p *initProc) watchExit() {
+	p.gone = make(chan struct{})
+	safe.Go("inner: reap", func() {
+		p.status = <-p.died
+		close(p.gone)
+	}, nil)
+}
+
+// startInit forks the inner init from agent, with flags, env and in cgroup.
+func startInit(r *reaper.Reaper, agent string, cloneflags uintptr, cgroup *os.File, env []string) (*initProc, error) {
 	pair, err := newSocketpair()
 	if err != nil {
-		return 0, nil, -1, fmt.Errorf("socketpair: %w", err)
+		return nil, fmt.Errorf("socketpair: %w", err)
 	}
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		unix.Close(pair[0])
 		unix.Close(pair[1])
-		return 0, nil, -1, err
+		return nil, err
 	}
 	defer devnull.Close()
-	sys := &syscall.SysProcAttr{Cloneflags: cloneflags}
+	pidfd := -1
+	sys := &syscall.SysProcAttr{Cloneflags: cloneflags, PidFD: &pidfd}
 	if cgroup != nil {
 		sys.UseCgroupFD = true
 		sys.CgroupFD = int(cgroup.Fd())
@@ -235,25 +261,53 @@ func startInit(r *reaper.Reaper, agent string, cloneflags uintptr, cgroup *os.Fi
 	unix.Close(pair[1])
 	if err != nil {
 		unix.Close(pair[0])
-		return 0, nil, -1, fmt.Errorf("start the inner init: %w", err)
+		return nil, fmt.Errorf("start the inner init: %w", err)
 	}
-	return pid, done, pair[0], nil
+	return &initProc{pid: pid, pidfd: pidfd, died: done, sock: pair[0]}, nil
 }
 
-// connect starts a client on sock once the inner init is ready, and closes
-// the socket when the init dies first.
-func connect(sock int, died <-chan reaper.Status) (*client, error) {
-	c := newClient(sock)
+// kill ends the init, and with it every process in its PID namespace, and
+// waits for it to be reaped. Call it once.
+func (p *initProc) kill() {
+	signal := func() {
+		if err := unix.PidfdSendSignal(p.pidfd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
+			log.Printf("inner: kill the init: %v", err)
+		}
+	}
+	switch {
+	case p.gone != nil:
+		select {
+		case <-p.gone:
+		default:
+			signal()
+			<-p.gone
+		}
+	case !p.reaped:
+		signal()
+		<-p.died
+		p.reaped = true
+	}
+	unix.Close(p.pidfd)
+}
+
+// connect starts a client on p's socket once the inner init is ready, and
+// closes the socket when the init dies first.
+func connect(p *initProc) (*client, error) {
+	c := newClient(p.sock)
 	ready := make(chan error, 1)
 	safe.Go("inner: ready", func() { ready <- c.waitReady() }, func() { ready <- errors.New("panic") })
 	select {
 	case err := <-ready:
 		if err != nil {
-			unix.Close(sock)
+			unix.Close(p.sock)
 			return nil, err
 		}
-	case st := <-died:
-		unix.Close(sock)
+	case st := <-p.died:
+		p.reaped = true
+		// the socket gets its EOF; the read must end before the fd number
+		// can go to another socket
+		<-ready
+		unix.Close(p.sock)
 		return nil, fmt.Errorf("the inner init exited before it was ready: %s", describe(st))
 	}
 	safe.Go("inner: socket", c.run, c.shut)
