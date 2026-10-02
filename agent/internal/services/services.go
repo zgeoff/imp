@@ -94,6 +94,32 @@ func New(runner proc.Runner, fsys fsroot.FS, image imagecfg.Config) *Supervisor 
 // Load reads Dir and starts every service in it, and the log rotator. A bad
 // file is logged and skipped so one typo cannot keep the rest from starting.
 func (s *Supervisor) Load() error {
+	safe.Go("services: log rotator", func() { s.rotateLogs(s.quit) }, nil)
+	return s.startAll()
+}
+
+// Reload drops every service and starts the directory's again, as a boot
+// would: for a container that started again, where every service died with
+// the old one.
+func (s *Supervisor) Reload() error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return nil
+	}
+	for _, svc := range s.services {
+		if !isClosed(svc.stop) {
+			close(svc.stop)
+		}
+	}
+	s.services = make(map[string]*service)
+	s.mu.Unlock()
+	return s.startAll()
+}
+
+func (s *Supervisor) startAll() error {
 	ents, err := s.fsys.ReadDir(s.dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -104,7 +130,6 @@ func (s *Supervisor) Load() error {
 			paths = append(paths, filepath.Join(s.dir, e.Name()))
 		}
 	}
-	safe.Go("services: log rotator", func() { s.rotateLogs(s.quit) }, nil)
 	for _, p := range paths {
 		def, err := readDef(s.fsys, p)
 		if err != nil {

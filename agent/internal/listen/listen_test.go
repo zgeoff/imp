@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
@@ -59,7 +60,7 @@ func (h *host) next(t *testing.T, want proto.Type, v any) {
 func newManager(t *testing.T) *Manager {
 	t.Helper()
 	t.Chdir(t.TempDir())
-	return NewManager("agents", "forwards", fmt.Sprint(os.Getuid()), testBinder())
+	return NewManager("agents", "forwards", fmt.Sprint(os.Getuid()), testBinder(), fsroot.Host)
 }
 
 var testReaper *reaper.Reaper
@@ -252,7 +253,7 @@ func TestOtherUsersAreRefused(t *testing.T) {
 
 func TestBadUserFails(t *testing.T) {
 	t.Chdir(t.TempDir())
-	m := NewManager("agents", "forwards", "no-such-user", testBinder())
+	m := NewManager("agents", "forwards", "no-such-user", testBinder(), fsroot.Host)
 	h := startHost(t, m.ServeAgent)
 	var got proto.ErrorResponse
 	h.next(t, proto.TypeResponse, &got)

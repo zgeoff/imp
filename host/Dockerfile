@@ -152,12 +152,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
       CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o "/out/$cmd" "./cmd/$cmd" || exit 1; \
     done
 
-# The drive is mounted read-only as the initial root, so stage 1's
-# mountpoints must exist in it. Fixed times and one processor make the drive
+# The drive is mounted read-only as the root of the agent's world, so its
+# mountpoints must exist in it: /user takes the user disk. Fixed times and one processor make the drive
 # the same bytes for the same agent, so an upgrade that leaves the agent
 # alone keeps every snapshot valid.
 RUN d=$(mktemp -d) && chmod 755 "$d" \
- && mkdir -p "$d/dev" "$d/proc" "$d/sys" "$d/newroot" \
+ && mkdir -p "$d/dev" "$d/proc" "$d/sys" "$d/run" "$d/user" \
  && cp /out/imp-agent "$d/imp-agent" \
  && mksquashfs "$d" /out/imp-system.squashfs -all-root -noappend -quiet -no-progress -comp zstd \
       -no-xattrs -mkfs-time 0 -all-time 0 -processors 1 \

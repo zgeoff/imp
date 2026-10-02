@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 func TestLoad(t *testing.T) {
@@ -41,7 +43,7 @@ func TestLoad(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := load(path)
+			got, err := load(fsroot.Host, path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -54,7 +56,7 @@ func TestLoad(t *testing.T) {
 
 func TestLoadUnreadable(t *testing.T) {
 	// a directory where the file should be: read fails, defaults remain
-	got, err := load(t.TempDir())
+	got, err := load(fsroot.Host, t.TempDir())
 	if err == nil || !reflect.DeepEqual(got, Config{Env: defaultEnv}) {
 		t.Fatalf("got %+v, %v", got, err)
 	}

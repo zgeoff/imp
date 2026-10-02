@@ -19,17 +19,17 @@ import (
 )
 
 // claimRequestTimeout bounds how long a connection may take to send its
-// request while stage 1 is parked.
+// request while the agent is parked.
 const claimRequestTimeout = 10 * time.Second
 
-// errNotParked answers any op but ping and claim while stage 1 is parked.
+// errNotParked answers any op but ping and claim while the agent is parked.
 var errNotParked = &proto.Error{
 	Code:    proto.ErrUnknownOp,
 	Message: "the guest is a boot template waiting for claim",
 }
 
 // parkForClaim serves ping and claim on the agent's vsock port until a
-// claim is applied, then closes the listener, so stage 2 can take the port.
+// claim is applied, then closes the listener, so the server can take the port.
 // It opens no inet socket: the template's snapshot holds no TCP state.
 // docs/architecture/boot-templates.md#claim has the order of the steps.
 func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) error) (proto.Claim, error) {
@@ -38,7 +38,7 @@ func parkForClaim(listen func() (net.Listener, error), apply func(proto.Claim) e
 		return proto.Claim{}, err
 	}
 	defer func() { l.Close() }()
-	log.Printf("stage1: parked as a boot template")
+	log.Printf("boot: parked as a boot template")
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -83,7 +83,7 @@ func serveParked(c net.Conn, apply func(proto.Claim) error) (proto.Claim, bool) 
 			return proto.Claim{}, false
 		}
 		if err := apply(*req.Claim); err != nil {
-			log.Printf("stage1: claim: %v", err)
+			log.Printf("boot: claim: %v", err)
 			w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: proto.ErrInternal, Message: err.Error()}})
 			return proto.Claim{}, false
 		}
@@ -95,7 +95,7 @@ func serveParked(c net.Conn, apply func(proto.Claim) error) (proto.Claim, bool) 
 	}
 }
 
-// claimParams is what stage 2 gets after a claim: the claim's values, never
+// claimParams is what the boot goes on with after a claim: the claim's values, never
 // the template's cmdline.
 func claimParams(c proto.Claim) cmdline.Params {
 	return cmdline.Params{
@@ -125,12 +125,12 @@ func applyClaim(c proto.Claim) error {
 	if err := addEntropy(c.Seed); err != nil {
 		errs = append(errs, fmt.Errorf("entropy: %w", err))
 	} else {
-		log.Printf("stage1: claim: crng reseeded from a %d-byte seed", len(c.Seed))
+		log.Printf("boot: claim: crng reseeded from a %d-byte seed", len(c.Seed))
 	}
 	if err := setMAC("eth0", c.MAC); err != nil {
 		errs = append(errs, fmt.Errorf("mac: %w", err))
 	}
-	// a disk still at the placeholder's size would fail the mount in stage 2;
+	// a disk still at the placeholder's size would fail its mount;
 	// an error now lets the host boot the kernel at once
 	readSize := func() (uint64, error) { return readDiskBytes(userDisk) }
 	if err := waitForDiskSize(readSize, c.DiskBytes, diskSizeTimeout); err != nil {

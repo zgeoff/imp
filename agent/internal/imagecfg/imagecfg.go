@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
-	"os"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proc"
 )
 
@@ -26,15 +26,15 @@ var defaultEnv = []string{
 	"TERM=xterm-256color",
 }
 
-// Load reads Path. A missing file gives the defaults; image env entries
-// override the defaults key by key.
-func Load() (Config, error) {
-	return load(Path)
+// Load reads Path in fsys, the user's root. A missing file gives the
+// defaults; image env entries override the defaults key by key.
+func Load(fsys fsroot.FS) (Config, error) {
+	return load(fsys, Path)
 }
 
-func load(path string) (Config, error) {
+func load(fsys fsroot.FS, path string) (Config, error) {
 	c := Config{}
-	b, err := os.ReadFile(path)
+	b, err := fsys.ReadFile(path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:

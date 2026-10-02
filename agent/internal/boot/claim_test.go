@@ -91,7 +91,7 @@ func TestParkForClaim(t *testing.T) {
 	if res.err != nil || res.claim.Hostname != "web" || len(applied) != 2 {
 		t.Fatalf("parkForClaim = %+v, %v; applied %d", res.claim, res.err, len(applied))
 	}
-	// the port is free for stage 2
+	// the port is free for the server
 	if _, err := net.Dial("unix", sock); err == nil {
 		t.Fatal("the parked listener is still open")
 	}
