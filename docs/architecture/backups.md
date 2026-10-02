@@ -83,7 +83,9 @@ password file. A restored host keeps its own token, CA and certificates.
    destroyed while restic reads.
 7. The tree closes, and `restic forget` applies the retention.
 
-One run, restore, prune or check runs at a time.
+One run, restore, prune or check runs at a time. A restore can therefore wait behind a scheduled
+run, and each restic command in it can wait up to 2 minutes more for another process's lock
+([Locks](#locks)).
 
 ### XFS
 
@@ -120,7 +122,10 @@ the last run, so a restart never puts a run off by a whole interval. A due run i
 
 - `forget` with `IMP_BACKUP_KEEP` (by default 24 hourly, 7 daily and 4 weekly points) after every
   run, manual ones included;
-- `prune` once a day, which holds restic's exclusive lock;
+- `prune` once a day, which holds restic's exclusive lock. A prune that meets another process's lock
+  tries again on the next 5-minute check, up to 6 prunes in a row (30 minutes, after which restic
+  counts a lock left behind as stale), then waits for the next run; one that fails for another
+  reason waits for the next run;
 - after a failed run, the next try waits 5 minutes, then twice as long after each failure in a row,
   up to the interval, so a full bucket does not freeze every running guest every few minutes;
 - `check --read-data-subset=5%` once a week. A failure logs
@@ -218,6 +223,12 @@ each run, restore, prune and check, so a lock its own crashed restic left never 
 The host container has a fixed host name (`imp-host` in `deploy/`, the container name in
 `scripts/dev.sh`) so a restarted container recognizes its own locks; with a changing name, such a
 lock blocks prune and check for up to 30 minutes.
+
+A live lock is not stale, and impd never removes it. Every restic command impd runs passes
+`--retry-lock 2m`, so it waits up to 2 minutes for another process's lock: the user's own restic, or
+a second host on a shared repository. `imp backup ls` runs `restic snapshots --no-lock`. It only
+reads snapshot files, so it neither waits behind a prune or a check nor makes them fail, and it runs
+outside the one-at-a-time rule above.
 
 ## Tests
 

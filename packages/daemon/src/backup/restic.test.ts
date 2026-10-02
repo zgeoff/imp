@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { CommandResult } from '../process/run-command';
 import type { BackupConfig } from './backup-config';
-import { createRestic, parseBackupSummary, parseSnapshots } from './restic';
+import { createRestic, isResticLocked, parseBackupSummary, parseSnapshots } from './restic';
 
 const CONFIG: BackupConfig = {
   repository: 's3:http://127.0.0.1:9000/imp',
@@ -51,7 +51,7 @@ test('it runs restic at the lowest priority with a capped Go runtime and no impd
     process.env['TAILSCALE_AUTHKEY'] = saved;
   }
 
-  expect(recorder.argvs).toEqual(['nice -n 19 ionice -c 3 restic unlock --quiet']);
+  expect(recorder.argvs).toEqual(['nice -n 19 ionice -c 3 restic --retry-lock 2m unlock --quiet']);
 
   expect(recorder.envs[0]).toMatchObject({
     RESTIC_REPOSITORY: CONFIG.repository,
@@ -72,7 +72,7 @@ test('it creates the repository only when restic reports there is none', async (
 
   await missing.restic.setupRepository();
 
-  expect(missing.argvs.map((argv) => argv.split(' restic ')[1])).toEqual([
+  expect(missing.argvs.map((argv) => argv.split(' restic --retry-lock 2m ')[1])).toEqual([
     'cat config --quiet',
     'init --quiet',
   ]);
@@ -118,7 +118,7 @@ test('it tags every backup and limits forget to impd snapshots', async () => {
     '/imps/i1',
   ]);
 
-  expect(recorder.argvs.map((argv) => argv.split(' restic ')[1])).toEqual([
+  expect(recorder.argvs.map((argv) => argv.split(' restic --retry-lock 2m ')[1])).toEqual([
     'backup --json --host impd --tag imp-backup --tag run=r1 --tag imp=web /data/backup/tree',
     'forget --quiet --tag imp-backup --group-by host --keep-hourly 24 --keep-daily 7 --keep-weekly 4',
     'restore --quiet --sparse --target /data/backup/restore/x --include /imps/i1 a1b2c3:/data/backup/tree',
@@ -137,8 +137,154 @@ test('it reports the last line of restic output when a command fails', async () 
   const checkError = await recorder.restic.check('1/5').catch(String);
 
   expect(checkError).toBe(
-    'Error: restic check exited 1: Fatal: pack 9f2c: ciphertext verification failed',
+    'ResticError: restic check exited 1: Fatal: pack 9f2c: ciphertext verification failed',
   );
+});
+
+test('a lock failure names the holder, from plain or --json output', async () => {
+  const held = 'repository is already locked exclusively by PID 1292 on imp-zfs by root';
+  const hint = 'the `unlock` command can be used to remove stale locks';
+
+  const recorder = setupRecorder([
+    { exitCode: 11, stdout: '', stderr: `unable to create lock in backend: ${held}\n${hint}\n` },
+    {
+      exitCode: 11,
+      stdout: '',
+      stderr: `${JSON.stringify({ message_type: 'exit_error', code: 11, message: `unable to create lock in backend: ${held}\n${hint}` })}\n`,
+    },
+  ]);
+
+  const pruneError = await recorder.restic.prune().catch((error: unknown) => error);
+  const listError = await recorder.restic.listSnapshots().catch((error: unknown) => error);
+
+  for (const error of [pruneError, listError]) {
+    expect(String(error)).toContain(held);
+    expect(String(error)).not.toContain(hint);
+    expect(isResticLocked(error)).toBeTrue();
+  }
+
+  expect(isResticLocked(new Error('restic prune exited 11'))).toBeFalse();
+});
+
+const LOCKING_OUTPUT: Readonly<Record<string, string>> = {
+  snapshots: '[]',
+  backup: JSON.stringify({
+    message_type: 'summary',
+    snapshot_id: 'a1',
+    files_new: 0,
+    files_changed: 0,
+    files_unmodified: 0,
+    data_added: 0,
+  }),
+};
+
+test('with --retry-lock, the lock failure is still the line that names the holder', async () => {
+  // restic 0.19.1's text, with the line it can print first while it waits
+  const stderr = [
+    'repo already locked, waiting up to 2m0s for the lock',
+    'unable to create lock in backend: repository is already locked exclusively by PID 40 on 78a6135f8901 by root (UID 0, GID 0)',
+    'lock was created at 2026-10-02 07:41:13 (2.477798054s ago)',
+    'storage ID ab39f58b',
+    'the `unlock` command can be used to remove stale locks',
+  ].join('\n');
+
+  const recorder = setupRecorder([{ exitCode: 11, stdout: '', stderr }]);
+
+  const error = await recorder.restic.prune().catch(String);
+
+  expect(error).toBe(
+    'ResticError: restic prune exited 11: unable to create lock in backend: repository is already locked exclusively by PID 40 on 78a6135f8901 by root (UID 0, GID 0)',
+  );
+});
+
+test('a snapshot that is gone is NOT_FOUND for a restore or a dump', async () => {
+  const gone = {
+    exitCode: 1,
+    stdout: '',
+    stderr: 'Fatal: failed to find snapshot: no matching ID found for prefix "deadbeef"\n',
+  };
+
+  const recorder = setupRecorder([gone, gone]);
+
+  const restoreError = await recorder.restic
+    .restore('deadbeef', '/data/backup/tree', '/tmp/x', [])
+    .catch((error: unknown) => error);
+
+  const dumpError = await recorder.restic
+    .dump('deadbeef', '/data/backup/tree/manifest.json')
+    .catch((error: unknown) => error);
+
+  for (const error of [restoreError, dumpError]) {
+    expect(error).toMatchObject({ code: 'NOT_FOUND', message: 'backup deadbeef not found' });
+  }
+});
+
+// restic's own lock rule over one repository: forget, prune and check take
+// it alone, the rest share it, and --no-lock takes none. A command that
+// meets a lock it cannot share exits 11, unless --retry-lock lets it wait.
+function setupLockingRestic() {
+  const lock = { exclusive: false, shared: 0 };
+
+  const exclusiveCommands = new Set(['forget', 'prune', 'check']);
+
+  const run = async (argv: readonly string[]): Promise<CommandResult> => {
+    const args = argv.slice(argv.indexOf('restic') + 1);
+    const retries = args[0] === '--retry-lock';
+    const rest = retries ? args.slice(2) : args;
+    const command = rest[0] ?? '';
+    const exclusive = exclusiveCommands.has(command);
+    const locks = !rest.includes('--no-lock');
+    const isBlocked = () => locks && (lock.exclusive || (exclusive && lock.shared > 0));
+
+    while (isBlocked()) {
+      if (!retries) {
+        return { exitCode: 11, stdout: '', stderr: 'unable to create lock in backend\n' };
+      }
+
+      await Bun.sleep(5);
+    }
+
+    if (locks && exclusive) {
+      lock.exclusive = true;
+    } else if (locks) {
+      lock.shared += 1;
+    }
+
+    // the command's work, long enough for the other to start meanwhile
+    await Bun.sleep(30);
+
+    if (locks && exclusive) {
+      lock.exclusive = false;
+    } else if (locks) {
+      lock.shared -= 1;
+    }
+
+    return { exitCode: 0, stdout: LOCKING_OUTPUT[command] ?? '', stderr: '' };
+  };
+
+  return createRestic({ config: CONFIG, cacheDir: '/data/backup/cache', run });
+}
+
+test('a prune and a snapshots list at once both succeed, in either order', async () => {
+  const restic = setupLockingRestic();
+
+  const pruneFirst = await Promise.all([restic.prune(), restic.listSnapshots()]);
+
+  expect(pruneFirst).toEqual([undefined, []]);
+
+  const listFirst = await Promise.all([restic.listSnapshots(), restic.prune()]);
+
+  expect(listFirst).toEqual([[], undefined]);
+});
+
+test('a prune waits for a backup or a check that holds the lock', async () => {
+  const restic = setupLockingRestic();
+
+  const [backup] = await Promise.all([restic.backup('/data/backup/tree', []), restic.prune()]);
+
+  expect(backup.snapshotId).toBe('a1');
+
+  await Promise.all([restic.check('1/5'), restic.prune()]);
 });
 
 test('it lists snapshots oldest first and tolerates untagged ones', () => {

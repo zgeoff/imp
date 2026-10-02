@@ -26,7 +26,7 @@ import { BackupManifestSchema } from './backup-manifest';
 import type { BackupManifest, ManifestImage, ManifestImp } from './backup-manifest';
 import { readDatabaseCopy } from './read-database-copy';
 import type { DatabaseCopy } from './read-database-copy';
-import { createRestic } from './restic';
+import { createRestic, isResticLocked } from './restic';
 import type { Restic, ResticSnapshot } from './restic';
 import { writeChangedBlocks } from './write-changed-blocks';
 
@@ -37,6 +37,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const PRUNE_EVERY_MS = DAY_MS;
 const CHECK_EVERY_MS = 7 * DAY_MS;
 const CHECK_SUBSET = '5%';
+
+// Prunes in a row that may meet a lock before the next try waits for a run:
+// six ticks of 5 minutes outlast restic's 30 minutes, after which a lock
+// left behind is stale and unlock removes it.
+const PRUNE_LOCK_TRIES = 6;
 const ID_ATTEMPTS = 3;
 
 // the wait after a failed scheduled run, doubled for each failure in a row
@@ -119,7 +124,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   // a run, a restore, a prune and a check never overlap
   const mutex = createKeyedMutex();
   const runExclusive = <T>(task: () => Promise<T>) => mutex.runExclusive('backup', task);
-  const retry = { failures: 0, lastFailureAt: 0 };
+
+  // pruneLocks: prunes in a row that found another restic's lock. The next
+  // tick tries again, up to PRUNE_LOCK_TRIES, instead of waiting for a run.
+  const retry = { failures: 0, lastFailureAt: 0, pruneLocks: 0 };
 
   const isRunDue = (): boolean => {
     const at = now().getTime();
@@ -338,19 +346,30 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     }
   };
 
+  const runPrune = async (): Promise<void> => {
+    try {
+      await restic.unlock();
+      await restic.prune();
+
+      retry.pruneLocks = 0;
+
+      writeState({ lastPruneAt: now() });
+    } catch (error) {
+      retry.pruneLocks = isResticLocked(error) ? retry.pruneLocks + 1 : 0;
+
+      log(`impd: backup: PRUNE FAILED: ${readErrorMessage(error)}`);
+    }
+  };
+
   const runMaintenance = async (): Promise<void> => {
     const state = readState();
     const at = now().getTime();
 
     if (deps.backup.forget && at - (state.lastPruneAt?.getTime() ?? 0) >= PRUNE_EVERY_MS) {
-      try {
-        await restic.unlock();
-        await restic.prune();
+      // a run starts a new series of tries
+      retry.pruneLocks = 0;
 
-        writeState({ lastPruneAt: now() });
-      } catch (error) {
-        log(`impd: backup: PRUNE FAILED: ${readErrorMessage(error)}`);
-      }
+      await runPrune();
     }
 
     if (at - (state.lastCheckAt?.getTime() ?? 0) >= CHECK_EVERY_MS) {
@@ -663,6 +682,10 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     runScheduled: () =>
       runExclusive(async () => {
         if (!isRunDue()) {
+          if (retry.pruneLocks > 0 && retry.pruneLocks < PRUNE_LOCK_TRIES) {
+            await runPrune();
+          }
+
           return;
         }
 
