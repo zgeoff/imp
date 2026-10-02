@@ -19,6 +19,11 @@ export interface ExecOptions {
   // with DETACHED when impd ends the socket while the session runs on
   readonly session?: string;
 
+  // after a stop signal (SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGKILL), how
+  // long the rest of the group gets before the agent kills it; not with a
+  // tty. See ExecStarted.groupKill.
+  readonly killGraceMs?: number;
+
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
@@ -84,6 +89,7 @@ export function openExec(
     ...(options.cols !== undefined && { cols: options.cols }),
     ...(options.rows !== undefined && { rows: options.rows }),
     ...(options.session !== undefined && { session: options.session }),
+    ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
   });
 }
 

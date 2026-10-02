@@ -16,6 +16,10 @@ export interface AgentExecRequest {
 
   // starts this session, or attaches to it if it runs; needs a tty
   readonly session?: string;
+
+  // after a stop signal, how long the rest of the process group gets before
+  // the agent kills it; see docs/architecture/protocol.md#exec
+  readonly killGraceMs?: number;
 }
 
 // attaches to a session that exists
@@ -39,6 +43,11 @@ export interface ExecStream {
   // session that already ran
   readonly session: string | null;
   readonly created: boolean;
+
+  // the agent kills what is left of the group once the command stops after
+  // a stop signal, and sends the exit only then; false for an agent from
+  // before 0.8.0, which ignores killGraceMs
+  readonly groupKill: boolean;
   readonly writeStdin: (data: Uint8Array) => void;
 
   // resolves once the stdin written so far is on its way to the guest; a
@@ -67,6 +76,7 @@ const StartedSchema = z.object({
   pid: z.int(),
   session: z.string().optional(),
   created: z.boolean().optional(),
+  kill_grace_ms: z.int().optional(),
 });
 
 const DetachedSchema = z.object({ reason: z.string() });
@@ -78,7 +88,13 @@ export async function openExecStream(
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  const stream = await openStream(vsockPath, { op: 'exec', ...request }, startTimeoutMs);
+  const { killGraceMs, ...rest } = request;
+
+  const stream = await openStream(
+    vsockPath,
+    { op: 'exec', ...rest, ...(killGraceMs !== undefined && { kill_grace_ms: killGraceMs }) },
+    startTimeoutMs,
+  );
 
   // an agent from before sessions ignores the name and runs a plain exec,
   // which would die with its connection; a woken imp keeps its old agent
@@ -137,6 +153,7 @@ async function openStream(
     pid: started.pid,
     session: started.session ?? null,
     created: started.created ?? false,
+    groupKill: (started.kill_grace_ms ?? 0) > 0,
     writeStdin: (data) => {
       connection.send(FRAME_TYPES.stdin, data);
     },

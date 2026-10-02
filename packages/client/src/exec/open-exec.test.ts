@@ -51,6 +51,9 @@ function buildFakeAgent() {
       ...stream,
       session: request.session ?? null,
       created: request.session !== undefined,
+
+      // an agent that runs `old` predates the group kill
+      groupKill: request.killGraceMs !== undefined && command !== 'old',
       close: () => {
         closed.push(command);
       },
@@ -148,6 +151,7 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
     pid: 42,
     session: null,
     created: false,
+    groupKill: false,
     writeStdin: (data) => {
       const text = new TextDecoder().decode(data);
 
@@ -519,7 +523,7 @@ test('openConsole with a session starts it and reports it', async () => {
 
   await handle.exit.catch(() => null);
 
-  expect(started).toEqual({ pid: 42, session: 'main', created: true });
+  expect(started).toEqual({ pid: 42, session: 'main', created: true, groupKill: false });
   expect(ctx.requests[0]).toMatchObject({ tty: true, session: 'main', cols: 100, rows: 30 });
 });
 
@@ -562,3 +566,32 @@ async function waitUntil(check: () => boolean): Promise<void> {
     await Bun.sleep(5);
   }
 }
+
+test('a kill grace reaches the agent, and started says whether it kills the group', async () => {
+  await using ctx = await setupExecTest();
+
+  for (const [command, groupKill] of [
+    ['wait', true],
+    ['old', false],
+  ] as const) {
+    const handle = await ctx.client.openExec('dev', [command], { killGraceMs: 2000 });
+    const started = await handle.started;
+
+    handle.close();
+
+    await handle.exit.catch(() => null);
+
+    expect(started.groupKill).toBe(groupKill);
+  }
+
+  expect(ctx.requests.map((request) => request.killGraceMs)).toEqual([2000, 2000]);
+
+  const plain = await ctx.client.openExec('dev', ['wait']);
+  const plainStarted = await plain.started;
+
+  expect(plainStarted.groupKill).toBe(false);
+
+  plain.close();
+
+  await plain.exit.catch(() => null);
+});

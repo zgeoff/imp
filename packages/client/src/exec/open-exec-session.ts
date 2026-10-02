@@ -21,6 +21,7 @@ export interface ExecStart {
 
   // starts this session, or attaches to it if it runs; needs a tty
   readonly session?: string;
+  readonly killGraceMs?: number;
 }
 
 // attaches to a session that runs: its replay, then live output
@@ -37,6 +38,11 @@ export interface ExecStarted {
   readonly pid: number;
   readonly session: string | null;
   readonly created: boolean;
+
+  // with killGraceMs: the agent kills what is left of the process group
+  // after a stop signal, and the exit arrives only once it is gone. False
+  // without killGraceMs, or for an imp whose agent predates it.
+  readonly groupKill: boolean;
 }
 
 // How a session ended. Only `exit` means the command ran to the end; its
@@ -214,6 +220,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
         pid: message.pid,
         session: message.session ?? null,
         created: message.created ?? false,
+        groupKill: message.groupKill ?? false,
       });
     } else if (message.type === 'exit') {
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });

@@ -76,6 +76,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
     // a tool's stdout sent to the client and not acked yet
     outUnacked: number;
+
+    // the start asked for a kill grace, so `started` says whether the
+    // agent kills the group itself
+    killGrace: boolean;
   } = {
     stream: null,
     starting: false,
@@ -86,6 +90,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     unacked: 0,
     acking: false,
     outUnacked: 0,
+    killGrace: false,
   };
 
   const send = (message: ExecServerMessage): void => {
@@ -218,6 +223,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       type: 'started',
       pid: stream.pid,
       ...(stream.session !== null && { session: stream.session, created: stream.created }),
+      ...(state.killGrace && { groupKill: stream.groupKill }),
     });
 
     for (const message of state.pending.splice(0)) {
@@ -324,6 +330,8 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         return;
       }
 
+      state.killGrace = control.killGraceMs !== undefined;
+
       const request: AgentExecRequest = {
         argv: control.argv,
         tty: control.tty,
@@ -332,6 +340,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         }),
         ...(control.cwd !== undefined && { cwd: control.cwd }),
         ...(control.session !== undefined && { session: control.session }),
+        ...(control.killGraceMs !== undefined && { killGraceMs: control.killGraceMs }),
         ...size,
       };
 

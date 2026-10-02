@@ -243,3 +243,57 @@ test('an attach or a kill on an agent from before sessions fails as AGENT_OUTDAT
 
   expect([attach, kill]).toMatchObject([{ code: 'AGENT_OUTDATED' }, { code: 'AGENT_OUTDATED' }]);
 });
+
+test('a kill grace goes to the agent, and its echo arms the group kill', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42, kill_grace_ms: 2000 }));
+  });
+
+  const stream = await openExecStream(vsock.path, {
+    argv: ['sleep', '9'],
+    tty: false,
+    killGraceMs: 2000,
+  });
+
+  expect(
+    decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() }),
+  ).toMatchObject({ op: 'exec', kill_grace_ms: 2000 });
+
+  expect(stream.groupKill).toBe(true);
+
+  stream.close();
+});
+
+// an agent from before 0.8.0 ignores the field and does not echo it, so the
+// host keeps cleaning up the group itself
+test('an old agent leaves the group kill off', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
+  });
+
+  const stream = await openExecStream(vsock.path, {
+    argv: ['sleep', '9'],
+    tty: false,
+    killGraceMs: 2000,
+  });
+
+  expect(stream.groupKill).toBe(false);
+
+  stream.close();
+});
+
+test('without a kill grace the request carries none', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 42 }));
+  });
+
+  const stream = await openExecStream(vsock.path, { argv: ['true'], tty: false });
+
+  expect(
+    decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() }),
+  ).not.toHaveProperty('kill_grace_ms');
+
+  expect(stream.groupKill).toBe(false);
+
+  stream.close();
+});

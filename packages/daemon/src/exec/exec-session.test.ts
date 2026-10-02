@@ -73,6 +73,7 @@ function buildFakeStream() {
     pid: 7,
     session: null,
     created: false,
+    groupKill: false,
     writeStdin: (data) => {
       input.push(`stdin:${new TextDecoder().decode(data)}`);
     },
@@ -332,6 +333,58 @@ test('it starts a named session', async () => {
 
   expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main' }]);
   expect(peer.sent).toEqual([{ type: 'started', pid: 7, session: 'main', created: true }]);
+});
+
+test('a kill grace goes to the agent, and started says whether it kills the group', async () => {
+  for (const groupKill of [true, false]) {
+    const fake = buildFakeStream();
+    const peer = buildFakePeer();
+    const requests: AgentExecRequest[] = [];
+
+    const session = createExecSession(
+      peer.peer,
+      buildBackend({
+        openExec: (_name, request) => {
+          requests.push(request);
+
+          return Promise.resolve({ ...fake.stream, groupKill });
+        },
+      }),
+    );
+
+    session.handleMessage({
+      type: 'start',
+      name: 'dev',
+      argv: ['sleep', '9'],
+      tty: false,
+      killGraceMs: 2000,
+    });
+
+    await Bun.sleep(5);
+
+    expect(requests).toEqual([{ argv: ['sleep', '9'], tty: false, killGraceMs: 2000 }]);
+    expect(peer.sent).toEqual([{ type: 'started', pid: 7, groupKill }]);
+  }
+});
+
+// a tty's group belongs to its terminal; a session always has one
+test('it refuses a kill grace with a tty', () => {
+  for (const extra of [{}, { session: 'main' }]) {
+    const peer = buildFakePeer();
+    const session = createExecSession(peer.peer, buildBackend({}));
+
+    session.handleMessage({
+      type: 'start',
+      name: 'dev',
+      argv: ['sh'],
+      tty: true,
+      killGraceMs: 2000,
+      ...extra,
+    });
+
+    expect(JSON.stringify(peer.sent[0])).toContain('a tty exec takes no kill grace');
+    expect(peer.closes).toEqual([1011]);
+  }
 });
 
 test('it refuses a session without a tty', () => {
