@@ -42,6 +42,7 @@
         "imp": "src/main.ts",
       },
       "dependencies": {
+        "@balena/dockerignore": "catalog:",
         "@imp/api": "workspace:*",
         "@imp/mcp": "workspace:*",
         "@orpc/client": "catalog:",
@@ -150,6 +151,7 @@
   },
   "catalog": {
     "@ark-ui/react": "5.37.2",
+    "@balena/dockerignore": "1.0.2",
     "@commitlint/cli": "21.2.0",
     "@happy-dom/global-registrator": "20.10.6",
     "@opentelemetry/api": "1.9.1",
@@ -214,6 +216,8 @@
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
+
+    "@balena/dockerignore": ["@balena/dockerignore@1.0.2", "", {}, "sha512-wMue2Sy4GAVTk6Ic4tJVcnfdau+gx2EnG7S+uAEe+TWJFqE4YoWN4/H8MSLj4eYJKxGg26lZwboEniNiNwZQ6Q=="],
 
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 

@@ -398,7 +398,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
   };
 }
 
-function toApiImage(image: ImageRecord): Image {
+export function toApiImage(image: ImageRecord): Image {
   return {
     id: image.id,
     name: image.name,

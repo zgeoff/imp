@@ -19,24 +19,29 @@ function formatMib(bytes: number): string {
   return `${(bytes / MIB).toFixed(1)} MiB`;
 }
 
-export function formatProgress(copied: number, total: number | null): string {
+export function formatProgress(copied: number, total: number | null, label = 'imp cp'): string {
   if (total === null || total === 0) {
-    return `imp cp: ${formatMib(copied)}`;
+    return `${label}: ${formatMib(copied)}`;
   }
 
   const percent = Math.min(100, Math.floor((copied / total) * 100));
 
-  return `imp cp: ${String(percent)}% ${formatMib(copied)} of ${formatMib(total)}`;
+  return `${label}: ${String(percent)}% ${formatMib(copied)} of ${formatMib(total)}`;
 }
 
-export function createCopyProgress(output: ProgressOutput, now = Date.now): CopyProgress {
+// `label` starts the line: the command that copies
+export function createCopyProgress(
+  output: ProgressOutput,
+  now = Date.now,
+  label = 'imp cp',
+): CopyProgress {
   const state = { copied: 0, total: null as number | null, drawnAt: 0, drawn: false };
 
   const renderLine = (): void => {
     state.drawnAt = now();
     state.drawn = true;
 
-    output.write(`\r${formatProgress(state.copied, state.total)}\u001B[K`);
+    output.write(`\r${formatProgress(state.copied, state.total, label)}\u001B[K`);
   };
 
   return {

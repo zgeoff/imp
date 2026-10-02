@@ -86,7 +86,8 @@
               "MessageEvent",
               "ReadableStream",
               "Headers",
-              "Request"
+              "Request",
+              "Blob"
             ],
             "package": "bun-types"
           },

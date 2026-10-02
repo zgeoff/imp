@@ -400,14 +400,14 @@ docker exec imp-host imp info     # the CLI is in the image and finds the token 
 
 ### Images on a server
 
-`imp image build <dir>` builds from a directory impd can see, and in the release image the repo is
-not there: the build fails with `does not exist on the impd host`. Build the image with the host's
-Docker, then add it:
+`imp image build <dir>` uploads the directory from the machine that runs the CLI, so a checkout on
+your laptop is enough ([images](./images.md#build-an-image)):
 
 ```sh
-docker build -t imp-base images/base
-imp image add imp-base --name base
+imp image build images/base --name base
 ```
+
+An image the host's Docker already has goes in with `imp image add <ref>`.
 
 Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `imp new` uses `ubuntu` and impd
 logs a warning at start.

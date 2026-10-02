@@ -20,6 +20,7 @@ import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
+import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
 import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
@@ -56,6 +57,7 @@ const STOP_DEADLINE_MS = 100_000;
 
 // at most per step before the sleep pass, which gets whatever is left
 const STOP_STEP_MAX_MS = 10_000;
+const BODY_SLACK_BYTES = 1024 ** 2;
 
 // Bounded, and a failure is logged: impd always reaches its exit. True when
 // the step finished in time. A ticker stop waits for a pass under way.
@@ -292,9 +294,15 @@ async function main(): Promise<void> {
     isReady: () => state.ready,
     now: Date.now,
     audit,
+    buildContexts: createBuildContextRoute({ config, images, diskBudget, audit, now: Date.now }),
   });
 
-  const app = api.app.listen(config.apiPort);
+  // Bun refuses a larger body before any route sees it; the slack leaves the
+  // build route room to answer 413 itself
+  const app = api.app.listen({
+    port: config.apiPort,
+    maxRequestBodySize: config.buildContextMaxBytes + BODY_SLACK_BYTES,
+  });
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
 
