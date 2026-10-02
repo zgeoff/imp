@@ -15,6 +15,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
@@ -28,7 +29,7 @@ func TestMain(m *testing.M) {
 }
 
 func newTestManager(t *testing.T) *Manager {
-	m := NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}))
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil))
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			m.Kill(s.Name)

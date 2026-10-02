@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -17,7 +18,7 @@ import (
 func listenThroughHelper(t *testing.T, network, address string) (*Bound, error) {
 	t.Helper()
 	d := testDialer("")
-	fds, err := d.runHelper(nil, []string{ListenCommand, network, address}, 2, proto.ErrListenFailed)
+	fds, err := d.runHelper([]string{ListenCommand, network, address}, 2, proto.ErrListenFailed)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +134,8 @@ func TestAListenRunsAsTheUser(t *testing.T) {
 	if err := os.WriteFile(helper, binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	d := NewDialer(testReaper, "dev", helper)
-	d.lookup = func(string) (*syscall.Credential, error) {
-		return &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}}, nil
-	}
+	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, "dev")
+	d.cred = &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}}
 
 	b, err := d.Listen("unix", filepath.Join(open, "app.sock"))
 	if err != nil {

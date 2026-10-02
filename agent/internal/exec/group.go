@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/cgroup"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -70,23 +71,23 @@ func (t *stopTimer) due() (time.Time, bool) {
 	return t.deadline, !t.deadline.IsZero()
 }
 
-// killGroup waits for the process group pgid to empty until deadline, then
+// killGroup waits for p's process group to empty until deadline, then
 // SIGKILLs what is left and waits up to groupKillWait for that to go.
 //
 // The leader is reaped by now, but its pid cannot have gone to another
 // process: Linux keeps a pid allocated while it is any live process's
-// process group id. So while one member is left, -pgid is still this
-// group, and no WNOWAIT trick to hold the leader's zombie is needed. Once
-// the group is empty, kill finds nothing (ESRCH) and the wait ends.
-func killGroup(pgid int, deadline time.Time) {
-	if waitGroupEmpty(pgid, deadline) {
+// process group id. So while one member is left, the group is still this
+// one, and no WNOWAIT trick to hold the leader's zombie is needed. Once
+// the group is empty, a signal finds nothing and the wait ends.
+func killGroup(p *proc.Process, deadline time.Time) {
+	if waitGroupEmpty(p, deadline) {
 		return
 	}
-	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+	if err := p.Signal(syscall.SIGKILL); err != nil {
 		return
 	}
-	if !waitGroupEmpty(pgid, time.Now().Add(groupKillWait)) {
-		log.Printf("exec: process group %d outlived SIGKILL by %s; sending the exit anyway", pgid, groupKillWait)
+	if !waitGroupEmpty(p, time.Now().Add(groupKillWait)) {
+		log.Printf("exec: process group %d outlived SIGKILL by %s; sending the exit anyway", p.Pid, groupKillWait)
 	}
 }
 
@@ -94,14 +95,14 @@ func killGroup(pgid int, deadline time.Time) {
 // with cgroup.kill and waits up to groupKillWait for that to go. It reaches
 // the members that left the process group (setsid, a double fork); they get
 // no SIGTERM first, only the kill at the deadline. If cgroup.kill fails, the
-// process group pgid still gets its SIGKILL.
-func killCgroup(g *cgroup.Group, pgid int, deadline time.Time) {
+// process group of p still gets its SIGKILL.
+func killCgroup(g *cgroup.Group, p *proc.Process, deadline time.Time) {
 	if g.WaitEmpty(deadline) {
 		return
 	}
 	if err := g.Kill(); err != nil {
 		log.Printf("exec: cgroup.kill: %v; killing the process group instead", err)
-		killGroup(pgid, deadline)
+		killGroup(p, deadline)
 		return
 	}
 	if !g.WaitEmpty(time.Now().Add(groupKillWait)) {
@@ -111,9 +112,9 @@ func killCgroup(g *cgroup.Group, pgid int, deadline time.Time) {
 
 // waitGroupEmpty polls until the group has no members or deadline passes,
 // and reports whether it emptied.
-func waitGroupEmpty(pgid int, deadline time.Time) bool {
+func waitGroupEmpty(p *proc.Process, deadline time.Time) bool {
 	for {
-		if syscall.Kill(-pgid, 0) == syscall.ESRCH {
+		if !p.GroupAlive() {
 			return true
 		}
 		if !time.Now().Before(deadline) {

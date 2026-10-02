@@ -14,22 +14,34 @@ import (
 	"sync"
 	"syscall"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
-// Spec describes one process to start.
+// Spec describes one process to start. User, HOME and the binary resolve
+// where the process starts: in the inner container, against its files.
 type Spec struct {
 	Argv []string
 	// Env is the full environment, KEY=VALUE.
 	Env []string
-	Dir string
+	// Dir is the working directory. Empty tries Workdir, then $HOME, and
+	// takes the first that is a directory, else /.
+	Dir     string
+	Workdir string
 	// User is "", "name", "uid", "name:group" or "uid:gid". Empty means root.
 	User string
+	// Cred, when set, replaces User (tests, with no /etc/passwd).
+	Cred *syscall.Credential
+	// SetHome sets HOME to User's home from /etc/passwd (not for root).
+	SetHome bool
 	// Files become fds 0, 1, 2, ... in the child.
 	Files []*os.File
 	// TTY makes the child a session leader with Files[0] as its controlling
 	// terminal. Otherwise the child gets its own process group.
 	TTY bool
+	// Helper runs the agent binary itself, with Argv[1:] as its arguments.
+	Helper bool
 	// Cgroup, if set, is the directory of the cgroup v2 leaf the child is
 	// born in (clone3 with CLONE_INTO_CGROUP).
 	Cgroup *os.File
@@ -42,6 +54,14 @@ type Process struct {
 	// InCgroup reports whether the child started in Spec.Cgroup. A spawn
 	// into the cgroup that fails is retried without it.
 	InCgroup bool
+	ctl      control
+}
+
+// control signals a started child where it runs.
+type control interface {
+	// signal sends sig to pid's process group, or to pid alone. Signal 0
+	// probes: an error means nothing is left to signal.
+	signal(pid int, sig syscall.Signal, group bool) error
 }
 
 // cgroupFallback logs the first spawn that could not use its cgroup.
@@ -49,31 +69,94 @@ var cgroupFallback sync.Once
 
 // Signal sends sig to the child's process group (the child leads it).
 func (p *Process) Signal(sig syscall.Signal) error {
-	return syscall.Kill(-p.Pid, sig)
+	return p.ctl.signal(p.Pid, sig, true)
 }
 
-// Start resolves the user and binary, then forks through r.
-func Start(r *reaper.Reaper, s Spec) (*Process, error) {
+// Kill sends SIGKILL to the child alone, never to a later process that
+// reused its pid.
+func (p *Process) Kill() error {
+	return p.ctl.signal(p.Pid, syscall.SIGKILL, false)
+}
+
+// GroupAlive reports whether any member of the child's process group lives:
+// only ESRCH means it is empty.
+func (p *Process) GroupAlive() bool {
+	return !errors.Is(p.ctl.signal(p.Pid, 0, true), syscall.ESRCH)
+}
+
+// NewProcess builds a Process another package started, with its own way to
+// signal it.
+func NewProcess(pid int, done <-chan reaper.Status, signal func(pid int, sig syscall.Signal, group bool) error) *Process {
+	return &Process{Pid: pid, Done: done, ctl: controlFunc(signal)}
+}
+
+type controlFunc func(pid int, sig syscall.Signal, group bool) error
+
+func (f controlFunc) signal(pid int, sig syscall.Signal, group bool) error { return f(pid, sig, group) }
+
+// Runner starts processes: in this process's world (Direct), or in the
+// inner container.
+type Runner interface {
+	Start(s Spec) (*Process, error)
+}
+
+// Direct forks children of this process through its reaper.
+type Direct struct {
+	Reaper *reaper.Reaper
+	// Agent is the agent binary, for Helper specs. AgentFile, when set, is
+	// an open fd of it that survives the path going away.
+	Agent     string
+	AgentFile *os.File
+}
+
+// Start resolves the user and binary, then forks through the reaper.
+func (d *Direct) Start(s Spec) (*Process, error) {
 	if len(s.Argv) == 0 {
 		return nil, errors.New("empty argv")
 	}
-	cred, _, err := LookupUser(s.User)
-	if err != nil {
-		return nil, err
+	cred, home := s.Cred, ""
+	if cred == nil {
+		var err error
+		if cred, home, err = LookupUser(s.User); err != nil {
+			return nil, err
+		}
 	}
-	path, err := LookPath(s.Argv[0], s.Env)
-	if err != nil {
-		return nil, err
+	env := s.Env
+	if s.SetHome && s.User != "" {
+		env = Merge(env, []string{"HOME=" + home})
+	}
+	files := s.Files
+	path := ""
+	if s.Helper {
+		path = d.Agent
+		if d.AgentFile != nil {
+			// the child's own fd of the binary: unmounting or replacing the
+			// path inside cannot break a helper
+			path = fmt.Sprintf("/proc/self/fd/%d", len(files))
+			files = append(append([]*os.File{}, files...), d.AgentFile)
+		}
+	} else {
+		var err error
+		if path, err = LookPath(s.Argv[0], env); err != nil {
+			return nil, err
+		}
 	}
 	dir := s.Dir
 	if dir == "" {
 		dir = "/"
+		for _, d := range []string{s.Workdir, Get(env, "HOME")} {
+			if fi, err := os.Stat(d); d != "" && err == nil && fi.IsDir() {
+				dir = d
+				break
+			}
+		}
 	}
-	fds := make([]uintptr, len(s.Files))
-	for i, f := range s.Files {
+	fds := make([]uintptr, len(files))
+	for i, f := range files {
 		fds[i] = f.Fd()
 	}
-	sys := &syscall.SysProcAttr{Credential: cred, Setpgid: !s.TTY}
+	pidfd := -1
+	sys := &syscall.SysProcAttr{Credential: cred, Setpgid: !s.TTY, PidFD: &pidfd}
 	if s.TTY {
 		sys.Setsid = true
 		sys.Setctty = true
@@ -83,9 +166,9 @@ func Start(r *reaper.Reaper, s Spec) (*Process, error) {
 		sys.UseCgroupFD = true
 		sys.CgroupFD = int(s.Cgroup.Fd())
 	}
-	attr := &syscall.ProcAttr{Dir: dir, Env: s.Env, Files: fds, Sys: sys}
+	attr := &syscall.ProcAttr{Dir: dir, Env: env, Files: fds, Sys: sys}
 	inCgroup := s.Cgroup != nil
-	pid, done, err := r.Start(func() (int, error) {
+	pid, done, err := d.Reaper.Start(func() (int, error) {
 		pid, err := syscall.ForkExec(path, s.Argv, attr)
 		if err == nil || !inCgroup {
 			return pid, err
@@ -107,20 +190,37 @@ func Start(r *reaper.Reaper, s Spec) (*Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", s.Argv[0], err)
 	}
-	return &Process{Pid: pid, Done: done, InCgroup: inCgroup}, nil
+	p := newDirectProcess(pid, pidfd, done)
+	p.InCgroup = inCgroup
+	return p, nil
 }
 
-// UserEnv returns env with HOME set to user's home from /etc/passwd. Root
-// (the empty user) keeps env as is.
-func UserEnv(env []string, user string) ([]string, error) {
-	if user == "" {
-		return env, nil
-	}
-	_, home, err := LookupUser(user)
-	if err != nil {
-		return nil, err
-	}
-	return Merge(env, []string{"HOME=" + home}), nil
+// newDirectProcess signals through a pidfd until the child is reaped, so a
+// Kill never reaches a process that reused the pid.
+func newDirectProcess(pid, pidfd int, reaped <-chan reaper.Status) *Process {
+	var mu sync.Mutex
+	done := make(chan reaper.Status, 1)
+	go func() {
+		st := <-reaped
+		mu.Lock()
+		if pidfd >= 0 {
+			unix.Close(pidfd)
+			pidfd = -1
+		}
+		mu.Unlock()
+		done <- st
+	}()
+	return NewProcess(pid, done, func(pid int, sig syscall.Signal, group bool) error {
+		if group {
+			return syscall.Kill(-pid, sig)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if pidfd < 0 {
+			return syscall.ESRCH
+		}
+		return unix.PidfdSendSignal(pidfd, sig, nil, 0)
+	})
 }
 
 // LookPath finds file in the PATH of env, not the agent's own PATH.

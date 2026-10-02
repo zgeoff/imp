@@ -60,16 +60,8 @@ func (d *Dialer) Listen(network, address string) (*Bound, error) {
 	if err := checkListenAddress(network, address); err != nil {
 		return nil, err
 	}
-	cred, err := d.lookup(d.user)
-	if err != nil {
-		return nil, &proto.Error{Code: proto.ErrListenFailed, Message: fmt.Sprintf("user %q: %v", d.user, err)}
-	}
-	var fds []int
-	if cred == nil {
-		fds, err = bindSocket(network, address)
-	} else {
-		fds, err = d.runHelper(cred, []string{ListenCommand, network, address}, 2, proto.ErrListenFailed)
-	}
+	// as root too: the path resolves in the user's world
+	fds, err := d.runHelper([]string{ListenCommand, network, address}, 2, proto.ErrListenFailed)
 	if err != nil {
 		return nil, err
 	}

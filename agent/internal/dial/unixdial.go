@@ -14,7 +14,6 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
 // A unix socket dial runs as the image's USER, the user an SSH login gets,
@@ -41,98 +40,74 @@ const (
 
 // Dialer serves dial requests; unix sockets dial as user.
 type Dialer struct {
-	reaper    *reaper.Reaper
-	user      string
-	agentPath string
+	runner proc.Runner
+	user   string
 
-	// resolves user; tests set credentials without /etc/passwd
-	lookup func(spec string) (*syscall.Credential, error)
+	// cred, when set, replaces user: tests set credentials without
+	// /etc/passwd
+	cred *syscall.Credential
 }
 
-// NewDialer dials unix sockets as user (the image USER spec) through the
-// agent binary at agentPath.
-func NewDialer(r *reaper.Reaper, user, agentPath string) *Dialer {
-	return &Dialer{reaper: r, user: user, agentPath: agentPath, lookup: lookupCredential}
-}
-
-func lookupCredential(spec string) (*syscall.Credential, error) {
-	cred, _, err := proc.LookupUser(spec)
-	return cred, err
+// NewDialer dials unix sockets as user (the image USER spec), through
+// helpers that runner starts where the sockets are: in the inner container.
+func NewDialer(runner proc.Runner, user string) *Dialer {
+	return &Dialer{runner: runner, user: user}
 }
 
 // openUnix connects to the socket at address as the dialer's user. Root
-// (a nil credential) connects in the agent itself.
+// connects through the helper too, so the path resolves in the user's
+// world and never in the agent's.
 func (d *Dialer) openUnix(address string) (net.Conn, error) {
 	if !filepath.IsAbs(address) {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "a unix socket path must be absolute (abstract sockets are not supported): " + address}
 	}
-	cred, err := d.lookup(d.user)
-	if err != nil {
-		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: fmt.Sprintf("user %q: %v", d.user, err)}
-	}
-	if cred == nil {
-		fd, err := connectUnix(address)
-		if err != nil {
-			return nil, err
-		}
-		return fileConn(fd, address)
-	}
-	return d.dialAsUser(cred, address)
-}
-
-// dialAsUser runs the helper with cred, or as the agent's own user for a
-// nil cred (tests).
-func (d *Dialer) dialAsUser(cred *syscall.Credential, address string) (net.Conn, error) {
-	fds, err := d.runHelper(cred, []string{HelperCommand, address}, 1, proto.ErrDialFailed)
+	fds, err := d.runHelper([]string{HelperCommand, address}, 1, proto.ErrDialFailed)
 	if err != nil {
 		return nil, err
 	}
 	return fileConn(fds[0], address)
 }
 
-// runHelper starts `imp-agent <args>` as cred and reads its answer: up to
-// max fds, the first a stream socket, or the error it met. A failure is
-// failCode, or BAD_REQUEST when the helper says so.
-func (d *Dialer) runHelper(cred *syscall.Credential, args []string, max int, failCode string) ([]int, error) {
+// runHelper starts `imp-agent <args>` as the dialer's user and reads its
+// answer: up to max fds, the first a stream socket, or the error it met. A
+// failure is failCode, or BAD_REQUEST when the helper says so.
+func (d *Dialer) runHelper(args []string, max int, failCode string) ([]int, error) {
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return nil, &proto.Error{Code: failCode, Message: "socketpair: " + err.Error()}
 	}
-	parent, child := pair[0], pair[1]
+	parent, child := pair[0], os.NewFile(uintptr(pair[1]), "helper")
 	defer unix.Close(parent)
-	devNull, err := unix.Open("/dev/null", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		unix.Close(child)
+		child.Close()
 		return nil, &proto.Error{Code: failCode, Message: "open /dev/null: " + err.Error()}
 	}
-	defer unix.Close(devNull)
+	defer devNull.Close()
 
 	// An empty env; the socketpair end as fd 0, and /dev/null as 1 and 2, so
 	// the helper's own fds land above 2 and a runtime crash message never
 	// goes into the target socket.
-	pidfd := -1
-	attr := &syscall.ProcAttr{
-		Dir:   "/",
-		Env:   []string{},
-		Files: []uintptr{uintptr(child), uintptr(devNull), uintptr(devNull)},
-		Sys:   &syscall.SysProcAttr{Credential: cred, Setpgid: true, PidFD: &pidfd},
-	}
-	argv := append([]string{d.agentPath}, args...)
-	_, _, err = d.reaper.Start(func() (int, error) {
-		return syscall.ForkExec(d.agentPath, argv, attr)
+	p, err := d.runner.Start(proc.Spec{
+		Argv:   append([]string{"imp-agent"}, args...),
+		Env:    []string{},
+		Dir:    "/",
+		User:   d.user,
+		Cred:   d.cred,
+		Helper: true,
+		Files:  []*os.File{child, devNull, devNull},
 	})
-	unix.Close(child)
+	child.Close()
 	if err != nil {
 		return nil, &proto.Error{Code: failCode, Message: "start the helper: " + err.Error()}
 	}
-	defer unix.Close(pidfd)
 
 	fds, err := receiveFds(parent, helperTimeout, max, failCode)
 	if err != nil {
 		// A helper that hangs must not outlive its request; the reaper reaps
-		// it. Through the pidfd: by now the helper may be gone and its pid
-		// reused by another process.
-		unix.PidfdSendSignal(pidfd, unix.SIGKILL, nil, 0)
+		// it. Kill reaches only this helper, never a process that reused its
+		// pid.
+		p.Kill()
 		return nil, err
 	}
 	return fds, nil

@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
@@ -66,7 +67,7 @@ func runTestHelper(address string) {
 // testDialer dials unix sockets as user; "" is root, which connects in the
 // agent itself
 func testDialer(user string) *Dialer {
-	return NewDialer(testReaper, user, os.Args[0])
+	return NewDialer(&proc.Direct{Reaper: testReaper, Agent: os.Args[0]}, user)
 }
 
 // listenUnix serves an echo on a socket in dir and returns its absolute
@@ -127,7 +128,7 @@ func countFds(t *testing.T) int {
 func TestTheHelperConnectsAndHandsTheSocketBack(t *testing.T) {
 	path := listenUnix(t, t.TempDir(), "echo.sock")
 
-	c, err := testDialer("").dialAsUser(nil, path)
+	c, err := testDialer("").openUnix(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestARelativePathOrAnAbstractSocketIsABadRequest(t *testing.T) {
 }
 
 // A symlink to a socket under the agent's own directory is refused. The
-// helper runs the same connectUnix, with the real impDir.
+// helper runs connectUnix, with the real impDir.
 func TestSymlinkIntoImpDirIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	old := impDir
@@ -166,8 +167,8 @@ func TestSymlinkIntoImpDirIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "unix", Address: link})
-	h.requireError(t, proto.ErrBadRequest)
+	_, err := connectUnix(link)
+	requireCode(t, err, proto.ErrBadRequest)
 }
 
 // A helper that hangs is killed at the deadline; one that dies, answers
@@ -179,7 +180,7 @@ func TestAHelperThatMisbehavesFailsTheDial(t *testing.T) {
 
 	for _, address := range []string{"/hang", "/die", "/junk", "/datagram", "/no/such.sock"} {
 		started := time.Now()
-		_, err := testDialer("").dialAsUser(nil, address)
+		_, err := testDialer("").openUnix(address)
 		requireCode(t, err, proto.ErrDialFailed)
 		if time.Since(started) > 2*time.Second {
 			t.Fatalf("%s took %s", address, time.Since(started))
@@ -190,7 +191,7 @@ func TestAHelperThatMisbehavesFailsTheDial(t *testing.T) {
 // The helper's stdout and stderr are /dev/null, so its own fds land above 2
 // and a runtime crash message never goes into the target socket.
 func TestTheHelperWritesNothingIntoTheSocket(t *testing.T) {
-	_, err := testDialer("").dialAsUser(nil, "/fds")
+	_, err := testDialer("").openUnix("/fds")
 
 	requireCode(t, err, proto.ErrDialFailed)
 	if !strings.Contains(err.Error(), "/dev/null,/dev/null") {
@@ -202,7 +203,7 @@ func TestTheHelperWritesNothingIntoTheSocket(t *testing.T) {
 func TestExtraFdsInTheAnswerAreClosed(t *testing.T) {
 	before := countFds(t)
 
-	c, err := testDialer("").dialAsUser(nil, "/two")
+	c, err := testDialer("").openUnix("/two")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,10 +285,8 @@ func TestAUnixDialRunsAsTheUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := NewDialer(testReaper, "dev", helper)
-	d.lookup = func(string) (*syscall.Credential, error) {
-		return &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{docker}}, nil
-	}
+	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, "dev")
+	d.cred = &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{docker}}
 
 	for _, ok := range []*peerListener{own, group} {
 		c, err := d.openUnix(ok.path)

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 func writeLog(t *testing.T, path string, size int64, head string) {
@@ -33,7 +35,7 @@ func TestRotateLog(t *testing.T) {
 	writeLog(t, big+".1", 1, "old")
 
 	for _, p := range []string{small, big, filepath.Join(dir, "missing.log")} {
-		if err := rotateLog(p); err != nil {
+		if err := rotateLog(fsroot.Host, p); err != nil {
 			t.Fatal(err)
 		}
 	}

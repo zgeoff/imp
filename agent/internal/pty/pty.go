@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 // Open returns a pty master and slave. It does its own ioctls instead of
@@ -36,6 +38,34 @@ func Open() (master, slave *os.File, err error) {
 		return nil, nil, err
 	}
 	return master, slave, nil
+}
+
+// OpenIn opens a pty on the devpts instance at <fsys>/dev/pts, such as the
+// inner container's, which its processes use as their controlling
+// terminal. The slave comes from the master (TIOCGPTPEER), not from a path.
+func OpenIn(fsys fsroot.FS) (master, slave *os.File, err error) {
+	master, err = fsys.OpenFile("/dev/pts/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	sfd := -1
+	err = control(master, func(fd int) error {
+		if err := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); err != nil {
+			return fmt.Errorf("unlockpt: %w", err)
+		}
+		r, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), unix.TIOCGPTPEER,
+			uintptr(unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC))
+		if errno != 0 {
+			return fmt.Errorf("TIOCGPTPEER: %w", errno)
+		}
+		sfd = int(r)
+		return nil
+	})
+	if err != nil {
+		master.Close()
+		return nil, nil, err
+	}
+	return master, os.NewFile(uintptr(sfd), "pty"), nil
 }
 
 // SetWinsize sets the terminal size. The kernel sends SIGWINCH to the

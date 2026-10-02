@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
@@ -22,7 +24,7 @@ func TestMain(m *testing.M) {
 }
 
 func newSupervisor(t *testing.T) *Supervisor {
-	s := New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
+	s := New(&proc.Direct{Reaper: testReaper}, fsroot.Host, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
 	s.logDir = t.TempDir()
 	return s
 }

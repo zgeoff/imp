@@ -6,7 +6,9 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -39,7 +42,9 @@ type Def = proto.ServiceDef
 
 // Supervisor runs every service.
 type Supervisor struct {
-	reaper *reaper.Reaper
+	runner proc.Runner
+	// fsys holds services.d and the logs: the user's files
+	fsys   fsroot.FS
 	image  imagecfg.Config
 	dir    string
 	logDir string
@@ -78,8 +83,10 @@ type service struct {
 	logMu sync.Mutex
 }
 
-func New(r *reaper.Reaper, image imagecfg.Config) *Supervisor {
-	return &Supervisor{reaper: r, image: image, dir: Dir, logDir: LogDir,
+// New runs services through runner, reading their files and writing their
+// logs in fsys.
+func New(runner proc.Runner, fsys fsroot.FS, image imagecfg.Config) *Supervisor {
+	return &Supervisor{runner: runner, fsys: fsys, image: image, dir: Dir, logDir: LogDir,
 		services: make(map[string]*service), quit: make(chan struct{}),
 		truncs: make(map[string]uint64)}
 }
@@ -87,13 +94,19 @@ func New(r *reaper.Reaper, image imagecfg.Config) *Supervisor {
 // Load reads Dir and starts every service in it, and the log rotator. A bad
 // file is logged and skipped so one typo cannot keep the rest from starting.
 func (s *Supervisor) Load() error {
-	paths, err := filepath.Glob(filepath.Join(s.dir, "*.json"))
-	if err != nil {
+	ents, err := s.fsys.ReadDir(s.dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	var paths []string
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".json") {
+			paths = append(paths, filepath.Join(s.dir, e.Name()))
+		}
 	}
 	safe.Go("services: log rotator", func() { s.rotateLogs(s.quit) }, nil)
 	for _, p := range paths {
-		def, err := readDef(p)
+		def, err := readDef(s.fsys, p)
 		if err != nil {
 			log.Printf("services: %s: %v", p, err)
 			continue
@@ -103,9 +116,9 @@ func (s *Supervisor) Load() error {
 	return nil
 }
 
-func readDef(path string) (Def, error) {
+func readDef(fsys fsroot.FS, path string) (Def, error) {
 	var d Def
-	b, err := os.ReadFile(path)
+	b, err := fsys.ReadFile(path)
 	if err != nil {
 		return d, err
 	}
@@ -243,18 +256,13 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 	if cwd == "" {
 		cwd = "/"
 	}
-	env, err := proc.UserEnv(proc.Merge(s.image.Env, svc.def.Env), user)
-	if err != nil {
-		devnull.Close()
-		logf.Close()
-		return reaper.Status{}, err
-	}
-	p, err := proc.Start(s.reaper, proc.Spec{
-		Argv:  svc.def.Argv,
-		Env:   env,
-		Dir:   cwd,
-		User:  user,
-		Files: []*os.File{devnull, logf, logf},
+	p, err := s.runner.Start(proc.Spec{
+		Argv:    svc.def.Argv,
+		Env:     proc.Merge(s.image.Env, svc.def.Env),
+		Dir:     cwd,
+		User:    user,
+		SetHome: true,
+		Files:   []*os.File{devnull, logf, logf},
 	})
 	devnull.Close()
 	logf.Close()
@@ -280,16 +288,16 @@ func (s *Supervisor) logPath(svc *service) string {
 // openLog rotates the service's log if it is too big, then opens it for
 // appending.
 func (s *Supervisor) openLog(svc *service) (*os.File, error) {
-	if err := os.MkdirAll(s.logDir, 0o755); err != nil {
+	if err := s.fsys.MkdirAll(s.logDir, 0o755); err != nil {
 		return nil, err
 	}
 	svc.logMu.Lock()
 	defer svc.logMu.Unlock()
 	path := s.logPath(svc)
-	if err := rotateLog(path); err != nil {
+	if err := rotateLog(s.fsys, path); err != nil {
 		log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
 	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	return s.fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 }
 
 func (s *Supervisor) setState(svc *service, state string) {
@@ -328,7 +336,7 @@ func (s *Supervisor) runsAsRoot(user string) bool {
 	if user == "" {
 		user = s.image.User
 	}
-	cred, _, err := proc.LookupUser(user)
+	cred, _, err := proc.LookupUserIn(s.fsys, user)
 	return err != nil || cred == nil || cred.Uid == 0
 }
 

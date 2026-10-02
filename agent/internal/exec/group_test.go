@@ -14,6 +14,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/cgroup"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -271,7 +272,7 @@ func TestCgroupSpawnFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), tree)
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), tree)
 	h := startExec(t, m, proto.Request{Argv: []string{"echo", "ran"}, KillGraceMs: 100})
 	h.started(t)
 	out, exit := h.wait(t, 5*time.Second)
@@ -295,7 +296,7 @@ func TestCgroupKillsEscapees(t *testing.T) {
 	t.Cleanup(func() { os.Remove("/sys/fs/cgroup/imp-exec-test") })
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	child := fmt.Sprintf(`trap "" TERM; echo $$ > %s; exec sleep 300`, pidFile)
-	m := NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), tree)
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), tree)
 	h := startExec(t, m, proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("setsid sh -c '%s' >/dev/null 2>&1 & exec sleep 300", child)},
 		KillGraceMs: 300,
@@ -336,7 +337,12 @@ func TestCgroupKillFallsBackToGroup(t *testing.T) {
 	}
 	killAfter(t, pid)
 
-	killCgroup(g, pid, time.Now())
+	killCgroup(g, proc.NewProcess(pid, nil, func(pid int, sig syscall.Signal, group bool) error {
+		if group {
+			pid = -pid
+		}
+		return syscall.Kill(pid, sig)
+	}), time.Now())
 	if alive(pid) {
 		t.Fatalf("pid %d survived a failed cgroup.kill", pid)
 	}
