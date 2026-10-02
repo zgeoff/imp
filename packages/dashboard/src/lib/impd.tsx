@@ -28,6 +28,7 @@ function buildQueryUtils(client: ImpClient) {
     checkpoints: client.checkpoints,
     images: client.images,
     exec: client.exec,
+    sessions: client.sessions,
     system: client.system,
   });
 }

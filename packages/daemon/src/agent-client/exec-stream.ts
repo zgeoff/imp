@@ -1,7 +1,8 @@
 import * as z from 'zod';
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
-import { readFrameWithin, requireNoAgentError } from './agent-requests';
+import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
+import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
 export interface AgentExecRequest {
@@ -12,14 +13,32 @@ export interface AgentExecRequest {
   readonly cols?: number;
   readonly rows?: number;
   readonly user?: string;
+
+  // starts this session, or attaches to it if it runs; needs a tty
+  readonly session?: string;
+}
+
+// attaches to a session that exists
+export interface AgentAttachRequest {
+  readonly session: string;
+  readonly cols?: number;
+  readonly rows?: number;
 }
 
 export type ExecEvent =
   | { readonly type: 'stdout' | 'stderr'; readonly data: Uint8Array }
-  | { readonly type: 'exit'; readonly code: number; readonly signal: number };
+  | { readonly type: 'exit'; readonly code: number; readonly signal: number }
+
+  // the agent ended a session connection: `taken_over` or `slow`
+  | { readonly type: 'detached'; readonly reason: string };
 
 export interface ExecStream {
   readonly pid: number;
+
+  // set for a session; created is false when the stream attached to a
+  // session that already ran
+  readonly session: string | null;
+  readonly created: boolean;
   readonly writeStdin: (data: Uint8Array) => void;
   readonly closeStdin: () => void;
   readonly resize: (cols: number, rows: number) => void;
@@ -27,19 +46,26 @@ export interface ExecStream {
   // a Linux signal number, sent to the whole process group
   readonly sendSignal: (signal: number) => void;
 
-  // stdout and stderr in order, then one exit; ends early when the
-  // connection drops
+  // stdout and stderr in order, then one exit or detached; ends early
+  // when the connection drops
   readonly events: () => AsyncGenerator<ExecEvent, void, undefined>;
 
-  // the agent sends SIGHUP to a process whose connection closes
+  // the agent sends SIGHUP to a plain exec whose connection closes; a
+  // session just detaches
   readonly close: () => void;
 }
 
 // a hung agent must not leave the exec, and the activity count it holds,
 // pending for good
 const EXEC_START_TIMEOUT_MS = 10_000;
-const StartedSchema = z.object({ pid: z.int() });
-const ExitSchema = z.object({ code: z.int(), signal: z.int() });
+
+const StartedSchema = z.object({
+  pid: z.int(),
+  session: z.string().optional(),
+  created: z.boolean().optional(),
+});
+
+const DetachedSchema = z.object({ reason: z.string() });
 
 // Opens an exec connection and waits for STARTED. Throws AgentError
 // (EXEC_FAILED) when the process cannot start.
@@ -48,12 +74,42 @@ export async function openExecStream(
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
+  const stream = await openStream(vsockPath, { op: 'exec', ...request }, startTimeoutMs);
+
+  // an agent from before sessions ignores the name and runs a plain exec,
+  // which would die with its connection; a woken imp keeps its old agent
+  if (request.session !== undefined && stream.session === null) {
+    stream.close();
+    throw buildAgentOutdatedError();
+  }
+
+  return stream;
+}
+
+// Attaches to a session and waits for STARTED; the replay follows as
+// stdout. Throws AgentError (NO_SESSION) when there is no such session, and
+// AGENT_OUTDATED for an agent from before sessions.
+export function openAttachStream(
+  vsockPath: string,
+  request: Readonly<AgentAttachRequest>,
+  startTimeoutMs = EXEC_START_TIMEOUT_MS,
+): Promise<ExecStream> {
+  return openStream(vsockPath, { op: 'session.attach', ...request }, startTimeoutMs).catch(
+    handleUnknownOp,
+  );
+}
+
+async function openStream(
+  vsockPath: string,
+  request: Readonly<Record<string, unknown>>,
+  startTimeoutMs: number,
+): Promise<ExecStream> {
   const connection = await openAgentConnection(vsockPath);
 
   let started: z.infer<typeof StartedSchema>;
 
   try {
-    connection.sendJson(FRAME_TYPES.request, { op: 'exec', ...request });
+    connection.sendJson(FRAME_TYPES.request, request);
 
     const first = await readFrameWithin(connection, startTimeoutMs);
 
@@ -75,6 +131,8 @@ export async function openExecStream(
 
   return {
     pid: started.pid,
+    session: started.session ?? null,
+    created: started.created ?? false,
     writeStdin: (data) => {
       connection.send(FRAME_TYPES.stdin, data);
     },
@@ -107,9 +165,15 @@ async function* readExecEvents(
 
       yield { type, data: frame.payload };
     } else if (frame.type === FRAME_TYPES.exit) {
-      const exit = ExitSchema.parse(decodeJsonPayload(frame));
+      const exit = AgentExitSchema.parse(decodeJsonPayload(frame));
 
       yield { type: 'exit', code: exit.code, signal: exit.signal };
+
+      return;
+    } else if (frame.type === FRAME_TYPES.detached) {
+      const detached = DetachedSchema.parse(decodeJsonPayload(frame));
+
+      yield { type: 'detached', reason: detached.reason };
 
       return;
     }

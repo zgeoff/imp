@@ -1,9 +1,12 @@
 import * as z from 'zod';
 import { NameSchema } from './name-schema';
+import { SessionNameSchema } from './session-schema';
 
 // `/exec` WebSocket: text messages are JSON control (the schemas below);
-// binary messages are one channel byte then raw bytes, so stream data is
-// never base64'd. The client sends `start` first and waits for `started`.
+// binary messages are one channel byte then raw bytes, never base64'd. The
+// client sends `start` or `attach` first and waits for `started`.
+
+// sessions outlive the socket: docs/architecture/daemon.md#sessions
 
 // auth is the bearer header, or `?ticket=` from `exec.ticket` for a browser;
 // a ticket starts only the imp it was issued for
@@ -29,19 +32,34 @@ export interface ExecFrame {
 
 const DimensionSchema = z.int().min(1).max(65_535);
 
-export const ExecStartMessageSchema = z.object({
-  type: z.literal('start'),
+export const ExecStartMessageSchema = z
+  .object({
+    type: z.literal('start'),
+    name: NameSchema,
+    argv: z.array(z.string()).min(1),
+    env: z.record(z.string(), z.string()).optional(),
+    cwd: z.string().optional(),
+    tty: z.boolean(),
+    cols: DimensionSchema.optional(),
+    rows: DimensionSchema.optional(),
+    session: SessionNameSchema.optional(),
+  })
+  .refine((start) => start.session === undefined || start.tty, {
+    message: 'a session needs a tty',
+    path: ['tty'],
+  });
+
+export const ExecAttachMessageSchema = z.object({
+  type: z.literal('attach'),
   name: NameSchema,
-  argv: z.array(z.string()).min(1),
-  env: z.record(z.string(), z.string()).optional(),
-  cwd: z.string().optional(),
-  tty: z.boolean(),
+  session: SessionNameSchema,
   cols: DimensionSchema.optional(),
   rows: DimensionSchema.optional(),
 });
 
 export const ExecClientMessageSchema = z.discriminatedUnion('type', [
   ExecStartMessageSchema,
+  ExecAttachMessageSchema,
   z.object({ type: z.literal('stdin_eof') }),
   z.object({ type: z.literal('resize'), cols: DimensionSchema, rows: DimensionSchema }),
   z.object({ type: z.literal('signal'), signal: z.string().regex(/^SIG[A-Z0-9]+$/) }),
@@ -49,8 +67,22 @@ export const ExecClientMessageSchema = z.discriminatedUnion('type', [
 
 export type ExecClientMessage = z.infer<typeof ExecClientMessageSchema>;
 
+// why a session socket ended without an exit: another client attached, the
+// client fell too far behind, or impd lost the agent connection (the
+// session runs on, and the client may attach again)
+export const DETACH_REASONS = ['taken_over', 'slow', 'lost'] as const;
+
+export type DetachReason = (typeof DETACH_REASONS)[number];
+
 export const ExecServerMessageSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('started'), pid: z.int().positive() }),
+  // session and created are set for a session; created is false when the
+  // socket attached to a session that already ran
+  z.object({
+    type: z.literal('started'),
+    pid: z.int().positive(),
+    session: SessionNameSchema.optional(),
+    created: z.boolean().optional(),
+  }),
 
   // code is null when a signal ended the process
   z.object({
@@ -58,6 +90,9 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
     code: z.int().nullable(),
     signal: z.string().nullable(),
   }),
+
+  // the last message of a session socket that ends without an exit
+  z.object({ type: z.literal('detached'), reason: z.enum(DETACH_REASONS) }),
 
   // code is a contract error (NOT_FOUND, RAM_BUDGET_EXCEEDED, …) or an agent
   // error (EXEC_FAILED, …); data is that error's data, as over RPC

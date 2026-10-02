@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
 import { imageCommand } from './image';
-import { newCommand } from './imps';
+import { consoleCommand, newCommand, readConsoleSession } from './imps';
+import { sessionsCommand } from './sessions';
 
 // These fail before any call to impd, so they need none: IMP_URL points
 // nowhere, and a call that slipped through would fail with another message.
@@ -66,4 +67,41 @@ test('an IMP_URL that is not an http URL is a usage error', async () => {
 
   expect(stderr).toHaveBeenCalledWith('imp: IMP_URL is not an http(s) URL: localhost:7070');
   expect(process.exitCode).toBe(2);
+});
+
+test('sessions kill with too few arguments fails instead of listing', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(sessionsCommand, { rawArgs: ['kill', 'box'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: usage: imp sessions kill <name> <session>');
+  expect(process.exitCode).toBe(2);
+});
+
+test('a detach key that is not ctrl-<key> is a usage error', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(consoleCommand, { rawArgs: ['box', '--detach-key', 'esc'] });
+
+  expect(stderr).toHaveBeenCalledWith(
+    String.raw`imp: --detach-key takes ctrl-<key> (a-z but h, i, j and m; @, \, ], ^ or _) or none, got esc`,
+  );
+
+  expect(process.exitCode).toBe(2);
+});
+
+test('an empty session name is a usage error', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(consoleCommand, { rawArgs: ['box', '--session', ''] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: a session needs a name');
+  expect(process.exitCode).toBe(2);
+});
+
+test('console uses the session main by default only on a terminal', () => {
+  expect(readConsoleSession(undefined, true)).toBe('main');
+  expect(readConsoleSession(undefined, false)).toBeNull();
+  expect(readConsoleSession('work', false)).toBe('work');
+  expect(readConsoleSession(false, true)).toBeNull();
 });

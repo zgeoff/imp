@@ -19,6 +19,7 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import { attachCommand, sessionsCommand } from './commands/sessions';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
 // it loads lazily: a static import would be a cycle.
@@ -39,6 +40,8 @@ export const mainCommand = defineCommand({
     stop: stopCommand,
     exec: execCommand,
     console: consoleCommand,
+    attach: attachCommand,
+    sessions: sessionsCommand,
     sleep: sleepCommand,
     wake: wakeCommand,
     hold: holdCommand,

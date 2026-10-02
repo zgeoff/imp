@@ -166,6 +166,14 @@ export function createFakeImpd(): FakeImpd {
         throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
       }),
     },
+    sessions: {
+      list: os.sessions.list.handler(() => []),
+      kill: os.sessions.kill.handler((context) => {
+        registerCall('sessions.kill', context.input);
+
+        return {};
+      }),
+    },
     system: {
       info: os.system.info.handler(() => fake.info),
     },
@@ -229,9 +237,11 @@ function buildSystemInfo(): SystemInfo {
     ramCommittedMib: 6144,
     awakeCount: 1,
     impCount: 2,
+    sessionCount: 0,
     firecrackerVersion: 'v1.17.0',
     guestKernel: { version: null, sha256: '0' },
     systemDrive: { sha256: '0' },
+    storage: { backend: 'xfs', usedBytes: 0, availableBytes: 0 },
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   };
 }

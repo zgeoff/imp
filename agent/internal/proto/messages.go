@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Op names.
 const (
@@ -13,6 +13,10 @@ const (
 	OpResumed      = "resumed"
 	OpShutdown     = "shutdown"
 	OpServicesList = "services.list"
+
+	// sessions: exec with a session name starts or attaches one
+	OpSessionAttach = "session.attach"
+	OpSessionKill   = "session.kill"
 )
 
 // Request is the first frame on every connection. Fields beyond Op are
@@ -29,6 +33,9 @@ type Request struct {
 	Rows uint16   `json:"rows,omitempty"`
 	User string   `json:"user,omitempty"`
 
+	// exec, session.attach, session.kill: the session name
+	Session string `json:"session,omitempty"`
+
 	// freeze: auto-thaw after this many ms (default 30000)
 	TimeoutMs int64 `json:"timeout_ms,omitempty"`
 
@@ -44,6 +51,8 @@ const (
 	ErrFrozen      = "FROZEN"
 	ErrPoweringOff = "POWERING_OFF"
 	ErrInternal    = "INTERNAL"
+	ErrNoSession   = "NO_SESSION"
+	ErrSessionCap  = "SESSION_LIMIT"
 )
 
 type Error struct {
@@ -69,9 +78,31 @@ type OK struct {
 }
 
 type Activity struct {
-	TCPEstablished int     `json:"tcp_established"`
-	ExecSessions   int     `json:"exec_sessions"`
-	Load1          float64 `json:"load1"`
+	TCPEstablished int `json:"tcp_established"`
+	// ExecSessions counts open exec and session.attach connections.
+	ExecSessions int           `json:"exec_sessions"`
+	Load1        float64       `json:"load1"`
+	Sessions     []SessionInfo `json:"sessions"`
+}
+
+// Session states.
+const (
+	SessionRunning = "running"
+	SessionExited  = "exited"
+)
+
+type SessionInfo struct {
+	Name     string   `json:"name"`
+	Pid      int      `json:"pid"`
+	Argv     []string `json:"argv"`
+	State    string   `json:"state"`
+	Attached bool     `json:"attached"`
+	Cols     uint16   `json:"cols"`
+	Rows     uint16   `json:"rows"`
+	// StartedUnixMs is the guest wall clock when the session started.
+	StartedUnixMs int64 `json:"started_unix_ms"`
+	// Exit is set once the process exited and its output drained.
+	Exit *Exit `json:"exit,omitempty"`
 }
 
 type ServiceStatus struct {
@@ -88,7 +119,22 @@ type ServicesList struct {
 
 type Started struct {
 	Pid int `json:"pid"`
+	// Session and Created are set on a session connection; Created is false
+	// when the connection attached to a session that already ran.
+	Session string `json:"session,omitempty"`
+	Created bool   `json:"created,omitempty"`
 }
+
+// Detached is why the guest ended a session connection without an EXIT.
+type Detached struct {
+	Reason string `json:"reason"`
+}
+
+// Detach reasons.
+const (
+	DetachTakenOver = "taken_over"
+	DetachSlow      = "slow"
+)
 
 type Resize struct {
 	Cols uint16 `json:"cols"`
@@ -104,4 +150,12 @@ type Signal struct {
 type Exit struct {
 	Code   int `json:"code"`
 	Signal int `json:"signal"`
+}
+
+// ExitOf builds the Exit for a reaped status: signal 0 means a normal exit.
+func ExitOf(code, signal int) Exit {
+	if signal != 0 {
+		return Exit{Code: 128 + signal, Signal: signal}
+	}
+	return Exit{Code: code}
 }

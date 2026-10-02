@@ -27,11 +27,12 @@ const (
 	TypeStdout   Type = 8  // guest→host, raw bytes
 	TypeStderr   Type = 9  // guest→host, raw bytes
 	TypeExit     Type = 10 // guest→host, JSON Exit; the last frame
+	TypeDetached Type = 11 // guest→host, JSON Detached; the last frame of a session connection
 )
 
 func (t Type) String() string {
 	names := [...]string{"", "REQUEST", "RESPONSE", "STDIN", "STDIN_EOF", "RESIZE",
-		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT"}
+		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT", "DETACHED"}
 	if int(t) < len(names) && names[t] != "" {
 		return names[t]
 	}

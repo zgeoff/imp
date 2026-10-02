@@ -24,6 +24,8 @@ error.
 | `IMP_DEFAULT_VCPUS`        | `2`               | vCPUs for `imp new` without `--cpus`.                                                                                                            |
 | `IMP_DEFAULT_MEMORY_MIB`   | `2048`            | Memory for `imp new` without `--memory`.                                                                                                         |
 | `IMP_DEFAULT_IMAGE`        | `base`            | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                       |
+| `IMP_STORAGE_BACKEND`      | `xfs`             | `xfs` or `zfs` ([storage](../architecture/storage.md)). impd refuses a data dir the other backend wrote.                                         |
+| `IMP_ZFS_ROOT`             | none              | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                              |
 | `IMP_DNS`                  | `1.1.1.1,8.8.8.8` | Guest DNS servers, comma-separated IPv4 addresses.                                                                                               |
 | `IMP_SUBNET`               | `10.66.0.0/16`    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535.                                |
 | `IMP_FIRECRACKER_BIN`      | `firecracker`     | The Firecracker binary.                                                                                                                          |
@@ -42,6 +44,8 @@ The host container's scripts in `host/` read these before impd starts.
 
 | Variable                  | Default                            | Read by            | Meaning                                                                                                            |
 | ------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `IMP_STORAGE_BACKEND`     | `xfs`                              | `setup-storage.sh` | `zfs` mounts `IMP_ZFS_ROOT` on `/var/lib/imp` and skips the loop file.                                             |
+| `IMP_ZFS_ROOT`            | none                               | `setup-storage.sh` | The dataset to mount; it must have `mountpoint=legacy`.                                                            |
 | `IMP_STORAGE_LOOP`        | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                |
 | `IMP_STORAGE_GIB`         | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
 | `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
@@ -75,8 +79,10 @@ the key is never printed. It sets `IMP_UPLINK_MTU` from this machine's default r
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
-`IMP_WAKE_RESERVE_MIB`, `IMP_DEFAULT_VCPUS`, `IMP_DEFAULT_MEMORY_MIB` and `IMP_TAILSCALE_HOSTNAME`
-to impd. Other impd variables keep their defaults in the dev container.
+`IMP_WAKE_RESERVE_MIB`, `IMP_DEFAULT_VCPUS`, `IMP_DEFAULT_MEMORY_MIB`, `IMP_TAILSCALE_HOSTNAME`,
+`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd. Other impd variables keep their defaults in the
+dev container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh`
+runs one on a throwaway pool.
 
 ## CLI
 

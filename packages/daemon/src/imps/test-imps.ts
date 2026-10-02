@@ -19,6 +19,7 @@ import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { createXfsBackend } from '../storage/xfs-backend';
 import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
 
@@ -68,7 +69,6 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   const db = await openDatabase(':memory:');
 
   const config = loadConfig({ IMP_DATA_DIR: dataDir, ...options.env });
-  const images = createImageService({ config, db });
   const fake = buildFakeVmm();
   const taps: string[] = [];
   const logs: string[] = [];
@@ -84,6 +84,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
       return Promise.resolve();
     });
+
+  const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
+  const images = createImageService({ config, db, storage });
 
   // a system drive file, as setupSystemFiles installs it
   const createSystemDrive = (drive: string): HostIdentity => {
@@ -120,7 +123,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         logs.push(message);
         options.onLog?.(message);
       },
-      cloneDisk,
+      storage,
       now: readClock,
     });
   };
@@ -144,7 +147,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     logs,
     imps: governed.imps,
     governor: governed.governor,
-    cloneDisk,
+    storage,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -167,7 +170,7 @@ type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'cloneDisk' | 'now'>;
+type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'storage' | 'now'>;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
 // that calls it without a socket, a no-op freeze and thaw, and `openExec` in
@@ -176,16 +179,18 @@ export function buildTestApp(
   ctx: Readonly<AppParts>,
   impd: Readonly<Impd>,
   token = TEST_TOKEN,
-  openExec?: ImpService['openExec'],
+
+  // a fake agent's streams in place of the VM's
+  agent: Partial<Pick<ImpService, 'openExec' | 'openAttach'>> = {},
 ) {
-  const imps: ImpService = openExec === undefined ? impd.imps : { ...impd.imps, openExec };
+  const imps: ImpService = { ...impd.imps, ...agent };
 
   const checkpoints = createCheckpointService({
     config: ctx.config,
     db: ctx.db,
     imps: impd.imps,
+    storage: ctx.storage,
     log: () => {},
-    cloneDisk: ctx.cloneDisk,
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
@@ -199,6 +204,7 @@ export function buildTestApp(
     checkpoints,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
+    storage: ctx.storage,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
     now: ctx.now,

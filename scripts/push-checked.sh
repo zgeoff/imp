@@ -19,6 +19,16 @@ for gate in format:check lint lint:shell typecheck deadcode test; do
     exit 1
   fi
 done
+# the go job's gates, as CI runs them in agent/
+unformatted=$(cd agent && gofmt -l .)
+if [[ -n $unformatted ]]; then
+  echo "push-checked: gofmt wants to reformat: $unformatted" >&2
+  exit 1
+fi
+if ! (cd agent && go vet ./... && go test -race ./...) > "$root/.cache/push-go.log" 2>&1; then
+  echo "push-checked: go failed; see .cache/push-go.log" >&2
+  exit 1
+fi
 cd "$root"
 LEFTHOOK=0 git -C "$root" push -q origin main
 echo "pushed $(git -C "$root" rev-parse --short main)"

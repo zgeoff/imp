@@ -352,6 +352,50 @@ jobs:
         if: always()
         run: docker rm -f imp-dev || true
 
+  # The ZFS storage backend against a real pool: scripts/test-zfs.sh puts a
+  # throwaway pool on a sparse file, with the zfs module Ubuntu's kernel
+  # ships. Not a required check until it has proven stable on GitHub's
+  # runners; the fake zfs in the unit tests runs in `checks` either way.
+  zfs:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Install ZFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zfsutils-linux
+          # zfs.ko sits in linux-modules-extra on some runner kernels
+          modinfo zfs >/dev/null 2>&1 \
+            || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe zfs
+          zfs version
+
+      - name: ZFS backend tests
+        run: sudo env "PATH=$PATH" scripts/test-zfs.sh
+
   # Main-only jobs go below with `if: github.event_name == 'push'` and
   # `needs:` on the gates above.
 

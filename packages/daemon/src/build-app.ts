@@ -15,6 +15,11 @@ import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
 import { isAuthorized } from './token';
 
+// Bun pings an idle exec socket and closes it when no answer comes, so a
+// client that vanished without a close (a laptop lid, dropped Wi-Fi) lets
+// go of its session, and of the imp's idle timer, within a minute
+const EXEC_SOCKET_OPTIONS = { idleTimeout: 30, sendPings: true } as const;
+
 export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
   readonly token: string;
 
@@ -54,7 +59,7 @@ export function buildApp(deps: AppDeps) {
   const sessionRoutes = createSessionRoutes(deps);
   const dashboard = createDashboardFiles(deps.config.dashboardDir);
 
-  const app = new Elysia()
+  const app = new Elysia({ websocket: EXEC_SOCKET_OPTIONS })
     .get('/health', () => ({ status: 'ok', ready: deps.isReady() }))
     .post('/auth/login', (context) => sessionRoutes.login(context.request), { parse: 'none' })
     .post('/auth/logout', (context) => sessionRoutes.logout(context.request), { parse: 'none' })
