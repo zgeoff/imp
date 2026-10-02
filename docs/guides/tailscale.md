@@ -6,20 +6,25 @@ that node on its own port. [Networking](../architecture/networking.md#urls) cove
 
 ## How it works
 
-`host/scripts/tailscale-up.sh` runs inside the host container. Without `TAILSCALE_AUTHKEY` it starts
-`tailscaled` from the saved node state when there is one (step 2), waits for `Running`, and skips
-the login; `deploy/bootstrap.sh` blanks the key once the node has joined. With neither a key nor
-saved state it does nothing. With a key it:
+`host/scripts/tailscale-up.sh` runs inside the host container. The key comes from
+`TAILSCALE_AUTHKEY`, or from the file `IMP_TAILSCALE_AUTHKEY_FILE` names (the
+[NixOS module](./nixos.md#the-tailscale-key) mounts one). With neither a key nor saved node state it
+does nothing. Otherwise it:
 
 1. Replaces `/etc/resolv.conf` with public resolvers (`IMP_DNS`, default `1.1.1.1,8.8.8.8`) if it
    points at `100.100.100.100`. See [DNS](#dns).
 2. Starts `tailscaled` in kernel TUN mode (`tailscale0`) unless one already runs. The container is
    privileged and has its own netns, so the TUN device and routes never touch the host.
-3. Runs
+3. With saved state, waits up to 15 s for the saved node to be `Running`. If it is, it skips the
+   login and never uses a key, which would make a second node; `deploy/bootstrap.sh` blanks the key
+   once the node has joined. If the saved node needs a login instead (`NeedsLogin`: it logged out,
+   or Tailscale deleted it after a long time offline), it goes on to step 4 with the key, and fails
+   without one.
+4. Runs
    `tailscale up --auth-key=file:... --hostname=${IMP_TAILSCALE_HOSTNAME:-imp} --advertise-tags=tag:imp --accept-dns=false --reset`.
-   The key goes through a 0600 temp file, so it never shows in argv. If the node is already
-   `Running` with the right hostname, it skips this.
-4. Waits for `Running` and prints the tailnet IP and MagicDNS name.
+   The key goes through a 0600 temp file, or the key file itself, so it never shows in argv. A node
+   that runs from saved state under another hostname logs in again only when there is a key.
+5. Waits for `Running` and prints the tailnet IP and MagicDNS name.
 
 `host/scripts/tailscale-down.sh` runs `tailscale logout` and stops `tailscaled`. Logout deletes an
 ephemeral node at once. A plain container stop does **not** log out.
@@ -41,8 +46,9 @@ node lifetime:
   it, so the new one becomes `imp-1`, `imp-2` and so on. The URLs change.
 
 The limit: an ephemeral node that stays offline is deleted by Tailscale. The time before that is
-Tailscale's choice, not ours. After that, the saved state is dead. `tailscale up --auth-key` then
-registers a fresh node with a new IP (and the old name, if it is free).
+Tailscale's choice, not ours, and a reinstall can take that long. After that, the saved state is
+dead: `tailscale-up.sh` sees `NeedsLogin` and joins again with the key, which registers a fresh node
+with a new IP (and the old name, if it is free). Without a key the node stays off the tailnet.
 
 For a long-lived host, use a non-ephemeral, tagged key, or an OAuth client
 (`--auth-key=tskey-client-...?ephemeral=false`). Tagged nodes have no key expiry. Keep the ephemeral

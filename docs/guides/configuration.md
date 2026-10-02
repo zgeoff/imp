@@ -117,20 +117,21 @@ set. The OTLP exporters read the other standard `OTEL_EXPORTER_OTLP_*` variables
 
 The host container's scripts in `host/` read these before impd starts.
 
-| Variable                  | Default                            | Read by            | Meaning                                                                                                            |
-| ------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `IMP_STORAGE_BACKEND`     | `xfs`                              | `setup-storage.sh` | `zfs` mounts `IMP_ZFS_ROOT` on `/var/lib/imp` and skips the loop file.                                             |
-| `IMP_ZFS_ROOT`            | none                               | `setup-storage.sh` | The dataset to mount; it must have `mountpoint=legacy`.                                                            |
-| `IMP_STORAGE_LOOP`        | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                |
-| `IMP_STORAGE_GIB`         | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
-| `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
-| `IMP_SUBNET`              | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
-| `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp (less 40, or 60 for IPv6). Unset: path MTU.                   |
-| `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                           |
-| `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
-| `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
-| `IMP_DNS`                 | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                          |
-| `IMP_DAEMON`              | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`. |
+| Variable                     | Default                            | Read by            | Meaning                                                                                                            |
+| ---------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `IMP_STORAGE_BACKEND`        | `xfs`                              | `setup-storage.sh` | `zfs` mounts `IMP_ZFS_ROOT` on `/var/lib/imp` and skips the loop file.                                             |
+| `IMP_ZFS_ROOT`               | none                               | `setup-storage.sh` | The dataset to mount; it must have `mountpoint=legacy`.                                                            |
+| `IMP_STORAGE_LOOP`           | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                |
+| `IMP_STORAGE_GIB`            | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
+| `IMP_STORAGE_FILE`           | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
+| `IMP_SUBNET`                 | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
+| `IMP_UPLINK_MTU`             | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp (less 40, or 60 for IPv6). Unset: path MTU.                   |
+| `TAILSCALE_AUTHKEY`          | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                           |
+| `IMP_TAILSCALE_AUTHKEY_FILE` | none                               | `tailscale-up.sh`  | A file that holds the key instead, read by `tailscale` only to join.                                               |
+| `IMP_TAILSCALE_HOSTNAME`     | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
+| `IMP_TAILSCALE_STATE_DIR`    | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
+| `IMP_DNS`                    | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                          |
+| `IMP_DAEMON`                 | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`. |
 
 **NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
 not pass `IMP_DNS`, so the dev instance uses the defaults.

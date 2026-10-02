@@ -1,10 +1,15 @@
 #!/bin/bash
 # Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
-# Runs inside the host container. Without TAILSCALE_AUTHKEY it starts
-# tailscaled from saved node state, so a joined node stays on the tailnet
-# after deploy/bootstrap.sh blanks the key; with neither it does nothing.
+# Runs inside the host container. With saved node state it starts tailscaled
+# from that state first, so a joined node stays on the tailnet without a key
+# (deploy/bootstrap.sh blanks it). Only when the saved node does not reach
+# Running (logged out, or deleted by the control plane after a long time
+# offline: NeedsLogin) does it join again, with the key if there is one.
+# With neither state nor key it does nothing.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
+#      IMP_TAILSCALE_AUTHKEY_FILE  a file that holds the key instead (the NixOS module
+#                                mounts one); read by tailscale itself, never by this script
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
 #      IMP_TAILSCALE_STATE_DIR   node state (default /var/lib/imp/tailscale); "mem" keeps it in memory
 #      IMP_DNS                   resolvers used if resolv.conf points into the tailnet,
@@ -15,15 +20,18 @@ hostname=${IMP_TAILSCALE_HOSTNAME:-imp}
 state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
 sock=/var/run/tailscale/tailscaled.sock
 
-# from_state: no key, so the node can only come back from its saved state.
-from_state=
-if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
-  if [ "$state_dir" = mem ] || [ ! -s "$state_dir/tailscaled.state" ]; then
-    echo "tailscale-up: TAILSCALE_AUTHKEY unset and no saved node state, skipping"
-    exit 0
-  fi
-  from_state=1
-  echo "tailscale-up: TAILSCALE_AUTHKEY unset; starting from the saved node state"
+key_file=${IMP_TAILSCALE_AUTHKEY_FILE:-}
+if [ -n "$key_file" ] && [ ! -s "$key_file" ]; then
+  echo "tailscale-up: IMP_TAILSCALE_AUTHKEY_FILE $key_file is missing or empty; ignoring it" >&2
+  key_file=
+fi
+has_key=
+[ -n "${TAILSCALE_AUTHKEY:-}" ] || [ -n "$key_file" ] && has_key=1
+has_state=
+[ "$state_dir" != mem ] && [ -s "$state_dir/tailscaled.state" ] && has_state=1
+if [ -z "$has_key" ] && [ -z "$has_state" ]; then
+  echo "tailscale-up: no auth key and no saved node state, skipping"
+  exit 0
 fi
 
 ts() { timeout 90 tailscale --socket="$sock" "$@"; }
@@ -71,36 +79,46 @@ for _ in $(seq 50); do
   case $(backend) in NoState | "") sleep 0.1 ;; *) break ;; esac
 done
 
-if [ -n "$from_state" ]; then
-  # Starting comes before Running when the saved state is good.
+want_up=1
+if [ -n "$has_state" ]; then
+  # Starting comes before Running when the saved state is good. A key is
+  # never used over a good state: it would make a second node.
   for _ in $(seq 150); do
-    case $(backend) in Running) break ;; *) sleep 0.1 ;; esac
+    case $(backend) in Running | NeedsLogin | NeedsMachineAuth | Stopped) break ;; *) sleep 0.1 ;; esac
   done
-  if [ "$(backend)" != Running ]; then
-    echo "tailscale-up: the saved node state is $(backend), not Running; set TAILSCALE_AUTHKEY to join again" >&2
+  state=$(backend)
+  if [ "$state" = Running ]; then
+    want_up=0
+    # Without a key the saved node is used as it is, even under another
+    # hostname; with one, a new hostname logs in again.
+    if [ -n "$has_key" ] && [ "$(ts status --json | jq -r '.Self.HostName')" != "$hostname" ]; then
+      want_up=1
+    fi
+  elif [ -n "$has_key" ]; then
+    echo "tailscale-up: the saved node state is ${state:-unknown}, not Running; joining again with the key"
+  else
+    echo "tailscale-up: the saved node state is ${state:-unknown}, not Running; give an auth key to join again" >&2
     exit 1
   fi
-fi
-
-# Without a key there is nothing to log in with: the saved node is used as
-# it is, even under another hostname.
-want_up=1
-if [ -n "$from_state" ]; then
-  want_up=0
 elif [ "$(backend)" = Running ] \
   && [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
+  # a second run while tailscaled is up (state in memory)
   want_up=0
 fi
 
 if [ $want_up = 1 ]; then
   # The key goes through a file so it never shows in argv (ps, /proc).
-  keyfile=$(mktemp)
-  trap 'rm -f "$keyfile"' EXIT
-  chmod 0600 "$keyfile"
-  printf '%s' "$TAILSCALE_AUTHKEY" >"$keyfile"
-  ts up --reset --auth-key="file:$keyfile" --hostname="$hostname" \
+  if [ -n "$key_file" ]; then
+    auth=$key_file
+  else
+    auth=$(mktemp)
+    trap 'rm -f "$auth"' EXIT
+    chmod 0600 "$auth"
+    printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
+  fi
+  ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
     --advertise-tags=tag:imp --accept-dns=false --timeout=60s
-  rm -f "$keyfile"
+  [ -n "$key_file" ] || rm -f "$auth"
 fi
 
 for _ in $(seq 100); do [ "$(backend)" = Running ] && break; sleep 0.1; done
