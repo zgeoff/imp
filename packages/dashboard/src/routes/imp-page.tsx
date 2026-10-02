@@ -4,6 +4,7 @@ import type { Imp } from '@zgeoff/imp-client';
 import { useState } from 'react';
 import { Button } from '../components/button';
 import { CheckpointsPanel } from '../components/checkpoints-panel';
+import { CpuPanel } from '../components/cpu-panel';
 import { ErrorText } from '../components/error-text';
 import { ForkDialog } from '../components/fork-dialog';
 import { ImpActions } from '../components/imp-actions';
@@ -58,6 +59,9 @@ export function ImpPage(props: ImpPageProps) {
       <ImpNotes imp={imp.data} nowMs={nowMs} />
       <section className={styles['card']}>
         <ImpDetails imp={imp.data} nowMs={nowMs} />
+      </section>
+      <section className={styles['card']}>
+        <CpuPanel imp={imp.data} />
       </section>
       <CheckpointsPanel name={props.name} nowMs={nowMs} />
       <ForkDialog open={forking} onOpenChange={setForking} source={props.name} />
