@@ -1,8 +1,9 @@
 # @zgeoff/imp-client
 
 A typed client for [impd](https://github.com/zgeoff/imp), the imp host daemon. It runs in Bun, in
-Node 22 or later, and in browsers with `Promise.withResolvers`: Chrome 119, Firefox 121 and Safari
-17.4 or later.
+binaries that `bun build --compile` makes, in Node 22 or later, and in browsers with
+`Promise.withResolvers`: Chrome 119, Firefox 121 and Safari 17.4 or later. CI checks each release
+under Node, Bun and a compiled Bun binary.
 
 ```sh
 npm install @zgeoff/imp-client
