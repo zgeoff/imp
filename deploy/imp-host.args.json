@@ -4,6 +4,7 @@
     ["--rm", "--name", "imp-host", "--hostname", "imp-host"],
     ["--init", "--privileged", "--device", "/dev/kvm", "--cgroupns=private"],
     ["--env-file", "/etc/imp/imp-host.env"],
+    ["$IMP_HOST_NETWORK"],
     ["-v", "/var/lib/imp:/var/lib/imp"],
     ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
     ["-v", "/etc/imp:/etc/imp:ro"],
