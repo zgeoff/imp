@@ -8,7 +8,7 @@ import type { FakeUpstream } from '../lib/fake-upstream';
 import { resolveImageName } from '../lib/fixtures';
 import { requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp, holdImp, removeImps } from '../lib/imps';
-import { instance, runChecked, runInContainer } from '../lib/instance';
+import { instance, readContainerGateway, runChecked, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { writeMetric } from '../lib/write-metric';
 
@@ -37,19 +37,6 @@ const AuditSchema = z.array(
 
 let upstream: FakeUpstream;
 let repo: string;
-
-// the container's default gateway: this machine, as the broker dials it
-async function readContainerGateway(): Promise<string> {
-  const route = await runInContainer(['ip', '-4', 'route', 'show', 'default']);
-
-  const gateway = /via (?<ip>[\d.]+)/.exec(route.stdout)?.groups?.['ip'];
-
-  if (gateway === undefined) {
-    throw new Error(`no default route in ${instance.container}: ${route.stdout}`);
-  }
-
-  return gateway;
-}
 
 beforeAll(async () => {
   const gateway = await readContainerGateway();
