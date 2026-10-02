@@ -242,6 +242,29 @@ test('past the burst a slot is refused until its bucket refills', async () => {
   expect(rcodes).toEqual(['NOERROR', 'NOERROR', 'REFUSED', 'NOERROR']);
 });
 
+test('a rate-limited query is plain REFUSED, with no EDE 18', async () => {
+  const ctx = setupHandler({ rate: { burst: 1, perSecond: 1 } });
+
+  await ctx.handle(GUEST, buildQuery('registry.npmjs.org'));
+
+  const limited = await ctx.handle(GUEST, buildQuery('registry.npmjs.org'));
+  const denied = await setupHandler().handle(GUEST, buildQuery('denied.test'));
+
+  expect(readReply(limited).rcode).toBe('REFUSED');
+  expect(readEde(limited)).toBeNull();
+  expect(readEde(denied)).toBe(18);
+});
+
+test('replies carry at most maxTtlS', async () => {
+  const ctx = setupHandler({ maxTtlS: 300 });
+
+  const reply = await ctx.sendQuery('registry.npmjs.org');
+
+  expect(reply.answers?.map((record) => (record.type === 'OPT' ? null : record.ttl))).toEqual([
+    300, 300, 60, 60,
+  ]);
+});
+
 test('an upstream that fails, or a set that cannot take the answer, is SERVFAIL', async () => {
   const down = setupHandler({ forward: () => Promise.reject(new Error('no upstream answered')) });
 
@@ -319,7 +342,7 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
     log: () => {},
   });
 
-  const server = await startResolverServer(0, handle);
+  const server = await startResolverServer(0, parseSubnet('127.0.0.0/16'), handle);
 
   try {
     // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
@@ -373,3 +396,87 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
     server.stop();
   }
 });
+
+test('upstream queries carry a fresh id, and the guest gets its own back', async () => {
+  const seenIds: number[] = [];
+
+  const upstream = await Bun.udpSocket({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data: (socket, data, port, address) => {
+        const query = new Uint8Array(data);
+
+        seenIds.push(dnsPacket.decode(Buffer.from(query)).id ?? 0);
+        socket.send(buildAnswer(query, NPM_ANSWERS), port, address);
+      },
+    },
+  });
+
+  try {
+    const forward = createDnsForward(['127.0.0.1'], upstream.port);
+
+    const first = await forward(buildQuery('registry.npmjs.org'));
+    const second = await forward(buildQuery('registry.npmjs.org'));
+
+    expect(readReply(first).id).toBe(4242);
+    expect(readReply(second).id).toBe(4242);
+    expect(seenIds).toHaveLength(2);
+    expect(seenIds[0]).not.toBe(seenIds[1]);
+  } finally {
+    upstream.close();
+  }
+});
+
+// a TCP client from `from` that resolves `closed` when the resolver ends it
+function openTcpClient(port: number, from: string) {
+  const closed = Promise.withResolvers<void>();
+  const connected = Promise.withResolvers<void>();
+  const socket = connect({ host: '127.0.0.1', port, localAddress: from }, connected.resolve);
+
+  socket.on('error', () => {});
+
+  socket.once('close', () => {
+    closed.resolve();
+  });
+
+  return { socket, connected: connected.promise, closed: closed.promise };
+}
+
+test('the TCP side closes an idle client and caps the clients of one slot', async () => {
+  const handle = createQueryHandler({
+    subnet: parseSubnet('127.0.0.0/16'),
+    checkName: () => Promise.resolve('refuse'),
+    writeAnswers: () => Promise.resolve(),
+    forward: () => Promise.reject(new Error('no upstream')),
+    maxTtlS: 300,
+    rate: { burst: 100, perSecond: 100 },
+    now: Date.now,
+    log: () => {},
+  });
+
+  const server = await startResolverServer(0, parseSubnet('127.0.0.0/16'), handle, {
+    idleS: 1,
+    maxPerSlot: 2,
+  });
+
+  try {
+    const first = openTcpClient(server.port, '127.0.0.2');
+    const second = openTcpClient(server.port, '127.0.0.2');
+
+    await Promise.all([first.connected, second.connected]);
+
+    // slot 0 is full; slot 1's guest still gets in
+    const third = openTcpClient(server.port, '127.0.0.2');
+    const other = openTcpClient(server.port, '127.0.0.6');
+
+    await third.closed;
+
+    expect(other.socket.destroyed).toBeFalse();
+
+    // the idle clients go
+    await Promise.all([first.closed, second.closed, other.closed]);
+  } finally {
+    server.stop();
+  }
+}, 15_000);

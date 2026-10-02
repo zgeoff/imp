@@ -26,6 +26,9 @@ export interface ResolverDeps {
     answers: readonly AddressAnswer[],
   ) => Promise<void>;
   readonly forward: DnsForward;
+
+  // the longest TTL a reply carries: a guest asks again within it, so an
+  // impd restart, which empties the sets, costs a guest at most that long
   readonly maxTtlS: number;
   readonly rate: { readonly burst: number; readonly perSecond: number };
   readonly now: () => number;
@@ -64,8 +67,13 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
   return async (source, message) => {
     const slot = findGuestSlot(source, deps.subnet);
 
-    if (slot === null || !tryTakeToken(slot)) {
+    if (slot === null) {
       return buildEmptyReply(message, RCODE.refused, EDE_PROHIBITED);
+    }
+
+    // plain REFUSED, so a guest can tell a busy resolver from a denied name
+    if (!tryTakeToken(slot)) {
+      return buildEmptyReply(message, RCODE.refused);
     }
 
     const query = readQuery(message);
@@ -104,7 +112,7 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
 }
 
 // The A records on the CNAME chain from the name asked for go into the set,
-// and every TTL in the reply drops to impd's longest expiry.
+// and every TTL in the reply drops to maxTtlS.
 async function writeAnswers(
   deps: ResolverDeps,
   slot: number,
@@ -158,6 +166,16 @@ function toCappedTtl(record: Answer, maxTtlS: number): Answer {
   return record.type === 'OPT' ? record : { ...record, ttl: Math.min(record.ttl ?? 0, maxTtlS) };
 }
 
+// a TCP client's idle time before the resolver closes it, and the
+// connections one slot may hold open, as the broker caps them
+const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
+
+// smaller limits for tests
+export interface ResolverServerLimits {
+  readonly idleS: number;
+  readonly maxPerSlot: number;
+}
+
 export interface ResolverServer {
   readonly port: number;
   readonly stop: () => void;
@@ -168,8 +186,12 @@ export interface ResolverServer {
 // the port for anything but a guest.
 export async function startResolverServer(
   port: number,
+  subnet: Subnet,
   handle: QueryHandler,
+  limits: ResolverServerLimits = DEFAULT_TCP_LIMITS,
 ): Promise<ResolverServer> {
+  const open = new Map<number, number>();
+
   const udp = await Bun.udpSocket({
     hostname: '0.0.0.0',
     port,
@@ -180,14 +202,51 @@ export async function startResolverServer(
     },
   });
 
-  const tcp = Bun.listen<{ buffered: Buffer }>({
+  const tcp = Bun.listen<{ buffered: Buffer; slot: number | null }>({
     hostname: '0.0.0.0',
     port: udp.port,
     socket: {
       open: (socket) => {
-        socket.data = { buffered: Buffer.alloc(0) };
+        const slot = findGuestSlot(socket.remoteAddress, subnet);
+        const count = slot === null ? 0 : (open.get(slot) ?? 0);
+
+        if (slot === null || count >= limits.maxPerSlot) {
+          socket.data = { buffered: Buffer.alloc(0), slot: null };
+
+          socket.end();
+
+          return;
+        }
+
+        open.set(slot, count + 1);
+
+        socket.data = { buffered: Buffer.alloc(0), slot };
+
+        socket.timeout(limits.idleS);
+      },
+      timeout: (socket) => {
+        socket.end();
+      },
+      close: (socket) => {
+        const slot = socket.data.slot;
+
+        if (slot === null) {
+          return;
+        }
+
+        const left = (open.get(slot) ?? 1) - 1;
+
+        if (left === 0) {
+          open.delete(slot);
+        } else {
+          open.set(slot, left);
+        }
       },
       data: (socket, chunk) => {
+        if (socket.data.slot === null) {
+          return;
+        }
+
         socket.data.buffered = Buffer.concat([socket.data.buffered, chunk]);
 
         for (;;) {

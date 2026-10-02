@@ -258,13 +258,17 @@ export function createEgressService(deps: EgressDeps): EgressService {
         checkName,
         writeAnswers,
         forward,
-        maxTtlS: MAX_TTL_S,
+        maxTtlS: MIN_TTL_S,
         rate: { burst: QUERY_BURST, perSecond: QUERIES_PER_SECOND },
         now,
         log: deps.log,
       });
 
-      state.server = await startResolverServer(deps.config.egressDnsPort, handle);
+      state.server = await startResolverServer(
+        deps.config.egressDnsPort,
+        deps.config.subnet,
+        handle,
+      );
 
       state.sweep = setInterval(() => {
         void runLoggedSweep();
