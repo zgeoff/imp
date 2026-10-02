@@ -110,11 +110,27 @@ test('only the image user and root reach the socket', async () => {
   expect(result.stdout).toContain('root=0\n');
 });
 
-// `ssh-add -l` on this machine through `ssh -L <socket>:<path>` to a socket
-// in the imp
-async function listThroughUnixForward(path: string, label: string): Promise<string> {
+// `ssh-add -l` on this machine through `ssh -N -L <socket>:<path>` to a socket
+// in the imp: what ssh-add printed, and what the forwarding ssh logged
+interface ForwardedList {
+  readonly listed: string;
+  readonly forwardLog: string;
+}
+
+async function listThroughUnixForward(path: string, label: string): Promise<ForwardedList> {
   const local = join(client.dir, `${label}.sock`);
-  const forward = startSsh(client, ['-N', '-L', `${local}:${path}`, `${name}@${SSH_HOST}`]);
+
+  // INFO: the client logs a refused channel at that level
+  const forward = startSsh(client, [
+    '-N',
+    '-o',
+    'LogLevel=INFO',
+    '-L',
+    `${local}:${path}`,
+    `${name}@${SSH_HOST}`,
+  ]);
+
+  let listed = '';
 
   try {
     await waitFor(`the ${label} forward to listen`, () => {
@@ -125,12 +141,16 @@ async function listThroughUnixForward(path: string, label: string): Promise<stri
 
     const result = await runCommand(['ssh-add', '-l'], { env: { SSH_AUTH_SOCK: local } });
 
-    return `${result.stdout}${result.stderr}`;
+    listed = `${result.stdout}${result.stderr}`;
   } finally {
     await forward.stop();
 
     rmSync(local, { force: true });
   }
+
+  const forwardLog = await new Response(forward.proc.stderr).text();
+
+  return { listed, forwardLog };
 }
 
 // The gateway dials a unix socket as the image user (dev), not as root: an
@@ -150,9 +170,10 @@ test("a unix socket forward reaches the image user's sockets, not root's", async
   const rootOnly = await listThroughUnixForward('/run/e2e-root.sock', 'root-fwd');
   const rootAgent = await listThroughUnixForward('/run/e2e-open.sock', 'open-fwd');
 
-  expect(own).toContain('The agent has no identities.');
-  expect(rootOnly).not.toContain('The agent has no identities.');
-  expect(rootAgent).not.toContain('The agent has no identities.');
+  expect(own.listed).toContain('The agent has no identities.');
+  expect(rootOnly.listed).not.toContain('The agent has no identities.');
+  expect(rootOnly.forwardLog).toContain('open failed: connect failed');
+  expect(rootAgent.listed).not.toContain('The agent has no identities.');
 });
 
 // OpenSSH asks for forwarding only when it has an agent, so the connection
