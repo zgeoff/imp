@@ -13,7 +13,7 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, writeGuestFile } from '../lib/imps';
-import { runCommand } from '../lib/instance';
+import { runCommand, runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
@@ -29,6 +29,9 @@ const TINY = resolveImageName('e2e-tiny');
 const plain = `${prefix}a`;
 const named = `${prefix}n`;
 const NOT_READY = 'moves-tailnet needs TAILSCALE_AUTHKEY (env, 1Password or .env)';
+
+const NO_PEER_RULE =
+  'add { "action": "accept", "src": ["tag:imp"], "dst": ["tag:imp:7070"] } to the tailnet policy';
 
 const NAMES_BLOCKED =
   'the tailnet name handover needs the Tailscale Services OAuth client and this machine on the tailnet; set IMP_E2E_TAILNET_NAMES=1 once they exist';
@@ -122,6 +125,20 @@ test.skipIf(!ready && !config.acceptance)(
     expect(ipA).toStartWith('100.');
     expect(ipB).toStartWith('100.');
     expect(ipB).not.toBe(ipA);
+
+    // tag:imp nodes see each other only with the policy's tag:imp to
+    // tag:imp:7070 rule (docs/guides/hosts.md#moves)
+    await waitFor(
+      "A among B's tailnet peers",
+      async () => {
+        const status = await runInContainer(['tailscale', 'status', '--json'], onB().target);
+
+        if (!status.stdout.includes(`"${ipA}"`)) {
+          throw new Error(`B does not see A (${ipA}): ${NO_PEER_RULE}`);
+        }
+      },
+      { timeoutMs: 30_000 },
+    );
 
     await createImp(plain, '--image', TINY, '--memory', '256');
     await writeGuestFile(plain, '/root/moved', 'tailnet-ok');

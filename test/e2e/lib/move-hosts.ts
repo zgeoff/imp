@@ -141,9 +141,10 @@ async function checkAOnNetwork(network: string): Promise<boolean> {
   return result.stdout.trim() === 'yes';
 }
 
-// A failed run can leave B up and A on the network, its only one; this
-// puts both back, and a run that is clean already loses nothing.
-async function removeLeftovers(): Promise<void> {
+// A failed run (--bail skips afterAll) can leave B up and A on the
+// network, its only one; this puts both back, and loses nothing when the
+// run is clean.
+export async function removeMoveLeftovers(): Promise<void> {
   const names = buildNames();
 
   await runDevScript('down', buildHostB({ tailnet: false }));
@@ -167,7 +168,7 @@ export async function startMoveHosts(
   const names = buildNames();
   const network = buildMoveNetwork(readOffset());
 
-  await removeLeftovers();
+  await removeMoveLeftovers();
 
   await runChecked([
     'docker',
@@ -229,7 +230,7 @@ export async function stopMoveHosts(hosts: MoveHosts): Promise<void> {
     await runDevScript('reboot');
   }
 
-  await removeLeftovers();
+  await removeMoveLeftovers();
 
   rmSync(buildNames().cliDir, { recursive: true, force: true });
 }

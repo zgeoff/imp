@@ -24,6 +24,7 @@ import {
   runCommand,
   runDevScript,
 } from './lib/instance';
+import { removeMoveLeftovers } from './lib/move-hosts';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
@@ -333,8 +334,12 @@ function formatSection(section: Section): string {
 }
 
 // impd's default and base images stay
-async function removeLeftovers(): Promise<void> {
+async function removeLeftovers(suites: readonly string[]): Promise<void> {
   console.log('== cleanup');
+
+  if (suites.some((suite) => suite.startsWith('moves'))) {
+    await removeMoveLeftovers();
+  }
 
   const healthy = await checkHealthReady();
 
@@ -461,7 +466,7 @@ async function main(): Promise<number> {
     }
 
     if (!args.keep) {
-      await removeLeftovers();
+      await removeLeftovers(args.suites);
     }
   }
 
