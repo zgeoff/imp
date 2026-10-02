@@ -38,7 +38,7 @@ import { createForwarder } from './forward-request';
 import type { Credential, UpstreamFetch } from './forward-request';
 import {
   buildBrokerEnv,
-  buildGuestBundle,
+  buildInstallInput,
   createGuestTrust,
   runBundleInstall,
 } from './guest-trust';
@@ -69,7 +69,8 @@ export interface Broker {
   readonly listGrants: (impName: string) => Promise<string[]>;
   readonly listAudit: (impName: string | null, limit: number) => Promise<AuditEntry[]>;
 
-  // a fork gets its source's grants
+  // a fork gets its source's grants; a failure is logged, not thrown, as
+  // the fork exists by then
   readonly createForkGrants: (fromImpName: string, toImpName: string) => Promise<void>;
 
   // the variables for an exec in this imp: none without a grant, or when
@@ -109,7 +110,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
 
   const trust = createGuestTrust(
-    buildGuestBundle(ca.certPem),
+    buildInstallInput(ca.certPem),
     deps.installBundle ?? runBundleInstall,
     log,
   );
@@ -351,9 +352,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     createForkGrants: async (fromImpName, toImpName) => {
-      const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
+      try {
+        const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
 
-      await createForkGrants(db, from.id, to.id);
+        await createForkGrants(db, from.id, to.id);
+      } catch (error) {
+        log(
+          `impd: ${toImpName}: forked without the grants of ${fromImpName}: ${readErrorMessage(error)}`,
+        );
+      }
     },
 
     readExecEnv: async (imp, vsockPath) => {

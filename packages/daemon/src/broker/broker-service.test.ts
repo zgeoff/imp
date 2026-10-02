@@ -301,3 +301,14 @@ test('the audit log keeps the newest rows of each imp', async () => {
 
   expect(afterRm).toEqual([]);
 });
+
+test('a fork whose grants cannot be copied is still returned, and the failure logged', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  // the source is gone by the time the grants are copied
+  await ctx.broker.createForkGrants('gone', 'dev');
+
+  expect(ctx.logs.join('\n')).toContain('forked without the grants of gone');
+});

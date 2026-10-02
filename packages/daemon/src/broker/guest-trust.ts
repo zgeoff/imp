@@ -1,12 +1,23 @@
-import { createHash } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import { openExecStream } from '../agent-client/exec-stream';
 import { readErrorMessage } from '../read-error-message';
 
-// How a guest trusts the broker: an exec writes the (public) CA bundle in
+// How a guest trusts the broker: an exec builds the CA bundle in the guest
 // once per boot, before the first exec that gets the broker's variables.
 
 const GUEST_BUNDLE_PATH = '/etc/imp/broker-ca.pem';
+
+// where distros keep their root bundle: Debian, Ubuntu, Alpine and Arch;
+// Fedora and RHEL; openSUSE; the BSD-style name some images use
+const GUEST_ROOT_PATHS = [
+  '/etc/ssl/certs/ca-certificates.crt',
+  '/etc/pki/tls/certs/ca-bundle.crt',
+  '/etc/ssl/ca-bundle.pem',
+  '/etc/ssl/cert.pem',
+];
+
+// between the broker CA and the host's roots on the install's stdin
+const ROOTS_MARKER = '# imp: host roots';
 
 // the variables each TLS stack reads for its trust store
 const CA_VARIABLES = [
@@ -43,27 +54,41 @@ export function buildBrokerEnv(input: BrokerEnvInput): readonly string[] {
   ];
 }
 
-export function buildGuestBundle(caPem: string): string {
-  return `${[...rootCertificates, caPem.trim()].join('\n')}\n`;
+// The install's stdin: the broker CA, then the host's roots, which the
+// guest uses only when it has no root bundle of its own.
+export function buildInstallInput(caPem: string): string {
+  return `${caPem.trim()}\n${ROOTS_MARKER}\n${rootCertificates.join('\n')}\n`;
 }
 
-// The shell script that writes the bundle from stdin, unless the file
-// already holds it. It reads stdin either way, so the host's write never
-// meets a closed pipe.
-function buildInstallScript(bundle: string): string {
-  const digest = createHash('sha256').update(bundle).digest('hex');
-  const path = GUEST_BUNDLE_PATH;
+// The script that builds the bundle in the guest: the guest's own roots
+// (CAs it added included) plus the broker CA. It leaves the file alone when
+// it already holds that, so a wake does not write to the disk.
+export function buildInstallScript(
+  target = GUEST_BUNDLE_PATH,
+  rootPaths: readonly string[] = GUEST_ROOT_PATHS,
+): string {
+  const input = `${target}.in`;
+  const next = `${target}.tmp`;
 
   return [
     'set -e',
-    `if [ -f ${path} ] && [ "$(cat ${path}.sha256 2>/dev/null)" = ${digest} ]; then`,
-    '  cat >/dev/null',
-    '  exit 0',
+    `mkdir -p "$(dirname '${target}')"`,
+    `cat > '${input}'`,
+    'roots=',
+    `for f in ${rootPaths.map((path) => `'${path}'`).join(' ')}; do`,
+    '  if [ -s "$f" ]; then roots=$f; break; fi',
+    'done',
+    '{',
+    `  if [ -n "$roots" ]; then cat "$roots"; else sed '1,/^${ROOTS_MARKER}$/d' '${input}'; fi`,
+    '  echo',
+    `  sed '/^${ROOTS_MARKER}$/,$d' '${input}'`,
+    `} > '${next}'`,
+    `rm -f '${input}'`,
+    `if [ -f '${target}' ] && [ "$(cat '${next}')" = "$(cat '${target}')" ]; then`,
+    `  rm -f '${next}'`,
+    'else',
+    `  mv '${next}' '${target}'`,
     'fi',
-    `mkdir -p ${path.slice(0, path.lastIndexOf('/'))}`,
-    `cat > ${path}.tmp`,
-    `mv ${path}.tmp ${path}`,
-    `echo ${digest} > ${path}.sha256`,
   ].join('\n');
 }
 
@@ -75,7 +100,8 @@ export interface TrustedImp {
   readonly pid: number | null;
 }
 
-export type InstallBundle = (vsockPath: string, bundle: string) => Promise<void>;
+// writes the bundle into the guest from buildInstallInput's text
+export type InstallBundle = (vsockPath: string, input: string) => Promise<void>;
 
 export interface GuestTrust {
   // true once the bundle is in this boot of the imp; one install runs per
@@ -87,7 +113,7 @@ export interface GuestTrust {
 }
 
 export function createGuestTrust(
-  bundle: string,
+  input: string,
   install: InstallBundle,
   log: (message: string) => void,
 ): GuestTrust {
@@ -104,25 +130,35 @@ export function createGuestTrust(
         return known.done;
       }
 
+      const entry: { pid: number | null; done: Promise<boolean> } = {
+        pid: imp.pid,
+        done: Promise.resolve(false),
+      };
+
+      // a failure is forgotten, so the next exec tries again
       const runInstall = async (): Promise<boolean> => {
         try {
-          await install(vsockPath, bundle);
+          await install(vsockPath, input);
 
           return true;
         } catch (error) {
           log(
-            `impd: ${imp.name}: broker CA not installed, so execs run without the broker: ${readErrorMessage(error)}`,
+            `impd: ${imp.name}: broker CA not installed, so this exec runs without the broker: ${readErrorMessage(error)}`,
           );
+
+          if (installs.get(imp.id) === entry) {
+            installs.delete(imp.id);
+          }
 
           return false;
         }
       };
 
-      const done = runInstall();
+      entry.done = runInstall();
 
-      installs.set(imp.id, { pid: imp.pid, done });
+      installs.set(imp.id, entry);
 
-      return done;
+      return entry.done;
     },
     forgetExcept: (impIds) => {
       for (const id of installs.keys()) {
@@ -135,10 +171,10 @@ export function createGuestTrust(
 }
 
 // The install as an exec through the agent, as root (uid 0, which needs no
-// passwd entry), with the bundle on stdin.
-export async function runBundleInstall(vsockPath: string, bundle: string): Promise<void> {
+// passwd entry), with buildInstallInput's text on stdin.
+export async function runBundleInstall(vsockPath: string, input: string): Promise<void> {
   const stream = await openExecStream(vsockPath, {
-    argv: ['/bin/sh', '-c', buildInstallScript(bundle)],
+    argv: ['/bin/sh', '-c', buildInstallScript()],
     tty: false,
     user: '0',
   });
@@ -148,7 +184,7 @@ export async function runBundleInstall(vsockPath: string, bundle: string): Promi
   }, INSTALL_TIMEOUT_MS);
 
   try {
-    stream.writeStdin(new TextEncoder().encode(bundle));
+    stream.writeStdin(new TextEncoder().encode(input));
     stream.closeStdin();
 
     const stderr: string[] = [];
