@@ -19,16 +19,19 @@ const names = [`${prefix}a`, `${prefix}b`];
 
 // The same bytes in both guests, but no two pages alike within one: only a
 // merge across the guests counts. 96 MiB of 9-byte lines; /dev/shm holds
-// about 245 MiB in a 512 MiB guest.
+// about 245 MiB in a 512 MiB guest until the second test grows it.
 const FILL_MIB = 96;
 const FILL = `seq -w 1 ${String(Math.floor((FILL_MIB * 1024 ** 2) / 9))} > /dev/shm/fill`;
 
-// what each guest then writes of its own: together past the budget below,
-// so the governor must sleep one
-const OWN_MIB = 160;
+// what each guest then writes of its own: the two together pass the budget
+// below even without their base, so the governor must sleep one; one alone
+// fits, and leaves the 512 MiB guest room to run
+const OWN_MIB = 288;
 
-// low enough that the two guests' own data does not fit; boots reserve 20 %
-const BUDGET_MIB = 384;
+// a guest's memory may not exceed the budget, so it equals the guests' size;
+// boots reserve 20 %
+const MEMORY_MIB = 512;
+const BUDGET_MIB = MEMORY_MIB;
 
 // guest mappings at least this large are guest memory
 const GUEST_MAPPING_MIB = 256;
@@ -174,7 +177,7 @@ test.skipIf(!KSM_READY)(
     const cpuBefore = readKsmdCpuMs();
 
     for (const name of names) {
-      await createImp(name, '--image', TINY, '--memory', '512m');
+      await createImp(name, '--image', TINY, '--memory', `${String(MEMORY_MIB)}m`);
       await holdImp(name);
     }
 
@@ -229,11 +232,17 @@ test.skipIf(!KSM_READY)(
       await runImp('hold', name, '0');
     }
 
-    // the fill goes first: /dev/shm cannot hold both
+    // the fill goes first, so the merged pages split; /dev/shm grows past
+    // its default half of the guest's RAM to hold the guest's own data;
+    // busybox head takes no 'M' suffix, so dd writes it
     for (const name of names) {
       await runShellInImp(
         name,
-        `rm /dev/shm/fill && head -c ${String(OWN_MIB)}M /dev/urandom > /dev/shm/own`,
+        [
+          'rm /dev/shm/fill',
+          `mount -o remount,size=${String(OWN_MIB + 32)}m /dev/shm`,
+          `dd if=/dev/urandom of=/dev/shm/own bs=1M count=${String(OWN_MIB)}`,
+        ].join(' && '),
       );
     }
 
