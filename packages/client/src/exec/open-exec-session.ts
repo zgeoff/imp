@@ -32,7 +32,9 @@ export type ExecOutcome =
       readonly message: string;
       readonly data?: unknown;
     }
-  | { readonly kind: 'unauthorized' }
+
+  // ticketRefused: the token is fine, so impd refused the exec ticket
+  | { readonly kind: 'unauthorized'; readonly ticketRefused?: boolean }
   | { readonly kind: 'unreachable'; readonly detail: string }
 
   // the connection dropped after the open, without an exit
@@ -239,6 +241,8 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
     if (access === 'unauthorized') {
       resolveOutcome({ kind: 'unauthorized' });
+    } else if (access === 'reachable' && options.ticket !== undefined) {
+      resolveOutcome({ kind: 'unauthorized', ticketRefused: true });
     } else if (access === 'unreachable') {
       resolveOutcome({ kind: 'unreachable', detail: reason });
     } else {

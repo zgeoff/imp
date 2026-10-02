@@ -8,17 +8,21 @@ import type {
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '../create-imp-client';
-import { ExecError } from './exec-error';
+import { ExecError, toExecError } from './exec-error';
 import { CONSOLE_SHELL } from './open-exec';
+import { openExecSession } from './open-exec-session';
 
 const BIG_BYTES = 512 * 1024;
 
 // A guest agent for the fake VMs, by argv[0]: `cat` echoes stdin until EOF,
-// `fail` exits 3, `big` floods both streams, and `wait` or the console's shell
-// runs until a signal or ^C; `input` records what each command got.
+// `fail` exits 3, `big` floods both streams, `tick` writes once, and `tick`,
+// `wait` or the console's shell runs until a signal or ^C or impd closes it.
 function buildFakeAgent() {
   const requests: AgentExecRequest[] = [];
   const input: string[] = [];
+
+  // the commands whose stream impd closed: the client went away
+  const closed: string[] = [];
 
   const openExec = (_name: string, request: Readonly<AgentExecRequest>): Promise<ExecStream> => {
     requests.push(request);
@@ -36,14 +40,21 @@ function buildFakeAgent() {
       );
     }
 
-    return Promise.resolve(
-      buildScriptedStream(request.argv[0] ?? '', (entry) => {
-        input.push(entry);
-      }),
-    );
+    const command = request.argv[0] ?? '';
+
+    const stream = buildScriptedStream(command, (entry) => {
+      input.push(entry);
+    });
+
+    return Promise.resolve({
+      ...stream,
+      close: () => {
+        closed.push(command);
+      },
+    });
   };
 
-  return { openExec, requests, input };
+  return { openExec, requests, input, closed };
 }
 
 interface EventQueue {
@@ -69,6 +80,10 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
     emitText('stdout', 'out');
     emitText('stderr', 'err');
     emitEvent({ type: 'exit', code: 3, signal: 0 });
+  }
+
+  if (command === 'tick') {
+    emitText('stdout', 'tick');
   }
 
   if (command === 'big') {
@@ -160,6 +175,7 @@ async function setupExecTest() {
     ...harness,
     ...agent,
     client,
+    url: `http://127.0.0.1:${port}`,
     closeExecSessions: built.closeExecSessions,
     async [Symbol.asyncDispose]() {
       await server.stop(true);
@@ -314,3 +330,81 @@ test('close and an abort end the session and the streams', async () => {
   expect(abortedExit).toMatchObject({ code: 'CLOSED' });
   expect(rest.done).toBeTrue();
 });
+
+test('a stream nobody reads ends the session past maxUnreadBytes', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['big'], { maxUnreadBytes: 64 * 1024 });
+  const rejection = await handle.exit.catch((error: unknown) => error);
+
+  expect(rejection).toBeInstanceOf(ExecError);
+  expect(rejection).toMatchObject({ code: 'OUTPUT_OVERFLOW' });
+});
+
+test('a break out of the output loop and a cancelled stderr stop the command', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['tick']);
+
+  for await (const chunk of handle.stdout) {
+    expect(decoder.decode(chunk)).toBe('tick');
+    break;
+  }
+
+  await handle.stderr.cancel();
+
+  const rejection = await handle.exit.catch((error: unknown) => error);
+
+  await waitUntil(() => ctx.closed.includes('tick'));
+
+  expect(rejection).toMatchObject({ code: 'CLOSED' });
+});
+
+test('started and exit are the same promise on every read, and a late write is CLOSED', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  expect(handle.exit).toBe(handle.exit);
+  expect(handle.started).toBe(handle.started);
+
+  await handle.exit;
+
+  const rejection = await handle.write('late').catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'CLOSED' });
+});
+
+test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', async () => {
+  await using ctx = await setupExecTest();
+
+  const session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    ticket: 'used.ticket',
+    start: { name: 'dev', argv: ['cat'], tty: false },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url) => new WebSocket(url),
+  });
+
+  const outcome = await session.outcome;
+
+  expect(outcome).toEqual({ kind: 'unauthorized', ticketRefused: true });
+
+  if (outcome.kind === 'unauthorized') {
+    expect(toExecError(outcome).message).toContain('exec ticket');
+  }
+});
+
+async function waitUntil(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5000;
+
+  while (!check()) {
+    if (Date.now() > deadline) {
+      throw new Error('timed out');
+    }
+
+    await Bun.sleep(5);
+  }
+}

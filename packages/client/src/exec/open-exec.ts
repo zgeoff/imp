@@ -15,6 +15,10 @@ export interface ExecOptions {
 
   // closes the session, as `close()` does
   readonly signal?: Readonly<AbortSignal>;
+
+  // output a stream may hold unread before the session ends with
+  // OUTPUT_OVERFLOW (default 8 MiB); a caller reads or cancels both streams
+  readonly maxUnreadBytes?: number;
 }
 
 export interface ExecExit {
@@ -23,8 +27,9 @@ export interface ExecExit {
   readonly signal: string | null;
 }
 
-// One running command. The output streams end when the session does; `exit`
-// rejects with an ExecError when the command did not run to its exit.
+// One running command. The output streams end when the session does, and
+// cancelling both ends it; `exit` rejects with an ExecError when the command
+// did not run to its exit.
 export interface ExecHandle {
   readonly started: Promise<{ readonly pid: number }>;
   readonly stdout: ReadableStream<Uint8Array>;
@@ -50,6 +55,7 @@ export interface ExecDeps {
   readonly fetch?: (request: Request) => Promise<Response>;
 }
 
+const DEFAULT_MAX_UNREAD_BYTES = 8 * 1024 * 1024;
 const TTY_SIGNAL_KEYS: Readonly<Record<string, string>> = { SIGINT: '\u0003', SIGQUIT: '\u001C' };
 
 // The login shell from the image's /etc/passwd, else bash, else sh. Plain
@@ -73,20 +79,47 @@ export async function openExec(
   options: Readonly<ExecOptions> = {},
 ): Promise<ExecHandle> {
   const abort = options.signal;
+  const callOptions = abort === undefined ? {} : { signal: abort };
 
   abort?.throwIfAborted();
-  const callOptions = abort === undefined ? {} : { signal: abort };
 
   const issued = await deps.rpc.exec.ticket({ name }, callOptions);
 
+  // the ticket call may have outlived an abort that it did not see
+  abort?.throwIfAborted();
   const tty = options.tty ?? false;
-
-  // these never reject, so a caller that reads neither `started` nor `exit`
-  // sees no unhandled rejection; the handle's getters turn them into throws
+  const maxUnreadBytes = options.maxUnreadBytes ?? DEFAULT_MAX_UNREAD_BYTES;
   const started = Promise.withResolvers<Settled<{ pid: number }>>();
   const ended = Promise.withResolvers<Settled<ExecExit>>();
-  const stdout = buildOutputStream();
-  const stderr = buildOutputStream();
+  const state = { ended: false, cancelled: 0 };
+
+  const stopWith = (code: 'CLOSED' | 'OUTPUT_OVERFLOW', message: string): void => {
+    session.stop();
+
+    resolveHandle({ error: new ExecError(code, message) });
+  };
+
+  const outputHooks: OutputHooks = {
+    maxUnreadBytes,
+    onOverflow: (channel) => {
+      stopWith(
+        'OUTPUT_OVERFLOW',
+        `${channel} holds more than ${String(maxUnreadBytes)} unread bytes; read or cancel it`,
+      );
+    },
+
+    // nobody reads the output any more, so the command may as well stop
+    onCancel: () => {
+      state.cancelled += 1;
+
+      if (state.cancelled === 2) {
+        stopWith('CLOSED', 'both output streams were cancelled');
+      }
+    },
+  };
+
+  const stdout = buildOutputStream('stdout', outputHooks);
+  const stderr = buildOutputStream('stderr', outputHooks);
 
   const session = openExecSession({
     baseUrl: deps.baseUrl,
@@ -114,6 +147,12 @@ export async function openExec(
   });
 
   const resolveHandle = (result: Settled<ExecExit>): void => {
+    if (state.ended) {
+      return;
+    }
+
+    state.ended = true;
+
     stdout.end();
     stderr.end();
     abort?.removeEventListener('abort', stopSession);
@@ -128,9 +167,7 @@ export async function openExec(
   // the session's outcome never settles after a stop, so the stop settles
   // the handle itself
   const stopSession = (): void => {
-    session.stop();
-
-    resolveHandle({ error: new ExecError('CLOSED', 'the exec session was closed') });
+    stopWith('CLOSED', 'the exec session was closed');
   };
 
   const waitForOutcome = async (): Promise<void> => {
@@ -144,12 +181,18 @@ export async function openExec(
     resolveHandle(result);
   };
 
-  abort?.addEventListener('abort', stopSession, { once: true });
+  if (abort?.aborted === true) {
+    stopSession();
+  } else {
+    abort?.addEventListener('abort', stopSession, { once: true });
+  }
+
   void waitForOutcome();
 
   return buildHandle(session, {
     started: started.promise,
     ended: ended.promise,
+    isEnded: () => state.ended,
     tty,
     stopSession,
     streams: [stdout.stream, stderr.stream],
@@ -211,6 +254,7 @@ export async function runCommand(
 interface HandleParts {
   readonly started: Promise<Settled<{ pid: number }>>;
   readonly ended: Promise<Settled<ExecExit>>;
+  readonly isEnded: () => boolean;
   readonly tty: boolean;
   readonly stopSession: () => void;
   readonly streams: readonly [ReadableStream<Uint8Array>, ReadableStream<Uint8Array>];
@@ -239,8 +283,26 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
     return result.value;
   };
 
+  // made once, so every read of `started` and `exit` is the same promise;
+  // a caller that reads neither sees no unhandled rejection
+  const startedPromise = waitForStart();
+  const exitPromise = waitForExit();
+
+  void waitIgnoringRejection(startedPromise);
+  void waitIgnoringRejection(exitPromise);
+
+  const requireOpen = (): void => {
+    if (parts.isEnded()) {
+      throw new ExecError('CLOSED', 'the exec session has ended');
+    }
+  };
+
   const write = async (data: string | Uint8Array): Promise<void> => {
-    await waitForStart();
+    requireOpen();
+
+    await startedPromise;
+
+    requireOpen();
 
     const bytes = typeof data === 'string' ? encoder.encode(data) : data;
 
@@ -259,17 +321,15 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
   };
 
   return {
-    get started() {
-      return waitForStart();
-    },
+    started: startedPromise,
     stdout: parts.streams[0],
     stderr: parts.streams[1],
-    get exit() {
-      return waitForExit();
-    },
+    exit: exitPromise,
     write,
     closeStdin: async () => {
-      await waitForStart();
+      await startedPromise;
+
+      requireOpen();
 
       session.closeStdin();
     },
@@ -289,27 +349,53 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
   };
 }
 
-// a stream the session pushes into; a reader that cancelled gets no more
-function buildOutputStream() {
+async function waitIgnoringRejection(promise: Promise<unknown>): Promise<void> {
+  try {
+    await promise;
+  } catch {
+    // the caller sees the rejection where it reads the promise
+  }
+}
+
+interface OutputHooks {
+  readonly maxUnreadBytes: number;
+  readonly onOverflow: (channel: 'stdout' | 'stderr') => void;
+  readonly onCancel: () => void;
+}
+
+// A stream the session pushes into. The queue counts bytes, so its
+// desiredSize goes below zero once more than maxUnreadBytes wait unread.
+function buildOutputStream(channel: 'stdout' | 'stderr', hooks: Readonly<OutputHooks>) {
   const state: { controller: ReadableStreamDefaultController<Uint8Array> | null; open: boolean } = {
     controller: null,
     open: true,
   };
 
-  const stream = new ReadableStream<Uint8Array>({
-    start: (controller) => {
-      state.controller = controller;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start: (controller) => {
+        state.controller = controller;
+      },
+      cancel: () => {
+        state.open = false;
+
+        hooks.onCancel();
+      },
     },
-    cancel: () => {
-      state.open = false;
-    },
-  });
+    { highWaterMark: hooks.maxUnreadBytes, size: (chunk) => chunk?.byteLength ?? 0 },
+  );
 
   return {
     stream,
     push: (data: Uint8Array) => {
-      if (state.open) {
-        state.controller?.enqueue(data);
+      if (!state.open || state.controller === null) {
+        return;
+      }
+
+      state.controller.enqueue(data);
+
+      if ((state.controller.desiredSize ?? 0) < 0) {
+        hooks.onOverflow(channel);
       }
     },
     end: () => {
@@ -321,8 +407,6 @@ function buildOutputStream() {
   };
 }
 
-// a reader loop, not `for await`: older Safari has no async iteration on
-// ReadableStream
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];

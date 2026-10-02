@@ -10,6 +10,7 @@ export type ExecClientErrorCode =
   | 'CONNECTION_CLOSED'
   | 'BAD_MESSAGE'
   | 'CLOSED'
+  | 'OUTPUT_OVERFLOW'
   | 'LOCAL_ERROR';
 
 // An exec that did not run to its exit. `data` is the error's data from
@@ -40,7 +41,12 @@ export function toExecError(outcome: Exclude<ExecOutcome, { kind: 'exit' }>): Ex
   }
 
   if (outcome.kind === 'unauthorized') {
-    return new ExecError('UNAUTHORIZED', 'impd rejected the token or the exec ticket');
+    const message =
+      outcome.ticketRefused === true
+        ? 'impd refused the exec ticket: it expired (30 s) or was used already'
+        : 'impd rejected the token';
+
+    return new ExecError('UNAUTHORIZED', message);
   }
 
   if (outcome.kind === 'unreachable') {
