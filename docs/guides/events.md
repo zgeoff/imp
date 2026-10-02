@@ -54,6 +54,7 @@ reader skips a kind or a field it does not know.
 | `adopted`  | impd started and found the imp's VM still running.                                       |
 | `held`     | A hold was set or cleared.                                                               |
 | `restored` | A checkpoint restore finished.                                                           |
+| `updated`  | `imp set` changed the imp's CPU limit, weight or vCPUs.                                  |
 
 `detail` comes with `booted`, `woke`, `slept` and `restored`: `durationMs`, `steps` (milliseconds
 per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
@@ -117,15 +118,23 @@ traces over OTLP (HTTP and protobuf). Without it, impd loads no SDK and every in
 nothing. The exporters read the standard variables themselves, such as `OTEL_EXPORTER_OTLP_HEADERS`
 ([configuration](./configuration.md#telemetry)).
 
-| Metric                      | Kind      | Attributes | Meaning                                     |
-| --------------------------- | --------- | ---------- | ------------------------------------------- |
-| `imp.lifecycle.transitions` | counter   | `reason`   | Imps created, changed or removed.           |
-| `imp.lifecycle.duration`    | histogram | `reason`   | Boot, wake, sleep and restore times, in ms. |
-| `imp.governor.decisions`    | counter   | `decision` | Admissions, refusals and sleeps.            |
-| `imp.imps`                  | gauge     | `state`    | Imps in each state.                         |
-| `imp.ram.used`              | gauge     |            | RAM the awake imps own, in MiB.             |
-| `imp.ram.budget`            | gauge     |            | `IMP_RAM_BUDGET_MIB`.                       |
+| Metric                      | Kind      | Attributes  | Meaning                                     |
+| --------------------------- | --------- | ----------- | ------------------------------------------- |
+| `imp.lifecycle.transitions` | counter   | `reason`    | Imps created, changed or removed.           |
+| `imp.lifecycle.duration`    | histogram | `reason`    | Boot, wake, sleep and restore times, in ms. |
+| `imp.governor.decisions`    | counter   | `decision`  | Admissions, refusals and sleeps.            |
+| `imp.imps`                  | gauge     | `state`     | Imps in each state.                         |
+| `imp.ram.used`              | gauge     |             | RAM the awake imps own, in MiB.             |
+| `imp.ram.budget`            | gauge     |             | `IMP_RAM_BUDGET_MIB`.                       |
+| `imp.cpu.usage`             | gauge     |             | Cores the running imps used, together.      |
+| `imp.cpu.utilization`       | histogram |             | Each running imp's CPU per sample, in %.    |
+| `imp.cpu.throttled`         | counter   |             | Time CPU limits held imps back, in s.       |
+| `imp.network.io`            | counter   | `direction` | Bytes the guests received and sent.         |
+| `imp.awake.time`            | counter   |             | Time imps spent running, in s.              |
 
-No metric carries an imp's name, so the series count stays the same as imps come and go. Each boot,
-wake, sleep and restore is also a span (`imp.boot`, `imp.wake`, `imp.sleep`, `imp.restore`) with the
-imp's name and trigger, and a child span for each step.
+The CPU, network and awake metrics come from impd's 5 s sample ([CPU limits](./cpu-limits.md)).
+`imp.awake.time` adds up sample intervals, so it misses the boot or wake itself and up to 5 s before
+each sleep or stop; `awakeMs` in the API counts the whole span. No metric carries an imp's name, so
+the series count stays the same as imps come and go. Each boot, wake, sleep and restore is also a
+span (`imp.boot`, `imp.wake`, `imp.sleep`, `imp.restore`) with the imp's name and trigger, and a
+child span for each step.

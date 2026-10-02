@@ -123,6 +123,10 @@ The host container's scripts in `host/` read these before impd starts.
 **NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
 not pass `IMP_DNS`, so the dev instance uses the defaults.
 
+**NOTE:** CPU limits need the container in a private cgroup namespace:
+`docker run --cgroupns=private` (`cgroup: private` in Compose). `setup-cgroups.sh` turns them off
+without it ([CPU limits](./cpu-limits.md)).
+
 ## Dev instance
 
 `scripts/dev.sh` runs one host container for development. It reads these on your machine:
