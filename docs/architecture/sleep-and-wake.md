@@ -46,8 +46,8 @@ waiting would deadlock. The type of the governor's sleep admits only a try-lock.
 
 ## Wake
 
-1. impd reads `meta.json` and compares it with this host. On no snapshot or any difference, it boots
-   the disk cold instead.
+1. impd reads `meta.json` and checks it against this host ([snapshot identity](#snapshot-identity)).
+   On no snapshot or a snapshot that cannot load, it boots the disk cold instead.
 2. It reserves RAM: the larger of what the VM owned at sleep and `IMP_WAKE_RESERVE_MIB`.
 3. It creates the tap if it is gone (a container restart removes taps).
 4. It starts Firecracker, which first removes a stale `vsock.sock` ([gotcha 1](#4-gotchas)), and
@@ -67,10 +67,33 @@ cold boot away.
 
 ### Snapshot identity
 
-`meta.json` records the Firecracker version, the snapshot format, the host kernel (`uname -r`), and
-hashes of the guest kernel and the system drive. The snapshot holds the guest kernel in memory and
-the guest's page cache of the system drive, so either change means a cold boot. It also records the
-imp's memory size and the RAM the VM owned at sleep.
+A cold boot writes `vm.json` in the imp's directory: what the VM booted with. It holds the
+Firecracker version, the snapshot format, the host kernel (`uname -r`), the sha256 of the guest
+kernel and of the system drive, the drive's path, the agent's protocol version from its first
+`ping`, and why the boot was cold when it replaced a wake (the next sleep clears that). It is
+written next to the old file and renamed over it; a failed write is logged and the boot goes on. The
+file stays through sleeps, wakes and impd restarts, so a re-adopted VM that booted on an older drive
+still says so. Each sleep copies it into `meta.json`, with the imp's memory size and the RAM the VM
+owned at sleep.
+
+A wake loads the snapshot only when all of these hold. Otherwise it boots the disk cold:
+
+| What changed since the VM booted | Wake                                                  |
+| -------------------------------- | ----------------------------------------------------- |
+| The Firecracker version          | cold boot                                             |
+| The snapshot format              | cold boot                                             |
+| The host kernel                  | cold boot                                             |
+| The system drive (the agent)     | restores while the drive file is kept, else cold boot |
+| The guest kernel                 | restores: the snapshot holds the kernel in memory     |
+| `meta.json` without a drive path | cold boot: the snapshot is from an older impd         |
+
+The snapshot reopens the system drive by path, and its page cache holds blocks of those bytes, so
+impd keeps every drive a snapshot names ([storage](./storage.md#system-files)). After a load, the
+agent must answer with the protocol version `meta.json` recorded; anything else is not the VM that
+went to sleep, and impd boots cold.
+
+A woken imp keeps its old agent and kernel until its next cold boot (`imp stop`, then `imp start`).
+`imp ls` shows both cases in its NOTE column ([operations](../guides/operations.md#upgrade)).
 
 ## What survives a sleep
 

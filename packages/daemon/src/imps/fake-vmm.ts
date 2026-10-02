@@ -1,6 +1,9 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { VmRunner } from '../vmm/vm-runner';
 
+// what every fake agent's ping reports
+export const FAKE_AGENT_VERSION = '0.1.0';
+
 export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady';
 
 // What the next call of a step does, within the VmRunner contract; each step
@@ -101,7 +104,7 @@ export function buildFakeVmm() {
         alive.add(pid);
       }
 
-      return { pid, firecrackerVersion: 'v1.17.0', timings: {} };
+      return { pid, firecrackerVersion: 'v1.17.0', agentVersion: FAKE_AGENT_VERSION, timings: {} };
     };
 
     return {

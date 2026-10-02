@@ -19,18 +19,33 @@ clone of a 32 GiB sparse rootfs takes about 3 ms).
 /var/lib/imp/
   token
   db/imp.sqlite
-  system/vmlinux  system/imp-system.squashfs
+  system/vmlinux  system/drives/<sha256>.squashfs
   images/<digest>/rootfs.ext4  images/<digest>/config.json
-  imps/<id>/disk.ext4
+  imps/<id>/disk.ext4  imps/<id>/vm.json
   imps/<id>/run/{api.sock,vsock.sock,firecracker.log,pid}
   imps/<id>/snapshot/{vmstate,mem,meta.json}
   imps/<id>/checkpoints/<cid>/disk.ext4
   tailscale/
 ```
 
-impd copies the kernel and the system drive into `system/` on start. A changed file is written next
-to the old one and renamed over it, so a running VM keeps the old inode. `snapshot/` holds the
-memory of a sleeping imp ([sleep and wake](./sleep-and-wake.md)).
+`snapshot/` holds the memory of a sleeping imp, and `vm.json` what its VM booted with
+([sleep and wake](./sleep-and-wake.md#snapshot-identity)).
+
+## System files
+
+impd copies the guest kernel and the system drive into `system/` on start.
+
+- **Kernel.** A changed kernel is written next to the old one and renamed over it, so a running VM
+  keeps the old inode. Only a cold boot reads it: a snapshot holds the kernel in memory.
+- **System drive.** Each drive goes to `system/drives/<sha256>.squashfs` and is never written over.
+  A snapshot reopens the drive by the path the VM booted with, and the guest's page cache holds
+  blocks of those bytes, so the bytes at that path must stay. After an agent change the old drive
+  stays, and a sleeping imp still wakes with its memory and its old agent.
+- **Pruning.** On start, after it re-adopts the VMs, impd deletes every drive that is not the
+  current one and that no snapshot and no live VM names. An imp leaves an old drive behind once it
+  boots cold, or is stopped or destroyed, and the next start removes it. Drives are matched by file
+  name, so a moved data dir keeps them. impd never touches the old `system/imp-system.squashfs`
+  ([operations](../guides/operations.md#upgrade)).
 
 ## Checkpoints, restores and forks
 

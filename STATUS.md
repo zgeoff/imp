@@ -71,6 +71,9 @@ From the milestone work:
 
 ## Known gaps
 
+- An upgrade across an agent change was tested on the dev instance (`scripts/dev.sh down`, then `up`
+  on a new drive), not on a server with `deploy/upgrade.sh`. A new Firecracker or host kernel still
+  boots every sleeping imp cold ([#10](https://github.com/zgeoff/imp/issues/10)).
 - A wake right after another wake or exec (under about 1 s apart) takes 650–850 ms instead of about
   80 ms. Normal idle timeouts never hit it ([#33](https://github.com/zgeoff/imp/issues/33)).
 - The WebSocket relay through the wake proxy was tested by hand, not in an end-to-end script

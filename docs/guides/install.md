@@ -126,10 +126,10 @@ kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-
 The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
 stamps and drive times are fixed, so the same sources give the same `vmlinux` and
 `imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/build-system-drive.sh` use the same
-stages, so the dev instance boots the same bytes as the release image. A snapshot of a sleeping imp
-restores only with the kernel and drive it was taken on, so this is what lets an upgrade that leaves
-them alone keep every imp's memory. Only these two files are reproducible; the image digest is not
-(apt packages, timestamps and the compiled impd differ per build).
+stages, so the dev instance boots the same bytes as the release image. A release that leaves them
+alone does not change which drive or kernel the imps boot, and impd keeps an older drive while a
+snapshot needs it ([upgrades](./operations.md#upgrade)). Only these two files are reproducible; the
+image digest is not (apt packages, timestamps and the compiled impd differ per build).
 
 `host/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one after a
 change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in CI by

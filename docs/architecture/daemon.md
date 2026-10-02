@@ -9,10 +9,11 @@ starts and stops Firecracker, and keeps the RAM of awake imps under the budget. 
 
 On start, impd reads its [configuration](../guides/configuration.md), copies the guest kernel and
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
-token, and re-adopts any Firecracker processes that are still alive. Then it serves the API, opens
-the proxy listeners and starts three timers: the idle loop every 2 s, the governor every 5 s, and a
-proxy listener sync every 30 s. It adds a default image in the background; `/health` reports
-`ready: true` once that finishes, whether it worked or not.
+token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
+drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
+the API, opens the proxy listeners and starts three timers: the idle loop every 2 s, the governor
+every 5 s, and a proxy listener sync every 30 s. It adds a default image in the background;
+`/health` reports `ready: true` once that finishes, whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -95,9 +96,11 @@ out: 10 s, or 120 s for a snapshot create or load.
 
 ### sleep: snapshot metadata
 
-The sleep module writes and reads `snapshot/meta.json`. It records what a memory snapshot is tied
-to: the Firecracker version, the snapshot format, the host kernel, and hashes of the guest kernel
-and the system drive. A wake compares them with the current values and boots cold on any difference.
+The sleep module writes and reads `vm.json`, what a VM booted with, and `snapshot/meta.json`, which
+copies it at each sleep: the Firecracker version, the snapshot format, the host kernel, the sha256
+of the guest kernel and of the system drive, the drive's path and the agent's protocol version. A
+wake checks the snapshot against this host and boots cold when it cannot load
+([snapshot identity](./sleep-and-wake.md#snapshot-identity)).
 
 ### agent-client: the vsock client
 
@@ -140,8 +143,8 @@ agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 ### storage: the data layout
 
 The storage module knows where every file under `/var/lib/imp` lives, makes reflink clones (it fails
-instead of a full copy), and copies the kernel and system drive into place on start. A changed file
-is written next to the old one and renamed over it, so a VM that has the old file open keeps it.
+instead of a full copy), and copies the kernel and system drive into place on start
+([system files](./storage.md#system-files)).
 
 ### net: taps and the tailnet
 

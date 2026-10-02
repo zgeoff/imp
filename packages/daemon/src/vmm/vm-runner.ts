@@ -36,6 +36,9 @@ interface StartedVm {
   readonly pid: number;
   readonly firecrackerVersion: string;
 
+  // the protocol version the agent's ping reports
+  readonly agentVersion: string;
+
   // milliseconds per step, for the create-time breakdown in the log
   readonly timings: Readonly<Record<string, number>>;
 }
@@ -166,11 +169,11 @@ export function createVmRunner(): VmRunner {
 
         setMark('instanceStart');
 
-        await waitForAgent(plan.paths.vsockSocket, { deadlineMs: AGENT_DEADLINE_MS });
+        const ping = await waitForAgent(plan.paths.vsockSocket, { deadlineMs: AGENT_DEADLINE_MS });
 
         setMark('agent');
 
-        return { pid, firecrackerVersion, timings: timer.marks };
+        return { pid, firecrackerVersion, agentVersion: ping.version, timings: timer.marks };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
@@ -262,7 +265,7 @@ export function createVmRunner(): VmRunner {
         setMark('load');
 
         // a ping sent while the guest resumes can hang: retry it soon
-        await waitForAgent(plan.paths.vsockSocket, {
+        const ping = await waitForAgent(plan.paths.vsockSocket, {
           deadlineMs: WAKE_AGENT_DEADLINE_MS,
           attemptMs: 200,
         });
@@ -275,7 +278,7 @@ export function createVmRunner(): VmRunner {
 
         setMark('resumed');
 
-        return { pid, firecrackerVersion, timings: timer.marks };
+        return { pid, firecrackerVersion, agentVersion: ping.version, timings: timer.marks };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
