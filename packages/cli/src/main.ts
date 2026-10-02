@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { defineCommand, runCommand, runMain } from 'citty';
+import { defineCommand, runMain } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
 import { imageCommand } from './commands/image';
@@ -46,19 +46,10 @@ const main = defineCommand({
   },
 });
 
-// runMain shows help when --help appears anywhere, so arguments after `--`
-// (the command for `imp exec`) bypass it
+// runMain shows help when --help appears anywhere, and citty would parse
+// the command's own flags, so it sees only the arguments before `--`;
+// `imp exec` reads the command after it from process.argv
 const rawArgs = process.argv.slice(2);
 const separator = rawArgs.indexOf('--');
-const ownArgs = separator === -1 ? rawArgs : rawArgs.slice(0, separator);
 
-if (ownArgs.length === rawArgs.length || ownArgs.some((arg) => arg === '--help' || arg === '-h')) {
-  await runMain(main, { rawArgs: ownArgs });
-} else {
-  try {
-    await runCommand(main, { rawArgs });
-  } catch (error) {
-    console.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
-  }
-}
+await runMain(main, { rawArgs: separator === -1 ? rawArgs : rawArgs.slice(0, separator) });

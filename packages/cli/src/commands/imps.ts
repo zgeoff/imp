@@ -159,7 +159,7 @@ export const execCommand = defineCommand({
     tty: { type: 'boolean', alias: 't', description: 'run on a terminal' },
   },
   run: async (context) => {
-    const argv = splitCommand(context.rawArgs, context.args._.slice(1));
+    const argv = splitCommand(process.argv, context.args._.slice(1));
 
     if (argv.length === 0) {
       console.error('imp: exec needs a command: imp exec <name> -- cmd args');
@@ -204,11 +204,12 @@ export const consoleCommand = defineCommand({
   },
 });
 
-// everything after `--`, else the positionals after the name
-function splitCommand(rawArgs: readonly string[], positionals: readonly string[]): string[] {
-  const separator = rawArgs.indexOf('--');
+// everything after `--` (main.ts keeps it from citty), else the
+// positionals after the name
+function splitCommand(argv: readonly string[], positionals: readonly string[]): string[] {
+  const separator = argv.indexOf('--');
 
-  return separator === -1 ? [...positionals] : rawArgs.slice(separator + 1);
+  return separator === -1 ? [...positionals] : argv.slice(separator + 1);
 }
 
 function readTermEnv(): Record<string, string> {
