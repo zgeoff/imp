@@ -37,6 +37,9 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 type Manager struct {
 	launcher *launch.Launcher
 
+	// starting serializes starts, so a spawn needs no hold on mu, which List
+	// and Kill take.
+	starting sync.Mutex
 	mu       sync.Mutex
 	sessions map[string]*session
 
@@ -111,7 +114,6 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 		<-v.done
 		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: noSession(s.name)})
 	}
-	m.removeIfOver(s)
 
 	input(s, v, r)
 	s.detach(v)
@@ -126,10 +128,10 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	if !namePattern.MatchString(req.Session) {
 		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("bad session name %q", req.Session)}
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[req.Session]
 	if req.Op == proto.OpSessionAttach {
+		m.mu.Lock()
+		s, ok := m.sessions[req.Session]
+		m.mu.Unlock()
 		if !ok {
 			return nil, false, noSession(req.Session)
 		}
@@ -138,11 +140,17 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	if !req.TTY {
 		return nil, false, &proto.Error{Code: proto.ErrBadRequest, Message: "a session needs a tty"}
 	}
+	m.starting.Lock()
+	defer m.starting.Unlock()
+	m.mu.Lock()
+	s, ok := m.sessions[req.Session]
+	count := len(m.sessions)
+	m.mu.Unlock()
 	if ok && !s.exited() {
 		return s, false, nil
 	}
 	// an exited session gives its name, and its slot, to the new one
-	if !ok && len(m.sessions) >= MaxSessions {
+	if !ok && count >= MaxSessions {
 		return nil, false, &proto.Error{Code: proto.ErrSessionCap, Message: fmt.Sprintf("this imp already has %d sessions", MaxSessions)}
 	}
 	p, master, err := m.launcher.StartPTY(req)
@@ -150,8 +158,11 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 		return nil, false, &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()}
 	}
 	s = newSession(req.Session, req, p, master)
+	s.onDelivered = func() { m.removeIfOver(s) }
+	m.mu.Lock()
 	m.sessions[s.name] = s
-	safe.Go("session "+s.name, func() { s.run(func() { m.removeIfOver(s) }) }, nil)
+	m.mu.Unlock()
+	safe.Go("session "+s.name, s.run, nil)
 	return s, true, nil
 }
 

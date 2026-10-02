@@ -67,7 +67,7 @@ func TestHistoryReplaysDroppedModes(t *testing.T) {
 	h.Write([]byte("\x1b[?1049h\x1b[?2004h\x1b[?1000h"))
 	h.Write([]byte(strings.Repeat("x", 100)))
 	got := string(h.Replay())
-	want := "\x1b[?1049h\x1b[?1000h\x1b[?2004h"
+	want := "\x1b[?1000h\x1b[?2004h\x1b[?1049h"
 	if !strings.HasPrefix(got, want) || strings.Count(got, "\x1b") != 3 {
 		t.Fatalf("replay %q, want %q then the output", got, want)
 	}

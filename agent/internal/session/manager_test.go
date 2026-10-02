@@ -280,6 +280,7 @@ func TestTakeover(t *testing.T) {
 // A viewer whose host stopped reading, but never closed, does not keep a
 // new viewer out.
 func TestTakeoverOfAHalfOpenViewer(t *testing.T) {
+	shortenLastWrite(t)
 	m := newTestManager(t)
 	guest, conn := net.Pipe()
 	stuck := &host{conn: conn, served: make(chan error, 1)}
@@ -294,6 +295,19 @@ func TestTakeoverOfAHalfOpenViewer(t *testing.T) {
 	second.until(t, "ready")
 	second.send(t, proto.TypeStdin, []byte("hi\n"))
 	second.until(t, "said hi")
+
+	// the stuck connection's writes time out, and its Serve returns
+	select {
+	case <-stuck.served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the half-open viewer's Serve did not return")
+	}
+}
+
+func shortenLastWrite(t *testing.T) {
+	saved := lastWriteTimeout
+	lastWriteTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { lastWriteTimeout = saved })
 }
 
 func TestExitWhileDetached(t *testing.T) {
@@ -318,9 +332,7 @@ func TestExitWhileDetached(t *testing.T) {
 	if !strings.Contains(later.out.String(), "bye") {
 		t.Fatalf("replay %q lost the last output", later.out.String())
 	}
-	if _, ok := find(m, "job"); ok {
-		t.Fatal("the session is still listed after its EXIT was delivered")
-	}
+	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 	if code := attach(t, m, "job").errorCode(t); code != proto.ErrNoSession {
 		t.Fatalf("attach after the EXIT: %s, want NO_SESSION", code)
 	}
@@ -493,4 +505,34 @@ func TestFailedWriteEndsOnlyThatViewer(t *testing.T) {
 	fresh.started(t)
 	fresh.send(t, proto.TypeStdin, []byte("e\n"))
 	fresh.until(t, "said e")
+}
+
+// An EXIT that a viewer could not be sent stays for the next viewer. With
+// no echo, the EXIT is the first frame after STARTED and the replay, so the
+// one write that fails is the EXIT's.
+func TestExitWhileTheViewerFails(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "job", `stty -echo; echo ready; read go; exit 5`)
+	h.started(t)
+	h.until(t, "ready")
+	h.detach(t)
+
+	guest, conn := net.Pipe()
+	broken := serve(t, m, proto.Request{Op: proto.OpSessionAttach, Session: "job"}, &failingConn{Conn: guest}, conn)
+	broken.started(t)
+	broken.send(t, proto.TypeStdin, []byte("go\n"))
+	select {
+	case <-broken.served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the broken viewer stayed attached")
+	}
+	waitFor(t, "the exit", func() bool { info, _ := find(m, "job"); return info.State == proto.SessionExited })
+
+	later := attach(t, m, "job")
+	later.started(t)
+	f := later.last(t)
+	if f.Type != proto.TypeExit || decode[proto.Exit](t, f).Code != 5 {
+		t.Fatalf("got %s %q, want EXIT 5", f.Type, f.Payload)
+	}
+	waitFor(t, "the session to go", func() bool { _, ok := find(m, "job"); return !ok })
 }

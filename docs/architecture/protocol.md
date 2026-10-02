@@ -244,8 +244,8 @@ A session has at most one connection, its viewer. After STARTED the viewer gets:
 1. A replay: one or more STDOUT frames with the recent output, about the last 256–512 KiB. It starts
    with the terminal modes in effect where the kept output starts (alternate screen, mouse modes,
    bracketed paste, application cursor keys, a hidden cursor, focus events and the kitty keyboard
-   flags), so the viewer's terminal ends in the modes the program set last. The kept output starts
-   between escape sequences and characters, never inside one.
+   flags, kept per screen as kitty does), so the viewer's terminal ends in the modes the program set
+   last. The kept output starts between escape sequences and characters, never inside one.
 2. Live output as STDOUT frames.
 3. EXIT when the process exits, or DETACHED when the agent drops the viewer.
 
@@ -261,17 +261,19 @@ that does not redraw on SIGWINCH shows the replay only.
 - **Host closes the connection.** That is a detach: the process gets no signal and keeps running. A
   vsock reset on a snapshot restore is a detach too.
 - **Takeover.** A new attach makes the old viewer get `DETACHED {"reason":"taken_over"}`, and the
-  agent closes its connection.
-- **A slow viewer.** The agent never waits for a viewer. A viewer more than 2 MiB behind is dropped
-  with `DETACHED {"reason":"slow"}` and its queued output is discarded. The program keeps writing to
-  the session.
+  agent closes its connection. Input from the old viewer after that goes nowhere.
+- **A slow viewer.** The agent never waits for a viewer. A viewer more than 2 MiB behind (the frames
+  being written included) is dropped with `DETACHED {"reason":"slow"}` and its queued output is
+  discarded. The program keeps writing to the session.
+- A viewer that was taken over or dropped has 5 s to take its last frames. A host that stopped
+  reading, but never closed, then loses the connection.
 
 ### Exit
 
 When the process exits, the agent forwards the remaining output (for at most 500 ms, as for `exec`)
-and sends EXIT to the viewer, then waits up to 2 s for the host to close. The session is then gone.
-With no viewer attached, the session stays as `exited`; the next attach gets the replay and EXIT,
-and the session is gone after that.
+and sends EXIT to the viewer, then waits up to 2 s for the host to close. The session is gone once
+the EXIT is written. With no viewer attached, or when the write of the EXIT fails, the session stays
+as `exited`; the next attach gets the replay and EXIT, and the session is gone after that.
 
 ### `session.kill`
 

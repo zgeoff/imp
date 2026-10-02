@@ -20,9 +20,10 @@ const historyLimit = 256 << 10
 // exec: a background child that keeps the pty open cannot hold the session.
 const drainGrace = 500 * time.Millisecond
 
-// stdinQueue bounds the STDIN frames waiting for the pty. Past it the
-// viewer's input loop waits, which pushes back on the host.
-const stdinQueue = 256
+// stdinQueue bounds the STDIN frames waiting for the pty, at most
+// proto.MaxPayload each. Past it the viewer's input loop waits, which pushes
+// back on the host.
+const stdinQueue = 4
 
 // session is one program on a pty that outlives its connections. One pump
 // reads the pty into the screen and the attached viewer, if any; it never
@@ -43,8 +44,11 @@ type session struct {
 	viewer     *viewer
 	cols, rows uint16
 	exit       *proto.Exit
-	// delivered is set once a viewer got the EXIT; the session is then over.
+	// delivered is set once the EXIT was written to a viewer; the session is
+	// then over. Until then each new viewer gets the EXIT.
 	delivered bool
+	// onDelivered runs once delivered is set.
+	onDelivered func()
 }
 
 func newSession(name string, req proto.Request, p *proc.Process, master *os.File) *session {
@@ -67,9 +71,8 @@ func newSession(name string, req proto.Request, p *proc.Process, master *os.File
 }
 
 // run pumps output until the process exits and its output drained, then
-// hands the EXIT to the viewer, or keeps it for the next one. onExit runs
-// after that.
-func (s *session) run(onExit func()) {
+// hands the EXIT to the viewer, or keeps it for the next one.
+func (s *session) run() {
 	pumped := make(chan struct{})
 	safe.Go("session "+s.name+" output", func() {
 		defer close(pumped)
@@ -90,7 +93,6 @@ func (s *session) run(onExit func()) {
 	}
 	s.mu.Unlock()
 	close(s.done)
-	onExit()
 }
 
 // pump reads the pty until EOF, EIO (every slave fd closed), or the drain
@@ -112,9 +114,9 @@ func (s *session) output(p []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.screen.Write(p)
-	if v := s.viewer; v != nil && !v.push(frame{proto.TypeStdout, append([]byte(nil), p...)}) {
+	if v := s.viewer; v != nil && !v.push(frame{typ: proto.TypeStdout, payload: append([]byte(nil), p...)}) {
 		s.viewer = nil
-		v.stop(&frame{proto.TypeDetached, mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
+		v.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
 	}
 }
 
@@ -128,11 +130,11 @@ func (s *session) attach(v *viewer, cols, rows uint16, created bool) bool {
 		return false
 	}
 	if old := s.viewer; old != nil {
-		old.stop(&frame{proto.TypeDetached, mustJSON(proto.Detached{Reason: proto.DetachTakenOver})}, false)
+		old.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachTakenOver})}, false)
 	}
 	v.pushJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, Session: s.name, Created: created})
 	if replay := s.screen.Replay(); len(replay) > 0 {
-		v.push(frame{proto.TypeStdout, replay})
+		v.push(frame{typ: proto.TypeStdout, payload: replay})
 	}
 	if s.exit != nil {
 		s.deliverExit(v)
@@ -174,12 +176,21 @@ func (s *session) resizeLocked(cols, rows uint16) {
 	s.cols, s.rows = cols, rows
 }
 
-// deliverExit ends the session with v as the viewer that sees the EXIT. The
-// caller holds mu.
+// deliverExit gives v the EXIT as its last frame. The session is over only
+// once that frame is written: if v fails first, or stopped already, the
+// next viewer gets the EXIT. The caller holds mu.
 func (s *session) deliverExit(v *viewer) {
 	s.viewer = nil
+	v.stop(&frame{typ: proto.TypeExit, payload: mustJSON(*s.exit), written: s.markDelivered}, false)
+}
+
+func (s *session) markDelivered() {
+	s.mu.Lock()
 	s.delivered = true
-	v.stop(&frame{proto.TypeExit, mustJSON(*s.exit)}, false)
+	s.mu.Unlock()
+	if s.onDelivered != nil {
+		s.onDelivered()
+	}
 }
 
 // detach drops v if it is still the viewer. The process keeps running.
@@ -201,8 +212,15 @@ func (s *session) signal(v *viewer, sig syscall.Signal) {
 }
 
 // queueStdin hands p to the stdin writer. It waits while the queue is full,
-// and gives up once the viewer or the session ends.
+// and gives up once the viewer or the session ends. Input from a viewer that
+// was taken over or dropped goes nowhere.
 func (s *session) queueStdin(v *viewer, p []byte) {
+	s.mu.Lock()
+	current := s.viewer == v
+	s.mu.Unlock()
+	if !current {
+		return
+	}
 	select {
 	case s.stdin <- p:
 	case <-v.done:

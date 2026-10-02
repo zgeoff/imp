@@ -32,32 +32,39 @@ func newHistory(limit int) *history {
 }
 
 func (h *history) Write(p []byte) {
-	if len(h.buf)+len(p) <= 2*h.limit {
-		h.buf = append(h.buf, p...)
-		return
+	if len(h.buf)+len(p) > 2*h.limit {
+		// trim first, so buf never grows past its capacity
+		p = h.drop(len(h.buf)+len(p)-h.limit, p)
 	}
 	h.buf = append(h.buf, p...)
-	h.trim()
 }
 
-// trim drops the oldest output down to limit bytes, then further to the
+// drop discards the oldest n bytes of buf followed by p, then further to the
 // next point where the parser is between sequences: a replay that started
-// inside an escape sequence or a UTF-8 character would show garbage.
-func (h *history) trim() {
-	cut := len(h.buf) - h.limit
-	for _, b := range h.buf[:cut] {
-		h.start.advance(b)
+// inside an escape sequence or a UTF-8 character would show garbage. It
+// returns what is left of p.
+func (h *history) drop(n int, p []byte) []byte {
+	k := min(n, len(h.buf))
+	cut := h.skip(h.buf, k)
+	ground := cut < len(h.buf)
+	h.buf = h.buf[:copy(h.buf, h.buf[cut:])]
+	if ground {
+		return p
 	}
-	for cut < len(h.buf) && !h.start.atGround() {
-		h.start.advance(h.buf[cut])
-		cut++
+	return p[h.skip(p, n-k):]
+}
+
+// skip feeds the first k bytes of b to start, then more up to the parser's
+// next ground state, and returns how many it fed.
+func (h *history) skip(b []byte, k int) int {
+	for _, c := range b[:k] {
+		h.start.advance(c)
 	}
-	n := copy(h.buf, h.buf[cut:])
-	h.buf = h.buf[:n]
-	if cap(h.buf) > 2*h.limit {
-		// a single write larger than the buffer grew it; give that back
-		h.buf = append(make([]byte, 0, 2*h.limit), h.buf...)
+	for k < len(b) && !h.start.atGround() {
+		h.start.advance(b[k])
+		k++
 	}
+	return k
 }
 
 func (h *history) Replay() []byte {

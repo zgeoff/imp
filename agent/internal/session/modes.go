@@ -1,6 +1,7 @@
 package session
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -45,10 +46,14 @@ const parserDataSize = 64
 type modes struct {
 	parser *ansi.Parser
 	set    map[int]bool
-	// kitty is the kitty keyboard protocol's stack of flag sets; the last
-	// entry is in effect.
-	kitty []int
+	// kitty holds the kitty keyboard protocol's stacks of flag sets, one
+	// for the main screen and one for the alternate screen, as kitty keeps
+	// them; the last entry of the shown screen's stack is in effect.
+	kitty [2][]int
 }
+
+// altModes are the modes that show the alternate screen.
+var altModes = []int{47, 1047, 1049}
 
 func newModes() *modes {
 	m := &modes{parser: ansi.NewParser()}
@@ -63,7 +68,17 @@ func (m *modes) reset() {
 	for _, n := range trackedModes {
 		m.set[n] = defaultOn[n]
 	}
-	m.kitty = nil
+	m.kitty = [2][]int{}
+}
+
+// screen returns 1 while the alternate screen shows, else 0.
+func (m *modes) screen() int {
+	for _, n := range altModes {
+		if m.set[n] {
+			return 1
+		}
+	}
+	return 0
 }
 
 func (m *modes) advance(b byte) { m.parser.Advance(b) }
@@ -94,22 +109,23 @@ func (m *modes) handleCsi(cmd ansi.Cmd, params ansi.Params) {
 // CSI = flags ; mode u (set the flags in effect).
 func (m *modes) handleKitty(prefix byte, params ansi.Params) {
 	first, _, _ := params.Param(0, -1)
+	stack := &m.kitty[m.screen()]
 	switch prefix {
 	case '>':
-		if len(m.kitty) == maxKittyFlags {
-			m.kitty = m.kitty[1:]
+		if len(*stack) == maxKittyFlags {
+			*stack = (*stack)[1:]
 		}
-		m.kitty = append(m.kitty, max(first, 0))
+		*stack = append(*stack, max(first, 0))
 	case '<':
 		n := max(first, 1)
-		m.kitty = m.kitty[:max(len(m.kitty)-n, 0)]
+		*stack = (*stack)[:max(len(*stack)-n, 0)]
 	case '=':
 		mode, _, _ := params.Param(1, 1)
 		flags := max(first, 0)
-		if len(m.kitty) == 0 {
-			m.kitty = []int{0}
+		if len(*stack) == 0 {
+			*stack = []int{0}
 		}
-		top := &m.kitty[len(m.kitty)-1]
+		top := &(*stack)[len(*stack)-1]
 		switch mode {
 		case 1:
 			*top = flags
@@ -129,11 +145,22 @@ func (m *modes) handleEsc(cmd ansi.Cmd) {
 }
 
 // sequence returns the bytes that put a terminal in its default modes into
-// these modes.
+// these modes. The main screen's kitty stack goes before the switch to the
+// alternate screen, and that screen's stack after it.
 func (m *modes) sequence() []byte {
 	var b strings.Builder
+	m.writeModes(&b, false)
+	writeKitty(&b, m.kitty[0])
+	m.writeModes(&b, true)
+	writeKitty(&b, m.kitty[1])
+	return []byte(b.String())
+}
+
+// writeModes writes the tracked modes that differ from the default: the
+// alternate screen modes, or every other one.
+func (m *modes) writeModes(b *strings.Builder, alt bool) {
 	for _, n := range trackedModes {
-		if m.set[n] == defaultOn[n] {
+		if slices.Contains(altModes, n) != alt || m.set[n] == defaultOn[n] {
 			continue
 		}
 		b.WriteString("\x1b[?" + strconv.Itoa(n))
@@ -143,8 +170,10 @@ func (m *modes) sequence() []byte {
 			b.WriteByte('l')
 		}
 	}
-	for _, flags := range m.kitty {
+}
+
+func writeKitty(b *strings.Builder, stack []int) {
+	for _, flags := range stack {
 		b.WriteString("\x1b[>" + strconv.Itoa(flags) + "u")
 	}
-	return []byte(b.String())
 }

@@ -10,7 +10,7 @@ func TestModesSequence(t *testing.T) {
 	}{
 		{"defaults", nil, ""},
 		{"alt screen, mouse, paste", []string{"\x1b[?1049h\x1b[?1000;1006h\x1b[?2004h"},
-			"\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?2004h"},
+			"\x1b[?1000h\x1b[?1006h\x1b[?2004h\x1b[?1049h"},
 		{"cursor keys, hidden cursor, focus", []string{"\x1b[?1h\x1b[?25l\x1b[?1004h"},
 			"\x1b[?1h\x1b[?25l\x1b[?1004h"},
 		{"set then reset", []string{"\x1b[?1049h\x1b[?2004h", "\x1b[?1049l\x1b[?2004l"}, ""},
@@ -25,6 +25,12 @@ func TestModesSequence(t *testing.T) {
 		{"kitty pop more than pushed", []string{"\x1b[>1u\x1b[<5u"}, ""},
 		{"kitty set modes", []string{"\x1b[>1u\x1b[=4;2u\x1b[=1;3u"}, "\x1b[>4u"},
 		{"kitty set with an empty stack", []string{"\x1b[=8u"}, "\x1b[>8u"},
+		{"kitty stacks per screen", []string{"\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[>5u"},
+			"\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[>5u"},
+		{"kitty pop on the alt screen leaves the main stack", []string{"\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[<5u"},
+			"\x1b[>1u\x1b[?1049h"},
+		{"leaving the alt screen shows the main stack", []string{"\x1b[>1u\x1b[?1049h\x1b[>3u\x1b[?1049l\x1b[<1u"},
+			"\x1b[>3u"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,8 +54,8 @@ func TestModesKittyStackIsBounded(t *testing.T) {
 			m.advance(b)
 		}
 	}
-	if len(m.kitty) != maxKittyFlags {
-		t.Fatalf("stack depth %d, want %d", len(m.kitty), maxKittyFlags)
+	if len(m.kitty[0]) != maxKittyFlags {
+		t.Fatalf("stack depth %d, want %d", len(m.kitty[0]), maxKittyFlags)
 	}
 }
 
