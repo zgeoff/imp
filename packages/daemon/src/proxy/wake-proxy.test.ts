@@ -1,15 +1,16 @@
 import { expect, test } from 'bun:test';
 import { removeImp } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
+import { findFreePorts } from '../net/test-free-ports';
 import { startWakeProxy } from './wake-proxy';
 
-// free ports, away from a dev instance's
+// free ports for the proxy and slot 0, the slot each test's imp takes
 function pickPorts() {
-  const base = 40_000 + Math.floor(Math.random() * 200) * 100;
+  const ports = findFreePorts(2);
 
   return {
-    IMP_PROXY_PORT: String(base),
-    IMP_PORT_BASE: String(base + 1),
+    IMP_PROXY_PORT: String(ports.take()),
+    IMP_PORT_BASE: String(ports.take()),
     IMP_SUBNET: '10.99.0.0/24',
   };
 }

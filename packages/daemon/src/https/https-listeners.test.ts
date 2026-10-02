@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { connect } from 'node:tls';
 import { setupImpTest } from '../imps/test-imps';
+import { findFreePorts } from '../net/test-free-ports';
 import { startWakeProxy } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
 import { createHttpsListeners } from './https-listeners';
@@ -9,11 +10,17 @@ import { createTestCertificate } from './test-certificates';
 const DOMAIN = 'imp.test';
 const NAMES = [DOMAIN, `*.${DOMAIN}`];
 
-// free ports, away from a dev instance's and the wake proxy test's
+// free ports; `slots` is slot 0's, the slot the test's imp takes
 function pickPorts() {
-  const base = 30_000 + Math.floor(Math.random() * 400) * 20;
+  const ports = findFreePorts(5);
 
-  return { api: base, proxy: base + 1, https: base + 2, http: base + 3, slots: base + 4 };
+  return {
+    api: ports.take(),
+    proxy: ports.take(),
+    https: ports.take(),
+    http: ports.take(),
+    slots: ports.take(),
+  };
 }
 
 // impd's API, as the bare domain reaches it: echoes what it was sent, and
