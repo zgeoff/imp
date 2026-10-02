@@ -45,10 +45,10 @@ type Manager struct {
 
 	mu      sync.Mutex
 	current *client
+	init    *initProc
 	// rootMu keeps the root open while an operation uses it
 	rootMu   sync.RWMutex
 	root     *fsroot.Root
-	initPid  int
 	restarts int
 	starts   []time.Time
 	lastErr  string
@@ -98,48 +98,58 @@ func (m *Manager) startOnce() error {
 		return fmt.Errorf("open %s: %w", CgroupDir, err)
 	}
 	defer cg.Close()
-	pid, died, sock, err := startInit(m.reaper, AgentBinary,
+	p, err := startInit(m.reaper, AgentBinary,
 		syscall.CLONE_NEWNS|syscall.CLONE_NEWPID|syscall.CLONE_NEWCGROUP, cg, m.cfg.env())
 	if err != nil {
 		return err
 	}
-	c, err := connect(sock, died)
+	c, err := connect(p)
 	if err != nil {
-		killCgroup()
+		p.kill()
+		cleanCgroup()
 		return err
 	}
-	root, err := fsroot.Open(fmt.Sprintf("/proc/%d/root", pid))
+	root, err := fsroot.Open(fmt.Sprintf("/proc/%d/root", p.pid))
 	if err != nil {
 		c.shut()
-		killCgroup()
+		p.kill()
+		cleanCgroup()
 		return fmt.Errorf("open the container's root: %w", err)
 	}
+	p.watchExit()
 	m.rootMu.Lock()
 	m.root = root
 	m.rootMu.Unlock()
 	m.mu.Lock()
-	m.current, m.initPid, m.lastErr = c, pid, ""
+	m.current, m.init, m.lastErr = c, p, ""
+	stopped := m.stopped
 	m.mu.Unlock()
-	log.Printf("inner: up, init pid %d", pid)
-	safe.Go("inner: watch", func() { m.watch(c, died) }, nil)
+	log.Printf("inner: up, init pid %d", p.pid)
+	safe.Go("inner: watch", func() { m.watch(c, p) }, nil)
+	if stopped {
+		// a Stop ran during the start and missed this init
+		m.kill(p)
+	}
 	return nil
 }
 
-// watch waits for the container to end: its init dying or its socket
-// closing. Either way every process in it goes.
-func (m *Manager) watch(c *client, died <-chan reaper.Status) {
+// watch waits for the container to end: its init dying, or its socket
+// closing, after which the init is killed. Either way every process in it
+// goes with its PID namespace.
+func (m *Manager) watch(c *client, p *initProc) {
 	select {
-	case st := <-died:
-		log.Printf("inner: the init died (%s)", describe(st))
+	case <-p.gone:
+		log.Printf("inner: the init died (%s)", describe(p.status))
 		c.shut()
 	case <-c.Down():
 		log.Printf("inner: the socket closed")
 	}
-	killCgroup()
+	m.kill(p)
+	cleanCgroup()
 	m.mu.Lock()
 	mine := m.current == c
 	if mine {
-		m.current = nil
+		m.current, m.init = nil, nil
 	}
 	m.mu.Unlock()
 	if mine {
@@ -160,6 +170,11 @@ func (m *Manager) watch(c *client, died <-chan reaper.Status) {
 	if !stopped {
 		m.restartLoop()
 	}
+}
+
+// kill kills p once; watch and Stop both may.
+func (m *Manager) kill(p *initProc) {
+	p.killOnce.Do(p.kill)
 }
 
 // restartLoop starts the container again with backoff, until it is up, the
@@ -242,18 +257,22 @@ func (m *Manager) Status() Status {
 func (m *Manager) InitPid() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.current == nil {
+	if m.init == nil {
 		return 0
 	}
-	return m.initPid
+	return m.init.pid
 }
 
-// Stop ends the container for good: for a poweroff.
+// Stop ends the container for good, and waits for its processes to go: for
+// a poweroff.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	m.stopped = true
+	p := m.init
 	m.mu.Unlock()
-	killCgroup()
+	if p != nil {
+		m.kill(p)
+	}
 }
 
 // Root is the current container's root, for the user's files. It answers
@@ -277,24 +296,44 @@ func (c Config) env() []string {
 	return []string{runSizeEnv + "=" + c.RunSize}
 }
 
-// killCgroup ends every process in the container's cgroup and waits for
-// them to go, then removes the cgroups the container made, so the next one
-// starts clean.
-func killCgroup() {
-	if err := os.WriteFile(CgroupDir+"/cgroup.kill", []byte("1"), 0); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		log.Printf("inner: cgroup.kill: %v", err)
-	}
+// cleanCgroup waits for the container's processes to leave its cgroup, then
+// removes the cgroups the container made, so the next one starts clean. It
+// does not use cgroup.kill: on the guest kernel (6.1) a clone3 with
+// CLONE_INTO_CGROUP into a cgroup that was once killed got SIGKILL before it
+// could exec. The init's death ends every process in the namespace instead.
+func cleanCgroup() {
 	deadline := time.Now().Add(killWait)
 	for populated() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if populated() {
-		log.Printf("inner: processes outlived cgroup.kill by %s", killWait)
+		log.Printf("inner: processes outlived the init by %s", killWait)
 		return
 	}
 	removeChildren(CgroupDir)
 	if err := os.Mkdir(ExecCgroupDir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		log.Printf("inner: %v", err)
+	}
+	disableControllers(CgroupDir)
+}
+
+// disableControllers clears what the last init enabled in dir's
+// subtree_control: a cgroup that hands controllers down takes no process, so
+// the next init could not start in it (EBUSY).
+func disableControllers(dir string) {
+	b, err := os.ReadFile(dir + "/cgroup.subtree_control")
+	if err != nil {
+		return
+	}
+	var off []string
+	for _, c := range strings.Fields(string(b)) {
+		off = append(off, "-"+c)
+	}
+	if len(off) == 0 {
+		return
+	}
+	if err := os.WriteFile(dir+"/cgroup.subtree_control", []byte(strings.Join(off, " ")), 0); err != nil {
+		log.Printf("inner: disable %v: %v", off, err)
 	}
 }
 
