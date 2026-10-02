@@ -6,11 +6,17 @@
 # are detached (setsid), so an impd restart keeps the VMs; impd re-adopts them.
 # SIGTERM or SIGINT stops impd and ends the container.
 #
-# Env: IMP_DAEMON (default /src/packages/daemon/src/main.ts) is the impd entry.
+# Env: IMP_DAEMON (default /src/packages/daemon/src/main.ts) is the impd entry:
+#      a .ts source file runs under bun (dev), anything else is the compiled
+#      impd (the release image sets /usr/local/bin/impd).
 set -euo pipefail
 
 lib=/usr/local/lib/imp
 daemon=${IMP_DAEMON:-/src/packages/daemon/src/main.ts}
+case $daemon in
+  *.ts) run_daemon=(bun "$daemon") ;;
+  *) run_daemon=("$daemon") ;;
+esac
 
 "$lib/setup-storage.sh"
 "$lib/setup-net.sh"
@@ -29,7 +35,7 @@ on_signal() {
 trap on_signal TERM INT
 
 while [ -z "$stopping" ]; do
-  bun "$daemon" &
+  "${run_daemon[@]}" &
   child=$!
   # A signal between the fork and the line above found no child to kill.
   if [ -n "$stopping" ]; then

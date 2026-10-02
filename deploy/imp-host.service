@@ -1,0 +1,39 @@
+# imp host as a systemd service. One of the two supported ways to run the
+# release image; deploy/compose.yaml is the other. Run one, not both.
+#
+#   install -m 0644 deploy/imp-host.service /etc/systemd/system/
+#   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
+#   systemctl daemon-reload && systemctl enable --now imp-host
+#
+# /var/lib/imp must be XFS with reflink (docs/guides/install.md).
+[Unit]
+Description=imp host (impd, Firecracker, tailscaled)
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+EnvironmentFile=/etc/imp/imp-host.env
+# A container left over from a crash would hold the name.
+ExecStartPre=-/usr/bin/docker rm -f imp-host
+# In the foreground and without a docker restart policy: systemd supervises
+# it and restarts it on failure.
+ExecStart=/usr/bin/docker run --rm --name imp-host \
+  --init --privileged --device /dev/kvm \
+  --env-file /etc/imp/imp-host.env \
+  -v /var/lib/imp:/var/lib/imp \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
+  ${IMP_HOST_IMAGE}
+# SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
+# to 120 s, and systemd waits a little longer before it kills anything.
+ExecStop=/usr/bin/docker stop -t 120 imp-host
+TimeoutStopSec=150
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

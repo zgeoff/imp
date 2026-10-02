@@ -17,7 +17,7 @@ outer() {
   local image=${IMP_SMOKE_IMAGE:-ubuntu:24.04}
 
   echo "== build host image"
-  docker build -q -t "$IMP_HOST_IMAGE" "$IMP_ROOT/host" >/dev/null
+  ensure_host_image
   echo "== build system drive"
   "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
   echo "== build rootfs from $image"

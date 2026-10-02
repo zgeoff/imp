@@ -88,7 +88,7 @@ up() {
   system=${IMP_SYSTEM_DRIVE:-$IMP_BUILD/imp-system.squashfs}
   [ -f "$kernel" ] || { echo "dev.sh: no kernel at $kernel" >&2; exit 1; }
 
-  docker build -q -t "$IMP_HOST_IMAGE" "$IMP_ROOT/host" >/dev/null
+  docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
   if [ ! -f "$system" ]; then
     echo "dev.sh: building the system drive"
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
