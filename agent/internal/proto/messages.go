@@ -167,6 +167,7 @@ type Claim struct {
 	GW6           string   `json:"gw6,omitempty"`
 	DNS           []string `json:"dns,omitempty"`
 	MAC           string   `json:"mac"`
+	DiskBytes     int64    `json:"disk_bytes,omitempty"`
 	UnixMs        int64    `json:"unix_ms"`
 	Seed          []byte   `json:"seed"`
 	ResetIdentity bool     `json:"reset_identity,omitempty"`

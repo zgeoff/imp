@@ -3,6 +3,7 @@ import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
 import type { FirecrackerPaths } from '../vmm/firecracker-process';
+import { TemplateRestoreError } from '../vmm/template-vm';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
@@ -17,7 +18,8 @@ export type VmStep =
   | 'grow'
   | 'vmState'
   | 'template'
-  | 'restore';
+  | 'restore'
+  | 'claim';
 
 // What the next call of a step does, within the VmRunner contract; each step
 // below says what fail and die mean for it. A hang waits for releaseHangs(),
@@ -308,10 +310,18 @@ export function buildFakeVmm() {
           templateBuilds.push({ vcpus: plan.vcpus, memoryMib: plan.memoryMib });
         }),
 
-      // as a boot: fail leaves no VM, die a pid whose VM is gone
+      // restore: as a boot, a failure in the template's own steps; claim:
+      // fail is a failure once the imp's disk and values are in play
       loadTemplateVm: (plan) =>
         runInGeneration(async () => {
-          const vm = await startFakeVm('restore', plan.paths);
+          const vm = await startFakeVm('restore', plan.paths).catch((error: unknown) => {
+            throw new TemplateRestoreError('restore failed', true, error);
+          });
+
+          if ((await pickOutcome('claim')) !== 'ok') {
+            alive.delete(vm.pid);
+            throw new TemplateRestoreError('claim failed', false, null);
+          }
 
           restores.push({
             hostname: plan.claim.hostname,

@@ -27,11 +27,12 @@ drive GC runs. The GC keeps each drive a template names.
 
 ## Make
 
-The first cold boot of a shape finds no template. It boots the kernel as before, and starts the
-template's build in the background, so no create waits for it. Misses of one key share one build;
-builds run one at a time, since they share one tap (`imp-tpl`).
+A cold boot of a shape with no template boots the kernel as before. The second such miss of a key
+starts the template's build in the background, so no create waits for it ([limits](#limits)). Misses
+of one key share one build; builds run one at a time, since they share one tap (`imp-tpl`).
 
-1. The build asks the RAM governor for admission, like a cold boot.
+1. The build asks the disk budget for room for the whole memory, and the RAM governor for free room:
+   it never sleeps an imp to make room for a template.
 2. impd boots a VM with `imp.template=1` on the kernel command line and nothing else that names an
    imp. Its rootfs is `<data>/templates/placeholder.ext4`, a 1 MiB file: the snapshot records the
    drive's path, so every template names the same one.
@@ -61,8 +62,25 @@ When the shape has a template, a cold boot:
 5. Waits for stage 2's ping, as a cold boot does.
 
 Everything after that is a cold boot's: impd writes the VM identity, so the next sleep, wake, fork
-and checkpoint see a normal imp. If any step fails, impd kills the VM, removes the template (the
-next miss builds it again) and boots the kernel.
+and checkpoint see a normal imp. If any step fails, impd kills the VM and boots the kernel. A step
+that reads only the template (the load, the resume, the parked ping) also removes it, and the next
+misses build it again. A failure from the patch on is the imp's own (its disk, its claim), and the
+template stays. Only the build that failed is removed: a template rebuilt since has another
+`buildId` in `meta.json`.
+
+## Limits
+
+A template costs RAM while it builds and disk for its mem file, up to the whole memory. So:
+
+- **2 misses.** A key builds on its second miss, so a shape booted once costs nothing.
+- **4 templates.** Past 4, the least recently restored goes. Odd `--memory` and `--cpus` values
+  cannot fill the disk.
+- **Free room only.** A build needs room on the disk for the whole memory, and free RAM: it never
+  sleeps an imp.
+- **Failed builds back off.** The next build of a key that failed waits 60 s, then 120 s. The third
+  failure turns the key off until impd restarts.
+- **Failed restores.** 3 failed restores of a key in a row turn it off until impd restarts. A good
+  restore resets the count.
 
 ## Claim
 
@@ -73,9 +91,12 @@ Stage 1 then:
 1. Sets the clock, so nothing after stamps the template's time.
 2. Credits the seed to the entropy pool (`RNDADDENTROPY`) and reseeds the CRNG at once
    (`RNDRESEEDCRNG`). Firecracker's VMGenID also makes the kernel reseed after the restore
-   (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it.
+   (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it. Stage 1 logs
+   `stage1: claim: crng reseeded from a 64-byte seed` to the console.
 3. Sets `eth0`'s MAC.
-4. Drops `vda`'s buffers (`BLKFLSBUF`) and rereads its partition table.
+4. Waits, for up to 2 s, until `vda` reports the size in the claim's `disk_bytes`: the size change
+   from the restore's `PATCH` reaches the guest as a config interrupt. Then it drops `vda`'s buffers
+   (`BLKFLSBUF`) and rereads its partition table.
 5. Answers, closes the parked listener, and goes on as a cold boot: it mounts `vda`, grows the
    filesystem, switches root and starts stage 2.
 
@@ -86,9 +107,10 @@ hostname and no network. When the flag is set, stage 2 runs the identity reset o
 
 ## RAM
 
-The governor counts `Pss_Anon` + `Pss_Shmem`, as for every VM
-([section 5](./sleep-and-wake.md#5-ram-what-the-governor-measures)), and a restore needs nothing
-more:
+Design decision: the governor counts `Pss_Anon` + `Pss_Shmem` for a restored VM, as for every VM
+([section 5](./sleep-and-wake.md#5-ram-what-the-governor-measures)), and not `Pss_File`. The plan
+proposed adding `Pss_File`; that would also count every woken imp's clean mem-file pages, which
+section 5 leaves out on purpose. A restore needs nothing more:
 
 - Firecracker maps the template's mem file `MAP_PRIVATE`. The pages a guest only reads are clean
   file pages, which the host can drop and read again, as with a woken imp's mem file.

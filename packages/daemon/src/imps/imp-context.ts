@@ -234,6 +234,7 @@ function createDefaultTemplates(
     buildVm: deps.vms.buildTemplateVm,
     taps: deps.taps,
     admission: deps.admission,
+    diskBudget: deps.diskBudget,
     log,
   });
 }

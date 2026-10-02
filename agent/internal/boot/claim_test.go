@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -121,5 +122,14 @@ func TestReadHandoff(t *testing.T) {
 func TestAddEntropyRefusesAShortSeed(t *testing.T) {
 	if err := addEntropy(make([]byte, 16)); err == nil {
 		t.Fatal("a 16-byte seed passed")
+	}
+}
+
+func TestWaitForDiskSize(t *testing.T) {
+	if err := waitForDiskSize("/nonexistent", 0, time.Millisecond); err != nil {
+		t.Fatalf("want 0 skips the wait: %v", err)
+	}
+	if err := waitForDiskSize("/nonexistent", 1, 10*time.Millisecond); err == nil {
+		t.Fatal("a device that never answers passed")
 	}
 }

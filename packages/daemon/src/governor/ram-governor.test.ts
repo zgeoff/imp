@@ -361,3 +361,40 @@ test('enforce says once that nothing is left to sleep, until usage is under the 
     'impd: governor: RAM over budget by 500 MiB and no idle imp left to sleep',
   ]);
 });
+
+test('an admission that may not sleep imps takes free room only', async () => {
+  const slept: string[] = [];
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () =>
+      Promise.resolve([
+        { id: 'idle', name: 'idle', pid: 1, apiSocket: '', lastActiveAt: 0, holdUntil: null },
+      ]),
+    readRamMib: () => 600,
+    isBusy: () => false,
+    trySleepImp: buildFakeSleep((id) => {
+      slept.push(id);
+
+      return Promise.resolve('slept');
+    }),
+    log: () => {
+      // quiet
+    },
+  });
+
+  await governor.admit({
+    id: 't1',
+    name: 't',
+    reserveMib: 300,
+    memoryMib: 600,
+    maySleepImps: false,
+  });
+
+  const rejection = await governor
+    .admit({ id: 't2', name: 't', reserveMib: 300, memoryMib: 600, maySleepImps: false })
+    .catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(slept).toEqual([]);
+});
