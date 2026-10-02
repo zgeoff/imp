@@ -35,12 +35,16 @@ const EncodingInput = z
   .default('utf8')
   .describe('utf8 for text, base64 for any bytes (default utf8)');
 
-// Writes stdin to "$1" through a temp file and a rename, so no reader sees
-// half a file. An existing file keeps its mode, a new one gets 0666 less the
-// umask. Each command here works in coreutils and BusyBox alike.
-const WRITE_SCRIPT = [
+// Writes stdin to "$1", through a symlink, by a temp file and a rename, so no
+// reader sees half a file. An existing file keeps its mode, a new one gets
+// 0666 less the umask. Each command works in coreutils and BusyBox alike.
+export const WRITE_SCRIPT = [
   'set -e',
   'target=$1',
+  'if [ -L "$target" ]; then',
+  '  target=$(readlink -f "$target") || { echo "cannot resolve the symlink $1" >&2; exit 1; }',
+  'fi',
+  'if [ -d "$target" ]; then echo "$1 is a directory" >&2; exit 1; fi',
   'dir=$(dirname "$target")',
   'mkdir -p "$dir"',
   'tmp=$(mktemp "$dir/.imp-write.XXXXXX")',
@@ -103,7 +107,7 @@ export const FILE_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_write_file',
-    description: `Write a file in an imp, replacing it whole, and create its parent directories. The write goes to a temp file that is renamed over the path, so no reader sees half a file; an existing file keeps its mode. At most ${String(MAX_WRITE_BYTES)} bytes.`,
+    description: `Write a file in an imp, replacing it whole, and create its parent directories. The write goes to a temp file that is renamed over the path, so no reader sees half a file; an existing file keeps its mode, a symlink is written through, and a directory is refused. At most ${String(MAX_WRITE_BYTES)} bytes.`,
     input: z.strictObject({
       name: ImpNameInput,
       path: GuestPathInput,

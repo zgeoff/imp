@@ -90,6 +90,33 @@ test('files round-trip through odd paths, and a write keeps the mode of the file
   }
 });
 
+test('a write follows a symlink and refuses a directory', async () => {
+  for (const name of [tiny, full]) {
+    await runShell(name, `ln -sf '${ODD_PATH}' /root/link.txt`);
+
+    const linked = await session.runTool('imp_write_file', {
+      name,
+      path: '/root/link.txt',
+      content: 'through\n',
+    });
+
+    expect(linked.isError).toBe(false);
+
+    const after = await runShell(name, `[ -L /root/link.txt ] && echo link; cat '${ODD_PATH}'`);
+
+    expect(after['stdout']).toBe('link\nthrough\n');
+
+    const directory = await session.runTool('imp_write_file', {
+      name,
+      path: '/root',
+      content: 'x',
+    });
+
+    expect(directory.isError).toBe(true);
+    expect(directory.content[0]?.text).toContain('/root is a directory');
+  }
+});
+
 test('base64 carries bytes that are not UTF-8', async () => {
   const bytes = Buffer.from([0, 1, 254, 255, 10]).toString('base64');
 
