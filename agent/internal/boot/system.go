@@ -76,26 +76,39 @@ func Run() error {
 		log.Printf("network (IPv6): %v", err)
 	}
 
-	mgr := inner.Start(r, inner.Config{RunSize: innerRunSize()})
+	mgr := inner.New(r, inner.Config{RunSize: innerRunSize()})
 	root := mgr.Root()
-	configureRoot(root, params)
-	image, err := imagecfg.Load(root)
-	if err != nil {
-		log.Printf("%s: %v (using defaults)", imagecfg.Path, err)
-	}
+	image := imagecfg.NewLive(imagecfg.Config{})
+	sup := services.New(mgr, root, image)
+	launcher := launch.New(mgr, image, func() (*os.File, *os.File, error) { return pty.OpenIn(root) })
+	dialer := dial.NewDialer(mgr, image)
+	listener := listen.NewManager(listen.AgentRoot, listen.ForwardRoot, image, dialer, root)
+
+	// The services and the sockets in the old container's /run went with
+	// it. A new container gets its files set and its image config read
+	// again, as at boot, and its services.
+	mgr.OnDown(func() {
+		listener.CloseAll()
+		sup.Suspend()
+	})
+	mgr.OnUp(func() {
+		prepareRoot(root, params, image)
+		if err := sup.Reload(); err != nil {
+			log.Printf("services: %v", err)
+		}
+	})
+	// with the container down, the image config stays at its defaults
+	// until it starts
+	mgr.Launch()
+	prepareRoot(root, params, image)
 	identityReset := ""
 	if params.ResetIdentity {
-		identityReset = resetIdentity(mgr, root, image.Env)
+		identityReset = resetIdentity(mgr, root, image.Get().Env)
 	}
-
-	sup := services.New(mgr, root, image)
 	if err := sup.Load(); err != nil {
 		log.Printf("services: %v", err)
 	}
 
-	launcher := launch.New(mgr, image, func() (*os.File, *os.File, error) { return pty.OpenIn(root) })
-	dialer := dial.NewDialer(mgr, image.User)
-	listener := listen.NewManager(listen.AgentRoot, listen.ForwardRoot, image.User, dialer, root)
 	// Each non-tty exec gets a cgroup leaf, so a stop kills its escapees too
 	// (docs/architecture/agent.md#exec-cgroups).
 	execCgroups, err := cgroup.NewTree(inner.ExecCgroupDir)
@@ -116,16 +129,6 @@ func Run() error {
 
 		IdentityReset: identityReset,
 	}
-
-	// The sockets in the old container's /run went with it; a new container
-	// gets its files set again, as at boot, and its services.
-	mgr.OnDown(listener.CloseAll)
-	mgr.OnUp(func() {
-		configureRoot(root, params)
-		if err := sup.Reload(); err != nil {
-			log.Printf("services: %v", err)
-		}
-	})
 
 	// A shutdown request and a signal can race; only the first powers off.
 	// A panic on the way must still end the guest, so it falls back to a
@@ -156,10 +159,11 @@ func Run() error {
 	return srv.Serve(listenVsock)
 }
 
-// configureRoot writes the files of the user's root that follow the imp
-// rather than the image: hostname, hosts and resolv.conf. A fork or rename
-// gives the imp a new hostname on the same disk.
-func configureRoot(root fsroot.FS, params cmdline.Params) {
+// prepareRoot writes the files of the user's root that follow the imp
+// rather than the image (hostname, hosts and resolv.conf), then reads the
+// image config. A fork or rename gives the imp a new hostname on the same
+// disk.
+func prepareRoot(root fsroot.FS, params cmdline.Params, image *imagecfg.Live) {
 	if name := params.Hostname; name != "" {
 		if err := fsroot.WriteFileAtomic(root, "/etc/hostname", []byte(name+"\n"), 0o644); err != nil {
 			log.Printf("hostname: %v", err)
@@ -171,6 +175,11 @@ func configureRoot(root fsroot.FS, params cmdline.Params) {
 	if err := netcfg.WriteResolvConf(root, params.DNS); err != nil {
 		log.Printf("resolv.conf: %v", err)
 	}
+	cfg, err := imagecfg.Load(root)
+	if err != nil {
+		log.Printf("%s: %v (using defaults)", imagecfg.Path, err)
+	}
+	image.Set(cfg)
 }
 
 // listenVsock listens on the agent's port, for a boot template parked for

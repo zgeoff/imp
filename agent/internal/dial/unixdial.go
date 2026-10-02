@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -38,20 +39,20 @@ const (
 	answerFailed     = 'd'
 )
 
-// Dialer serves dial requests; unix sockets dial as user.
+// Dialer serves dial requests; unix sockets dial as the image's user.
 type Dialer struct {
 	runner proc.Runner
-	user   string
+	image  *imagecfg.Live
 
 	// cred, when set, replaces user: tests set credentials without
 	// /etc/passwd
 	cred *syscall.Credential
 }
 
-// NewDialer dials unix sockets as user (the image USER spec), through
-// helpers that runner starts where the sockets are: in the inner container.
-func NewDialer(runner proc.Runner, user string) *Dialer {
-	return &Dialer{runner: runner, user: user}
+// NewDialer dials unix sockets as the image's USER, through helpers that
+// runner starts where the sockets are: in the inner container.
+func NewDialer(runner proc.Runner, image *imagecfg.Live) *Dialer {
+	return &Dialer{runner: runner, image: image}
 }
 
 // openUnix connects to the socket at address as the dialer's user. Root
@@ -92,7 +93,7 @@ func (d *Dialer) runHelper(args []string, max int, failCode string) ([]int, erro
 		Argv:   append([]string{"imp-agent"}, args...),
 		Env:    []string{},
 		Dir:    "/",
-		User:   d.user,
+		User:   d.image.Get().User,
 		Cred:   d.cred,
 		Helper: true,
 		Files:  []*os.File{child, devNull, devNull},
