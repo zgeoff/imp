@@ -54,15 +54,19 @@ export async function writeUnknownBoot(
 }
 
 // A moved imp's boots, newest first as its source listed them: written
-// oldest first, so they keep their order here
+// oldest first, so they keep their order here. A time past `now` (the source's
+// clock ahead of this one) is clamped to it.
 export async function writeMovedBoots(
   db: ImpDatabase,
   impId: string,
   boots: readonly Readonly<ColdBoot>[],
+  now: number,
 ): Promise<void> {
   await db.transaction().execute(async (trx) => {
     for (const boot of boots.toReversed()) {
-      await writeBootRow(trx, impId, { ...boot, at: new Date(boot.at) });
+      const at = Math.min(Date.parse(boot.at), now);
+
+      await writeBootRow(trx, impId, { ...boot, at: new Date(at) });
     }
   });
 }

@@ -48,13 +48,18 @@ tests, and only with `IMP_E2E=1`; impd logs a warning at start when it is set. O
 
 The stream is frames: a type byte, a 4-byte big-endian length, then the payload.
 
-| Type | Name       | Payload                                                                                                                                                                      |
-| ---- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | `HEADER`   | JSON: the imp's settings, the grants' secret names, the image, the checkpoints. The settings include an owed identity reset; the image includes its source (`oci` or `imp`). |
-| 2    | `FILE`     | JSON: the file's kind (`image-rootfs`, `image-config`, `checkpoint`, `disk`) and size                                                                                        |
-| 3    | `DATA`     | An 8-byte offset, then at most 1 MiB of the file at it                                                                                                                       |
-| 4    | `FILE_END` | JSON: the sha256 over every `DATA` payload of the file, in order                                                                                                             |
-| 5    | `END`      | `{}`                                                                                                                                                                         |
+| Type | Name       | Payload                                                                                                                                                                                                                                             |
+| ---- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | `HEADER`   | JSON: the imp's settings, the grants' secret names, the image, the checkpoints, and the imp's last 4 cold boots, for a cold move and a warm one alike. The settings include an owed identity reset; the image includes its source (`oci` or `imp`). |
+| 2    | `FILE`     | JSON: the file's kind (`image-rootfs`, `image-config`, `checkpoint`, `disk`) and size                                                                                                                                                               |
+| 3    | `DATA`     | An 8-byte offset, then at most 1 MiB of the file at it                                                                                                                                                                                              |
+| 4    | `FILE_END` | JSON: the sha256 over every `DATA` payload of the file, in order                                                                                                                                                                                    |
+| 5    | `END`      | `{}`                                                                                                                                                                                                                                                |
+
+The cold boots go with every move ([output offsets](./daemon.md#output-offsets)): a client from
+before a cold move finds its own boot among them, and learns that the next boot ended its output.
+The target takes at most 4, each with a UUID boot ID and a cause it knows, and clamps a time ahead
+of its own clock to now.
 
 The files go in order: the image's two files (only when the target asked), each checkpoint oldest
 first, then the disk. Between two ZFS hosts, `zfs send` streams take the place of the checkpoint and
@@ -184,9 +189,9 @@ drive before them when `/move/offer` finds the target lacks it. The header carri
 - The drive lands under its sha256, which other snapshots trust: the target hashes what arrived and
   refuses a drive whose sum is not its name. Whether the drive came along or not, `meta.json` and
   `vm.json` must name this host's own path for that sha256.
-- The imp's last cold boots go along ([output offsets](./daemon.md#output-offsets)). The wake on the
-  target is a memory wake into the same boot, so it records no cold boot; a wake that cannot load
-  the memory boots cold with the cause `wake_fallback`.
+- The wake on the target is a memory wake into the boot the imp slept in, which the carried cold
+  boots name ([the header](#the-stream)), so it records no cold boot. A wake that cannot load the
+  memory boots cold with the cause `wake_fallback`.
 - The imp's disk grow, if one is pending, goes along: the first wake on the target grows the guest.
 - A tap that a failed destroy left in the slot is removed before the staged imp exists, so the wake
   makes it again with the slot's MAC.

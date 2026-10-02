@@ -36,16 +36,17 @@ as it does for a backup.
 
 ### What a move keeps
 
-| Kept                                                    | Not kept                                                     |
-| ------------------------------------------------------- | ------------------------------------------------------------ |
-| The ID and the name                                     | The slot, the guest address and the ports: the target picks  |
-| vCPUs, memory, disk size, HTTP port, CPU limit, weight  | The memory: the imp arrives `stopped` and boots cold         |
-| A warm move: the memory and the slot                    | A warm move: the source's broker CA (see below)              |
-| The disk, with everything in it (services too)          | Open connections and sessions: they end                      |
-| Each checkpoint, its label and time (with a new ID)     | Secret values: they never leave a host                       |
-| The egress policy                                       | Grants of a secret the target has no secret by that name for |
-| Grants, for each secret the target has by the same name | The audit logs and the event history                         |
-| A template copy's owed identity reset                   | Public exposure: a public imp does not move                  |
+| Kept                                                           | Not kept                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| The ID and the name                                            | The slot, the guest address and the ports: the target picks  |
+| vCPUs, memory, disk size, HTTP port, CPU limit, weight         | The memory: the imp arrives `stopped` and boots cold         |
+| A warm move: the memory and the slot                           | A warm move: the source's broker CA (see below)              |
+| The disk, with everything in it (services too)                 | Open connections and sessions: they end                      |
+| Each checkpoint, its label and time (with a new ID)            | Secret values: they never leave a host                       |
+| The egress policy                                              | Grants of a secret the target has no secret by that name for |
+| Grants, for each secret the target has by the same name        | The audit logs and the event history                         |
+| A template copy's owed identity reset                          | Public exposure: a public imp does not move                  |
+| The last 4 cold boots, so a client knows what ended its output |                                                              |
 
 The image goes by digest, as files. A target with the digest uses its own; one without it gets the
 image in the stream and files it under a digest of what arrived, never the source's claim: the
