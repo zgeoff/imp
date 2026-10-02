@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { openSessionSocket, requireOutput } from '../lib/exec-socket';
+import type { SessionOutput } from '../lib/exec-socket';
 import { resolveImageName } from '../lib/fixtures';
 import { requireImp, runImp, runInImp, runShellInImp } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
@@ -45,6 +47,23 @@ async function readIsnSecret(name: string): Promise<number> {
   const stdout = await runInImp(name, 'isn-probe');
 
   return Number(stdout.trim());
+}
+
+// a session's output identity: its boot, and the imp's last cold boots
+async function readSessionOutput(name: string): Promise<SessionOutput> {
+  const opened = await openSessionSocket({
+    type: 'start',
+    name,
+    session: 'boot',
+    argv: ['sleep', 'infinity'],
+    tty: true,
+  });
+
+  const output = requireOutput(opened);
+
+  opened.close();
+
+  return output;
 }
 
 async function readMac(name: string): Promise<string> {
@@ -130,6 +149,27 @@ test('each restored imp keys TCP with its own secret', async () => {
   expect(findSpan(secrets.second, secrets.third)).toBeGreaterThan(SHARED_SECRET_SPAN);
   expect(findSpan(secrets.first, secrets.second)).toBeGreaterThan(SHARED_SECRET_SPAN);
   expect(findSpan(secrets.first, secrets.third)).toBeGreaterThan(SHARED_SECRET_SPAN);
+});
+
+test('each restored boot names itself, so its cold boot is recorded', async () => {
+  const before = await readSessionOutput(second);
+  const other = await readSessionOutput(third);
+
+  await runImp('stop', second);
+  await runImp('start', second);
+
+  const after = await readSessionOutput(second);
+  const log = await readImpdLogTail(400);
+
+  // the start restored the template again, not the kernel
+  expect(log.split(`${second}: restored boot template`).length - 1).toBeGreaterThanOrEqual(2);
+  expect(other.bootId).not.toBe(before.bootId);
+  expect(after.bootId).not.toBe(before.bootId);
+
+  expect(after.coldBoots.map((boot) => boot.bootId).slice(0, 2)).toEqual([
+    after.bootId,
+    before.bootId,
+  ]);
 });
 
 test('a restored imp sleeps and wakes like any other', async () => {
