@@ -75,8 +75,53 @@ let
     networking.nftables.enable = true;
     networking.nftables.flushRuleset = true;
   };
+  # As the cloud host has it: networking.firewall filters forwarding.
+  ipv6Host = host {
+    services.imp.ipv6.enable = true;
+    services.imp.forwardDeny = [
+      "10.42.0.0/16"
+      "fd42::/64"
+      "10.43.0.0/16"
+    ];
+    networking.nftables.enable = true;
+    networking.firewall.filterForward = true;
+    networking.defaultGateway6 = "2001:db8::1";
+  };
+  ipv6NoRoute = host { services.imp.ipv6.enable = true; };
+  ipv6Kernel = host {
+    services.imp.ipv6 = {
+      enable = true;
+      uplink = "eth0.100";
+      routerAdverts = "kernel";
+    };
+  };
+  ipv6KernelNoUplink = host {
+    services.imp.ipv6 = {
+      enable = true;
+      routerAdverts = "kernel";
+    };
+  };
+  ipv6Networkd = host {
+    services.imp.ipv6 = {
+      enable = true;
+      uplink = "eth0";
+    };
+    systemd.network.networks."10-uplink" = {
+      matchConfig.Name = "eth0";
+      networkConfig.IPv6AcceptRA = true;
+    };
+  };
+  filterOnly = host {
+    networking.nftables.enable = true;
+    networking.firewall.filterForward = true;
+  };
+  denyNoNftables = host { services.imp.forwardDeny = [ "10.42.0.0/16" ]; };
+  networkInSettings = host { services.imp.settings.IMP_HOST_NETWORK = "--network x"; };
 
   zfsCfg = zfsHost.config;
+  ipv6Cfg = ipv6Host.config;
+  ipv6Unit = ipv6Cfg.systemd.services.imp-host;
+  ipv6Rules = ipv6Cfg.networking.firewall.extraForwardRules;
   xfsCfg = xfsHost.config;
   unit = zfsCfg.systemd.services.imp-host;
   ownCfg = ownFirewall.config;
@@ -162,6 +207,58 @@ let
     (expect "ports on loopback only" (
       lib.hasInfix "-p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080" unit.serviceConfig.ExecStart
     ))
+    (expect "ipv6: no failed assertion" (failed ipv6Host == [ ]))
+    (expect "ipv6: imp-host joins the imp-host network" (
+      lib.hasInfix "--env-file /etc/imp/imp-host.env --network imp-host " ipv6Unit.serviceConfig.ExecStart
+    ))
+    (expect "no ipv6: Docker's default bridge" (
+      !(lib.hasInfix "--network" unit.serviceConfig.ExecStart)
+    ))
+    (expect "ipv6: the network is made after the old container goes" (
+      lib.hasSuffix "-imp-host-network" (toString (lib.last ipv6Unit.serviceConfig.ExecStartPre))
+    ))
+    (expect "ipv6: a unique local /64 from the hostId" (
+      builtins.match "fd[0-9a-f]{2}:[0-9a-f]{4}:[0-9a-f]{4}::/64" ipv6Cfg.services.imp.ipv6.subnet != null
+    ))
+    (expect "ipv6: denied ranges drop in their own chain, ahead of networking.firewall's, by family" (
+      lib.hasInfix ''
+        chain forward {
+          type filter hook forward priority filter - 1; policy accept;
+          iifname { "br-imphost", "docker0" } ip daddr { 10.42.0.0/16, 10.43.0.0/16 } drop
+          iifname { "br-imphost", "docker0" } ip6 daddr { fd42::/64 } drop
+        }'' ipv6Cfg.networking.nftables.tables.imp-forward.content
+      && ipv6Cfg.networking.nftables.tables.imp-forward.family == "inet"
+    ))
+    (expect "ipv6: forwarding from both bridges is admitted" (
+      ipv6Rules == ''iifname { "br-imphost", "docker0" } accept comment "imp: imp-host's egress"''
+    ))
+    (expect "no forwardDeny, no table" (!(filterOnly.config.networking.nftables.tables ? imp-forward)))
+    (expect "no bridge is trusted for input" (
+      !(lib.elem "br-imphost" ipv6Cfg.networking.firewall.trustedInterfaces)
+      && !(lib.elem "docker0" ipv6Cfg.networking.firewall.trustedInterfaces)
+    ))
+    (expect "filterForward without ipv6: docker0 alone, no deny" (
+      filterOnly.config.networking.firewall.extraForwardRules
+      == ''iifname { "docker0" } accept comment "imp: imp-host's egress"''
+    ))
+    (expect "no forward filter, no forward rules" (zfsCfg.networking.firewall.extraForwardRules == ""))
+    (expect "ipv6 without a way to keep router adverts is refused" (
+      lib.any (lib.hasInfix "router adverts") (failed ipv6NoRoute)
+    ))
+    (expect "networkd's IPv6AcceptRA on the uplink keeps them" (failed ipv6Networkd == [ ]))
+    (expect "kernel router adverts: accept_ra 2 on the uplink, by the slash form" (
+      failed ipv6Kernel == [ ]
+      && ipv6Kernel.config.boot.kernel.sysctl."net/ipv6/conf/eth0.100/accept_ra" == 2
+    ))
+    (expect "kernel router adverts need the uplink" (
+      lib.any (lib.hasInfix "needs services.imp.ipv6.uplink") (failed ipv6KernelNoUplink)
+    ))
+    (expect "forwardDeny without nftables is refused" (
+      lib.any (lib.hasInfix "forwardDeny needs networking.nftables.enable") (failed denyNoNftables)
+    ))
+    (expect "IMP_HOST_NETWORK goes in ipv6.enable, not settings" (
+      lib.any (lib.hasInfix "sets IMP_HOST_NETWORK") (failed networkInSettings)
+    ))
   ];
 
   # the env writer, among the secret staging and the image load
@@ -174,6 +271,8 @@ let
   ownStart = ownCfg.systemd.services.imp-firewall.serviceConfig.ExecStart;
   ownPre = writerOf ownCfg;
   xfsPre = writerOf xfsCfg;
+  ipv6Pre = writerOf ipv6Cfg;
+  ipv6Network = lib.last ipv6Unit.serviceConfig.ExecStartPre;
   stagePre = lib.head unit.serviceConfig.ExecStartPre;
 in
 # The settings file is a store path; read it at build time.
@@ -201,5 +300,12 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   grep -qx '		tcp dport { 22, 2222 } accept comment "SSH"' "$rules"
   grep -q 'hook input priority filter; policy drop;' "$rules"
   grep -qx IMP_HOST_FIREWALL=own "$(settings ${ownPre})"
+  # ipv6: the env file says so, and the network script makes bootstrap.sh's network
+  grep -qx IMP_HOST_IPV6=on "$(settings ${ipv6Pre})"
+  grep -qx 'IMP_HOST_SUBNET6=${ipv6Cfg.services.imp.ipv6.subnet}' "$(settings ${ipv6Pre})"
+  grep -qx IMP_HOST_IPV6=off "$zfs"
+  grep -qx IMP_HOST_SUBNET6= "$zfs"
+  grep -q 'create_host_network' ${ipv6Network}
+  grep -q 'subnet6 ${ipv6Cfg.services.imp.ipv6.subnet}' ${ipv6Network}
   printf '%s\n' ${lib.escapeShellArgs checks} > $out
 ''

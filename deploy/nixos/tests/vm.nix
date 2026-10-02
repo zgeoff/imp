@@ -8,7 +8,10 @@
 #   file, the kernel settings, that the host has no imp rules, and the three
 #   ways the node comes up: a first join with the key file, a restart from
 #   good saved state with no key used, and a join again when the saved node
-#   needs a login (the control plane deleted it).
+#   needs a login (the control plane deleted it). With ipv6.enable, as the
+#   cloud host has it (networking.firewall with filterForward): imp-host's
+#   IPv6 network and default route, egress to `own` over IPv4 and IPv6, the
+#   forwardDeny ranges dropped, and no host port opened to the bridge.
 # own: hostFirewall = "own", without networking.firewall; SSH connects
 #   through bootstrap.sh's table and another port does not.
 { pkgs, self }:
@@ -111,30 +114,48 @@ in
 pkgs.testers.runNixOSTest {
   name = "imp-nixos-module";
 
-  nodes.host = {
-    imports = [ base ];
-    virtualisation = {
-      memorySize = 3072;
-      emptyDiskImages = [ 4096 ];
+  nodes.host =
+    { nodes, ... }:
+    {
+      imports = [ base ];
+      virtualisation = {
+        memorySize = 3072;
+        emptyDiskImages = [ 4096 ];
+      };
+      # As the cloud host has it: the platform owns the firewall, with nftables,
+      # and filters forwarding.
+      networking.nftables.enable = true;
+      networking.firewall.filterForward = true;
+      networking.firewall.allowedUDPPorts = [ 41641 ];
+      # open to anyone, so a connection from the bridge shows input works
+      networking.firewall.allowedTCPPorts = [ 9998 ];
+      # a static IPv6 default route, as a server has: it keeps no router adverts
+      networking.defaultGateway6 = {
+        address = nodes.own.networking.primaryIPv6Address;
+        interface = "eth1";
+      };
+      environment.systemPackages = [ pkgs.socat ];
+      services.imp = {
+        ipv6.enable = true;
+        # own answers on addresses in these, from the test script
+        forwardDeny = [
+          "10.99.0.0/24"
+          "fd99::/64"
+        ];
+        tailscaleAuthKeyFile = "/etc/imp-test/authkey";
+        backupPasswordFile = "/etc/imp-test/backup-password";
+        environmentFile = "/etc/imp-test/imp-host.env";
+        settings.IMP_TAILSCALE_HOSTNAME = "imp-vm";
+      };
+      # A store file would do in a test, but the module takes paths outside it.
+      environment.etc."imp-test/authkey".text = fakeKey;
+      environment.etc."imp-test/backup-password".text = fakeBackupPassword;
+      environment.etc."imp-test/imp-host.env".text =
+        "IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp\n";
+      # 3 GiB is below what the formula needs, so imp-host refuses to start
+      # until ramBudgetMiB is set; the test switches to this.
+      specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
     };
-    # As the cloud host has it: the platform owns the firewall, with nftables.
-    networking.nftables.enable = true;
-    networking.firewall.allowedUDPPorts = [ 41641 ];
-    services.imp = {
-      tailscaleAuthKeyFile = "/etc/imp-test/authkey";
-      backupPasswordFile = "/etc/imp-test/backup-password";
-      environmentFile = "/etc/imp-test/imp-host.env";
-      settings.IMP_TAILSCALE_HOSTNAME = "imp-vm";
-    };
-    # A store file would do in a test, but the module takes paths outside it.
-    environment.etc."imp-test/authkey".text = fakeKey;
-    environment.etc."imp-test/backup-password".text = fakeBackupPassword;
-    environment.etc."imp-test/imp-host.env".text =
-      "IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp\n";
-    # 3 GiB is below what the formula needs, so imp-host refuses to start
-    # until ramBudgetMiB is set; the test switches to this.
-    specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
-  };
 
   nodes.own = {
     imports = [ base ];
@@ -148,170 +169,219 @@ pkgs.testers.runNixOSTest {
     };
   };
 
-  testScript = ''
-    import json
+  testScript =
+    { nodes, ... }:
+    ''
+      import json
 
-    start_all()
-    host.wait_for_unit("multi-user.target")
+      start_all()
+      host.wait_for_unit("multi-user.target")
 
-    def start_imp_host(want_rc="0"):
-        host.succeed("rm -f ${stateDir}/up.rc")
-        host.succeed("systemctl reset-failed imp-host || true")
-        host.succeed("systemctl restart imp-host")
-        host.wait_until_succeeds("test -s ${stateDir}/up.rc", timeout=120)
-        rc = host.succeed("cat ${stateDir}/up.rc").strip()
-        out = host.succeed("cat ${stateDir}/up.out")
-        assert rc == want_rc, f"tailscale-up exited {rc}, not {want_rc}: {out}"
-        return out
+      def start_imp_host(want_rc="0"):
+          host.succeed("rm -f ${stateDir}/up.rc")
+          host.succeed("systemctl reset-failed imp-host || true")
+          host.succeed("systemctl restart imp-host")
+          host.wait_until_succeeds("test -s ${stateDir}/up.rc", timeout=120)
+          rc = host.succeed("cat ${stateDir}/up.rc").strip()
+          out = host.succeed("cat ${stateDir}/up.out")
+          assert rc == want_rc, f"tailscale-up exited {rc}, not {want_rc}: {out}"
+          return out
 
-    def restarts():
-        return int(host.succeed("systemctl show -p NRestarts --value imp-host"))
+      def restarts():
+          return int(host.succeed("systemctl show -p NRestarts --value imp-host"))
 
-    def loads():
-        return int(host.succeed("journalctl -u imp-host --no-pager | grep -c 'imp-host: loading' || true"))
+      def loads():
+          return int(host.succeed("journalctl -u imp-host --no-pager | grep -c 'imp-host: loading' || true"))
 
-    def ups():
-        return host.succeed("cat ${stateDir}/fake-up.log 2>/dev/null || true").strip().splitlines()
+      def ups():
+          return host.succeed("cat ${stateDir}/fake-up.log 2>/dev/null || true").strip().splitlines()
 
-    with subtest("without the pool, imp-host does not start"):
-        host.fail("systemctl is-active imp-host")
+      with subtest("without the pool, imp-host does not start"):
+          host.fail("systemctl is-active imp-host")
 
-    with subtest("a budget below the floor is refused, and the refusal does not loop"):
-        host.succeed("zpool create -O mountpoint=none tank /dev/vdb")
-        host.fail("systemctl start imp-host")
-        host.wait_until_succeeds("journalctl -u imp-host --no-pager | grep -q 'below the 512 MiB floor: RAM'", timeout=60)
-        host.succeed("journalctl -u imp-host --no-pager | grep -q 'Set services.imp.ramBudgetMiB'")
-        host.wait_until_succeeds("systemctl show -p Result --value imp-host | grep -qx start-limit-hit", timeout=120)
-        host.succeed("test ! -e /etc/imp/imp-host.env")
+      with subtest("a budget below the floor is refused, and the refusal does not loop"):
+          host.succeed("zpool create -O mountpoint=none tank /dev/vdb")
+          host.fail("systemctl start imp-host")
+          host.wait_until_succeeds("journalctl -u imp-host --no-pager | grep -q 'below the 512 MiB floor: RAM'", timeout=60)
+          host.succeed("journalctl -u imp-host --no-pager | grep -q 'Set services.imp.ramBudgetMiB'")
+          host.wait_until_succeeds("systemctl show -p Result --value imp-host | grep -qx start-limit-hit", timeout=120)
+          host.succeed("test ! -e /etc/imp/imp-host.env")
 
-    with subtest("with ramBudgetMiB, imp-host starts and joins with the key file"):
-        host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
-        start_imp_host()
-        host.succeed("zfs get -H -o value mountpoint tank/imp | grep -qx legacy")
-        joins = ups()
-        assert len(joins) == 1, joins
-        assert "--auth-key=file:/run/imp/tailscale-authkey" in joins[0], joins
-        assert "--hostname=imp-vm" in joins[0], joins
+      with subtest("with ramBudgetMiB, imp-host starts and joins with the key file"):
+          host.succeed("/run/booted-system/specialisation/budget/bin/switch-to-configuration test")
+          start_imp_host()
+          host.succeed("zfs get -H -o value mountpoint tank/imp | grep -qx legacy")
+          joins = ups()
+          assert len(joins) == 1, joins
+          assert "--auth-key=file:/run/imp/tailscale-authkey" in joins[0], joins
+          assert "--hostname=imp-vm" in joins[0], joins
 
-    with subtest("a restart from good saved state uses no key, and loads no image"):
-        out = start_imp_host()
-        assert len(ups()) == 1, ups()
-        assert loads() == 1, loads()
+      with subtest("a restart from good saved state uses no key, and loads no image"):
+          out = start_imp_host()
+          assert len(ups()) == 1, ups()
+          assert loads() == 1, loads()
 
-    with subtest("an archive that differs from the one loaded is loaded again"):
-        host.succeed("echo /nix/store/another-archive > /var/lib/imp-host/image-archive")
-        start_imp_host()
-        assert loads() == 2, loads()
+      with subtest("an archive that differs from the one loaded is loaded again"):
+          host.succeed("echo /nix/store/another-archive > /var/lib/imp-host/image-archive")
+          start_imp_host()
+          assert loads() == 2, loads()
 
-    with subtest("saved state that needs a login joins again with the key"):
-        host.succeed("echo stale > ${stateDir}/tailscaled.state")
-        out = start_imp_host()
-        assert "joining again with the key" in out, out
-        assert len(ups()) == 2, ups()
+      with subtest("saved state that needs a login joins again with the key"):
+          host.succeed("echo stale > ${stateDir}/tailscaled.state")
+          out = start_imp_host()
+          assert "joining again with the key" in out, out
+          assert len(ups()) == 2, ups()
 
-    with subtest("a missing key file warns, and the node starts from its saved state"):
-        host.succeed("rm /etc/imp-test/authkey")
-        out = start_imp_host()
-        assert len(ups()) == 2, ups()
-        host.succeed("journalctl -u imp-host --no-pager | grep -q 'authkey is missing or empty; the node starts from its saved state'")
+      with subtest("a missing key file warns, and the node starts from its saved state"):
+          host.succeed("rm /etc/imp-test/authkey")
+          out = start_imp_host()
+          assert len(ups()) == 2, ups()
+          host.succeed("journalctl -u imp-host --no-pager | grep -q 'authkey is missing or empty; the node starts from its saved state'")
 
-    with subtest("stale state and no key: a clear failure, imp-host keeps running"):
-        before = restarts()
-        host.succeed("echo stale > ${stateDir}/tailscaled.state")
-        out = start_imp_host(want_rc="1")
-        assert "give an auth key to join again" in out, out
-        host.succeed("systemctl is-active imp-host")
-        assert restarts() == before, (before, restarts())
+      with subtest("stale state and no key: a clear failure, imp-host keeps running"):
+          before = restarts()
+          host.succeed("echo stale > ${stateDir}/tailscaled.state")
+          out = start_imp_host(want_rc="1")
+          assert "give an auth key to join again" in out, out
+          host.succeed("systemctl is-active imp-host")
+          assert restarts() == before, (before, restarts())
 
-    with subtest("a single-use key used already: a clear failure, no loop"):
-        host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< used-key")
-        out = start_imp_host(want_rc="1")
-        assert "single-use key that was used already" in out, out
-        assert len(ups()) == 2, ups()
-        host.succeed("systemctl is-active imp-host")
-        host.succeed("sleep 10; systemctl is-active imp-host")
-        assert restarts() == before, (before, restarts())
+      with subtest("a single-use key used already: a clear failure, no loop"):
+          host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< used-key")
+          out = start_imp_host(want_rc="1")
+          assert "single-use key that was used already" in out, out
+          assert len(ups()) == 2, ups()
+          host.succeed("systemctl is-active imp-host")
+          host.succeed("sleep 10; systemctl is-active imp-host")
+          assert restarts() == before, (before, restarts())
 
-    with subtest("a new key joins again"):
-        host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< ${fakeKey}")
-        start_imp_host()
-        assert len(ups()) == 3, ups()
+      with subtest("a new key joins again"):
+          host.succeed("install -m 0400 /dev/stdin /etc/imp-test/authkey <<< ${fakeKey}")
+          start_imp_host()
+          assert len(ups()) == 3, ups()
 
-    with subtest("saved state still Starting (no network): counts as good, waits in the background"):
-        host.succeed("echo starting > ${stateDir}/tailscaled.state")
-        out = start_imp_host()
-        assert "going on, and waiting for it in the background" in out, out
-        assert len(ups()) == 3, ups()
-        # the control plane answers: the node was deleted, so it joins with the key
-        host.succeed("echo stale > ${stateDir}/tailscaled.state")
-        host.wait_until_succeeds("test $(wc -l < ${stateDir}/fake-up.log) = 4", timeout=60)
-        host.succeed("grep -q 'the saved node is NeedsLogin; joining again with the key' ${stateDir}/up.out")
+      with subtest("saved state still Starting (no network): counts as good, waits in the background"):
+          host.succeed("echo starting > ${stateDir}/tailscaled.state")
+          out = start_imp_host()
+          assert "going on, and waiting for it in the background" in out, out
+          assert len(ups()) == 3, ups()
+          # the control plane answers: the node was deleted, so it joins with the key
+          host.succeed("echo stale > ${stateDir}/tailscaled.state")
+          host.wait_until_succeeds("test $(wc -l < ${stateDir}/fake-up.log) = 4", timeout=60)
+          host.succeed("grep -q 'the saved node is NeedsLogin; joining again with the key' ${stateDir}/up.out")
 
-    with subtest("saved state still Starting and no key (a reboot with no network): impd comes up"):
-        host.succeed("rm /etc/imp-test/authkey")
-        host.succeed("echo starting > ${stateDir}/tailscaled.state")
-        out = start_imp_host()
-        assert "going on, and waiting for it in the background" in out, out
-        assert len(ups()) == 4, ups()
-        host.succeed("systemctl is-active imp-host")
-        # tailscaled connects by itself: no login, no key
-        host.succeed("echo valid > ${stateDir}/tailscaled.state")
-        host.wait_until_succeeds("grep -q 'the saved node is Running' ${stateDir}/up.out", timeout=60)
-        assert len(ups()) == 4, ups()
+      with subtest("saved state still Starting and no key (a reboot with no network): impd comes up"):
+          host.succeed("rm /etc/imp-test/authkey")
+          host.succeed("echo starting > ${stateDir}/tailscaled.state")
+          out = start_imp_host()
+          assert "going on, and waiting for it in the background" in out, out
+          assert len(ups()) == 4, ups()
+          host.succeed("systemctl is-active imp-host")
+          # tailscaled connects by itself: no login, no key
+          host.succeed("echo valid > ${stateDir}/tailscaled.state")
+          host.wait_until_succeeds("grep -q 'the saved node is Running' ${stateDir}/up.out", timeout=60)
+          assert len(ups()) == 4, ups()
 
-    with subtest("the key is never in the env, argv, the log or the store's env file"):
-        host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
-        host.fail("docker inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")
-        host.fail("grep -qF ${fakeKey} ${stateDir}/fake-up.log ${stateDir}/up.out")
-        host.fail("journalctl -b --no-pager | grep -qF ${fakeKey}")
+      with subtest("the key is never in the env, argv, the log or the store's env file"):
+          host.fail("grep -q TAILSCALE_AUTHKEY /etc/imp/imp-host.env")
+          host.fail("docker inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")
+          host.fail("grep -qF ${fakeKey} ${stateDir}/fake-up.log ${stateDir}/up.out")
+          host.fail("journalctl -b --no-pager | grep -qF ${fakeKey}")
 
-    with subtest("the backup password: a file in the container, never a value"):
-        host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /etc/imp/imp-host.env")
-        host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /etc/imp/imp-host.env")
-        host.fail("grep -qF ${fakeBackupPassword} /etc/imp/imp-host.env")
-        host.fail("docker inspect imp-host | grep -qF ${fakeBackupPassword}")
-        host.fail("journalctl -b --no-pager | grep -qF ${fakeBackupPassword}")
-        assert host.succeed("docker exec imp-host cat /run/imp/backup-password").strip() == "${fakeBackupPassword}"
-        host.fail("docker exec imp-host sh -c 'echo x > /run/imp/backup-password'")
+      with subtest("the backup password: a file in the container, never a value"):
+          host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /etc/imp/imp-host.env")
+          host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /etc/imp/imp-host.env")
+          host.fail("grep -qF ${fakeBackupPassword} /etc/imp/imp-host.env")
+          host.fail("docker inspect imp-host | grep -qF ${fakeBackupPassword}")
+          host.fail("journalctl -b --no-pager | grep -qF ${fakeBackupPassword}")
+          assert host.succeed("docker exec imp-host cat /run/imp/backup-password").strip() == "${fakeBackupPassword}"
+          host.fail("docker exec imp-host sh -c 'echo x > /run/imp/backup-password'")
 
-    with subtest("no backup password: a warning, and backups stay off"):
-        host.succeed("rm /etc/imp-test/backup-password")
-        start_imp_host()
-        host.succeed("journalctl -u imp-host --no-pager | grep -q 'backup-password is missing or empty; backups stay off'")
-        host.succeed("grep -qx IMP_BACKUP_REPOSITORY= /etc/imp/imp-host.env")
-        host.fail("grep -q IMP_BACKUP_PASSWORD_FILE /etc/imp/imp-host.env")
+      with subtest("no backup password: a warning, and backups stay off"):
+          host.succeed("rm /etc/imp-test/backup-password")
+          start_imp_host()
+          host.succeed("journalctl -u imp-host --no-pager | grep -q 'backup-password is missing or empty; backups stay off'")
+          host.succeed("grep -qx IMP_BACKUP_REPOSITORY= /etc/imp/imp-host.env")
+          host.fail("grep -q IMP_BACKUP_PASSWORD_FILE /etc/imp/imp-host.env")
 
-    with subtest("the env file"):
-        assert host.succeed("stat -c %a /etc/imp/imp-host.env").strip() == "600"
-        for line in ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
-                     "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]:
-            host.succeed(f"grep -qx {line} /etc/imp/imp-host.env")
-        # the formula refused this host (above); ramBudgetMiB is what runs
-        host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
+      with subtest("the env file"):
+          assert host.succeed("stat -c %a /etc/imp/imp-host.env").strip() == "600"
+          for line in ["IMP_HOST_FIREWALL=none", "IMP_STORAGE_BACKEND=zfs", "IMP_ZFS_ROOT=tank/imp",
+                       "IMP_TAILSCALE_HOSTNAME=imp-vm", "IMP_HOST_IMAGE=imp-host-stub:test"]:
+              host.succeed(f"grep -qx {line} /etc/imp/imp-host.env")
+          # the formula refused this host (above); ramBudgetMiB is what runs
+          host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
 
-    with subtest("the kernel"):
-        host.succeed("sysctl -n vm.overcommit_memory | grep -qx 1")
-        host.succeed("sysctl -n vm.swappiness | grep -qx 1")
-        host.succeed("test -c /dev/kvm && test -c /dev/net/tun && test -c /dev/zfs")
-        host.succeed("grep -qx 1073741824 /sys/module/zfs/parameters/zfs_arc_max")
+      with subtest("the kernel"):
+          host.succeed("sysctl -n vm.overcommit_memory | grep -qx 1")
+          host.succeed("sysctl -n vm.swappiness | grep -qx 1")
+          host.succeed("test -c /dev/kvm && test -c /dev/net/tun && test -c /dev/zfs")
+          host.succeed("grep -qx 1073741824 /sys/module/zfs/parameters/zfs_arc_max")
 
-    with subtest("none: no imp rules on the host; the platform's firewall stays"):
-        ruleset = json.loads(host.succeed("nft -j list ruleset"))["nftables"]
-        tables = [o["table"]["name"] for o in ruleset if "table" in o]
-        assert "imp_host" not in tables, tables
-        inputs = [o["chain"] for o in ruleset if "chain" in o and o["chain"].get("hook") == "input"]
-        assert all(c["table"] == "nixos-fw" for c in inputs), inputs
-        host.succeed("nft list ruleset | grep -q 41641")
-        published = host.succeed("docker port imp-host").strip().splitlines()
-        assert published and all(" -> 127.0.0.1:" in p for p in published), published
+      with subtest("ipv6: imp-host runs on br-imphost, with an IPv6 default route"):
+          host.succeed("grep -qx IMP_HOST_IPV6=on /etc/imp/imp-host.env")
+          info = host.succeed("docker network inspect -f '{{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.name\"}}' imp-host").strip()
+          assert info == "true br-imphost", info
+          nets = json.loads(host.succeed("docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host"))
+          assert list(nets) == ["imp-host"], list(nets)
+          host.succeed("docker exec imp-host ip -6 route show default | grep -q via")
 
-    with subtest("own: SSH connects through the imp table, another port does not"):
-        own.wait_for_unit("imp-firewall.service")
-        own.wait_for_unit("sshd.service")
-        own.succeed("nft list table inet imp_host | grep -q 'policy drop'")
-        own.succeed("systemd-run --unit=listen9999 nc -lk 9999")
-        own.wait_for_open_port(9999)
-        host.succeed("nc -z -w 5 own 22")
-        host.fail("nc -z -w 5 own 9999")
-  '';
+      with subtest("filterForward: egress to own over IPv4 and IPv6, denied ranges dropped"):
+          own4 = "${nodes.own.networking.primaryIPAddress}"
+          own6 = "${nodes.own.networking.primaryIPv6Address}"
+          # own's sshd answers on every address, and its imp table admits SSH
+          own.wait_for_unit("sshd.service")
+          own.succeed("ip addr add 10.99.0.1/32 dev lo && ip -6 addr add fd99::1/128 dev lo")
+          host.succeed(f"ip route add 10.99.0.0/24 via {own4} && ip -6 route add fd99::/64 via {own6}")
+
+          def ssh_from(where, addr):
+              return f"{where} timeout 5 bash -c 'exec 3<>/dev/tcp/{addr}/22'"
+
+          for addr in [own4, own6, "10.99.0.1", "fd99::1"]:
+              host.succeed(ssh_from("", addr))
+          container = "docker exec imp-host"
+          host.succeed(ssh_from(container, own4))
+          host.succeed(ssh_from(container, own6))
+          host.fail(ssh_from(container, "10.99.0.1"))
+          host.fail(ssh_from(container, "fd99::1"))
+          # without the module's forward rule, egress stops: the test covers the filter
+          chain = "nft -a list chain inet nixos-fw forward-allow"
+          handle = host.succeed(f"{chain} | sed -n \"s/.*imp: imp-host's egress.*# handle //p\"").strip()
+          assert handle, host.succeed(chain)
+          host.succeed(f"nft delete rule inet nixos-fw forward-allow handle {handle}")
+          host.fail(ssh_from(container, own4))
+          host.fail(ssh_from(container, own6))
+          host.succeed("systemctl restart nftables")
+          host.succeed(ssh_from(container, own6))
+
+      with subtest("filterForward: no host port opens to the bridge"):
+          host.succeed("systemd-run --unit=listen9998 socat TCP6-LISTEN:9998,ipv6only=0,fork,reuseaddr SYSTEM:true")
+          host.succeed("systemd-run --unit=listen9999 socat TCP6-LISTEN:9999,ipv6only=0,fork,reuseaddr SYSTEM:true")
+          host.wait_for_open_port(9998)
+          host.wait_for_open_port(9999)
+          for family in ["", "-6"]:
+              gateway = host.succeed(f"docker exec imp-host ip {family} route show default | awk '{{print $3}}'").strip()
+              connect = f"docker exec imp-host timeout 5 bash -c 'exec 3<>/dev/tcp/{gateway}/{{}}'"
+              host.succeed(connect.format(9998))
+              host.fail(connect.format(9999))
+
+      with subtest("none: no imp rules on the host; the platform's firewall stays"):
+          ruleset = json.loads(host.succeed("nft -j list ruleset"))["nftables"]
+          tables = [o["table"]["name"] for o in ruleset if "table" in o]
+          assert "imp_host" not in tables, tables
+          inputs = [o["chain"] for o in ruleset if "chain" in o and o["chain"].get("hook") == "input"]
+          assert all(c["table"] == "nixos-fw" for c in inputs), inputs
+          host.succeed("nft list ruleset | grep -q 41641")
+          published = host.succeed("docker port imp-host").strip().splitlines()
+          assert published and all(" -> 127.0.0.1:" in p for p in published), published
+
+      with subtest("own: SSH connects through the imp table, another port does not"):
+          own.wait_for_unit("imp-firewall.service")
+          own.wait_for_unit("sshd.service")
+          own.succeed("nft list table inet imp_host | grep -q 'policy drop'")
+          own.succeed("systemd-run --unit=listen9999 nc -lk 9999")
+          own.wait_for_open_port(9999)
+          host.succeed("nc -z -w 5 own 22")
+          host.fail("nc -z -w 5 own 9999")
+    '';
 }
