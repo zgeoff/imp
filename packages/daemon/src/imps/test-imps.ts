@@ -216,7 +216,10 @@ export async function findBrokenInvariants(
       broken.push(`${where}: still creating`);
     }
 
-    if (imp.state !== 'running' && imp.pid !== null) {
+    // an error record keeps the pid of a VM that would not stop, to retry
+    if (imp.state === 'error' && imp.pid !== null) {
+      owned.add(imp.pid);
+    } else if (imp.state !== 'running' && imp.pid !== null) {
       broken.push(`${where}: keeps pid ${String(imp.pid)}`);
     }
 

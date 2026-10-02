@@ -375,6 +375,42 @@ test('a restarted impd settles imps left in every state', async () => {
   expect(broken).toEqual([]);
 });
 
+test('a creating imp whose VM will not stop does not keep the next impd from starting', async () => {
+  await using ctx = await setupLifecycleTest();
+
+  const image = await ctx.images.resolveImage('ubuntu');
+
+  const pid = ctx.fake.spawnOrphan();
+
+  const creating = await createImp(ctx.db, {
+    name: 'stuck',
+    imageId: image.id,
+    vcpus: 1,
+    memoryMib: 512,
+    slot: 0,
+    ip: '10.66.0.2',
+  });
+
+  await updateImpState(ctx.db, creating.id, { state: 'creating', pid });
+
+  ctx.fake.queue('stop', 'fail');
+
+  const impd = ctx.restartImpd();
+
+  const reconciled = await waitForOutcome(impd.imps.reconcileImps(), 2000);
+  const stuck = await findImpByName(ctx.db, 'stuck');
+  const broken = await findBrokenInvariants(ctx, true);
+
+  expect(reconciled).toBe('done');
+  expect(stuck).toMatchObject({ state: 'error', pid });
+  expect(broken).toEqual([]);
+
+  // the record kept the pid, so a destroy kills the VM once it lets go
+  await buildTestApp(ctx, impd).client.imps.destroy({ name: 'stuck' });
+
+  expect(ctx.fake.alive.has(pid)).toBeFalse();
+});
+
 test('impd stopping with a wake under way leaves every imp asleep for the next impd', async () => {
   await using ctx = await setupLifecycleTest();
 

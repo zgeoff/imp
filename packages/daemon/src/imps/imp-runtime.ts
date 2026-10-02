@@ -208,15 +208,23 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               return;
             }
 
-            if (imp.pid !== null && context.vms.isVmAlive(imp.pid, paths)) {
-              await context.vms.stopVm(imp.pid, paths, false);
+            const error = 'impd stopped while the imp was being created';
+
+            try {
+              if (imp.pid !== null && context.vms.isVmAlive(imp.pid, paths)) {
+                await context.vms.stopVm(imp.pid, paths, false);
+              }
+            } catch (stopError) {
+              // one stuck VM must not keep impd from starting; the record
+              // keeps its pid, so a start or destroy kills it again
+              context.log(`impd: ${imp.name}: could not stop: ${readErrorMessage(stopError)}`);
+
+              await ops.updateState(imp, { state: 'error', error });
+
+              return;
             }
 
-            await ops.updateState(imp, {
-              state: 'error',
-              pid: null,
-              error: 'impd stopped while the imp was being created',
-            });
+            await ops.updateState(imp, { state: 'error', pid: null, error });
           }),
         ),
       );
