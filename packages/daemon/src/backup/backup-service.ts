@@ -26,6 +26,7 @@ import type { ImpDatabase } from '../db/open-database';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
 import { createKeyedMutex } from '../imps/keyed-mutex';
+import type { NetworkService } from '../networks/network-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
 import { BACKUP_TREE, buildBackupPaths } from '../storage/data-layout';
@@ -111,6 +112,9 @@ export interface BackupServiceDeps {
 
   // the broker's grant, checked as `imp grant` checks one
   readonly grants: Pick<Broker, 'addGrant'>;
+
+  // a restored imp's networks, made when missing
+  readonly networks: Pick<NetworkService, 'resolveNetworkIds'>;
   readonly storage: StorageBackend;
   readonly restic?: Restic;
   readonly freezer?: DiskFreezer;
@@ -250,6 +254,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
             .filter((grant) => grant.impId === imp.id)
             .map((grant) => grant.secretName),
           identityResetPending: imp.identityResetPending === 1,
+          networks: copy.members
+            .filter((member) => member.impId === imp.id)
+            .map((member) => member.network),
           disk: BACKUP_TREE.buildDisk(imp.id),
           diskBytes: imp.diskBytes,
           usedBytes: readTreeUsedBytes(BACKUP_TREE.buildDisk(imp.id)),
@@ -588,9 +595,12 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       await writeRestoredFile(imp.disk, disk, imp);
     };
 
+    const networkIds = await deps.networks.resolveNetworkIds(imp.networks, true);
+
     try {
       return await deps.imps.createImp({
         name: target.name,
+        networkIds,
         image: target.image,
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,

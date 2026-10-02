@@ -16,6 +16,7 @@ import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
 import { createTemplateService } from '../images/template-service';
 import { setupImpTest } from '../imps/test-imps';
+import { createNetworkService } from '../networks/network-service';
 import { buildImpPaths } from '../storage/data-layout';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
@@ -146,6 +147,7 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     db: harness.db,
     imps: harness.imps,
     grants: harness.broker,
+    networks: createNetworkService({ db: harness.db, egress: harness.egress }),
     storage: harness.storage,
     storageGate: harness.storageGate,
     diskBudget: harness.diskBudget,
@@ -772,6 +774,27 @@ test('a restore regrants by name, and keeps the egress policy and its list', asy
   const policy = await ctx.egress.readPolicy('back');
 
   expect(policy).toEqual({ mode: 'box', allow: ['github.com', '*.npmjs.org'] });
+});
+
+test('a restore puts the imp back on its networks, made again when gone', async () => {
+  await using ctx = await setupTest();
+
+  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress });
+
+  await ctx.createDevImp();
+  await networks.createNetwork('lab');
+  await networks.joinNetwork('lab', 'dev');
+
+  const run = await ctx.backups.runBackup();
+  const manifest = await ctx.readManifest(run.snapshotId);
+
+  await networks.deleteNetwork('lab');
+  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const restored = await networks.listNetworks();
+
+  expect(manifest.imps[0]?.networks).toEqual(['lab']);
+  expect(restored.map((network) => [network.name, network.imps])).toEqual([['lab', ['back']]]);
 });
 
 test('an egress policy this impd cannot read comes back none, never more open', async () => {

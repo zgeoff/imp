@@ -47,6 +47,9 @@ const ManifestImpSchema = z
     // a template copy whose first boot has not reset its identity yet
     identityResetPending: z.boolean().default(false),
 
+    // the networks it is on, by name
+    networks: z.array(z.string()).readonly().default([]),
+
     // oldest first
     checkpoints: z.array(ManifestCheckpointSchema).readonly(),
   })
