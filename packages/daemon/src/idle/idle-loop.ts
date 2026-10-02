@@ -67,6 +67,7 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
         execSessions: deps.imps.tracker.count(imp.id, 'exec'),
         proxyConnections: deps.imps.tracker.count(imp.id, 'proxy'),
         sshConnections: deps.imps.tracker.count(imp.id, 'ssh'),
+        tunnelConnections: deps.imps.tracker.count(imp.id, 'tunnel'),
         tcpEstablished,
         cpuPercent,
         holdUntil: imp.holdUntil?.getTime() ?? null,

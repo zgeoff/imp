@@ -59,7 +59,7 @@ export async function handleForward(
   try {
     await context.awake;
 
-    dial = await context.backend.openDial(context.impName, target);
+    dial = await context.backend.openDial(context.impName, target, 'ssh');
   } catch (error) {
     context.log(
       `impd: ssh: ${context.impName}: forward to ${target.address}: ${formatFailure(error)}`,
