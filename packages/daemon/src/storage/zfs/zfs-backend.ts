@@ -1,10 +1,16 @@
-import { existsSync, mkdirSync, readFileSync, rmdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createKeyedMutex } from '../../imps/keyed-mutex';
 import { printLog } from '../../process/print-log';
 import { runCommand } from '../../process/run-command';
 import { readErrorMessage } from '../../read-error-message';
-import { buildImagePaths, buildImpPaths, buildSnapshotPaths } from '../data-layout';
+import {
+  BACKUP_TREE,
+  buildBackupPaths,
+  buildImagePaths,
+  buildImpPaths,
+  buildSnapshotPaths,
+} from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
 import type { DiskSource, LiveStorage, StorageBackend } from '../storage-backend';
 import { createZfsCommands, parseZfsMounts, parseZfsRelease } from './zfs-commands';
@@ -26,6 +32,9 @@ const ROOTFS_FILE = 'rootfs.ext4';
 const MAX_RECLAIM_STEPS = 1000;
 const CHECKPOINT_SNAPSHOT = /@cp-[^@]+$/;
 const FORK_SNAPSHOT = /@fork-[^@]+$/;
+
+// `@bk-<run>-<imp>`: a backup run's copy of a disk, gone once the run ends
+const BACKUP_SNAPSHOT = /@bk-[^@]+$/;
 
 interface ZfsBackendDeps {
   readonly dataDir: string;
@@ -123,7 +132,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
   const runReclaimStep = async (): Promise<boolean> => {
     const entries = await listAll();
 
-    const next = planReclaimStep(entries, datasets.retired);
+    const next = planReclaimStep(entries, datasets);
 
     if (next === null) {
       return true;
@@ -180,6 +189,10 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
     if (source.kind === 'imp') {
       throw new Error('zfs: a fork of a live disk takes its own snapshot');
+    }
+
+    if (source.kind === 'empty') {
+      throw new Error('zfs: an empty disk has no origin');
     }
 
     const entries = await listAll();
@@ -252,7 +265,12 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         continue;
       }
 
-      await removeMount(buildStagingDir(staged.name));
+      // a backup run's clones are mounted in the backup tree
+      for (const [dir, name] of parseZfsMounts(readMounts())) {
+        if (name === staged.name) {
+          await zfs.unmount(dir);
+        }
+      }
 
       await zfs.destroy(staged.name);
 
@@ -270,6 +288,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
     const isDead = (snapshot: ZfsEntry) =>
       FORK_SNAPSHOT.test(snapshot.name) ||
+      BACKUP_SNAPSHOT.test(snapshot.name) ||
       (CHECKPOINT_SNAPSHOT.test(snapshot.name) &&
         !live.checkpointIds.has(readSnapshotId(snapshot.name)));
 
@@ -447,6 +466,18 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         return;
       }
 
+      if (source.kind === 'empty') {
+        await runSerial(async () => {
+          await zfs.create(target);
+
+          await setupMount(target, buildDiskDir(impId));
+        });
+
+        writeFileSync(join(buildDiskDir(impId), ROOTFS_FILE), '');
+
+        return;
+      }
+
       // a promote can move a checkpoint's snapshot, so the lookup is serial
       await runSerial(async () => {
         const origin = await findOrigin(source);
@@ -572,6 +603,135 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       startReclaim();
 
       return halted;
+    },
+
+    // the frozen guest waits for no reclaim, as with a checkpoint
+    createBackupCopy: (impId, runId) =>
+      runSnapshot(() => zfs.snapshot(`${buildDiskName(impId)}@bk-${runId}-${impId}`)),
+
+    // Read-only clones in staging, mounted in the tree. Each disk copy is
+    // marked at once, so ZFS drops it with its clone and a removed imp's
+    // retired disk goes once the run closes.
+    openBackupTree: async (request) => {
+      const tree = buildBackupPaths(deps.dataDir).tree;
+      const clones: { name: string; dir: string }[] = [];
+
+      const impIds = new Set<string>();
+      const checkpointIds = new Set<string>();
+      const imageDigests = new Set<string>();
+
+      const removeClones = async () => {
+        await runSerial(async () => {
+          for (const clone of clones.splice(0)) {
+            await removeMount(clone.dir);
+
+            await zfs.destroy(clone.name);
+          }
+
+          // a copy that never made it into the tree
+          const entries = await listAll();
+
+          for (const snapshot of entries) {
+            const isLeft = snapshot.type === 'snapshot' && !snapshot.deferDestroy;
+
+            if (isLeft && snapshot.name.includes(`@bk-${request.runId}-`)) {
+              await zfs.destroyDeferred(snapshot.name);
+            }
+          }
+        });
+
+        startReclaim();
+      };
+
+      const createTreeClone = async (snapshot: string, name: string, relativeDir: string) => {
+        const dir = join(tree, relativeDir);
+
+        await zfs.clone(snapshot, name, { readonly: 'on' });
+
+        clones.push({ name, dir });
+
+        await setupMount(name, dir);
+      };
+
+      const createTreeClones = async () => {
+        const mounted = [...parseZfsMounts(readMounts()).keys()].find((dir) =>
+          dir.startsWith(`${tree}/`),
+        );
+
+        if (mounted !== undefined) {
+          throw new Error(`zfs: ${mounted} in the backup tree is still mounted`);
+        }
+
+        // empty mount points of the last run
+        rmSync(join(tree, 'imps'), { recursive: true, force: true });
+        rmSync(join(tree, 'images'), { recursive: true, force: true });
+
+        const entries = await listAll();
+
+        for (const imp of request.imps) {
+          const copy = entries.find(
+            (entry) =>
+              entry.type === 'snapshot' && entry.name.endsWith(`@bk-${request.runId}-${imp.impId}`),
+          );
+
+          if (copy === undefined) {
+            continue;
+          }
+
+          const diskDir = dirname(BACKUP_TREE.buildDisk(imp.impId));
+
+          await createTreeClone(copy.name, `${datasets.staging}/bk-${imp.impId}`, diskDir);
+
+          await zfs.destroyDeferred(copy.name);
+
+          impIds.add(imp.impId);
+
+          for (const checkpointId of imp.checkpointIds) {
+            const [snapshot, ...others] = listCheckpointSnapshots(entries, checkpointId);
+
+            // deleted since the database copy
+            if (snapshot === undefined || others.length > 0 || snapshot.deferDestroy) {
+              continue;
+            }
+
+            const checkpointDir = dirname(BACKUP_TREE.buildCheckpointDisk(imp.impId, checkpointId));
+
+            await createTreeClone(
+              snapshot.name,
+              `${datasets.staging}/bkc-${checkpointId}`,
+              checkpointDir,
+            );
+
+            checkpointIds.add(checkpointId);
+          }
+        }
+
+        for (const digest of request.imageDigests) {
+          const base = entries.find((entry) => entry.name === `${buildImageName(digest)}@base`);
+
+          if (base === undefined || base.deferDestroy) {
+            continue;
+          }
+
+          const name = `${datasets.staging}/bki-${toDigestHex(digest)}`;
+
+          await createTreeClone(base.name, name, BACKUP_TREE.buildImageDir(digest));
+
+          imageDigests.add(digest);
+        }
+      };
+
+      try {
+        await runSerial(createTreeClones);
+      } catch (error) {
+        await removeClones().catch((closeError: unknown) => {
+          log(`impd: zfs: could not close the backup tree: ${readErrorMessage(closeError)}`);
+        });
+
+        throw error;
+      }
+
+      return { impIds, checkpointIds, imageDigests, close: removeClones };
     },
 
     waitForReclaim: async () => {

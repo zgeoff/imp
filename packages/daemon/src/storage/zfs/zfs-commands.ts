@@ -19,7 +19,11 @@ export interface ZfsCommands {
   readonly list: (root: string) => Promise<ZfsEntry[]>;
   readonly create: (name: string, properties?: Readonly<Record<string, string>>) => Promise<void>;
   readonly snapshot: (name: string) => Promise<void>;
-  readonly clone: (snapshot: string, target: string) => Promise<void>;
+  readonly clone: (
+    snapshot: string,
+    target: string,
+    properties?: Readonly<Record<string, string>>,
+  ) => Promise<void>;
   readonly rename: (from: string, to: string) => Promise<void>;
   readonly promote: (name: string) => Promise<void>;
   readonly destroy: (name: string) => Promise<void>;
@@ -74,16 +78,11 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 
       return parseZfsList(stdout);
     },
-    create: (name, properties = {}) => {
-      const options = Object.entries(properties).flatMap(([key, value]) => [
-        '-o',
-        `${key}=${value}`,
-      ]);
-
-      return runQuiet(['zfs', 'create', ...options, name]);
-    },
+    create: (name, properties = {}) =>
+      runQuiet(['zfs', 'create', ...buildPropertyArgs(properties), name]),
     snapshot: (name) => runQuiet(['zfs', 'snapshot', name]),
-    clone: (snapshot, target) => runQuiet(['zfs', 'clone', snapshot, target]),
+    clone: (snapshot, target, properties = {}) =>
+      runQuiet(['zfs', 'clone', ...buildPropertyArgs(properties), snapshot, target]),
     rename: (from, to) => runQuiet(['zfs', 'rename', from, to]),
     promote: (name) => runQuiet(['zfs', 'promote', name]),
     destroy: (name) => runQuiet(['zfs', 'destroy', name]),
@@ -111,6 +110,10 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 }
 
 // `zfs list -H` output: one tab-separated row per dataset, `-` for no value
+function buildPropertyArgs(properties: Readonly<Record<string, string>>): string[] {
+  return Object.entries(properties).flatMap(([key, value]) => ['-o', `${key}=${value}`]);
+}
+
 export function parseZfsList(stdout: string): ZfsEntry[] {
   return stdout
     .split('\n')

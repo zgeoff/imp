@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runChecked, runCommand } from '../../process/run-command';
 import { createZfsBackend } from './zfs-backend';
@@ -201,4 +201,59 @@ test.skipIf(!isReal)('it reads the usage and real zfs list output parses', async
   console.log(listed);
 
   expect(listed).toContain(`${pool.root}/images/real@base\tsnapshot\t-\toff`);
+});
+
+// restic skips a file whose inode, mtime, ctime and size match its last run;
+// each run's tree is a new clone, so these must survive the clone
+test.skipIf(!isReal)('a backup tree file keeps its metadata from run to run', async () => {
+  const pool = await setupPool();
+
+  const backend = pool.backend;
+  const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'a', 'disk', 'rootfs.ext4');
+
+  await backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+
+  writeFileSync(backend.resolveImpPaths('a').disk, 'one');
+
+  const readTreeDisk = async (runId: string) => {
+    await backend.createBackupCopy('a', runId, { isReusable: true });
+
+    const tree = await backend.openBackupTree({
+      runId,
+      imps: [{ impId: 'a', checkpointIds: [] }],
+      imageDigests: [DIGEST],
+    });
+
+    const stats = statSync(treeDisk, { bigint: true });
+    const text = readFileSync(treeDisk, 'utf8');
+
+    const touched = await runCommand(['touch', treeDisk]);
+
+    await tree.close();
+
+    return { stats, text, touchExit: touched.exitCode };
+  };
+
+  const first = await readTreeDisk('r1');
+  const second = await readTreeDisk('r2');
+
+  expect(first.text).toBe('one');
+  expect(first.touchExit).not.toBe(0);
+  expect(second.stats.ino).toBe(first.stats.ino);
+  expect(second.stats.mtimeNs).toBe(first.stats.mtimeNs);
+  expect(second.stats.ctimeNs).toBe(first.stats.ctimeNs);
+
+  writeFileSync(backend.resolveImpPaths('a').disk, 'two');
+
+  const third = await readTreeDisk('r3');
+
+  expect(third.text).toBe('two');
+  expect(third.stats.mtimeNs).not.toBe(first.stats.mtimeNs);
+
+  await backend.waitForReclaim();
+
+  const left = await runChecked(['zfs', 'list', '-H', '-t', 'all', '-o', 'name', '-r', pool.root]);
+
+  expect(left).not.toContain('@bk-');
+  expect(left).not.toContain('/staging/bk');
 });

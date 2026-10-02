@@ -3,11 +3,36 @@ import type { ImpPaths } from './data-layout';
 export type StorageBackendKind = 'xfs' | 'zfs';
 
 // Where a new imp disk comes from. An imp source is its live disk: the caller
-// freezes the guest around the call.
+// freezes the guest around the call. An empty disk is a zero-length file for
+// a backup restore to write into.
 export type DiskSource =
   | { readonly kind: 'image'; readonly digest: string }
   | { readonly kind: 'imp'; readonly impId: string }
-  | { readonly kind: 'checkpoint'; readonly impId: string; readonly checkpointId: string };
+  | { readonly kind: 'checkpoint'; readonly impId: string; readonly checkpointId: string }
+  | { readonly kind: 'empty' };
+
+// `isReusable` lets XFS keep last run's copy when the disk is unchanged
+interface BackupCopyOptions {
+  readonly isReusable: boolean;
+}
+
+// What one backup run reads, as its database copy names it.
+export interface BackupTreeRequest {
+  readonly runId: string;
+
+  // the imps createBackupCopy copied this run
+  readonly imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[];
+  readonly imageDigests: readonly string[];
+}
+
+// The backup tree at BACKUP_TREE's paths, until close. It holds what was asked
+// for less anything removed since the database copy.
+export interface BackupTree {
+  readonly impIds: ReadonlySet<string>;
+  readonly checkpointIds: ReadonlySet<string>;
+  readonly imageDigests: ReadonlySet<string>;
+  readonly close: () => Promise<void>;
+}
 
 interface StorageUsage {
   readonly usedBytes: number;
@@ -57,6 +82,18 @@ export interface StorageBackend {
     checkpointId: string,
     halt: () => Promise<T>,
   ) => Promise<T>;
+
+  // A crash-consistent copy of the imp's disk for the backup tree. The caller
+  // holds the imp's lock and freezes a running guest only around this call.
+  readonly createBackupCopy: (
+    impId: string,
+    runId: string,
+    options: BackupCopyOptions,
+  ) => Promise<void>;
+
+  // Lays out the backup tree under buildBackupPaths(dataDir).tree, with no imp
+  // locked: removeImpDisk and removeCheckpoint still work while restic reads.
+  readonly openBackupTree: (request: BackupTreeRequest) => Promise<BackupTree>;
 
   readonly readUsage: () => Promise<StorageUsage>;
 
