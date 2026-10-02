@@ -56,6 +56,7 @@ test('a pass measures every imp with its checkpoints and keeps the result', asyn
   await ctx.cache.runPass();
 
   expect(asked).toEqual([[{ impId: ctx.imp.id, checkpointIds: ['cp-1'] }]]);
+  expect(ctx.cache.readExclusiveTotal()).toBe(10);
 
   expect(ctx.cache.read(ctx.imp.id)).toEqual({
     exclusiveBytes: 10,

@@ -131,10 +131,12 @@ nothing. The exporters read the standard variables themselves, such as `OTEL_EXP
 | `imp.cpu.throttled`         | counter   |             | Time CPU limits held imps back, in s.       |
 | `imp.network.io`            | counter   | `direction` | Bytes the guests received and sent.         |
 | `imp.awake.time`            | counter   |             | Time imps spent running, in s.              |
+| `imp.disk.used`             | gauge     |             | Disk the imps take on their own, in bytes.  |
 
 The CPU, network and awake metrics come from impd's 5 s sample ([CPU limits](./cpu-limits.md)).
 `imp.awake.time` adds up sample intervals, so it misses the boot or wake itself and up to 5 s before
-each sleep or stop; `awakeMs` in the API counts the whole span. No metric carries an imp's name, so
-the series count stays the same as imps come and go. Each boot, wake, sleep and restore is also a
-span (`imp.boot`, `imp.wake`, `imp.sleep`, `imp.restore`) with the imp's name and trigger, and a
-child span for each step.
+each sleep or stop; `awakeMs` in the API counts the whole span. `imp.disk.used` reads impd's
+disk-usage pass (every 5 min, and soon after a create or destroy): the bytes destroying each imp
+would free, together. No metric carries an imp's name, so the series count stays the same as imps
+come and go. Each boot, wake, sleep and restore is also a span (`imp.boot`, `imp.wake`, `imp.sleep`,
+`imp.restore`) with the imp's name and trigger, and a child span for each step.

@@ -189,6 +189,7 @@ async function main(): Promise<void> {
   startImpTelemetry({
     bus: imps.events,
     subscribeResources: imps.subscribeResources,
+    readDiskUsedBytes: diskUsage.readExclusiveTotal,
     readStateCounts: () => countImpsByState(db),
     readRam: async () => {
       const usage = await governor.readUsage();
