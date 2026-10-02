@@ -365,23 +365,26 @@ export async function updateImpDisk(
   return sized;
 }
 
-export async function updateImpHold(
-  db: ImpDatabase,
-  id: string,
-  until: Date | null,
-): Promise<ImpRecord> {
+// A lease with no end counts as one that ends at the last time a Date holds.
+const NO_END_MS = 8_640_000_000_000_000;
+
+// hold_until becomes the latest end of the imp's leases (db/leases.ts), so
+// the governor, the idle loop and the sleep checks read one field; run it
+// in the lease write's transaction
+export async function updateImpHold(db: ImpDatabase, id: string): Promise<ImpRecord> {
   const row = await db
     .updateTable('imps')
-    .set({ hold_until: until === null ? null : until.getTime() })
+    .set((eb) => ({
+      hold_until: eb
+        .selectFrom('imp_leases')
+        .select((inner) => inner.fn.max(inner.fn.coalesce('until', sql.lit(NO_END_MS))).as('end'))
+        .where('imp_id', '=', id),
+    }))
     .where('id', '=', id)
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  const held = toImpRecord(row);
-
-  emitImpWrite(db, { kind: 'changed', imp: held, reason: 'held' });
-
-  return held;
+  return toImpRecord(row);
 }
 
 // A public imp's auth as stored: the hash of the token or password, never

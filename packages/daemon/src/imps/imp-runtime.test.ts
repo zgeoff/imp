@@ -1,11 +1,31 @@
 import { expect, test } from 'bun:test';
-import { findImpByName, updateImpActivity, updateImpHold } from '../db/imps';
+import { findImpByName, updateImpActivity } from '../db/imps';
+import { writeLease } from '../db/leases';
+import type { ImpDatabase } from '../db/open-database';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { setupImpTest, waitForOutcome } from './test-imps';
 
 // these tests wait up to 10 s for held calls to settle; a loaded host is slow
 const SLOW_TEST_TIMEOUT_MS = 30_000;
+
+// a hold from now for `ms`, as `imps.hold` writes it
+async function holdFor(db: ImpDatabase, impId: string, ms: number): Promise<void> {
+  const at = Date.now();
+
+  await writeLease(
+    db,
+    {
+      impId,
+      principal: 'token:test-token-id',
+      label: 'hold',
+      display: 'test',
+      until: new Date(at + ms),
+      createdAt: new Date(at),
+    },
+    { at, reason: 'held' },
+  );
+}
 
 async function setupRunningImp(env: Readonly<Record<string, string>> = {}) {
   const ctx = await setupImpTest({ env });
@@ -24,7 +44,7 @@ test('a background sleep skips an imp that was held after the caller looked', as
 
   const seen = await findImpByName(ctx.db, 'dev');
 
-  await updateImpHold(ctx.db, id, new Date(Date.now() + 60_000));
+  await holdFor(ctx.db, id, 60_000);
 
   const byIdle = await ctx.imps.trySleepImp(id, 'idle', {
     by: 'idle',
@@ -133,7 +153,7 @@ test('an idle sleep that waits for a young guest gives way to a hold', async () 
 
   await Bun.sleep(20);
 
-  await updateImpHold(ctx.db, ctx.impId, new Date(Date.now() + 60_000));
+  await holdFor(ctx.db, ctx.impId, 60_000);
 
   const outcome = await sleeping;
   const imp = await findImpByName(ctx.db, 'dev');
@@ -183,7 +203,7 @@ test('impd stopping sleeps held and connected imps too', async () => {
 
   const id = ctx.impId;
 
-  await updateImpHold(ctx.db, id, new Date(Date.now() + 60_000));
+  await holdFor(ctx.db, id, 60_000);
 
   const release = ctx.imps.tracker.open(id, 'exec');
 
