@@ -497,14 +497,17 @@ counts, not how soon the sleep follows a wake.
 ### 8. KSM: sharing identical guest pages
 
 KSM (kernel samepage merging) lets the host keep one copy of a page that several guests hold. It is
-off by default. `IMP_KSM=1` turns it on, and `deploy/bootstrap.sh --ksm` sets that on a bare-metal
-host ([configuration](../guides/configuration.md#impd)).
+off by default. `IMP_KSM=1` turns it on, and `deploy/bootstrap.sh --ksm` sets that on a host, not in
+a container ([configuration](../guides/configuration.md#impd)).
 
 **CAUTION:** Merged pages let one guest learn about another. A write to a merged page takes longer,
 because the kernel copies the page first, so a guest can time its writes to learn which pages
 another guest holds. Shared pages are also a Rowhammer target. imps run agent code, and a prompt
-injection can take that code over. Turn KSM on only on a host whose imps all belong to one tenant.
-The multi-tenant jailer mode ([#27](https://github.com/zgeoff/imp/issues/27)) must refuse `IMP_KSM`.
+injection can take that code over. KSM is a trade-off for a host with one owner, who accepts that
+one imp may learn what another holds. The jailer ([#27](https://github.com/zgeoff/imp/issues/27))
+does not change that: it confines Firecracker, it does not make a host safe for several owners. So
+impd does not refuse `IMP_KSM` with the jailer; `ksm-exec` then wraps the jailer from outside its
+chroot (`ksm-exec jailer ...`), and the flag survives the jailer's own exec on Linux 6.7 and later.
 
 **How the guest memory becomes mergeable.** Firecracker has no KSM setting, and its seccomp filter
 traps `prctl`. So impd starts it through `ksm-exec` (`agent/cmd/ksm-exec`), which sets
@@ -518,9 +521,11 @@ carries `VM_MERGEABLE`, guest memory included. The flag must survive the exec:
 | 6.19  | 590c03ca6a3f | ksmd no longer clears the flag in the exec window (marked for stable). |
 
 impd refuses to start with `IMP_KSM` on a kernel older than 6.10, or one without KSM. After each
-boot, wake and re-adopt it checks that the guest memory shows `mg` in `/proc/<pid>/smaps`. When it
-does not, it logs it, and `imp info` counts the imp as unmergeable. That catches the race that 6.19
-fixes.
+boot, wake and re-adopt it checks the merge flag: `ksm_merge_any` in `/proc/<pid>/ksm_stat` from
+Linux 6.12, else `mg` on the guest memory in `/proc/<pid>/smaps`. When the flag is missing, it logs
+it, and `imp info` counts the imp as unmergeable; when it cannot read the flag, it logs that. That
+catches the race that 6.19 fixes. Nothing can set the flag on a process from outside after its exec,
+so impd reports it and does not retry.
 
 **What it saves.** Measured offline on WSL2 (2026-10-02): 3 `ubuntu` guests of 512 MiB, booted cold,
 slept, and every 4 KiB page of their mem files hashed.
@@ -543,10 +548,12 @@ speed, faster than the 5 s enforcement tick. So with `IMP_KSM`:
 
 - a sleep records the VM's unshared size (`Anonymous` + `Pss_Shmem`), not its Pss, and the wake
   reserve uses that;
-- the governor keeps `IMP_KSM_HEADROOM_PERCENT` (default 100) of `general_profit` free, besides the
-  budget's use. At 100, a split of every merged page at once still fits; KSM then lowers the host's
-  real RAM use but fits no more imps under the budget. A lower value fits more imps and takes the
-  risk that the guests write their merged pages faster than the governor sleeps imps.
+- the governor keeps `IMP_KSM_HEADROOM_PERCENT` (default 100) of what KSM saves in the awake VMs
+  free, besides the budget's use: the sum of each Firecracker's `ksm_process_profit`, not the
+  host-wide `general_profit`, which counts other processes too. At 100, a split of every merged page
+  at once still fits; KSM then lowers the host's real RAM use but fits no more imps under the
+  budget. A lower value fits more imps and takes the risk that the guests write their merged pages
+  faster than the governor sleeps imps.
 
 **Zero pages and virtio-mem ([#35](https://github.com/zgeoff/imp/issues/35)).** `use_zero_pages=1`
 merges a zero-filled page into the kernel's zero page. Such pages leave `Rss` and Pss, and

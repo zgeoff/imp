@@ -131,10 +131,11 @@ The phases run in order:
   `/etc/sysctl.d/90-imp.conf`, and `kvm`, `tun` and `loop` to `/etc/modules-load.d/imp.conf`, and
   applies both. Swap stays as the installer made it. With ZFS, also `zfs`, and the ARC cap in
   `/etc/modprobe.d/imp-zfs.conf`.
-- **ksm:** Only with `--ksm`. Writes `/etc/tmpfiles.d/imp-ksm.conf`, which starts ksmd with
-  zero-page merging at boot, applies it, and sets `IMP_KSM=1` in the env file. It refuses in a
-  container and on a kernel older than 6.10. Off by default: read the caution in
-  [KSM](../architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) first.
+- **ksm:** Only with `--ksm` or `--no-ksm`. `--ksm` writes `/etc/tmpfiles.d/imp-ksm.conf`, which
+  starts ksmd with zero-page merging at boot, applies it, and sets `IMP_KSM=1` in the env file. It
+  refuses in a container and on a kernel older than 6.10. `--no-ksm` removes the rule, stops ksmd
+  and sets `IMP_KSM=0`; merged pages stay merged until a guest writes them. Off by default: read the
+  caution in [KSM](../architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) first.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
   enabled. With `--host-firewall none`, it does none of this ([Firewall](#firewall)).
