@@ -131,16 +131,17 @@ impd removes what a crash leaves at start and every hour
 ([cleanup](../architecture/storage.md#cleanup)). `imp gc` runs the same sweep now.
 
 - `imp gc --dry-run` lists what would go, and removes nothing.
-- A disk or image that no row names is an orphan. impd keeps it, with its snapshots, and logs
-  `impd: storage: kept orphan …` at start and `impd: gc: kept orphan …` every hour: its dataset or
-  directory, size, creation time and snapshots. `imp gc` lists them under `kept`.
+- A disk, image or memory snapshot that no row names is an orphan. impd keeps it, with its
+  snapshots, and logs `impd: storage: kept orphan …` at start and `impd: gc: kept orphan …` every
+  hour: its dataset or directory, size, creation time and snapshots. `imp gc` lists them under
+  `kept`.
 - Orphans come from a destroy that crashed after its row went, or from a lost or replaced database.
   After a database restore, check the list before you remove anything: each orphan may be an imp.
 - `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire.
 
-**CAUTION:** `imp gc --orphans` deletes every disk and image the database does not name, with their
-checkpoints. It cannot be undone. Run it with `--dry-run` first, and only when no orphan holds data
-you need.
+**CAUTION:** `imp gc --orphans` deletes every disk, image and memory snapshot the database does not
+name, with their checkpoints. It cannot be undone. Run it with `--dry-run` first, and only when no
+orphan holds data you need.
 
 The API is `system.gc` with `{ dryRun?, orphans? }`. It returns `dryRun`, `dropped` (each `kind` and
 `id`) and `kept` (each orphan's `kind`, `id`, `location`, `bytes`, `createdAt` and `snapshots`).
