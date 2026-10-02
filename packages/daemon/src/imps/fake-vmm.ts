@@ -2,12 +2,22 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
+import type { FirecrackerPaths } from '../vmm/firecracker-process';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
 export const FAKE_AGENT_VERSION = '0.1.0';
 
-export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady' | 'grow' | 'vmState';
+export type VmStep =
+  | 'boot'
+  | 'wake'
+  | 'sleep'
+  | 'stop'
+  | 'agentReady'
+  | 'grow'
+  | 'vmState'
+  | 'template'
+  | 'restore';
 
 // What the next call of a step does, within the VmRunner contract; each step
 // below says what fail and die mean for it. A hang waits for releaseHangs(),
@@ -49,6 +59,10 @@ export function buildFakeVmm() {
 
   // each cold boot's hostname and whether it asked for an identity reset
   const boots: { hostname: string; isIdentityReset: boolean }[] = [];
+
+  // each template build's shape, and each restore's claim
+  const templateBuilds: { vcpus: number; memoryMib: number }[] = [];
+  const restores: { hostname: string; isIdentityReset: boolean; memFile: string }[] = [];
 
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
@@ -96,7 +110,7 @@ export function buildFakeVmm() {
     return counter.nextPid;
   };
 
-  const setVm = (pid: number, paths: Readonly<ImpPaths>, state: InstanceState): void => {
+  const setVm = (pid: number, paths: Readonly<FirecrackerPaths>, state: InstanceState): void => {
     alive.add(pid);
     vms.set(pid, { apiSocket: paths.apiSocket, state });
   };
@@ -123,7 +137,10 @@ export function buildFakeVmm() {
     };
 
     // fail leaves no VM; die returns a pid whose VM is already gone
-    const startFakeVm = async (step: 'boot' | 'wake', paths: Readonly<ImpPaths>) => {
+    const startFakeVm = async (
+      step: 'boot' | 'wake' | 'restore',
+      paths: Readonly<FirecrackerPaths>,
+    ) => {
       const outcome = await pickOutcome(step);
 
       if (outcome === 'fail') {
@@ -274,6 +291,36 @@ export function buildFakeVmm() {
 
           return { agentVersion: agent.version, firecrackerVersion: 'v1.17.0' };
         }),
+
+      // fail and die: no snapshot
+      buildTemplateVm: (plan) =>
+        runInGeneration(async () => {
+          const outcome = await pickOutcome('template');
+
+          if (outcome !== 'ok') {
+            throw new FakeVmError('template build failed');
+          }
+
+          mkdirSync(plan.snapshotDir, { recursive: true });
+          writeFileSync(plan.vmstate, 'vmstate');
+          writeFileSync(plan.memFile, 'mem');
+
+          templateBuilds.push({ vcpus: plan.vcpus, memoryMib: plan.memoryMib });
+        }),
+
+      // as a boot: fail leaves no VM, die a pid whose VM is gone
+      loadTemplateVm: (plan) =>
+        runInGeneration(async () => {
+          const vm = await startFakeVm('restore', plan.paths);
+
+          restores.push({
+            hostname: plan.claim.hostname,
+            isIdentityReset: plan.claim.isIdentityReset,
+            memFile: plan.memFile,
+          });
+
+          return plan.claim.isIdentityReset ? { ...vm, identityReset: guest.identityReset } : vm;
+        }),
     };
   };
 
@@ -285,6 +332,8 @@ export function buildFakeVmm() {
     stops,
     grows,
     boots,
+    templateBuilds,
+    restores,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {

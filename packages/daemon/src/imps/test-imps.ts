@@ -115,7 +115,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   // a new disk stays the size of its image: the fake clone copies every byte
   const config: Config = {
-    ...loadConfig({ IMP_DATA_DIR: dataDir, ...options.env }),
+    ...loadConfig({ IMP_DATA_DIR: dataDir, IMP_BOOT_TEMPLATES: 'false', ...options.env }),
     defaultDiskBytes: 0,
   };
 

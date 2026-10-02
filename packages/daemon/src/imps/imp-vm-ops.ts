@@ -1,4 +1,6 @@
+import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ImpEventDetail } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
@@ -8,6 +10,7 @@ import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError } from '../api-errors';
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
+import type { SlotAddress } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
 import {
@@ -22,6 +25,7 @@ import {
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import type { VmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import type { StartedVm } from '../vmm/vm-runner';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
@@ -33,6 +37,9 @@ import type { ShutdownGate } from './shutdown-gate';
 // snapshot writes put the whole mem file through the page cache
 // (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
+
+// the claim's seed for the guest's entropy pool; the agent wants 32 or more
+const CLAIM_SEED_BYTES = 64;
 
 // how long a sleep waits for the services list it records
 const SERVICES_FOR_SLEEP_MS = 1000;
@@ -130,6 +137,73 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
   };
 
+  // A cold boot: a restore of the shape's boot template when one is ready,
+  // else the kernel's boot. A template that fails to restore goes, and the
+  // imp boots the kernel (docs/architecture/boot-templates.md#claim).
+  const startColdVm = async (
+    imp: LockedImp,
+    paths: ImpPaths,
+    address: SlotAddress,
+  ): Promise<StartedVm> => {
+    const cgroup = context.cgroups.setup(imp.id, imp.cpu);
+    const template = context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
+
+    if (template !== null && template !== undefined) {
+      try {
+        const vm = await context.vms.loadTemplateVm({
+          firecrackerBin: context.config.firecrackerBin,
+          paths,
+          vmstate: template.vmstate,
+          memFile: template.memFile,
+          diskPath: resolve(paths.disk),
+          tap: address.tap,
+          cgroup,
+          claim: {
+            id: imp.id,
+            hostname: imp.name,
+            ip: `${address.guestIp}/${String(address.prefixLength)}`,
+            gw: address.hostIp,
+            dns: context.config.dns,
+            mac: address.guestMac,
+            seed: randomBytes(CLAIM_SEED_BYTES),
+            isIdentityReset: imp.isIdentityResetPending,
+          },
+        });
+
+        context.log(
+          `impd: ${imp.name}: restored boot template ${template.key.slice(0, 12)} as pid ${String(vm.pid)} ${formatTimings(vm.timings)}`,
+        );
+
+        return vm;
+      } catch (error) {
+        context.log(
+          `impd: ${imp.name}: boot template ${template.key.slice(0, 12)} failed, booting the kernel: ${readErrorMessage(error)}`,
+        );
+
+        context.templates?.discard(template.key);
+      }
+    }
+
+    const vm = await context.vms.startVm({
+      firecrackerBin: context.config.firecrackerBin,
+      kernelPath: context.config.kernelPath,
+      systemDrivePath: context.identity.systemDrivePath,
+      paths,
+      address,
+      impId: imp.id,
+      hostname: imp.name,
+      vcpus: imp.vcpus,
+      memoryMib: imp.memoryMib,
+      dns: context.config.dns,
+      cgroup,
+      isIdentityReset: imp.isIdentityResetPending,
+    });
+
+    context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
+
+    return vm;
+  };
+
   // `reason` says why a wake booted cold instead; null for a create or a start
   // `isWake` when the boot stands in for a wake, which it counts as
   const startColdImpVm = async (
@@ -170,22 +244,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       await context.egress.requireImp(imp.id);
       await context.taps.setupTap(address);
 
-      const vm = await context.vms.startVm({
-        firecrackerBin: context.config.firecrackerBin,
-        kernelPath: context.config.kernelPath,
-        systemDrivePath: context.identity.systemDrivePath,
-        paths,
-        address,
-        impId: imp.id,
-        hostname: imp.name,
-        vcpus: imp.vcpus,
-        memoryMib: imp.memoryMib,
-        dns: context.config.dns,
-        cgroup: context.cgroups.setup(imp.id, imp.cpu),
-        isIdentityReset: imp.isIdentityResetPending,
-      });
-
-      context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
+      const vm = await startColdVm(imp, paths, address);
 
       startCounting(context, imp, vm.pid);
 

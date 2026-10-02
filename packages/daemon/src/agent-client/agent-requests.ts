@@ -9,6 +9,9 @@ const AgentErrorResponseSchema = z.object({
   error: z.object({ code: z.string(), message: z.string() }),
 });
 
+// a claim flushes the disk and reseeds the CRNG: well under a second
+const CLAIM_TIMEOUT_MS = 5000;
+
 const PingResponseSchema = z.object({
   ok: z.literal(true),
   version: z.string(),
@@ -18,6 +21,9 @@ const PingResponseSchema = z.object({
 
   // set on a boot that asked for an identity reset (docs/guides/templates.md#identity)
   identity_reset: z.enum(['ok', 'failed']).optional(),
+
+  // stage 1 waiting in a boot template for its claim
+  stage: z.literal('template').optional(),
 });
 
 export const OkResponseSchema = z.object({ ok: z.literal(true) });
@@ -98,6 +104,43 @@ export async function sendPing(vsockPath: string, timeoutMs = 2000): Promise<Age
   const response = await sendAgentRequest(vsockPath, { op: 'ping' }, timeoutMs);
 
   return PingResponseSchema.parse(response);
+}
+
+// What a guest restored from a boot template needs to become one imp
+// (docs/architecture/boot-templates.md#claim).
+export interface Claim {
+  readonly id: string;
+  readonly hostname: string;
+  readonly ip: string;
+  readonly gw: string;
+  readonly dns: readonly string[];
+  readonly mac: string;
+  readonly unixMs: number;
+  readonly seed: Uint8Array;
+  readonly isIdentityReset: boolean;
+}
+
+export async function sendClaim(vsockPath: string, claim: Readonly<Claim>): Promise<void> {
+  const response = await sendAgentRequest(
+    vsockPath,
+    {
+      op: 'claim',
+      claim: {
+        id: claim.id,
+        hostname: claim.hostname,
+        ip: claim.ip,
+        gw: claim.gw,
+        dns: claim.dns,
+        mac: claim.mac,
+        unix_ms: claim.unixMs,
+        seed: Buffer.from(claim.seed).toString('base64'),
+        reset_identity: claim.isIdentityReset,
+      },
+    },
+    CLAIM_TIMEOUT_MS,
+  );
+
+  OkResponseSchema.parse(response);
 }
 
 // The agent replies, then powers the guest off; Firecracker exits after.

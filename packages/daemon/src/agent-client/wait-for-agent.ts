@@ -9,6 +9,10 @@ export interface WaitOptions {
 
   // how long one ping may take (default 1000)
   readonly attemptMs?: number;
+
+  // wait for stage 1 parked in a boot template (true) or for stage 2
+  // (false); any answer when left out
+  readonly isParked?: boolean;
 }
 
 // Pings until the agent answers. During boot the vsock socket may not exist
@@ -27,7 +31,17 @@ export async function waitForAgent(
     const attemptMs = Math.min(options.attemptMs ?? 1000, deadline - Date.now());
 
     try {
-      return await sendPing(vsockPath, Math.max(1, attemptMs));
+      const ping = await sendPing(vsockPath, Math.max(1, attemptMs));
+
+      const isParked = ping.stage === 'template';
+
+      if (options.isParked === undefined || options.isParked === isParked) {
+        return ping;
+      }
+
+      const waitedFor = isParked ? 'still parked in the template' : 'not parked';
+
+      lastError = new Error(waitedFor);
     } catch (error) {
       lastError = error;
     }

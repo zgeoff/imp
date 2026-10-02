@@ -20,6 +20,7 @@ test('it fills every setting from its default when the env is empty', () => {
     bootReservePercent: 50,
     wakeReserveMib: 256,
     sleepMinGuestUptimeMs: 1500,
+    bootTemplates: true,
     watchdogTimeoutS: 60,
     watchdogAction: 'report',
     defaultVcpus: 2,
