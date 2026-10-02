@@ -36,6 +36,12 @@ such as `dev-*`. Such a token:
 - cannot make host-wide calls, whatever its scope: images, secrets and grants, backups and tokens. A
   grant hands a host secret to an imp, so a `dev-*` token could otherwise grant itself any secret.
 
+A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
+reserve, the count of imps, awake and in all, and the storage: used and free space, the reserve, and
+the sum of every imp's disk size. A `GovernorDecision` event for one of its imps shows the host's
+RAM use and budget. Neither names an imp it cannot see. This is accepted: the totals tell it why a
+wake waits.
+
 ## Manage tokens
 
 Only a `manage` token with no patterns manages tokens.
@@ -118,6 +124,8 @@ The address must be the client's own:
 - Only an address in `100.64.0.0/10` or `fd7a:115c:a1e0::/48` is asked about. `setup-net.sh` drops
   packets from those ranges that do not come in on `tailscale0`, as tailscaled itself does, so no
   other network can claim one. impd refuses an `IMP_SUBNET` that overlaps `100.64.0.0/10`.
+- The node's own tailnet addresses are no peer. That rule lets packets from local addresses pass, so
+  an imp's traffic out through the node, or impd's own, would otherwise get the node's tags.
 - Over the [HTTPS domain](./https.md), the wake proxy calls the API on loopback. It hands the
   client's address over in-process: it registers the address and sends the API a random handle in
   `x-imp-peer`, which the API redeems once, and only from a loopback peer. The proxy removes any
@@ -126,8 +134,9 @@ The address must be the client's own:
 A tailnet identity is ambient: a browser on that machine sends it with every page's requests, as it
 would a cookie. So impd takes it only when:
 
-- the `Host` names impd: loopback, the node's MagicDNS name or short name, its tailnet address, or
-  the domain. A page on a name of its own that resolves to impd (DNS rebinding) is refused.
+- the `Host` names impd: loopback, the node's MagicDNS name or short name, its tailnet addresses
+  (IPv4 and IPv6), or the domain. A page on a name of its own that resolves to impd (DNS rebinding)
+  is refused.
 - the request comes from impd's own origin, or from a client that is not a browser (no `Origin`). A
   page on an imp's port is another origin and is refused, on `/rpc`, `/exec` and `/tunnel` alike.
 
