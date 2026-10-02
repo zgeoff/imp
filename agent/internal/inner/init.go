@@ -40,6 +40,14 @@ const runSizeEnv = "IMP_INNER_RUN_SIZE"
 // the user's root, pivots into it, and serves the agent on fd 3. It
 // returns only on failure; the agent restarts the container then.
 func Run() error {
+	// The socket stays the init's own: a process it starts must never
+	// inherit it, or it could spawn as root and forge exits.
+	unix.CloseOnExec(sockFd)
+	// The agent runs at -1000, which a fork inherits: the container's
+	// processes must stay fair game for the OOM killer.
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("0"), 0); err != nil {
+		return fmt.Errorf("oom_score_adj: %w", err)
+	}
 	ignoreSignals()
 	agentFile, err := setupRoot(os.Getenv(runSizeEnv))
 	if err != nil {
@@ -106,7 +114,7 @@ func setupRoot(runSize string) (*os.File, error) {
 	}{
 		{"proc", "/proc", "proc", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC, ""},
 		{"sysfs", "/sys", "sysfs", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC, ""},
-		{"cgroup2", "/sys/fs/cgroup", "cgroup2", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_RELATIME, "nsdelegate"},
+		{"cgroup2", "/sys/fs/cgroup", "cgroup2", unix.MS_NOSUID | unix.MS_NODEV | unix.MS_NOEXEC | unix.MS_RELATIME, ""},
 		// a copy of the agent's /dev, filled below: the kernel has one
 		// devtmpfs, and a node deleted inside must not go for the agent
 		{"tmpfs", "/dev", "tmpfs", unix.MS_NOSUID, "mode=0755,size=64k"},
