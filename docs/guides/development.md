@@ -22,7 +22,7 @@ harness against a real instance when a change touches the lifecycle, the agent o
 
 `scripts/test-e2e.sh` brings up the dev instance (`scripts/dev.sh`), then runs each suite in
 `test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
-way a user would. The suites run in this order:
+way a user would; the dashboard suite drives it through a browser. The suites run in this order:
 
 | Suite         | What it proves                                                                       |
 | ------------- | ------------------------------------------------------------------------------------ |
@@ -35,10 +35,12 @@ way a user would. The suites run in this order:
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
 | `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
+| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                   |
+| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy       |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp, dashboard
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -136,7 +138,10 @@ seconds with the reason. The job then:
 2. builds the dev host image with a cache of its own (scope `imp-dev`) and sets
    `IMP_HOST_IMAGE_READY=1`, so `scripts/dev.sh` uses it instead of building it again. Only runs on
    `main` write these caches; pull requests only read them.
-3. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
+3. restores the Playwright browser cache (`~/.cache/ms-playwright`), keyed on the Playwright version
+   in `bun.lock`, which pins the Chromium build. The dashboard suite installs that Chromium's
+   headless shell when the cache misses.
+4. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
    key in CI, and a missed timing limit only warns.
 

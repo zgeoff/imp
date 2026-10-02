@@ -52,15 +52,17 @@ query goes through the SDK and oRPC's wire format. They run in their own `bun te
 register must not reach the daemon's tests, and the root `bun test` skips the package.
 
 The end-to-end test logs in, creates an imp, runs a command in its console, sleeps and destroys it,
-then logs out. It reads `IMP_URL` (default: the dev instance at `7070 + IMP_DEV_PORT_OFFSET`) and
-`IMP_TOKEN`, and needs `bun run build:dashboard` first:
+then logs out. The `dashboard` suite of the [end-to-end harness](./development.md#end-to-end-tests)
+builds the dashboard, installs Playwright's pinned Chromium and runs it; it is in the `fast` set CI
+runs:
 
 ```sh
-export IMP_DEV_NAME=imp-dev-dash IMP_DEV_PORT_OFFSET=3600
-scripts/dev.sh up && bun run build:dashboard
-IMP_TOKEN=$(scripts/dev.sh token) bun run --cwd packages/dashboard e2e
-scripts/dev.sh down
+scripts/test-e2e.sh --only dashboard
 ```
+
+On its own, it reads `IMP_URL` (default: the dev instance at `7070 + IMP_DEV_PORT_OFFSET`) and
+`IMP_TOKEN`, and needs `bun run build:dashboard` and `bun run --cwd packages/dashboard e2e:install`
+first.
 
 ## Not yet
 
