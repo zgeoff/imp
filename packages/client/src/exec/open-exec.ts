@@ -1,7 +1,7 @@
 import { CONSOLE_SHELL } from '@imp/api';
-import type { ImpContract } from '@imp/api';
+import type { ImpContract, ResumeFrom } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
-import { ExecError, toExecError } from './exec-error';
+import { ExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
 import type {
   ExecAttach,
@@ -10,6 +10,7 @@ import type {
   ExecStart,
   ExecStarted,
 } from './open-exec-session';
+import { toExecError } from './to-exec-error';
 
 export interface ExecOptions {
   readonly tty?: boolean;
@@ -30,6 +31,11 @@ export interface ExecOptions {
   // tty. See ExecStarted.groupKill.
   readonly killGraceMs?: number;
 
+  // with a session: the output after the byte at this offset of this
+  // generation, rather than a replay; `started.output.resume` says how it
+  // was met (docs/architecture/daemon.md#output-offsets)
+  readonly resumeFrom?: ResumeFrom;
+
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
@@ -43,6 +49,9 @@ export interface ExecExit {
   // null when a signal ended the process
   readonly code: number | null;
   readonly signal: string | null;
+
+  // for a session with offsets: the offset after the last byte received
+  readonly offset?: number;
 }
 
 // One running command. The output streams end when the session does, and
@@ -97,13 +106,21 @@ export function openExec(
     ...(options.rows !== undefined && { rows: options.rows }),
     ...(options.session !== undefined && { session: options.session }),
     ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
+    ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
   });
 }
 
-export type AttachOptions = Pick<ExecOptions, 'cols' | 'rows' | 'signal' | 'maxUnreadBytes'>;
+export interface AttachOptions extends Pick<
+  ExecOptions,
+  'cols' | 'rows' | 'signal' | 'maxUnreadBytes' | 'resumeFrom'
+> {
+  // false: reject with InvalidStateError rather than boot or wake the imp
+  readonly wake?: boolean;
+}
 
 // Attaches to a session that runs: stdout gets the replay of its recent
-// output, then live output. NOT_FOUND when there is no such session.
+// output, or with resumeFrom the output after it, then live output.
+// NoSessionError when there is no such session.
 export function openAttach(
   deps: Readonly<ExecDeps>,
   name: string,
@@ -115,6 +132,8 @@ export function openAttach(
     session,
     ...(options.cols !== undefined && { cols: options.cols }),
     ...(options.rows !== undefined && { rows: options.rows }),
+    ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
+    ...(options.wake !== undefined && { wake: options.wake }),
   });
 }
 
@@ -227,7 +246,13 @@ async function openHandle(
 
     const result: Settled<ExecExit> =
       outcome.kind === 'exit'
-        ? { value: { code: outcome.code, signal: outcome.signal } }
+        ? {
+            value: {
+              code: outcome.code,
+              signal: outcome.signal,
+              ...(outcome.offset !== undefined && { offset: outcome.offset }),
+            },
+          }
         : { error: toExecError(outcome) };
 
     resolveHandle(result);

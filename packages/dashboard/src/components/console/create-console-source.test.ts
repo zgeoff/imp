@@ -10,7 +10,13 @@ function buildHandle(exit: Promise<ExecExit>) {
   const calls: unknown[] = [];
 
   const handle: ExecHandle = {
-    started: Promise.resolve({ pid: 1, session: null, created: true, groupKill: false }),
+    started: Promise.resolve({
+      pid: 1,
+      session: null,
+      created: true,
+      groupKill: false,
+      output: { continuity: 'none' },
+    }),
     stdout: stdout.readable,
     stderr: stderr.readable,
     exit,

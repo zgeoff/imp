@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { CONSOLE_SHELL } from '@imp/api';
+import type { SessionOutput } from '@imp/api';
 import { AgentError } from '@imp/daemon/src/agent-client/agent-connection';
 import type {
   AgentAttachRequest,
@@ -10,10 +11,28 @@ import type {
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '../create-imp-client';
-import { ExecError, toExecError } from './exec-error';
+import { ExecError } from './exec-error';
+import { InvalidResumeError } from './invalid-resume-error';
+import { InvalidStateError } from './invalid-state-error';
+import { NoSessionError } from './no-session-error';
 import { openExecSession } from './open-exec-session';
+import { toExecError } from './to-exec-error';
 
 const BIG_BYTES = 512 * 1024;
+const GENERATION = 'd'.repeat(32);
+const COLD_BOOT = { bootId: 'boot-2', cause: 'recovery', at: '2026-10-03T00:00:00.000Z' } as const;
+
+const COUNTED_OUTPUT: SessionOutput = {
+  continuity: 'offsets',
+  bootId: 'boot-2',
+  executionGeneration: GENERATION,
+  bufferStart: 0,
+  end: 100,
+  offset: 95,
+  prelude: 0,
+  coldBoots: [COLD_BOOT],
+  resume: { kind: 'exact' },
+};
 
 // A guest agent for the fake VMs, by argv[0]: `cat` echoes stdin until EOF,
 // `fail` exits 3, `big` floods both streams, `tick` writes once, and `tick`,
@@ -70,6 +89,41 @@ function buildFakeAgent() {
   ): Promise<ExecStream> => {
     attaches.push(request);
 
+    if (request.wake === false) {
+      return Promise.reject(
+        new ORPCError('INVALID_STATE', {
+          message: 'cannot attach without a wake to an imp that is sleeping',
+          data: { state: 'sleeping', allowed: ['running'], coldBoots: [COLD_BOOT] },
+        }),
+      );
+    }
+
+    if ((request.resumeFrom?.offset ?? 0) > 100) {
+      return Promise.reject(
+        new AgentError('INVALID_RESUME', 'past the end', { end: 100, bufferStart: 0 }),
+      );
+    }
+
+    if (request.session === 'counted') {
+      return Promise.resolve({
+        ...buildScriptedStream('counted', (entry) => {
+          input.push(entry);
+        }),
+        session: 'counted',
+        output: COUNTED_OUTPUT,
+      });
+    }
+
+    if (request.session === 'ended') {
+      return Promise.reject(
+        new AgentError('NO_SESSION', 'no session "ended"', {
+          bootId: 'boot-2',
+          coldBoots: [COLD_BOOT],
+          previous: { executionGeneration: GENERATION, end: 100, exitCode: 0 },
+        }),
+      );
+    }
+
     if (request.session !== 'main') {
       return Promise.reject(new AgentError('NO_SESSION', `no session "${request.session}"`));
     }
@@ -122,6 +176,12 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
 
   if (command === 'tick') {
     emitText('stdout', 'tick');
+  }
+
+  // a resume: the tail after offset 95, then the exit
+  if (command === 'counted') {
+    emitText('stdout', 'tail!');
+    emitEvent({ type: 'exit', code: 0, signal: 0 });
   }
 
   if (command === 'big') {
@@ -524,7 +584,14 @@ test('openConsole with a session starts it and reports it', async () => {
 
   await handle.exit.catch(() => null);
 
-  expect(started).toEqual({ pid: 42, session: 'main', created: true, groupKill: false });
+  expect(started).toEqual({
+    pid: 42,
+    session: 'main',
+    created: true,
+    groupKill: false,
+    output: { continuity: 'none' },
+  });
+
   expect(ctx.requests[0]).toMatchObject({ tty: true, session: 'main', cols: 100, rows: 30 });
 });
 
@@ -553,7 +620,59 @@ test('openAttach to no such session fails with the agent code', async () => {
   const handle = await ctx.client.openAttach('dev', 'gone');
   const failure = await handle.exit.catch((error: unknown) => error);
 
-  expect(failure).toMatchObject({ code: 'NO_SESSION' });
+  expect(failure).toBeInstanceOf(NoSessionError);
+  expect(failure).toMatchObject({ code: 'NO_SESSION', data: undefined });
+});
+
+test('openAttach with resumeFrom gets its place in the output and the offset at the exit', async () => {
+  await using ctx = await setupExecTest();
+
+  const resumeFrom = { executionGeneration: GENERATION, offset: 95 };
+
+  const handle = await ctx.client.openAttach('dev', 'counted', { resumeFrom });
+  const started = await handle.started;
+
+  const tail = await new Response(handle.stdout).text();
+
+  const exit = await handle.exit;
+
+  expect(ctx.attaches).toEqual([{ session: 'counted', resumeFrom }]);
+  expect(started.output).toEqual(COUNTED_OUTPUT);
+  expect(tail).toBe('tail!');
+  expect(exit).toEqual({ code: 0, signal: null, offset: 100 });
+});
+
+test('NO_SESSION, INVALID_STATE and INVALID_RESUME reject as typed errors with their data', async () => {
+  await using ctx = await setupExecTest();
+
+  const ended = await ctx.client.openAttach('dev', 'ended');
+  const noSession = await ended.exit.catch((error: unknown) => error);
+  const asleep = await ctx.client.openAttach('dev', 'main', { wake: false });
+  const invalidState = await asleep.exit.catch((error: unknown) => error);
+
+  const resumeFrom = { executionGeneration: GENERATION, offset: 101 };
+
+  const past = await ctx.client.openAttach('dev', 'main', { resumeFrom });
+  const invalidResume = await past.exit.catch((error: unknown) => error);
+
+  expect(noSession).toBeInstanceOf(NoSessionError);
+
+  expect(noSession).toMatchObject({
+    data: {
+      bootId: 'boot-2',
+      coldBoots: [COLD_BOOT],
+      previous: { executionGeneration: GENERATION, end: 100, exitCode: 0 },
+    },
+  });
+
+  expect(invalidState).toBeInstanceOf(InvalidStateError);
+
+  expect(invalidState).toMatchObject({
+    data: { state: 'sleeping', allowed: ['running'], coldBoots: [COLD_BOOT] },
+  });
+
+  expect(invalidResume).toBeInstanceOf(InvalidResumeError);
+  expect(invalidResume).toMatchObject({ data: { end: 100, bufferStart: 0 } });
 });
 
 async function waitUntil(check: () => boolean): Promise<void> {
@@ -595,4 +714,40 @@ test('a kill grace reaches the agent, and started says whether it kills the grou
   plain.close();
 
   await plain.exit.catch(() => null);
+});
+
+// an impd from before offsets sends no output: the client reads it as none
+test('a started without output, from an older impd, reads as continuity none', async () => {
+  using server = Bun.serve({
+    port: 0,
+    fetch: (request, bunServer) =>
+      bunServer.upgrade(request) ? undefined : new Response('no', { status: 400 }),
+    websocket: {
+      message: (ws) => {
+        ws.send(JSON.stringify({ type: 'started', pid: 5, session: 'main', created: false }));
+        ws.send(JSON.stringify({ type: 'exit', code: 0, signal: null }));
+      },
+    },
+  });
+
+  const started: unknown[] = [];
+
+  const session = openExecSession({
+    baseUrl: `http://127.0.0.1:${String(server.port)}`,
+    token: null,
+    start: { name: 'dev', session: 'main' },
+    onStarted: (info) => {
+      started.push(info);
+    },
+    onOutput: () => {},
+    connect: (url) => new WebSocket(url),
+  });
+
+  const outcome = await session.outcome;
+
+  expect(started).toEqual([
+    { pid: 5, session: 'main', created: false, groupKill: false, output: { continuity: 'none' } },
+  ]);
+
+  expect(outcome).toEqual({ kind: 'exit', code: 0, signal: null });
 });
