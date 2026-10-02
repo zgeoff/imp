@@ -91,6 +91,7 @@ test('imp_sleep, imp_url and imp_destroy act on the imp', async () => {
   const local = String(urls.structuredContent?.['local']);
 
   expect(local).toContain('dev.');
+  expect(urls.structuredContent?.['https']).toBeNull();
   expect(urls.structuredContent?.['tailnet']).toBeNull();
 
   const destroyed = await ctx.runTool('imp_destroy', { name: 'dev' });

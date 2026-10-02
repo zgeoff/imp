@@ -35,8 +35,6 @@ interface SocketData {
   readonly handleEarlyMessage: (event: MessageEvent<string | ArrayBuffer>) => void;
 }
 
-type ProxyServer = Server<SocketData>;
-
 interface WakeProxyDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
@@ -44,9 +42,38 @@ interface WakeProxyDeps {
   readonly log: (message: string) => void;
 }
 
+// Where a request goes: an imp, which it wakes, impd's own API, or nowhere
+export type ProxyRoute =
+  | { readonly kind: 'imp'; readonly name: string }
+  | { readonly kind: 'api' }
+  | { readonly kind: 'none'; readonly hint: string };
+
+export interface ProxyListenOptions {
+  readonly port: number;
+  readonly hostname?: string;
+  readonly tls?: { readonly key: string; readonly cert: string };
+
+  // lets a listener with a new certificate bind next to the old one
+  readonly reusePort?: boolean;
+  readonly route: (request: Request) => ProxyRoute;
+}
+
+type ProxyServer = Server<SocketData>;
+
+// one request on its way to an address behind the proxy
+interface UpstreamOptions {
+  // ends the connection's count in the activity tracker
+  readonly release: () => void;
+  readonly wokeMs: number | null;
+  readonly formatFailure: (reason: string) => string;
+}
+
 export interface WakeProxy {
   // one listener per imp on portBase + slot; call after a create or destroy
   readonly syncListeners: () => Promise<void>;
+
+  // another listener with the same proxy behind it; the caller stops it
+  readonly startListener: (options: ProxyListenOptions) => ProxyServer;
   readonly stop: () => Promise<void>;
 }
 
@@ -94,14 +121,23 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   const handleRequest = async (
     request: Request,
     server: ProxyServer,
-    name: string | null,
+    route: ProxyRoute,
   ): Promise<Response | undefined> => {
-    if (name === null) {
-      return buildErrorPage(
-        404,
-        `Use http://<imp>.imp.localhost:${String(deps.config.proxyPort)}/.`,
-      );
+    if (route.kind === 'none') {
+      return buildErrorPage(404, route.hint);
     }
+
+    if (route.kind === 'api') {
+      return sendUpstream(request, server, `127.0.0.1:${String(deps.config.apiPort)}`, {
+        release: () => {
+          // impd's own API: nothing to keep awake
+        },
+        wokeMs: null,
+        formatFailure: (reason) => `impd's API did not answer (${reason}).`,
+      });
+    }
+
+    const name = route.name;
 
     const opened: { release: () => void } = {
       release: () => {
@@ -124,14 +160,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const imp = running.imp;
     const wokeMs = running.wokeMs;
 
-    const url = new URL(request.url);
-
-    const target = `${imp.ip}:${String(imp.httpPort)}${url.pathname}${url.search}`;
-
     if (wokeMs !== null) {
-      deps.log(
-        `impd: proxy: ${name} woke in ${String(wokeMs)}ms for ${request.method} ${url.pathname}`,
-      );
+      const path = new URL(request.url).pathname;
+
+      deps.log(`impd: proxy: ${name} woke in ${String(wokeMs)}ms for ${request.method} ${path}`);
     }
 
     try {
@@ -140,8 +172,29 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       // the idle loop also counts the open connection
     }
 
+    return sendUpstream(request, server, `${imp.ip}:${String(imp.httpPort)}`, {
+      release: opened.release,
+      wokeMs,
+      formatFailure: (reason) =>
+        `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
+    });
+  };
+
+  const sendUpstream = async (
+    request: Request,
+    server: ProxyServer,
+    address: string,
+    options: UpstreamOptions,
+  ): Promise<Response | undefined> => {
+    const wokeMs = options.wokeMs;
+    const release = options.release;
+
+    const url = new URL(request.url);
+
+    const target = `${address}${url.pathname}${url.search}`;
+
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-      return handleWebSocket(request, server, `ws://${target}`, opened.release);
+      return handleWebSocket(request, server, `ws://${target}`, release);
     }
 
     try {
@@ -164,10 +217,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         headers.set('x-imp-wake-ms', String(wokeMs));
       }
 
-      const body = upstream.body === null ? null : buildTrackedBody(upstream.body, opened.release);
+      const body = upstream.body === null ? null : buildTrackedBody(upstream.body, release);
 
       if (body === null) {
-        opened.release();
+        release();
       }
 
       return new Response(body, {
@@ -176,14 +229,9 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         headers,
       });
     } catch (error) {
-      opened.release();
+      release();
 
-      const reason = readErrorMessage(error);
-
-      return buildErrorPage(
-        502,
-        `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
-      );
+      return buildErrorPage(502, options.formatFailure(readErrorMessage(error)));
     }
   };
 
@@ -233,16 +281,27 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     return undefined;
   };
 
-  const startListener = (port: number, fixedName: string | null): ProxyServer =>
+  const startListener = (options: ProxyListenOptions): ProxyServer =>
     Bun.serve<SocketData>({
-      port,
+      port: options.port,
+      ...(options.hostname !== undefined && { hostname: options.hostname }),
+      ...(options.tls !== undefined && { tls: options.tls }),
+      ...(options.reusePort === true && { reusePort: true }),
       idleTimeout: 0,
-      fetch: (request, server) =>
-        handleRequest(request, server, fixedName ?? parseHostName(request.headers.get('host'))),
+      fetch: (request, server) => handleRequest(request, server, options.route(request)),
       websocket,
     });
 
-  const main = startListener(deps.config.proxyPort, null);
+  const hint = `Use http://<imp>.imp.localhost:${String(deps.config.proxyPort)}/.`;
+
+  const main = startListener({
+    port: deps.config.proxyPort,
+    route: (request) => {
+      const name = parseHostName(request.headers.get('host'));
+
+      return name === null ? { kind: 'none', hint } : { kind: 'imp', name };
+    },
+  });
 
   deps.log(`impd: proxy on :${String(deps.config.proxyPort)}`);
 
@@ -270,7 +329,13 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         const port = deriveSlotAddress(imp.slot, deps.config).tailnetPort;
 
         try {
-          listeners.set(imp.id, { slot: imp.slot, server: startListener(port, imp.name) });
+          const route: ProxyRoute = { kind: 'imp', name: imp.name };
+
+          listeners.set(imp.id, {
+            slot: imp.slot,
+            server: startListener({ port, route: () => route }),
+          });
+
           failedSlots.delete(imp.slot);
         } catch (error) {
           if (!failedSlots.has(imp.slot)) {
@@ -286,6 +351,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
 
   return {
     syncListeners: runListenerSync,
+    startListener,
     stop: async () => {
       await Promise.all([
         main.stop(true),
@@ -324,7 +390,9 @@ function buildUpstreamHeaders(request: Request, server: ProxyServer): Headers {
   }
 
   headers.set('x-forwarded-host', request.headers.get('host') ?? '');
-  headers.set('x-forwarded-proto', 'http');
+
+  // https on the domain listeners: Bun gives a TLS request an https URL
+  headers.set('x-forwarded-proto', new URL(request.url).protocol.replace(':', ''));
 
   return headers;
 }

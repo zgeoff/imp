@@ -1,12 +1,16 @@
 import type { Imp } from '@imp/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
+import type { HttpsConfig } from '../https/https-config';
 import { countSessions } from '../sessions/count-sessions';
 import { readBootStatus } from './boot-status';
 import type { ImpContext } from './imp-context';
 
 export interface ImpUrls {
   readonly local: string;
+
+  // https://<name>.<domain> when IMP_DOMAIN is set
+  readonly https: string | null;
   readonly tailnet: string | null;
 }
 
@@ -85,9 +89,10 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
     },
     readUrls: async (imp) => {
       const local = buildLocalUrl(imp.name);
+      const https = buildHttpsUrl(imp.name, context.config.https);
 
       if (context.config.tailscaleAuthKey === null) {
-        return { local, tailnet: null };
+        return { local, https, tailnet: null };
       }
 
       const live =
@@ -96,7 +101,17 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       const host = live ?? context.config.tailscaleHostname;
       const port = context.findAddress(imp.slot).tailnetPort;
 
-      return { local, tailnet: `http://${host}:${String(port)}` };
+      return { local, https, tailnet: `http://${host}:${String(port)}` };
     },
   };
+}
+
+function buildHttpsUrl(name: string, https: HttpsConfig | null): string | null {
+  if (https === null) {
+    return null;
+  }
+
+  const port = https.httpsPort === 443 ? '' : `:${String(https.httpsPort)}`;
+
+  return `https://${name}.${https.domain}${port}`;
 }

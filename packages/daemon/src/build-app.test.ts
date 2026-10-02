@@ -94,6 +94,34 @@ test('it creates, stops, starts and destroys an imp', async () => {
   expect(ctx.fake.alive.size).toBe(0);
 });
 
+test('it reports the https URL when impd has a domain', async () => {
+  await using plain = await setupTest(TEST_TOKEN);
+
+  await plain.createTestImage('ubuntu');
+  await plain.client.imps.create({ name: 'box' });
+
+  const plainUrls = await plain.client.imps.url({ name: 'box' });
+
+  expect(plainUrls).toEqual({
+    local: 'http://box.imp.localhost:7080',
+    https: null,
+    tailnet: null,
+  });
+
+  await using ctx = await setupTest(TEST_TOKEN, {
+    IMP_DOMAIN: 'imp.example.com',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN: 'unused',
+  });
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.client.imps.create({ name: 'box' });
+
+  const urls = await ctx.client.imps.url({ name: 'box' });
+
+  expect(urls.https).toBe('https://box.imp.example.com');
+});
+
 test('it prefers the configured default image and falls back to ubuntu', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
