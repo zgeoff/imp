@@ -49,7 +49,9 @@ errs low on a busy host. `imp info --json` shows each number.
 The CLI creates on the first host. When that host's governor turns the boot away
 (`RAM_BUDGET_EXCEEDED`), impd removes the imp before it answers, and the CLI tries the next host.
 Any other failure ends placement with that host's error, a lost connection too: the imp may exist
-there. So a placement never leaves two imps.
+there. So a placement never leaves two imps. A failure after the create, in the trust warnings for
+`--net` or the expose for `--public`, says `<imp> was created on <host>; <error>` and exits 1. With
+`--json` the CLI still writes `{ "host", "imp", "error" }`.
 
 A name that a saved host has already ends placement before any create, so the name stays unique
 across your hosts and `imp ls --all` stays clear. This check is best effort: a host that does not
@@ -70,8 +72,9 @@ imp ls --all --json   # { "imps": [{ "host": "big-box", … }], "errors": [{ "ho
 ```
 
 `imp ls --all` asks every saved host at once, with 5 s for each. It prints what came back, then one
-line on stderr for each host that failed, `imp: <host>: <error>`. With `--json` it always writes the
-whole object, `errors` included, so a script reads one answer whatever happened.
+line on stderr for each host that failed, `imp: <host>: <error>`. With `--json` it writes the whole
+object, `errors` included, whatever the hosts answered, so a script reads one answer. A usage error
+(exit 2), such as no saved host at all, writes no JSON.
 
 | Exit code | Meaning                                              |
 | --------- | ---------------------------------------------------- |
