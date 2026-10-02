@@ -667,6 +667,16 @@ test('a backup tree mounts read-only clones of the copy, checkpoints and image',
   expect(ctx.fake.readMountedAt(checkpointDir)).toBe(`${ROOT}/staging/bkc-cp-1`);
   expect(ctx.fake.readMountedAt(join(treeDir, 'images', '9f2c'))).toBe(`${ROOT}/staging/bki-9f2c`);
   expect(ctx.fake.readProperty(`${ROOT}/staging/bk-a`, 'readonly')).toBe('on');
+
+  for (const dir of [
+    join(treeDir, 'imps', 'a', 'disk'),
+    checkpointDir,
+    join(treeDir, 'images', '9f2c'),
+  ]) {
+    expect({ dir, isReadOnly: ctx.fake.isReadOnlyAt(dir) }).toEqual({ dir, isReadOnly: true });
+  }
+
+  expect(ctx.fake.isReadOnlyAt(join(ctx.dataDir, 'imps', 'a', 'disk'))).toBeFalse();
   expect(ctx.fake.isDeferred(`${ROOT}/disks/a@bk-r1-a`)).toBeTrue();
 
   await tree.close();

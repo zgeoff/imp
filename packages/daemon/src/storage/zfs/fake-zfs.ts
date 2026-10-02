@@ -43,6 +43,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
   const datasets = new Map<string, FakeDataset>();
   const snapshots = new Map<string, FakeSnapshot>();
   const mounts = new Map<string, string>();
+  const readOnlyDirs = new Set<string>();
 
   const commands: string[] = [];
   const gates: { match: (command: string) => boolean; opened: Promise<void> }[] = [];
@@ -278,9 +279,11 @@ export function createFakeZfs(options: FakeZfsOptions) {
     const [tool = '', verb = '', ...rest] = argv;
     const last = argv.at(-1) ?? '';
 
-    // mount -t zfs <name> <dir>
+    // mount -t zfs [-o ro] <name> <dir>; like a real legacy mount, the
+    // readonly property does not make it read-only
     if (tool === 'mount') {
-      const [, name = '', dir = ''] = rest;
+      const name = argv.at(-2) ?? '';
+      const dir = last;
 
       if (!datasets.has(name)) {
         return buildFailure(`mount: ${dir}: ${name} does not exist`);
@@ -292,10 +295,16 @@ export function createFakeZfs(options: FakeZfsOptions) {
 
       mounts.set(dir, name);
 
+      if (rest.includes('ro')) {
+        readOnlyDirs.add(dir);
+      }
+
       return buildSuccess();
     }
 
     if (tool === 'umount') {
+      readOnlyDirs.delete(verb);
+
       if (!mounts.delete(verb)) {
         return buildFailure(`umount: ${verb}: not mounted.`);
       }
@@ -409,7 +418,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       [...mounts.entries()]
         .map(
           ([dir, name]) =>
-            `${name} ${dir.replaceAll(' ', String.raw`\040`)} zfs rw,noatime,xattr,noacl 0 0\n`,
+            `${name} ${dir.replaceAll(' ', String.raw`\040`)} zfs ${readOnlyDirs.has(dir) ? 'ro' : 'rw'},noatime,xattr,noacl 0 0\n`,
         )
         .join(''),
 
@@ -439,5 +448,6 @@ export function createFakeZfs(options: FakeZfsOptions) {
     readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,
+    isReadOnlyAt: (dir: string) => readOnlyDirs.has(dir),
   };
 }

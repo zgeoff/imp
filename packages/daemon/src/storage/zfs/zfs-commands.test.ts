@@ -90,6 +90,7 @@ test('it runs each operation as one exact command', async () => {
   await zfs.destroyDeferred('tank/imp/disks/b@cp-abc234');
   await zfs.mount('tank/imp/disks/b', '/var/lib/imp/imps/b/disk');
   await zfs.unmount('/var/lib/imp/imps/b/disk');
+  await zfs.mount('tank/imp/staging/bk-b', '/var/lib/imp/backup/tree/b', { isReadOnly: true });
 
   expect(recorder.argvs).toEqual([
     'zfs create -o recordsize=16K tank/imp/disks',
@@ -101,6 +102,7 @@ test('it runs each operation as one exact command', async () => {
     'zfs destroy -d tank/imp/disks/b@cp-abc234',
     'mount -t zfs tank/imp/disks/b /var/lib/imp/imps/b/disk',
     'umount /var/lib/imp/imps/b/disk',
+    'mount -t zfs -o ro tank/imp/staging/bk-b /var/lib/imp/backup/tree/b',
   ]);
 });
 

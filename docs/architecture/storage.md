@@ -184,7 +184,8 @@ On start, impd settles what a crash cut short, then drops what the database does
 
 Off-host backups use restic, not `zfs send` ([backups](./backups.md#why-restic-not-zfs-send)). A run
 snapshots each disk as `@bk-<run>-<imp>` and mounts read-only clones of it, of each checkpoint and
-of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)).
+of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)). The clones have
+`readonly=on` and mount with `-o ro`: a legacy mount ignores the property.
 
 ## Images: any OCI image
 

@@ -96,7 +96,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
   const listAll = () => zfs.list(deps.root);
 
-  const setupMount = async (name: string, dir: string): Promise<void> => {
+  const setupMount = async (name: string, dir: string, isReadOnly = false): Promise<void> => {
     const mounted = parseZfsMounts(readMounts()).get(dir);
 
     if (mounted === name) {
@@ -109,7 +109,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
     mkdirSync(dir, { recursive: true });
 
-    await zfs.mount(name, dir);
+    await zfs.mount(name, dir, { isReadOnly });
   };
 
   const removeMount = async (dir: string): Promise<void> => {
@@ -650,7 +650,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
         clones.push({ name, dir });
 
-        await setupMount(name, dir);
+        await setupMount(name, dir, true);
       };
 
       const createTreeClones = async () => {

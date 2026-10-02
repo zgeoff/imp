@@ -14,6 +14,10 @@ export interface ZfsEntry {
   readonly deferDestroy: boolean;
 }
 
+interface MountOptions {
+  readonly isReadOnly: boolean;
+}
+
 export interface ZfsCommands {
   // every filesystem and snapshot under `root`, oldest first
   readonly list: (root: string) => Promise<ZfsEntry[]>;
@@ -36,8 +40,9 @@ export interface ZfsCommands {
   // the userland version, such as 2.2.2-0ubuntu9
   readonly readVersion: () => Promise<string>;
 
-  // legacy mountpoints: impd mounts every dataset itself
-  readonly mount: (name: string, dir: string) => Promise<void>;
+  // legacy mountpoints: impd mounts every dataset itself. A legacy mount
+  // ignores the readonly property, so a read-only mount says so itself.
+  readonly mount: (name: string, dir: string, options?: MountOptions) => Promise<void>;
   readonly unmount: (dir: string) => Promise<void>;
 }
 
@@ -104,7 +109,15 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
 
       return parseZfsVersion(stdout);
     },
-    mount: (name, dir) => runQuiet(['mount', '-t', 'zfs', name, dir]),
+    mount: (name, dir, options) =>
+      runQuiet([
+        'mount',
+        '-t',
+        'zfs',
+        ...(options?.isReadOnly === true ? ['-o', 'ro'] : []),
+        name,
+        dir,
+      ]),
     unmount: (dir) => runQuiet(['umount', dir]),
   };
 }
