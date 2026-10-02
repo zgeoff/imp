@@ -316,7 +316,7 @@ ExecStartPre=-/usr/bin/docker rm -f imp-host
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
-  --init --privileged --device /dev/kvm \
+  --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \
   -v /var/lib/imp:/var/lib/imp \
   -v /var/run/docker.sock:/var/run/docker.sock \

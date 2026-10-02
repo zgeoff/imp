@@ -19,6 +19,8 @@ services:
     hostname: imp-host
     init: true
     privileged: true
+    # each imp's Firecracker gets its own cgroup for CPU limits
+    cgroup: private
     devices:
       - /dev/kvm
     env_file:
