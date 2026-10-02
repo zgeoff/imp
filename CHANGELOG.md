@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.1](https://github.com/zgeoff/imp/compare/v0.1.0...v0.1.1) (2026-10-02)
+
+### Bug Fixes
+
+- **daemon:** pick again after each governor sleep
+  ([bf8481b](https://github.com/zgeoff/imp/commit/bf8481b7a19b8856a43af20c5b2c957e27af1ded))
+- pick again after each governor sleep
+  ([dc8a01c](https://github.com/zgeoff/imp/commit/dc8a01c0d615b7a73a3dc368b6ca71459fd3465e)), closes
+  [#47](https://github.com/zgeoff/imp/issues/47)
+- **release:** give npm publish a ./ path to the tarball
+  ([7cb1378](https://github.com/zgeoff/imp/commit/7cb13785e4de0aa2247456e7e7266266be9649c0))
+- **storage:** mount zfs backup clones with -o ro
+  ([403f90d](https://github.com/zgeoff/imp/commit/403f90d5f7eac569d2e1749e3d5b0ec2e40cc6cf))
+
 ## 0.1.0 (2026-10-02)
 
 ### Features
