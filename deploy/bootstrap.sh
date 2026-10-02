@@ -495,7 +495,7 @@ preflight() {
   if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
-  if [ -z "$authkey" ]; then
+  if [ -z "$authkey" ] && ! tailnet_joined; then
     warn "no Tailscale key: the host stays local-only (docs/guides/tailscale.md)"
   fi
 }
@@ -841,7 +841,7 @@ ensure_kernel() {
   done <<<$'vm.overcommit_memory 1\nvm.swappiness 1'
   local mod
   for mod in "${mods[@]}"; do
-    [ -d "/sys/module/$mod" ] || change "modprobe $mod" modprobe "$mod"
+    module_present "$mod" || change "modprobe $mod" modprobe "$mod"
   done
   local arc_param=/sys/module/zfs/parameters/zfs_arc_max
   if [ -n "$arc_bytes" ] && [ "$(cat "$arc_param" 2>/dev/null)" != "$arc_bytes" ]; then
@@ -850,6 +850,12 @@ ensure_kernel() {
   local swap
   swap=$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)
   log "swap: ${swap} MiB, left as it is"
+}
+
+# module_present MOD: loaded, or built into the kernel. A built-in module
+# without parameters (tun on Ubuntu 26.04) has no /sys/module entry.
+module_present() {
+  [ -d "/sys/module/$1" ] || grep -q "/$1.ko" "/lib/modules/$(uname -r)/modules.builtin" 2>/dev/null
 }
 
 write_param() { echo "$2" >"$1"; }
