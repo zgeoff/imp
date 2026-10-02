@@ -42,6 +42,7 @@
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
         "citty": "catalog:",
+        "zod": "catalog:",
       },
     },
     "packages/client": {

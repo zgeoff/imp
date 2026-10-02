@@ -3,6 +3,7 @@ import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import {
+  parseImp,
   readInfo,
   readState,
   requireImp,
@@ -24,7 +25,7 @@ test('imp new boots the default image and the first exec answers within the limi
 
   const started = Date.now();
 
-  const out = await runImp('new', name);
+  const out = await runImp('new', name, '--json');
 
   await runInImp(name, 'true');
 
@@ -38,7 +39,10 @@ test('imp new boots the default image and the first exec answers within the limi
   const uname = await runInImp(name, 'uname', '-a');
   const info = await readInfo();
 
-  expect(out.trim()).toBe(`${name} ${row.url}`);
+  const created = parseImp(out);
+
+  expect(created.name).toBe(name);
+  expect(created.url).toBe(row.url);
   expect(row.url).toMatch(new RegExp(`^http://${name}\\.imp\\.localhost:\\d+$`));
   expect(row.state).toBe('running');
   expect(urls.split('\n')[0]).toBe(row.url);

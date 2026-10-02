@@ -11,6 +11,7 @@
     "@imp/api": "workspace:*",
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
-    "citty": "catalog:"
+    "citty": "catalog:",
+    "zod": "catalog:"
   }
 }

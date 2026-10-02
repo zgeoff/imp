@@ -13,18 +13,19 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | `examples/hello/` → `imp/hello` | `imp/base` + a tiny HTTP service on :8080 (the bring-your-own example)   |
 
 ```sh
-imp image build images/base --name base     # tagged imp/base
-imp image build images/dev --name dev       # FROM imp/base
-imp image build images/examples/hello --name hello
+imp image build "$PWD/images/base" --name base     # tagged imp/base
+imp image build "$PWD/images/dev" --name dev       # FROM imp/base
+imp image build "$PWD/images/examples/hello" --name hello
 ```
 
 `imp image build` runs `docker build` on the host Docker and tags the result `imp/<name>`, so later
-images can say `FROM imp/base`. The CLI sends the absolute path of the directory, and impd builds
-from that path, so the directory must exist at the same path in the host container. `scripts/dev.sh`
-mounts the repo at its own path for this; the release image has no repo, so build there with the
-host's Docker and add the result ([install](./install.md#images-on-a-server)). An image you built
-with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
-`--build-arg BASE=...` to stack on another base; use `docker build` for that.
+images can say `FROM imp/base`. The directory is a path on the impd host, not on the machine that
+runs the CLI, so the CLI takes only an absolute path and sends it as it is. impd builds from that
+path, so the directory must exist at that path in the host container. `scripts/dev.sh` mounts the
+repo at its own path for this; the release image has no repo, so build there with the host's Docker
+and add the result ([install](./install.md#images-on-a-server)). An image you built with plain
+`docker build` goes in with `imp image add <ref>`. `images/dev` takes `--build-arg BASE=...` to
+stack on another base; use `docker build` for that.
 
 ## What the guest takes from the image
 
