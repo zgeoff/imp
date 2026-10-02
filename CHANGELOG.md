@@ -2,14 +2,22 @@
 
 ## [0.2.1](https://github.com/zgeoff/imp/compare/v0.2.0...v0.2.1) (2026-10-02)
 
-
 ### Bug Fixes
 
-* **agent:** leave uptime out of ping when the clock read fails ([47fcb71](https://github.com/zgeoff/imp/commit/47fcb71a8d13f4ba1eee7310d1333bea0b51e568)), closes [#33](https://github.com/zgeoff/imp/issues/33)
-* **build:** keep ssh2's optional cpu-features out of the impd binary ([5c654d3](https://github.com/zgeoff/imp/commit/5c654d3c1ab08e3b3babb8acd040161d6b8f4c14))
-* **daemon:** bound the young-guest wait and skip it for the governor ([c655703](https://github.com/zgeoff/imp/commit/c65570307e3c78f181e0a08b008e5f18dcd171d2)), closes [#33](https://github.com/zgeoff/imp/issues/33)
-* **daemon:** wait for a young guest before a sleep ([bfac671](https://github.com/zgeoff/imp/commit/bfac671fda13be038df5feb59fa19f64f7dc22c4)), closes [#33](https://github.com/zgeoff/imp/issues/33)
-* wait for a young guest before a sleep, so its wake is fast ([9c3bc37](https://github.com/zgeoff/imp/commit/9c3bc370c153883df94175700e4e4925386c17cc)), closes [#33](https://github.com/zgeoff/imp/issues/33)
+- **agent:** leave uptime out of ping when the clock read fails
+  ([47fcb71](https://github.com/zgeoff/imp/commit/47fcb71a8d13f4ba1eee7310d1333bea0b51e568)), closes
+  [#33](https://github.com/zgeoff/imp/issues/33)
+- **build:** keep ssh2's optional cpu-features out of the impd binary
+  ([5c654d3](https://github.com/zgeoff/imp/commit/5c654d3c1ab08e3b3babb8acd040161d6b8f4c14))
+- **daemon:** bound the young-guest wait and skip it for the governor
+  ([c655703](https://github.com/zgeoff/imp/commit/c65570307e3c78f181e0a08b008e5f18dcd171d2)), closes
+  [#33](https://github.com/zgeoff/imp/issues/33)
+- **daemon:** wait for a young guest before a sleep
+  ([bfac671](https://github.com/zgeoff/imp/commit/bfac671fda13be038df5feb59fa19f64f7dc22c4)), closes
+  [#33](https://github.com/zgeoff/imp/issues/33)
+- wait for a young guest before a sleep, so its wake is fast
+  ([9c3bc37](https://github.com/zgeoff/imp/commit/9c3bc370c153883df94175700e4e4925386c17cc)), closes
+  [#33](https://github.com/zgeoff/imp/issues/33)
 
 ## [0.2.0](https://github.com/zgeoff/imp/compare/v0.1.1...v0.2.0) (2026-10-02)
 
