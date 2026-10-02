@@ -77,11 +77,13 @@ sends in the header and sets the real value.
 3. **Other hosts.** A `CONNECT` to any other host is a plain TCP tunnel, with no TLS termination and
    no credential. The broker resolves the name once, checks every answer, and dials the address it
    checked, so a DNS rebind cannot swap it. It refuses loopback, private, shared (`100.64/10`, which
-   holds the tailnet), link-local, multicast and reserved ranges, IPv6, and every address of the
-   host container. Without these checks, a tunnel would start inside the host container and reach
-   impd's API, the wake proxy and other imps' ports. The imp's
-   [egress policy](../architecture/networking.md#egress) decides which hosts get a tunnel: `open`
-   any, `box` those its list allows, `none` none. A tighter policy closes the tunnels it denies.
+   holds the tailnet), link-local, multicast and reserved ranges, the
+   [blocked IPv6 ranges](../architecture/networking.md#blocked-ranges), and every address of the
+   host container. It dials IPv6 only when the host gives imps IPv6. Without these checks, a tunnel
+   would start inside the host container and reach impd's API, the wake proxy and other imps' ports.
+   The imp's [egress policy](../architecture/networking.md#egress) decides which hosts get a tunnel:
+   `open` any, `box` those its list allows, `none` none. A tighter policy closes the tunnels it
+   denies.
 4. **The guest's variables.** Every exec in an imp with a grant, and every command, shell and SFTP
    server that the [SSH gateway](./ssh.md) starts, gets `HTTPS_PROXY` and `https_proxy`, `NO_PROXY`
    for loopback, `NODE_USE_ENV_PROXY=1`, and `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,

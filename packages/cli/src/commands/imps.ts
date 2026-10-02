@@ -35,8 +35,7 @@ export const newCommand = defineCommand({
     policy: { type: 'string', description: 'egress policy: open (default), box or none' },
     allow: {
       type: 'string',
-      description:
-        'what a box may reach: hosts, *.domains, IPv4 addresses or CIDRs, comma-separated',
+      description: 'what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated',
     },
     'cpu-limit': cpuLimitArg,
     'cpu-weight': cpuWeightArg,
@@ -222,8 +221,7 @@ export const policyCommand = defineCommand({
     mode: { type: 'positional', description: 'open, box or none', required: false },
     allow: {
       type: 'string',
-      description:
-        'what a box may reach: hosts, *.domains, IPv4 addresses or CIDRs, comma-separated',
+      description: 'what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated',
     },
     json: jsonArg,
   },

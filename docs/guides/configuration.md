@@ -39,6 +39,7 @@ error.
 | `IMP_ZFS_ROOT`                  | none                              | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                                         |
 | `IMP_DNS`                       | `1.1.1.1,8.8.8.8`                 | Guest DNS servers, comma-separated IPv4 addresses; also the egress resolver's upstreams.                                                                    |
 | `IMP_SUBNET`                    | `10.66.0.0/16`                    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535. It must not overlap `100.64.0.0/10`.      |
+| `IMP_SUBNET6`                   | `auto`                            | IPv6: `auto`, a /64 or `off` ([IPv6](../architecture/networking.md#ipv6)). `auto` often means off; a /64 needs a route to the host.                         |
 | `IMP_FIRECRACKER_BIN`           | `firecracker`                     | The Firecracker binary.                                                                                                                                     |
 | `IMP_KERNEL`                    | none                              | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                             |
 | `IMP_SYSTEM_DRIVE`              | none                              | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own.            |
@@ -124,7 +125,7 @@ The host container's scripts in `host/` read these before impd starts.
 | `IMP_STORAGE_GIB`         | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
 | `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
 | `IMP_SUBNET`              | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
-| `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp. Unset: path MTU.                                             |
+| `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp (less 40, or 60 for IPv6). Unset: path MTU.                   |
 | `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: the saved node state, if any, else no tailnet.                                           |
 | `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
 | `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
@@ -169,7 +170,7 @@ With none of them, the dev instance stays off the tailnet. The key reaches Docke
 `-e TAILSCALE_AUTHKEY` with no value, so it never shows in argv, and `bash -x` traces never show it.
 `load_tailscale_authkey` in `scripts/lib.sh` holds the order; the e2e harness uses it too.
 
-`dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route.
+`dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route, unless it is set.
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
@@ -177,7 +178,7 @@ impd tuning passes through an allowlist. When set on your machine, `dev.sh` pass
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_WATCHDOG_TIMEOUT_S`,
 `IMP_WATCHDOG_ACTION`, `IMP_TAILSCALE_HOSTNAME`, `IMP_TAILNET_IDENTITIES`, `IMP_TAILNET_NAMES`,
 `IMP_TAILNET_NAME_PREFIX`, `IMP_BUILD_CONTEXT_MAX_MIB`, `IMP_BROKER_PORT`,
-`IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
+`IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT` and `IMP_SUBNET6` to impd, the `IMP_BACKUP_*`
 variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
 `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`,
 `IMP_PUBLIC_IP`, `IMP_PUBLIC_HTTPS_PORT`, `IMP_PUBLIC_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path

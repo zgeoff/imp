@@ -138,6 +138,11 @@ From the milestone work:
   (`IMP_TAILNET_NAMES=1`), and not tested against a real tailnet: that needs a Tailscale OAuth
   client and tailnet policy entries.
 - The disk usage pass ([#21](https://github.com/zgeoff/imp/issues/21)) is not timed on a large host.
+- IPv6 ([#32](https://github.com/zgeoff/imp/issues/32)) is tested on the dev box only, on Docker
+  IPv6 networks: the `ipv6` suite (about 85 s) covers NAT66, a routed /64, the policies,
+  packet-too-big from a router beyond the host, and a guest's router advertisement. It has not run
+  on a host with a real global IPv6 route or a /64 routed by a provider. The resolver's AAAA answers
+  have unit tests only, as the dev container has no route to public IPv6.
 
 ## Notes
 

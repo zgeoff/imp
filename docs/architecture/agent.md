@@ -13,9 +13,10 @@ the filesystems, sets up the network, supervises services, reaps zombies, and se
   for the dev instance: the same bytes either way.
 
 The kernel command line is `root=/dev/vdb rootfstype=squashfs ro init=/imp-agent`, plus `imp.*`
-parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`, and
+parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`;
 `imp.reset_identity=1` on the first boot of an imp made from a
-[template](../guides/templates.md#identity).
+[template](../guides/templates.md#identity); and with IPv6, `imp.ip6` and `imp.gw6`
+([IPv6](./networking.md#ipv6)), which an older agent ignores.
 
 ## Boot
 
@@ -32,6 +33,8 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 
 1. Mount cgroup2, `/dev/pts` and `/dev/shm`.
 2. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
+   With `imp.ip6`, turn off router advertisements and redirects on `eth0`, add the address with no
+   duplicate address detection, and add a default route via `imp.gw6`.
 3. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
 4. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
 5. Make the [exec cgroup](#exec-cgroups) parent, and listen on vsock port 1024.

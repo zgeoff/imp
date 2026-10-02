@@ -1,9 +1,9 @@
 # Networking
 
-Every imp gets its own tap device and its own /30, routed through the host container. No two imps
-share a layer-2 network, so they cannot see each other. The wake proxy gives each imp an HTTP URL on
-the host and on the tailnet, and an HTTPS URL on your own domain when one is set. The credential
-broker listens on every imp's gateway.
+Every imp gets its own tap device and its own /30, routed through the host container, and an IPv6
+/128 when the host has IPv6 ([IPv6](#ipv6)). No two imps share a layer-2 network, so they cannot see
+each other. The wake proxy gives each imp an HTTP URL on the host and on the tailnet, and an HTTPS
+URL on your own domain when one is set. The credential broker listens on every imp's gateway.
 
 ## Addressing
 
@@ -13,6 +13,8 @@ broker listens on every imp's gateway.
 - An imp keeps its slot for its whole life, so the tap name and the IP survive a sleep and a
   restore. A container restart removes the taps; a wake creates the tap again before it loads the
   snapshot.
+- With IPv6, each imp also gets a /128 in the host's /64, and its gateway is `fe80::1`
+  ([IPv6](#ipv6)).
 - Guest DNS: `IMP_DNS` (default `1.1.1.1,8.8.8.8`), passed on the kernel command line. A `box` or
   `none` imp's queries go to impd's resolver whatever the guest asks ([Egress](#egress)).
 
@@ -39,32 +41,37 @@ container's own network namespace and never touch the host's.
   same for `fd7a:115c:a1e0::/48` with ip6tables: only `tailscale0` brings in Tailscale's ranges, so
   a [tailnet identity](../guides/tokens.md#tailnet-identity) names the real peer. A connection to
   the node's own address comes from a local address and stays.
-- `ip6tables INPUT -i imp+` drops everything. The taps get IPv6 link-local addresses, and impd's API
-  and proxy listen on IPv6 too; without this rule a guest reaches them over its tap.
+- `ip6tables INPUT -i imp+` drops everything but router solicitations and neighbour solicitations
+  and advertisements with a hop limit of 255. The taps have IPv6 addresses, and impd's API and proxy
+  listen on IPv6 too; without this rule a guest reaches them over its tap. A guest's router
+  advertisement or redirect is dropped here, and the taps ignore both anyway ([IPv6](#ipv6)).
+- `ip6tables FORWARD`: no imp-to-imp traffic; a tap may send out of the container's IPv6 default
+  route; to a tap, only replies and related ICMPv6, such as packet-too-big. Anything else to or from
+  a tap is dropped. The `raw` rpfilter rule is set for IPv6 as well.
 - The egress resolver's port, `IMP_EGRESS_DNS_PORT` (default 7053), is accepted from the taps over
   UDP and TCP and dropped in `raw PREROUTING` from anywhere else, as the broker's is. The rules
   carry the comment `imp-egress-dns`.
-- The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
-  smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
-  records stall.
+- The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`): less 40 for
+  IPv4, less 60 for IPv6. Behind a smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never
+  reaches the guests, and large TLS records stall.
 
 ## Egress
 
 Each imp has an egress policy: what it may reach directly, past the host container.
 
-| Policy | The imp reaches                                                                        |
-| ------ | -------------------------------------------------------------------------------------- |
-| `open` | anything but `169.254.0.0/16` (metadata services) and `100.64.0.0/10` (the tailnet)    |
-| `box`  | the addresses its allow-list's names resolve to, and the address ranges the list names |
-| `none` | nothing                                                                                |
+| Policy | The imp reaches                                                                                                            |
+| ------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `open` | anything but `169.254.0.0/16` (metadata services), `100.64.0.0/10` (the tailnet), and the IPv6 ranges [IPv6](#ipv6) blocks |
+| `box`  | the addresses its allow-list's names resolve to, and the address ranges the list names                                     |
+| `none` | nothing                                                                                                                    |
 
 Hosts a [grant](../guides/connectors.md) covers stay reachable under every policy, through the
 credential broker: it dials them from the host container, which this firewall does not filter.
 `open` is the default. `imp new --policy box --allow github.com,*.npmjs.org` sets one at create, and
 `imp policy <name> box --allow …`, `open` or `none` changes it; `imp policy <name>` shows it. An
 allow entry is a hostname, `*.` and a hostname for every name under it (not the name itself), or an
-IPv4 address or CIDR, the only way a box reaches a private address. A fork and a backup restore
-carry the policy.
+IPv4 or IPv6 address or CIDR (IPv6 from /16 to /128), the only way a box reaches a private address.
+A fork and a backup restore carry the policy.
 
 ### The firewall
 
@@ -74,14 +81,14 @@ Its `forward` chain runs before iptables' FORWARD and only drops and rejects, so
 still accept what it lets through.
 
 - A verdict map sends each tap (`imp<slot>`) to its slot's chain. A tap with no entry is refused.
-- Each slot chain drops any source but the guest's own address: rpfilter passes the other addresses
-  of the guest's /30.
+- Each slot chain drops any source but the guest's own addresses, IPv4 and IPv6: rpfilter passes the
+  other addresses of the guest's /30. An imp with no IPv6 address drops all IPv6.
 - A `box` chain drops `ct state invalid`, lets established flows through, then accepts the list's
   ranges, refuses every range the broker refuses (`REFUSED_RANGES`) and `IMP_SUBNET`, and accepts
-  the addresses in its set. Anything else is refused.
+  the addresses in its set. Anything else is refused. IPv6 follows the same order: the list's
+  ranges, then the blocked IPv6 ranges, then the addresses in its IPv6 set.
 - A refusal is a TCP reset, or ICMP admin-prohibited for anything else. A reset ends a live
   connection at once; ICMP alone leaves it retrying.
-- IPv6 from a tap is refused: guests have no IPv6 route out.
 - impd writes a new imp's chain in the same step as its insert, before its tap comes up, and takes a
   destroyed imp's out before its slot is free. A box or none imp does not boot or wake where nft
   cannot run; impd logs `impd: egress: NO FIREWALL` at start and refuses those policies.
@@ -89,7 +96,9 @@ still accept what it lets through.
 ### The resolver
 
 A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
-address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address.
+address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address. Only
+IPv4 is redirected: the guest's resolv.conf names IPv4 servers, and DNS over IPv6 from a box or none
+imp is refused as any other IPv6 traffic its policy does not allow.
 
 - A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
   leaves the host. A query with more than one question is refused. Each imp has a rate limit; a
@@ -97,8 +106,9 @@ address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the sour
 - Over TCP, each imp may hold 16 connections, and one idle for 10 s is closed.
 - For an allowed name, impd asks `IMP_DNS`, under a fresh random query id, puts the A records on the
   CNAME chain from the name into the imp's set, and only then replies. The chain's names count as
-  allowed for their TTL, for a stub resolver that follows the CNAME itself. AAAA gets an empty
-  answer.
+  allowed for their TTL, for a stub resolver that follows the CNAME itself. AAAA does the same into
+  the imp's IPv6 set when the host has IPv6 ([IPv6](#ipv6)); without it, AAAA gets an empty answer,
+  so the guest uses IPv4.
 - Each address expires at its TTL, clamped to between 5 minutes and a day, and a later answer
   extends it. impd keeps the expiry and a sweep every 30 s deletes what is due: nftables does not
   refresh an element's timeout on a second add before kernel 6.10.
@@ -124,6 +134,75 @@ Known limits:
   construction: their addresses are in no set unless the list names them.
 - A guest that cached a wildcard name's address before an impd restart reaches it again only after
   it asks again: at most 5 minutes.
+
+## IPv6
+
+`IMP_SUBNET6` sets what IPv6 imps get. impd decides once, at start, and logs it as `impd: ipv6: …`.
+
+| `IMP_SUBNET6`    | Imps get                                                                                                                                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto` (default) | A unique local /64 (`fd`, then 40 random bits), kept in `<data>/net/ipv6-ula`, behind NAT66 out of the container's IPv6 default route. With no such route, no IPv6. That is common: see the limits below. |
+| a /64            | That prefix, routed, with no NAT. The network must route the /64 to the host container.                                                                                                                   |
+| `off`            | No IPv6.                                                                                                                                                                                                  |
+
+- An imp's address is the prefix with its IPv4 address as the interface ID: `10.66.0.6` in
+  `fd12:3456:789a::/64` is `fd12:3456:789a::a42:6`. It lasts as long as the slot and the prefix.
+- Every tap has `fe80::1`, with no duplicate address detection, and impd routes the imp's /128 to
+  the tap. The kernel command line carries `imp.ip6=<address>/128 imp.gw6=fe80::1`. The agent adds
+  the address and a default route via `fe80::1`, and turns off router advertisements and redirects
+  on `eth0`. An older agent ignores both parameters, and the imp has IPv4 only.
+- NAT66 is impd's table `ip6 imp_nat66`: it masquerades the prefix out of the uplink.
+- Packet-too-big from beyond the host reaches the guest as related traffic, so path MTU discovery
+  works. The MSS clamp covers TCP behind a smaller-MTU uplink.
+
+### Router advertisements
+
+A guest on a tap could send router advertisements or redirects, and the host container, which
+forwards, could take one as its route out. Nothing a guest sends changes the container's routes:
+
+- `setup-net.sh` sets `accept_ra=2` on the uplink only, so it keeps its own default route with
+  forwarding on. The defaults get `accept_ra=0` and `accept_redirects=0`, and impd sets both on each
+  tap before it comes up.
+- `ip6tables INPUT` accepts only router solicitations and neighbour solicitations and advertisements
+  from the taps, with a hop limit of 255. Everything else is dropped.
+
+### Blocked ranges
+
+The `open` and `box` chains refuse these, and the credential broker never dials them:
+
+| Range                              | Why                                                                                       |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `fc00::/7`                         | Unique local: private networks, the imps' own `auto` prefix among them.                   |
+| `fe80::/10`                        | Link-local: the taps and the container's own links.                                       |
+| `ff00::/8`                         | Multicast.                                                                                |
+| `::/128`, `::1/128`                | Unspecified and loopback.                                                                 |
+| `::ffff:0:0/96`                    | IPv4-mapped: an IPv4 address in IPv6 form would pass the IPv4 checks.                     |
+| `64:ff9b::/96`, `64:ff9b:1::/48`   | NAT64: a translator on the path would reach private IPv4 addresses.                       |
+| `2002::/16`                        | 6to4: the address holds an IPv4 address, which a relay reaches.                           |
+| `2001::/32`                        | Teredo: the same.                                                                         |
+| the imps' prefix                   | Other imps.                                                                               |
+| the container's connected prefixes | The host's own networks, such as its Docker network. impd reads them at each table build. |
+
+The broker reads the connected prefixes every 30 s. It dials an IPv4-mapped answer as its IPv4
+address, under the IPv4 checks.
+
+### A new prefix
+
+A snapshot holds the prefix it was made under. When the host's prefix changes, or IPv6 goes off, the
+imp boots cold on its next wake, with the reason `the IPv6 prefix changed (<old> → <new>)`. An imp
+that booted with no IPv6 wakes as it was; while the host has a prefix, `imp info` and the dashboard
+note `no IPv6 until its next cold boot` for it.
+
+Known limits:
+
+- `auto` often means off. Docker networks are IPv4 only unless made with `--ipv6`, and the default
+  bridge is one of them. impd logs
+  `impd: ipv6: off (IMP_SUBNET6=auto, and the container has no IPv6 default route)`.
+- A routed /64 needs a route to it on the network:
+  `ip -6 route add <prefix> via <container address>`. The container's address can change when it is
+  made again.
+- Behind NAT66, every imp shares the container's address to the outside.
+- There is no SLAAC or DHCPv6, and one address per imp.
 
 ## The wake proxy
 
@@ -153,9 +232,10 @@ next request.
 Guests reach the broker on their gateway at `IMP_BROKER_PORT` (default 7081), through `HTTPS_PROXY`.
 It takes `CONNECT` only. A granted host goes to a TLS terminator that adds the credential; any other
 host gets a plain tunnel to a checked public address. A tunnel starts inside the host container,
-past the `INPUT` drop, so it refuses every private, shared, loopback and link-local range, IPv6, and
-the container's own addresses. The broker also drops a guest that dials another imp's gateway. The
-[connectors guide](../guides/connectors.md) has the whole design.
+past the `INPUT` drop, so it refuses every private, shared, loopback and link-local range, the
+blocked IPv6 ranges ([IPv6](#ipv6)), and the container's own addresses. It dials IPv6 only when the
+host gives imps IPv6, IPv4 answers first. The broker also drops a guest that dials another imp's
+gateway. The [connectors guide](../guides/connectors.md) has the whole design.
 
 ## The SSH gateway
 
