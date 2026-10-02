@@ -13,6 +13,8 @@ Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+# With XFS, /var/lib/imp is a host mount; never start before it is there.
+RequiresMountsFor=/var/lib/imp
 
 [Service]
 Type=exec

@@ -5,6 +5,7 @@
 #   bootstrap.sh --yes --data-device /dev/nvme1n1
 #   bootstrap.sh --yes --loop-file /srv/imp.xfs --loop-size 400
 #   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 1 if a run would change anything
+#   bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1
 #
 # Phases, in order: preflight, packages, storage, kernel, firewall, imp,
 # health. Each phase compares the host with what it wants and changes only
@@ -29,12 +30,18 @@ Modes (one):
   --dry-run                   print the changes, make none
   --check                     like --dry-run; exit 1 if any change is pending
 
-Storage (one):
-  --data-device DEV           an empty disk or partition for /var/lib/imp; it gets
-                              XFS with reflink. A device with any other
-                              signature, partitions or mounts is refused.
-  --loop-file PATH            a sparse XFS file on the root filesystem instead
+Storage:
+  --storage xfs|zfs           the backend (default: the env file's, else xfs)
+  --data-device DEV           an empty disk or partition for imp: XFS with
+                              reflink on /var/lib/imp, or a ZFS pool. A device
+                              with another signature, partitions or mounts is
+                              refused.
+  --loop-file PATH            XFS only: a sparse XFS file on the root
+                              filesystem instead of a device
   --loop-size GIB             its apparent size (default 200)
+  --zfs-pool NAME             ZFS only: the pool (default tank). It is created
+                              on --data-device, or must exist already; imp
+                              gets the dataset NAME/imp.
 
 Options:
   --image REF                 host image (default ghcr.io/zgeoff/imp-host:latest)
@@ -58,6 +65,9 @@ readonly TEMPLATE_BUDGET_MIB=16384
 readonly LOOP_MIN_FREE_GIB=20
 
 mode=
+storage=
+zfs_pool=
+zfs_root=
 data_device=
 loop_file=
 loop_size_gib=200
@@ -124,13 +134,24 @@ version_ge() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$2" ]
 }
 
-# ram_budget_mib MEMTOTAL_KIB: the RAM awake imps may use. The host keeps
-# the larger of 8 GiB and 15 % for itself, Docker, impd and the page cache.
+# ram_budget_mib MEMTOTAL_KIB [ARC_MIB]: the RAM awake imps may use. The
+# host keeps the larger of 8 GiB and 15 % for itself, Docker, impd and the
+# page cache, and with ZFS also the ARC's cap.
 ram_budget_mib() {
-  local total=$(($1 / 1024)) reserve
+  local total=$(($1 / 1024)) arc=${2:-0} reserve
   reserve=$((total * 15 / 100))
   [ "$reserve" -lt 8192 ] && reserve=8192
-  echo $((total - reserve))
+  echo $((total - reserve - arc))
+}
+
+# zfs_arc_max_mib MEMTOTAL_KIB: the cap on the ZFS ARC, 10 % of RAM within
+# 1 to 8 GiB. Uncapped, the ARC grows to half of RAM, and the governor does
+# not see what it takes from the guests.
+zfs_arc_max_mib() {
+  local arc=$(($1 / 1024 / 10))
+  [ "$arc" -lt 1024 ] && arc=1024
+  [ "$arc" -gt 8192 ] && arc=8192
+  echo "$arc"
 }
 
 # mkfs_xfs_opts KERNEL XFSPROGS: the mkfs.xfs options for an XFS this kernel
@@ -203,20 +224,24 @@ table inet imp_host {
 EOF
 }
 
-# render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET: imp-host.env with
-# bootstrap's keys set. EXISTING (empty when there is no file) wins over
-# TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE is set when
-# IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB when it is
-# empty or still the template's. TAILSCALE_AUTHKEY comes from the
+# render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT:
+# imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
+# file) wins over TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE
+# is set when IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB
+# when it is empty or still the template's, IMP_STORAGE_BACKEND always, and
+# IMP_ZFS_ROOT when ZFS_ROOT is non-empty. TAILSCALE_AUTHKEY comes from the
 # environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
 # non-empty.
 render_env() {
   local base=$1 template=$2 budget=$3 img=$4 img_set=$5
   [ -z "$base" ] && base=$template && img_set=1
   BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
+    STORAGE=$6 ZFS_ROOT=$7 \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
       /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
+      /^IMP_STORAGE_BACKEND=/ { set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"]); next }
+      /^IMP_ZFS_ROOT=/ && ENVIRON["ZFS_ROOT"] != "" { set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"]); next }
       /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
         set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
       }
@@ -230,6 +255,8 @@ render_env() {
         if (!done["IMP_HOST_IMAGE"] && ENVIRON["IMG_SET"] != "") set("IMP_HOST_IMAGE", ENVIRON["IMG"])
         if (!done["TAILSCALE_AUTHKEY"] && ENVIRON["BOOTSTRAP_AUTHKEY"] != "") set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"])
         if (!done["IMP_RAM_BUDGET_MIB"]) set("IMP_RAM_BUDGET_MIB", ENVIRON["BUDGET"])
+        if (!done["IMP_STORAGE_BACKEND"]) set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"])
+        if (!done["IMP_ZFS_ROOT"] && ENVIRON["ZFS_ROOT"] != "") set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"])
       }
     ' <<<"$base"
 }
@@ -244,6 +271,7 @@ unit_imp_host() {
 #   install -m 0644 deploy/imp-host.service /etc/systemd/system/
 #   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
 #   systemctl daemon-reload && systemctl enable --now imp-host
+#   deploy/upgrade.sh   to a new image
 #
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
 [Unit]
@@ -252,6 +280,8 @@ Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+# With XFS, /var/lib/imp is a host mount; never start before it is there.
+RequiresMountsFor=/var/lib/imp
 
 [Service]
 Type=exec
@@ -306,8 +336,26 @@ IMP_DEFAULT_IMAGE=base
 IMP_DEFAULT_VCPUS=2
 IMP_DEFAULT_MEMORY_MIB=2048
 
+# Where disks live: xfs (a reflink XFS mount at /var/lib/imp) or zfs. With
+# zfs, IMP_ZFS_ROOT is a dataset with mountpoint=legacy that the container
+# mounts itself (docs/architecture/storage.md#zfs). The host's zfs module must
+# be OpenZFS 2.x; impd warns when its minor version differs from the image's.
+IMP_STORAGE_BACKEND=xfs
+IMP_ZFS_ROOT=
+
 # Set when the uplink MTU is below 1500, so guest TCP is clamped to match.
 IMP_UPLINK_MTU=
+EOF
+}
+
+# The pool imports at boot (zfs-import-cache.service); the container needs
+# it and /dev/zfs before it starts.
+unit_imp_host_zfs() {
+  cat <<'EOF'
+# Written by deploy/bootstrap.sh: import the ZFS pool before imp starts.
+[Unit]
+Wants=zfs.target
+After=zfs.target
 EOF
 }
 
@@ -343,6 +391,8 @@ parse_args() {
         [ -n "$mode" ] && die "give one of --yes, --dry-run and --check"
         mode=${1#--}
         ;;
+      --storage) storage=${2:?--storage needs xfs or zfs} && shift ;;
+      --zfs-pool) zfs_pool=${2:?--zfs-pool needs a name} && shift ;;
       --data-device) data_device=${2:?--data-device needs a device} && shift ;;
       --loop-file) loop_file=${2:?--loop-file needs a path} && shift ;;
       --loop-size) loop_size_gib=${2:?--loop-size needs GiB} && shift ;;
@@ -365,6 +415,10 @@ parse_args() {
     die "give --data-device or --loop-file, not both"
   fi
   [[ $loop_size_gib =~ ^[1-9][0-9]*$ ]] || die "--loop-size must be a whole number of GiB"
+  case ${storage:-xfs} in xfs | zfs) ;; *) die "--storage must be xfs or zfs" ;; esac
+  if [ -n "$zfs_pool" ] && ! [[ $zfs_pool =~ ^[A-Za-z][A-Za-z0-9_.:-]*$ ]]; then
+    die "--zfs-pool must be a pool name: $zfs_pool"
+  fi
   local port
   for port in "${extra_ssh_ports[@]}"; do
     [[ $port =~ ^[1-9][0-9]*$ ]] || die "--ssh-port must be a port number: $port"
@@ -395,11 +449,41 @@ preflight() {
   [ -c /dev/kvm ] || die "/dev/kvm is missing; enable VT-x/AMD-V in the firmware"
   grep -qwE 'vmx|svm' /proc/cpuinfo || die "the CPU reports neither vmx nor svm"
 
-  if [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
+  resolve_storage
+  if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
   if [ -z "$authkey" ]; then
     warn "no Tailscale key: the host stays local-only (docs/guides/tailscale.md)"
+  fi
+}
+
+# resolve_storage: the backend and the ZFS dataset, from the flags, else
+# the env file, so a later run without --storage keeps what the first chose.
+resolve_storage() {
+  local env_storage="" env_root=""
+  if [ -f "$ENV_FILE" ]; then
+    env_storage=$(sed -n 's/^IMP_STORAGE_BACKEND=//p' "$ENV_FILE" | tail -n 1)
+    env_root=$(sed -n 's/^IMP_ZFS_ROOT=//p' "$ENV_FILE" | tail -n 1)
+  fi
+  storage=${storage:-${env_storage:-xfs}}
+  if [ -n "$env_storage" ] && [ "$storage" != "$env_storage" ]; then
+    die "$ENV_FILE says IMP_STORAGE_BACKEND=$env_storage; switching backends would leave every imp behind"
+  fi
+  log "storage: $storage"
+  [ "$storage" = zfs ] || return 0
+  [ -z "$loop_file" ] || die "--loop-file is XFS only; ZFS needs --data-device or an existing pool"
+  if [ -n "$zfs_pool" ]; then
+    zfs_root=$zfs_pool/imp
+  else
+    zfs_root=${env_root:-tank/imp}
+    zfs_pool=${zfs_root%%/*}
+  fi
+  if [ -n "$env_root" ] && [ "$zfs_root" != "$env_root" ]; then
+    die "$ENV_FILE says IMP_ZFS_ROOT=$env_root, not $zfs_root"
+  fi
+  if mountpoint -q "$DATA_DIR"; then
+    die "$DATA_DIR is a mount on the host; with ZFS the container mounts $zfs_root there itself"
   fi
 }
 
@@ -413,7 +497,37 @@ ensure_packages() {
   if [ ${#missing[@]} -gt 0 ]; then
     change "apt-get install ${missing[*]}" apt_install "${missing[@]}"
   fi
+  [ "$storage" != zfs ] || ensure_zfs_packages
   ensure_docker
+}
+
+# Ubuntu ships the zfs module with its kernel; Debian builds it with DKMS,
+# from contrib.
+ensure_zfs_packages() {
+  # shellcheck source=/dev/null
+  . /etc/os-release
+  local wanted=(zfsutils-linux) pkg missing=()
+  if [ "$ID" = debian ]; then
+    put_file /etc/apt/sources.list.d/imp-contrib.sources 644 "$(debian_contrib_sources)" || true
+    wanted=("linux-headers-$(uname -r)" zfs-dkms zfsutils-linux)
+  fi
+  for pkg in "${wanted[@]}"; do
+    dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    change "apt-get install ${missing[*]}" apt_install "${missing[@]}"
+  fi
+}
+
+debian_contrib_sources() {
+  cat <<'EOF'
+# Written by deploy/bootstrap.sh: contrib, for zfs-dkms and zfsutils-linux.
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: trixie trixie-updates
+Components: contrib
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
 }
 
 # apt_install PKG...: apt's output goes to a log, shown only on failure.
@@ -465,7 +579,10 @@ ensure_service() {
 # Storage backends: xfs now; ZFS (#11) adds storage_zfs and a flag.
 ensure_storage() {
   phase storage
-  storage_xfs
+  case $storage in
+    xfs) storage_xfs ;;
+    zfs) storage_zfs ;;
+  esac
 }
 
 storage_xfs() {
@@ -514,9 +631,8 @@ device_source() {
   if [ -n "$uuid" ]; then echo "UUID=$uuid"; else echo "$1"; fi
 }
 
-# prepare_device DEV: refuse anything that may hold data, then mkfs it. A
-# device that already holds an XFS with reflink is reused (a second run).
-prepare_device() {
+# check_device_free DEV: refuse a device that may hold data in use.
+check_device_free() {
   local dev=$1
   [ -b "$dev" ] || die "$dev is not a block device"
   dev=$(readlink -f "$dev")
@@ -531,6 +647,13 @@ prepare_device() {
   if [ "$(lsblk -n -o PATH "$dev" | wc -l)" -gt 1 ]; then
     die "$dev has partitions or holders (RAID, LVM); give an empty disk or partition"
   fi
+}
+
+# prepare_device DEV: refuse anything that may hold data, then mkfs it. A
+# device that already holds an XFS with reflink is reused (a second run).
+prepare_device() {
+  local dev=$1
+  check_device_free "$dev"
   local fstype
   fstype=$(blkid -p -s TYPE -o value "$dev" 2>/dev/null || true)
   case $fstype in
@@ -544,6 +667,46 @@ prepare_device() {
       ;;
     *) die "$dev holds $fstype; give an empty disk or partition" ;;
   esac
+}
+
+# storage_zfs: the pool (created on --data-device, imported, or already
+# there) and the dataset imp mounts, with mountpoint=legacy. The host never
+# mounts it: the container mounts it on /var/lib/imp, and impd creates the
+# children (docs/architecture/storage.md#zfs).
+storage_zfs() {
+  if command -v zpool >/dev/null && zpool list -H -o name "$zfs_pool" >/dev/null 2>&1; then
+    log "pool $zfs_pool is imported"
+  elif [ -n "$data_device" ]; then
+    check_device_free "$data_device"
+    local fstype
+    fstype=$(blkid -p -s TYPE -o value "$data_device" 2>/dev/null || true)
+    case $fstype in
+      zfs_member)
+        [ "$(blkid -p -s LABEL -o value "$data_device")" = "$zfs_pool" ] \
+          || die "$data_device belongs to another ZFS pool"
+        change "zpool import $zfs_pool" zpool import "$zfs_pool"
+        ;;
+      "")
+        if blkid -p "$data_device" >/dev/null 2>&1; then
+          die "$data_device carries a signature (a partition table?); wipe it by hand if it is free"
+        fi
+        change "zpool create $zfs_pool on $data_device" zpool create -o ashift=12 \
+          -O compression=lz4 -O atime=off -O xattr=sa -O mountpoint=none "$zfs_pool" "$data_device"
+        ;;
+      *) die "$data_device holds $fstype; give an empty disk or partition" ;;
+    esac
+  else
+    die "no pool $zfs_pool; give --data-device DEV to create it"
+  fi
+
+  if ! command -v zfs >/dev/null || ! zfs list -H -o name "$zfs_root" >/dev/null 2>&1; then
+    change "zfs create $zfs_root (mountpoint=legacy)" zfs create -o mountpoint=legacy "$zfs_root"
+  elif [ "$(zfs get -H -o value mountpoint "$zfs_root")" != legacy ]; then
+    change "zfs set mountpoint=legacy $zfs_root" zfs set mountpoint=legacy "$zfs_root"
+  else
+    log "dataset $zfs_root is there, mountpoint=legacy"
+  fi
+  [ -d "$DATA_DIR" ] || change "mkdir $DATA_DIR" mkdir -p "$DATA_DIR"
 }
 
 prepare_loop_file() {
@@ -596,9 +759,17 @@ append_line() { printf '%s\n' "$2" >>"$1"; }
 ensure_kernel() {
   phase kernel
   local sysctls=$'# Written by deploy/bootstrap.sh.\n# Guests are sized past RAM by design: the governor sleeps imps to keep the\n# awake ones under IMP_RAM_BUDGET_MIB, so large sparse maps must not fail.\nvm.overcommit_memory = 1\n# Keep guest memory in RAM. Swap stays as the installer made it, but the\n# governor measures RAM per VM, and swapped guest pages would hide from it.\nvm.swappiness = 1'
-  local modules=$'# Written by deploy/bootstrap.sh.\nkvm\ntun\nloop'
+  local mods=(kvm tun loop)
+  [ "$storage" = zfs ] && mods+=(zfs)
   put_file /etc/sysctl.d/90-imp.conf 644 "$sysctls" || true
-  put_file /etc/modules-load.d/imp.conf 644 "$modules" || true
+  put_file /etc/modules-load.d/imp.conf 644 \
+    "$(echo '# Written by deploy/bootstrap.sh.' && printf '%s\n' "${mods[@]}")" || true
+  local arc_bytes=""
+  if [ "$storage" = zfs ]; then
+    arc_bytes=$(($(zfs_arc_max_mib "$(memtotal_kib)") * 1024 * 1024))
+    put_file /etc/modprobe.d/imp-zfs.conf 644 \
+      "$(printf '# Written by deploy/bootstrap.sh: the ARC cap that the RAM budget leaves room for.\noptions zfs zfs_arc_max=%s' "$arc_bytes")" || true
+  fi
 
   if [ -n "$in_container" ]; then
     log "container: not applying sysctls or loading modules (they are global to the kernel)"
@@ -609,13 +780,21 @@ ensure_kernel() {
     [ "$(sysctl -n "$key")" = "$want" ] || change "sysctl $key=$want" sysctl -qw "$key=$want"
   done <<<$'vm.overcommit_memory 1\nvm.swappiness 1'
   local mod
-  for mod in kvm tun loop; do
+  for mod in "${mods[@]}"; do
     [ -d "/sys/module/$mod" ] || change "modprobe $mod" modprobe "$mod"
   done
+  local arc_param=/sys/module/zfs/parameters/zfs_arc_max
+  if [ -n "$arc_bytes" ] && [ "$(cat "$arc_param" 2>/dev/null)" != "$arc_bytes" ]; then
+    change "set zfs_arc_max to $arc_bytes" write_param "$arc_param" "$arc_bytes"
+  fi
   local swap
   swap=$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)
   log "swap: ${swap} MiB, left as it is"
 }
+
+write_param() { echo "$2" >"$1"; }
+
+memtotal_kib() { awk '/^MemTotal:/ { print $2 }' /proc/meminfo; }
 
 ensure_firewall() {
   phase firewall
@@ -684,16 +863,21 @@ reload_unit() {
 
 ensure_imp() {
   phase imp
-  local existing="" memtotal budget
+  local existing="" memtotal arc=0 budget
   [ -f "$ENV_FILE" ] && existing=$(cat "$ENV_FILE")
-  memtotal=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
-  budget=$(ram_budget_mib "$memtotal")
-  log "RAM: $((memtotal / 1024)) MiB, budget for awake imps ${budget} MiB"
+  memtotal=$(memtotal_kib)
+  [ "$storage" = zfs ] && arc=$(zfs_arc_max_mib "$memtotal")
+  budget=$(ram_budget_mib "$memtotal" "$arc")
+  log "RAM: $((memtotal / 1024)) MiB, ZFS ARC cap ${arc} MiB, budget for awake imps ${budget} MiB"
 
   local env changed=
-  env=$(BOOTSTRAP_AUTHKEY=$authkey render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set")
+  env=$(BOOTSTRAP_AUTHKEY=$authkey render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
+    "$storage" "$zfs_root")
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
+  if [ "$storage" = zfs ]; then
+    put_file /etc/systemd/system/imp-host.service.d/zfs.conf 644 "$(unit_imp_host_zfs)" && changed=1
+  fi
 
   # The image the unit runs: the env file's, which an operator may pin.
   local run_image

@@ -45,6 +45,15 @@ test('it keeps the larger of 8 GiB and 15 % of RAM for the host', () => {
   expect(runFunction('ram_budget_mib', [String(128 * 1024 * 1024)]).trim()).toBe('111412');
 });
 
+test('with zfs it caps the ARC at 10 % within 1 to 8 GiB and keeps that out of the budget', () => {
+  const kib64 = String(64_000 * 1024);
+
+  expect(runFunction('zfs_arc_max_mib', [kib64]).trim()).toBe('6400');
+  expect(runFunction('zfs_arc_max_mib', [String(8 * 1024 * 1024)]).trim()).toBe('1024');
+  expect(runFunction('zfs_arc_max_mib', [String(256 * 1024 * 1024)]).trim()).toBe('8192');
+  expect(runFunction('ram_budget_mib', [kib64, '6400']).trim()).toBe('48000');
+});
+
 function getMkfsOptions(kernel: string, progs: string): string {
   return runFunction('mkfs_xfs_opts', [kernel, progs]).trim();
 }
@@ -127,24 +136,27 @@ function normalizeTrailingNewlines(text: string): string {
   return text.replace(/\n+$/, '');
 }
 
-function renderEnv(
-  existing: string,
-  budget: string,
-  image: string,
-  imageSet: string,
-  key = '',
-): string {
+interface EnvInput {
+  readonly existing: string;
+  readonly image?: string;
+  readonly imageSet?: boolean;
+  readonly key?: string;
+  readonly storage?: string;
+  readonly zfsRoot?: string;
+}
+
+function renderEnv(input: EnvInput): string {
   const args = [
-    normalizeTrailingNewlines(existing),
+    normalizeTrailingNewlines(input.existing),
     normalizeTrailingNewlines(template),
-    budget,
-    image,
-    imageSet,
+    '54400',
+    input.image ?? 'ghcr.io/zgeoff/imp-host:latest',
+    input.imageSet === true ? '1' : '',
+    input.storage ?? 'xfs',
+    input.zfsRoot ?? '',
   ];
 
-  return runFunction('render_env', args, {
-    env: { BOOTSTRAP_AUTHKEY: key },
-  });
+  return runFunction('render_env', args, { env: { BOOTSTRAP_AUTHKEY: input.key ?? '' } });
 }
 
 function getEnvValues(env: string, key: string): string[] {
@@ -155,11 +167,13 @@ function getEnvValues(env: string, key: string): string[] {
 }
 
 test('a new env file is the template with the budget, the image and the key', () => {
-  const env = renderEnv('', '54400', 'imp-host:1.2.3', '', 'fake-key-for-tests');
+  const env = renderEnv({ existing: '', image: 'imp-host:1.2.3', key: 'fake-key-for-tests' });
 
   expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB')).toEqual(['54400']);
   expect(getEnvValues(env, 'IMP_HOST_IMAGE')).toEqual(['imp-host:1.2.3']);
   expect(getEnvValues(env, 'TAILSCALE_AUTHKEY')).toEqual(['fake-key-for-tests']);
+  expect(getEnvValues(env, 'IMP_STORAGE_BACKEND')).toEqual(['xfs']);
+  expect(getEnvValues(env, 'IMP_ZFS_ROOT')).toEqual(['']);
   expect(getEnvValues(env, 'IMP_IDLE_TIMEOUT_S')).toEqual(['60']);
 });
 
@@ -170,20 +184,40 @@ test('an existing env file keeps the operator values', () => {
     .replace('TAILSCALE_AUTHKEY=', 'TAILSCALE_AUTHKEY=fake-old-key')
     .replace('IMP_IDLE_TIMEOUT_S=60', 'IMP_IDLE_TIMEOUT_S=300');
 
-  expect(renderEnv(existing, '54400', 'ghcr.io/zgeoff/imp-host:latest', '')).toBe(existing);
+  expect(renderEnv({ existing })).toBe(existing);
 });
 
 test('the template budget is replaced; --image and a new key win', () => {
-  const env = renderEnv(template, '54400', 'imp-host:2.0.0', '1', 'fake-new-key');
+  const env = renderEnv({
+    existing: template,
+    image: 'imp-host:2.0.0',
+    imageSet: true,
+    key: 'fake-new-key',
+  });
 
   expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB')).toEqual(['54400']);
   expect(getEnvValues(env, 'IMP_HOST_IMAGE')).toEqual(['imp-host:2.0.0']);
   expect(getEnvValues(env, 'TAILSCALE_AUTHKEY')).toEqual(['fake-new-key']);
 });
 
-test('missing keys are appended once, and rendering twice changes nothing', () => {
-  const once = renderEnv('IMP_IDLE_TIMEOUT_S=30', '54400', 'imp-host:1', '1');
+test('zfs sets the backend and the dataset', () => {
+  const env = renderEnv({ existing: template, storage: 'zfs', zfsRoot: 'tank/imp' });
 
-  expect(once).toBe('IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\n');
-  expect(renderEnv(once, '54400', 'imp-host:1', '1')).toBe(once);
+  expect(getEnvValues(env, 'IMP_STORAGE_BACKEND')).toEqual(['zfs']);
+  expect(getEnvValues(env, 'IMP_ZFS_ROOT')).toEqual(['tank/imp']);
+  expect(renderEnv({ existing: env, storage: 'zfs', zfsRoot: 'tank/imp' })).toBe(env);
+});
+
+test('missing keys are appended once, and rendering twice changes nothing', () => {
+  const once = renderEnv({
+    existing: 'IMP_IDLE_TIMEOUT_S=30',
+    image: 'imp-host:1',
+    imageSet: true,
+  });
+
+  expect(once).toBe(
+    'IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\nIMP_STORAGE_BACKEND=xfs\n',
+  );
+
+  expect(renderEnv({ existing: once, image: 'imp-host:1', imageSet: true })).toBe(once);
 });
