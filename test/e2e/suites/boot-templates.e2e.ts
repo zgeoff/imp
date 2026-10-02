@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
 import { runImp, runInImp, runShellInImp } from '../lib/imp-cli';
-import { createImp } from '../lib/imps';
+import { createImp, removeImps } from '../lib/imps';
 import { readImpdLogTail, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
+import { writeMetric } from '../lib/write-metric';
 
 // Boot templates (docs/architecture/boot-templates.md): every restored imp
 // must be its own machine. The e2e-ws image carries isn-probe, which prints
@@ -24,6 +25,9 @@ const third = `${prefix}c`;
 // two guests that share the kernel's net_secret print values within a few
 // hundred of each other; isn-probe's own noise is well under this
 const SHARED_SECRET_SPAN = 100_000;
+
+// creates timed one after another, each removed before the next
+const TIMED_CREATES = 10;
 
 function createShaped(name: string, ...args: readonly string[]): Promise<string> {
   return createImp(name, '--image', WS, '--memory', MEMORY_MIB, '--cpus', '1', ...args);
@@ -120,4 +124,72 @@ test('a restored imp sleeps and wakes like any other', async () => {
   const marker = await runInImp(second, 'cat', '/root/marker');
 
   expect(marker.trim()).toBe('kept');
+});
+
+// `name=12ms` pairs from the impd log line that names the imp and `what`
+function readLoggedSteps(log: string, name: string, what: string): Record<string, number> {
+  const line = log.split('\n').findLast((candidate) => candidate.includes(`${name}: ${what}`));
+  const steps: Record<string, number> = {};
+
+  for (const match of line?.matchAll(/(?<step>\w+)=(?<ms>\d+)ms/g) ?? []) {
+    steps[match.groups?.['step'] ?? ''] = Number(match.groups?.['ms']);
+  }
+
+  const total = /created in (?<ms>\d+)ms/.exec(line ?? '')?.groups?.['ms'];
+
+  return total === undefined ? steps : { ...steps, total: Number(total) };
+}
+
+function pickPercentile(values: readonly number[], fraction: number): number {
+  const sorted = values.toSorted((a, b) => a - b);
+
+  return sorted[Math.max(0, Math.ceil(fraction * sorted.length) - 1)] ?? 0;
+}
+
+test('imp new from a template, timed: the wall time and its spans', async () => {
+  const walls: number[] = [];
+  const spans: Record<string, number[]> = {};
+
+  for (let index = 0; index < TIMED_CREATES; index += 1) {
+    const name = `${prefix}t${String(index)}`;
+    const started = performance.now();
+
+    await createShaped(name);
+
+    walls.push(performance.now() - started);
+
+    const log = await readImpdLogTail(50);
+
+    const created = readLoggedSteps(log, name, 'created in');
+    const restored = readLoggedSteps(log, name, 'restored boot template');
+    const vmMs = Object.values(restored).reduce((sum, ms) => sum + ms, 0);
+
+    expect(restored['stage2']).toBeNumber();
+
+    // the CLI's process and the API round trip, and impd's write-up after the VM
+    const found = {
+      ...restored,
+      ...created,
+      cli: Math.round((walls.at(-1) ?? 0) - (created['total'] ?? 0)),
+      finish: (created['boot'] ?? 0) - vmMs,
+    };
+
+    for (const [step, ms] of Object.entries(found)) {
+      spans[step] = [...(spans[step] ?? []), ms];
+    }
+
+    await removeImps(name);
+  }
+
+  const medians = Object.fromEntries(
+    Object.entries(spans).map(([step, values]) => [step, pickPercentile(values, 0.5)]),
+  );
+
+  writeMetric('bootTemplateNewMs', {
+    p50: Math.round(pickPercentile(walls, 0.5)),
+    p95: Math.round(pickPercentile(walls, 0.95)),
+    n: walls.length,
+  });
+
+  writeMetric('bootTemplateNewSpansP50Ms', medians);
 });

@@ -135,6 +135,22 @@ dropped page cache is `echo 3 > /proc/sys/vm/drop_caches` before each create.
 | kernel, identity reset   | dropped    | 932 ms | 1317 ms |
 | template, identity reset | dropped    | 761 ms | 1081 ms |
 
-A restore's own steps: spawn 30–50 ms, load 4 ms, resume 1 ms, the parked ping and claim 40 ms, and
-stage 1 to stage 2 about 120 ms (mount, grow, switch root). The rest of `imp new` is the disk clone
-(about 45 ms) and the API.
+The `boot-templates` e2e suite times 10 `imp new` runs through the CLI and writes the spans to
+`metrics.jsonl` (`bootTemplateNewMs`, `bootTemplateNewSpansP50Ms`). The CLI's wall time on WSL2 was
+601 ms p50 and 775 ms p95. The p50 of each span:
+
+| Span               | p50    | What it is                                                      |
+| ------------------ | ------ | --------------------------------------------------------------- |
+| `cli`              | 230 ms | the CLI process and the API round trip: wall time less impd's   |
+| `record`           | 12 ms  | the image lookup, the disk budget and the imp's row             |
+| `clone`            | 46 ms  | the slot's firewall and the disk clone                          |
+| `size`             | 64 ms  | the disk grown past the image, its filesystem grown on the host |
+| `admit` + `setup`  | 7 ms   | the RAM governor, the tap and the cgroup                        |
+| `spawn`            | 35 ms  | Firecracker started                                             |
+| `load` to `resume` | 5 ms   | the snapshot load, `PATCH /drives/rootfs` and the resume        |
+| `parked` + `claim` | 46 ms  | the parked guest's first ping, then `claim`                     |
+| `stage2`           | 120 ms | stage 1 mounts and grows the disk, switches root; stage 2 up    |
+| `finish`           | 22 ms  | the VM identity, the imp's state and the reply                  |
+
+impd's own part (`created in`) was 371 ms. impd logs it per create with the step spans on the boot's
+line.

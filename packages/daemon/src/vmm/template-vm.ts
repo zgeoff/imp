@@ -151,6 +151,9 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
     marks.setMark('load');
 
     await api.patchDrive('rootfs', plan.diskPath);
+
+    marks.setMark('patch');
+
     await api.resume();
 
     marks.setMark('resume');
@@ -162,6 +165,8 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
       isParked: true,
     });
 
+    marks.setMark('parked');
+
     await sendClaim(plan.paths.vsockSocket, { ...plan.claim, unixMs: Date.now() });
 
     marks.setMark('claim');
@@ -172,9 +177,11 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
       isParked: false,
     });
 
-    marks.setMark('agent');
+    marks.setMark('stage2');
 
     const firecrackerVersion = await api.getVersion();
+
+    marks.setMark('version');
 
     return {
       pid,
