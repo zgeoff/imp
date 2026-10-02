@@ -85,7 +85,7 @@ fail() {
 kernel_state() {
   sysctl -a 2>/dev/null \
     | grep -E '^(vm|kernel)\.' \
-    | grep -vE '^kernel\.(random\.|ns_last_pid|pty\.nr|sched_domain\.|perf_event_max_sample_rate|tainted)' || true
+    | grep -vE '^kernel\.(random\.|spl\.kmem\.|ns_last_pid|pty\.nr|sched_domain\.|perf_event_max_sample_rate|tainted)' || true
   awk '$1 ~ /^(kvm|kvm_intel|kvm_amd|tun|loop|zfs)$/ { print "module", $1 }' /proc/modules | sort
 }
 
