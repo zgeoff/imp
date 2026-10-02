@@ -1,6 +1,6 @@
 import type { AcceptConnection, RejectConnection, ServerChannel } from 'ssh2';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
-import { formatFailure, startChannelInput, writeToChannel } from './channel-io';
+import { formatFailure, runChannelRelay } from './channel-io';
 import type { SshConnectionContext } from './ssh-connection-context';
 
 // RFC 4254 5.1: the client may not open this channel
@@ -57,32 +57,11 @@ export async function handleForward(
     return;
   }
 
-  const channel = accept();
-
-  startChannelInput(channel, dial);
-
-  channel.once('close', dial.close);
-
   try {
-    await sendTargetOutput(channel, dial);
+    await runChannelRelay(accept(), dial);
   } catch (error) {
     context.log(
       `impd: ssh: ${context.impName}: forward to ${target.address}: ${formatFailure(error)}`,
     );
-  } finally {
-    dial.close();
-    channel.destroy();
-  }
-}
-
-// The target's bytes to the client. Its EOF becomes the channel's EOF, and
-// the client may still send; the relay ends when the agent closes.
-async function sendTargetOutput(channel: ServerChannel, dial: DialStream): Promise<void> {
-  for await (const event of dial.events()) {
-    if (event.type === 'data') {
-      await writeToChannel(channel, event.data);
-    } else {
-      channel.eof();
-    }
   }
 }
