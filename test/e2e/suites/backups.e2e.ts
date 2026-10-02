@@ -4,12 +4,20 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { resolveImageName } from '../lib/fixtures';
-import { listCheckpoints, readState, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import {
+  listCheckpoints,
+  listImps,
+  readState,
+  runImp,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
 import {
   createImp,
   holdImp,
   readGuestFile,
   registerImp,
+  removeImpsWithPrefix,
   waitForExec,
   writeGuestFile,
 } from '../lib/imps';
@@ -376,6 +384,11 @@ test('a corrupted pack fails the check, loudly', async () => {
 
   expect(key).toBeDefined();
 
+  // kept, so the next step restores from a whole repository again
+  const saved = await runS3('GET', `/${key ?? ''}`, '-o', '/tmp/e2e-pack');
+
+  expect(saved.exitCode).toBe(0);
+
   const garbage = randomBytes(4096).toString('hex');
 
   const put = await runS3('PUT', `/${key ?? ''}`, '--data-binary', garbage);
@@ -389,4 +402,51 @@ test('a corrupted pack fails the check, loudly', async () => {
   const status = await readStatus();
 
   expect(status.lastCheck?.error).toBeDefined();
+
+  const restored = await runS3('PUT', `/${key ?? ''}`, '--data-binary', '@/tmp/e2e-pack');
+
+  expect(restored.exitCode).toBe(0);
+});
+
+test('restore --all brings back every imp of a point, and one boots with its data', async () => {
+  // the newest point that holds the source: a scheduled run after the
+  // removal below would hold none of the suite's imps
+  const before = await readStatus();
+
+  const point = before.points.findLast((candidate) => candidate.imps.includes(source));
+
+  expect(point).toBeDefined();
+
+  await removeImpsWithPrefix(prefix);
+
+  const others = await listImps();
+
+  const merge = others.length === 0 ? [] : ['--merge'];
+
+  for (const name of point?.imps ?? []) {
+    registerImp(name);
+  }
+
+  const result = await tryImp([
+    'backup',
+    'restore',
+    '--all',
+    ...merge,
+    '--at',
+    point?.time.toISOString() ?? '',
+  ]);
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stderr).toContain('stop the old impd');
+
+  const states = await Promise.all((point?.imps ?? []).map((name) => readState(name)));
+
+  expect(states.every((state) => state === 'stopped')).toBeTrue();
+
+  await runImp('start', source);
+  await waitForExec(source);
+
+  const sourceFile = await readGuestFile(source, '/root/f');
+
+  expect(sourceFile).toBe('v2');
 });
