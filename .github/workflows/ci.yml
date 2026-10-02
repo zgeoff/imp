@@ -224,12 +224,13 @@ jobs:
 
       # The release PR bumps package versions that bun.lock records too, and
       # writes a CHANGELOG.md that oxfmt reformats: repair both so the PR
-      # passes the checks job like any other.
-      - name: Check out release PR
+      # passes the checks job like any other. The PR output stays a string
+      # here: env is evaluated even when the step is skipped, and fromJSON of
+      # an empty output would fail the run that tags a release.
+      - name: Checkout
         if: steps.release.outputs.prs_created == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
           token: ${{ steps.app-token.outputs.token || github.token }}
 
       - name: Setup Bun
@@ -240,14 +241,19 @@ jobs:
 
       - name: Sync lockfile and formatting on release PR
         if: steps.release.outputs.prs_created == 'true'
+        env:
+          PR: ${{ steps.release.outputs.pr }}
         run: |
+          branch=$(jq -r .headBranchName <<<"$PR")
+          git fetch --depth=1 origin "$branch"
+          git checkout -B "$branch" FETCH_HEAD
           bun install
           bun run format
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -am "chore: sync lockfile and format release files"
-            git push
+            git push origin "$branch"
           fi
 
       # Reads no release-please outputs: prs_created is false when the open
