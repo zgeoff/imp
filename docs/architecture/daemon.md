@@ -50,13 +50,16 @@ redirects there. The prefix keeps every dashboard route clear of `/rpc`, `/exec`
 Hashed files under `/ui/assets/` are cached for good; the page shell is checked on every load and
 carries a CSP that allows only impd and forbids framing.
 
-The browser never holds the API token. `POST /auth/login` takes the token once and sets the
-`imp_session` cookie: HttpOnly, SameSite=Strict, `Secure` behind TLS, 30 days. Its value is
+The browser never holds the API token. `POST /auth/login` takes the token once and sets the session
+cookie: HttpOnly, SameSite=Strict, 30 days. Over plain HTTP it is `imp_session`. Behind TLS (an
+https URL, or `x-forwarded-proto: https`) it is `__Host-imp_session`, which is `Secure`, and the
+browser takes it only host-only and on `/`, so no other name under an
+[HTTPS domain](../guides/https.md), an imp's included, can set it. Its value is
 `v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>">`, keyed by a key derived from the token
 (HMAC-SHA256 of `imp-session-key` under the token). It survives an impd restart, and a new token
 ends every session. The cookie is host-only, with no `Domain`, so it never reaches another host
-name. `POST /auth/logout` only clears the cookie in that browser; a copied value stays valid until
-it expires or the token changes.
+name. `POST /auth/logout` clears the cookie in that browser, both names behind TLS; a copied value
+stays valid until it expires or the token changes.
 
 `/rpc` takes the cookie only from the dashboard's own origin. Imps serve pages on other ports of the
 same host, and a browser counts those as the same site, so SameSite alone would let an imp's page
@@ -65,12 +68,12 @@ call the API with the owner's session. impd accepts the cookie when `Sec-Fetch-S
 access. The scheme is not compared, so a TLS front such as `tailscale serve` works. Login and logout
 take the same check. `/exec` never takes the cookie: the dashboard gets an exec ticket over `/rpc`.
 
-Browsers send cookies to every port of a host, so the wake proxy removes `imp_session` from every
-request it forwards to an imp. An imp's server can still set cookies for the host. A planted
+Browsers send cookies to every port of a host, so the wake proxy removes both cookie names from
+every request it forwards to an imp. An imp's server can still set cookies for the host. A planted
 `imp_session` on a longer path, which the browser sends first, does not lock the owner out: impd
-accepts the request when any `imp_session` value in it is valid. An imp's response can overwrite the
-real cookie or flood the cookie jar, and so log the dashboard out while it keeps doing that. It
-cannot read or use the session.
+accepts the request when any session value under either name is valid. An imp's response can
+overwrite the real cookie or flood the cookie jar, and so log the dashboard out while it keeps doing
+that. It cannot read or use the session.
 
 ### imps: the lifecycle
 

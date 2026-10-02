@@ -67,7 +67,7 @@ export const impContract = {
 
     url: base
       .input(NameInputSchema)
-      .output(z.object({ local: z.url(), tailnet: z.url().nullable() })),
+      .output(z.object({ local: z.url(), https: z.url().nullable(), tailnet: z.url().nullable() })),
 
     // disk only: a memory fork would duplicate entropy and IDs across clones
     fork: base

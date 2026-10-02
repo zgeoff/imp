@@ -7,6 +7,7 @@ import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
 import { openDatabase } from './db/open-database';
 import { createGovernedImps } from './governor/create-governed-imps';
+import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
@@ -145,6 +146,19 @@ async function main(): Promise<void> {
 
   await proxy.syncListeners();
 
+  const https =
+    config.https === null
+      ? null
+      : buildHttpsService({
+          config: config.https,
+          dataDir: config.dataDir,
+          proxy,
+          readTailscale: config.tailscaleAuthKey === null ? null : readTailscale,
+          log: printLog,
+        });
+
+  https?.start();
+
   const brokerPort = await broker.listen(config.brokerPort);
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
@@ -194,6 +208,10 @@ async function main(): Promise<void> {
     await runStopStep('tickers', readStepMs(), () =>
       Promise.all(tickers.map((ticker) => ticker.stop())),
     );
+
+    if (https !== null) {
+      await runStopStep('https', readStepMs(), () => https.stop());
+    }
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
     await runStopStep('broker', readStepMs(), () => broker.stop());
