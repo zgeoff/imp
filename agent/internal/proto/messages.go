@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.12.0"
+const Version = "0.13.0"
 
 // Op names.
 const (

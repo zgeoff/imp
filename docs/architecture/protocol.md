@@ -7,13 +7,14 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.12.0`, which reports a template copy's identity reset in `ping` (`0.11.0` kills a stopped
-exec's whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards,
-`0.8.0` kills what is left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs
-`imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`,
-`0.4.0` `agent.listen` and `agent.accept`, `0.3.0` `dial` and `imp-agent sftp`, `0.2.0` sessions;
-`0.1.0` was the first). The Go side is `agent/internal/proto`; the host side is the agent client in
-impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.13.0`, which adds `claim` and the `stage` of a parked boot template's `ping` (`0.12.0`
+reports a template copy's identity reset in `ping`, `0.11.0` kills a stopped exec's whole cgroup,
+`0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards, `0.8.0` kills what is
+left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`,
+`0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`, `0.4.0` `agent.listen` and
+`agent.accept`, `0.3.0` `dial` and `imp-agent sftp`, `0.2.0` sessions; `0.1.0` was the first). The
+Go side is `agent/internal/proto`; the host side is the agent client in impd
+([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -102,7 +103,7 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 
 ```json
 → {"op":"ping"}
-← {"ok":true,"version":"0.12.0","uptime_ms":265}
+← {"ok":true,"version":"0.13.0","uptime_ms":265}
 ```
 
 `uptime_ms` is `CLOCK_BOOTTIME`. The host uses `ping` as the boot-readiness probe. On a boot with
