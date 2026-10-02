@@ -332,6 +332,7 @@ async function main(): Promise<void> {
     publicRecords,
     isReady: () => state.ready,
     now: Date.now,
+    log: printLog,
     audit,
     buildContexts: createBuildContextRoute({ config, images, diskBudget, audit, now: Date.now }),
   });

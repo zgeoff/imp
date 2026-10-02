@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { EVENT_VERSION } from '@imp/api';
 import type { ImpContract, ImpEvent } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
@@ -217,6 +218,79 @@ test('a dashboard stream ends at the session expiry and at any logout', async ()
   const calls = await waitForCalls(ctx, 2);
 
   expect(calls.map((call) => call.actor)).toEqual(['dashboard', 'token']);
+});
+
+// a decision as the governor sends one; no imp is named with a space
+function buildDecision(name: string): ImpEvent {
+  return {
+    v: EVENT_VERSION,
+    at: new Date(),
+    ev: 'GovernorDecision',
+    decision: 'admitted',
+    name,
+    trigger: 'admission',
+    usedMib: 0,
+    budgetMib: 1024,
+  };
+}
+
+// whether the stream is still open a moment on
+async function isOpen(stream: Readonly<{ ended: Promise<void> }>): Promise<boolean> {
+  const ended = await Promise.race([
+    stream.ended.then(() => true),
+    Bun.sleep(20).then(() => false),
+  ]);
+
+  return !ended;
+}
+
+test('an event that fails the schema is dropped and the stream goes on', async () => {
+  await using ctx = await setupEventTest();
+
+  const stream = await readEvents(ctx.client);
+
+  ctx.imps.events.publish(buildDecision('boot template'));
+  ctx.imps.events.publish(buildDecision('good'));
+
+  await stream.waitFor('GovernorDecision admitted good');
+
+  const open = await isOpen(stream);
+
+  expect(open).toBe(true);
+
+  await stream.stop();
+
+  expect(stream.lines()).toEqual(['GovernorDecision admitted good']);
+
+  expect(ctx.logs.filter((line) => line.includes('fail the event schema'))).toEqual([
+    'impd: dropped 1 GovernorDecision event(s) that fail the event schema; the latest at name: must be a lowercase letter followed by up to 30 lowercase letters, digits or hyphens',
+  ]);
+});
+
+test('a snapshot imp that fails the schema is dropped and the stream goes on', async () => {
+  await using ctx = await setupEventTest();
+
+  await ctx.client.imps.create({ name: 'bad' });
+  await ctx.client.imps.create({ name: 'good' });
+
+  // a row no create would write
+  await ctx.db.updateTable('imps').set({ name: 'Bad Name' }).where('name', '=', 'bad').execute();
+
+  const stream = await readEvents(ctx.client);
+
+  await stream.waitFor('ImpAdded snapshot good');
+
+  ctx.imps.events.publish(buildDecision('later'));
+
+  await stream.waitFor('GovernorDecision admitted later');
+
+  const open = await isOpen(stream);
+
+  expect(open).toBe(true);
+
+  await stream.stop();
+
+  expect(stream.lines()).toEqual(['ImpAdded snapshot good', 'GovernorDecision admitted later']);
 });
 
 async function waitUntil(check: () => boolean): Promise<void> {

@@ -79,6 +79,11 @@ per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
 - `ImpRemoved` comes with no `ImpChanged stopped` before it when the imp was running, and its
   `imp.state` is the last state written. It means the VM, the disk and the checkpoints are all gone;
   no `CheckpointRemoved` comes for them.
+- An event that fails the event schema, a bug in impd, is left out of the stream: oRPC would end the
+  stream on it. impd counts it in `imp.events.dropped` and logs it, at most once per event type
+  every 5 minutes. A dropped event can leave a client stale until it reconnects. An imp whose own
+  record fails the schema is left out of every snapshot too, so it stays hidden across reconnects,
+  and each stream that opens adds 1 to the counter for it.
 - A dashboard stream ends when its session expires and at any logout. The browser reconnects if its
   session is still valid.
 - oRPC sends a keep-alive comment every 5 s, so an idle stream stays open through a proxy. Measured
@@ -134,6 +139,7 @@ nothing. The exporters read the standard variables themselves, such as `OTEL_EXP
 | `imp.network.io`            | counter   | `direction` | Bytes the guests received and sent.         |
 | `imp.awake.time`            | counter   |             | Time imps spent running, in s.              |
 | `imp.disk.used`             | gauge     |             | Disk the imps take on their own, in bytes.  |
+| `imp.events.dropped`        | counter   | `ev`        | Events left out of the stream as invalid.   |
 
 The CPU, network and awake metrics come from impd's 5 s sample ([CPU limits](./cpu-limits.md)).
 `imp.awake.time` adds up sample intervals, so it misses the boot or wake itself and up to 5 s before

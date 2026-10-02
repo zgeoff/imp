@@ -22,6 +22,7 @@ import { listImps } from './db/imps';
 import type { ImpRecord } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
 import type { EgressService } from './egress/egress-service';
+import { createEventCheck } from './events/event-check';
 import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
@@ -74,6 +75,7 @@ export interface RouterDeps {
   readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
+  readonly log: (message: string) => void;
   readonly audit: ApiAudit;
   readonly tokens: TokenStore;
 }
@@ -147,6 +149,9 @@ export function buildRouter(deps: RouterDeps) {
 
     return imps.map((imp) => ({ v: EVENT_VERSION, at, ev: 'ImpAdded', reason: 'snapshot', imp }));
   };
+
+  // one for every stream: each event is checked once, whoever reads it
+  const isEventValid = createEventCheck({ log: deps.log, now: deps.now });
 
   const listCallerImps = async (caller: Readonly<Caller>) => {
     const imps = await deps.imps.listImps();
@@ -444,11 +449,16 @@ export function buildRouter(deps: RouterDeps) {
 
         return openEventStream({
           bus: deps.imps.events,
-          readSnapshot: () => readSnapshot(caller),
+          readSnapshot: async () => {
+            const snapshot = await readSnapshot(caller);
+
+            return snapshot.filter((event) => isEventValid(event));
+          },
           signal: mergeSignals(options.signal, options.context.ends),
           endsAt: caller.expiresAt,
           now: deps.now,
-          accepts: (event) => isImpAllowed(caller.imps, readEventImpName(event)),
+          accepts: (event) =>
+            isEventValid(event) && isImpAllowed(caller.imps, readEventImpName(event)),
         });
       }),
     },

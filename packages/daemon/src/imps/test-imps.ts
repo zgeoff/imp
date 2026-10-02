@@ -298,6 +298,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     fake,
     taps,
     logs,
+    log: printTestLog,
     filesystemGrows,
     imps: governed.imps,
     governor: governed.governor,
@@ -345,6 +346,7 @@ type AppParts = Pick<
   | 'storageGate'
   | 'diskBudget'
   | 'now'
+  | 'log'
   | 'broker'
   | 'tokens'
   | 'revocations'
@@ -432,6 +434,7 @@ export function buildTestApp(
     publicRecords: createPublicRecordsLink(),
     isReady: () => true,
     now: ctx.now,
+    log: ctx.log,
     audit,
     buildContexts,
   });
