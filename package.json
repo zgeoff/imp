@@ -1,6 +1,6 @@
 {
   "name": "@zgeoff/imp",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
   "license": "MIT",
