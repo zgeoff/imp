@@ -92,6 +92,14 @@ jobs:
       - name: Test
         run: bun test
 
+      # its own run: the component tests register a DOM that must not reach
+      # the daemon's tests (bunfig.toml pathIgnorePatterns)
+      - name: Test Dashboard
+        run: bun run test:dashboard
+
+      - name: Build Dashboard
+        run: bun run build:dashboard
+
   go:
     runs-on: ubuntu-latest
     permissions:

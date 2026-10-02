@@ -161,6 +161,16 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
  && bun build --compile packages/cli/src/main.ts --outfile /out/imp
 
+# --- dashboard: the web dashboard's static files. Its own stage: the build
+# needs the dev dependencies (vite) that the compile stage leaves out. ---
+FROM bun AS dashboard
+WORKDIR /src
+COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
+COPY packages/ packages/
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --frozen-lockfile --ignore-scripts
+RUN bun run --cwd packages/dashboard build
+
 # --- release: the runtime with everything baked in; nothing from the repo
 # is mounted. The default target. impd reports its package.json version;
 # IMP_VERSION only labels the image (host/build-release.sh sets it). ---
@@ -175,6 +185,7 @@ LABEL org.opencontainers.image.title="imp-host" \
 
 COPY --from=system-files / /usr/local/share/imp/
 COPY --from=compile /out/impd /out/imp /usr/local/bin/
+COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
 # the CLI in the container finds impd's token with no IMP_TOKEN
 RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 
@@ -183,4 +194,5 @@ RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/tok
 ENV IMP_DAEMON=/usr/local/bin/impd \
     IMP_KERNEL=/usr/local/share/imp/vmlinux \
     IMP_SYSTEM_DRIVE=/usr/local/share/imp/imp-system.squashfs \
+    IMP_DASHBOARD_DIR=/usr/local/share/imp/dashboard \
     IMP_STORAGE_LOOP=0
