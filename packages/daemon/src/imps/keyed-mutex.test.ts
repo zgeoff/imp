@@ -52,3 +52,69 @@ test('it reports a key locked while its task runs', async () => {
 
   expect(mutex.isLocked('a')).toBe(false);
 });
+
+test('tryRunExclusive skips a held key without waiting and runs a free one', async () => {
+  const mutex = createKeyedMutex();
+  const gate = Promise.withResolvers<void>();
+  const held = mutex.runExclusive('a', () => gate.promise);
+
+  const skipped = await mutex.tryRunExclusive('a', () => Promise.resolve('never'));
+  const free = await mutex.tryRunExclusive('b', () => Promise.resolve('b'));
+
+  expect(skipped).toEqual({ ran: false });
+  expect(free).toEqual({ ran: true, value: 'b' });
+
+  gate.resolve();
+
+  await held;
+
+  const after = await mutex.tryRunExclusive('a', () => Promise.resolve('a'));
+
+  expect(after).toEqual({ ran: true, value: 'a' });
+});
+
+test('a task queued behind tryRunExclusive waits for it', async () => {
+  const mutex = createKeyedMutex();
+  const log: string[] = [];
+
+  const first = mutex.tryRunExclusive('a', async () => {
+    await Bun.sleep(10);
+
+    log.push('try');
+  });
+
+  const second = mutex.runExclusive('a', () => {
+    log.push('queued');
+
+    return Promise.resolve();
+  });
+
+  await Promise.all([first, second]);
+
+  expect(log).toEqual(['try', 'queued']);
+});
+
+test('waitForAll resolves once every queued task is done', async () => {
+  const mutex = createKeyedMutex();
+  const log: string[] = [];
+
+  const first = mutex.runExclusive('a', async () => {
+    await Bun.sleep(10);
+
+    log.push('a');
+  });
+
+  const second = mutex.runExclusive('b', async () => {
+    await Bun.sleep(20);
+
+    log.push('b');
+  });
+
+  await mutex.waitForAll();
+
+  log.push('all');
+
+  await Promise.all([first, second]);
+
+  expect(log).toEqual(['a', 'b', 'all']);
+});

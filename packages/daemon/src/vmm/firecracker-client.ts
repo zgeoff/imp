@@ -63,6 +63,15 @@ export interface FirecrackerClient {
   readonly getVersion: () => Promise<string>;
 }
 
+interface FirecrackerTimeouts {
+  readonly requestMs: number;
+  readonly snapshotMs: number;
+}
+
+// A wedged Firecracker must not hold an imp's lock forever. A snapshot writes
+// the whole guest memory, so it gets longer.
+const DEFAULT_TIMEOUTS: FirecrackerTimeouts = { requestMs: 10_000, snapshotMs: 120_000 };
+
 class FirecrackerApiError extends Error {
   readonly status: number;
 
@@ -74,30 +83,49 @@ class FirecrackerApiError extends Error {
   }
 }
 
-export function createFirecrackerClient(socketPath: string): FirecrackerClient {
-  const sendRequest = async (method: string, path: string, body?: unknown): Promise<string> => {
+export function createFirecrackerClient(
+  socketPath: string,
+  timeouts: FirecrackerTimeouts = DEFAULT_TIMEOUTS,
+): FirecrackerClient {
+  const sendRequest = async (
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = timeouts.requestMs,
+  ): Promise<string> => {
     const init: BunFetchRequestInit = {
       method,
       unix: socketPath,
       headers: { 'content-type': 'application/json', accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
     };
 
     if (body !== undefined) {
       init.body = JSON.stringify(body);
     }
 
-    const response = await fetch(`http://localhost${path}`, init);
-    const text = await response.text();
+    try {
+      const response = await fetch(`http://localhost${path}`, init);
+      const text = await response.text();
 
-    if (!response.ok) {
-      throw new FirecrackerApiError(method, path, response.status, text);
+      if (!response.ok) {
+        throw new FirecrackerApiError(method, path, response.status, text);
+      }
+
+      return text;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        throw new Error(`firecracker ${method} ${path}: no answer within ${String(timeoutMs)} ms`, {
+          cause: error,
+        });
+      }
+
+      throw error;
     }
-
-    return text;
   };
 
-  const sendPut = async (path: string, body: unknown): Promise<void> => {
-    await sendRequest('PUT', path, body);
+  const sendPut = async (path: string, body: unknown, timeoutMs?: number): Promise<void> => {
+    await sendRequest('PUT', path, body, timeoutMs);
   };
 
   return {
@@ -137,18 +165,26 @@ export function createFirecrackerClient(socketPath: string): FirecrackerClient {
       await sendRequest('PATCH', '/vm', { state: 'Resumed' });
     },
     createSnapshot: (files) =>
-      sendPut('/snapshot/create', {
-        snapshot_type: 'Full',
-        snapshot_path: files.snapshotPath,
-        mem_file_path: files.memFilePath,
-        sync_snapshot_files: true,
-      }),
+      sendPut(
+        '/snapshot/create',
+        {
+          snapshot_type: 'Full',
+          snapshot_path: files.snapshotPath,
+          mem_file_path: files.memFilePath,
+          sync_snapshot_files: true,
+        },
+        timeouts.snapshotMs,
+      ),
     loadSnapshot: (files, resumeVm) =>
-      sendPut('/snapshot/load', {
-        snapshot_path: files.snapshotPath,
-        mem_backend: { backend_type: 'File', backend_path: files.memFilePath },
-        resume_vm: resumeVm,
-      }),
+      sendPut(
+        '/snapshot/load',
+        {
+          snapshot_path: files.snapshotPath,
+          mem_backend: { backend_type: 'File', backend_path: files.memFilePath },
+          resume_vm: resumeVm,
+        },
+        timeouts.snapshotMs,
+      ),
     getVersion: async () => {
       const text = await sendRequest('GET', '/version');
 

@@ -1,4 +1,4 @@
 {
-  "argv": ["/usr/local/libexec/imp/dockerd"],
+  "argv": ["/usr/bin/dockerd"],
   "restart": "always"
 }

@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
   allocateSlot,
-  countImps,
   createImp,
   findImpById,
   findImpByName,
@@ -161,7 +160,7 @@ test('it records activity and holds', async () => {
   expect(released.holdUntil).toBeNull();
 });
 
-test('it lists imps by name and counts them by state', async () => {
+test('it lists imps by name', async () => {
   await using ctx = await setupTestDatabase();
 
   const b = await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 0));
@@ -170,14 +169,11 @@ test('it lists imps by name and counts them by state', async () => {
   await updateImpState(ctx.db, b.id, { state: 'running' });
 
   const imps = await listImps(ctx.db);
-  const total = await countImps(ctx.db);
-  const running = await countImps(ctx.db, 'running');
-  const sleeping = await countImps(ctx.db, 'sleeping');
 
-  expect(imps.map((imp) => imp.name)).toEqual(['a', 'b']);
-  expect(total).toBe(2);
-  expect(running).toBe(1);
-  expect(sleeping).toBe(0);
+  expect(imps.map((imp) => [imp.name, imp.state])).toEqual([
+    ['a', 'creating'],
+    ['b', 'running'],
+  ]);
 });
 
 test('it applies a compare-and-set change only while the row matches', async () => {

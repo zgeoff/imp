@@ -8,6 +8,6 @@ IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
 # ensure_host_image builds the host container image unless it exists.
 ensure_host_image() {
   if ! docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1; then
-    docker build -q -t "$IMP_HOST_IMAGE" "$IMP_ROOT/host" >/dev/null
+    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
   fi
 }

@@ -118,7 +118,7 @@ and sleep and wake.
 
 ```sh
 bun run typecheck && bun run lint && bun test
-bun run lint:shell                # shellcheck over scripts/, host/ and test/
+bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && go test -race ./...)
 scripts/acceptance.sh --clean     # end to end, from a clean state
 ```

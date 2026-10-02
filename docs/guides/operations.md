@@ -1,7 +1,9 @@
 # Operations
 
 Day-to-day care of an imp host: restarts, the RAM budget, logs, and checks. The commands assume the
-dev instance from the [install guide](./install.md).
+dev instance from the [install guide](./install.md). On a server running the release image,
+`systemctl restart imp-host` (or `docker compose restart`) does what `reboot` does here, and
+`docker exec imp-host pkill -HUP -x impd` what `restart` does.
 
 ## Restart without losing imps
 

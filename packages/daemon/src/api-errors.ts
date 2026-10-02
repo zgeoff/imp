@@ -32,6 +32,10 @@ export function buildInvalidStateError(
   });
 }
 
+export function buildStoppingError() {
+  return new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is stopping' });
+}
+
 export function isRamBudgetError(error: unknown): boolean {
   return error instanceof ORPCError && error.code === 'RAM_BUDGET_EXCEEDED';
 }

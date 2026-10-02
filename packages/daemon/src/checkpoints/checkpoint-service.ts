@@ -15,7 +15,10 @@ import type { CheckpointRecord } from '../db/checkpoints';
 import { findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpService } from '../imps/imp-service';
+import type { LockedImp } from '../imps/imp-lock';
+import type { ImpCheckpointHooks } from '../imps/imp-service';
+import { printLog } from '../process/print-log';
+import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
 import { createReflinkClone } from '../storage/reflink';
 
@@ -55,7 +58,7 @@ interface DiskFreezer {
 export interface CheckpointServiceDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: ImpService;
+  readonly imps: ImpCheckpointHooks;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
 
@@ -86,12 +89,7 @@ function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
 }
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
-  const log =
-    deps.log ??
-    ((message: string) => {
-      console.log(message);
-    });
-
+  const log = deps.log ?? printLog;
   const cloneDisk = deps.cloneDisk ?? createReflinkClone;
   const freezer = deps.freezer ?? { freeze: sendFreeze, thaw: sendThaw };
 
@@ -111,7 +109,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
   // A running disk is frozen around the clone (sync + FIFREEZE in the guest).
   // A sleeping one wakes first: its memory image holds unwritten page cache.
   // The caller holds the imp's lock.
-  const createConsistentClone = async (found: ImpRecord, target: string, action: string) => {
+  const createConsistentClone = async (found: LockedImp, target: string, action: string) => {
     const paths = buildImpPaths(deps.config.dataDir, found.id);
 
     if (found.state === 'stopped' || found.state === 'error') {
@@ -134,7 +132,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
       try {
         await freezer.thaw(paths.vsockSocket);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = readErrorMessage(error);
 
         log(`impd: ${imp.name}: thaw failed (the agent thaws on its own): ${message}`);
       }
@@ -230,14 +228,20 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const paths = buildImpPaths(deps.config.dataDir, imp.id);
         const wasAwake = imp.state === 'running' || imp.state === 'sleeping';
         const started = performance.now();
-
-        const halted = await deps.imps.haltImp(imp);
-
         const staged = `${paths.disk}.new`;
 
+        // the clone comes first: when it fails, the imp keeps running or
+        // keeps its memory snapshot
         rmSync(staged, { force: true });
 
-        await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), staged);
+        try {
+          await cloneDisk(buildCheckpointDisk(imp.id, checkpoint.id), staged);
+        } catch (error) {
+          rmSync(staged, { force: true });
+          throw error;
+        }
+
+        const halted = await deps.imps.haltImp(imp);
 
         renameSync(staged, paths.disk);
 

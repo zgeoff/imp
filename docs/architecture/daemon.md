@@ -16,12 +16,13 @@ proxy listener sync every 30 s. It adds a default image in the background; `/hea
 
 Signals decide what happens to the VMs:
 
-| Signal              | What impd does                                                        |
-| ------------------- | --------------------------------------------------------------------- |
-| `SIGTERM`, `SIGINT` | Sleeps every awake imp, then exits. A container restart keeps memory. |
-| `SIGHUP`            | Exits at once. The VMs keep running; the next impd re-adopts them.    |
+| Signal              | What impd does                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| `SIGTERM`, `SIGINT` | Sleeps every awake imp, then exits. A container restart keeps memory.                                |
+| `SIGHUP`            | Waits for wakes and boots under way, then exits. The VMs keep running; the next impd re-adopts them. |
 
-[Operations](../guides/operations.md) covers both from the operator's side.
+The whole stop has a 100 s deadline. [Sleep and wake](./sleep-and-wake.md#restarts) has the steps,
+and [operations](../guides/operations.md) covers both signals from the operator's side.
 
 ## Modules
 
@@ -30,29 +31,38 @@ Signals decide what happens to the VMs:
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
 `/rpc`, and the exec WebSocket at `/exec`. Both need the bearer token in an `Authorization` header
 or a `token` query parameter. The router maps each procedure of the contract in `packages/api` to a
-service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE` and
-`RAM_BUDGET_EXCEEDED`. The token is made on first start and kept in `<dataDir>/token`, readable by
-the owner only.
+service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`,
+`RAM_BUDGET_EXCEEDED`, and `SERVICE_UNAVAILABLE` while impd stops. The token is made on first start
+and kept in `<dataDir>/token`, readable by the owner only.
 
 ### imps: the lifecycle
-
-<!-- #5 (split of imp-service.ts) rewrites this section with the new module structure. -->
 
 The imp service owns the lifecycle of every imp: create, start, stop, sleep, wake, hold and destroy.
 An imp is in one of five states: `creating`, `running`, `sleeping`, `stopped` or `error`. A
 transition table says which moves are legal; any other move fails with `INVALID_STATE`. Destroy
 works from every state.
 
-- **Locks.** Every lifecycle change for one imp runs under that imp's lock, so two calls never
-  change one imp at once.
-- **Anything that needs a VM** wakes a sleeping imp and cold-boots a stopped one.
-- **Sleeps** run 2 at a time across the host (one semaphore), because each snapshot pushes the whole
-  memory file through the page cache.
-- **Activity.** A tracker counts the host-side connections that keep an imp awake: exec sessions,
-  and proxied requests and WebSockets.
+The code splits along the per-imp lock. Every lifecycle change for one imp runs under that imp's
+lock, so two calls never change one imp at once.
+
+| File                  | What it does                                                                                                                                          |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `imp-service.ts`      | The facade. It wires the parts and hands each consumer a narrow type: the router, the checkpoint service, and the proxy, idle loop and governor.      |
+| `imp-lock.ts`         | The per-imp lock. Under it, a caller gets a `LockedImp`: a fresh record that only this module can make. A new imp's record is written under its lock. |
+| `imp-vm-ops.ts`       | Boot, halt, sleep and wake a VM. Each takes a `LockedImp`, so none can run without the lock. Sleeps run 2 at a time across the host.                  |
+| `imp-commands.ts`     | The API commands, each under the imp's lock.                                                                                                          |
+| `imp-runtime.ts`      | Exec, wake on demand for the proxy, background sleeps, the sleep pass on SIGTERM, and reconcile after a start.                                        |
+| `lock-free-sleep.ts`  | The background sleep the idle loop and the governor use. It only tries the lock and never waits for it.                                               |
+| `shutdown-gate.ts`    | Closed once the SIGTERM sleep pass starts. After that no VM boots or wakes.                                                                           |
+| `imp-liveness.ts`     | Marks an imp with a dead VM or a lost snapshot `stopped`, or `sleeping` when its VM died after the sleep wrote the snapshot.                          |
+| `imp-presenter.ts`    | Imp records as the API shows them, and their URLs.                                                                                                    |
+| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, and proxied requests and WebSockets.                                          |
+
+- **Anything that needs a VM** wakes a sleeping imp and cold-boots a stopped one. An exec counts its
+  session before the wake, so no background sleep slips in between.
 - **Recovery.** After a start, impd re-adopts every live VM by its pid and API socket. A running imp
-  with no live VM is marked `stopped`; an imp that was still `creating` goes to `error`. Sleeping
-  imps stay asleep.
+  with no live VM is marked `stopped` (or `sleeping`, see above); an imp that was still `creating`
+  goes to `error`. Sleeping imps stay asleep.
 
 [Sleep and wake](./sleep-and-wake.md) describes the sleep and wake steps.
 
@@ -61,15 +71,17 @@ works from every state.
 The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a boot or a wake, the
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
-a hold, a taken lock, an open exec session or a proxied request is never picked. Every 5 s it also
-sleeps imps while the measured use is over the budget.
-[Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
+a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
+an imp's lock: a victim locked by the time its turn comes is skipped. Every 5 s it also sleeps imps
+while the measured use is over the budget. [Sleep and wake](./sleep-and-wake.md#the-ram-governor)
+has the rules and the numbers.
 
 ### idle: the idle loop
 
 Every 2 s the idle loop asks each running imp's agent for its `activity` and reads Firecracker's CPU
 time from `/proc`. It combines that with the host-side counts and any hold. An imp with nothing to
-keep it awake for `IMP_IDLE_TIMEOUT_S` goes to sleep.
+keep it awake for `IMP_IDLE_TIMEOUT_S` goes to sleep, unless it was held or active again by the time
+the sleep takes its lock.
 
 ### vmm: Firecracker
 
@@ -77,7 +89,8 @@ The vmm module starts Firecracker detached (`setsid`), so it outlives an impd re
 its API over the unix socket. It builds the kernel command line, configures the drives, vsock,
 network and balloon, and starts the VM. It also runs the sleep (pause, snapshot, kill) and the wake
 (load the snapshot as the first call). It reads `/proc/<pid>/smaps_rollup` for the RAM each VM owns,
-and checks a pid's command line, so a recycled pid never counts as a live VM.
+and checks a pid's command line, so a recycled pid never counts as a live VM. Every API call times
+out: 10 s, or 120 s for a snapshot create or load.
 
 ### sleep: snapshot metadata
 
@@ -89,7 +102,8 @@ and the system drive. A wake compares them with the current values and boots col
 
 The agent client is the host side of the [agent protocol](./protocol.md). It runs the `CONNECT`
 handshake on Firecracker's vsock socket, encodes and decodes frames, sends unary requests, and opens
-exec streams. It retries pings until the agent answers, so callers can wait for a boot or a wake.
+exec streams. It retries pings until the agent answers, so callers can wait for a boot or a wake. An
+exec that the agent does not start within 10 s fails and closes its connection.
 
 ### exec: the exec bridge
 
@@ -110,8 +124,9 @@ has the details.
 The checkpoint service clones disks. A checkpoint freezes the guest filesystem through the agent,
 takes a reflink clone of the disk, and thaws. A sleeping imp wakes first, because its memory holds
 page cache that is not on the disk yet. A restore halts the imp, clones the checkpoint over its
-disk, drops any memory snapshot, and boots again if the imp was awake. A fork clones a disk or a
-checkpoint into a new imp. [Storage](./storage.md#checkpoints-restores-and-forks) covers the files.
+disk, drops any memory snapshot, and boots again if the imp was awake. It clones before it halts, so
+a failed clone leaves the imp running or asleep as it was. A fork clones a disk or a checkpoint into
+a new imp. [Storage](./storage.md#checkpoints-restores-and-forks) covers the files.
 
 ### images: OCI images to ext4
 
@@ -141,5 +156,5 @@ mutex gives it to one caller at a time. Timestamps are integer milliseconds sinc
 
 ### process: helpers
 
-Small helpers: run a command and capture its output, and a ticker that runs a task on an interval,
-never two at once, and logs a failure without stopping.
+Small helpers: run a command and capture its output, a ticker that runs a task on an interval, never
+two at once, and logs a failure without stopping, and a bounded wait for impd's stop steps.

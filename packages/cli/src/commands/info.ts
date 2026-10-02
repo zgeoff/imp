@@ -23,6 +23,11 @@ export const infoCommand = defineCommand({
           `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed)`,
         ],
         ['firecracker', info.firecrackerVersion ?? 'unknown'],
+        [
+          'kernel',
+          `${info.guestKernel.version ?? 'unknown'} (sha256 ${info.guestKernel.sha256.slice(0, 12)})`,
+        ],
+        ['agent drive', `sha256 ${info.systemDrive.sha256.slice(0, 12)}`],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
       ];
 

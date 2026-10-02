@@ -15,6 +15,11 @@ export const SystemInfoSchema = z.object({
   awakeCount: z.int().nonnegative(),
   impCount: z.int().nonnegative(),
   firecrackerVersion: z.string().nullable(),
+
+  // the guest kernel and system drive imps boot with; version is null when
+  // the kernel image has no version banner
+  guestKernel: z.object({ version: z.string().nullable(), sha256: z.string() }),
+  systemDrive: z.object({ sha256: z.string() }),
   tailscale: z.object({
     enabled: z.boolean(),
     state: z.string().nullable(),

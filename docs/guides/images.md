@@ -21,9 +21,10 @@ imp image build images/examples/hello --name hello
 `imp image build` runs `docker build` on the host Docker and tags the result `imp/<name>`, so later
 images can say `FROM imp/base`. The CLI sends the absolute path of the directory, and impd builds
 from that path, so the directory must exist at the same path in the host container. `scripts/dev.sh`
-mounts the repo at its own path for this. An image you built with plain `docker build` goes in with
-`imp image add <ref>`. `images/dev` takes `--build-arg BASE=...` to stack on another base; use
-`docker build` for that.
+mounts the repo at its own path for this; the release image has no repo, so build there with the
+host's Docker and add the result ([install](./install.md#images-on-a-server)). An image you built
+with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
+`--build-arg BASE=...` to stack on another base; use `docker build` for that.
 
 ## What the guest takes from the image
 
@@ -80,10 +81,9 @@ when it exits.
 
 ## Docker in the guest (`imp/base`)
 
-- `services.d/docker.json` runs `/usr/local/libexec/imp/dockerd`, a wrapper that execs `dockerd`. It
-  also clears stale `/run` state when `/run` is not a tmpfs; the agent mounts a fresh tmpfs there
-  every boot, so that step does nothing today. dockerd starts its own containerd; there is no
-  separate containerd service.
+- `services.d/docker.json` runs `/usr/bin/dockerd` directly. The agent mounts a fresh tmpfs on
+  `/run` every boot, so no stale pid file or socket from the last boot is left to clear. dockerd
+  starts its own containerd; there is no separate containerd service.
 - `/etc/docker/daemon.json` sets the `cgroupfs` cgroup driver (there is no systemd; the agent mounts
   cgroup v2 at `/sys/fs/cgroup`) and the `local` log driver (compressed, rotated).
 - iptables is the Ubuntu default nf_tables variant. The imp guest kernel (`kernel/`) has nftables

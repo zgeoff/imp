@@ -1,36 +1,40 @@
 import { listImps } from '../db/imps';
 import { createImpService } from '../imps/imp-service';
-import type { ImpService, ImpServiceDeps } from '../imps/imp-service';
+import type { ImpServiceDeps, Imps } from '../imps/imp-service';
+import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
-import { readVmRam } from '../vmm/vm-stats';
+import { readOwnedRamMib } from '../vmm/vm-stats';
 import { createRamGovernor } from './ram-governor';
-import type { RamGovernor } from './ram-governor';
+import type { RamAdmission, RamGovernor } from './ram-governor';
 
 type GovernedDeps = Omit<ImpServiceDeps, 'admission'>;
 
 // The imp service and the RAM governor need each other: the service asks the
 // governor before every boot, the governor sleeps imps through the service.
 export function createGovernedImps(deps: GovernedDeps): {
-  readonly imps: ImpService;
+  readonly imps: Imps;
   readonly governor: RamGovernor;
 } {
-  const holder: { imps: ImpService | null } = { imps: null };
+  const holder: { governor: RamGovernor | null } = { governor: null };
+  const readRamMib = deps.readRamMib ?? readOwnedRamMib;
+  const log = deps.log ?? printLog;
 
-  const readRamMib =
-    deps.readRamMib ?? ((pid, apiSocket) => readVmRam(pid, apiSocket)?.ownedMib ?? null);
+  // the governor exists before any request reaches the service
+  const admission: RamAdmission = {
+    admit: (request) => holder.governor?.admit(request) ?? Promise.resolve(),
+    release: (id) => {
+      holder.governor?.release(id);
+    },
+  };
 
-  const log =
-    deps.log ??
-    ((message: string) => {
-      console.log(message);
-    });
+  const imps = createImpService({ ...deps, readRamMib, admission });
 
   const governor = createRamGovernor({
     budgetMib: deps.config.ramBudgetMib,
     listAwake: async () => {
-      const imps = await listImps(deps.db);
+      const listed = await listImps(deps.db);
 
-      return imps.flatMap((imp) =>
+      return listed.flatMap((imp) =>
         imp.state === 'running' && imp.pid !== null
           ? [
               {
@@ -48,16 +52,12 @@ export function createGovernedImps(deps: GovernedDeps): {
     readRamMib,
 
     // an open exec session or proxied request pins the imp, like a hold
-    isBusy: (id) =>
-      holder.imps !== null && (holder.imps.isImpBusy(id) || holder.imps.tracker.count(id) > 0),
-    sleepImp: (id, reason) =>
-      holder.imps === null ? Promise.resolve(false) : holder.imps.sleepImpById(id, reason, true),
+    isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,
+    trySleepImp: imps.trySleepImp,
     log,
   });
 
-  const imps = createImpService({ ...deps, readRamMib, admission: governor });
-
-  holder.imps = imps;
+  holder.governor = governor;
 
   return { imps, governor };
 }

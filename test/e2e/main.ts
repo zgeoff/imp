@@ -98,11 +98,14 @@ async function resetInstance(): Promise<void> {
     return;
   }
 
-  const image = await runCommand(['docker', 'image', 'inspect', hostImage]);
-
-  if (image.exitCode !== 0) {
-    await runChecked(['docker', 'build', '-q', '-t', hostImage, join(REPO_ROOT, 'host')]);
-  }
+  // scripts/lib.sh knows how the host image builds
+  await runChecked([
+    'bash',
+    '-c',
+    'source "$1" && ensure_host_image',
+    'bash',
+    join(REPO_ROOT, 'scripts', 'lib.sh'),
+  ]);
 
   // imp.xfs is root-owned, and a stale loop device can outlive the container
   await runChecked([

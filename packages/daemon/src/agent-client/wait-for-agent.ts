@@ -1,3 +1,4 @@
+import { readErrorMessage } from '../read-error-message';
 import { sendPing } from './agent-requests';
 import type { AgentPing } from './agent-requests';
 
@@ -36,7 +37,7 @@ export async function waitForAgent(
     delay = Math.min(maxDelay, delay * 2);
   }
 
-  const reason = lastError instanceof Error ? lastError.message : String(lastError);
+  const reason = readErrorMessage(lastError);
 
   throw new Error(
     `agent did not answer within ${String(options.deadlineMs)} ms (last error: ${reason})`,

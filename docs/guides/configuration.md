@@ -1,7 +1,9 @@
 # Configuration
 
 imp reads environment variables in three places: impd, the host container scripts, and the CLI.
-There is no config file. An empty variable counts as unset.
+There is no config file. A server keeps the variables in an env file, `/etc/imp/imp-host.env`
+([`deploy/imp-host.env.example`](../../deploy/imp-host.env.example)), which the systemd unit and the
+compose file pass to the container. An empty variable counts as unset.
 
 ## impd
 
@@ -25,8 +27,8 @@ error.
 | `IMP_DNS`                  | `1.1.1.1,8.8.8.8` | Guest DNS servers, comma-separated IPv4 addresses.                                                                |
 | `IMP_SUBNET`               | `10.66.0.0/16`    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535. |
 | `IMP_FIRECRACKER_BIN`      | `firecracker`     | The Firecracker binary.                                                                                           |
-| `IMP_KERNEL`               | none              | The guest kernel to copy into `<data>/system/vmlinux` on start.                                                   |
-| `IMP_SYSTEM_DRIVE`         | none              | The system drive to copy into `<data>/system/imp-system.squashfs` on start.                                       |
+| `IMP_KERNEL`               | none              | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                   |
+| `IMP_SYSTEM_DRIVE`         | none              | The system drive to copy into `<data>/system/imp-system.squashfs` on start. The release image sets its own.       |
 | `TAILSCALE_AUTHKEY`        | none              | Set means the host joins the tailnet; impd then reports tailnet URLs.                                             |
 | `IMP_TAILSCALE_HOSTNAME`   | `imp`             | The tailnet hostname to ask for.                                                                                  |
 
@@ -37,17 +39,18 @@ settings.
 
 The host container's scripts in `host/` read these before impd starts.
 
-| Variable                  | Default                            | Read by            | Meaning                                                                   |
-| ------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------- |
-| `IMP_STORAGE_GIB`         | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                     |
-| `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.     |
-| `IMP_SUBNET`              | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                        |
-| `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp. Unset: path MTU.    |
-| `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: no tailnet.                                     |
-| `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                     |
-| `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                     |
-| `IMP_DNS`                 | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet. |
-| `IMP_DAEMON`              | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd entry point the supervisor runs.                                 |
+| Variable                  | Default                            | Read by            | Meaning                                                                                                            |
+| ------------------------- | ---------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `IMP_STORAGE_LOOP`        | `1`; `0` in the release image      | `setup-storage.sh` | `1` loop-mounts `IMP_STORAGE_FILE` when nothing is mounted at `/var/lib/imp`; `0` refuses to start.                |
+| `IMP_STORAGE_GIB`         | `200`                              | `setup-storage.sh` | The size of the sparse XFS loop file.                                                                              |
+| `IMP_STORAGE_FILE`        | `/data/imp.xfs`                    | `setup-storage.sh` | Where the loop file lives. Unused when `/var/lib/imp` is already XFS.                                              |
+| `IMP_SUBNET`              | `10.66.0.0/16`                     | `setup-net.sh`     | The subnet to masquerade. Keep it equal to impd's.                                                                 |
+| `IMP_UPLINK_MTU`          | none                               | `setup-net.sh`     | The MTU outside the container, for the TCP MSS clamp. Unset: path MTU.                                             |
+| `TAILSCALE_AUTHKEY`       | none                               | `tailscale-up.sh`  | A tagged auth key. Unset: no tailnet.                                                                              |
+| `IMP_TAILSCALE_HOSTNAME`  | `imp`                              | `tailscale-up.sh`  | The tailnet hostname.                                                                                              |
+| `IMP_TAILSCALE_STATE_DIR` | `/var/lib/imp/tailscale`           | `tailscale-up.sh`  | Node state; `mem` keeps it in memory.                                                                              |
+| `IMP_DNS`                 | `1.1.1.1,8.8.8.8`                  | `tailscale-up.sh`  | Resolvers for the container when its resolv.conf points into the tailnet.                                          |
+| `IMP_DAEMON`              | `/src/packages/daemon/src/main.ts` | `entrypoint`       | The impd the supervisor runs: a `.ts` file under bun, else a binary. The release image sets `/usr/local/bin/impd`. |
 
 **NOTE:** impd and `tailscale-up.sh` read the same `IMP_DNS`, a comma-separated list. `dev.sh` does
 not pass `IMP_DNS`, so the dev instance uses the defaults.
@@ -89,5 +92,7 @@ Without `IMP_TOKEN`, the CLI reads `~/.config/imp/token`. impd writes the token 
 
 Some `IMP_*` variables are internal to the scripts and tests, not settings: `IMP_ROOT`, `IMP_BUILD`,
 `IMP_HOST_IMAGE`, `IMP_DATA`, `IMP_ID`, `IMP_CI_KERNEL`, `IMP_SMOKE_IMAGE`, `IMP_BASE_IMAGE` and
-`IMP_E2E_*`. `KVER` and `KSHA256` pick the kernel source for `kernel/build.sh`
+`IMP_E2E_*`. `IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` pick the image, the env file
+and the data directory for `deploy/`. `IMP_VERSION` and `IMP_RELEASE_IMAGE` name the image
+`host/build-release.sh` builds. `KVER` and `KSHA256` pick the kernel source for `kernel/build.sh`
 ([kernel README](../../kernel/README.md)).

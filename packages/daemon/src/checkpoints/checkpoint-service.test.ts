@@ -3,23 +3,15 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig } from '../config';
 import { listCheckpoints } from '../db/checkpoints';
-import { createImage } from '../db/images';
 import { findImpByName } from '../db/imps';
-import { openDatabase } from '../db/open-database';
-import { createImageService } from '../images/image-service';
-import { createImpService } from '../imps/imp-service';
+import { setupImpTest } from '../imps/test-imps';
 import { buildImpPaths } from '../storage/data-layout';
-import type { VmRunner } from '../vmm/vm-runner';
 import {
   buildCheckpointId,
   createCheckpointService,
@@ -27,70 +19,28 @@ import {
 } from './checkpoint-service';
 
 async function setupTest() {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-checkpoint-test-`);
-
-  const db = await openDatabase(':memory:');
-
-  const config = loadConfig({ IMP_DATA_DIR: dataDir });
-  const images = createImageService({ config, db });
-
   // freeze, thaw, clone and stop calls in the order they happen
   const events: string[] = [];
-
-  const alive = new Set<number>();
-
-  const state = { nextPid: 1000, failClone: false };
-
-  const vms: VmRunner = {
-    startVm: () => {
-      state.nextPid += 1;
-
-      alive.add(state.nextPid);
-
-      return Promise.resolve({ pid: state.nextPid, firecrackerVersion: 'v1.17.0', timings: {} });
-    },
-    stopVm: (pid, _paths, graceful) => {
-      alive.delete(pid);
-      events.push(`stop ${String(pid)} ${graceful ? 'graceful' : 'kill'}`);
-
-      return Promise.resolve();
-    },
-    sleepVm: (pid) => {
-      alive.delete(pid);
-
-      return Promise.resolve({});
-    },
-    wakeVm: () => Promise.reject(new Error('no snapshot in this test')),
-    isVmAlive: (pid) => alive.has(pid),
-    isAgentReady: () => Promise.resolve(true),
-  };
+  const state = { failClone: false };
 
   const createClone = (source: string, target: string): Promise<void> => {
     if (state.failClone) {
       return Promise.reject(new Error('clone failed'));
     }
 
-    events.push(`clone ${source.slice(dataDir.length)}`);
+    events.push(`clone ${source.slice(harness.dataDir.length)}`);
 
     copyFileSync(source, target);
 
     return Promise.resolve();
   };
 
-  const imps = createImpService({
-    config,
-    db,
-    images,
-    vms,
-    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
-    log: () => {},
-    cloneDisk: createClone,
-  });
+  const harness = await setupImpTest({ cloneDisk: createClone });
 
   const checkpoints = createCheckpointService({
-    config,
-    db,
-    imps,
+    config: harness.config,
+    db: harness.db,
+    imps: harness.imps,
     log: () => {},
     cloneDisk: createClone,
     freezer: {
@@ -107,36 +57,33 @@ async function setupTest() {
     },
   });
 
-  await Bun.write(`${dataDir}/images/base/rootfs.ext4`, 'rootfs');
+  await harness.createTestImage('base');
 
-  await createImage(db, { name: 'base', ref: 'base:latest', digest: 'sha256:base', sizeBytes: 6 });
+  const findDisk = async (name: string): Promise<string> => {
+    const imp = await findImpByName(harness.db, name);
 
-  const readDisk = async (name: string): Promise<string> => {
-    const imp = await findImpByName(db, name);
-
-    return readFileSync(buildImpPaths(dataDir, imp?.id ?? '').disk, 'utf8');
-  };
-
-  const writeDisk = async (name: string, content: string): Promise<void> => {
-    const imp = await findImpByName(db, name);
-
-    writeFileSync(buildImpPaths(dataDir, imp?.id ?? '').disk, content);
+    return buildImpPaths(harness.dataDir, imp?.id ?? '').disk;
   };
 
   return {
-    db,
-    dataDir,
-    imps,
+    db: harness.db,
+    dataDir: harness.dataDir,
+    imps: harness.imps,
+    fake: harness.fake,
     checkpoints,
     events,
     state,
-    readDisk,
-    writeDisk,
-    async [Symbol.asyncDispose]() {
-      await db.destroy();
+    readDisk: async (name: string) => {
+      const disk = await findDisk(name);
 
-      rmSync(dataDir, { recursive: true, force: true });
+      return readFileSync(disk, 'utf8');
     },
+    writeDisk: async (name: string, content: string) => {
+      const disk = await findDisk(name);
+
+      writeFileSync(disk, content);
+    },
+    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
   };
 }
 
@@ -244,7 +191,7 @@ test('it restores a running imp: stop, swap the disk, drop the snapshot, boot', 
   const restored = await ctx.checkpoints.restoreCheckpoint('dev', 'v1');
 
   expect(restored.state).toBe('running');
-  expect(ctx.events[0]).toBe('stop 1001 graceful');
+  expect(ctx.fake.stops[0]).toEqual({ pid: 1001, graceful: true });
 
   const devDisk = await ctx.readDisk('dev');
 
@@ -358,4 +305,50 @@ test('it deletes a checkpoint by label, and destroy removes the rest', async () 
   const rows = await listCheckpoints(ctx.db, imp.id);
 
   expect(rows).toEqual([]);
+});
+
+test('a restore whose clone fails leaves a sleeping imp asleep with its memory', async () => {
+  await using ctx = await setupTest();
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  await ctx.checkpoints.createCheckpoint('dev', 'v1');
+  await ctx.imps.sleepImp('dev');
+
+  ctx.state.failClone = true;
+
+  const rejection = await ctx.checkpoints
+    .restoreCheckpoint('dev', 'v1')
+    .catch((error: unknown) => error);
+
+  const record = await findImpByName(ctx.db, 'dev');
+
+  expect(rejection).toMatchObject({ message: 'clone failed' });
+  expect(record?.state).toBe('sleeping');
+  expect(existsSync(paths.memFile)).toBe(true);
+  expect(existsSync(`${paths.disk}.new`)).toBe(false);
+});
+
+test('a restore whose clone fails leaves a running imp running on its own disk', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.checkpoints.createCheckpoint('dev', 'v1');
+  await ctx.writeDisk('dev', 'changed');
+
+  ctx.state.failClone = true;
+
+  const rejection = await ctx.checkpoints
+    .restoreCheckpoint('dev', 'v1')
+    .catch((error: unknown) => error);
+
+  const record = await findImpByName(ctx.db, 'dev');
+  const disk = await ctx.readDisk('dev');
+
+  expect(rejection).toMatchObject({ message: 'clone failed' });
+  expect(record).toMatchObject({ state: 'running', pid: 1001 });
+  expect(ctx.fake.stops).toEqual([]);
+  expect(disk).toBe('changed');
 });

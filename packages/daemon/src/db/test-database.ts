@@ -1,3 +1,4 @@
+import { readErrorMessage } from '../read-error-message';
 import { createImage } from './images';
 import type { ImageRecord } from './images';
 import { openDatabase } from './open-database';
@@ -32,7 +33,7 @@ export async function readRejectionMessage(promise: Promise<unknown>): Promise<s
   try {
     await promise;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return readErrorMessage(error);
   }
 
   throw new Error('expected the promise to reject');

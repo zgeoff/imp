@@ -4,11 +4,15 @@
 # bare metal, mount a real XFS partition at /var/lib/imp first and this only
 # creates the directories.
 #
-# Env: IMP_STORAGE_GIB (default 200) sizes the sparse loop file.
+# Env: IMP_STORAGE_LOOP (default 1): 1 creates and mounts a loop file when
+#      nothing is mounted at /var/lib/imp; 0 (the release image) refuses to
+#      start without a mount instead.
+#      IMP_STORAGE_GIB (default 200) sizes the sparse loop file.
 #      IMP_STORAGE_FILE (default /data/imp.xfs) is where it lives.
 set -euo pipefail
 
 root=/var/lib/imp
+loop=${IMP_STORAGE_LOOP:-1}
 file=${IMP_STORAGE_FILE:-/data/imp.xfs}
 gib=${IMP_STORAGE_GIB:-200}
 
@@ -18,8 +22,17 @@ gib=${IMP_STORAGE_GIB:-200}
 mounted=
 if mountpoint -q "$root"; then
   echo "setup-storage: $root already mounted"
+elif [ "$loop" = 0 ]; then
+  echo "setup-storage: nothing is mounted at $root; mount a host XFS directory with reflink there" >&2
+  exit 1
 else
-  mkdir -p "$root" "$(dirname "$file")"
+  # A loop file in the container's own layer goes away with the container,
+  # and every imp with it.
+  if ! mountpoint -q "$(dirname "$file")"; then
+    echo "setup-storage: $(dirname "$file") is not a mount; mount a host directory there for $file" >&2
+    exit 1
+  fi
+  mkdir -p "$root"
   if [ ! -e "$file" ]; then
     echo "setup-storage: creating ${gib} GiB sparse $file"
     truncate -s "${gib}G" "$file"

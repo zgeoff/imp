@@ -1,0 +1,4 @@
+# The guest kernel source: kernel/build.sh and host/Dockerfile both read it.
+# To bump, change both lines together (sha256 of linux-$KVER.tar.xz).
+KVER=6.1.188
+KSHA256=ed4d0acb1307c235230c89efc094e210e6290593f94a7e617f28b1001101a33a

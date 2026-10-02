@@ -25,6 +25,8 @@ export interface ImpRecord {
 }
 
 export interface NewImp {
+  // a fresh UUIDv7 when left out
+  readonly id?: string;
   readonly name: string;
   readonly imageId: string;
   readonly vcpus: number;
@@ -70,7 +72,7 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
   const row = await db
     .insertInto('imps')
     .values({
-      id: Bun.randomUUIDv7(),
+      id: imp.id ?? Bun.randomUUIDv7(),
       name: imp.name,
       image_id: imp.imageId,
       state: 'creating',
@@ -104,18 +106,6 @@ export async function listImps(db: ImpDatabase): Promise<ImpRecord[]> {
   const rows = await db.selectFrom('imps').selectAll().orderBy('name').execute();
 
   return rows.map((row) => toImpRecord(row));
-}
-
-export async function countImps(db: ImpDatabase, state?: ImpState): Promise<number> {
-  let query = db.selectFrom('imps').select((eb) => eb.fn.countAll<number>().as('count'));
-
-  if (state !== undefined) {
-    query = query.where('state', '=', state);
-  }
-
-  const row = await query.executeTakeFirstOrThrow();
-
-  return row.count;
 }
 
 // Fields the change leaves out keep their value; null clears one.
@@ -164,6 +154,10 @@ export async function updateImpStateIf(
 
   if (change.pid !== undefined) {
     values.pid = change.pid;
+  }
+
+  if (change.sleptAt !== undefined) {
+    values.slept_at = change.sleptAt === null ? null : change.sleptAt.getTime();
   }
 
   const pidOperator = expected.pid === null ? 'is' : '=';

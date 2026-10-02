@@ -88,7 +88,9 @@ packages/daemon   impd
 packages/cli      imp CLI
 images/base       thin base image
 images/dev        example dev image
-host/             host container Dockerfile, entrypoint, storage, network and tailnet setup
+host/             host container Dockerfile (dev and release), entrypoint, storage, network
+                  and tailnet setup
+deploy/           compose file, systemd unit and env file for the release image
 kernel/           guest kernel config and build
 scripts/          acceptance.sh and dev helpers
 docs/             this documentation

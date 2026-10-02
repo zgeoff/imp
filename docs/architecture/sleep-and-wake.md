@@ -17,8 +17,9 @@ reservation. Then it waits for a slot of a host-wide semaphore (2 sleeps at a ti
 [gotcha 8](#4-gotchas)) and:
 
 1. Pauses the VM (`PATCH /vm`).
-2. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If that fails,
-   impd deletes the `.new` files and resumes the VM; the imp stays awake.
+2. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If the pause or
+   the snapshot fails, impd deletes the `.new` files and resumes the VM; the imp stays awake. If the
+   resume fails too, it kills the VM, and the imp boots cold next time.
 3. Kills Firecracker with SIGKILL and waits for it to exit. The VM is paused and its snapshot is on
    disk, so nothing needs a clean shutdown.
 4. Renames the `.new` files over `vmstate` and `mem`. It never writes into the old mem file: a woken
@@ -28,6 +29,20 @@ reservation. Then it waits for a slot of a host-wide semaphore (2 sleeps at a ti
 6. Writes `meta.json` and sets the state to `sleeping`. The tap stays.
 
 If Firecracker is gone after a failed sleep, impd drops the snapshot and marks the imp `stopped`.
+
+Every Firecracker API call gives up after 10 s, and snapshot create and load after 120 s. A wedged
+VM then fails the sleep, instead of holding the imp's lock for good.
+
+### Background sleeps
+
+The idle loop and the governor decide from a record they read earlier, so the sleep checks again
+under the imp's lock. Both skip an imp with a hold or an open exec session or proxied connection.
+The idle loop also skips an imp that was active since it looked. The governor does not: it sleeps
+the least recently active imp, idle or not.
+
+Neither waits for an imp's lock. If the lock is taken, the sleep is skipped. The governor holds its
+admission lock while it sleeps, and a boot under the imp's lock may be waiting for admission, so
+waiting would deadlock. The type of the governor's sleep admits only a try-lock.
 
 ## Wake
 
@@ -65,12 +80,21 @@ proxy, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the
 
 ## Restarts
 
-- On SIGTERM or SIGINT, impd sleeps every awake imp, so a container restart keeps memory.
-  `scripts/dev.sh down` gives it 120 s.
-- On SIGHUP, impd exits without sleeping anything. Firecracker processes are detached (`setsid`), so
-  the next impd re-adopts every live VM by pid and API socket, even one whose agent answers late.
-- After a crash, an imp with no live VM is marked `stopped` and boots cold. Sleeping imps stay
-  asleep and wake on demand.
+- On SIGTERM or SIGINT, impd sleeps every awake imp, so a container restart keeps memory. It takes
+  each imp's lock in turn, so a wake or boot under way finishes first and that imp is put to sleep
+  too. Once this pass starts, no VM boots or wakes: those calls fail with `SERVICE_UNAVAILABLE`, and
+  a create cut short goes to `error`.
+- On SIGHUP, impd sleeps nothing, but it waits for any wake or boot under way, so none leaves a
+  Firecracker that no record knows. Firecracker processes are detached (`setsid`), so the next impd
+  re-adopts every live VM by pid and API socket, even one whose agent answers late.
+- The whole stop has one deadline of 100 s, under the 120 s that `scripts/dev.sh down` gives it.
+  Each step before the sleep pass gets at most 10 s; the sleep pass gets the rest. Open exec
+  sessions close with code 1012 first. If the last step runs out of time, impd exits without closing
+  the database, since a sleep may still write to it.
+- After a crash, an imp with no live VM is marked `stopped` and boots cold. One exception: if the
+  snapshot on disk is newer than the imp's last activity, impd stopped between a sleep's snapshot
+  and its record, so the imp is marked `sleeping` and keeps its memory. Sleeping imps stay asleep
+  and wake on demand.
 
 ## Idle detection
 
@@ -98,8 +122,10 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   owned at sleep and `IMP_WAKE_RESERVE_MIB` (default 256). A reservation counts until the
   measurement passes it, for at most 20 s.
 - **Make room.** If the sum would pass the budget, impd sleeps the least recently active imps that
-  are not held and not busy, until it fits. If it still cannot fit, or the imp's memory alone is
-  larger than the budget, the request fails with `RAM_BUDGET_EXCEEDED`.
+  are not held and not busy, until it fits. An imp whose lock is taken by the time its turn comes is
+  skipped, not waited for ([background sleeps](#background-sleeps)), and impd picks again without
+  it. If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
+  with `RAM_BUDGET_EXCEEDED`.
 - **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget.
 
 ## Findings
