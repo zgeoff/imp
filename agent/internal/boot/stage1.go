@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 
@@ -26,7 +25,7 @@ const (
 
 // Stage1 runs as PID 1 with the read-only system drive as root. It mounts
 // the user disk, keeps the system drive reachable under it, switches root,
-// and re-execs the agent as stage 2. The system drive must contain the
+// and runs stage 2. The system drive must contain the
 // directories /dev, /proc, /sys and /newroot, since it cannot be written.
 func Stage1() error {
 	if err := mountOnce("devtmpfs", "/dev", "devtmpfs", unix.MS_NOSUID, "mode=0755"); err != nil {
@@ -98,7 +97,9 @@ func Stage1() error {
 		return err
 	}
 	log.Printf("stage1: switched root to %s", userDisk)
-	return syscall.Exec(AgentPath, []string{AgentPath, "stage2", params.Encode()}, os.Environ())
+	// the values go straight across, a claim's after a restore: stage 2 never
+	// reads the cmdline, which on a restored guest is the template's
+	return Stage2(params)
 }
 
 // mountOnce mounts fstype on target unless something is already mounted

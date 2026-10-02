@@ -59,8 +59,6 @@ func main() {
 			os.Exit(1)
 		}
 		return
-	case len(os.Args) > 1 && os.Args[1] == "stage2":
-		err = boot.Stage2()
 	case os.Getpid() == 1:
 		err = boot.Stage1()
 	default:
