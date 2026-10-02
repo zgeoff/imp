@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import * as z from 'zod';
 import { AgentSessionSchema } from '../agent-client/agent-requests';
 import { ServicesListSchema } from '../agent-client/service-requests';
 import type { ImpPaths } from '../storage/data-layout';
+import { writeFileDurably } from '../storage/write-file-durably';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
 // What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
@@ -68,8 +69,17 @@ export function buildSnapshotIdentity(
   };
 }
 
+// meta.json is the snapshot's commit record: written last, and durably, so
+// the files it vouches for are complete
 export function writeSnapshotMeta(paths: Readonly<ImpPaths>, meta: Readonly<SnapshotMeta>): void {
-  writeFileSync(paths.snapshotMeta, `${JSON.stringify(meta, null, 2)}\n`);
+  writeFileDurably(paths.snapshotMeta, `${JSON.stringify(meta, null, 2)}\n`);
+}
+
+// Without its record the snapshot does not load. A sleep drops it before it
+// writes new files, so a crash mid-sleep cannot pair them with the old one; a
+// wake drops it once the VM runs on its memory.
+export function removeSnapshotMeta(paths: Readonly<ImpPaths>): void {
+  rmSync(paths.snapshotMeta, { force: true });
 }
 
 // null when there is no complete snapshot to load

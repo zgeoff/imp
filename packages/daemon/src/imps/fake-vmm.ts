@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { VmRunner } from '../vmm/vm-runner';
 
@@ -143,9 +143,12 @@ export function buildFakeVmm() {
             throw new FakeVmError('snapshot files lost after the kill');
           }
 
+          // as Firecracker does: new files, renamed over the old ones
           mkdirSync(paths.snapshotDir, { recursive: true });
-          writeFileSync(paths.vmstate, 'vmstate');
-          writeFileSync(paths.memFile, 'mem');
+          writeFileSync(`${paths.vmstate}.new`, 'vmstate');
+          writeFileSync(`${paths.memFile}.new`, 'mem');
+          renameSync(`${paths.vmstate}.new`, paths.vmstate);
+          renameSync(`${paths.memFile}.new`, paths.memFile);
 
           usedSnapshots.delete(paths.snapshotDir);
 

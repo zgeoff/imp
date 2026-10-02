@@ -15,6 +15,7 @@ import {
   findColdBootReason,
   readSnapshotMeta,
   removeSnapshot,
+  removeSnapshotMeta,
   writeSnapshotMeta,
 } from '../sleep/snapshot-meta';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
@@ -282,6 +283,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     // what the event stream reports about this sleep
     const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
 
+    removeSnapshotMeta(paths);
+
     try {
       const cgroup = context.cgroups.setup(imp.id, imp.cpu);
 
@@ -394,6 +397,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       return startAfterFailedWake(imp, paths, wrong);
     }
+
+    removeSnapshotMeta(paths);
 
     const wakeMs = Math.round(performance.now() - started);
 
