@@ -19,6 +19,7 @@ const BUILDS: Readonly<Record<FixtureImage, Build>> = {
   'e2e-bare': { dir: join(FIXTURES_DIR, 'tiny'), file: 'Dockerfile.bare', hashed: true },
   'e2e-ws': { dir: join(FIXTURES_DIR, 'ws'), hashed: true },
   'e2e-git': { dir: join(FIXTURES_DIR, 'git'), hashed: true },
+  'e2e-ra': { dir: join(FIXTURES_DIR, 'ra'), hashed: true },
 };
 
 const names = new Map<FixtureImage, string>();

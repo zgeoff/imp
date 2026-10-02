@@ -1,6 +1,6 @@
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
-export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws' | 'e2e-git';
+export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws' | 'e2e-git' | 'e2e-ra';
 
 export interface Suite {
   readonly name: string;
@@ -38,6 +38,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },
   { name: 'tokens', prefix: 'e2e-tok-', images: ['e2e-tiny'] },
   { name: 'egress', prefix: 'e2e-eg-', images: ['e2e-tiny'] },
+  { name: 'ipv6', prefix: 'e2e-v6-', images: ['e2e-tiny', 'e2e-ra'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
   { name: 'templates', prefix: 'e2e-tpl-', images: ['e2e-git'] },
 

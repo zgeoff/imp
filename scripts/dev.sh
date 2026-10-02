@@ -44,6 +44,7 @@
 #      else .env; see load_tailscale_authkey in scripts/lib.sh.
 #      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
 #      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
+#      IMP_UPLINK_MTU overrides the MTU read from this machine's default route.
 #      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
 #      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
 #      AWS_* keys, so this shell's own AWS_* never reach the container.
@@ -178,7 +179,7 @@ up() {
       -p $((20000 + offset))-$((20063 + offset)):20000-20063 \
       -p 127.0.0.1:$((2222 + offset)):22 \
       -e IMP_STORAGE_GIB="${IMP_STORAGE_GIB:-200}" \
-      -e IMP_UPLINK_MTU="$(read_uplink_mtu)" \
+      -e IMP_UPLINK_MTU="${IMP_UPLINK_MTU:-$(read_uplink_mtu)}" \
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
