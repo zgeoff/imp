@@ -775,6 +775,19 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       names.push(name);
     }
 
+    // the disk's own snapshot, staged and in place: a GC leaves it until
+    // setupReceived destroys it (checkReceiveSteps refused no steps)
+    const diskSnapshot = names.at(-1) ?? '';
+
+    const held = [
+      `${buildStaged(steps.at(-1)?.dataset ?? 0)}@${diskSnapshot}`,
+      `${buildDiskName(impId)}@${diskSnapshot}`,
+    ];
+
+    for (const name of held) {
+      heldSnapshots.add(name);
+    }
+
     try {
       for (const [index, step] of steps.entries()) {
         const dataset = buildStaged(step.dataset);
@@ -810,6 +823,10 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       });
 
       throw error;
+    } finally {
+      for (const name of held) {
+        heldSnapshots.delete(name);
+      }
     }
   };
 
