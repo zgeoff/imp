@@ -47,6 +47,19 @@ export async function startMemoryProof(name: string): Promise<MemoryProof> {
   return { name, token, identity };
 }
 
+// true while the httpd process and boot the proof started are still there
+export async function checkMemoryKept(proof: MemoryProof): Promise<boolean> {
+  const pid = proof.identity.split(' ')[0] ?? '';
+
+  try {
+    const identity = await runShellInImp(proof.name, buildIdentityScript(pid));
+
+    return identity === proof.identity;
+  } catch {
+    return false;
+  }
+}
+
 // the same httpd process and boot the proof started
 export async function checkMemoryProof(proof: MemoryProof): Promise<void> {
   const pid = proof.identity.split(' ')[0] ?? '';

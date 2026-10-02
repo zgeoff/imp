@@ -35,6 +35,7 @@ const ImpRowSchema = z.object({
     .optional(),
   cpu: z.object({ limit: z.number().nullable(), weight: z.number() }).optional(),
   resources: ResourcesSchema.optional(),
+  coldBootReason: z.string().optional(),
 });
 
 const NameFailureSchema = z.object({ name: z.string(), error: z.string() });

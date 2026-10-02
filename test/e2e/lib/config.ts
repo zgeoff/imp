@@ -26,6 +26,10 @@ export const config = {
   scaleMemoryMib: readNumber('E2E_SCALE_MEMORY_MIB', 512),
   scaleFillMib: readNumber('E2E_SCALE_FILL_MIB', 256),
 
+  // chaos suite: rounds of random faults, and the seed that replays them
+  chaosRounds: readNumber('E2E_CHAOS_ROUNDS', 8),
+  chaosSeed: readNumber('E2E_CHAOS_SEED', Date.now() % 1_000_000_007),
+
   // limits
   maxNewMs: readNumber('E2E_MAX_NEW_MS', 3000),
   maxCheckpointMs: readNumber('E2E_MAX_CHECKPOINT_MS', 500),

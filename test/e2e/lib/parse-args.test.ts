@@ -32,6 +32,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'tokens',
     'egress',
     'cpu',
+    'chaos',
     'backups',
   ]);
 });

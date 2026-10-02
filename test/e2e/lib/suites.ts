@@ -40,6 +40,9 @@ export const SUITES: readonly Suite[] = [
   { name: 'egress', prefix: 'e2e-eg-', images: ['e2e-tiny'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
 
+  // kills impd, Firecracker and the container; reboots the instance
+  { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
+
   // last: it reboots the instance with backups on, then off again
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
