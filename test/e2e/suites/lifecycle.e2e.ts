@@ -98,19 +98,27 @@ test('exec passes stdout, stdin, stderr and exit codes through', async () => {
 
   expect(echoed).toBe('hello-stdout');
 
-  const stdin = await tryImp(['exec', name, '--', 'cat'], { stdin: 'hello stdin\n' });
+  const stdin = await tryImp(['exec', name, '--', 'cat'], {
+    stdin: 'hello stdin\n',
+  });
 
   expect(stdin.stdout).toBe('hello stdin\n');
 
   const lines = Array.from({ length: 20_000 }, (_, index) => String(index + 1)).join('\n');
 
-  const large = await tryImp(['exec', name, '--', 'wc', '-l'], { stdin: `${lines}\n` });
+  const large = await tryImp(['exec', name, '--', 'wc', '-l'], {
+    stdin: `${lines}\n`,
+  });
 
   expect(large.stdout.trim()).toBe('20000');
 
   const failed = await tryImp(['exec', name, '--', 'sh', '-c', 'echo to-stderr >&2; exit 7']);
 
-  expect(failed).toMatchObject({ exitCode: 7, stdout: '', stderr: 'to-stderr\n' });
+  expect(failed).toMatchObject({
+    exitCode: 7,
+    stdout: '',
+    stderr: 'to-stderr\n',
+  });
 
   const signalled = await tryImp(['exec', name, '--', 'sh', '-c', 'kill -TERM $$']);
 
@@ -239,7 +247,10 @@ test('imp events streams a create, sleep, wake and rm, and the api audit log has
 
   const calls = z
     .array(z.object({ procedure: z.string(), actor: z.string() }))
-    .parse(JSON.parse(audit));
+    .parse(JSON.parse(audit))
+
+    // newest first; a reused dev instance keeps the rows of earlier runs
+    .slice(0, 4);
 
   expect(calls.map((call) => call.procedure)).toEqual([
     'imps.destroy',
