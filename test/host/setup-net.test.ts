@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { buildUnshare } from './unshare';
 
 const SCRIPT = join(import.meta.dir, '..', '..', 'host', 'scripts', 'setup-net.sh');
 
@@ -8,13 +9,13 @@ const SCRIPT = join(import.meta.dir, '..', '..', 'host', 'scripts', 'setup-net.s
 // unless IMP_HOST_TESTS=required, as in CI's root step.
 const canUnshare =
   process.env['IMP_HOST_TESTS'] === 'required' ||
-  Bun.spawnSync(['unshare', '-rn', 'iptables', '-t', 'raw', '-S'], {
+  Bun.spawnSync([...buildUnshare(), 'iptables', '-t', 'raw', '-S'], {
     stdout: 'ignore',
     stderr: 'ignore',
   }).exitCode === 0;
 
 function runInNetns(script: string) {
-  const result = Bun.spawnSync(['unshare', '-rn', 'bash', '-euo', 'pipefail', '-c', script], {
+  const result = Bun.spawnSync([...buildUnshare(), 'bash', '-euo', 'pipefail', '-c', script], {
     env: { ...process.env, SETUP_NET: SCRIPT, BUN: process.execPath },
   });
 
