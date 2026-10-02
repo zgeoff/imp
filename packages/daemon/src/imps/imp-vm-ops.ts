@@ -334,7 +334,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const vm = await startColdVm(imp, paths, address, hostSteps, diskReady);
 
       startCounting(context, imp, vm.pid);
-      checkMergeFlag(context, imp, vm.pid);
+
+      await checkMergeFlag(context, imp, vm.pid);
 
       // its sleeps record this, whatever the host boots by then
       writeIdentity(imp, paths, {
@@ -610,8 +611,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     );
 
     startCounting(context, imp, woken.pid);
-    checkMergeFlag(context, imp, woken.pid);
 
+    await checkMergeFlag(context, imp, woken.pid);
     await updateImpActivity(context.db, imp.id, new Date());
 
     // a memory wake keeps the boot; one that slept before impd kept cold

@@ -21,21 +21,27 @@ export function createMergeFlags(): MergeFlags {
   };
 }
 
-// With IMP_KSM, checks that KSM may merge the VM's guest memory. Before Linux
-// 6.19 (590c03ca6a3f) ksmd can clear the merge flag during the exec, and the
-// guest then runs unmerged; `imp info` counts such imps.
-export function checkMergeFlag(
+// With IMP_KSM, checks that KSM may merge the VM's guest memory: before 6.19
+// (590c03ca6a3f) ksmd can clear the flag during the exec. `imp info` counts
+// such imps; a flag impd cannot read is logged.
+export async function checkMergeFlag(
   context: ImpContext,
   imp: Readonly<{ id: string; name: string }>,
   pid: number,
-): void {
+): Promise<void> {
   if (context.config.ksm === null) {
     return;
   }
 
-  const mergeable = context.checkGuestMerge(pid);
+  const mergeable = await context.checkGuestMerge(pid);
 
-  if (mergeable === false) {
+  if (mergeable === null) {
+    context.log(`impd: ${imp.name}: cannot read whether KSM may merge its guest memory`);
+
+    return;
+  }
+
+  if (!mergeable) {
     context.mergeFlags.recordLost(imp.id);
 
     context.log(

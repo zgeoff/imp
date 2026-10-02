@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 const KSM_DIR = '/sys/kernel/mm/ksm';
 const PAGE_BYTES = 4096;
@@ -113,11 +114,57 @@ export function checkMergeableMappings(smaps: string): boolean | null {
   return guest.every((mapping) => mapping.mergeable);
 }
 
-// Whether KSM may merge the VM's guest memory; null when its smaps cannot be read
-export function checkGuestMemoryMergeable(pid: number): boolean | null {
+// /proc/<pid>/ksm_stat: `name value` lines, `name: value` for the flags (6.12)
+export function parseKsmStat(text: string): ReadonlyMap<string, string> {
+  const fields = new Map<string, string>();
+
+  for (const line of text.split('\n')) {
+    const match = /^(?<name>\w+):?\s+(?<value>\S+)$/u.exec(line.trim());
+
+    if (match?.groups !== undefined) {
+      fields.set(match.groups['name'] ?? '', match.groups['value'] ?? '');
+    }
+  }
+
+  return fields;
+}
+
+async function readKsmStat(pid: number): Promise<ReadonlyMap<string, string> | null> {
   try {
-    return checkMergeableMappings(readFileSync(`/proc/${String(pid)}/smaps`, 'utf8'));
+    const text = await readFile(`/proc/${String(pid)}/ksm_stat`, 'utf8');
+
+    return parseKsmStat(text);
   } catch {
     return null;
   }
+}
+
+// Whether KSM may merge the VM's guest memory; null when that cannot be read.
+// ksm_stat's ksm_merge_any (6.12) answers at once; before it, the smaps flags.
+export async function checkGuestMemoryMergeable(pid: number): Promise<boolean | null> {
+  const stat = await readKsmStat(pid);
+
+  const mergeAny = stat?.get('ksm_merge_any');
+
+  if (mergeAny !== undefined) {
+    return mergeAny === 'yes';
+  }
+
+  try {
+    const smaps = await readFile(`/proc/${String(pid)}/smaps`, 'utf8');
+
+    return checkMergeableMappings(smaps);
+  } catch {
+    return null;
+  }
+}
+
+// What KSM saves in this process less its metadata (ksm_process_profit), in
+// MiB; negative while little is merged, null when unreadable
+export async function readKsmProfitMib(pid: number): Promise<number | null> {
+  const stat = await readKsmStat(pid);
+
+  const profit = stat?.get('ksm_process_profit');
+
+  return profit === undefined ? null : Number(profit) / MIB;
 }

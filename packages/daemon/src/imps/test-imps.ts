@@ -124,7 +124,8 @@ export interface ImpTestOptions {
   // IMP_KSM's readers: the unshared size a sleep records, the merge flag, and
   // the host counters
   readonly readUnsharedRamMib?: (pid: number) => number | null;
-  readonly checkGuestMerge?: (pid: number) => boolean | null;
+  readonly checkGuestMerge?: (pid: number) => Promise<boolean | null>;
+  readonly readKsmProfitMib?: (pid: number) => Promise<number | null>;
   readonly readKsmHostStats?: () => KsmHostStats | null;
 }
 
@@ -305,7 +306,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         readUnsharedRamMib: options.readUnsharedRamMib,
       }),
       ...(options.checkGuestMerge !== undefined && { checkGuestMerge: options.checkGuestMerge }),
-      ...(options.readKsmHostStats !== undefined && { readKsmHostStats: options.readKsmHostStats }),
+      ...(options.readKsmProfitMib !== undefined && { readKsmProfitMib: options.readKsmProfitMib }),
     });
   };
 
