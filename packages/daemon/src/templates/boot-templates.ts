@@ -158,6 +158,11 @@ export function buildTemplateKey(identity: Readonly<HostIdentity>, shape: Readon
     firecrackerVersion: identity.firecrackerVersion,
     snapshotVersion: identity.snapshotVersion,
     hostKernel: identity.hostKernel,
+
+    // the guest kernel picked its code paths on this CPU: one that changed
+    // since, as a cloud host's can at a reboot, faults a restore
+    cpuModel: identity.cpuModel,
+    cpuFlags: identity.cpuFlags,
     bootArgs: TEMPLATE_BOOT_ARGS,
     devices: VM_DEVICES,
     memoryMib: shape.memoryMib,
