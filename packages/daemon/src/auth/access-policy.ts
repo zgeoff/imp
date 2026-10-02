@@ -131,7 +131,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'events.stream': readAny,
   'system.info': readAny,
 
-  // gc removes storage that no imp, checkpoint or image names
+  // gc removes what a crash left and, with orphans, every disk no row names
   'system.gc': manageHost,
 
   'tokens.list': manageHost,
