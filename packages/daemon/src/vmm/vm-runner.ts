@@ -350,7 +350,7 @@ export function createVmRunner(): VmRunner {
 
         await api.loadSnapshot(
           { snapshotPath: plan.paths.vmstate, memFilePath: plan.paths.memFile },
-          true,
+          { resumeVm: true },
         );
 
         plan.cgroup?.applyLimit();

@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/disk"
 )
 
@@ -36,6 +37,19 @@ func Stage1() error {
 	}
 	if err := mountOnce("sysfs", "/sys", "sysfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
+	}
+	params, err := cmdline.Read()
+	if err != nil {
+		return err
+	}
+	// a boot template parks here, before the user disk is touched; the
+	// restored copy goes on with its claim's values
+	if params.Template {
+		claim, err := parkForClaim(listenVsock, applyClaim)
+		if err != nil {
+			return err
+		}
+		params = claimParams(claim)
 	}
 	// noinit_itable: the disk is a sparse file, so the inode tables of a grown
 	// disk read as zeros already; zeroing them in the background would only
@@ -84,7 +98,7 @@ func Stage1() error {
 		return err
 	}
 	log.Printf("stage1: switched root to %s", userDisk)
-	return syscall.Exec(AgentPath, []string{AgentPath, "stage2"}, os.Environ())
+	return syscall.Exec(AgentPath, []string{AgentPath, "stage2", params.Encode()}, os.Environ())
 }
 
 // mountOnce mounts fstype on target unless something is already mounted

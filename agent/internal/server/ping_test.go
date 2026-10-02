@@ -15,7 +15,7 @@ import (
 // uptime_ms out instead of reporting 0, which impd would read as a young guest.
 func TestPingOmitsUptimeWithoutAClock(t *testing.T) {
 	failing := func(int32, *unix.Timespec) error { return errors.New("no clock") }
-	data, err := json.Marshal(buildPing(failing))
+	data, err := json.Marshal(BuildPing(failing))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestPingReportsUptime(t *testing.T) {
 		*ts = unix.NsecToTimespec(2_500_000_000)
 		return nil
 	}
-	ping := buildPing(clock)
+	ping := BuildPing(clock)
 	if ping.UptimeMs == nil || *ping.UptimeMs != 2500 {
 		t.Fatalf("UptimeMs = %v, want 2500", ping.UptimeMs)
 	}

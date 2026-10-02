@@ -2,6 +2,7 @@
 package cmdline
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 )
@@ -19,6 +20,9 @@ type Params struct {
 	DNS []string
 	// ResetIdentity is set on the first boot of an imp made from a template.
 	ResetIdentity bool
+	// Template is set on the cold boot that makes a boot template: stage 1
+	// waits for a claim instead of mounting the user disk.
+	Template bool
 	// Raw holds every imp.* key (without the prefix), including unknown ones.
 	Raw map[string]string
 }
@@ -57,6 +61,8 @@ func Parse(line string) Params {
 			p.IP6 = val
 		case "gw6":
 			p.GW6 = val
+		case "template":
+			p.Template = val == "1"
 		case "dns":
 			for _, s := range strings.Split(val, ",") {
 				if s = strings.TrimSpace(s); s != "" {
@@ -91,4 +97,23 @@ func split(line string) []string {
 		out = append(out, cur.String())
 	}
 	return out
+}
+
+// Encode is how stage 1 hands the parameters to stage 2, as one argv entry:
+// after a template restore the kernel cmdline is the template's, so stage 2
+// never reads it (docs/architecture/boot-templates.md#claim).
+func (p Params) Encode() string {
+	b, err := json.Marshal(p)
+	if err != nil {
+		// a struct of strings always marshals
+		panic(err)
+	}
+	return string(b)
+}
+
+// Decode reads what Encode wrote.
+func Decode(s string) (Params, error) {
+	var p Params
+	err := json.Unmarshal([]byte(s), &p)
+	return p, err
 }
