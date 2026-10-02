@@ -113,6 +113,10 @@ impd compares the container's zfs userland with the host's module (`/sys/module/
 different major version stops impd; a different minor version logs a warning that names both, and
 impd starts. The image ships 2.3; Ubuntu 24.04 hosts and the CI runner run 2.2.
 
+The `zfs` CI job runs the image's 2.3.9 tools against the runner's 2.2.2 module. A pass covers only
+the commands its suites run (lifecycle, checkpoints, sleep, and the real-pool tests); it does not
+prove that 2.3 tools work with a 2.2 module in general.
+
 The backend uses only what OpenZFS 0.8 had already, so every 2.x module works:
 
 | What impd uses                                                    | In OpenZFS since |

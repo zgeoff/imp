@@ -1,0 +1,50 @@
+# What the VM end-to-end jobs (e2e, zfs) build before scripts/dev.sh runs:
+# the guest kernel and system drive into .cache/ci, and the dev host image
+# loaded as $IMP_HOST_IMAGE (default imp-host:dev). Both use the release's
+# GitHub Actions caches; the kernel layer rebuilds only when kernel/version
+# or the config files change. Run it after checkout.
+name: Build e2e inputs
+description: Build the guest kernel, system drive and dev host image with the GitHub cache
+
+inputs:
+  write-cache:
+    description: "'true' writes the caches back; pull requests only read them"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    # type=gha cache needs the runtime token and URL in the environment,
+    # which only actions get by default
+    - name: Expose GitHub runtime
+      uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+
+    - name: Build kernel and system drive
+      shell: bash
+      env:
+        WRITE_CACHE: ${{ inputs.write-cache }}
+      run: |
+        cache_to=()
+        if [ "$WRITE_CACHE" = true ]; then
+          cache_to=(--cache-to "type=gha,scope=system-files,mode=max")
+        fi
+        docker buildx build -f host/Dockerfile --target system-files --platform linux/amd64 \
+          --output type=local,dest=.cache/ci \
+          --cache-from type=gha,scope=system-files "${cache_to[@]}" .
+
+    # --load puts it in the image store; IMP_HOST_IMAGE_READY=1 then stops
+    # scripts/dev.sh from building it again without the GitHub cache
+    - name: Build host image
+      shell: bash
+      env:
+        WRITE_CACHE: ${{ inputs.write-cache }}
+      run: |
+        cache_to=()
+        if [ "$WRITE_CACHE" = true ]; then
+          cache_to=(--cache-to "type=gha,scope=imp-dev,mode=max")
+        fi
+        docker buildx build -f host/Dockerfile --target dev -t "${IMP_HOST_IMAGE:-imp-host:dev}" --load \
+          --cache-from type=gha,scope=imp-dev "${cache_to[@]}" .

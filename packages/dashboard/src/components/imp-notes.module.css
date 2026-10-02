@@ -1,0 +1,18 @@
+.notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.warning {
+  color: var(--warn);
+}
+
+.info {
+  color: var(--muted);
+}

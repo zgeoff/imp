@@ -145,11 +145,13 @@ up() {
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
+      -e IMP_DASHBOARD_DIR=/src/packages/dashboard/dist \
       "$IMP_HOST_IMAGE" >/dev/null
     echo "dev.sh: started $name"
   fi
   wait_ready
   echo "dev.sh: impd ready on $api (token: scripts/dev.sh token)"
+  echo "dev.sh: dashboard on $api/ui/ (bun run build:dashboard to build it)"
 }
 
 # down gives impd time to sleep every imp (SIGTERM), so memory survives

@@ -27,6 +27,7 @@ test('it fills every setting from its default when the env is empty', () => {
     zfsRoot: null,
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
+    dashboardDir: null,
     https: null,
   });
 });

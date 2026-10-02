@@ -1,0 +1,3 @@
+[test]
+# a DOM for the component tests; the root run skips this package
+preload = ["@zgeoff/bun-test-extended", "./test-setup.ts"]
