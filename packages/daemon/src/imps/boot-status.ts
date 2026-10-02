@@ -23,7 +23,7 @@ export function readBootStatus(
 
     // its wake finds nothing to load
     if (meta === null) {
-      return { coldBootReason: 'no snapshot' };
+      return { coldBootReason: 'no snapshot it can load' };
     }
 
     const reason = findColdBootReason(meta, host);

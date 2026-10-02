@@ -489,14 +489,14 @@ test('system.info counts a running imp on an older firecracker as a cold boot to
 
   const info = await client.system.info();
 
-  await client.imps.sleep({ name: 'dev' });
-
-  const asleep = await client.imps.get({ name: 'dev' });
-
   expect(info.bootStatus).toEqual({
     coldBoots: 1,
     outdated: { firecracker: 1, kernel: 0, agent: 0 },
   });
+
+  await client.imps.sleep({ name: 'dev' });
+
+  const asleep = await client.imps.get({ name: 'dev' });
 
   expect(asleep.coldBootReason).toBe('firecrackerVersion changed (v1.17.0 → v1.18.0)');
 });

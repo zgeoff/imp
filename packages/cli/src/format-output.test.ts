@@ -136,22 +136,38 @@ test('it counts sessions in the imp list, and shows - when impd has not seen the
 });
 
 test('it says how many imps will boot cold and run each older part', () => {
-  const none = formatBootStatus({
-    coldBoots: 0,
-    outdated: { firecracker: 0, kernel: 0, agent: 0 },
-  });
+  const none = formatBootStatus(
+    {
+      coldBoots: 0,
+      outdated: { firecracker: 0, kernel: 0, agent: 0 },
+    },
+    '0.2.0',
+  );
 
-  const some = formatBootStatus({
-    coldBoots: 3,
-    outdated: { firecracker: 1, kernel: 0, agent: 2 },
-  });
+  const some = formatBootStatus(
+    {
+      coldBoots: 3,
+      outdated: { firecracker: 1, kernel: 0, agent: 2 },
+    },
+    '0.2.0',
+  );
 
-  const outdatedOnly = formatBootStatus({
-    coldBoots: 0,
-    outdated: { firecracker: 0, kernel: 1, agent: 0 },
-  });
+  const outdatedOnly = formatBootStatus(
+    {
+      coldBoots: 0,
+      outdated: { firecracker: 0, kernel: 1, agent: 0 },
+    },
+    '0.2.0',
+  );
 
   expect(none).toBe('none');
   expect(some).toBe('3 will boot cold; outdated: 1 firecracker, 2 agent');
   expect(outdatedOnly).toBe('outdated: 1 kernel');
+});
+
+test('it says an older impd does not report boot status', () => {
+  // an impd from before the counts leaves the field out
+  const status = formatBootStatus(undefined, '0.1.0');
+
+  expect(status).toBe('unknown (impd 0.1.0 predates it)');
 });

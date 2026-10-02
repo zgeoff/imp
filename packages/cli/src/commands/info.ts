@@ -20,7 +20,7 @@ export const infoCommand = defineCommand({
         ['version', info.version],
         ['imps', `${String(info.impCount)} (${String(info.awakeCount)} awake)`],
         ['sessions', String(info.sessionCount)],
-        ['boot status', formatBootStatus(info.bootStatus)],
+        ['boot status', formatBootStatus(info.bootStatus, info.version)],
         [
           'ram',
           `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed)`,

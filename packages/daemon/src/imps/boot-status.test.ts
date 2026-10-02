@@ -23,7 +23,7 @@ function count(cases: readonly StatusCase[]) {
 test('a sleeping imp with a reason boots cold; one whose snapshot loads counts its old parts', () => {
   const result = count([
     { state: 'sleeping', status: { coldBootReason: 'firecrackerVersion changed' } },
-    { state: 'sleeping', status: { coldBootReason: 'no snapshot' } },
+    { state: 'sleeping', status: { coldBootReason: 'no snapshot it can load' } },
     { state: 'sleeping', status: { outdated: ['agent', 'kernel'] } },
     { state: 'sleeping', status: {} },
   ]);
@@ -60,7 +60,10 @@ test('a running imp whose last boot was cold does not boot cold again for that',
 });
 
 test('stopped, failed and creating imps are never read or counted', () => {
-  const outdated: BootStatus = { coldBootReason: 'no snapshot', outdated: ['firecracker'] };
+  const outdated: BootStatus = {
+    coldBootReason: 'no snapshot it can load',
+    outdated: ['firecracker'],
+  };
 
   const result = count([
     { state: 'stopped', status: outdated },

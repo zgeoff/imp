@@ -112,8 +112,15 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
 }
 
 // what `imp info` says an upgrade left: the imps whose next wake boots
-// cold, and how many run each older part
-export function formatBootStatus(status: Readonly<SystemInfo['bootStatus']>): string {
+// cold, and how many run each older part; an older impd does not count them
+export function formatBootStatus(
+  status: Readonly<SystemInfo['bootStatus']> | undefined,
+  impdVersion: string,
+): string {
+  if (status === undefined) {
+    return `unknown (impd ${impdVersion} predates it)`;
+  }
+
   const notes: string[] = [];
 
   if (status.coldBoots > 0) {
