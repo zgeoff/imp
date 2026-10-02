@@ -306,16 +306,19 @@ test('a box imp reaches the IPv6 addresses it allows, and nothing else', async (
 });
 
 // DNS is redirected to impd's resolver over IPv4 only; a box imp's port 53
-// over IPv6 meets its policy like any other port, so no query leaks out.
-test('a box imp sends no DNS over IPv6', async () => {
+// over IPv6 meets its policy like any other port: open to an address its
+// list allows, refused to any other, so no query leaks out.
+test('a box imp sends DNS over IPv6 only to an address its list allows', async () => {
   const query = await tryInImp(box, `nslookup example.com ${SERVER_OTHER}`);
   const overTcp = await tryGetFromImp(box, `http://[${SERVER_OTHER}]:53/`);
+  const allowed = await tryGetFromImp(box, `http://[${SERVER}]:53/`);
 
   // the open imp reaches port 53 there, so it is the policy that refuses
   const control = await tryGetFromImp(open, `http://[${SERVER_OTHER}]:53/`);
 
   expect(query).toBeFalse();
   expect(overTcp).toBeFalse();
+  expect(allowed).toBeTrue();
   expect(control).toBeTrue();
 });
 
