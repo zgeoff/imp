@@ -21,7 +21,10 @@ ensure_host_image() {
 load_tailscale_authkey() {
   { local xtrace=$-; set +x; } 2>/dev/null
   local key=${TAILSCALE_AUTHKEY:-} found=1
-  if [ -z "$key" ] && [ -z "${IMP_TAILSCALE_OP_MISSED:-}" ] && command -v op >/dev/null 2>&1; then
+  # 1Password only on request (IMP_TAILSCALE_OP=1): otherwise every worktree's
+  # dev instance would join the tailnet
+  if [ -z "$key" ] && [ "${IMP_TAILSCALE_OP:-}" = 1 ] && [ -z "${IMP_TAILSCALE_OP_MISSED:-}" ] &&
+    command -v op >/dev/null 2>&1; then
     # stdin closed and a deadline: a locked desktop app must not hang a run
     key=$(timeout 20 op read "${IMP_TAILSCALE_AUTHKEY_REF:-op://cloud/imp-tailscale-authkey/credential}" \
       </dev/null 2>/dev/null) || key=

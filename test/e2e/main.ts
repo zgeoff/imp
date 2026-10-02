@@ -415,7 +415,12 @@ async function main(): Promise<number> {
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
 
-  // one 1Password read per run: dev.sh and the tailscale suite take it from the env
+  // one 1Password read per run, and only when a suite needs the tailnet:
+  // dev.sh and the tailscale suite take the key from the env
+  if (args.suites.includes('tailscale')) {
+    process.env['IMP_TAILSCALE_OP'] = '1';
+  }
+
   const authKey = await readTailscaleAuthKey();
 
   if (authKey !== null) {

@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT, runCommand } from './instance';
 import { LIB_SCRIPT } from './tailscale-key';
@@ -54,7 +54,7 @@ test('a key from op is exported and never shows in a bash -x trace', async () =>
   const result = await runTraced(
     `source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey
     { set +x; } 2>/dev/null; [ "$TAILSCALE_AUTHKEY" = '${SECRET}' ] && echo match`,
-    { PATH: writeFakeBin(binDir, 'key') },
+    { PATH: writeFakeBin(binDir, 'key'), IMP_TAILSCALE_OP: '1' },
   );
 
   expect(result.stdout).toBe('match\n');
@@ -74,13 +74,34 @@ test('after an op miss, the rest of the run skips op', async () => {
       'bash',
       LIB_SCRIPT,
     ],
-    { env: { PATH: writeFakeBin(binDir, 'fail') } },
+    { env: { PATH: writeFakeBin(binDir, 'fail'), IMP_TAILSCALE_OP: '1' } },
   );
 
   const calls = readFileSync(opCalls, 'utf8').trim().split('\n');
 
   expect(result.stdout).toBe('1\n');
   expect(calls).toHaveLength(1);
+});
+
+test('without IMP_TAILSCALE_OP=1, op is never called', async () => {
+  const binDir = mkdtempSync(join(dir, 'bin-'));
+
+  rmSync(opCalls, { force: true });
+
+  const result = await runCommand(
+    [
+      'bash',
+      '-c',
+      'source "$1"; unset TAILSCALE_AUTHKEY; load_tailscale_authkey; echo "found $?"',
+      'bash',
+      LIB_SCRIPT,
+    ],
+    { env: { PATH: writeFakeBin(binDir, 'key') } },
+  );
+
+  // the repo's own .env may still supply a key; op must not be asked
+  expect(result.exitCode).toBe(0);
+  expect(existsSync(opCalls)).toBeFalse();
 });
 
 test('dev.sh up passes the key to docker by name only, and never traces it', async () => {
