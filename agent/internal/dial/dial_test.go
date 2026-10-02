@@ -181,12 +181,19 @@ func TestHostCloseEndsTheRelay(t *testing.T) {
 // After the host half-closed, a target that resets ends the relay without
 // STDOUT_EOF.
 func TestTargetResetEndsWithoutEOF(t *testing.T) {
+	// The target resets only once the host half-closed: a reset right after
+	// the accept can reach the agent before its connect completes, and the
+	// dial then fails with ECONNRESET instead of relaying.
 	addr := listen(t, "tcp", "127.0.0.1:0", func(c net.Conn) {
+		io.Copy(io.Discard, c)
 		c.Write([]byte("partial"))
 		c.(*net.TCPConn).SetLinger(0)
 	})
 	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: addr.String()})
 	h.requireOK(t)
+	if err := h.w.Write(proto.TypeStdinEOF, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	for {
 		f, err := h.r.Next()
