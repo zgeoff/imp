@@ -89,27 +89,39 @@ func (d *Dialer) dialAsUser(cred *syscall.Credential, address string) (net.Conn,
 	}
 	parent, child := pair[0], pair[1]
 	defer unix.Close(parent)
+	devNull, err := unix.Open("/dev/null", unix.O_RDWR|unix.O_CLOEXEC, 0)
+	if err != nil {
+		unix.Close(child)
+		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: "open /dev/null: " + err.Error()}
+	}
+	defer unix.Close(devNull)
 
-	// an empty env, and the socketpair end as fd 0 and nothing else
+	// An empty env; the socketpair end as fd 0, and /dev/null as 1 and 2, so
+	// the helper's own fds land above 2 and a runtime crash message never
+	// goes into the target socket.
+	pidfd := -1
 	attr := &syscall.ProcAttr{
 		Dir:   "/",
 		Env:   []string{},
-		Files: []uintptr{uintptr(child)},
-		Sys:   &syscall.SysProcAttr{Credential: cred, Setpgid: true},
+		Files: []uintptr{uintptr(child), uintptr(devNull), uintptr(devNull)},
+		Sys:   &syscall.SysProcAttr{Credential: cred, Setpgid: true, PidFD: &pidfd},
 	}
 	argv := []string{d.agentPath, HelperCommand, address}
-	pid, _, err := d.reaper.Start(func() (int, error) {
+	_, _, err = d.reaper.Start(func() (int, error) {
 		return syscall.ForkExec(d.agentPath, argv, attr)
 	})
 	unix.Close(child)
 	if err != nil {
 		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: "start the dial helper: " + err.Error()}
 	}
+	defer unix.Close(pidfd)
 
 	fd, err := receiveSocket(parent, helperTimeout)
 	if err != nil {
-		// a helper that hangs must not outlive its dial; the reaper reaps it
-		syscall.Kill(pid, syscall.SIGKILL)
+		// A helper that hangs must not outlive its dial; the reaper reaps it.
+		// Through the pidfd: by now the helper may be gone and its pid
+		// reused by another process.
+		unix.PidfdSendSignal(pidfd, unix.SIGKILL, nil, 0)
 		return nil, err
 	}
 	return fileConn(fd, address)
@@ -161,7 +173,9 @@ func helperFailed(message string) error {
 }
 
 // waitReadable polls conn until it has data or timeout passes. A signal
-// (the reaper's SIGCHLD) interrupts poll; it goes on with the time left.
+// (the reaper's SIGCHLD) interrupts poll; it goes on with the time left. It
+// holds an OS thread for up to helperTimeout, and the reaper runs one fork at
+// a time: both fine at the rate SSH forwards open.
 func waitReadable(conn int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {

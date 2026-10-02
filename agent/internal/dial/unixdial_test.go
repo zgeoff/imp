@@ -6,7 +6,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -43,6 +42,10 @@ func runTestHelper(address string) {
 	case "/datagram":
 		fd, _ := unix.Socket(unix.AF_UNIX, unix.SOCK_DGRAM, 0)
 		unix.Sendmsg(0, []byte{answerOK}, unix.UnixRights(fd), nil, 0)
+	case "/fds":
+		out, _ := os.Readlink("/proc/self/fd/1")
+		errOut, _ := os.Readlink("/proc/self/fd/2")
+		unix.Sendmsg(0, []byte(string(answerFailed)+out+","+errOut), nil, nil, 0)
 	case "/two":
 		pair, _ := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 		unix.Sendmsg(0, []byte{answerOK}, unix.UnixRights(pair[0], pair[1]), nil, 0)
@@ -177,6 +180,17 @@ func TestAHelperThatMisbehavesFailsTheDial(t *testing.T) {
 	}
 }
 
+// The helper's stdout and stderr are /dev/null, so its own fds land above 2
+// and a runtime crash message never goes into the target socket.
+func TestTheHelperWritesNothingIntoTheSocket(t *testing.T) {
+	_, err := testDialer("").dialAsUser(nil, "/fds")
+
+	requireCode(t, err, proto.ErrDialFailed)
+	if !strings.Contains(err.Error(), "/dev/null,/dev/null") {
+		t.Fatalf("the helper's fds 1 and 2: %v", err)
+	}
+}
+
 // Fds past the first in the helper's message are closed, not leaked.
 func TestExtraFdsInTheAnswerAreClosed(t *testing.T) {
 	before := countFds(t)
@@ -220,10 +234,7 @@ func TestTheReceivedFdIsCloseOnExec(t *testing.T) {
 		t.Fatalf("fd flags %d %v, want FD_CLOEXEC", flags, err)
 	}
 
-	out, err := exec.Command("/bin/sh", "-c", "ls /proc/self/fd").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
+	out := listChildFds(t)
 	for _, name := range strings.Fields(string(out)) {
 		if name == fmt.Sprint(fd) {
 			t.Fatalf("a child inherited fd %d", fd)
@@ -326,4 +337,29 @@ func listenPeer(t *testing.T, dir, name string, uid, gid int, mode os.FileMode) 
 		}
 	}()
 	return p
+}
+
+// listChildFds forks /bin/sh to list its own fds. It forks through the test
+// reaper, which reaps every child: os/exec's Wait would race it.
+func listChildFds(t *testing.T) []byte {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	attr := &syscall.ProcAttr{Files: []uintptr{0, w.Fd(), 2}}
+	_, done, err := testReaper.Start(func() (int, error) {
+		return syscall.ForkExec("/bin/sh", []string{"sh", "-c", "ls /proc/self/fd"}, attr)
+	})
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	return out
 }
