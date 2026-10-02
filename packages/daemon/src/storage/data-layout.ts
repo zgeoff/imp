@@ -77,8 +77,8 @@ export function buildBackupPaths(dataDir: string) {
   return {
     dir,
 
-    // what restic reads: the database copy, the manifest and the backup
-    // tree's disks, at the same paths every run
+    // what restic reads: the manifest, and the disks, checkpoints and images
+    // at the same paths every run; the database copy stays outside it
     tree: join(dir, 'tree'),
     cache: join(dir, 'cache'),
 
@@ -94,7 +94,6 @@ export function buildBackupPaths(dataDir: string) {
 // Paths in the backup tree, relative to it: the same on XFS and ZFS, where
 // each directory is a read-only clone of the dataset.
 export const BACKUP_TREE = {
-  database: 'db.sqlite',
   manifest: 'manifest.json',
   buildImpDir: (impId: string) => join('imps', impId),
   buildDisk: (impId: string) => join('imps', impId, 'disk', 'rootfs.ext4'),
