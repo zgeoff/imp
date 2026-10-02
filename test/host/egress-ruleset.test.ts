@@ -7,13 +7,14 @@ import {
 } from '../../packages/daemon/src/egress/egress-ruleset';
 import type { FirewallSlot } from '../../packages/daemon/src/egress/egress-ruleset';
 import { BLOCKED_RANGES6 } from '../../packages/daemon/src/net/ranges6';
+import { buildUnshare } from './unshare';
 
 // impd's table, applied by the real nft in a fresh user and network
 // namespace. Skipped where that is not allowed, or nft is missing, unless
 // IMP_HOST_TESTS=required, as in CI's root step.
 const canUnshare =
   process.env['IMP_HOST_TESTS'] === 'required' ||
-  Bun.spawnSync(['unshare', '-rn', 'nft', 'list', 'ruleset'], {
+  Bun.spawnSync([...buildUnshare(), 'nft', 'list', 'ruleset'], {
     stdout: 'ignore',
     stderr: 'ignore',
   }).exitCode === 0;
@@ -66,7 +67,7 @@ const BASE = {
 };
 
 function runNft(scripts: Readonly<Record<string, string>>, after: string): string {
-  const result = Bun.spawnSync(['unshare', '-rn', 'bash', '-euo', 'pipefail', '-c', after], {
+  const result = Bun.spawnSync([...buildUnshare(), 'bash', '-euo', 'pipefail', '-c', after], {
     env: { ...process.env, ...scripts },
   });
 
@@ -243,10 +244,7 @@ test.skipIf(!canUnshare)(
 
     const result = Bun.spawnSync(
       [
-        'unshare',
-        '-rnm',
-        '--propagation',
-        'private',
+        ...buildUnshare(true),
         'bash',
         '-euo',
         'pipefail',
