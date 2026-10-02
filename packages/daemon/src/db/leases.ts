@@ -38,6 +38,9 @@ interface LeaseWrite {
 
   // the ImpChanged reason it emits; null for none, as a renew
   readonly reason: ImpChangeReason | null;
+
+  // a removal emits even when it took nothing, as `hold 0` always has
+  readonly isEmittedWhenNone?: boolean;
 }
 
 // Only a lease made through `leases.*` blocks a user's sleep or stop: the
@@ -109,8 +112,8 @@ export async function writeLease(
   return imp;
 }
 
-// Removes the leases, then sets the imp's hold. It emits only when one went;
-// `released` says how many.
+// Removes the leases, then sets the imp's hold. It emits only when one went,
+// unless told otherwise; `released` says how many.
 export async function removeLeases(
   db: ImpDatabase,
   impId: string,
@@ -139,7 +142,7 @@ export async function removeLeases(
     return { removed: deleted.length, imp: await updateImpHold(trx, impId) };
   });
 
-  if (result.removed > 0 && write.reason !== null) {
+  if (write.reason !== null && (result.removed > 0 || write.isEmittedWhenNone === true)) {
     emitImpWrite(db, {
       kind: 'changed',
       imp: result.imp,

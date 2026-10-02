@@ -23,7 +23,8 @@ for each caller:
 A token, its dashboard sessions and its bound keys are one principal, so a lease taken through one
 is renewed or released through any of them. A deleted token's id never comes back: a new token with
 the same name holds none of the old one's leases. A tagged node whose `tailscale whois` gives no
-stable ID is `tailnet:<node name>`.
+stable ID has no principal: a later node could take its name, so the lease calls and `imp hold`
+refuse it with `FORBIDDEN`.
 
 The caller names only a **label**, 1–64 characters of letters, digits, `.`, `_`, `:` and `-`. The
 pair (principal, label) is the lease. The API shows its `owner` as `{ principal, display, label }`;
@@ -71,10 +72,12 @@ governor never sleep an imp with a live lease or hold
 Only a lease taken through `leases.*` blocks a user's sleep or stop. A hold and a legacy hold never
 do, and they outlast it.
 
-- `imps.sleep` and `imps.stop` on an imp with a lease from `leases.*` fail with `LEASED`, data
-  `{ leases, otherCount }`, shown as [above](#owners).
-- With `force: true` they end every such lease on the imp first, and emit `ImpChanged` with reason
-  `released` and `detail.released`, the count. A renew after that gets `LEASE_NOT_HELD`.
+- `imps.sleep` and `imps.stop` that would change the state of an imp with a lease from `leases.*`
+  fail with `LEASED`, data `{ leases, otherCount }`, shown as [above](#owners). A sleep of a
+  sleeping imp, or a stop of a stopped one, changes nothing and answers as before.
+- With `force: true` they sleep or stop the imp, then end every such lease on it and emit
+  `ImpChanged` with reason `released` and `detail.released`, the count. A sleep or stop that fails
+  keeps the leases. A renew after a release gets `LEASE_NOT_HELD`.
 - `imp sleep` and `imp stop` pass `force`, because a person typed them. The dashboard, the MCP tools
   and older CLIs cannot pass it; they meet `LEASED` only on an imp that a client leased through
   `leases.*`.
