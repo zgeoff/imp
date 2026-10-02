@@ -115,8 +115,8 @@ different major version stops impd; a different minor version logs a warning tha
 impd starts. The image ships 2.3; Ubuntu 24.04 hosts and the CI runner run 2.2.
 
 The `zfs` CI job runs the image's 2.3.9 tools against the runner's 2.2.2 module. A pass covers only
-the commands its suites run (lifecycle, checkpoints, sleep, and the real-pool tests); it does not
-prove that 2.3 tools work with a 2.2 module in general.
+the commands its suites run (lifecycle, checkpoints, disks, sleep, and the real-pool tests); it does
+not prove that 2.3 tools work with a 2.2 module in general.
 
 The backend uses only what OpenZFS 0.8 had already, so every 2.x module works:
 
@@ -211,14 +211,23 @@ the disk had, which a restore or a fork from it takes back. A backup's manifest 
 online. Both backends keep the disk as a file (on ZFS, in its dataset), so the grow is a `truncate`
 under the imp's lock. The guest follows:
 
-- **Stopped**: every cold boot grows the filesystem to fill the disk. The agent's stage 1 runs
-  `EXT4_IOC_RESIZE_FS`, an online resize, after it mounts the disk.
+- **Stopped**, and a new disk before its first boot: impd runs `resize2fs` on the host, about 80 ms
+  for 4 to 100 GiB. A filesystem that was not unmounted cleanly is skipped, since its journal must
+  replay first; the guest grows it instead. Every cold boot also grows the filesystem to fill the
+  disk: the agent's stage 1 runs `EXT4_IOC_RESIZE_FS`, an online resize, after it mounts the disk.
 - **Running**: impd sends `PATCH /drives/rootfs` so Firecracker reads the file's size again and
   tells the guest, then the agent's `grow` request waits for the new size and resizes
   ([protocol](./protocol.md#grow)).
 - **Sleeping**: the snapshot holds the old size, so the grow waits for the wake, which runs the same
   two steps. A failed grow stays pending (`disk_grow_pending`) for the next wake; a cold boot clears
   it.
+
+The guest mounts its root with `noinit_itable`. A grown filesystem has new inode tables, which ext4
+zeroes: in the background by default, or at once in an online resize with `noinit_itable`. The disk
+is a sparse file, so those tables read as zeros already, and zeroing them only allocates host space:
+about 1.6 % of the new size (1.6 GiB for a 4 GiB image grown to 100 GiB). `resize2fs` on the host
+leaves them as holes, which is why a stopped disk grows there. An online grow, of a running or
+sleeping imp, still pays the 1.6 %.
 
 `mkfs.ext4` keeps `resize_inode`, which lets an online grow add block group descriptors: a 4 GiB
 filesystem grows to well past 1 TiB. The journal keeps the size mkfs gave the image, 64 MiB for a 4

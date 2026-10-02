@@ -93,6 +93,9 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   const taps: string[] = [];
   const logs: string[] = [];
 
+  // disks whose filesystem the host grew; the test disks hold no ext4
+  const filesystemGrows: string[] = [];
+
   // the clock for holds and reservations; a test moves it with `advance`
   const clock = { offsetMs: 0 };
   const readClock = () => Date.now() + clock.offsetMs;
@@ -168,6 +171,11 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       storage,
       now: readClock,
       readExecEnv: broker.readExecEnv,
+      growFilesystem: (disk) => {
+        filesystemGrows.push(disk);
+
+        return Promise.resolve(true);
+      },
     });
   };
 
@@ -188,6 +196,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     fake,
     taps,
     logs,
+    filesystemGrows,
     imps: governed.imps,
     governor: governed.governor,
     broker,

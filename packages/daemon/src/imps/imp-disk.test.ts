@@ -19,6 +19,12 @@ async function setupDiskTest() {
 
   const app = buildTestApp(harness, harness);
 
+  const findDisk = async (name: string) => {
+    const imp = await findImpByName(harness.db, name);
+
+    return buildImpPaths(harness.dataDir, imp?.id ?? '').disk;
+  };
+
   const readDisk = async (name: string) => {
     const imp = await findImpByName(harness.db, name);
 
@@ -27,7 +33,7 @@ async function setupDiskTest() {
     return { fileBytes: statSync(disk).size, isGrowPending: imp?.isDiskGrowPending };
   };
 
-  return { ...harness, client: app.client, readDisk };
+  return { ...harness, client: app.client, findDisk, readDisk };
 }
 
 test('a new disk takes the size asked for, and never less than its image', async () => {
@@ -40,6 +46,11 @@ test('a new disk takes the size asked for, and never less than its image', async
   const disk1 = await ctx.readDisk('sized');
 
   expect(disk1).toEqual({ fileBytes: 2 * 1024 ** 3, isGrowPending: false });
+
+  // the host grew the filesystem before the first boot
+  const sizedDisk = await ctx.findDisk('sized');
+
+  expect(ctx.filesystemGrows).toEqual([sizedDisk]);
 
   // an image whose filesystem is 3 GiB
   await ctx.createTestImage('big');
@@ -55,6 +66,7 @@ test('a new disk takes the size asked for, and never less than its image', async
   const fitted = await ctx.client.imps.create({ name: 'fitted', image: 'big' });
 
   expect(fitted.diskMib).toBe(3 * GIB_MIB);
+  expect(ctx.filesystemGrows).toEqual([sizedDisk]);
 });
 
 test('a resize grows a stopped disk for its next boot, and never shrinks one', async () => {
@@ -64,7 +76,10 @@ test('a resize grows a stopped disk for its next boot, and never shrinks one', a
   await ctx.client.imps.stop({ name: 'dev' });
 
   const grown = await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4 * GIB_MIB });
+  const devDisk = await ctx.findDisk('dev');
 
+  // the host grows a stopped disk's filesystem: on create, then on the resize
+  expect(ctx.filesystemGrows).toEqual([devDisk, devDisk]);
   expect(grown.diskMib).toBe(4 * GIB_MIB);
 
   const disk2 = await ctx.readDisk('dev');
@@ -89,6 +104,9 @@ test('a running guest grows at once; a failed grow is retried at the next wake',
   await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB });
 
   expect(ctx.fake.grows).toEqual([{ disk, diskBytes: 3 * 1024 ** 3 }]);
+
+  // a VM has the disk open: only the create's grow ran on the host
+  expect(ctx.filesystemGrows).toEqual([disk]);
 
   ctx.fake.queue('grow', 'fail');
 

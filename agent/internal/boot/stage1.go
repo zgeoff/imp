@@ -37,7 +37,10 @@ func Stage1() error {
 	if err := mountOnce("sysfs", "/sys", "sysfs", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, ""); err != nil {
 		return err
 	}
-	if err := unix.Mount(userDisk, newRoot, "ext4", unix.MS_RELATIME, ""); err != nil {
+	// noinit_itable: the disk is a sparse file, so the inode tables of a grown
+	// disk read as zeros already; zeroing them in the background would only
+	// allocate about 1.6 % of the disk on the host
+	if err := unix.Mount(userDisk, newRoot, "ext4", unix.MS_RELATIME, "noinit_itable"); err != nil {
 		return fmt.Errorf("mount %s: %w", userDisk, err)
 	}
 	// the host may have grown the disk since the last boot; a failed grow

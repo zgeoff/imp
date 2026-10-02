@@ -10,6 +10,7 @@ import {
   updateImpHold,
   updateImpState,
 } from '../db/imps';
+import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
@@ -108,9 +109,16 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
 
         // a fork or a restore takes its source's size, an image's disk grows
-        // past the image's filesystem; the first boot grows the guest's too
+        // past the image's filesystem, and the filesystem with it
+        const cloneBytes = readFileBytes(paths.disk);
+        const sizedBytes = growDiskFile(paths.disk, diskBytes ?? 0);
+
+        if (sizedBytes > cloneBytes) {
+          await growStoppedFilesystem(context, imp.name, paths.disk);
+        }
+
         const sized = await updateImpDisk(context.db, imp.id, {
-          diskBytes: growDiskFile(paths.disk, diskBytes ?? 0),
+          diskBytes: sizedBytes,
           isGrowPending: false,
         });
 
@@ -259,6 +267,11 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         context.log(`impd: ${imp.name}: disk grown to ${String(diskMib)} MiB`);
 
+        // no VM has the disk open: the host grows its filesystem now
+        if (grown.pid === null && grown.state !== 'sleeping') {
+          await growStoppedFilesystem(context, imp.name, paths.disk);
+        }
+
         if (grown.state !== 'running') {
           return presenter.toApi(grown);
         }
@@ -310,6 +323,22 @@ function resolveDiskBytes(
   }
 
   return requested ?? Math.max(context.config.defaultDiskBytes, floor);
+}
+
+// The host's grow is the cheap one; when it fails or skips an unclean
+// filesystem, the guest's next boot grows it instead.
+async function growStoppedFilesystem(context: ImpContext, name: string, disk: string) {
+  try {
+    const isGrown = await context.growFilesystem(disk);
+
+    if (!isGrown) {
+      context.log(`impd: ${name}: the filesystem was not unmounted cleanly; its boot grows it`);
+    }
+  } catch (error) {
+    context.log(
+      `impd: ${name}: the host could not grow the filesystem: ${readErrorMessage(error)}`,
+    );
+  }
 }
 
 // The disk goes through the backend first: on ZFS a dataset is mounted inside

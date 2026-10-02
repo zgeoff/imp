@@ -17,6 +17,7 @@ import type { VmRunner } from '../vmm/vm-runner';
 import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
+import { growFilesystem } from './imp-disk';
 
 export interface ImpServiceDeps {
   readonly config: Config;
@@ -49,6 +50,10 @@ export interface ImpServiceDeps {
   // `KEY=VALUE` entries every exec in the imp starts with, under the
   // caller's own: the credential broker's proxy and CA variables
   readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+
+  // grows a disk's filesystem on the host while no VM has it open; false
+  // leaves the grow to the guest's next boot (imp-disk.ts)
+  readonly growFilesystem?: (disk: string) => Promise<boolean>;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -67,6 +72,7 @@ export interface ImpContext {
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly now: () => number;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
@@ -91,6 +97,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readTailnetHostname: deps.readTailnetHostname,
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
+    growFilesystem: deps.growFilesystem ?? growFilesystem,
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
