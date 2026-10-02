@@ -8,6 +8,7 @@ on:
       - flake.nix
       - flake.lock
       - deploy/**
+      - host/scripts/tailscale-up.sh
       - .github/workflows/nix.yml
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - flake.nix
       - flake.lock
       - deploy/**
+      - host/scripts/tailscale-up.sh
       - .github/workflows/nix.yml
 
 permissions:
@@ -50,7 +52,7 @@ jobs:
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
         with:
           extra_nix_config: |
-            system-features = kvm nixos-test benchmark big-parallel
+            system-features = kvm nixos-test
 
       - name: Format
         run: git ls-files -z '*.nix' | xargs -0 nix fmt -- --check
