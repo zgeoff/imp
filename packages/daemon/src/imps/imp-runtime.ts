@@ -7,17 +7,9 @@ import type { ActivityTracker } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps } from './imp-vm-ops';
+import { createLockFreeSleep } from './lock-free-sleep';
+import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import type { ShutdownGate } from './shutdown-gate';
-
-// 'skipped' when the imp's lock is taken or it no longer qualifies
-export type SleepOutcome = 'slept' | 'skipped' | 'failed';
-
-// What a background sleep checks again under the lock. The governor sleeps
-// the least recently active imp, idle or not; the idle loop also needs the
-// imp no more active than when it looked.
-type SleepPolicy =
-  | { readonly by: 'governor' }
-  | { readonly by: 'idle'; readonly seenActiveAt: number };
 
 // What the wake proxy, the idle loop, the governor and impd's start and stop
 // need: imps woken on demand, put to sleep in the background, and the
@@ -37,9 +29,8 @@ export interface ImpRuntime {
   ) => Promise<{ readonly imp: ImpRecord; readonly wokeMs: number | null }>;
 
   // for the idle loop and the governor: sleeps the imp if it still runs and
-  // `policy` still allows it. It never waits for the imp's lock: the governor
-  // calls it while it holds admission, which a locked boot may be waiting for.
-  readonly trySleepImp: (id: string, reason: string, policy: SleepPolicy) => Promise<SleepOutcome>;
+  // `policy` still allows it
+  readonly trySleepImp: LockFreeSleep;
 
   // on SIGTERM: every running imp to sleep, a few at a time. A wake or boot
   // already under way finishes first and is put to sleep; later ones fail.
@@ -160,15 +151,13 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     requireRunning,
 
-    trySleepImp: async (id, reason, policy) => {
-      const result = await lock.tryWithImpId(id, (imp) =>
+    trySleepImp: createLockFreeSleep<LockedImp | undefined>(
+      lock.tryWithImpId,
+      (imp, reason, policy) =>
         imp !== undefined && isSleepAllowed(imp, policy)
           ? sleepIfRunning(imp, reason)
           : Promise.resolve<SleepOutcome>('skipped'),
-      );
-
-      return result.ran ? result.value : 'skipped';
-    },
+    ),
 
     // open connections do not count: impd is going away
     sleepAllImps: async () => {

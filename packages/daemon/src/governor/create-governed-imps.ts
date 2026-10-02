@@ -1,12 +1,11 @@
 import { listImps } from '../db/imps';
-import type { ImpRuntime } from '../imps/imp-runtime';
 import { createImpService } from '../imps/imp-service';
 import type { ImpServiceDeps, Imps } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
 import { readOwnedRamMib } from '../vmm/vm-stats';
 import { createRamGovernor } from './ram-governor';
-import type { RamGovernor } from './ram-governor';
+import type { RamAdmission, RamGovernor } from './ram-governor';
 
 type GovernedDeps = Omit<ImpServiceDeps, 'admission'>;
 
@@ -16,19 +15,26 @@ export function createGovernedImps(deps: GovernedDeps): {
   readonly imps: Imps;
   readonly governor: RamGovernor;
 } {
-  const holder: { imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'trySleepImp'> | null } = {
-    imps: null,
-  };
-
+  const holder: { governor: RamGovernor | null } = { governor: null };
   const readRamMib = deps.readRamMib ?? readOwnedRamMib;
   const log = deps.log ?? printLog;
+
+  // the governor exists before any request reaches the service
+  const admission: RamAdmission = {
+    admit: (request) => holder.governor?.admit(request) ?? Promise.resolve(),
+    release: (id) => {
+      holder.governor?.release(id);
+    },
+  };
+
+  const imps = createImpService({ ...deps, readRamMib, admission });
 
   const governor = createRamGovernor({
     budgetMib: deps.config.ramBudgetMib,
     listAwake: async () => {
-      const imps = await listImps(deps.db);
+      const listed = await listImps(deps.db);
 
-      return imps.flatMap((imp) =>
+      return listed.flatMap((imp) =>
         imp.state === 'running' && imp.pid !== null
           ? [
               {
@@ -46,18 +52,12 @@ export function createGovernedImps(deps: GovernedDeps): {
     readRamMib,
 
     // an open exec session or proxied request pins the imp, like a hold
-    isBusy: (id) =>
-      holder.imps !== null && (holder.imps.isImpBusy(id) || holder.imps.tracker.count(id) > 0),
-    trySleepImp: (id, reason) =>
-      holder.imps === null
-        ? Promise.resolve('skipped')
-        : holder.imps.trySleepImp(id, reason, { by: 'governor' }),
+    isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,
+    trySleepImp: imps.trySleepImp,
     log,
   });
 
-  const imps = createImpService({ ...deps, readRamMib, admission: governor });
-
-  holder.imps = imps;
+  holder.governor = governor;
 
   return { imps, governor };
 }

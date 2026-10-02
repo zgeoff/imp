@@ -1,5 +1,5 @@
 import { buildImpOverBudgetError, buildRamBudgetError } from '../api-errors';
-import type { SleepOutcome } from '../imps/imp-runtime';
+import type { LockFreeSleep } from '../imps/lock-free-sleep';
 import { createSemaphore } from '../imps/semaphore';
 import { pickSleepVictims } from './pick-sleep-victims';
 
@@ -65,9 +65,9 @@ export interface RamGovernorDeps {
   // or proxied requests: never a victim
   readonly isBusy: (id: string) => boolean;
 
-  // sleeps the imp if it is still running and idle. It must never wait for
-  // the imp's lock: admission is held, and a locked boot may wait for it.
-  readonly trySleepImp: (id: string, reason: string) => Promise<SleepOutcome>;
+  // sleeps the imp if it still runs and is not held; the type admits only a
+  // sleep that never waits for the imp's lock, since admission is held
+  readonly trySleepImp: LockFreeSleep;
   readonly log: (message: string) => void;
   readonly now?: () => number;
 }
@@ -163,7 +163,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       }
 
       for (const id of victims) {
-        const outcome = await deps.trySleepImp(id, reason);
+        const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
 
         if (outcome === 'slept') {
           reservations.delete(id);

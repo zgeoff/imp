@@ -1,5 +1,18 @@
 import { expect, test } from 'bun:test';
+import { createKeyedMutex } from '../imps/keyed-mutex';
+import { createLockFreeSleep } from '../imps/lock-free-sleep';
+import type { SleepOutcome } from '../imps/lock-free-sleep';
 import { createRamGovernor } from './ram-governor';
+
+// a fake sleep behind a real try-lock, as the governor's type demands
+function buildFakeSleep(sleep: (id: string) => Promise<SleepOutcome>) {
+  const mutex = createKeyedMutex();
+
+  return createLockFreeSleep<string>(
+    (id, action) => mutex.tryRunExclusive(id, () => action(id)),
+    (id) => sleep(id),
+  );
+}
 
 test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
   const awake = new Map([
@@ -25,12 +38,12 @@ test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
       ),
     readRamMib: () => 300,
     isBusy: (id) => id === 'pinned',
-    trySleepImp: (id) => {
+    trySleepImp: buildFakeSleep((id) => {
       slept.push(id);
       awake.delete(id);
 
       return Promise.resolve('slept');
-    },
+    }),
     log: () => {
       // quiet
     },
@@ -61,11 +74,11 @@ test('it never admits an imp whose memory is larger than the whole budget', asyn
       ]),
     readRamMib: () => 300,
     isBusy: () => false,
-    trySleepImp: (id) => {
+    trySleepImp: buildFakeSleep((id) => {
       slept.push(id);
 
       return Promise.resolve('slept');
-    },
+    }),
     log: () => {
       // quiet
     },
@@ -108,7 +121,7 @@ test('it picks again without a victim that was skipped, and fails once none is l
       ),
     readRamMib: () => 300,
     isBusy: () => false,
-    trySleepImp: (id) => {
+    trySleepImp: buildFakeSleep((id) => {
       tried.push(id);
 
       if (id === 'old') {
@@ -118,7 +131,7 @@ test('it picks again without a victim that was skipped, and fails once none is l
       awake.delete(id);
 
       return Promise.resolve('slept');
-    },
+    }),
     log: () => {
       // quiet
     },
