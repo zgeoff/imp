@@ -34,6 +34,7 @@ way a user would. The suites run in this order:
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
 | `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
+| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake      |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
@@ -51,9 +52,10 @@ scripts/test-e2e.sh --clean                  # wipe the dev instance's data firs
 
 The `acceptance` set is the definition of done: the tailscale suite fails without a
 `TAILSCALE_AUTHKEY`, and the timing limits fail the run. Any other set skips tailscale without a key
-and only warns about a missed limit. The `fast` set takes about 3.5 minutes, most of it idle
-timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its defaults
-the scale suite alone took about 75 seconds in the last acceptance run.
+and only warns about a missed limit. The https suite starts Pebble before the dev instance and needs
+no domain ([HTTPS](./https.md#testing-with-pebble)). The `fast` set takes about 3.5 minutes, most of
+it idle timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its
+defaults the scale suite alone took about 75 seconds in the last acceptance run.
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev.sh`. These variables tune a run:

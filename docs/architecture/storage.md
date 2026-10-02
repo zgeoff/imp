@@ -37,11 +37,13 @@ On XFS:
   imps/<id>/snapshot/{vmstate,mem,meta.json}
   imps/<id>/checkpoints/<cid>/disk.ext4
   tailscale/
+  tls/{account.key,certificate.pem,attempts.json}
 ```
 
-`snapshot/` holds the memory of a sleeping imp, and `vm.json` what its VM booted with
-([sleep and wake](./sleep-and-wake.md#snapshot-identity)). [ZFS](#datasets) keeps the disk and the
-memory snapshot in other places.
+`tls/` holds the ACME account and the certificate for `IMP_DOMAIN`
+([HTTPS](../guides/https.md#files)). `snapshot/` holds the memory of a sleeping imp, and `vm.json`
+what its VM booted with ([sleep and wake](./sleep-and-wake.md#snapshot-identity)). [ZFS](#datasets)
+keeps the disk and the memory snapshot in other places.
 
 ## System files
 

@@ -127,6 +127,9 @@ Every imp serves its port 8080 at two URLs:
 - `http://<name>.imp.localhost:7080` on the host
 - `http://<tailnet-host>:<port>` on your tailnet; `imp url` prints it
 
+With a domain of your own (`IMP_DOMAIN`), it is also at `https://<name>.<domain>` on your tailnet,
+with a certificate impd gets and renews ([HTTPS](./docs/guides/https.md)).
+
 ## The RAM budget
 
 impd keeps the total RAM of awake imps under a budget, 16 GiB by default (`IMP_RAM_BUDGET_MIB`; the

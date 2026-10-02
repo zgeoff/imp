@@ -2,7 +2,7 @@
 
 Every imp gets its own tap device and its own /30, routed through the host container. No two imps
 share a layer-2 network, so they cannot see each other. The wake proxy gives each imp an HTTP URL on
-the host and on the tailnet.
+the host and on the tailnet, and an HTTPS URL on your own domain when one is set.
 
 ## Addressing
 
@@ -43,14 +43,21 @@ The proxy forwards HTTP and WebSockets to an imp's HTTP port. The port is set at
   in the guest that would keep it awake.
 - Errors are short HTML pages: 404 for an unknown imp, 503 when it could not wake, 502 when nothing
   answers on the port.
+- **HTTPS on a domain.** With `IMP_DOMAIN`, TLS listeners on 443 hand requests to the same proxy,
+  and 80 redirects to them. They bind the tailnet IP and loopback only, and accept exactly
+  `<name>.<domain>` for an imp and `<domain>` for impd's API
+  ([HTTPS](../guides/https.md#listeners)).
 
 ## URLs
 
-| Where   | URL                                    |
-| ------- | -------------------------------------- |
-| Host    | `http://<name>.imp.localhost:7080`     |
-| Tailnet | `http://<tailnet-host>:<20000 + slot>` |
+| Where                  | URL                                    |
+| ---------------------- | -------------------------------------- |
+| Host                   | `http://<name>.imp.localhost:7080`     |
+| Tailnet                | `http://<tailnet-host>:<20000 + slot>` |
+| Tailnet, with a domain | `https://<name>.<domain>`              |
 
-MagicDNS does not support wildcard names, so on the tailnet each imp has a port, not a hostname.
-`imp url <name>` prints both URLs. The [Tailscale guide](../guides/tailscale.md) covers the tailnet
-node, the ACL and HTTPS.
+MagicDNS does not support wildcard names, so on the tailnet each imp has a port, not a hostname. A
+domain of your own fills that gap: its wildcard record points at the host's tailnet IP
+([why](../guides/https.md#why-the-records-point-at-the-tailnet-ip)). `imp url <name>` prints the
+https URL first, when there is one, then the others. The [Tailscale guide](../guides/tailscale.md)
+covers the tailnet node, the ACL and HTTPS.
