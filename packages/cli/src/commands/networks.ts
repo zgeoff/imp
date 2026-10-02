@@ -49,6 +49,11 @@ const joinCommand = defineCommand({
         name: context.args.name,
       });
 
+      // on stderr, so --json stays one document
+      if (network.warning !== null) {
+        console.error(`warning: ${network.warning}`);
+      }
+
       console.log(formatOutput(network, context.args.json, (one) => formatNetworks([one])));
     }),
 });

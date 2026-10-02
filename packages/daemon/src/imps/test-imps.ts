@@ -91,6 +91,9 @@ interface ImpTestOptions {
   // nft in place of the real one; by default it records each script
   readonly runNft?: (script: string) => Promise<void>;
 
+  // what `iptables -S FORWARD` prints; setup-net's rules by default
+  readonly forwardRules?: string;
+
   // each imp's tailnet name as a URL; none by default
   readonly readServiceUrl?: (name: string) => string | null;
 
@@ -202,6 +205,10 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
       return Promise.resolve();
     },
+    readForwardRules: () =>
+      Promise.resolve(
+        options.forwardRules ?? '-A FORWARD -m comment --comment imp-network -j ACCEPT\n',
+      ),
     flushPair: (first, second) => {
       flushedPairs.push(`${first} ${second}`);
 

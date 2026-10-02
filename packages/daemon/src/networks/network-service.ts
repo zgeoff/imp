@@ -1,5 +1,6 @@
-import type { Network } from '@imp/api';
+import type { Network, NetworkJoin } from '@imp/api';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
+import { listEgressSlots } from '../db/egress';
 import { findImpByName } from '../db/imps';
 import {
   findNetworkByName,
@@ -28,15 +29,20 @@ export interface NetworkService {
   readonly listNetworks: () => Promise<Network[]>;
   readonly createNetwork: (name: string) => Promise<Network>;
   readonly deleteNetwork: (name: string) => Promise<void>;
-  readonly joinNetwork: (network: string, imp: string) => Promise<Network>;
+  readonly joinNetwork: (network: string, imp: string) => Promise<NetworkJoin>;
   readonly leaveNetwork: (network: string, imp: string) => Promise<Network>;
 
-  // a new imp's networks: NOT_FOUND for one that does not exist, or with
-  // `createMissing`, as a restore does, a new one
-  readonly resolveNetworkIds: (
+  // a new imp's networks; NOT_FOUND for one that does not exist
+  readonly resolveNetworkIds: (names: readonly string[]) => Promise<string[]>;
+
+  // a restored imp's networks, made under the firewall's lock when missing;
+  // `created` names the ones made, for removeEmptyNetworks after a failure
+  readonly writeMissingNetworks: (
     names: readonly string[],
-    createMissing?: boolean,
-  ) => Promise<string[]>;
+  ) => Promise<{ readonly ids: readonly string[]; readonly created: readonly string[] }>;
+
+  // the named networks that have no members left
+  readonly removeEmptyNetworks: (names: readonly string[]) => Promise<void>;
 }
 
 export function createNetworkService(deps: NetworkDeps): NetworkService {
@@ -52,23 +58,6 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
     return network;
   };
 
-  const resolveNetwork = async (name: string, createMissing: boolean): Promise<NetworkRecord> => {
-    const found = await findNetworkByName(db, name);
-
-    if (found !== undefined) {
-      return found;
-    }
-
-    if (!createMissing) {
-      throw buildNotFoundError('network', name);
-    }
-
-    const created = await writeNetwork(db, name);
-
-    // null: another call made it since the lookup
-    return created ?? requireNetwork(name);
-  };
-
   const requireImpId = async (name: string): Promise<string> => {
     const imp = await findImpByName(db, name);
 
@@ -77,6 +66,51 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
     }
 
     return imp.id;
+  };
+
+  // inside the lock: nothing else makes networks meanwhile
+  const requireWritten = async (name: string): Promise<NetworkRecord> => {
+    const network = await writeNetwork(db, name);
+
+    if (network === null) {
+      throw buildConflictError('network', name);
+    }
+
+    return network;
+  };
+
+  const removeEmpty = async (names: readonly string[]): Promise<void> => {
+    for (const name of names) {
+      const network = await findNetworkByName(db, name);
+
+      if (network !== undefined && network.imps.length === 0) {
+        await removeNetwork(db, network.id);
+      }
+    }
+  };
+
+  // An open member reaches anything, and can relay for a box or none one:
+  // a network is a trust boundary. Null when the network mixes no policies.
+  const readTrustWarning = async (networkName: string, impName: string): Promise<string | null> => {
+    const network = await requireNetwork(networkName);
+    const slots = await listEgressSlots(db);
+
+    const modes = new Map(slots.map((slot) => [slot.name, slot.policy.mode]));
+
+    const others = network.imps.filter((name) => name !== impName);
+    const open = others.filter((name) => modes.get(name) === 'open');
+    const closed = others.filter((name) => modes.get(name) !== 'open');
+    const mode = modes.get(impName);
+
+    if (mode !== 'open' && open.length > 0) {
+      return `${impName} is ${String(mode)}, but ${open.join(', ')} on ${networkName} ${open.length === 1 ? 'is' : 'are'} open and can relay for it: a box or none imp trusts its open peers`;
+    }
+
+    if (mode === 'open' && closed.length > 0) {
+      return `${impName} is open, so ${closed.join(', ')} on ${networkName} can reach anything through it: a box or none imp trusts its open peers`;
+    }
+
+    return null;
   };
 
   const readNetwork = async (name: string): Promise<Network> => {
@@ -92,8 +126,16 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
       return networks.map((network) => toApiNetwork(network));
     },
 
+    // through the lock, so the resolver knows the name at once
     createNetwork: async (name) => {
-      const network = await writeNetwork(db, name);
+      const network = await deps.egress.changeNetworks({
+        write: () => writeNetwork(db, name),
+        undo: async (created) => {
+          if (created !== null) {
+            await removeNetwork(db, created.id);
+          }
+        },
+      });
 
       if (network === null) {
         throw buildConflictError('network', name);
@@ -102,17 +144,20 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
       return toApiNetwork(network);
     },
 
+    // the members are read under the lock, so a join just before is put
+    // back with the rest
     deleteNetwork: async (name) => {
       const network = await requireNetwork(name);
-      const members = await listNetworkMembers(db);
-
-      const impIds = members
-        .filter((member) => member.network === name)
-        .map((member) => member.impId);
 
       await deps.egress.changeNetworks({
-        write: () => removeNetwork(db, network.id),
-        undo: () => writeNetworkWithMembers(db, network, impIds),
+        write: async () => {
+          const members = await listNetworkMembers(db);
+
+          await removeNetwork(db, network.id);
+
+          return members.filter((member) => member.network === name).map((member) => member.impId);
+        },
+        undo: (impIds) => writeNetworkWithMembers(db, network, impIds),
       });
     },
 
@@ -129,7 +174,10 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
         },
       });
 
-      return readNetwork(networkName);
+      const joined = await readNetwork(networkName);
+      const warning = await readTrustWarning(networkName, impName);
+
+      return { ...joined, warning };
     },
 
     leaveNetwork: async (networkName, impName) => {
@@ -148,16 +196,45 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
       return readNetwork(networkName);
     },
 
-    resolveNetworkIds: async (names, createMissing = false) => {
+    resolveNetworkIds: async (names) => {
       const ids: string[] = [];
 
       for (const name of new Set(names)) {
-        const network = await resolveNetwork(name, createMissing);
+        const network = await requireNetwork(name);
 
         ids.push(network.id);
       }
 
       return ids;
+    },
+
+    writeMissingNetworks: (names) =>
+      deps.egress.changeNetworks({
+        write: async () => {
+          const ids: string[] = [];
+          const created: string[] = [];
+
+          for (const name of new Set(names)) {
+            const found = await findNetworkByName(db, name);
+
+            if (found !== undefined) {
+              ids.push(found.id);
+              continue;
+            }
+
+            const network = await requireWritten(name);
+
+            ids.push(network.id);
+            created.push(name);
+          }
+
+          return { ids, created };
+        },
+        undo: (written) => removeEmpty(written.created),
+      }),
+
+    removeEmptyNetworks: async (names) => {
+      await deps.egress.changeNetworks({ write: () => removeEmpty(names), undo: async () => {} });
     },
   };
 }

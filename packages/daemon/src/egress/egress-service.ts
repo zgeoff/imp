@@ -7,7 +7,7 @@ import type { Config } from '../config';
 import { listEgressSlots, readEgressPolicy, writeEgressPolicy } from '../db/egress';
 import type { EgressSlot } from '../db/egress';
 import { findImpByName } from '../db/imps';
-import { listNetworkMembers } from '../db/networks';
+import { listNetworkMembers, listNetworkNames } from '../db/networks';
 import type { NetworkMember } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import { createKeyedMutex } from '../imps/keyed-mutex';
@@ -62,6 +62,7 @@ export interface EgressDeps {
   readonly readConnected6?: () => Promise<readonly string[]>;
   readonly flushConnections?: (guestIp: string) => Promise<void>;
   readonly flushPair?: (first: string, second: string) => Promise<void>;
+  readonly readForwardRules?: () => Promise<string>;
   readonly forward?: DnsForward;
   readonly resolveExact?: (name: string) => Promise<readonly AddressAnswer[]>;
   readonly now?: () => number;
@@ -115,6 +116,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   const write = createNftWriter(deps.runNft ?? runNft);
   const flushConnections = deps.flushConnections ?? runConntrackFlush;
   const flushPair = deps.flushPair ?? runPairFlush;
+  const readForwardRules = deps.readForwardRules ?? runForwardRulesList;
   const forward = deps.forward ?? createDnsForward(deps.config.dns);
   const ipv6 = deps.ipv6 ?? null;
   const readConnected6 = deps.readConnected6 ?? readConnectedPrefixes6;
@@ -132,6 +134,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
     // the networks' members, released slots left out
     members: readonly NetworkMember[];
+    networkNames: ReadonlySet<string>;
     released: Set<number>;
     unenforced: string | null;
     server: ResolverServer | null;
@@ -139,6 +142,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   } = {
     slots: new Map(),
     members: [],
+    networkNames: new Set(),
     released: new Set(),
     unenforced: null,
     server: null,
@@ -194,6 +198,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
       const members = allMembers.filter((member) => slots.has(member.slot));
 
+      const networkNames = await listNetworkNames(deps.db);
+
       if (state.unenforced === null) {
         // the container's own links, read now: a network can join it later
         const connected6 = ipv6 === null ? [] : await readConnected6();
@@ -209,6 +215,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
       state.slots = slots;
       state.members = members;
+
+      state.networkNames = new Set(networkNames);
     });
 
   // after a failed apply: nft may still refuse, and keeps its last table
@@ -305,6 +313,22 @@ export function createEgressService(deps: EgressDeps): EgressService {
     }
   };
 
+  // setup-net.sh's ACCEPT for marked traffic between imps: without it, the
+  // imp-to-imp DROP takes every packet, and networks fail closed
+  const checkPeerAccept = async (): Promise<void> => {
+    try {
+      const rules = await readForwardRules();
+
+      if (!rules.includes('imp-network')) {
+        deps.log(
+          "impd: egress: setup-net.sh's imp-network ACCEPT is missing from FORWARD; imps on a network cannot reach each other until the host container starts again",
+        );
+      }
+    } catch (error) {
+      deps.log(`impd: egress: reading FORWARD: ${readErrorMessage(error)}`);
+    }
+  };
+
   const requirePolicy = (policy: EgressPolicy): void => {
     if (policy.mode !== 'open' && state.unenforced !== null) {
       throw new ORPCError('PRECONDITION_FAILED', {
@@ -337,7 +361,11 @@ export function createEgressService(deps: EgressDeps): EgressService {
         subnet: deps.config.subnet,
         ipv6: ipv6 !== null,
         resolveLocal: (slot, query) =>
-          resolveNetworkName(state.members, deps.config.subnet, { slot, ...query }),
+          resolveNetworkName(
+            { names: state.networkNames, members: state.members },
+            deps.config.subnet,
+            { slot, ...query },
+          ),
         checkName,
         writeAnswers,
         forward,
@@ -361,6 +389,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
       for (const slot of state.slots.keys()) {
         void resolveExactNames(slot);
       }
+
+      await checkPeerAccept();
     },
 
     stop: () => {
@@ -406,10 +436,17 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
         const result = await change.write();
 
+        // The rows go back, then the table is built again from whatever the
+        // rows say: an undo that throws leaves the change in the rows, and the
+        // table follows them, so a failed leave never keeps a pair connected.
         try {
           await applyTable();
         } catch (error) {
-          await change.undo(result);
+          try {
+            await change.undo(result);
+          } catch (undoError) {
+            deps.log(`impd: egress: undoing a network change: ${readErrorMessage(undoError)}`);
+          }
 
           await tryApplyTable();
 
@@ -525,6 +562,18 @@ function listPeerPairs(members: readonly NetworkMember[]): Set<string> {
   }
 
   return pairs;
+}
+
+async function runForwardRulesList(): Promise<string> {
+  const result = await runCommand(['iptables', '-S', 'FORWARD']);
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `iptables -S FORWARD exited ${String(result.exitCode)}: ${result.stderr.trim()}`,
+    );
+  }
+
+  return result.stdout;
 }
 
 // both directions: conntrack matches -s and -d on a flow's original tuple

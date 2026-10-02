@@ -118,6 +118,12 @@ export async function removeMember(
   return result.numDeletedRows === 1n;
 }
 
+export async function listNetworkNames(db: ImpDatabase): Promise<string[]> {
+  const rows = await db.selectFrom('networks').select('name').orderBy('name').execute();
+
+  return rows.map((row) => row.name);
+}
+
 export async function listNetworkMembers(db: ImpDatabase): Promise<NetworkMember[]> {
   const rows = await db
     .selectFrom('network_members')

@@ -17,7 +17,7 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { NameSchema } from './name-schema';
-import { MAX_CREATE_NETWORKS, NetworkSchema } from './network-schema';
+import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
@@ -349,7 +349,7 @@ export const impContract = {
 
     // `name` is the imp: it and the network's other imps reach one another
     // from now on, whatever their egress policies; joining twice is a no-op
-    join: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkSchema),
+    join: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkJoinSchema),
 
     // its connections to the others end; leaving one it is not on is a no-op
     leave: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkSchema),

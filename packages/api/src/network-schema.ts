@@ -13,5 +13,11 @@ export const NetworkSchema = z.object({
 
 export type Network = z.infer<typeof NetworkSchema>;
 
+// a join's answer: the network, and a warning when it puts a box or none imp
+// next to an open one, which can relay for it
+export const NetworkJoinSchema = NetworkSchema.extend({ warning: z.string().nullable() });
+
+export type NetworkJoin = z.infer<typeof NetworkJoinSchema>;
+
 // what one imp may join at its create
 export const MAX_CREATE_NETWORKS = 16;

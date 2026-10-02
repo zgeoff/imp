@@ -114,7 +114,7 @@ export interface BackupServiceDeps {
   readonly grants: Pick<Broker, 'addGrant'>;
 
   // a restored imp's networks, made when missing
-  readonly networks: Pick<NetworkService, 'resolveNetworkIds'>;
+  readonly networks: Pick<NetworkService, 'writeMissingNetworks' | 'removeEmptyNetworks'>;
   readonly storage: StorageBackend;
   readonly restic?: Restic;
   readonly freezer?: DiskFreezer;
@@ -595,12 +595,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       await writeRestoredFile(imp.disk, disk, imp);
     };
 
-    const networkIds = await deps.networks.resolveNetworkIds(imp.networks, true);
+    // a network the restore made goes again when the imp does not come back
+    const networks = await deps.networks.writeMissingNetworks(imp.networks);
 
     try {
       return await deps.imps.createImp({
         name: target.name,
-        networkIds,
+        networkIds: networks.ids,
         image: target.image,
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
@@ -612,6 +613,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       });
     } catch (error) {
       await removeFailedImp(target.name, created.id);
+
+      await deps.networks.removeEmptyNetworks(networks.created);
 
       throw error;
     }
