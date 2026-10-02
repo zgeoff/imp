@@ -152,9 +152,12 @@ FROM bun AS compile
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml ./
 COPY packages/ packages/
-# --ignore-scripts: the root prepare script installs git hooks
+# --ignore-scripts: the root prepare script installs git hooks. No
+# --production: the CLI builds @zgeoff/imp-client from source, and the client
+# bundles @imp/api for npm, so it lists it only as a devDependency. The
+# binaries carry only what they import, so dev dependencies never ship.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile --production --ignore-scripts
+    bun install --frozen-lockfile --ignore-scripts
 
 # No --target: the image's own bun (linux x64, glibc) becomes the runtime,
 # which matches the debian runtime stage and needs no download.

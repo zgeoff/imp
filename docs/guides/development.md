@@ -104,15 +104,15 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                          |
-| ------------ | -------- | ------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                       |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.         |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                        |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                 |
-| `cli`        | yes      | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                   |
+| Job          | Required | What it runs                                                                                              |
+| ------------ | -------- | --------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                           |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.                             |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                            |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                     |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage. |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                       |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 
