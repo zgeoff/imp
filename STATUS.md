@@ -95,11 +95,11 @@ From the milestone work:
 - The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
   fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
   restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
-- Backups ([#12](https://github.com/zgeoff/imp/issues/12)): restic reads every hole of a 32 GiB
-  sparse disk, about 10 s of CPU for each disk it has to read in a run. The restore drill passed on
-  XFS on the dev box; on ZFS it runs in the zfs CI job only. MinIO for the drill comes from
-  Chainguard's free `:latest`, pinned by digest, which Chainguard may stop serving. Memory snapshots
-  are not backed up: a sleeping imp comes back stopped.
+- Backups ([#12](https://github.com/zgeoff/imp/issues/12)): a known cost, kept for now: restic reads
+  every hole of a 32 GiB sparse disk, about 10 s of CPU for each disk it has to read in a run. The
+  restore drill passed on XFS on the dev box; on ZFS it runs in the zfs CI job only. MinIO for the
+  drill comes from Chainguard's free `:latest`, pinned by digest, which Chainguard may stop serving.
+  Memory snapshots are not backed up: a sleeping imp comes back stopped.
 - HTTPS on a domain ([#16](https://github.com/zgeoff/imp/issues/16)) is tested against Pebble only
   (the `https` suite: certificate in about 100 ms, an imp over https, a wake over https), not with a
   real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider, and public

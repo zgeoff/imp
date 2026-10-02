@@ -45,16 +45,19 @@ The paths are the same every run, so restic finds each file it read the run befo
 ### The manifest
 
 `manifest.json` is everything a restore reads: each imp's name, image digest, vCPUs, memory, HTTP
-port, state, its checkpoints oldest first with labels and times, and each image's name, ref and
-digest. It holds no tokens or secrets, and no slots or addresses: a restore takes new ones.
+port, state, egress policy, the names of the secrets granted to it, its checkpoints oldest first
+with labels and times, and each image's name, ref and digest. It holds no tokens or secret values,
+and no slots or addresses: a restore takes new ones.
 
 The database itself stays on the host. Each run starts with `VACUUM INTO <data>/backup/db.sqlite`,
 one consistent read of the database, and backs up only what that copy names. The copy stays out of
-the snapshot so a table added later, such as the connector secrets of
-[#15](https://github.com/zgeoff/imp/issues/15), never reaches a backup by accident. A secret value
-goes into a backup only through the manifest, as an explicit field, with a note here.
+the snapshot so a table added later never reaches a backup by accident. A secret value goes into a
+backup only through the manifest, as an explicit field, with a note here; none does today.
 
-The API token (`<data>/token`) is never backed up. A restored host keeps the token it has.
+These never reach a backup, and a test lists the snapshot to check it: the API token
+(`<data>/token`), the connector secret values (`<data>/secrets`), the credential broker's CA key
+(`<data>/broker`), the TLS directory with the ACME account key (`<data>/tls`), and the restic
+password file. A restored host keeps its own token, CA and certificates.
 
 ## A run
 
@@ -118,6 +121,8 @@ the last run, so a restart never puts a run off by a whole interval. A due run i
 - `forget` with `IMP_BACKUP_KEEP` (by default 24 hourly, 7 daily and 4 weekly points) after every
   run, manual ones included;
 - `prune` once a day, which holds restic's exclusive lock;
+- after a failed run, the next try waits 5 minutes, then twice as long after each failure in a row,
+  up to the interval, so a full bucket does not freeze every running guest every few minutes;
 - `check --read-data-subset=5%` once a week. A failure logs
   `impd: backup: CHECK FAILED, the repository may be damaged`, and `imp backup ls` shows it until a
   check passes.
@@ -162,15 +167,24 @@ imp backup restore --all --merge               # add every imp to a host that ha
 - A name in use stops the restore with a conflict that names the imp; `--as` picks another name.
 - `--all` refuses a host that has imps, unless `--merge`. With `--merge`, every name is checked
   first, and a clash names the imp; nothing is restored then.
+- restic fetches one file at a time, a checkpoint or the disk, into `<data>/backup/restore`, and
+  impd deletes it once written: a restore needs room for one disk, not one per checkpoint.
+- The egress policy comes back as it was. Each grant comes back when a secret of that name exists on
+  this host and `imp grant` would accept it; the rest are listed, and `imp backup restore` prints
+  them. Secret values are never in a backup: add the secrets first, with `imp secret add`.
 - A restore that fails part way removes the imp it was making.
 
 ### Whole-host restore
 
-1. Install imp on the new host as usual ([install](../guides/install.md)), with the same
+1. **Stop the old impd, or remove its `IMP_BACKUP_*` settings, first.** Both hosts are named
+   `imp-host`, so each one's `restic unlock` would take the other's live locks for its own dead ones
+   and drop them. `imp backup restore --all` prints this warning too.
+2. Install imp on the new host as usual ([install](../guides/install.md)), with the same
    `IMP_BACKUP_*` settings, the repository's keys and the same password file.
-2. Start it. It makes a new API token, as any new host does; the old token is not in the backup.
-3. Run `imp backup restore --all`, with `--at` for an older point.
-4. Start the imps you need. Sleeping imps come back stopped: memory snapshots are not backed up.
+3. Add the connector secrets the imps need (`imp secret add`); their grants come back by name.
+4. Start it. It makes a new API token, as any new host does; the old token is not in the backup.
+5. Run `imp backup restore --all`, with `--at` for an older point.
+6. Start the imps you need. Sleeping imps come back stopped: memory snapshots are not backed up.
 
 ## Security
 
@@ -210,5 +224,6 @@ lock blocks prune and check for up to 30 minutes.
 - The `backups` e2e suite is the restore drill. It runs MinIO, pinned by digest, in the dev
   instance's network, and covers a backup in the middle of guest writes, a restore with its
   checkpoint, `--all` and `--merge`, a point that survived `forget` and `prune`, a restore with a
-  stale exclusive lock in the repository, and a corrupted pack that `check` catches. The zfs CI job
-  runs it on a ZFS pool.
+  stale exclusive lock in the repository, a corrupted pack that `check` catches, and then, with the
+  pack put back and the suite's imps removed, `restore --all` and a boot of a restored imp. The zfs
+  CI job runs it on a ZFS pool.
