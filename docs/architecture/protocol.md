@@ -109,6 +109,23 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 `imp.reset_identity=1`, `identity_reset` is `ok` or `failed`; impd keeps asking for the reset until
 a boot answers `ok` ([templates](../guides/templates.md#identity)).
 
+A guest parked in a [boot template](./boot-templates.md#make) answers with `"stage":"template"`;
+stage 2 leaves the field out.
+
+### `claim`
+
+```json
+→ {"op":"claim","claim":{"id":"01…","hostname":"web","ip":"10.66.0.2/30","gw":"10.66.0.1",
+   "dns":["1.1.1.1"],"mac":"06:00:0a:42:00:02","unix_ms":1790000000000,"seed":"<64 bytes, base64>",
+   "reset_identity":true}}
+← {"ok":true}
+```
+
+Only a guest parked in a boot template serves it, and it refuses every op but `ping` and `claim`
+with `UNKNOWN_OP`. The guest sets its clock, entropy and MAC, then goes on to stage 2 with these
+values ([claim](./boot-templates.md#claim)). A claim without a hostname and an ip is `BAD_REQUEST`;
+one that fails to apply is `INTERNAL`, and the guest stays parked for another.
+
 ### `freeze` / `thaw`
 
 ```json

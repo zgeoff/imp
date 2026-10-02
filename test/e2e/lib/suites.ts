@@ -41,6 +41,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'ipv6', prefix: 'e2e-v6-', images: ['e2e-tiny', 'e2e-ra'] },
   { name: 'cpu', prefix: 'e2e-cpu-', images: ['e2e-tiny'] },
   { name: 'templates', prefix: 'e2e-tpl-', images: ['e2e-git'] },
+  { name: 'boot-templates', prefix: 'e2e-bt-', images: ['e2e-ws'] },
 
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
@@ -70,6 +71,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'tokens',
     'cpu',
     'templates',
+    'boot-templates',
   ],
 };
 

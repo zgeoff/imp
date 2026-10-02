@@ -23,7 +23,7 @@ import type { TemplateBuildPlan } from '../vmm/template-vm';
 
 // The cmdline of every template: stage 1 parks for a claim, and nothing in
 // it names an imp (docs/architecture/boot-templates.md#make)
-export const TEMPLATE_BOOT_ARGS = [
+const TEMPLATE_BOOT_ARGS = [
   'console=ttyS0 reboot=k panic=1 pci=off',
   'i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd',
   'root=/dev/vdb rootfstype=squashfs ro init=/imp-agent',
@@ -67,7 +67,7 @@ export interface TemplateShape {
   readonly memoryMib: number;
 }
 
-export interface TemplateFiles {
+interface TemplateFiles {
   readonly key: string;
   readonly vmstate: string;
   readonly memFile: string;

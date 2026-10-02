@@ -25,6 +25,7 @@ error.
 | `IMP_IDLE_TIMEOUT_S`            | `60`                              | Seconds with no activity before an imp sleeps.                                                                                                              |
 | `IMP_IDLE_CPU_PERCENT`          | `10`                              | Firecracker CPU, in percent of one core, above which an imp counts as busy.                                                                                 |
 | `IMP_BOOT_RESERVE_PERCENT`      | `50`                              | The RAM reserved before a cold boot, as a percentage of the imp's memory (1–100).                                                                           |
+| `IMP_BOOT_TEMPLATES`            | `true`                            | A cold boot restores a parked guest of its shape; `false` boots the kernel ([boot templates](../architecture/boot-templates.md)).                           |
 | `IMP_WAKE_RESERVE_MIB`          | `256`                             | The least RAM reserved before a wake.                                                                                                                       |
 | `IMP_SLEEP_MIN_GUEST_UPTIME_MS` | `1500`                            | A sleep first waits until the guest has been up this long; `0` turns the wait off ([young guests](../architecture/sleep-and-wake.md#young-guests)).         |
 | `IMP_WATCHDOG_TIMEOUT_S`        | `60`                              | Seconds an agent may stay silent before the [watchdog](../architecture/sleep-and-wake.md#the-watchdog) acts.                                                |
@@ -174,7 +175,7 @@ With none of them, the dev instance stays off the tailnet. The key reaches Docke
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
-`IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
+`IMP_BOOT_TEMPLATES`, `IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_WATCHDOG_TIMEOUT_S`,
 `IMP_WATCHDOG_ACTION`, `IMP_TAILSCALE_HOSTNAME`, `IMP_TAILNET_IDENTITIES`, `IMP_TAILNET_NAMES`,
 `IMP_TAILNET_NAME_PREFIX`, `IMP_BUILD_CONTEXT_MAX_MIB`, `IMP_BROKER_PORT`,

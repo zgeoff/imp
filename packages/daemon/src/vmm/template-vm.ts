@@ -18,6 +18,10 @@ const KILL_TIMEOUT_MS = 3000;
 // the stage-2 ping after a claim: a cold boot's stage 2, without the kernel
 const CLAIMED_AGENT_DEADLINE_MS = 10_000;
 
+// a restore's agent answers within tens of ms: ping often, not on a
+// cold boot's backoff
+const RESTORE_PING_DELAY_MS = 5;
+
 // The cold boot a template is made from (docs/architecture/boot-templates.md).
 export interface TemplateBuildPlan {
   readonly firecrackerBin: string;
@@ -154,6 +158,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
     await waitForAgent(plan.paths.vsockSocket, {
       deadlineMs: AGENT_DEADLINE_MS,
       attemptMs: 200,
+      maxDelayMs: RESTORE_PING_DELAY_MS,
       isParked: true,
     });
 
@@ -163,6 +168,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
     const ping = await waitForAgent(plan.paths.vsockSocket, {
       deadlineMs: CLAIMED_AGENT_DEADLINE_MS,
+      maxDelayMs: RESTORE_PING_DELAY_MS,
       isParked: false,
     });
 
