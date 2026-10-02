@@ -328,27 +328,28 @@ once no clone needs its blocks.
 
 ### What a sweep takes
 
-A crash between a destroy's row and its disk leaves an orphan, but so does a lost or replaced
+A create or a checkpoint that crashes after its disk or snapshot and before its row leaves an orphan
+(a destroy removes the files first and the row last, so it never does). So does a lost or replaced
 database. On ZFS the database lives on the root dataset, on the pool with the disks, so an OS
 reinstall keeps both. A database restored from an older copy, or one that is gone while the pool
-survives, makes every newer disk an orphan; a sweep that took them would delete every imp. So a
-sweep takes only what is provably impd's own and transient, for a named imp or a temporary name, and
-keeps the rest:
+survives, makes every newer disk and checkpoint an orphan; a sweep that took them would delete every
+imp. So a sweep takes only what is provably impd's own and transient, for a named imp or a temporary
+name, and keeps the rest:
 
-| What no row names                                                          | Class          | Why                                                                   |
-| -------------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------- |
-| A disk: `disks/<id>` (ZFS), or `imps/<id>` with any file in it (XFS)       | orphan: kept   | It may hold an imp; only its row says it does not.                    |
-| `imps/<id>` or `mem/<id>` with any file in it and no disk (ZFS)            | orphan: kept   | A memory snapshot, `meta.json`, `vmstate` or `vm.json` may be needed. |
-| An image (`images/<digest>`), whole or not, unless empty                   | orphan: kept   | It may be the origin of a kept disk, or a template.                   |
-| Any snapshot or checkpoint on an orphan                                    | kept with it   | A snapshot never goes before the disk it belongs to.                  |
-| A `@cp-*` snapshot or checkpoint with no row, on a named disk              | leftover: goes | A checkpoint delete removes the row first.                            |
-| A `@fork-*` or `@bk-*` snapshot on a named disk or image, or in `retired/` | leftover: goes | A fork or a backup run marks it when it ends; it never outlives one.  |
-| An `imps/<id>`, `mem/<id>` or image directory with no file in it           | leftover: goes | It holds nothing.                                                     |
+| What no row names                                                              | Class          | Why                                                                                                          |
+| ------------------------------------------------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| A disk: `disks/<id>` (ZFS), or `imps/<id>` with any file in it (XFS)           | orphan: kept   | It may hold an imp; only its row says it does not.                                                           |
+| `imps/<id>` or `mem/<id>` with any file in it and no disk (ZFS)                | orphan: kept   | A memory snapshot, `meta.json`, `vmstate` or `vm.json` may be needed.                                        |
+| An image (`images/<digest>`), whole or not, unless empty                       | orphan: kept   | It may be the origin of a kept disk, or a template.                                                          |
+| Any snapshot or checkpoint on an orphan                                        | kept with it   | A snapshot never goes before the disk it belongs to.                                                         |
+| A `@cp-*` snapshot or checkpoint with no row, on a named disk or in `retired/` | orphan: kept   | An older database lacks the rows of newer checkpoints; a restore leaves the imp's checkpoints in `retired/`. |
+| A `@fork-*` or `@bk-*` snapshot on a named disk or image, or in `retired/`     | leftover: goes | A fork or a backup run marks it when it ends; it never outlives one.                                         |
+| An `imps/<id>`, `mem/<id>` or image directory with no file in it               | leftover: goes | It holds nothing.                                                                                            |
 
-Start and the hourly pass log one line for each orphan, with its dataset or directory, its size, its
-creation time and its snapshots or checkpoints, then a count: once a start and once an hour.
-`imp gc` returns them in `kept` instead. On XFS the size counts the blocks it shares through reflink
-in full.
+Start logs one line for each orphan, with its dataset, snapshot or directory, its size, its creation
+time and its snapshots or checkpoints, then a count. The hourly pass does the same when the set of
+orphans changed since its last pass, and logs only the count when it did not. `imp gc` returns them
+in `kept` instead. On XFS the size counts the blocks it shares through reflink in full.
 
 `imp gc --orphans` retires them as a destroy would: on ZFS it marks each snapshot on the orphan
 (`zfs destroy -d`), unmounts it and renames it into `retired/`, and the reclaim frees it; it removes
@@ -360,15 +361,18 @@ inside the storage gate, each time it runs, so it never acts on a list made befo
 
 Start is not read-only. Before the sweep, and besides it, it deletes:
 
+Each ZFS destroy and promote here logs a line (`impd: zfs: destroyed …`, `impd: zfs: reclaim: …`).
+
 - **ZFS `staging/`** ([crash recovery](#crash-recovery)): `staging/image-*` and `staging/bk*` are
   temporary names, a build or a backup run's read-only clones, that never get a row.
   `staging/restore-<id>` is renamed into place when the disk is gone; with the disk still there it
   is destroyed, since it is an unchanged clone of a checkpoint snapshot that stays.
 - **XFS hidden `images/.new-*` and `images/.build-*`**: image builds under a temporary name.
 - **The reclaim** of `retired/` ([reclaim](#reclaim)): only datasets an explicit delete or a restore
-  already retired, once every snapshot on them is marked.
-- **The sweep's leftovers** in the table above: marked snapshots of named disks, and empty
-  directories.
+  already retired, once every snapshot on them is marked. A retired dataset that holds a checkpoint
+  with no row stays, since the sweep never marks one without `--orphans`.
+- **The sweep's leftovers** in the table above: `@fork-*` and `@bk-*` snapshots outside an orphan,
+  and empty directories.
 
 `imp rm`, a checkpoint delete and `imp image rm` delete what they name, as before.
 

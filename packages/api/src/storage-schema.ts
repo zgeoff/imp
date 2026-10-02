@@ -16,10 +16,10 @@ export type DroppedStorage = z.infer<typeof DroppedStorageSchema>;
 // the database is lost. A GC keeps it unless asked for orphans.
 export const OrphanStorageSchema = z
   .object({
-    kind: z.enum(['imp', 'image', 'memory']),
+    kind: z.enum(['imp', 'image', 'memory', 'checkpoint']),
     id: z.string(),
 
-    // the ZFS dataset, or the directory
+    // the ZFS dataset or snapshot, or the directory
     location: z.string(),
 
     // its snapshots or checkpoints included

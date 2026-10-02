@@ -2,25 +2,30 @@ import type { OrphanStorage, SweepResult } from './storage-backend';
 
 const MIB = 1024 ** 2;
 
-// What a sweep did, for the log: each thing it removed, then each orphan it
-// kept and their count. Start and the hourly pass log orphans; `imp gc`
-// returns them instead, so a run by hand never repeats the list.
+// how much of the orphans a sweep logs: each and their count, the count
+// alone, or nothing (`imp gc` returns them instead)
+export type OrphanLogging = 'each' | 'count' | 'none';
+
+// What a sweep did, for the log: each thing it removed, then the orphans it
+// kept, as `orphans` says.
 export function printSweep(
   log: (message: Readonly<string>) => void,
   prefix: string,
   result: Readonly<SweepResult>,
-  options: Readonly<{ isOrphansLogged: boolean }>,
+  orphans: OrphanLogging,
 ): void {
   for (const dropped of result.dropped) {
     log(`${prefix}: removed ${dropped.kind} ${dropped.id}`);
   }
 
-  if (!options.isOrphansLogged || result.kept.length === 0) {
+  if (orphans === 'none' || result.kept.length === 0) {
     return;
   }
 
-  for (const orphan of result.kept) {
-    log(`${prefix}: kept ${formatOrphan(orphan)}`);
+  if (orphans === 'each') {
+    for (const orphan of result.kept) {
+      log(`${prefix}: kept ${formatOrphan(orphan)}`);
+    }
   }
 
   log(

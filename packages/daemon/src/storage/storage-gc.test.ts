@@ -77,7 +77,7 @@ test('a GC keeps an imp no row names until asked for orphans, and a dry run only
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([dev.id]);
 });
 
-test('start, the hourly pass and imp gc keep every orphan of a lost database', async () => {
+test('start, the hourly pass and imp gc keep every orphan of a lost database, logged once', async () => {
   await using ctx = await setupImpTest();
 
   const logs: string[] = [];
@@ -132,11 +132,12 @@ test('start, the hourly pass and imp gc keep every orphan of a lost database', a
     'imp b',
   ]);
 
-  // once for each hourly pass, never for imp gc, which returns them
-  expect(logs.filter((line) => line.includes('kept orphan imp a '))).toHaveLength(2);
-  expect(logs.filter((line) => line.includes('kept orphan image old '))).toHaveLength(2);
+  // each orphan once, then only the count while the set stays; imp gc
+  // returns them instead
+  expect(logs.filter((line) => line.includes('kept orphan imp a '))).toHaveLength(1);
+  expect(logs.filter((line) => line.includes('kept orphan image old '))).toHaveLength(1);
   expect(logs.filter((line) => line.includes('kept 3 orphans'))).toHaveLength(2);
-  expect(logs).toHaveLength(8);
+  expect(logs).toHaveLength(5);
 });
 
 test('the hourly pass and imp gc on ZFS keep what a lost database leaves', async () => {
@@ -263,4 +264,36 @@ test('a GC with orphans waits for an imp whose disk exists before its row', asyn
 
   expect(swept).toEqual({ dryRun: false, dropped: [], kept: [] });
   expect(existsSync(buildImpPaths(ctx.dataDir, dev.id).disk)).toBeTrue();
+});
+
+test('a GC with orphans waits for a destroy that holds the gate', async () => {
+  await using ctx = await setupImpTest();
+
+  await ctx.createTestImage('ubuntu');
+
+  const app = buildTestApp(ctx, ctx);
+
+  const dev = await app.client.imps.create({ name: 'dev' });
+
+  const stop = ctx.fake.hold('stop');
+  const destroyed = app.client.imps.destroy({ name: 'dev' });
+
+  await stop.reached;
+
+  const gc = app.client.system.gc({ orphans: true });
+
+  // the GC waits on the gate while the VM stops, before any file goes
+  await Bun.sleep(20);
+
+  expect(ctx.storageGate.countInFlight()).toBe(1);
+  expect(existsSync(buildImpPaths(ctx.dataDir, dev.id).disk)).toBeTrue();
+
+  stop.release();
+
+  await destroyed;
+
+  const swept = await gc;
+
+  expect(swept).toEqual({ dryRun: false, dropped: [], kept: [] });
+  expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([]);
 });
