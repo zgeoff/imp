@@ -162,10 +162,21 @@ test('a failed provenance check installs nothing', async () => {
   expect(result.code).toBe(1);
 
   expect(result.stderr).toBe(
-    `imp: ${ASSET} has no valid provenance from zgeoff/imp; nothing installed\n`,
+    `imp: could not verify provenance of ${ASSET} from zgeoff/imp; nothing installed\n`,
   );
 
   expect(existsSync(join(ctx.target, 'imp'))).toBeFalse();
+});
+
+test('a binary that does not run fails the install', async () => {
+  const broken = '#!/bin/sh\nexit 1\n';
+
+  await using ctx = setupTest({ 'v1.2.3': { binary: broken, sums: makeSums(broken) } });
+
+  const result = await ctx.run();
+
+  expect(result.code).toBe(1);
+  expect(result.stdout).not.toContain('imp: installed');
 });
 
 test('no release at all is an error', async () => {

@@ -69,7 +69,7 @@ fi
 # gh asks the GitHub API for the attestation, which needs a login
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   gh attestation verify "$tmp/$asset" -R zgeoff/imp >/dev/null ||
-    fail "$asset has no valid provenance from zgeoff/imp; nothing installed"
+    fail "could not verify provenance of $asset from zgeoff/imp; nothing installed"
   echo "imp: provenance verified"
 elif command -v gh >/dev/null 2>&1; then
   echo "imp: gh is not logged in; skipped the provenance check"
@@ -81,7 +81,10 @@ mkdir -p "$dir"
 cp "$tmp/$asset" "$dir/.imp.tmp"
 chmod +x "$dir/.imp.tmp"
 mv "$dir/.imp.tmp" "$dir/imp"
-echo "imp: installed $("$dir/imp" --version) to $dir/imp"
+
+# on its own line, so set -e stops here when the binary does not run
+version=$("$dir/imp" --version)
+echo "imp: installed $version to $dir/imp"
 
 case ":$PATH:" in
   *":$dir:"*) ;;

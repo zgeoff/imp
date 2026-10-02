@@ -339,7 +339,10 @@ jobs:
           TAP: ${{ github.repository_owner }}/${{ vars.HOMEBREW_TAP }}
           VERSION: ${{ needs.assets.outputs.version }}
         run: |
-          git clone "https://x-access-token:$GH_TOKEN@github.com/$TAP.git" tap
+          # gh hands git the token as a credential helper, so it never lands
+          # in tap/.git/config
+          gh auth setup-git
+          gh repo clone "$TAP" tap
           mkdir -p tap/Formula
           scripts/build-formula.sh "$VERSION" dist/SHA256SUMS > tap/Formula/imp.rb
           cd tap
