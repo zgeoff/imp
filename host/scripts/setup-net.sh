@@ -12,6 +12,13 @@ fi
 
 sysctl -qw net.ipv4.ip_forward=1
 
+# Strict reverse-path filtering: a guest cannot send from another imp's
+# address, so the broker's peer check holds. Defense in depth: each tap
+# routes only its own /30. Set before any tap exists, so new taps inherit
+# it from `default`; set -e makes a failed write fatal.
+sysctl -qw net.ipv4.conf.all.rp_filter=1
+sysctl -qw net.ipv4.conf.default.rp_filter=1
+
 out=$(ip route show default | awk '{print $5; exit}')
 if [ -z "$out" ]; then
   echo "setup-net: no default route" >&2
@@ -37,6 +44,12 @@ rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED
 # connections (impd's proxy dials into guests).
 rule filter INPUT -i imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 rule filter INPUT -i imp+ -j DROP
+# ...and the credential broker on its port (docs/guides/connectors.md). It
+# goes first: `rule` appends, which would put it under the DROP. Keep the
+# default in step with packages/daemon/src/config.ts.
+broker_port=${IMP_BROKER_PORT:-7081}
+iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT 1 -i imp+ -p tcp --dport "$broker_port" -j ACCEPT
 
 # Clamp the TCP MSS of guest connections to the real uplink MTU. Behind a
 # smaller-MTU uplink (WSL eth0 is 1360) frag-needed ICMP never reaches the
@@ -51,4 +64,4 @@ for dir in -i -o; do
   rule mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp[@]}"
 done
 
-echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]})"
+echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]}, broker :$broker_port)"
