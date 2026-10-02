@@ -35,6 +35,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'networks',
     'cpu',
     'templates',
+    'boot-templates',
     'chaos',
     'backups',
   ]);
@@ -64,6 +65,7 @@ test('it expands a set and drops duplicates', () => {
     'tokens',
     'cpu',
     'templates',
+    'boot-templates',
   ]);
 });
 

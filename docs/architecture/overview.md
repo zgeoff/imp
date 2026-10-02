@@ -15,6 +15,7 @@ This page gives the shape and the main decisions. The other architecture pages g
 - [Networking](./networking.md): taps, /30s, iptables, the wake proxy and the URLs.
 - [Sleep and wake](./sleep-and-wake.md): memory snapshots, idle detection and the RAM governor.
 - [Backups](./backups.md): restic backups of disks, checkpoints and images, off the host.
+- [Boot templates](./boot-templates.md): a cold boot restored from a snapshot of a parked guest.
 
 ## Shape
 
