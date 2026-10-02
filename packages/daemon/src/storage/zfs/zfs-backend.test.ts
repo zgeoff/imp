@@ -66,7 +66,11 @@ function setupTest(kernel = VERSION) {
     },
     listRetired: () => fake.listDatasets().filter((name) => name.startsWith(`${ROOT}/retired/`)),
     diskDir: (impId: string) => join(dataDir, 'imps', impId, 'disk'),
-    [Symbol.dispose]: () => {
+
+    // a reclaim still queued must not outlive the test
+    [Symbol.asyncDispose]: async () => {
+      await state.backend.waitForReclaim();
+
       rmSync(dataDir, { recursive: true, force: true });
     },
   };
@@ -93,7 +97,7 @@ async function readFailure(promise: Promise<unknown>): Promise<unknown> {
 }
 
 test('start refuses a userland and kernel module of different major versions', async () => {
-  using ctx = setupTest('3.0.0-1');
+  await using ctx = setupTest('3.0.0-1');
 
   const failure = await readFailure(ctx.backend.start(ctx.live));
 
@@ -103,7 +107,7 @@ test('start refuses a userland and kernel module of different major versions', a
 });
 
 test('start warns about a minor version skew and goes on', async () => {
-  using ctx = setupTest('2.3.1-1');
+  await using ctx = setupTest('2.3.1-1');
 
   await ctx.backend.start(ctx.live);
 
@@ -115,7 +119,7 @@ test('start warns about a minor version skew and goes on', async () => {
 });
 
 test('start refuses a data dir that is not the root dataset', async () => {
-  using ctx = setupTest();
+  await using ctx = setupTest();
 
   const backend = createZfsBackend({
     dataDir: ctx.dataDir,
@@ -131,7 +135,7 @@ test('start refuses a data dir that is not the root dataset', async () => {
 });
 
 test('start makes the datasets it needs, once, and mounts the memory dataset', async () => {
-  using ctx = setupTest();
+  await using ctx = setupTest();
 
   await ctx.backend.start(ctx.live);
 
@@ -155,7 +159,7 @@ test('start makes the datasets it needs, once, and mounts the memory dataset', a
 });
 
 test('an image is built in staging, then renamed, snapshotted and mounted', async () => {
-  using ctx = setupTest();
+  await using ctx = setupTest();
 
   await ctx.backend.start(ctx.live);
 
@@ -185,7 +189,7 @@ test('an image is built in staging, then renamed, snapshotted and mounted', asyn
 });
 
 test('a failed image build leaves no dataset behind', async () => {
-  using ctx = setupTest();
+  await using ctx = setupTest();
 
   await ctx.backend.start(ctx.live);
 
@@ -198,7 +202,7 @@ test('a failed image build leaves no dataset behind', async () => {
 });
 
 test('an imp disk is a mounted clone of the image, with its own paths', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
 
@@ -213,7 +217,7 @@ test('an imp disk is a mounted clone of the image, with its own paths', async ()
 });
 
 test('a checkpoint is a snapshot sized by what was written, and its id must be new', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
 
@@ -230,7 +234,7 @@ test('a checkpoint is a snapshot sized by what was written, and its id must be n
 });
 
 test('a restore keeps every other checkpoint, older and newer', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-old');
@@ -266,7 +270,7 @@ test('a restore keeps every other checkpoint, older and newer', async () => {
 });
 
 test('a restore whose halt fails drops the staged clone and keeps the disk', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -282,7 +286,7 @@ test('a restore whose halt fails drops the staged clone and keeps the disk', asy
 });
 
 test('deleting checkpoints frees the disk a restore retired', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-old');
@@ -304,7 +308,7 @@ test('deleting checkpoints frees the disk a restore retired', async () => {
 });
 
 test('a fork from the live disk outlives its source', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -335,7 +339,7 @@ test('a fork from the live disk outlives its source', async () => {
 });
 
 test('a fork from a checkpoint holds the snapshot until it is destroyed', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -357,7 +361,7 @@ test('a fork from a checkpoint holds the snapshot until it is destroyed', async 
 });
 
 test('a removed image hands its blocks to the imps cloned from it', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createImp('b');
@@ -405,7 +409,7 @@ const SWAP_STEPS = [
 
 for (const swap of SWAP_STEPS) {
   test(`a restore cut short before the ${swap.step} is settled by the next start`, async () => {
-    using ctx = await setupStarted();
+    await using ctx = await setupStarted();
 
     await ctx.createImp('a');
     await ctx.createCheckpoint('a', 'cp-one');
@@ -433,7 +437,7 @@ for (const swap of SWAP_STEPS) {
 }
 
 test('a restore cut short before its clone or during the halt leaves the disk', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -466,7 +470,7 @@ test('a restore cut short before its clone or during the halt leaves the disk', 
 });
 
 test('start remounts every disk and image after a container restart', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createImp('b');
@@ -478,7 +482,7 @@ test('start remounts every disk and image after a container restart', async () =
 });
 
 test('start drops disks, checkpoints and images the database no longer names', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createImp('gone');
@@ -500,7 +504,7 @@ test('start drops disks, checkpoints and images the database no longer names', a
 });
 
 test('it reads the pool usage of the root dataset', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   const usage = await ctx.backend.readUsage();
 
@@ -511,7 +515,7 @@ test('it reads the pool usage of the root dataset', async () => {
 });
 
 test('a checkpoint and a live fork never wait for a reclaim', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.backend.createImpDisk('b', { kind: 'imp', impId: 'a' });
@@ -541,7 +545,7 @@ test('a checkpoint and a live fork never wait for a reclaim', async () => {
 });
 
 test('a swap whose retire fails remounts the old disk', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -559,7 +563,7 @@ test('a swap whose retire fails remounts the old disk', async () => {
 });
 
 test('a swap whose last rename fails finishes it', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -576,7 +580,7 @@ test('a swap whose last rename fails finishes it', async () => {
 });
 
 test('a failed halt is what a restore throws, even when its cleanup fails', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -600,7 +604,7 @@ test('a failed halt is what a restore throws, even when its cleanup fails', asyn
 });
 
 test('a checkpoint id held by a deleted checkpoint a fork needs is taken', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createCheckpoint('a', 'cp-one');
@@ -613,7 +617,7 @@ test('a checkpoint id held by a deleted checkpoint a fork needs is taken', async
 });
 
 test('start drops an image build a crash cut short, with its mount dir', async () => {
-  using ctx = await setupStarted();
+  await using ctx = await setupStarted();
 
   const staged = `${ROOT}/staging/image-crashed`;
   const dir = join(ctx.dataDir, 'staging', 'image-crashed');

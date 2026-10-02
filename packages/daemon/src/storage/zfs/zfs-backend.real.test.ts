@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runChecked, runCommand } from '../../process/run-command';
 import { createZfsBackend } from './zfs-backend';
+import type { ZfsBackend } from './zfs-backend';
 import type { CommandRunner } from './zfs-commands';
 
 // Against a real pool, as root: the `zfs` CI job sets these (.github/workflows/
@@ -31,7 +32,11 @@ async function setupPool(run: CommandRunner = runCommand) {
 
   await runChecked(['mount', '-t', 'zfs', root, dataDir]);
 
+  const backends: ZfsBackend[] = [];
+
   cleanups.push(async () => {
+    await Promise.all(backends.map((backend) => backend.waitForReclaim()));
+
     await runCommand(['umount', '-R', dataDir]);
     await runChecked(['zfs', 'destroy', '-R', root]);
   });
@@ -44,6 +49,8 @@ async function setupPool(run: CommandRunner = runCommand) {
 
   const startBackend = async (runner: CommandRunner = run) => {
     const backend = createZfsBackend({ dataDir, root, run: runner, log: () => {} });
+
+    backends.push(backend);
 
     await backend.start(live);
 

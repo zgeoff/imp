@@ -146,6 +146,8 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       }
     },
 
+    stop: () => Promise.resolve(),
+
     readUsage: () => {
       const stats = statfsSync(deps.dataDir);
 

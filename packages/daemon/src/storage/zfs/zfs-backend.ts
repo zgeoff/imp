@@ -578,6 +578,10 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       await reclaim.running;
     },
 
+    stop: async () => {
+      await reclaim.running;
+    },
+
     readUsage: async () => {
       const usage = await zfs.readUsage(deps.root);
 

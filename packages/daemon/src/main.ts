@@ -199,6 +199,9 @@ async function main(): Promise<void> {
       printLog(`impd: every imp asleep in ${String(sleptMs)}ms`);
     }
 
+    // a reclaim pass left running would race the next impd's start
+    await runStopStep('storage', readStepMs(), () => storage.stop());
+
     // a sleep still running writes its record later: closing the database
     // under it would fail that write. The next start finds its snapshot.
     if (settled) {

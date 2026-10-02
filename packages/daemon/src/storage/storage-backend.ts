@@ -59,6 +59,9 @@ export interface StorageBackend {
   ) => Promise<T>;
 
   readonly readUsage: () => Promise<StorageUsage>;
+
+  // waits for background work (a ZFS reclaim) to finish, before impd exits
+  readonly stop: () => Promise<void>;
 }
 
 // The id is in use already: on ZFS, a deleted checkpoint's snapshot stays
