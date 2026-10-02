@@ -3,7 +3,8 @@
 `imp mcp` gives a coding agent imps as tools. The agent can create an imp, run a test suite in it,
 checkpoint before a risky change, fork to try two fixes, and destroy what it does not need. The
 server speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio. It reaches
-impd with the same `IMP_URL` and token as the rest of the CLI ([configuration](./configuration.md)).
+impd as the rest of the CLI does: the current saved host, `--host`, or `IMP_URL` and `IMP_TOKEN`
+([configuration](./configuration.md)).
 
 ## Add it to an agent
 
@@ -24,7 +25,7 @@ so a generated name fits in 31.
 
 The guard stops mistakes, such as an agent that destroys the wrong imp. It is not a security
 boundary. The token that `imp mcp` uses opens the whole impd API, and an agent that can read
-`~/.config/imp/token` or `IMP_TOKEN` can call impd without the server. Scoped tokens are
+`~/.config/imp/config.json` or `IMP_TOKEN` can call impd without the server. Scoped tokens are
 [#29](https://github.com/zgeoff/imp/issues/29).
 
 ## Tools

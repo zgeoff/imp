@@ -22,7 +22,7 @@ export const newCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.create({
         ...(context.args.name !== undefined && { name: context.args.name }),
         ...(context.args.image !== undefined && { image: context.args.image }),
@@ -41,7 +41,7 @@ export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
   args: { json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imps = await client.imps.list();
 
       console.log(formatOutput(imps, context.args.json, formatImps));
@@ -52,7 +52,7 @@ export const startCommand = defineCommand({
   meta: { name: 'start', description: 'Boot a stopped imp' },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.start({ name: context.args.name });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -63,7 +63,7 @@ export const stopCommand = defineCommand({
   meta: { name: 'stop', description: 'Shut an imp down (its disk stays, its memory does not)' },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.stop({ name: context.args.name });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -74,7 +74,7 @@ export const rmCommand = defineCommand({
   meta: { name: 'rm', description: 'Destroy an imp and its disk and checkpoints' },
   args: { name: nameArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       await client.imps.destroy({ name: context.args.name });
     }),
 });
@@ -83,7 +83,7 @@ export const sleepCommand = defineCommand({
   meta: { name: 'sleep', description: 'Snapshot an imp to disk and free its RAM' },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.sleep({ name: context.args.name });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -94,7 +94,7 @@ export const wakeCommand = defineCommand({
   meta: { name: 'wake', description: 'Resume a sleeping or stopped imp' },
   args: { name: nameArg, json: jsonArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.wake({ name: context.args.name });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -108,7 +108,7 @@ export const holdCommand = defineCommand({
     duration: { type: 'positional', description: 'e.g. 90s, 15m, 2h', required: true },
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.hold({
         name: context.args.name,
         seconds: parseDuration(context.args.duration),
@@ -122,7 +122,7 @@ export const urlCommand = defineCommand({
   meta: { name: 'url', description: "Print an imp's URLs" },
   args: { name: nameArg },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const urls = await client.imps.url({ name: context.args.name });
 
       console.log(urls.local);
@@ -142,7 +142,7 @@ export const forkCommand = defineCommand({
     json: jsonArg,
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const imp = await client.imps.fork({
         source: context.args.source,
         name: context.args.name,
@@ -168,6 +168,7 @@ export const execCommand = defineCommand({
     }
 
     const code = await runExec({
+      host: context.host,
       name: context.args.name,
       argv,
       tty: context.args.tty === true,
@@ -183,6 +184,7 @@ export const consoleCommand = defineCommand({
   args: { name: nameArg },
   run: async (context) => {
     const code = await runExec({
+      host: context.host,
       name: context.args.name,
       argv: ['/bin/sh', '-c', CONSOLE_SHELL],
       tty: true,

@@ -4,10 +4,12 @@ import type { Readable } from 'node:stream';
 import { openExecSession } from '@zgeoff/imp-client';
 import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
-import { TOKEN_HINT } from './run-action';
-import { UsageError } from './usage-error';
+import type { CliConfig } from './cli-config';
+import { formatUnauthorized } from './run-action';
 
 export interface ExecOptions {
+  // the saved host `--host` named, or null
+  readonly host: string | null;
   readonly name: string;
   readonly argv: readonly string[];
   readonly tty: boolean;
@@ -52,16 +54,13 @@ function openWebSocket(url: string, headers: Readonly<Record<string, string>>): 
 // Runs one command in an imp, wired to this process's stdio and signals,
 // and resolves with the exit code for this process.
 export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO): Promise<number> {
-  let config: ReturnType<typeof loadCliConfig>;
+  let config: CliConfig;
 
   try {
-    config = loadCliConfig(io.env);
+    config = loadCliConfig(io.env, options.host);
   } catch (error) {
-    if (!(error instanceof UsageError)) {
-      throw error;
-    }
-
-    console.error(`imp: ${error.message}`);
+    // a usage error, or a config.json that cannot be read (EACCES, EISDIR)
+    console.error(`imp: ${error instanceof Error ? error.message : String(error)}`);
 
     return Promise.resolve(IMP_FAILED_CODE);
   }
@@ -205,7 +204,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
   const waitForOutcome = async (): Promise<void> => {
     const outcome = await session.outcome;
 
-    stopSession(printOutcome(outcome, config.url));
+    stopSession(printOutcome(outcome, config));
   };
 
   void waitForOutcome();
@@ -214,7 +213,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 }
 
 // prints a line on stderr for any failure, and returns the exit code
-function printOutcome(outcome: ExecOutcome, baseUrl: string): number {
+function printOutcome(outcome: ExecOutcome, config: CliConfig): number {
   switch (outcome.kind) {
     case 'exit': {
       if (outcome.code !== null) {
@@ -239,12 +238,12 @@ function printOutcome(outcome: ExecOutcome, baseUrl: string): number {
       return outcome.code === 'EXEC_FAILED' ? EXEC_FAILED_CODE : IMP_FAILED_CODE;
     }
     case 'unauthorized': {
-      console.error(`imp: ${TOKEN_HINT}`);
+      console.error(`imp: ${formatUnauthorized(config)}`);
 
       return IMP_FAILED_CODE;
     }
     case 'unreachable': {
-      console.error(`imp: cannot reach impd at ${baseUrl} (${outcome.detail})`);
+      console.error(`imp: cannot reach impd at ${config.url} (${outcome.detail})`);
 
       return IMP_FAILED_CODE;
     }

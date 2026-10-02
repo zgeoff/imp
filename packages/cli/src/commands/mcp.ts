@@ -21,7 +21,7 @@ export const mcpCommand = defineCommand({
     all: { type: 'boolean', description: 'touch every imp on impd' },
   },
   run: (context) =>
-    runAction(async (client) => {
+    runAction(context.host, async (client) => {
       const mcp = await import('@imp/mcp');
 
       let guard: ImpGuard;

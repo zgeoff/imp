@@ -26,7 +26,7 @@ also need Docker, [Bun](https://bun.sh) and Go.
 git clone https://github.com/zgeoff/imp && cd imp
 kernel/build.sh       # the guest kernel, about 9 minutes the first time
 scripts/dev.sh up     # builds and starts the host container that runs impd
-export IMP_TOKEN=$(scripts/dev.sh token)
+scripts/dev.sh token | scripts/imp login http://localhost:7070 --name dev
 ```
 
 To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
@@ -34,6 +34,11 @@ To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
 ```sh
 TAILSCALE_AUTHKEY=tskey-auth-…
 ```
+
+On a laptop that talks to an impd elsewhere, only the CLI is needed, with
+`imp login https://imp.example.ts.net` to point it there. There is no release yet, so for now link
+`scripts/imp` from a checkout onto your `PATH`. From the first release, `install.sh` installs the
+binary, and once the Homebrew tap is set up, so does `brew install zgeoff/tap/imp`.
 
 The [install guide](./docs/guides/install.md) has the details.
 
@@ -69,14 +74,16 @@ imp fork box box-2                # a second copy to try something else in
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
 | `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
+| `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
+| `completion bash\|zsh\|fish`           | print the shell completion script                        |
 
 `--memory` takes MiB or a unit (`512m`, `2g`). Commands that print imps, images, checkpoints or
 `info` take `--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
-size, a relative `image build` path, an `IMP_URL` that is not an http URL). `imp exec` and
-`imp console` exit with the command's own code, or 128 + n when signal n ended it, and set these
-codes themselves:
+size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
+`imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n ended it,
+and set these codes themselves:
 
 | Code | When                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |
