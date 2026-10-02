@@ -28,9 +28,13 @@ on_signal() {
 }
 trap on_signal TERM INT
 
-while :; do
+while [ -z "$stopping" ]; do
   bun "$daemon" &
   child=$!
+  # A signal between the fork and the line above found no child to kill.
+  if [ -n "$stopping" ]; then
+    kill -TERM "$child" 2>/dev/null || true
+  fi
   rc=0
   wait "$child" || rc=$?
   # A trapped signal interrupts wait before impd has exited.

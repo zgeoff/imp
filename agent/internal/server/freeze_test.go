@@ -1,10 +1,15 @@
 package server
 
 import (
+	"errors"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
 // fakeIoctl records the ioctls freeze and thaw issue.
@@ -71,5 +76,60 @@ func TestStaleAutoThaw(t *testing.T) {
 	}
 	if err := s.thaw(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFreezeTwiceIsFrozen(t *testing.T) {
+	var f fakeIoctl
+	f.install(t)
+	s := &Server{}
+	if err := s.freeze(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var pe *proto.Error
+	if err := s.freeze(time.Hour); !errors.As(err, &pe) || pe.Code != proto.ErrFrozen {
+		t.Fatalf("second freeze = %v, want FROZEN", err)
+	}
+	if err := s.thaw(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.freeze(time.Hour); err != nil {
+		t.Fatalf("freeze after thaw = %v", err)
+	}
+	if err := s.thaw(); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := f.get(), []uint{fiFreeze, fiThaw, fiFreeze, fiThaw}; !slices.Equal(got, want) {
+		t.Fatalf("ioctls = %#x, want %#x", got, want)
+	}
+}
+
+// TestFreezeBusyIsFrozen covers a filesystem frozen from inside the guest.
+func TestFreezeBusyIsFrozen(t *testing.T) {
+	prev := rootIoctl
+	rootIoctl = func(uint) error { return unix.EBUSY }
+	t.Cleanup(func() { rootIoctl = prev })
+	var pe *proto.Error
+	if err := (&Server{}).freeze(time.Hour); !errors.As(err, &pe) || pe.Code != proto.ErrFrozen {
+		t.Fatalf("freeze = %v, want FROZEN", err)
+	}
+}
+
+func TestThawForPoweroff(t *testing.T) {
+	var f fakeIoctl
+	f.install(t)
+	s := &Server{}
+	if err := s.freeze(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ThawForPoweroff(); err != nil {
+		t.Fatal(err)
+	}
+	var pe *proto.Error
+	if err := s.freeze(time.Hour); !errors.As(err, &pe) || pe.Code != proto.ErrPoweringOff {
+		t.Fatalf("freeze after ThawForPoweroff = %v, want POWERING_OFF", err)
+	}
+	if got, want := f.get(), []uint{fiFreeze, fiThaw}; !slices.Equal(got, want) {
+		t.Fatalf("ioctls = %#x, want %#x", got, want)
 	}
 }

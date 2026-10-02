@@ -18,6 +18,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
+	"github.com/zgeoff/imp/agent/internal/safe"
 )
 
 // drainGrace bounds how long output is forwarded after the process exits.
@@ -74,25 +75,42 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 			Error: &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()},
 		})
 	}
+	// A panic in the session ends it as a host hangup would: its pipes
+	// close, which stops the pumps, and the process gets SIGHUP. In Serve
+	// itself the panic then goes on to the request handler's recover.
+	abort := func() {
+		s.close()
+		s.proc.Signal(syscall.SIGHUP)
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			abort()
+			panic(v)
+		}
+	}()
 	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid}); err != nil {
 		s.proc.Signal(syscall.SIGHUP)
 	}
 
 	var writer sync.WaitGroup
-	writer.Go(s.writeStdin)
+	writer.Add(1)
+	safe.Go("exec stdin", func() {
+		defer writer.Done()
+		s.writeStdin()
+	}, abort)
 	var pumps sync.WaitGroup
 	for _, o := range s.outputs {
 		pumps.Add(1)
-		go func() {
+		safe.Go("exec output", func() {
 			defer pumps.Done()
 			pump(o.f, o.typ, w)
-		}()
+		}, abort)
 	}
 	hangup := make(chan struct{})
-	go func() {
+	safe.Go("exec input", func() {
+		defer close(hangup)
 		s.input(r)
-		close(hangup)
-	}()
+	}, abort)
 
 	var st reaper.Status
 	select {

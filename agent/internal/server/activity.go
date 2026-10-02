@@ -72,6 +72,10 @@ func load1() float64 {
 	if err != nil {
 		return 0
 	}
-	f, _ := strconv.ParseFloat(strings.Fields(string(b))[0], 64)
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 {
+		return 0
+	}
+	f, _ := strconv.ParseFloat(fields[0], 64)
 	return f
 }

@@ -156,4 +156,9 @@ else
   echo "ok   node $short ($ip) removed from the tailnet"
 fi
 
-[ $fail = 0 ] && echo "== PASS" || { echo "== FAIL"; exit 1; }
+if [ "$fail" = 0 ]; then
+  echo "== PASS"
+else
+  echo "== FAIL"
+  exit 1
+fi

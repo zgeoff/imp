@@ -12,6 +12,8 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/zgeoff/imp/agent/internal/safe"
 )
 
 // Status is the outcome of a reaped child.
@@ -43,9 +45,11 @@ func New() *Reaper {
 	r := &Reaper{waiters: make(map[int]chan Status)}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGCHLD)
+	// Each pass recovers on its own: a dead reap loop would leave every
+	// later child unreaped and every waiter blocked.
 	go func() {
 		for range sigs {
-			r.reapAll()
+			safe.Call("reaper", r.reapAll)
 		}
 	}()
 	return r
