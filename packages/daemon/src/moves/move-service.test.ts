@@ -1,22 +1,19 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import type { MoveStatus } from '@imp/api';
 import { createImage, findImageByName } from '../db/images';
 import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
+import { TEST_TOKEN, buildTestApp } from '../imps/test-imps';
+import type { ImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
+import type { StorageBackend } from '../storage/storage-backend';
 import { createFakeZfs } from '../storage/zfs/fake-zfs';
 import type { FakeZfs } from '../storage/zfs/fake-zfs';
 import { createZfsBackend } from '../storage/zfs/zfs-backend';
 import { MOVE_PART_HEADER, MOVE_PATHS } from './move-header';
 import { ReceiptSchema, buildTicketHeader } from './move-tickets';
-
-// the target's peer URL: a literal tailnet address, as a move needs
-const TARGET_URL = 'http://100.100.0.2:7070';
-
-// the source's address, as the target's socket sees it
-const SOURCE_PEER = '100.100.0.1';
+import { SOURCE_PEER, TARGET_URL, createUbuntuImage, setupMoveHosts } from './test-moves';
+import type { FetchHook } from './test-moves';
 
 async function waitUntil(isDone: () => Promise<boolean>): Promise<void> {
   for (let tries = 0; tries < 500; tries += 1) {
@@ -32,84 +29,41 @@ async function waitUntil(isDone: () => Promise<boolean>): Promise<void> {
   throw new Error('waited 5 s in vain');
 }
 
-type FetchHook = (request: Request, forward: () => Promise<Response>) => Promise<Response>;
-
-// Two impds in one process: `source` sends to `target` through `fetch`,
-// which hands each request to the target's move routes as from the tailnet.
 interface MoveTestOptions {
   readonly hasImage?: boolean;
   readonly partBytes?: number;
 }
 
+// a stopped `dev` on the source, with a checkpoint and a disk changed since
 async function setupMoveTest(hook?: FetchHook, options: MoveTestOptions = {}) {
-  const source = await setupImpTest();
-  const target = await setupImpTest({ env: { IMP_PEER_URL: TARGET_URL } });
-
-  const targetApp = buildTestApp(target, target);
-  const sendToTarget = (request: Request) => targetApp.moves.handle(request, SOURCE_PEER);
-
-  const sourceApp = buildTestApp(source, source, undefined, {}, null, {
-    fetch: (request) =>
-      hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
+  const hosts = await setupMoveHosts({
+    ...(hook !== undefined && { hook }),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
   });
 
-  const hosts = options.hasImage === false ? [source] : [source, target];
+  await createUbuntuImage(hosts.source);
 
-  for (const host of hosts) {
-    await host.createTestImage('ubuntu');
-
-    writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').config, '{}');
+  if (options.hasImage !== false) {
+    await createUbuntuImage(hosts.target);
   }
 
-  const created = await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  const created = await hosts.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  await sourceApp.client.imps.stop({ name: 'dev' });
+  await hosts.sourceApp.client.imps.stop({ name: 'dev' });
 
-  const disk = source.storage.resolveImpPaths(created.id).disk;
+  const disk = hosts.source.storage.resolveImpPaths(created.id).disk;
 
   writeFileSync(disk, 'hello');
 
-  await sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+  await hosts.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
   writeFileSync(disk, 'world');
 
-  // runs a whole move, as `imp move` does, and waits for it to end
-  const runMove = async (): Promise<MoveStatus> => {
-    const plan = await sourceApp.client.moves.prepare({ name: 'dev' });
-    const ticket = await targetApp.client.moves.receive({ name: 'dev', bytes: plan.bytes });
-
-    await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
-
-    return waitForMove();
-  };
-
-  const waitForMove = async (): Promise<MoveStatus> => {
-    for (let tries = 0; tries < 500; tries += 1) {
-      const status = await sourceApp.client.moves.status({ name: 'dev' });
-
-      if (status.isDone || status.error !== null) {
-        return status;
-      }
-
-      await Bun.sleep(10);
-    }
-
-    throw new Error('the move never ended');
-  };
-
   return {
-    source,
-    target,
-    sourceApp,
-    targetApp,
+    ...hosts,
     impId: created.id,
-    runMove,
-    waitForMove,
-    async [Symbol.asyncDispose]() {
-      await source[Symbol.asyncDispose]();
-      await target[Symbol.asyncDispose]();
-    },
+    runMove: () => hosts.runMove('dev'),
+    waitForMove: () => hosts.waitForMove('dev'),
   };
 }
 
@@ -591,61 +545,62 @@ test('a target restart removes a stream cut short and tickets never used', async
 
 const ZFS_ROOT = 'tank/imp';
 
-// an impd on a fake ZFS pool, with the image built there
-async function setupZfsHost(env: Readonly<Record<string, string>> = {}) {
+// an impd's storage on a fake ZFS pool, and the pool once it is made
+function buildFakeZfsHost() {
   const pool: { zfs: FakeZfs | null } = { zfs: null };
 
-  const host = await setupImpTest({
-    env,
-    createStorage: (dataDir) => {
-      const zfs = createFakeZfs({ root: ZFS_ROOT, rootDir: dataDir });
+  const createStorage = (dataDir: string): StorageBackend => {
+    const zfs = createFakeZfs({ root: ZFS_ROOT, rootDir: dataDir });
 
-      pool.zfs = zfs;
+    pool.zfs = zfs;
 
-      const backend = createZfsBackend({
-        dataDir,
-        root: ZFS_ROOT,
-        run: zfs.run,
-        streams: zfs.streams,
-        readMounts: zfs.readMounts,
-        readModuleVersion: () => '2.2.2-0ubuntu9',
-        log: () => {},
-      });
+    const backend = createZfsBackend({
+      dataDir,
+      root: ZFS_ROOT,
+      run: zfs.run,
+      streams: zfs.streams,
+      readMounts: zfs.readMounts,
+      readModuleVersion: () => '2.2.2-0ubuntu9',
+      log: () => {},
+    });
 
-      // the fake pool keeps no files: a new disk gets one, as a clone would
-      const writeDisk = (impId: string) => {
-        const disk = backend.resolveImpPaths(impId).disk;
+    // the fake pool keeps no files: a new disk gets one, as a clone would
+    const writeDisk = (impId: string) => {
+      const disk = backend.resolveImpPaths(impId).disk;
 
-        if (!existsSync(disk)) {
-          writeFileSync(disk, 'disk');
-        }
-      };
+      if (!existsSync(disk)) {
+        writeFileSync(disk, 'disk');
+      }
+    };
 
-      return {
-        ...backend,
-        createImpDisk: async (impId, source) => {
-          await backend.createImpDisk(impId, source);
+    return {
+      ...backend,
+      createImpDisk: async (impId, source) => {
+        await backend.createImpDisk(impId, source);
 
-          writeDisk(impId);
-        },
-        receiveMoveSnapshots: async (impId, steps, readStep, buildId) => {
-          const received = await backend.receiveMoveSnapshots(impId, steps, readStep, buildId);
+        writeDisk(impId);
+      },
+      receiveMoveSnapshots: async (impId, steps, readStep, buildId) => {
+        const received = await backend.receiveMoveSnapshots(impId, steps, readStep, buildId);
 
-          writeDisk(impId);
+        writeDisk(impId);
 
-          return received;
-        },
-      };
-    },
-  });
+        return received;
+      },
+    };
+  };
 
+  return { pool, createStorage };
+}
+
+// the fake pool keeps no files: the image is a dataset only
+async function createZfsImage(host: Readonly<Pick<ImpTest, 'db' | 'dataDir' | 'storage'>>) {
   await host.storage.start({
     impIds: new Set(),
     checkpointIds: new Set(),
     imageDigests: new Set(),
   });
 
-  // the fake pool keeps no files: the image is a dataset only
   await host.storage.createImage('sha256:ubuntu', () => Promise.resolve());
 
   writeFileSync(buildImagePaths(host.dataDir, 'sha256:ubuntu').rootfs, 'rootfs');
@@ -657,76 +612,50 @@ async function setupZfsHost(env: Readonly<Record<string, string>> = {}) {
     digest: 'sha256:ubuntu',
     sizeBytes: 6,
   });
+}
 
-  if (pool.zfs === null) {
+// two impds, the target on a fake ZFS pool and the source too unless `isSourceXfs`
+async function setupZfsMove(options: Readonly<{ hook?: FetchHook; isSourceXfs?: boolean }> = {}) {
+  const isSourceXfs = options.isSourceXfs === true;
+  const sourceHost = buildFakeZfsHost();
+  const targetHost = buildFakeZfsHost();
+
+  const hosts = await setupMoveHosts({
+    ...(options.hook !== undefined && { hook: options.hook }),
+    ...(!isSourceXfs && { source: { createStorage: sourceHost.createStorage } }),
+    target: { createStorage: targetHost.createStorage },
+  });
+
+  await (isSourceXfs ? createUbuntuImage(hosts.source) : createZfsImage(hosts.source));
+  await createZfsImage(hosts.target);
+
+  if (targetHost.pool.zfs === null) {
     throw new Error('no pool');
   }
 
-  return { host, zfs: pool.zfs, [Symbol.asyncDispose]: () => host[Symbol.asyncDispose]() };
-}
-
-// two ZFS hosts, and a stopped imp with one checkpoint moved from the source
-// to the target as ZFS streams
-async function setupZfsMove() {
-  const source = await setupZfsHost();
-  const target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
-
-  const targetApp = buildTestApp(target.host, target.host);
-
-  const sourceApp = buildTestApp(source.host, source.host, undefined, {}, null, {
-    fetch: (request) => targetApp.moves.handle(request, SOURCE_PEER),
-  });
-
-  await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
-  await sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
-
-  const plan = await sourceApp.client.moves.prepare({
-    name: 'dev',
-    stop: true,
-    targetStorage: 'zfs',
-  });
-
-  const ticket = await targetApp.client.moves.receive({ name: 'dev', bytes: plan.bytes });
-
-  await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
-
-  for (let tries = 0; tries < 500; tries += 1) {
-    const status = await sourceApp.client.moves.status({ name: 'dev' });
-
-    if (status.isDone || status.error !== null) {
-      expect(status.error).toBeNull();
-      break;
-    }
-
-    await Bun.sleep(10);
-  }
-
-  return {
-    source,
-    target,
-    sourceApp,
-    targetApp,
-    [Symbol.asyncDispose]: async () => {
-      await source[Symbol.asyncDispose]();
-      await target[Symbol.asyncDispose]();
-    },
-  };
+  // an XFS source has no pool
+  return { ...hosts, sourcePool: sourceHost.pool.zfs, targetPool: targetHost.pool.zfs };
 }
 
 test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', async () => {
-  await using move = await setupZfsMove();
+  await using ctx = await setupZfsMove();
 
-  const checkpoints = await move.targetApp.client.checkpoints.list({ name: 'dev' });
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
-  const received = move.target.zfs.commands.filter((command) => command.startsWith('zfs recv'));
+  const status = await ctx.runMove('dev', true);
+  const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
 
-  const moved = await move.targetApp.client.imps.get({ name: 'dev' });
-  const left = await findImpByName(move.source.host.db, 'dev');
+  const received = ctx.targetPool.commands.filter((command) => command.startsWith('zfs recv'));
 
+  const moved = await ctx.targetApp.client.imps.get({ name: 'dev' });
+  const left = await findImpByName(ctx.source.db, 'dev');
+
+  expect(status.error).toBeNull();
   expect(checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one']);
   expect(received).toHaveLength(2);
 
-  expect(move.target.zfs.listSnapshots()).toContain(
+  expect(ctx.targetPool.listSnapshots()).toContain(
     `${ZFS_ROOT}/disks/${moved.id}@${checkpoints[0]?.id ?? ''}`,
   );
 
@@ -734,28 +663,33 @@ test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', asy
 });
 
 test('after a move between ZFS hosts, a GC on either host finds nothing to drop or keep', async () => {
-  await using move = await setupZfsMove();
+  await using ctx = await setupZfsMove();
+
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+
+  const status = await ctx.runMove('dev', true);
 
   const sweeps = [];
 
-  for (const app of [move.sourceApp, move.targetApp]) {
+  for (const app of [ctx.sourceApp, ctx.targetApp]) {
     const kept = await app.client.system.gc({});
     const retired = await app.client.system.gc({ orphans: true });
 
     sweeps.push(kept, retired);
   }
 
+  const pools = [ctx.sourcePool, ctx.targetPool].filter((pool) => pool !== null);
+
+  expect(status.error).toBeNull();
   expect(sweeps.map((sweep) => [sweep.dropped, sweep.kept])).toEqual(sweeps.map(() => [[], []]));
 
-  expect([
-    ...move.source.zfs.listSnapshots(),
-    ...move.target.zfs.listSnapshots(),
-  ]).not.toContainEqual(expect.stringContaining('@mv-'));
+  expect(pools.flatMap((pool) => pool.listSnapshots())).not.toContainEqual(
+    expect.stringContaining('@mv-'),
+  );
 
   expect(
-    [...move.source.zfs.listDatasets(), ...move.target.zfs.listDatasets()].filter((name) =>
-      name.includes('/staging/'),
-    ),
+    pools.flatMap((pool) => pool.listDatasets()).filter((name) => name.includes('/staging/')),
   ).toEqual([]);
 });
 
@@ -778,16 +712,12 @@ function writeWrongSum(body: Uint8Array): boolean {
 }
 
 test('a ZFS stream whose sum does not match never commits, and the move can go again', async () => {
-  await using source = await setupZfsHost();
-  await using target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
-
-  const targetApp = buildTestApp(target.host, target.host);
   const state = { isCorrupted: false };
 
-  const sourceApp = buildTestApp(source.host, source.host, undefined, {}, null, {
-    fetch: async (request) => {
+  await using ctx = await setupZfsMove({
+    hook: async (request, forward) => {
       if (state.isCorrupted || request.headers.get(MOVE_PART_HEADER) === null) {
-        return targetApp.moves.handle(request, SOURCE_PEER);
+        return forward();
       }
 
       const read = await request.arrayBuffer();
@@ -802,50 +732,26 @@ test('a ZFS stream whose sum does not match never commits, and the move can go a
         body,
       });
 
-      return targetApp.moves.handle(changed, SOURCE_PEER);
+      return ctx.targetApp.moves.handle(changed, SOURCE_PEER);
     },
   });
 
-  await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
-  await sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
+  await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
-  const runMove = async (): Promise<MoveStatus> => {
-    const plan = await sourceApp.client.moves.prepare({
-      name: 'dev',
-      stop: true,
-      targetStorage: 'zfs',
-    });
+  const failed = await ctx.runMove('dev', true);
 
-    const ticket = await targetApp.client.moves.receive({ name: 'dev', bytes: plan.bytes });
-
-    await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
-
-    for (let tries = 0; tries < 500; tries += 1) {
-      const status = await sourceApp.client.moves.status({ name: 'dev' });
-
-      if (status.isDone || status.error !== null) {
-        return status;
-      }
-
-      await Bun.sleep(10);
-    }
-
-    throw new Error('the move never ended');
-  };
-
-  const failed = await runMove();
-
-  const staged = target.zfs.listDatasets().filter((name) => name.includes('/staging/'));
-  const received = target.zfs.commands.filter((command) => command.startsWith('zfs recv'));
+  const staged = ctx.targetPool.listDatasets().filter((name) => name.includes('/staging/'));
+  const received = ctx.targetPool.commands.filter((command) => command.startsWith('zfs recv'));
 
   // nothing to clean up: `zfs recv` never saw the stream's end
-  const cleaned = target.zfs.commands.filter((command) => command.includes('/staging/mvin-'));
+  const cleaned = ctx.targetPool.commands.filter((command) => command.includes('/staging/mvin-'));
 
-  const absent = await findImpByName(target.host.db, 'dev');
+  const absent = await findImpByName(ctx.target.db, 'dev');
 
-  await sourceApp.client.moves.abort({ name: 'dev' });
+  await ctx.sourceApp.client.moves.abort({ name: 'dev' });
 
-  const retried = await runMove();
+  const retried = await ctx.runMove('dev', true);
 
   expect(state.isCorrupted).toBe(true);
   expect(failed.error).toContain('the sha256 does not match');
@@ -857,50 +763,25 @@ test('a ZFS stream whose sum does not match never commits, and the move can go a
 });
 
 test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots', async () => {
-  await using source = await setupImpTest();
-  await using target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
+  await using ctx = await setupZfsMove({ isSourceXfs: true });
 
-  const targetApp = buildTestApp(target.host, target.host);
+  const created = await ctx.sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  const sourceApp = buildTestApp(source, source, undefined, {}, null, {
-    fetch: (request) => targetApp.moves.handle(request, SOURCE_PEER),
-  });
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
 
-  await source.createTestImage('ubuntu');
+  writeFileSync(ctx.source.storage.resolveImpPaths(created.id).disk, 'hello');
 
-  writeFileSync(buildImagePaths(source.dataDir, 'sha256:ubuntu').config, '{}');
+  await ctx.sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
 
-  const created = await sourceApp.client.imps.create({ name: 'dev', image: 'ubuntu' });
+  const status = await ctx.runMove('dev');
+  const checkpoints = await ctx.targetApp.client.checkpoints.list({ name: 'dev' });
 
-  await sourceApp.client.imps.stop({ name: 'dev' });
+  const disk = readFileSync(ctx.target.storage.resolveImpPaths(created.id).disk, 'utf8');
 
-  writeFileSync(source.storage.resolveImpPaths(created.id).disk, 'hello');
-
-  await sourceApp.client.checkpoints.create({ name: 'dev', label: 'one' });
-
-  const plan = await sourceApp.client.moves.prepare({ name: 'dev', targetStorage: 'zfs' });
-  const ticket = await targetApp.client.moves.receive({ name: 'dev', bytes: plan.bytes });
-
-  await sourceApp.client.moves.send({ name: 'dev', to: ticket.peerUrl, ticket: ticket.ticket });
-
-  for (let tries = 0; tries < 500; tries += 1) {
-    const status = await sourceApp.client.moves.status({ name: 'dev' });
-
-    if (status.isDone || status.error !== null) {
-      expect(status.error).toBeNull();
-      break;
-    }
-
-    await Bun.sleep(10);
-  }
-
-  const checkpoints = await targetApp.client.checkpoints.list({ name: 'dev' });
-
-  const disk = readFileSync(target.host.storage.resolveImpPaths(created.id).disk, 'utf8');
-
+  expect(status.error).toBeNull();
   expect(disk.startsWith('hello')).toBe(true);
 
-  expect(target.zfs.listSnapshots()).toContain(
+  expect(ctx.targetPool.listSnapshots()).toContain(
     `${ZFS_ROOT}/disks/${created.id}@${checkpoints[0]?.id ?? ''}`,
   );
 });
