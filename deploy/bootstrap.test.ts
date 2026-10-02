@@ -165,7 +165,7 @@ interface EnvInput {
   readonly hostFirewall?: string;
   readonly ipv6?: string;
   readonly subnet6?: string;
-  readonly ksm?: boolean;
+  readonly ksm?: 'on' | 'off';
 }
 
 function renderEnv(input: EnvInput): string {
@@ -180,7 +180,7 @@ function renderEnv(input: EnvInput): string {
     input.hostFirewall ?? 'own',
     input.ipv6 ?? 'off',
     input.subnet6 ?? '',
-    input.ksm === true ? '1' : '',
+    input.ksm ?? '',
   ];
 
   return runFunction('render_env', args, { env: { BOOTSTRAP_AUTHKEY: input.key ?? '' } });
@@ -244,11 +244,12 @@ test('none replaces own, and stays on the next render', () => {
   expect(renderEnv({ existing: env, hostFirewall: 'none' })).toBe(env);
 });
 
-test('--ksm sets IMP_KSM=1; without it the operator’s IMP_KSM stays', () => {
-  const env = renderEnv({ existing: template, ksm: true });
+test('--ksm sets IMP_KSM=1, --no-ksm 0; without either the operator’s IMP_KSM stays', () => {
+  const env = renderEnv({ existing: template, ksm: 'on' });
 
   expect(getEnvValues(env, 'IMP_KSM')).toEqual(['1']);
-  expect(renderEnv({ existing: env, ksm: true })).toBe(env);
+  expect(renderEnv({ existing: env, ksm: 'on' })).toBe(env);
+  expect(getEnvValues(renderEnv({ existing: env, ksm: 'off' }), 'IMP_KSM')).toEqual(['0']);
   expect(renderEnv({ existing: env })).toBe(env);
   expect(getEnvValues(renderEnv({ existing: template }), 'IMP_KSM')).toEqual(['']);
 });
