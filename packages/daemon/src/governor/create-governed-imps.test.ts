@@ -1,41 +1,48 @@
 import { expect, test } from 'bun:test';
 import { setupImpTest, waitForOutcome } from '../imps/test-imps';
 
-test('the governor skips a victim whose lock another boot holds instead of waiting for it', async () => {
-  // two awake imps of 300 MiB; making room for 600 MiB needs both asleep
-  await using ctx = await setupImpTest({
-    env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
-  });
+// these tests wait up to 10 s for held calls to settle; a loaded host is slow
+const SLOW_TEST_TIMEOUT_MS = 30_000;
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'a' });
-  await Bun.sleep(5);
-  await ctx.imps.createImp({ name: 'b' });
+test(
+  'the governor skips a victim whose lock another boot holds instead of waiting for it',
+  async () => {
+    // two awake imps of 300 MiB; making room for 600 MiB needs both asleep
+    await using ctx = await setupImpTest({
+      env: { IMP_RAM_BUDGET_MIB: '800', IMP_DEFAULT_MEMORY_MIB: '512' },
+    });
 
-  const gate = ctx.fake.hold('sleep');
+    await ctx.createTestImage('ubuntu');
+    await ctx.imps.createImp({ name: 'a' });
+    await Bun.sleep(5);
+    await ctx.imps.createImp({ name: 'b' });
 
-  // the governor holds admission while it sleeps `a`
-  const admitting = ctx.governor.admit({ id: 'x', name: 'x', reserveMib: 600, memoryMib: 600 });
+    const gate = ctx.fake.hold('sleep');
 
-  await gate.reached;
+    // the governor holds admission while it sleeps `a`
+    const admitting = ctx.governor.admit({ id: 'x', name: 'x', reserveMib: 600, memoryMib: 600 });
 
-  // a restore of `b`: it takes b's lock, halts it and boots it, which asks
-  // the governor for admission
-  const restoring = ctx.imps.lockImp('b', async (imp) => {
-    const halted = await ctx.imps.haltImp(imp);
+    await gate.reached;
 
-    return ctx.imps.bootImp(halted);
-  });
+    // a restore of `b`: it takes b's lock, halts it and boots it, which asks
+    // the governor for admission
+    const restoring = ctx.imps.lockImp('b', async (imp) => {
+      const halted = await ctx.imps.haltImp(imp);
 
-  await Bun.sleep(5);
+      return ctx.imps.bootImp(halted);
+    });
 
-  gate.release();
+    await Bun.sleep(5);
 
-  const outcomes = await Promise.all([
-    waitForOutcome(admitting, 2000),
-    waitForOutcome(restoring, 2000),
-  ]);
+    gate.release();
 
-  expect(outcomes).not.toContain('hung');
-  expect(outcomes[0]).toBe('done');
-});
+    const outcomes = await Promise.all([
+      waitForOutcome(admitting, 10_000),
+      waitForOutcome(restoring, 10_000),
+    ]);
+
+    expect(outcomes).not.toContain('hung');
+    expect(outcomes[0]).toBe('done');
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);

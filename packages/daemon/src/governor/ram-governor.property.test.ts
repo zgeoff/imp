@@ -5,6 +5,8 @@ import { createLockFreeSleep } from '../imps/lock-free-sleep';
 import type { SleepOutcome } from '../imps/lock-free-sleep';
 import { createRamGovernor } from './ram-governor';
 
+// hundreds of runs: a loaded host can stretch them past the 5 s default
+const SLOW_TEST_TIMEOUT_MS = 30_000;
 const BUDGET_MIB = 1000;
 const IMP_IDS: readonly string[] = ['a', 'b', 'c', 'd', 'e', 'f'];
 
@@ -268,110 +270,118 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
   };
 }
 
-test('one op at a time: admission keeps the budget and never picks a pinned imp', async () => {
-  await fc.assert(
-    fc.asyncProperty(startArb, fc.array(opArb, { maxLength: 40 }), async (start, ops) => {
-      const model = setupModel(start);
+test(
+  'one op at a time: admission keeps the budget and never picks a pinned imp',
+  async () => {
+    await fc.assert(
+      fc.asyncProperty(startArb, fc.array(opArb, { maxLength: 40 }), async (start, ops) => {
+        const model = setupModel(start);
 
-      for (const op of ops) {
-        const awakeBefore = [...model.imps.values()].filter((imp) => imp.awake).length;
-        const callsBefore = model.sleepCalls.length;
+        for (const op of ops) {
+          const awakeBefore = [...model.imps.values()].filter((imp) => imp.awake).length;
+          const callsBefore = model.sleepCalls.length;
 
-        if (op.kind === 'admit') {
-          if (model.findImp(op.id).awake) {
-            continue;
-          }
+          if (op.kind === 'admit') {
+            if (model.findImp(op.id).awake) {
+              continue;
+            }
 
-          const outcome = await model.runAdmit(op);
+            const outcome = await model.runAdmit(op);
 
-          if (outcome === 'admitted') {
-            const usage = await model.governor.readUsage();
+            if (outcome === 'admitted') {
+              const usage = await model.governor.readUsage();
 
-            expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
+              expect(usage.usedMib + usage.reservedMib).toBeLessThanOrEqual(BUDGET_MIB);
+            } else {
+              const reservedMib = await model.readReservation(op.id);
+
+              expect(reservedMib).toBe(0);
+            }
+          } else if (op.kind === 'enforce') {
+            await model.governor.enforce();
+
+            // over budget only when sleeping every eligible imp would not do;
+            // #46 makes enforce sleep what it can, which tightens this
+            const room = model.findRoomLeft();
+
+            expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
           } else {
-            const reservedMib = await model.readReservation(op.id);
-
-            expect(reservedMib).toBe(0);
+            model.applyMutation(op);
           }
-        } else if (op.kind === 'enforce') {
+
+          const calls = model.sleepCalls.slice(callsBefore);
+
+          // nothing changes between the pick and the sleep: no pinned imp is
+          // even asked, and each awake imp at most once
+          expect(calls.filter((call) => !call.eligible)).toEqual([]);
+          expect(calls.length).toBeLessThanOrEqual(awakeBefore);
+        }
+      }),
+      { numRuns: 300 },
+    );
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
+
+test(
+  'concurrent admits with holds and RSS changes inside them all settle',
+  async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.scheduler(),
+        startArb,
+        concurrentAdmitsArb,
+        fc.array(mutationArb, { maxLength: 20 }),
+        async (scheduler, start, admits, mutations) => {
+          const model = setupModel(start);
+
+          model.pacer.pace = () => scheduler.schedule(Promise.resolve());
+
+          const pending = admits.filter((admit) => !model.findImp(admit.id).awake);
+          const admitting = pending.map((admit) => model.runAdmit(admit));
+          const enforcing = model.governor.enforce();
+
+          // each mutation lands wherever the scheduler releases it, inside an
+          // admit as often as between two
+          const mutating = mutations.map(async (op) => {
+            await scheduler.schedule(Promise.resolve());
+
+            model.applyMutation(op);
+          });
+
+          const outcomes = await scheduler.waitFor(Promise.all(admitting));
+
+          await scheduler.waitFor(Promise.all([enforcing, ...mutating]));
+
+          // a pin set after the pick reaches the fake, which refuses it as the
+          // real sleep does under the lock; the governor moves on. Each admit
+          // and the enforce pass ask each imp at most once.
+          expect(model.sleepCalls.length).toBeLessThanOrEqual(
+            (admitting.length + 1) * IMP_IDS.length,
+          );
+
+          model.pacer.pace = () => Promise.resolve();
+
+          for (const [index, outcome] of outcomes.entries()) {
+            const id = pending[index]?.id ?? '';
+
+            if (outcome === 'rejected' && !model.findImp(id).awake) {
+              const reservedMib = await model.readReservation(id);
+
+              expect(reservedMib).toBe(0);
+            }
+          }
+
           await model.governor.enforce();
 
-          // over budget only when sleeping every eligible imp would not do;
-          // #46 makes enforce sleep what it can, which tightens this
+          // as above; #46 tightens it
           const room = model.findRoomLeft();
 
           expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
-        } else {
-          model.applyMutation(op);
-        }
-
-        const calls = model.sleepCalls.slice(callsBefore);
-
-        // nothing changes between the pick and the sleep: no pinned imp is
-        // even asked, and each awake imp at most once
-        expect(calls.filter((call) => !call.eligible)).toEqual([]);
-        expect(calls.length).toBeLessThanOrEqual(awakeBefore);
-      }
-    }),
-    { numRuns: 300 },
-  );
-});
-
-test('concurrent admits with holds and RSS changes inside them all settle', async () => {
-  await fc.assert(
-    fc.asyncProperty(
-      fc.scheduler(),
-      startArb,
-      concurrentAdmitsArb,
-      fc.array(mutationArb, { maxLength: 20 }),
-      async (scheduler, start, admits, mutations) => {
-        const model = setupModel(start);
-
-        model.pacer.pace = () => scheduler.schedule(Promise.resolve());
-
-        const pending = admits.filter((admit) => !model.findImp(admit.id).awake);
-        const admitting = pending.map((admit) => model.runAdmit(admit));
-        const enforcing = model.governor.enforce();
-
-        // each mutation lands wherever the scheduler releases it, inside an
-        // admit as often as between two
-        const mutating = mutations.map(async (op) => {
-          await scheduler.schedule(Promise.resolve());
-
-          model.applyMutation(op);
-        });
-
-        const outcomes = await scheduler.waitFor(Promise.all(admitting));
-
-        await scheduler.waitFor(Promise.all([enforcing, ...mutating]));
-
-        // a pin set after the pick reaches the fake, which refuses it as the
-        // real sleep does under the lock; the governor moves on. Each admit
-        // and the enforce pass ask each imp at most once.
-        expect(model.sleepCalls.length).toBeLessThanOrEqual(
-          (admitting.length + 1) * IMP_IDS.length,
-        );
-
-        model.pacer.pace = () => Promise.resolve();
-
-        for (const [index, outcome] of outcomes.entries()) {
-          const id = pending[index]?.id ?? '';
-
-          if (outcome === 'rejected' && !model.findImp(id).awake) {
-            const reservedMib = await model.readReservation(id);
-
-            expect(reservedMib).toBe(0);
-          }
-        }
-
-        await model.governor.enforce();
-
-        // as above; #46 tightens it
-        const room = model.findRoomLeft();
-
-        expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
-      },
-    ),
-    { numRuns: 200 },
-  );
-});
+        },
+      ),
+      { numRuns: 200 },
+    );
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);

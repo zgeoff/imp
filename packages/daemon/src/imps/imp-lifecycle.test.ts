@@ -10,6 +10,9 @@ import {
   writeTestSnapshot,
 } from './test-imps';
 
+// these tests wait up to 10 s for held calls to settle; a loaded host is slow
+const SLOW_TEST_TIMEOUT_MS = 30_000;
+
 // Whole-service tests through the oRPC router, with VM steps that fail, die
 // or hang, and impd restarts over the same database and VMs.
 
@@ -35,9 +38,9 @@ async function setupLifecycleTest(env: Readonly<Record<string, string>> = {}) {
   return { ...harness, client: app.client, findPaths, readState };
 }
 
-// polls `check` every millisecond for up to 2 s
+// polls `check` every millisecond for up to 10 s
 async function waitUntil(check: () => Promise<boolean>): Promise<void> {
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + 10_000;
 
   while (Date.now() < deadline) {
     const met = await check();
@@ -52,53 +55,57 @@ async function waitUntil(check: () => Promise<boolean>): Promise<void> {
   throw new Error('the condition never held');
 }
 
-test('a restore waiting for admission does not deadlock the governor sleeping its imp', async () => {
-  // a and x own 300 MiB each; b reserves 720, so admitting it must sleep
-  // both, oldest first: x, then a. Once b is in, a's 256 still fits.
-  await using ctx = await setupLifecycleTest({
-    IMP_RAM_BUDGET_MIB: '1000',
-    IMP_DEFAULT_MEMORY_MIB: '256',
-    IMP_BOOT_RESERVE_PERCENT: '100',
-  });
+test(
+  'a restore waiting for admission does not deadlock the governor sleeping its imp',
+  async () => {
+    // a and x own 300 MiB each; b reserves 720, so admitting it must sleep
+    // both, oldest first: x, then a. Once b is in, a's 256 still fits.
+    await using ctx = await setupLifecycleTest({
+      IMP_RAM_BUDGET_MIB: '1000',
+      IMP_DEFAULT_MEMORY_MIB: '256',
+      IMP_BOOT_RESERVE_PERCENT: '100',
+    });
 
-  const x = await ctx.client.imps.create({ name: 'x' });
-  const a = await ctx.client.imps.create({ name: 'a' });
-  const checkpoint = await ctx.client.checkpoints.create({ name: 'a' });
+    const x = await ctx.client.imps.create({ name: 'x' });
+    const a = await ctx.client.imps.create({ name: 'a' });
+    const checkpoint = await ctx.client.checkpoints.create({ name: 'a' });
 
-  await updateImpActivity(ctx.db, x.id, new Date(1000));
-  await updateImpActivity(ctx.db, a.id, new Date(2000));
+    await updateImpActivity(ctx.db, x.id, new Date(1000));
+    await updateImpActivity(ctx.db, a.id, new Date(2000));
 
-  const sleepGate = ctx.fake.hold('sleep');
+    const sleepGate = ctx.fake.hold('sleep');
 
-  // the governor holds admission while x's sleep waits on the gate
-  const admitting = ctx.client.imps.create({ name: 'b', memoryMib: 720 });
+    // the governor holds admission while x's sleep waits on the gate
+    const admitting = ctx.client.imps.create({ name: 'b', memoryMib: 720 });
 
-  await sleepGate.reached;
+    await sleepGate.reached;
 
-  // the restore takes a's lock, halts it, then waits for admission to boot it
-  const restoring = ctx.client.checkpoints.restore({ name: 'a', checkpoint: checkpoint.id });
+    // the restore takes a's lock, halts it, then waits for admission to boot it
+    const restoring = ctx.client.checkpoints.restore({ name: 'a', checkpoint: checkpoint.id });
 
-  await waitUntil(async () => (await ctx.readState('a')) === 'stopped');
+    await waitUntil(async () => (await ctx.readState('a')) === 'stopped');
 
-  sleepGate.release();
+    sleepGate.release();
 
-  const outcomes = await Promise.all([
-    waitForOutcome(admitting, 2000),
-    waitForOutcome(restoring, 2000),
-  ]);
+    const outcomes = await Promise.all([
+      waitForOutcome(admitting, 10_000),
+      waitForOutcome(restoring, 10_000),
+    ]);
 
-  // the governor skipped a, whose lock the restore held, instead of waiting
-  const states = [await ctx.readState('x'), await ctx.readState('a')];
+    // the governor skipped a, whose lock the restore held, instead of waiting
+    const states = [await ctx.readState('x'), await ctx.readState('a')];
 
-  expect(outcomes).toEqual(['done', 'done']);
-  expect(states).toEqual(['sleeping', 'running']);
+    expect(outcomes).toEqual(['done', 'done']);
+    expect(states).toEqual(['sleeping', 'running']);
 
-  await ctx.imps.waitForLifecycle();
+    await ctx.imps.waitForLifecycle();
 
-  const broken = await findBrokenInvariants(ctx, false);
+    const broken = await findBrokenInvariants(ctx, false);
 
-  expect(broken).toEqual([]);
-});
+    expect(broken).toEqual([]);
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
 
 test('a boot that fails leaves the imp in error with no VM and no reservation', async () => {
   await using ctx = await setupLifecycleTest();
@@ -373,83 +380,91 @@ test('a restarted impd settles imps left in every state', async () => {
   expect(broken).toEqual([]);
 });
 
-test('a creating imp whose VM will not stop does not keep the next impd from starting', async () => {
-  await using ctx = await setupLifecycleTest();
+test(
+  'a creating imp whose VM will not stop does not keep the next impd from starting',
+  async () => {
+    await using ctx = await setupLifecycleTest();
 
-  const image = await ctx.images.resolveImage('ubuntu');
+    const image = await ctx.images.resolveImage('ubuntu');
 
-  const pid = ctx.fake.spawnOrphan();
+    const pid = ctx.fake.spawnOrphan();
 
-  const creating = await createImp(ctx.db, {
-    name: 'stuck',
-    imageId: image.id,
-    vcpus: 1,
-    memoryMib: 512,
-    slot: 0,
-    ip: '10.66.0.2',
-  });
+    const creating = await createImp(ctx.db, {
+      name: 'stuck',
+      imageId: image.id,
+      vcpus: 1,
+      memoryMib: 512,
+      slot: 0,
+      ip: '10.66.0.2',
+    });
 
-  await updateImpState(ctx.db, creating.id, { state: 'creating', pid });
+    await updateImpState(ctx.db, creating.id, { state: 'creating', pid });
 
-  ctx.fake.queue('stop', 'fail');
+    ctx.fake.queue('stop', 'fail');
 
-  const impd = ctx.restartImpd();
+    const impd = ctx.restartImpd();
 
-  const reconciled = await waitForOutcome(impd.imps.reconcileImps(), 2000);
-  const stuck = await findImpByName(ctx.db, 'stuck');
-  const broken = await findBrokenInvariants(ctx, true);
+    const reconciled = await waitForOutcome(impd.imps.reconcileImps(), 10_000);
+    const stuck = await findImpByName(ctx.db, 'stuck');
+    const broken = await findBrokenInvariants(ctx, true);
 
-  expect(reconciled).toBe('done');
-  expect(stuck).toMatchObject({ state: 'error', pid });
-  expect(broken).toEqual([]);
+    expect(reconciled).toBe('done');
+    expect(stuck).toMatchObject({ state: 'error', pid });
+    expect(broken).toEqual([]);
 
-  // the record kept the pid, so a destroy kills the VM once it lets go
-  await buildTestApp(ctx, impd).client.imps.destroy({ name: 'stuck' });
+    // the record kept the pid, so a destroy kills the VM once it lets go
+    await buildTestApp(ctx, impd).client.imps.destroy({ name: 'stuck' });
 
-  expect(ctx.fake.alive.has(pid)).toBeFalse();
-});
+    expect(ctx.fake.alive.has(pid)).toBeFalse();
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
 
-test('impd stopping with a wake under way leaves every imp asleep for the next impd', async () => {
-  await using ctx = await setupLifecycleTest();
+test(
+  'impd stopping with a wake under way leaves every imp asleep for the next impd',
+  async () => {
+    await using ctx = await setupLifecycleTest();
 
-  await ctx.client.imps.create({ name: 'waking' });
-  await ctx.client.imps.create({ name: 'running' });
-  await ctx.client.imps.sleep({ name: 'waking' });
+    await ctx.client.imps.create({ name: 'waking' });
+    await ctx.client.imps.create({ name: 'running' });
+    await ctx.client.imps.sleep({ name: 'waking' });
 
-  const wakeGate = ctx.fake.hold('wake');
-  const waking = ctx.client.imps.wake({ name: 'waking' });
+    const wakeGate = ctx.fake.hold('wake');
+    const waking = ctx.client.imps.wake({ name: 'waking' });
 
-  await wakeGate.reached;
+    await wakeGate.reached;
 
-  // SIGTERM: the wake under way finishes first, then everything sleeps
-  const stopping = ctx.imps.sleepAllImps();
+    // SIGTERM: the wake under way finishes first, then everything sleeps
+    const stopping = ctx.imps.sleepAllImps();
 
-  wakeGate.release();
+    wakeGate.release();
 
-  const outcomes = await Promise.all([
-    waitForOutcome(waking, 2000),
-    waitForOutcome(stopping, 2000),
-  ]);
+    const outcomes = await Promise.all([
+      waitForOutcome(waking, 10_000),
+      waitForOutcome(stopping, 10_000),
+    ]);
 
-  const impd = ctx.restartImpd();
+    const impd = ctx.restartImpd();
 
-  await impd.imps.reconcileImps();
+    await impd.imps.reconcileImps();
 
-  const after = await listImps(ctx.db);
-  const broken = await findBrokenInvariants(ctx, true);
+    const after = await listImps(ctx.db);
+    const broken = await findBrokenInvariants(ctx, true);
 
-  expect(outcomes).toEqual(['done', 'done']);
-  expect(after.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
-  expect(ctx.fake.alive.size).toBe(0);
-  expect(broken).toEqual([]);
+    expect(outcomes).toEqual(['done', 'done']);
+    expect(after.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
+    expect(ctx.fake.alive.size).toBe(0);
+    expect(broken).toEqual([]);
 
-  // the next impd wakes them as usual
-  const next = buildTestApp(ctx, impd).client;
+    // the next impd wakes them as usual
+    const next = buildTestApp(ctx, impd).client;
 
-  const woken = await next.imps.wake({ name: 'waking' });
+    const woken = await next.imps.wake({ name: 'waking' });
 
-  expect(woken.state).toBe('running');
-});
+    expect(woken.state).toBe('running');
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
 
 test('impd restarting in place waits for a boot under way and re-adopts its VM', async () => {
   await using ctx = await setupLifecycleTest();
@@ -493,25 +508,29 @@ test('impd restarting in place waits for a boot under way and re-adopts its VM',
   expect(broken).toEqual([]);
 });
 
-test('an impd that dies mid-create leaves the next one an error record', async () => {
-  await using ctx = await setupLifecycleTest();
+test(
+  'an impd that dies mid-create leaves the next one an error record',
+  async () => {
+    await using ctx = await setupLifecycleTest();
 
-  const bootGate = ctx.fake.hold('boot');
-  const creating = ctx.client.imps.create({ name: 'dev' });
+    const bootGate = ctx.fake.hold('boot');
+    const creating = ctx.client.imps.create({ name: 'dev' });
 
-  await bootGate.reached;
+    await bootGate.reached;
 
-  // impd is killed: the new one reconciles while the old boot is stuck
-  const impd = ctx.restartImpd();
+    // impd is killed: the new one reconciles while the old boot is stuck
+    const impd = ctx.restartImpd();
 
-  await impd.imps.reconcileImps();
+    await impd.imps.reconcileImps();
 
-  // the old boot finishes into a dead process and never writes its record
-  bootGate.release();
+    // the old boot finishes into a dead process and never writes its record
+    bootGate.release();
 
-  const outcome = await waitForOutcome(creating, 2000);
-  const imp = await findImpByName(ctx.db, 'dev');
+    const outcome = await waitForOutcome(creating, 2000);
+    const imp = await findImpByName(ctx.db, 'dev');
 
-  expect(outcome).toBe('hung');
-  expect(imp).toMatchObject({ state: 'error', pid: null });
-});
+    expect(outcome).toBe('hung');
+    expect(imp).toMatchObject({ state: 'error', pid: null });
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);

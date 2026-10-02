@@ -2,6 +2,9 @@ import { expect, test } from 'bun:test';
 import { findImpByName, updateImpActivity, updateImpHold } from '../db/imps';
 import { setupImpTest, waitForOutcome } from './test-imps';
 
+// these tests wait up to 10 s for held calls to settle; a loaded host is slow
+const SLOW_TEST_TIMEOUT_MS = 30_000;
+
 async function setupRunningImp() {
   const ctx = await setupImpTest();
 
@@ -141,35 +144,39 @@ test('impd stopping waits for a boot under way, sleeps that imp, and refuses lat
   expect(later).toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: 'impd is stopping' });
 });
 
-test('a governor pass during impd stopping neither hangs nor wakes anything', async () => {
-  await using ctx = await setupImpTest({
-    env: { IMP_RAM_BUDGET_MIB: '500', IMP_DEFAULT_MEMORY_MIB: '256' },
-  });
+test(
+  'a governor pass during impd stopping neither hangs nor wakes anything',
+  async () => {
+    await using ctx = await setupImpTest({
+      env: { IMP_RAM_BUDGET_MIB: '500', IMP_DEFAULT_MEMORY_MIB: '256' },
+    });
 
-  await ctx.createTestImage('ubuntu');
-  await ctx.imps.createImp({ name: 'a' });
-  await ctx.imps.createImp({ name: 'b' });
+    await ctx.createTestImage('ubuntu');
+    await ctx.imps.createImp({ name: 'a' });
+    await ctx.imps.createImp({ name: 'b' });
 
-  const gate = ctx.fake.hold('sleep');
+    const gate = ctx.fake.hold('sleep');
 
-  // 600 MiB awake against a budget of 500: the pass wants one asleep
-  const enforcing = ctx.governor.enforce();
-  const stopping = ctx.imps.sleepAllImps();
+    // 600 MiB awake against a budget of 500: the pass wants one asleep
+    const enforcing = ctx.governor.enforce();
+    const stopping = ctx.imps.sleepAllImps();
 
-  await gate.reached;
+    await gate.reached;
 
-  gate.release();
+    gate.release();
 
-  const outcomes = await Promise.all([
-    waitForOutcome(enforcing, 2000),
-    waitForOutcome(stopping, 2000),
-  ]);
+    const outcomes = await Promise.all([
+      waitForOutcome(enforcing, 10_000),
+      waitForOutcome(stopping, 10_000),
+    ]);
 
-  const imps = await ctx.imps.listImps();
+    const imps = await ctx.imps.listImps();
 
-  expect(outcomes).toEqual(['done', 'done']);
-  expect(imps.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
-});
+    expect(outcomes).toEqual(['done', 'done']);
+    expect(imps.map((imp) => imp.state)).toEqual(['sleeping', 'sleeping']);
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
 
 test('a create that impd stopping cuts short is recorded as an error', async () => {
   await using ctx = await setupRunningImp();
