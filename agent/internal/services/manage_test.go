@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -91,7 +92,7 @@ func TestAddWritesTheFileAndStarts(t *testing.T) {
 
 func TestAddRefusesAFileWrittenByHand(t *testing.T) {
 	s := newManagedSupervisor(t)
-	if err := writeDef(filepath.Join(s.dir, "db.json"), Def{Argv: []string{"true"}}); err != nil {
+	if err := writeDef(fsroot.Host, filepath.Join(s.dir, "db.json"), Def{Argv: []string{"true"}}); err != nil {
 		t.Fatal(err)
 	}
 	requireCode(t, s.Add(Def{Name: "db", Argv: []string{"true"}}, false), proto.ErrServiceTaken)
@@ -129,7 +130,7 @@ func TestRemoveAndRestartCheckTheName(t *testing.T) {
 	}
 	requireCode(t, s.Remove("../../tmp/x"), proto.ErrBadRequest)
 	requireCode(t, s.Restart("../../tmp/x"), proto.ErrBadRequest)
-	if !exists(victim) {
+	if !exists(fsroot.Host, victim) {
 		t.Fatal("remove deleted a file outside services.d")
 	}
 	if len(s.List()) != 0 {
@@ -149,7 +150,7 @@ func TestRemoveStopsAndDeletes(t *testing.T) {
 	if len(s.List()) != 0 {
 		t.Fatalf("list = %+v after remove", s.List())
 	}
-	if exists(filepath.Join(s.dir, "web.json")) {
+	if exists(fsroot.Host, filepath.Join(s.dir, "web.json")) {
 		t.Fatal("the file is left")
 	}
 	if err := syscallKill(st.Pid); err == nil {
@@ -166,7 +167,7 @@ func TestRestartReadsTheFile(t *testing.T) {
 	first := waitRunning(t, s, "web", 0)
 
 	path := filepath.Join(s.dir, "web.json")
-	if err := writeDef(path, Def{Name: "web", Argv: []string{"sleep", "32"}}); err != nil {
+	if err := writeDef(fsroot.Host, path, Def{Name: "web", Argv: []string{"sleep", "32"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Restart("web"); err != nil {
@@ -178,7 +179,7 @@ func TestRestartReadsTheFile(t *testing.T) {
 	}
 
 	// a file written after boot starts on its first restart
-	if err := writeDef(filepath.Join(s.dir, "late.json"), Def{Argv: []string{"sleep", "30"}}); err != nil {
+	if err := writeDef(fsroot.Host, filepath.Join(s.dir, "late.json"), Def{Argv: []string{"sleep", "30"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Restart("late"); err != nil {

@@ -15,7 +15,6 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
-	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
 // keygenTimeout bounds ssh-keygen -A; past it the old keys stay, the reset
@@ -33,10 +32,10 @@ type keygenFunc func(prefix string) error
 // host keys, on a boot impd asks it to (imp.reset_identity=1), before any
 // service starts. It returns what ping reports: impd keeps asking until a
 // boot reports ok. See docs/guides/templates.md#identity.
-func resetIdentity(r *reaper.Reaper, env []string) string {
+func resetIdentity(runner proc.Runner, env []string) string {
 	var keygen keygenFunc
 	if path, err := proc.LookPath("ssh-keygen", env); err == nil {
-		keygen = func(prefix string) error { return runKeygen(r, path, prefix, env) }
+		keygen = func(prefix string) error { return runKeygen(runner, path, prefix, env) }
 	}
 	err := resetIdentityAt("/", keygen)
 	// the new files must outlive a crash: impd stops asking after this boot
@@ -160,8 +159,8 @@ func removeStaleStages(dir string) {
 
 // runKeygen runs ssh-keygen -A -f prefix, which writes every missing default
 // host key under prefix/etc/ssh.
-func runKeygen(r *reaper.Reaper, path, prefix string, env []string) error {
-	p, err := proc.Start(r, proc.Spec{
+func runKeygen(runner proc.Runner, path, prefix string, env []string) error {
+	p, err := runner.Start(proc.Spec{
 		Argv:  []string{path, "-A", "-f", prefix},
 		Env:   env,
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},

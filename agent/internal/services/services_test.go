@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 func TestBackoffSequence(t *testing.T) {
@@ -82,7 +84,7 @@ func TestReadDef(t *testing.T) {
 			if err := os.WriteFile(p, []byte(tt.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			got, err := readDef(p)
+			got, err := readDef(fsroot.Host, p)
 			if tt.err {
 				if err == nil {
 					t.Fatalf("readDef = %+v, want an error", got)

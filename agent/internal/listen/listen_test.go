@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/dial"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
 // host is impd's end of one agent connection, with the manager serving the
@@ -60,9 +62,24 @@ func newManager(t *testing.T) *Manager {
 	return NewManager("agents", "forwards", fmt.Sprint(os.Getuid()), testBinder())
 }
 
-// testBinder binds in the test process, as the agent does for a root image
+var testReaper *reaper.Reaper
+
+// TestMain doubles as the listen helper, which the binder starts as this
+// test binary.
+func TestMain(m *testing.M) {
+	if len(os.Args) == 4 && os.Args[1] == dial.ListenCommand {
+		if err := dial.RunListenHelper(os.Args[2], os.Args[3]); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+	testReaper = reaper.New()
+	os.Exit(m.Run())
+}
+
+// testBinder binds through the helper, as the test's own user
 func testBinder() Binder {
-	return dial.NewDialer(nil, "", "")
+	return dial.NewDialer(&proc.Direct{Reaper: testReaper, Agent: os.Args[0]}, "")
 }
 
 func listen(t *testing.T, m *Manager) (*host, proto.Listening) {

@@ -12,7 +12,6 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/pty"
-	"github.com/zgeoff/imp/agent/internal/reaper"
 )
 
 // The pty size when the request gives none.
@@ -22,12 +21,19 @@ const (
 )
 
 type Launcher struct {
-	reaper *reaper.Reaper
+	runner proc.Runner
 	image  imagecfg.Config
+	// ptys opens a pty in the world the runner starts processes in
+	ptys func() (master, slave *os.File, err error)
 }
 
-func New(r *reaper.Reaper, image imagecfg.Config) *Launcher {
-	return &Launcher{reaper: r, image: image}
+// New starts processes through runner, on ptys that openPTY makes; nil
+// opens them in this process's own /dev.
+func New(runner proc.Runner, image imagecfg.Config, openPTY func() (master, slave *os.File, err error)) *Launcher {
+	if openPTY == nil {
+		openPTY = pty.Open
+	}
+	return &Launcher{runner: runner, image: image, ptys: openPTY}
 }
 
 // Spec resolves req's argv, env, cwd and user. The caller sets Files and TTY.
@@ -39,17 +45,21 @@ func (l *Launcher) Spec(req proto.Request) (proc.Spec, error) {
 	if user == "" {
 		user = l.image.User
 	}
-	// HOME must be the user's before cwd falls back to it.
-	env, err := proc.UserEnv(proc.Merge(l.image.Env, req.Env), user)
-	if err != nil {
-		return proc.Spec{}, err
-	}
-	return proc.Spec{Argv: req.Argv, Env: env, Dir: l.cwd(req, env), User: user}, nil
+	// HOME is the user's, and the cwd falls back to the image workdir and
+	// HOME, where the process starts.
+	return proc.Spec{
+		Argv:    req.Argv,
+		Env:     proc.Merge(l.image.Env, req.Env),
+		Dir:     req.Cwd,
+		Workdir: l.image.Workdir,
+		User:    user,
+		SetHome: true,
+	}, nil
 }
 
 // Start starts spec through the reaper.
 func (l *Launcher) Start(spec proc.Spec) (*proc.Process, error) {
-	return proc.Start(l.reaper, spec)
+	return l.runner.Start(spec)
 }
 
 // StartPTY starts req on a new pty, sized from req, and returns the process
@@ -59,7 +69,7 @@ func (l *Launcher) StartPTY(req proto.Request) (*proc.Process, *os.File, error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	master, slave, err := pty.Open()
+	master, slave, err := l.ptys()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -79,18 +89,4 @@ func (l *Launcher) StartPTY(req proto.Request) (*proc.Process, *os.File, error) 
 		return nil, nil, err
 	}
 	return p, master, nil
-}
-
-// cwd picks the request's cwd, else the image workdir, else $HOME. Only an
-// explicit request cwd is allowed to fail; defaults fall back to /.
-func (l *Launcher) cwd(req proto.Request, env []string) string {
-	if req.Cwd != "" {
-		return req.Cwd
-	}
-	for _, d := range []string{l.image.Workdir, proc.Get(env, "HOME")} {
-		if fi, err := os.Stat(d); d != "" && err == nil && fi.IsDir() {
-			return d
-		}
-	}
-	return "/"
 }

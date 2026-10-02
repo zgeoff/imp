@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/safe"
 )
 
@@ -21,11 +22,11 @@ const (
 
 // rotateLog renames a log over maxLogSize to <path>.1. It runs before a
 // service start opens the log, when nothing writes to it.
-func rotateLog(path string) error {
-	if !oversize(path) {
+func rotateLog(fsys fsroot.FS, path string) error {
+	if !oversize(fsys, path) {
 		return nil
 	}
-	return os.Rename(path, path+".1")
+	return fsys.Rename(path, path+".1")
 }
 
 // copyTruncateLog copies a log over maxLogSize to <path>.1 and empties it in
@@ -33,34 +34,34 @@ func rotateLog(path string) error {
 // its next write lands at the new end. Lines written between the copy and
 // the truncate are lost, which is the usual copytruncate trade.
 func (s *Supervisor) copyTruncateLog(path string) error {
-	if !oversize(path) {
+	if !oversize(s.fsys, path) {
 		return nil
 	}
-	src, err := os.Open(path)
+	src, err := s.fsys.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
 		return err
 	}
 	defer src.Close()
 	tmp := path + ".1.tmp"
-	dst, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	dst, err := s.fsys.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(dst, src); err != nil {
 		dst.Close()
-		os.Remove(tmp)
+		s.fsys.Remove(tmp)
 		return err
 	}
 	if err := dst.Close(); err != nil {
-		os.Remove(tmp)
+		s.fsys.Remove(tmp)
 		return err
 	}
-	if err := os.Rename(tmp, path+".1"); err != nil {
+	if err := s.fsys.Rename(tmp, path+".1"); err != nil {
 		return err
 	}
 	s.truncMu.Lock()
 	defer s.truncMu.Unlock()
-	if err := os.Truncate(path, 0); err != nil {
+	if err := s.fsys.Truncate(path, 0); err != nil {
 		return err
 	}
 	s.truncs[path]++
@@ -72,15 +73,15 @@ func (s *Supervisor) copyTruncateLog(path string) error {
 func (s *Supervisor) readLogState(path string) (uint64, os.FileInfo, error) {
 	s.truncMu.Lock()
 	defer s.truncMu.Unlock()
-	fi, err := os.Stat(path)
+	fi, err := s.fsys.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return s.truncs[path], nil, nil
 	}
 	return s.truncs[path], fi, err
 }
 
-func oversize(path string) bool {
-	fi, err := os.Stat(path)
+func oversize(fsys fsroot.FS, path string) bool {
+	fi, err := fsys.Stat(path)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			log.Printf("services: %v", err)

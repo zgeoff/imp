@@ -12,6 +12,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 )
@@ -25,7 +26,7 @@ func TestMain(m *testing.M) {
 }
 
 func newManager() *Manager {
-	return NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil)
+	return NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), nil)
 }
 
 // host is the host side of one exec connection.

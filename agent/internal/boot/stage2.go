@@ -20,10 +20,12 @@ import (
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
@@ -61,18 +63,19 @@ func Stage2(params cmdline.Params) error {
 	if err != nil {
 		log.Printf("%s: %v (using defaults)", imagecfg.Path, err)
 	}
+	runner := &proc.Direct{Reaper: r, Agent: AgentPath}
 	identityReset := ""
 	if params.ResetIdentity {
-		identityReset = resetIdentity(r, image.Env)
+		identityReset = resetIdentity(runner, image.Env)
 	}
 
-	sup := services.New(r, image)
+	sup := services.New(runner, fsroot.Host, image)
 	if err := sup.Load(); err != nil {
 		log.Printf("services: %v", err)
 	}
 
-	launcher := launch.New(r, image)
-	dialer := dial.NewDialer(r, image.User, AgentPath)
+	launcher := launch.New(runner, image, nil)
+	dialer := dial.NewDialer(runner, image.User)
 	// Each non-tty exec gets a cgroup leaf, so a stop kills its escapees too.
 	execCgroups, err := cgroup.NewTree(ExecCgroupRoot)
 	if err != nil {

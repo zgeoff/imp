@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 )
 
 // The account files. Variables so tests can point them at fixtures.
@@ -26,6 +28,12 @@ var (
 // /etc/passwd with no group given also gets every group that lists it as a
 // member; an explicit group is the only group.
 func LookupUser(spec string) (*syscall.Credential, string, error) {
+	return LookupUserIn(fsroot.Host, spec)
+}
+
+// LookupUserIn is LookupUser against the account files of fsys, such as
+// the inner container's root as the agent reaches it.
+func LookupUserIn(fsys fsroot.FS, spec string) (*syscall.Credential, string, error) {
 	if spec == "" || spec == "root" || spec == "0" {
 		return nil, "/root", nil
 	}
@@ -33,7 +41,7 @@ func LookupUser(spec string) (*syscall.Credential, string, error) {
 
 	var uid, gid uint32
 	home, name := "/", ""
-	ent, ok, err := findEntry(passwdPath, userPart)
+	ent, ok, err := findEntry(fsys, passwdPath, userPart)
 	switch {
 	case err != nil:
 		return nil, "", err
@@ -54,7 +62,7 @@ func LookupUser(spec string) (*syscall.Credential, string, error) {
 	}
 
 	if hasGroup {
-		ent, ok, err := findEntry(groupPath, groupPart)
+		ent, ok, err := findEntry(fsys, groupPath, groupPart)
 		switch {
 		case err != nil:
 			return nil, "", err
@@ -73,7 +81,7 @@ func LookupUser(spec string) (*syscall.Credential, string, error) {
 
 	groups := []uint32{}
 	if name != "" && !hasGroup {
-		if groups, err = memberGroups(name, gid); err != nil {
+		if groups, err = memberGroups(fsys, name, gid); err != nil {
 			return nil, "", err
 		}
 	}
@@ -85,9 +93,9 @@ func LookupUser(spec string) (*syscall.Credential, string, error) {
 // /etc/group means no supplementary groups. A member line with a bad gid is
 // logged and skipped: failing would stop every exec and service as that
 // user over one typo.
-func memberGroups(user string, gid uint32) ([]uint32, error) {
+func memberGroups(fsys fsroot.FS, user string, gid uint32) ([]uint32, error) {
 	groups := []uint32{gid}
-	err := eachEntry(groupPath, func(ent []string) (bool, error) {
+	err := eachEntry(fsys, groupPath, func(ent []string) (bool, error) {
 		if len(ent) < 4 || !slices.Contains(strings.Split(ent[3], ","), user) {
 			return false, nil
 		}
@@ -109,9 +117,9 @@ func memberGroups(user string, gid uint32) ([]uint32, error) {
 // findEntry returns the colon-split line of a passwd-style file whose name
 // (field 0) or numeric id (field 2) matches key. A missing file matches
 // nothing.
-func findEntry(path, key string) ([]string, bool, error) {
+func findEntry(fsys fsroot.FS, path, key string) ([]string, bool, error) {
 	var found []string
-	err := eachEntry(path, func(ent []string) (bool, error) {
+	err := eachEntry(fsys, path, func(ent []string) (bool, error) {
 		if len(ent) >= 3 && (ent[0] == key || ent[2] == key) {
 			found = ent
 			return true, nil
@@ -125,8 +133,8 @@ const maxLine = 1 << 20
 
 // eachEntry calls fn with every colon-split line of path until fn returns
 // true or an error. A missing file has no lines.
-func eachEntry(path string, fn func([]string) (bool, error)) error {
-	f, err := os.Open(path)
+func eachEntry(fsys fsroot.FS, path string, fn func([]string) (bool, error)) error {
+	f, err := fsys.OpenFile(path, os.O_RDONLY, 0)
 	if os.IsNotExist(err) {
 		return nil
 	}

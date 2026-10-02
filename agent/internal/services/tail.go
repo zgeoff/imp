@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -38,12 +39,12 @@ func (s *Supervisor) Logs(name string, req LogRequest, w *proto.Writer, done <-c
 		return badRequest("lines: want 0 to 100000")
 	}
 	path := filepath.Join(s.logDir, name+".log")
-	if filepath.Base(path) != name+".log" || s.find(name) == nil && !exists(path) && !exists(path+".1") {
+	if filepath.Base(path) != name+".log" || s.find(name) == nil && !exists(s.fsys, path) && !exists(s.fsys, path+".1") {
 		return noService(name)
 	}
 	// opened before the reply, so what comes first and the follow meet at
 	// the same offset for everything written after it
-	cur, size, err := openLogFile(path)
+	cur, size, err := openLogFile(s.fsys, path)
 	if err != nil {
 		return err
 	}
@@ -52,9 +53,9 @@ func (s *Supervisor) Logs(name string, req LogRequest, w *proto.Writer, done <-c
 		return err
 	}
 	if req.Cursor != nil {
-		err = sendFromCursor(path, cur, size, *req.Cursor, w)
+		err = sendFromCursor(s.fsys, path, cur, size, *req.Cursor, w)
 	} else {
-		err = sendTail(path, cur, size, req.Lines, w)
+		err = sendTail(s.fsys, path, cur, size, req.Lines, w)
 	}
 	if err != nil {
 		cur.close()
@@ -76,8 +77,8 @@ type logFile struct {
 }
 
 // openLogFile opens a log and reads its size; nil when it does not exist.
-func openLogFile(path string) (*logFile, int64, error) {
-	f, err := os.Open(path)
+func openLogFile(fsys fsroot.FS, path string) (*logFile, int64, error) {
+	f, err := fsys.OpenFile(path, os.O_RDONLY, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, 0, nil
 	}
@@ -125,13 +126,13 @@ func (lf *logFile) send(end int64, w *proto.Writer) error {
 
 // sendTail sends the last n lines across <path>.1 and the first size bytes
 // of cur, and leaves cur at size.
-func sendTail(path string, cur *logFile, size int64, n int, w *proto.Writer) error {
+func sendTail(fsys fsroot.FS, path string, cur *logFile, size int64, n int, w *proto.Writer) error {
 	start, found := int64(0), 0
 	if cur != nil {
 		start, found = findLastLines(cur.f, size, n)
 	}
 	if found < n {
-		old, oldSize, err := openLogFile(path + ".1")
+		old, oldSize, err := openLogFile(fsys, path+".1")
 		if err != nil {
 			return err
 		}
@@ -155,14 +156,14 @@ func sendTail(path string, cur *logFile, size int64, n int, w *proto.Writer) err
 // The cursor names <path> itself, or <path>.1 once a start rotated it
 // there; a file that shrank below it (a copytruncate) starts again from 0.
 // A cursor in neither file is a log rotated past it: <path> goes whole.
-func sendFromCursor(path string, cur *logFile, size int64, c proto.LogCursor, w *proto.Writer) error {
+func sendFromCursor(fsys fsroot.FS, path string, cur *logFile, size int64, c proto.LogCursor, w *proto.Writer) error {
 	if cur != nil && cur.ino == c.Inode {
 		if c.Offset <= size {
 			cur.offset = c.Offset
 		}
 		return cur.send(size, w)
 	}
-	old, oldSize, err := openLogFile(path + ".1")
+	old, oldSize, err := openLogFile(fsys, path+".1")
 	if err != nil {
 		return err
 	}
@@ -249,14 +250,14 @@ func (s *Supervisor) followLog(path string, cur *logFile, w *proto.Writer, done 
 			cur = nil
 		}
 		if cur != nil && now != truncs {
-			if err := sendCopyRest(path, cur.offset, w); err != nil {
+			if err := sendCopyRest(s.fsys, path, cur.offset, w); err != nil {
 				return err
 			}
 			cur.offset = 0
 		}
 		truncs = now
 		if cur == nil && fi != nil {
-			cur, _, err = openLogFile(path)
+			cur, _, err = openLogFile(s.fsys, path)
 			if err != nil {
 				return err
 			}
@@ -271,8 +272,8 @@ func (s *Supervisor) followLog(path string, cur *logFile, w *proto.Writer, done 
 
 // sendCopyRest sends what a copytruncate copied to <path>.1 past offset:
 // what the service wrote after the follow's last read.
-func sendCopyRest(path string, offset int64, w *proto.Writer) error {
-	old, size, err := openLogFile(path + ".1")
+func sendCopyRest(fsys fsroot.FS, path string, offset int64, w *proto.Writer) error {
+	old, size, err := openLogFile(fsys, path+".1")
 	if err != nil || old == nil {
 		return err
 	}
