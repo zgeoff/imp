@@ -17,7 +17,8 @@ const CheckpointSchema = z
 
 const ImpSchema = z
   .object({
-    id: z.string(),
+    // it names the target's datasets and paths, so only a UUID
+    id: z.uuid(),
     name: z.string(),
     vcpus: z.int().positive(),
     memoryMib: z.int().positive(),

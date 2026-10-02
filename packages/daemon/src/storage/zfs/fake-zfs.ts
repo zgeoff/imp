@@ -23,6 +23,15 @@ interface FakeSnapshot {
 // incremental from
 const FakeStreamSchema = z.object({ guid: z.string(), baseGuid: z.string().nullable() });
 
+// a whole fake stream, or undefined while its end has not come
+function readFakeStream(text: string): z.infer<typeof FakeStreamSchema> | undefined {
+  try {
+    return FakeStreamSchema.parse(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
 interface FakeZfsOptions {
   readonly root: string;
 
@@ -493,14 +502,33 @@ export function createFakeZfs(options: FakeZfsOptions) {
     readFrom: (argv) => {
       commands.push(argv.join(' '));
 
-      return { stdout: openSend(argv), done: Promise.resolve(), stop: () => {} };
+      return { stdout: openSend(argv), done: Promise.resolve(), stop: () => Promise.resolve() };
     },
+
+    // As real ZFS, the receive commits once the stream's end record (here
+    // the JSON's last byte) is in, whether or not the input fails after it
     writeTo: async (argv, input) => {
       commands.push(argv.join(' '));
 
-      const text = await new Response(input).text();
+      const decoder = new TextDecoder();
 
-      runReceive(argv, FakeStreamSchema.parse(JSON.parse(text)));
+      const read = { text: '', isCommitted: false };
+
+      for await (const chunk of input) {
+        read.text += decoder.decode(chunk, { stream: true });
+
+        const stream = read.isCommitted ? undefined : readFakeStream(read.text);
+
+        if (stream !== undefined) {
+          runReceive(argv, stream);
+
+          read.isCommitted = true;
+        }
+      }
+
+      if (!read.isCommitted) {
+        throw new Error('cannot receive: the stream ended early');
+      }
     },
   };
 

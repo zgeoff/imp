@@ -1,9 +1,10 @@
 // A command whose stdout is read as it comes: `done` resolves once it exits
-// 0, and rejects with its stderr otherwise. `stop` kills it.
+// 0, and rejects with its stderr otherwise. `stop` kills it and resolves once
+// it has exited, so nothing it holds, such as a snapshot, is busy after.
 export interface StreamedCommand {
   readonly stdout: ReadableStream<Uint8Array>;
   readonly done: Promise<void>;
-  readonly stop: () => void;
+  readonly stop: () => Promise<void>;
 }
 
 // what a ZFS move spawns; a fake ZFS in tests
@@ -37,10 +38,12 @@ export function createStreamRunner(): StreamRunner {
       return {
         stdout: child.stdout,
         done: checkExit(),
-        stop: () => {
+        stop: async () => {
           state.isStopped = true;
 
           child.kill();
+
+          await child.exited;
         },
       };
     },

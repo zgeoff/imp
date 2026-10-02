@@ -7,6 +7,7 @@ import {
   MOVE_FRAMES,
   countDataBytes,
   createFrameReader,
+  encodeCommand,
   encodeFile,
   readDataPayload,
 } from './move-frames';
@@ -171,4 +172,49 @@ test('the pipe gives up when the next part does not come', async () => {
   const error = await readRejection(new Response(pipe.stream).bytes());
 
   expect(String(error)).toContain('did not come');
+});
+
+test('a command stream given up at its FILE frame starts no command; one given up later stops it', async () => {
+  const opened: string[] = [];
+  const stopped: string[] = [];
+
+  const openCommand = (name: string) => () => {
+    opened.push(name);
+
+    return {
+      stdout: new Response('stream').body ?? new ReadableStream<Uint8Array>(),
+      done: Promise.resolve(),
+      stop: () => {
+        stopped.push(name);
+
+        return Promise.resolve();
+      },
+    };
+  };
+
+  const file = { kind: 'zfs-stream', index: 0, sizeBytes: 0 } as const;
+
+  const atFile = encodeCommand(
+    openCommand('first'),
+    file,
+    () => {},
+    () => {},
+  );
+
+  await atFile.next();
+  await atFile.return();
+
+  const atData = encodeCommand(
+    openCommand('second'),
+    file,
+    () => {},
+    () => {},
+  );
+
+  await atData.next();
+  await atData.next();
+  await atData.return();
+
+  expect(opened).toEqual(['second']);
+  expect(stopped).toEqual(['second']);
 });

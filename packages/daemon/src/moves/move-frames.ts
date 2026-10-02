@@ -108,10 +108,10 @@ export async function* encodeFile(
 }
 
 // The frames of a command's output, such as `zfs send`: FILE, its bytes in
-// DATA frames at running offsets, FILE_END. A command that fails fails the
-// stream before FILE_END, so the target never takes a short stream as whole.
+// DATA frames, FILE_END. A failed command fails the stream before FILE_END;
+// the command starts after FILE, so a stream given up there starts none.
 export async function* encodeCommand(
-  command: StreamedCommand,
+  openCommand: () => StreamedCommand,
   file: MoveFile,
   onData: (bytes: number) => void,
   sums: (sha256: string) => void,
@@ -120,6 +120,7 @@ export async function* encodeCommand(
   const state = { offset: 0, isDone: false };
 
   yield encodeJsonFrame(MOVE_FRAMES.file, file);
+  const command = openCommand();
 
   try {
     for await (const chunk of command.stdout) {
@@ -141,7 +142,7 @@ export async function* encodeCommand(
     state.isDone = true;
   } finally {
     if (!state.isDone) {
-      command.stop();
+      await command.stop();
     }
   }
 

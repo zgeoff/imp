@@ -6,7 +6,7 @@ test('a command stopped on purpose ends quietly; one that fails says why', async
   const runner = createStreamRunner();
   const stopped = runner.readFrom(['sleep', '10']);
 
-  stopped.stop();
+  await stopped.stop();
 
   const failed = runner.readFrom(['sh', '-c', 'echo broken >&2; exit 3']);
 
