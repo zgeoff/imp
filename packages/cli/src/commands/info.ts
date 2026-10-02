@@ -1,5 +1,5 @@
 import { defineCommand } from '../define-command';
-import { formatJson } from '../format-output';
+import { formatBootStatus, formatJson } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
@@ -20,6 +20,7 @@ export const infoCommand = defineCommand({
         ['version', info.version],
         ['imps', `${String(info.impCount)} (${String(info.awakeCount)} awake)`],
         ['sessions', String(info.sessionCount)],
+        ['boot status', formatBootStatus(info.bootStatus)],
         [
           'ram',
           `${String(info.ramUsedMib)} / ${String(info.ramBudgetMib)} MiB (${String(info.ramReservedMib)} reserved, ${String(info.ramCommittedMib)} committed)`,

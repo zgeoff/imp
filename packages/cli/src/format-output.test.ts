@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test';
 import type { Imp } from '@imp/api';
-import { formatCheckpoints, formatImps, formatSessions, formatTable } from './format-output';
+import {
+  formatBootStatus,
+  formatCheckpoints,
+  formatImps,
+  formatSessions,
+  formatTable,
+} from './format-output';
 
 test('it pads each column to its widest cell', () => {
   const table = formatTable(
@@ -127,4 +133,25 @@ test('it counts sessions in the imp list, and shows - when impd has not seen the
   const column = rows.map((row) => row.slice(rows[0]?.indexOf('SESSIONS')).split(/\s+/)[0]);
 
   expect(column).toEqual(['SESSIONS', '2', '-']);
+});
+
+test('it says how many imps will boot cold and run each older part', () => {
+  const none = formatBootStatus({
+    coldBoots: 0,
+    outdated: { firecracker: 0, kernel: 0, agent: 0 },
+  });
+
+  const some = formatBootStatus({
+    coldBoots: 3,
+    outdated: { firecracker: 1, kernel: 0, agent: 2 },
+  });
+
+  const outdatedOnly = formatBootStatus({
+    coldBoots: 0,
+    outdated: { firecracker: 0, kernel: 1, agent: 0 },
+  });
+
+  expect(none).toBe('none');
+  expect(some).toBe('3 will boot cold; outdated: 1 firecracker, 2 agent');
+  expect(outdatedOnly).toBe('outdated: 1 kernel');
 });
