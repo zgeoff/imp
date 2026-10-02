@@ -106,10 +106,17 @@ build in their own stage. The kernel stage reads only `kernel/version`, `kernel/
 kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-from` and
 `--cache-to` through `build-release.sh` to keep it.
 
-The kernel toolchain comes from a dated Ubuntu snapshot and the system drive has fixed times, so the
-same sources give the same kernel and drive bytes. A snapshot of a sleeping imp restores only with
-the kernel and drive it was taken on, so this is what lets an upgrade that leaves them alone keep
-every imp's memory. `host/check-reproducible.sh` checks it (two cold builds, a few minutes).
+The kernel toolchain and `mksquashfs` come from dated Ubuntu and Debian snapshots, and the build
+stamps and drive times are fixed, so the same sources give the same `vmlinux` and
+`imp-system.squashfs` bytes. `kernel/build.sh` and `scripts/build-system-drive.sh` use the same
+stages, so the dev instance boots the same bytes as the release image. A snapshot of a sleeping imp
+restores only with the kernel and drive it was taken on, so this is what lets an upgrade that leaves
+them alone keep every imp's memory. Only these two files are reproducible; the image digest is not
+(apt packages, timestamps and the compiled impd differ per build).
+
+`host/check-reproducible.sh` checks it: one cold build, one on a fresh builder, and one after a
+change under `packages/`. It takes 5 to 20 minutes; the `Reproducible` workflow runs it in CI by
+hand.
 
 ### Prepare the host
 
@@ -151,6 +158,7 @@ the host's Docker socket and `/var/lib/imp`, and give impd 120 seconds to sleep 
   ```
 
 - **Compose:** [`deploy/compose.yaml`](../../deploy/compose.yaml), with a Docker restart policy.
+  Needs Docker Compose 2.24 or later, for the `env_file` entry with `path` and `required`.
 
   ```sh
   docker compose -f deploy/compose.yaml up -d
@@ -170,8 +178,7 @@ The systemd unit needs no drop-in: it stops the container itself before Docker s
 Then, on the host:
 
 ```sh
-export IMP_TOKEN=$(cat /var/lib/imp/token)
-docker exec -e IMP_TOKEN imp-host imp info     # the CLI is in the image
+docker exec imp-host imp info     # the CLI is in the image and finds the token itself
 ```
 
 ### Images on a server
