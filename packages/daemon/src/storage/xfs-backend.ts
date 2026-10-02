@@ -63,6 +63,9 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   const backup = buildBackupPaths(deps.dataDir);
 
+  // this run's copies of running disks: new every run, so none outlives it
+  const freshCopies = new Set<string>();
+
   const readCopies = (): Copies => {
     try {
       return CopiesSchema.parse(JSON.parse(readFileSync(backup.copies, 'utf8')));
@@ -230,7 +233,12 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       await cloneFile(source, `${target}.new`);
 
       renameSync(`${target}.new`, target);
-      writeCopies({ ...copies, [impId]: record });
+
+      if (options.isReusable) {
+        writeCopies({ ...copies, [impId]: record });
+      } else {
+        freshCopies.add(impId);
+      }
     },
 
     // the tree stays between runs, so restic finds each file it read before
@@ -287,7 +295,18 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
       writeCopies(Object.fromEntries(Object.entries(copies).filter(([id]) => impIds.has(id))));
 
-      return { impIds, checkpointIds, imageDigests, close: () => Promise.resolve() };
+      // a running disk's copy would pin the blocks it shares until next run
+      const removeFreshCopies = () => {
+        for (const impId of freshCopies) {
+          rmSync(join(backup.tree, BACKUP_TREE.buildDisk(impId)), { force: true });
+        }
+
+        freshCopies.clear();
+
+        return Promise.resolve();
+      };
+
+      return { impIds, checkpointIds, imageDigests, close: removeFreshCopies };
     },
 
     stop: () => Promise.resolve(),

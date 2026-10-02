@@ -152,3 +152,31 @@ test('an empty disk is a zero-length file', async () => {
 
   expect(statSync(ctx.backend.resolveImpPaths('b').disk).size).toBe(0);
 });
+
+test("a running disk's copy goes when the tree closes; a reusable one stays", async () => {
+  using ctx = await setupBackupTest();
+
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: false });
+  await ctx.backend.createBackupCopy('b', 'r1', { isReusable: true });
+
+  const tree = await ctx.backend.openBackupTree({
+    runId: 'r1',
+    imps: [
+      { impId: 'a', checkpointIds: [] },
+      { impId: 'b', checkpointIds: [] },
+    ],
+    imageDigests: [],
+  });
+
+  const running = join(ctx.treeDir, 'imps', 'a', 'disk', 'rootfs.ext4');
+  const stopped = join(ctx.treeDir, 'imps', 'b', 'disk', 'rootfs.ext4');
+
+  expect([...tree.impIds].toSorted()).toEqual(['a', 'b']);
+  expect(existsSync(running)).toBeTrue();
+
+  await tree.close();
+
+  expect(existsSync(running)).toBeFalse();
+  expect(existsSync(stopped)).toBeTrue();
+});
