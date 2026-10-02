@@ -33,7 +33,7 @@ test('it builds the smoke-boot kernel cmdline with the slot addressing', () => {
 
 // A Firecracker stand-in: a process whose command line names the API socket,
 // as the liveness check expects, and an API that fails the pause.
-function setupFailingPause(resumeStatus: number) {
+async function setupFailingPause(resumeStatus: number) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
   const paths = buildImpPaths(dir, 'vm');
 
@@ -56,6 +56,18 @@ function setupFailingPause(resumeStatus: number) {
 
   const child = Bun.spawn(['bash', '-c', 'sleep 30; true', 'firecracker', paths.apiSocket]);
 
+  // until bash has exec'd, its command line is empty and it looks dead; on a
+  // loaded host that takes longer than the test
+  const deadline = Date.now() + 10_000;
+
+  while (!isFirecrackerAlive(child.pid, paths.apiSocket)) {
+    if (Date.now() > deadline) {
+      throw new Error('the stand-in never started');
+    }
+
+    await Bun.sleep(1);
+  }
+
   return {
     paths,
     calls,
@@ -71,7 +83,7 @@ function setupFailingPause(resumeStatus: number) {
 }
 
 test('a sleep whose pause fails resumes the VM and leaves it running', async () => {
-  await using vm = setupFailingPause(204);
+  await using vm = await setupFailingPause(204);
 
   const rejection = await createVmRunner()
     .sleepVm(vm.child.pid, vm.paths)
@@ -83,7 +95,7 @@ test('a sleep whose pause fails resumes the VM and leaves it running', async () 
 });
 
 test('a sleep whose pause and resume both fail kills the VM', async () => {
-  await using vm = setupFailingPause(500);
+  await using vm = await setupFailingPause(500);
 
   const rejection = await createVmRunner()
     .sleepVm(vm.child.pid, vm.paths)
