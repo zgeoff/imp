@@ -31,14 +31,14 @@ export interface TailnetPeer {
   readonly node: string;
 
   // the node's stable ID, which outlives a rename; null from a tailscale
-  // whose whois leaves it out
+  // whose whois leaves it out or sends it empty
   readonly stableId: string | null;
 }
 
 const TagsSchema = z.array(z.string()).nullable().optional();
 
 const WhoisSchema = z.object({
-  Node: z.object({ Name: z.string(), Tags: TagsSchema, StableID: z.string().min(1).optional() }),
+  Node: z.object({ Name: z.string(), Tags: TagsSchema, StableID: z.string().optional() }),
   UserProfile: z.object({ LoginName: z.string() }),
 });
 
@@ -142,13 +142,14 @@ export function findTailnetCaller(
 }
 
 // A user owns leases across all of its nodes. A tagged node has no user, so
-// it owns them by node: its stable ID, or its name when whois gives none.
-function readTailnetPrincipal(peer: Readonly<TailnetPeer>): string {
+// it owns them by its stable ID; without one it owns none, since a later
+// node can take its name.
+function readTailnetPrincipal(peer: Readonly<TailnetPeer>): string | null {
   if (peer.login !== null) {
     return `tailnet-user:${peer.login}`;
   }
 
-  return `tailnet:${peer.stableId ?? peer.node}`;
+  return peer.stableId === null ? null : `tailnet:${peer.stableId}`;
 }
 
 // `tailscale whois --json <address>`; null when the address is no peer's
@@ -161,7 +162,10 @@ export function parseWhois(json: string): TailnetPeer | null {
       login: tags.length > 0 ? null : whois.UserProfile.LoginName,
       tags,
       node: whois.Node.Name.split('.')[0] ?? whois.Node.Name,
-      stableId: whois.Node.StableID ?? null,
+      stableId:
+        whois.Node.StableID === undefined || whois.Node.StableID === ''
+          ? null
+          : whois.Node.StableID,
     };
   } catch {
     return null;

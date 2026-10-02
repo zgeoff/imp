@@ -48,6 +48,11 @@ test('it reads a user’s node and a tagged node from whois', () => {
   expect(parseWhois(TAGGED_WHOIS)).toEqual(CI);
   expect(parseWhois('')).toBeNull();
   expect(parseWhois('{"Node":{}}')).toBeNull();
+
+  // an empty StableID is none, not a broken answer
+  const empty = TAGGED_WHOIS.replace('nRunner1CNTRL', '');
+
+  expect(parseWhois(empty)).toEqual({ ...CI, stableId: null });
 });
 
 test('the first rule that matches gives the scope; a tagged node matches by tag only', () => {
@@ -82,9 +87,10 @@ test('a user owns leases by login, a tagged node by its stable ID', () => {
     display: 'runner',
   });
 
-  // a whois without StableID: the node's name stands in
+  // a whois without StableID: no principal, so no leases, never the name
   expect(findTailnetCaller(rules, { ...CI, stableId: null })).toMatchObject({
-    principal: 'tailnet:runner',
+    principal: null,
+    display: 'runner',
   });
 });
 

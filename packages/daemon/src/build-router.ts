@@ -8,7 +8,13 @@ import type { ApiAudit } from './audit/api-audit';
 import { checkAccess, findAccess, isAuditedProcedure } from './auth/access-policy';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
-import { isLeaseVisible, toApiLease, toCallerError, toLeaseSummary } from './auth/caller-view';
+import {
+  isLeaseVisible,
+  requireLeaseHolder,
+  toApiLease,
+  toCallerError,
+  toLeaseSummary,
+} from './auth/caller-view';
 import { isImpAllowed } from './auth/imp-patterns';
 import { hasScope } from './auth/scopes';
 import type { TokenStore } from './auth/token-store';
@@ -33,6 +39,7 @@ import type { PublicRecordsLink } from './https/public-records-link';
 import type { ImageService } from './images/image-service';
 import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
+import { readPresentedLeases } from './imps/imp-presenter';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { NetworkService } from './networks/network-service';
@@ -167,14 +174,18 @@ export function buildRouter(deps: RouterDeps) {
   };
 
   // The presenter shows an imp's leases as a count; the caller sees its own,
-  // or every owner with host-wide manage
+  // or every owner with host-wide manage. The records are the ones the
+  // presenter read; an imp from elsewhere has its read here.
   const toCallerImps = async (caller: Readonly<Caller>, imps: readonly Imp[]): Promise<Imp[]> => {
-    const byImp = await deps.imps.readLeases(imps.map((imp) => imp.id));
+    const unread = imps.filter((imp) => readPresentedLeases(imp) === undefined);
 
-    return imps.map((imp) => ({
-      ...imp,
-      leases: toLeaseSummary(caller, imp.name, byImp.get(imp.id) ?? []),
-    }));
+    const byImp = await deps.imps.readLeases(unread.map((imp) => imp.id));
+
+    return imps.map((imp) => {
+      const leases = readPresentedLeases(imp) ?? byImp.get(imp.id) ?? [];
+
+      return { ...imp, leases: toLeaseSummary(caller, imp.name, leases) };
+    });
   };
 
   const toCallerImp = async (caller: Readonly<Caller>, imp: Imp | Promise<Imp>): Promise<Imp> => {
@@ -265,7 +276,7 @@ export function buildRouter(deps: RouterDeps) {
 
         return toCallerImp(
           caller,
-          deps.imps.holdImp(context.input.name, context.input.seconds, caller),
+          deps.imps.holdImp(context.input.name, context.input.seconds, requireLeaseHolder(caller)),
         );
       }),
       resizeDisk: os.imps.resizeDisk.handler((context) =>
@@ -306,7 +317,7 @@ export function buildRouter(deps: RouterDeps) {
 
         const acquired = await deps.imps.acquireLease(
           input.name,
-          caller,
+          requireLeaseHolder(caller),
           input.label,
           input.ttlSeconds,
         );
@@ -319,7 +330,7 @@ export function buildRouter(deps: RouterDeps) {
 
         const renewed = await deps.imps.renewLease(
           input.name,
-          caller,
+          requireLeaseHolder(caller),
           input.label,
           input.ttlSeconds,
         );
@@ -329,8 +340,9 @@ export function buildRouter(deps: RouterDeps) {
       release: os.leases.release.handler(async (context) => {
         const input = context.input;
         const caller = context.context.caller;
+        const holder = requireLeaseHolder(caller);
 
-        const released = await deps.imps.releaseLease(input.name, caller, input.label);
+        const released = await deps.imps.releaseLease(input.name, holder, input.label);
 
         return { released };
       }),
