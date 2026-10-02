@@ -10,7 +10,10 @@ broker listens on every imp's gateway.
 
 - impd carves guest subnets out of `IMP_SUBNET` (default `10.66.0.0/16`). Slot `n` owns the /30 at
   offset `4n`: the host end is `4n+1`, the guest `4n+2`.
-- The tap is `imp<slot>`. The guest MAC is `06:00` followed by the guest IP in hex.
+- The tap is `imp<slot>`. The guest MAC is `06:00` followed by the guest IP in hex, and a new tap's
+  MAC is `06:01` followed by the host IP in hex. A woken guest's neighbour entry for its gateway
+  then stays valid on a new tap: after a container restart, or on another host after a
+  [warm move](./moves.md). A tap that exists keeps its MAC, which its guest knows.
 - An imp keeps its slot for its whole life, so the tap name and the IP survive a sleep and a
   restore. A container restart removes the taps; a wake creates the tap again before it loads the
   snapshot.

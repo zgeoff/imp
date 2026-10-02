@@ -30,8 +30,9 @@ export function createTapDevices(
   run: RunCommand = runCommand,
   readOwner: ReadOwner = readTapOwner,
 ): TapDevices {
-  // `tolerated`: stderr fragments that mean the change is already in place
-  const runIp = async (args: readonly string[], tolerated: readonly string[]): Promise<void> => {
+  // `tolerated`: stderr fragments that mean the change is already in place;
+  // false then, true when this call made it
+  const runIp = async (args: readonly string[], tolerated: readonly string[]): Promise<boolean> => {
     const result = await run(['ip', ...args]);
 
     const stderr = result.stderr.toLowerCase();
@@ -39,6 +40,8 @@ export function createTapDevices(
     if (result.exitCode !== 0 && !tolerated.some((fragment) => stderr.includes(fragment))) {
       throw new Error(`ip ${args.join(' ')}: ${result.stderr.trim()}`);
     }
+
+    return result.exitCode === 0;
   };
 
   // A kernel with IPv6 disabled has no keys for it; the tap then has no
@@ -79,7 +82,18 @@ export function createTapDevices(
       const ownerArgs =
         owner === null ? [] : ['user', String(owner.uid), 'group', String(owner.gid)];
 
-      await runIp(['tuntap', 'add', address.tap, 'mode', 'tap', ...ownerArgs], ['exists', 'busy']);
+      const isNew = await runIp(
+        ['tuntap', 'add', address.tap, 'mode', 'tap', ...ownerArgs],
+        ['exists', 'busy'],
+      );
+
+      // the slot's MAC, not a random one, so a guest woken on another host
+      // still knows its gateway (docs/architecture/networking.md#addressing);
+      // a tap that exists keeps its own, as its guest knows it
+      if (isNew) {
+        await runIp(['link', 'set', address.tap, 'address', address.hostMac], []);
+      }
+
       await runIp(['addr', 'add', cidr, 'dev', address.tap], ['exists', 'already assigned']);
 
       // before the link is up: a guest never sets the host's routes, with

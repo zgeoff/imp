@@ -22,6 +22,9 @@ export interface SlotAddress {
   readonly netmask: string;
   readonly guestMac: string;
 
+  // the tap's: as the guest's, from the host IP
+  readonly hostMac: string;
+
   // the imp's IPv6 /128, or null when imps get no IPv6
   // (docs/architecture/networking.md#ipv6)
   readonly guestIp6: string | null;
@@ -104,6 +107,7 @@ export function deriveSlotAddress(slot: number, plan: SlotPlan): SlotAddress {
     // locally administered unicast, then the guest IP: unique per slot and
     // readable in a packet capture
     guestMac: ['06', '00', ...splitOctets(guest).map((octet) => toHexByte(octet))].join(':'),
+    hostMac: ['06', '01', ...splitOctets(base + 1).map((octet) => toHexByte(octet))].join(':'),
     guestIp6:
       plan.prefix6 === undefined || plan.prefix6 === null
         ? null
