@@ -632,6 +632,11 @@ ensure_firewall() {
   local ports
   mapfile -t ports < <(ssh_ports)
   [ ${#ports[@]} -gt 0 ] || die "found no SSH port; give --ssh-port"
+  # sudo drops SSH_CONNECTION by default, and without it the check below
+  # cannot see the session's port.
+  if [ -z "${SSH_CONNECTION:-}" ] && [ -n "${SUDO_USER:-}" ]; then
+    die "run as root, or with sudo -E, so the firewall phase can check this SSH session's port"
+  fi
   local session_port
   session_port=$(awk '{ print $4 }' <<<"${SSH_CONNECTION:-}")
   if [ -n "$session_port" ] && ! printf '%s\n' "${ports[@]}" | grep -qx "$session_port"; then

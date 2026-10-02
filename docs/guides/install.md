@@ -100,8 +100,10 @@ bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file 
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 ```
 
-`--dry-run` prints every change and makes none. `--check` does the same and exits 1 when a change is
-pending. A run changes only what differs from what it wants, so a second run changes nothing.
+Run it in a root login, or with `sudo -E`: plain `sudo` drops `SSH_CONNECTION`, which the firewall
+phase reads to keep your session's port open, so the script refuses it. `--dry-run` prints every
+change and makes none. `--check` does the same and exits 1 when a change is pending. A run changes
+only what differs from what it wants, so a second run changes nothing.
 
 **CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
 partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS. Check
@@ -138,7 +140,8 @@ Give imp a disk or a partition of its own. Put the OS on the rest:
 OVH Rise and Vultr bare metal ship two NVMe disks, and their installers can put the OS on a RAID 1
 of both. Either keep the second disk out of the RAID and give it as `--data-device`, or make a RAID
 array or partition for imp in the installer and give that (`--data-device /dev/md2`). The script
-does not partition disks.
+does not partition disks. OVH's default template gives the free space to `/home`; the script refuses
+that partition while it is mounted, so pick a layout without it in the installer.
 
 `--loop-file /srv/imp.xfs --loop-size 400` puts a sparse XFS file on the root filesystem instead. It
 needs 20 GiB free and puts a loop device in the I/O path; use it only when no disk or partition is
