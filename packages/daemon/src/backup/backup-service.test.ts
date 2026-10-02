@@ -147,7 +147,7 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     db: harness.db,
     imps: harness.imps,
     grants: harness.broker,
-    networks: createNetworkService({ db: harness.db, egress: harness.egress }),
+    networks: createNetworkService({ db: harness.db, egress: harness.egress, imps: harness.imps }),
     storage: harness.storage,
     storageGate: harness.storageGate,
     diskBudget: harness.diskBudget,
@@ -779,7 +779,7 @@ test('a restore regrants by name, and keeps the egress policy and its list', asy
 test('a restore puts the imp back on its networks, made again when gone', async () => {
   await using ctx = await setupTest();
 
-  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress });
+  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress, imps: ctx.imps });
 
   await ctx.createDevImp();
   await networks.createNetwork('lab');

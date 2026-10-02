@@ -276,7 +276,7 @@ async function main(): Promise<void> {
 
   const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
   const templates = createTemplateService({ config, db, imps, storage, storageGate, diskBudget });
-  const networks = createNetworkService({ db, egress });
+  const networks = createNetworkService({ db, egress, imps });
 
   const backups =
     config.backup === null

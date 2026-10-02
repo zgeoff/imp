@@ -185,7 +185,7 @@ test('a net rm that nft refuses puts back every member, the latest join included
 test('a restore makes its missing networks, and removes them again when it fails', async () => {
   await using ctx = await setupNetwork();
 
-  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress });
+  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress, imps: ctx.imps });
 
   const written = await networks.writeMissingNetworks(['lab', 'new']);
   const made = await ctx.client.networks.list();

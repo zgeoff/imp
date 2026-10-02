@@ -1,5 +1,5 @@
 import type { Network, NetworkJoin } from '@imp/api';
-import { buildConflictError, buildMovingError, buildNotFoundError } from '../api-errors';
+import { buildConflictError, buildNotFoundError } from '../api-errors';
 import { listEgressSlots } from '../db/egress';
 import { findImpByName } from '../db/imps';
 import {
@@ -15,6 +15,7 @@ import {
 import type { NetworkRecord } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
+import type { ImpCheckpointHooks } from '../imps/imp-service';
 
 // Private networks between imps (docs/guides/networks.md). Every change to
 // who is on a network goes through the egress firewall's lock, which builds
@@ -23,6 +24,9 @@ import type { EgressService } from '../egress/egress-service';
 export interface NetworkDeps {
   readonly db: ImpDatabase;
   readonly egress: Pick<EgressService, 'changeNetworks'>;
+
+  // a join holds the imp's lock, which refuses an imp a move marked
+  readonly imps: Pick<ImpCheckpointHooks, 'lockImp'>;
 }
 
 export interface NetworkService {
@@ -167,28 +171,19 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
 
     joinNetwork: async (networkName, impName) => {
       const network = await requireNetwork(networkName);
-      const imp = await findImpByName(db, impName);
 
-      if (imp === undefined) {
-        throw buildNotFoundError('imp', impName);
-      }
-
-      // a marked imp is on its way to a host without this network, and a
-      // join after a warm move's network check would slip past it
-      if (imp.moveState !== null) {
-        throw buildMovingError(impName);
-      }
-
-      const impId = imp.id;
-
-      await deps.egress.changeNetworks({
-        write: () => writeMember(db, network.id, impId),
-        undo: async (added) => {
-          if (added) {
-            await removeMember(db, network.id, impId);
-          }
-        },
-      });
+      // under the imp's lock, which refuses a marked imp with MOVING: a join
+      // cannot slip in after a warm move's network check
+      await deps.imps.lockImp(impName, (imp) =>
+        deps.egress.changeNetworks({
+          write: () => writeMember(db, network.id, imp.id),
+          undo: async (added) => {
+            if (added) {
+              await removeMember(db, network.id, imp.id);
+            }
+          },
+        }),
+      );
 
       const joined = await readNetwork(networkName);
       const warning = await readTrustWarning(networkName, impName);
