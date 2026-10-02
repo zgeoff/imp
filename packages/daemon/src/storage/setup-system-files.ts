@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync } from 'n
 import { dirname } from 'node:path';
 import type { Config } from '../config';
 import { buildSystemDrivePath } from './data-layout';
-import { deriveFileSha256, deriveSha256, readKernelInfo } from './system-file-info';
+import { deriveFileSha256, readKernelInfo } from './system-file-info';
 import type { SystemFileInfo } from './system-file-info';
 
 // The files imps boot with, and what system.info reports about them.
@@ -24,10 +24,11 @@ export async function setupSystemFiles(config: Config): Promise<SystemFiles> {
     throw new Error(`${kernelSource} does not exist${missing}`);
   }
 
-  const guestKernel = readKernelInfo(readFileSync(kernelSource));
+  const kernel = readFileSync(kernelSource);
+  const guestKernel = readKernelInfo(kernel);
 
   // renamed over: a VM that has the old file open keeps the old inode
-  if (config.kernelSource !== null && !hasContent(config.kernelPath, guestKernel.sha256)) {
+  if (config.kernelSource !== null && !hasContent(config.kernelPath, kernel)) {
     writeCopy(config.kernelSource, config.kernelPath);
   }
 
@@ -51,8 +52,9 @@ export async function setupSystemFiles(config: Config): Promise<SystemFiles> {
   };
 }
 
-function hasContent(path: string, sha256: string): boolean {
-  return existsSync(path) && deriveSha256(readFileSync(path)) === sha256;
+// compared byte for byte: the source is hashed once already
+function hasContent(path: string, content: Uint8Array): boolean {
+  return existsSync(path) && Buffer.from(content).equals(readFileSync(path));
 }
 
 // a crash mid-copy leaves only the .new file, never a short target

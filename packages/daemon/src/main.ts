@@ -33,7 +33,7 @@ import { createForwardedPeers } from './proxy/forwarded-peers';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
-import { readHostIdentity } from './sleep/vm-identity';
+import { UNKNOWN_VERSION, readHostIdentity } from './sleep/vm-identity';
 import { createAuthorizedKeys } from './ssh/authorized-keys';
 import { setupSshDir } from './ssh/host-key';
 import { startSsh } from './ssh/start-ssh';
@@ -50,7 +50,6 @@ import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
 import { createCpuCgroups } from './vmm/cpu-cgroups';
-import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
 
 // the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
@@ -160,6 +159,9 @@ async function main(): Promise<void> {
     printLog('impd: no cpu controller under /sys/fs/cgroup/imps; CPU limits are kept, not applied');
   }
 
+  // spawns Firecracker once per version flag; system.info reuses it
+  const identity = readHostIdentity(config.firecrackerBin, systemFiles);
+
   const governed = createGovernedImps({
     cgroups,
     config,
@@ -168,7 +170,7 @@ async function main(): Promise<void> {
     taps: createTapDevices(),
     vms: createVmRunner(),
     storage,
-    identity: readHostIdentity(config.firecrackerBin, systemFiles),
+    identity,
     log: printLog,
     readExecEnv: broker.readExecEnv,
     storageGate,
@@ -293,7 +295,8 @@ async function main(): Promise<void> {
     backups,
     broker,
     egress,
-    firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
+    firecrackerVersion:
+      identity.firecrackerVersion === UNKNOWN_VERSION ? null : identity.firecrackerVersion,
     systemFiles: systemFiles.info,
     storage,
     diskBudget,

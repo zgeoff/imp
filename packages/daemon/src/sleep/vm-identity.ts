@@ -82,13 +82,16 @@ export function findOutdatedParts(
   return parts.filter(([key]) => vm[key] !== host[key]).map(([, part]) => part);
 }
 
+// what a version reads as when the binary is missing, as on a dev machine
+export const UNKNOWN_VERSION = 'unknown';
+
 function readVersionOutput(bin: string, flag: string): string {
   try {
     const result = Bun.spawnSync([bin, flag], { stdout: 'pipe', stderr: 'ignore' });
     const match = /v\d+\.\d+\.\d+/.exec(result.stdout.toString());
 
-    return match?.[0] ?? 'unknown';
+    return match?.[0] ?? UNKNOWN_VERSION;
   } catch {
-    return 'unknown';
+    return UNKNOWN_VERSION;
   }
 }

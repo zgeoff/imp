@@ -202,6 +202,10 @@ export function createVmRunner(): VmRunner {
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
+        // the disk stays open until the process is gone: a retry must not
+        // put a second VM on it
+        await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
+
         const reason = readErrorMessage(error);
 
         throw new Error(`boot failed: ${reason}\n${readLogTail(plan.paths.logFile)}`, {

@@ -116,15 +116,3 @@ export function readLogTail(logFile: string, lines = 20): string {
     return '(no log)';
   }
 }
-
-// null when the binary is missing, as on a dev machine outside the container
-export function readFirecrackerVersion(bin: string): string | null {
-  try {
-    const result = Bun.spawnSync([bin, '--version'], { stdout: 'pipe', stderr: 'ignore' });
-    const match = /v\d+\.\d+\.\d+/.exec(result.stdout.toString());
-
-    return match?.[0] ?? null;
-  } catch {
-    return null;
-  }
-}

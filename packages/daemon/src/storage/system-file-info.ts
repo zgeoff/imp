@@ -40,6 +40,6 @@ export function parseKernelVersion(image: Uint8Array): string | null {
   return match?.[0] ?? null;
 }
 
-export function deriveSha256(data: Uint8Array): string {
+function deriveSha256(data: Uint8Array): string {
   return new Bun.CryptoHasher('sha256').update(data).digest('hex');
 }
