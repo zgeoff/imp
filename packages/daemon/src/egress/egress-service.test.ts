@@ -163,6 +163,36 @@ test('a tighter policy flushes the guest, prunes the set and refreshes the table
   expect(ctx.nftScripts.at(-1)).not.toContain('allow0');
 });
 
+test('a policy change nft does not take leaves the old policy in place', async () => {
+  const state = { broken: false };
+
+  await using ctx = await setupEgress(() =>
+    state.broken ? Promise.reject(new Error('nft: table busy')) : Promise.resolve(),
+  );
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  state.broken = true;
+
+  const failed = await readRejection(
+    ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] }),
+  );
+
+  const kept = await ctx.egress.readPolicy('dev');
+
+  expect(String(failed)).toContain('nft: table busy');
+  expect(kept).toEqual({ mode: 'open', allow: [] });
+  expect(ctx.flushed).toEqual([]);
+
+  state.broken = false;
+
+  await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+  const changed = await ctx.egress.readPolicy('dev');
+
+  expect(changed).toEqual({ mode: 'none', allow: [] });
+});
+
 test('without nft, box and none are refused, and so is a boot of such an imp', async () => {
   const state = { broken: false };
 

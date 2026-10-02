@@ -106,12 +106,12 @@ export function createEgressService(deps: EgressDeps): EgressService {
     sweep: Timer | null;
   } = { slots: new Map(), released: new Set(), unenforced: null, server: null, sweep: null };
 
-  const buildScript = (): string =>
+  const buildScript = (views: ReadonlyMap<number, SlotView>): string =>
     buildRuleset({
       privateRanges,
       dnsPort: deps.config.egressDnsPort,
       setSize: SET_SIZE,
-      slots: [...state.slots.values()].map((view) => ({
+      slots: [...views.values()].map((view) => ({
         slot: view.entry.slot,
         tap: `imp${String(view.entry.slot)}`,
         guestIp: view.entry.guestIp,
@@ -121,7 +121,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
       })),
     });
 
-  // the slots from the database, then the whole table in one transaction
+  // the slots from the database, then the whole table in one transaction;
+  // impd's view of the slots changes only once nft has taken it
   const applyTable = (): Promise<void> =>
     mutex.runExclusive('table', async () => {
       const rows = await listEgressSlots(deps.db);
@@ -134,6 +135,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
         }
       }
 
+      if (state.unenforced === null) {
+        await write(buildScript(slots));
+      }
+
       for (const slot of state.slots.keys()) {
         if (!slots.has(slot)) {
           sets.clear(slot);
@@ -141,10 +146,6 @@ export function createEgressService(deps: EgressDeps): EgressService {
       }
 
       state.slots = slots;
-
-      if (state.unenforced === null) {
-        await write(buildScript());
-      }
     });
 
   const writeAnswers = async (
@@ -242,6 +243,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
       } catch (error) {
         state.unenforced = formatNftError(error);
 
+        await applyTable();
+
         const closed = [...state.slots.values()].filter(
           (view) => view.entry.policy.mode !== 'open',
         );
@@ -324,39 +327,50 @@ export function createEgressService(deps: EgressDeps): EgressService {
       return policy;
     },
 
-    setPolicy: async (name, policy) => {
-      requirePolicy(policy);
+    // one change at a time, so a rollback never undoes a later change
+    setPolicy: (name, policy) =>
+      mutex.runExclusive('policy', async () => {
+        requirePolicy(policy);
 
-      const imp = await findImpByName(deps.db, name);
+        const imp = await findImpByName(deps.db, name);
 
-      if (imp === undefined) {
-        throw buildNotFoundError('imp', name);
-      }
+        const previous = imp === undefined ? undefined : await readEgressPolicy(deps.db, imp.id);
 
-      await writeEgressPolicy(deps.db, imp.id, policy);
+        if (imp === undefined || previous === undefined) {
+          throw buildNotFoundError('imp', name);
+        }
 
-      const rules = buildAllowRules(policy.allow);
+        await writeEgressPolicy(deps.db, imp.id, policy);
 
-      if (policy.mode === 'box') {
-        sets.prune(imp.slot, (allowed) => isNameAllowed(rules, allowed));
-      } else {
-        sets.clear(imp.slot);
-      }
+        const rules = buildAllowRules(policy.allow);
 
-      await applyTable();
+        if (policy.mode === 'box') {
+          sets.prune(imp.slot, (allowed) => isNameAllowed(rules, allowed));
+        } else {
+          sets.clear(imp.slot);
+        }
 
-      // the guest's own flows the new policy may deny, and the broker's
-      // tunnels, which conntrack does not see
-      deps.closeTunnels(imp.id, (host) => isTunnelAllowed(policy, host));
+        // nft still holds the old table, so the row goes back to match it
+        try {
+          await applyTable();
+        } catch (error) {
+          await writeEgressPolicy(deps.db, imp.id, previous);
 
-      if (policy.mode !== 'open') {
-        await flushConnections(imp.ip);
-      }
+          throw error;
+        }
 
-      void resolveExactNames(imp.slot);
+        // the guest's own flows the new policy may deny, and the broker's
+        // tunnels, which conntrack does not see
+        deps.closeTunnels(imp.id, (host) => isTunnelAllowed(policy, host));
 
-      return policy;
-    },
+        if (policy.mode !== 'open') {
+          await flushConnections(imp.ip);
+        }
+
+        void resolveExactNames(imp.slot);
+
+        return policy;
+      }),
 
     checkName,
     writeAnswers,
