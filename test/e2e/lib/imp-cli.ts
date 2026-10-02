@@ -37,6 +37,7 @@ const SystemInfoSchema = z.object({
 });
 
 const CheckpointRowSchema = z.object({ id: z.string(), label: z.string().optional() });
+const ImageRowSchema = z.object({ name: z.string() });
 
 export type ImpState = z.infer<typeof ImpStateSchema>;
 
@@ -153,11 +154,15 @@ export async function listCheckpoints(name: string): Promise<readonly Checkpoint
   return z.array(CheckpointRowSchema).parse(JSON.parse(stdout));
 }
 
-// `imp image ls` has no --json: the first column of every row under the header
+// what a command that returns one imp prints with --json
+export function parseImp(stdout: string): ImpRow {
+  return ImpRowSchema.parse(JSON.parse(stdout));
+}
+
 export async function listImageNames(): Promise<readonly string[]> {
-  const stdout = await runImp('image', 'ls');
+  const stdout = await runImp('image', 'ls', '--json');
 
-  const rows = stdout.trim().split('\n').slice(1);
+  const images = z.array(ImageRowSchema).parse(JSON.parse(stdout));
 
-  return rows.map((row) => row.split(/\s+/)[0] ?? '').filter((name) => name !== '');
+  return images.map((image) => image.name);
 }
