@@ -31,14 +31,15 @@ The dashboard follows the same stream ([dashboard](./dashboard.md)).
 Every event has `v` (the format version, now `1`), `at` (when impd sent it) and `ev` (its kind). A
 reader skips a kind or a field it does not know.
 
-| `ev`                | Fields                                                   | When                                                                                 |
-| ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `ImpAdded`          | `reason` (`snapshot` or `created`), `imp`                | Each imp as the stream opens, then each new imp.                                     |
-| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, leases or error.                        |
-| `ImpRemoved`        | `imp`, as its record was last                            | `imp rm`: the VM, the disk and the checkpoints are gone.                             |
-| `CheckpointAdded`   | `name` (the imp's), `checkpoint`                         | A checkpoint.                                                                        |
-| `CheckpointRemoved` | `name`, `checkpoint`                                     | A checkpoint deleted.                                                                |
-| `GovernorDecision`  | `decision`, `name`, `trigger`, `usedMib`, `budgetMib`, … | The RAM governor admitted or refused a boot or a wake, or slept an imp to make room. |
+| `ev`                | Fields                                                   | When                                                                                  |
+| ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `ImpAdded`          | `reason` (`snapshot` or `created`), `imp`                | Each imp as the stream opens, then each new imp.                                      |
+| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, leases or error.                         |
+| `ImpRemoved`        | `imp`, as its record was last                            | `imp rm`: the VM, the disk and the checkpoints are gone.                              |
+| `CheckpointAdded`   | `name` (the imp's), `checkpoint`                         | A checkpoint.                                                                         |
+| `CheckpointRemoved` | `name`, `checkpoint`                                     | A checkpoint deleted.                                                                 |
+| `GovernorDecision`  | `decision`, `name`, `trigger`, `usedMib`, `budgetMib`, … | The RAM governor admitted or refused a boot or a wake, or slept an imp to make room.  |
+| `AgentExec`         | `name`, `actor`, `actorName`, `tty`, `command`           | The imp's agent took an `imp exec --agent`; `command` is the program, never its args. |
 
 `imp` has the shape `imp ls --json` prints, so a reader keeps its own copy with no second call. An
 `ImpChanged` reason says why the record changed:
@@ -101,11 +102,11 @@ reader's imps, not its fields, so it carries no lease owners ([leases](./leases.
 ## The API audit log
 
 impd writes one row for each call that changes something: every procedure except the reads, plus
-each exec, console, attach and SSH session as it opens, each `imp proxy` tunnel as `tunnel:<port>`,
-and each reverse forward as `reverse:<path or port>` (`reverse:auto` for a socket the agent names).
-A row has the time, the procedure, the caller, the imp it named, the outcome (`ok` or the error
-code) and how long the call took. It never holds the call's input, so a secret's value never reaches
-it.
+each exec, console, attach and SSH session as it opens (`exec-agent` for `imp exec --agent`), each
+`imp proxy` tunnel as `tunnel:<port>`, and each reverse forward as `reverse:<path or port>`
+(`reverse:auto` for a socket the agent names). A row has the time, the procedure, the caller, the
+imp it named, the outcome (`ok` or the error code) and how long the call took. It never holds the
+call's input, so a secret's value never reaches it.
 
 ```sh
 imp audit --kind api          # every imp, newest first
