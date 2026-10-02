@@ -37,4 +37,7 @@ export const IMP_ERRORS = defineErrors({
       allowed: z.array(ImpStateSchema),
     }),
   },
+
+  // the imp's agent is from before the feature; a stop and start updates it
+  AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },
 });

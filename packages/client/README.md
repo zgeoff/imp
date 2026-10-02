@@ -131,12 +131,13 @@ A failed call throws an `ORPCError`. impd's errors carry a `code` and typed `dat
 
 | Code                  | When                                                 | `data`                                 |
 | --------------------- | ---------------------------------------------------- | -------------------------------------- |
-| `NOT_FOUND`           | No imp, image or checkpoint has that name.           | `{ kind, name }`                       |
+| `NOT_FOUND`           | No imp, image, checkpoint or session has that name.  | `{ kind, name }`                       |
 | `CONFLICT`            | The name is taken.                                   | `{ kind, name }`                       |
 | `INVALID_STATE`       | The imp's state does not allow the call.             | `{ state, allowed }`                   |
 | `RAM_BUDGET_EXCEEDED` | The host has no room, even after sleeping idle imps. | `{ budgetMib, usedMib, requestedMib }` |
 | `SERVICE_UNAVAILABLE` | impd is stopping.                                    |                                        |
 | `FORBIDDEN`           | An exec ticket was used for another imp.             |                                        |
+| `AGENT_OUTDATED`      | The imp's agent has no sessions; stop and start it.  |                                        |
 
 ```ts
 import { isDefinedError, safe } from '@zgeoff/imp-client';

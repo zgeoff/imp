@@ -34,8 +34,9 @@ function sendResponse(socket: Socket, value: unknown): void {
   socket.end(encodeJsonFrame(FRAME_TYPES.response, value));
 }
 
-// An agent that answers activity with `sessions` and kills by name.
-function buildSessionAgent(initial: readonly AgentSession[]) {
+// An agent that answers activity with `sessions` and kills by name; one
+// from before sessions knows no session.kill.
+function buildSessionAgent(initial: readonly AgentSession[], knowsKill: boolean) {
   const sessions = [...initial];
   const ops: string[] = [];
 
@@ -48,7 +49,7 @@ function buildSessionAgent(initial: readonly AgentSession[]) {
       return;
     }
 
-    if (request.op !== 'session.kill') {
+    if (request.op !== 'session.kill' || !knowsKill) {
       sendResponse(socket, { error: { code: 'UNKNOWN_OP', message: 'unknown op' } });
 
       return;
@@ -70,7 +71,7 @@ function buildSessionAgent(initial: readonly AgentSession[]) {
   return { sessions, ops, handleRequest };
 }
 
-async function setupSessionTest(sessions: readonly AgentSession[]) {
+async function setupSessionTest(sessions: readonly AgentSession[], knowsKill = true) {
   const harness = await setupImpTest();
 
   const app = buildTestApp(harness, harness);
@@ -79,7 +80,7 @@ async function setupSessionTest(sessions: readonly AgentSession[]) {
 
   const imp = await app.client.imps.create({ name: 'dev', image: 'ubuntu' });
 
-  const agent = buildSessionAgent(sessions);
+  const agent = buildSessionAgent(sessions, knowsKill);
 
   const listening = await startFakeAgent(
     buildImpPaths(harness.config.dataDir, imp.id).vsockSocket,
@@ -216,6 +217,14 @@ test('a kill of no such session is NOT_FOUND', async () => {
   const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
 
   expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'session', name: 'main' } });
+});
+
+test('a kill on an agent from before sessions is AGENT_OUTDATED', async () => {
+  await using ctx = await setupSessionTest([], false);
+
+  const rejection = await readRejection(ctx.client.sessions.kill({ name: 'dev', session: 'main' }));
+
+  expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED', status: 409 });
 });
 
 test('a list of an unknown imp is NOT_FOUND', async () => {

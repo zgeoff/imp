@@ -228,3 +228,18 @@ test('a kill of no session rejects with NO_SESSION', async () => {
 
   expect(error).toMatchObject({ code: 'NO_SESSION' });
 });
+
+test('an attach or a kill on an agent from before sessions fails as AGENT_OUTDATED', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'UNKNOWN_OP', message: 'unknown op' },
+      }),
+    );
+  });
+
+  const attach = await readRejection(openAttachStream(vsock.path, { session: 'main' }));
+  const kill = await readRejection(sendSessionKill(vsock.path, 'main'));
+
+  expect([attach, kill]).toMatchObject([{ code: 'AGENT_OUTDATED' }, { code: 'AGENT_OUTDATED' }]);
+});

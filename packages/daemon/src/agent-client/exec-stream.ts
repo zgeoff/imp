@@ -1,6 +1,7 @@
 import * as z from 'zod';
-import { AgentError, openAgentConnection } from './agent-connection';
+import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
 import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 
@@ -79,24 +80,23 @@ export async function openExecStream(
   // which would die with its connection; a woken imp keeps its old agent
   if (request.session !== undefined && stream.session === null) {
     stream.close();
-
-    throw new AgentError(
-      'AGENT_OUTDATED',
-      "the imp's agent has no sessions yet; stop and start the imp to update it",
-    );
+    throw buildAgentOutdatedError();
   }
 
   return stream;
 }
 
 // Attaches to a session and waits for STARTED; the replay follows as
-// stdout. Throws AgentError (NO_SESSION) when there is no such session.
+// stdout. Throws AgentError (NO_SESSION) when there is no such session, and
+// AGENT_OUTDATED for an agent from before sessions.
 export function openAttachStream(
   vsockPath: string,
   request: Readonly<AgentAttachRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  return openStream(vsockPath, { op: 'session.attach', ...request }, startTimeoutMs);
+  return openStream(vsockPath, { op: 'session.attach', ...request }, startTimeoutMs).catch(
+    handleUnknownOp,
+  );
 }
 
 async function openStream(

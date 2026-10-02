@@ -1,3 +1,4 @@
+import { buildAgentOutdatedError, hasSessions } from '../agent-client/agent-outdated';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentActivity } from '../agent-client/agent-requests';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
@@ -5,6 +6,8 @@ import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-
 import { findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
+import { readVmIdentity } from '../sleep/vm-identity';
+import type { ImpPaths } from '../storage/data-layout';
 import type { ActivityTracker } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
@@ -96,7 +99,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // no background sleep slips in between the wake and the open.
   const openStream = async (
     name: string,
-    open: (vsockPath: string) => Promise<ExecStream>,
+    open: (paths: ImpPaths) => Promise<ExecStream>,
   ): Promise<ExecStream> => {
     const opened = { release: () => {} };
 
@@ -109,7 +112,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       await updateImpActivity(context.db, imp.id, new Date());
 
-      const stream = await open(context.findPaths(imp.id).vsockSocket);
+      const stream = await open(context.findPaths(imp.id));
 
       return {
         ...stream,
@@ -158,9 +161,22 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
   return {
     openExec: (name, request) =>
-      openStream(name, (vsockPath) => openExecStream(vsockPath, request)),
+      openStream(name, (paths) => {
+        // fail before an old agent runs the command as a plain exec
+        const agentVersion = readVmIdentity(paths)?.agentVersion;
+
+        if (
+          request.session !== undefined &&
+          agentVersion !== undefined &&
+          !hasSessions(agentVersion)
+        ) {
+          throw buildAgentOutdatedError();
+        }
+
+        return openExecStream(paths.vsockSocket, request);
+      }),
     openAttach: (name, request) =>
-      openStream(name, (vsockPath) => openAttachStream(vsockPath, request)),
+      openStream(name, (paths) => openAttachStream(paths.vsockSocket, request)),
 
     readActivity: async (imp) => {
       try {

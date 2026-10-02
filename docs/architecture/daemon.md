@@ -37,8 +37,9 @@ never accepted in a URL, where logs and browser history would keep it; no client
 `token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
 router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
 contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
-while impd stops, and `FORBIDDEN` for an exec ticket used for another imp. The token is made on
-first start and kept in `<dataDir>/token`, readable by the owner only.
+while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
+session request to an agent from before sessions. The token is made on first start and kept in
+`<dataDir>/token`, readable by the owner only.
 
 ### imps: the lifecycle
 
@@ -142,7 +143,9 @@ no connection: it keeps the imp awake only through its CPU or TCP use
 
 The code is in `sessions/`: the list and kill service, the in-memory copy of each awake imp's
 sessions, and the count `imp ls` shows. An imp woken with an agent from before sessions keeps it
-until its next cold boot; a session request to it fails with `AGENT_OUTDATED`.
+until its next cold boot; a session request to it fails with `AGENT_OUTDATED`. impd checks the agent
+version it recorded at boot before a session exec, so an old agent never runs the command as a plain
+exec. An attach or a kill that the old agent answers with `UNKNOWN_OP` fails the same way.
 
 `sessions.list` never wakes an imp. The idle loop reads every awake imp's sessions from `activity`
 every 2 s and keeps them in memory; a list of an awake imp asks the agent again, and falls back to

@@ -1,7 +1,7 @@
 import type { Session } from '@imp/api';
 import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity, sendSessionKill } from '../agent-client/agent-requests';
-import { buildNotFoundError } from '../api-errors';
+import { buildAgentOutdatedApiError, buildNotFoundError } from '../api-errors';
 import { updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpContext } from '../imps/imp-context';
@@ -70,6 +70,10 @@ export function createSessionService(parts: SessionServiceParts): SessionService
           (error: unknown) => {
             if (error instanceof AgentError && error.code === 'NO_SESSION') {
               throw buildNotFoundError('session', session);
+            }
+
+            if (error instanceof AgentError && error.code === 'AGENT_OUTDATED') {
+              throw buildAgentOutdatedApiError(error.message);
             }
 
             throw error;

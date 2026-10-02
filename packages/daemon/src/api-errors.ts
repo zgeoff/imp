@@ -32,6 +32,10 @@ export function buildInvalidStateError(
   });
 }
 
+export function buildAgentOutdatedApiError(message: string) {
+  return new ORPCError('AGENT_OUTDATED', { status: 409, message });
+}
+
 export function buildStoppingError() {
   return new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is stopping' });
 }

@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { handleUnknownOp } from './agent-outdated';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
 
@@ -104,9 +105,12 @@ export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise
   return ActivityResponseSchema.parse(response);
 }
 
-// Throws AgentError NO_SESSION when the imp has no session of that name.
+// Throws AgentError NO_SESSION when the imp has no session of that name,
+// and AGENT_OUTDATED for an agent from before sessions.
 export async function sendSessionKill(vsockPath: string, session: string): Promise<void> {
-  const response = await sendAgentRequest(vsockPath, { op: 'session.kill', session });
+  const response = await sendAgentRequest(vsockPath, { op: 'session.kill', session }).catch(
+    handleUnknownOp,
+  );
 
   OkResponseSchema.parse(response);
 }
