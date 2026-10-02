@@ -22,6 +22,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
+	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/pty"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
@@ -108,6 +109,10 @@ func Run() error {
 		Services: sup,
 		Listen:   listener,
 		Dial:     dialer,
+		Inner: func() *proto.InnerStatus {
+			st := mgr.Status()
+			return &proto.InnerStatus{Up: st.Up, Restarts: st.Restarts, LastError: st.LastErr}
+		},
 
 		IdentityReset: identityReset,
 	}

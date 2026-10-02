@@ -38,6 +38,8 @@ type Server struct {
 	Shutdown func()
 	// IdentityReset is what this boot's identity reset reported, or "".
 	IdentityReset string
+	// Inner reports the inner container for ping; nil leaves it out
+	Inner func() *proto.InnerStatus
 
 	freezeMu  sync.Mutex
 	thawTimer *time.Timer
@@ -183,6 +185,9 @@ func (s *Server) unary(req proto.Request) (any, error) {
 	case proto.OpPing:
 		ping := BuildPing(unix.ClockGettime)
 		ping.IdentityReset = s.IdentityReset
+		if s.Inner != nil {
+			ping.Inner = s.Inner()
+		}
 		return ping, nil
 	case proto.OpActivity:
 		return s.activity()

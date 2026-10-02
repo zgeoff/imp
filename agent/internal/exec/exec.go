@@ -4,6 +4,7 @@ package exec
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -77,7 +78,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	s, err := m.start(req)
 	if err != nil {
 		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
-			Error: &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()},
+			Error: proto.StartError(err, errors.Is(err, proc.ErrDown)),
 		})
 	}
 	if s.group != nil {

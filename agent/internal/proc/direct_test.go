@@ -73,6 +73,10 @@ func TestAHelperRunsTheAgentFromItsOwnFd(t *testing.T) {
 	if got := run(t, d, Spec{Argv: []string{"imp-agent", "hello"}, Helper: true}); got != "hello" {
 		t.Fatalf("helper said %q", got)
 	}
+	// an exec of the agent by its path, as impd's sftp
+	if got := run(t, d, Spec{Argv: []string{bin, "by path"}}); got != "by path" {
+		t.Fatalf("the agent by its path said %q", got)
+	}
 }
 
 func TestKillReachesOnlyTheChildAndGroupAliveSeesTheGroup(t *testing.T) {
