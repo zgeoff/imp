@@ -9,14 +9,19 @@
 #   scripts/test-bootstrap.sh --distro debian ...      one distro only
 #   scripts/test-bootstrap.sh --keep ...               leave a failed container to inspect
 #
+# Each distro runs on a loop file. Debian also runs --data-device on a loop
+# device: the refusals first (a device with ext4, a mounted device), then a
+# real run and --check.
+#
 # HOST SAFETY. The container is privileged and shares the host's kernel, so:
 # - it has its own network namespace (never --network host): the firewall
 #   and Docker's rules inside it never reach the host;
 # - systemd-sysctl, systemd-modules-load, systemd-udevd and systemd-binfmt
 #   are masked in the image, and bootstrap.sh itself writes kernel settings
 #   in a container but does not apply them;
-# - storage is a loop file in the container, never a disk; the EXIT trap
-#   unmounts it and detaches its loop device (loop devices are global);
+# - storage is a loop file or a loop device in the container, never a disk;
+#   the EXIT trap unmounts them and detaches the loop devices (they are
+#   global);
 # - every run is bracketed by a snapshot of the vm.* and kernel.* sysctls
 #   and the loaded modules, and the test fails on any difference.
 set -euo pipefail
@@ -51,6 +56,10 @@ fi
 work=$(mktemp -d)
 container=
 loop_file=/var/imp.xfs
+# backing files for the --data-device leg
+disk_empty=/var/disk-empty.img
+disk_ext4=/var/disk-ext4.img
+storage_args=()
 
 log() { echo "test-bootstrap: $*"; }
 fail() {
@@ -67,23 +76,27 @@ kernel_state() {
   awk '{ print "module", $1 }' /proc/modules | sort
 }
 
-# teardown: stop the test container. The loop file is unmounted inside it
-# first: its loop device is the host's, and removing the container would
-# leave it attached.
+# teardown: stop the test container. Mounts are undone and loop devices
+# detached inside it first: the loop devices are the host's, and removing
+# the container would leave them attached.
 teardown() {
   [ -n "$container" ] || return 0
   docker exec "$container" bash -c '
     systemctl stop imp-host 2>/dev/null
-    ! mountpoint -q /var/lib/imp || umount /var/lib/imp
-    for dev in $(losetup --list -n -O NAME -j '"$loop_file"'); do losetup -d "$dev"; done
-  ' || echo "test-bootstrap: WARNING: teardown in $container failed; check losetup -l" >&2
+    for dir in /var/lib/imp /mnt/ext4; do ! mountpoint -q "$dir" || umount "$dir"; done
+    for file in "$@"; do
+      [ -e "$file" ] || continue
+      for dev in $(losetup --list -n -O NAME -j "$file"); do losetup -d "$dev"; done
+    done
+  ' teardown "$loop_file" "$disk_empty" "$disk_ext4" \
+    || echo "test-bootstrap: WARNING: teardown in $container failed; check losetup -l" >&2
   docker rm -f -v "$container" >/dev/null
   container=
 }
 
 cleanup() {
   if [ -n "$keep" ] && [ -n "$container" ]; then
-    echo "test-bootstrap: kept $container; remove it with: docker exec $container umount /var/lib/imp; docker rm -f -v $container" >&2
+    echo "test-bootstrap: kept $container; unmount /var/lib/imp and detach its loop devices before docker rm -f -v" >&2
     return
   fi
   teardown
@@ -120,12 +133,14 @@ FROM ${BASE}
 ARG EXTRA
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      systemd systemd-sysv dbus openssh-server procps iproute2 ca-certificates ${EXTRA} \
+      systemd systemd-sysv dbus openssh-server procps iproute2 ca-certificates \
+      netcat-openbsd e2fsprogs ${EXTRA} \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /usr/sbin/policy-rc.d
-# policy-rc.d (above) stops services from starting on install in a Docker
-# image; a server has none. These write kernel-global state (sysctls, modules, binfmt) or touch host
-# devices; the container shares the host's kernel.
+# policy-rc.d (removed above) stops services from starting on install in a
+# Docker image; a server has none. The masked units write kernel-global
+# state (sysctls, modules, binfmt) or touch host devices, and the container
+# shares the host's kernel.
 RUN systemctl mask systemd-sysctl.service systemd-modules-load.service \
       systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket \
       systemd-udev-trigger.service systemd-binfmt.service proc-sys-fs-binfmt_misc.automount \
@@ -140,8 +155,7 @@ in_container() { docker exec "$container" "$@"; }
 
 bootstrap() {
   local mode=$1 before after rc=0 out
-  local args=("$mode" --loop-file "$loop_file" --loop-size 50
-    --image "$image" --image-archive /mnt/archive/image.tar)
+  local args=("$mode" "${storage_args[@]}" --image "$image" --image-archive /mnt/archive/image.tar)
   [ -n "$health" ] || args+=(--skip-health)
   # The stub never starts tailscaled, so it can carry a fake key; the real
   # image would try to join with it.
@@ -170,7 +184,8 @@ wait_for_imp_host() {
   return 1
 }
 
-run_distro() {
+# start_container DISTRO: a fresh systemd container, booted.
+start_container() {
   local distro=$1
   log "[$distro] building the systemd image"
   build_image "$distro"
@@ -191,6 +206,27 @@ run_distro() {
   done
   case $state in running | degraded) ;; *) fail "[$distro] systemd did not come up: $state" ;; esac
   docker cp deploy/bootstrap.sh "$container:/root/bootstrap.sh"
+}
+
+can_connect() { timeout 5 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
+
+# check_firewall_drops: from the host, SSH connects and another listening
+# port does not.
+check_firewall_drops() {
+  local ip
+  ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container")
+  docker exec -d "$container" nc -lk 9999
+  sleep 1
+  can_connect "$ip" 22 || fail "SSH on $ip:22 does not connect"
+  if can_connect "$ip" 9999; then
+    fail "port 9999 on $ip connects through the firewall"
+  fi
+}
+
+run_distro() {
+  local distro=$1
+  start_container "$distro"
+  storage_args=(--loop-file "$loop_file" --loop-size 50)
   if [ "$distro" = ubuntu ]; then
     in_container ufw --force enable >/dev/null
   fi
@@ -213,6 +249,7 @@ run_distro() {
   if [ "$distro" = ubuntu ]; then
     in_container ufw status | grep -q 'Status: inactive' || fail "[ubuntu] ufw is still active"
   fi
+  check_firewall_drops
 
   log "[$distro] --check after the first run"
   bootstrap --check || fail "[$distro] --check found pending changes after a full run"
@@ -224,7 +261,40 @@ run_distro() {
   log "[$distro] passed"
 }
 
+# run_device: --data-device on loop devices. The health check is skipped;
+# the loop-file runs cover it.
+run_device() {
+  local distro=debian empty ext4
+  start_container "$distro"
+  empty=$(in_container bash -c "truncate -s 20G $disk_empty && losetup -f --show $disk_empty")
+  ext4=$(in_container bash -c "truncate -s 1G $disk_ext4 && mkfs.ext4 -q $disk_ext4 && losetup -f --show $disk_ext4")
+  local saved_health=$health
+  health=
+
+  log "[$distro] --data-device refuses a device with ext4"
+  storage_args=(--data-device "$ext4")
+  if bootstrap --check; then fail "[$distro] --check took a device with ext4"; fi
+  grep -q "holds ext4" <<<"$LAST_OUTPUT" || fail "[$distro] no 'holds ext4' refusal"
+
+  log "[$distro] --data-device refuses a mounted device"
+  in_container bash -c "mkdir -p /mnt/ext4 && mount $ext4 /mnt/ext4"
+  if bootstrap --check; then fail "[$distro] --check took a mounted device"; fi
+  grep -q "is mounted" <<<"$LAST_OUTPUT" || fail "[$distro] no 'is mounted' refusal"
+
+  log "[$distro] --data-device on an empty device"
+  storage_args=(--data-device "$empty")
+  bootstrap --yes || fail "[$distro] the --data-device run failed"
+  in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nofail 0 2$' /etc/fstab \
+    || fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
+  bootstrap --check || fail "[$distro] --check found pending changes after the --data-device run"
+
+  health=$saved_health
+  teardown
+  log "[$distro] --data-device passed"
+}
+
 for distro in "${distros[@]}"; do
   run_distro "$distro"
+  [ "$distro" != debian ] || run_device
 done
 log "passed: ${distros[*]}"
