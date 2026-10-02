@@ -662,6 +662,7 @@ The migrations, in order:
 | `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy` |
 | `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                     |
 | `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))       |
+| `016_add_imp_jail_uid`      | `imps.jail_uid`, the uid each imp's [jailed](#the-jailer) Firecracker runs as                                      |
 | `017_add_move_slots`        | `move_tickets.slot`, the slot a warm move keeps                                                                    |
 | `018_add_warm_moves`        | `move_sends.warm`, and `imps.trust_pending` until a warm-moved imp's first wake                                    |
 
