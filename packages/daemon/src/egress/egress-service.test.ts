@@ -5,7 +5,6 @@ import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { parsePrefix64 } from '../net/addressing6';
 import { resolveIpv6Plan } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
-import { findFreePorts } from '../net/test-free-ports';
 import { readRejection } from '../read-rejection';
 
 async function setupEgress(runNft?: (script: string) => Promise<void>, ipv6?: Ipv6Plan) {
@@ -384,17 +383,53 @@ test('a network change that nft refuses and whose undo throws still leaves the t
   expect(ctx.logs.join('\n')).toContain('the database is gone');
 });
 
-test("a start without setup-net's imp-network ACCEPT says networks cannot work", async () => {
-  const port = findFreePorts(1).take();
-
+test("a table with members and without setup-net's imp-network ACCEPT says so, once", async () => {
   await using ctx = await setupImpTest({
-    env: { IMP_EGRESS_DNS_PORT: String(port) },
-    forwardRules: '-A FORWARD -i imp+ -o imp+ -j DROP\n',
+    // the rule without its mark, as a hand-made one might be
+    forwardRules: '-A FORWARD -m comment --comment imp-network -j ACCEPT\n',
   });
 
-  await ctx.egress.start();
+  await ctx.createTestImage('base');
 
-  ctx.egress.stop();
+  const network = await writeNetwork(ctx.db, 'lab');
 
-  expect(ctx.logs.some((line) => line.includes('imp-network ACCEPT is missing'))).toBeTrue();
+  const networkIds = network === null ? [] : [network.id];
+
+  await ctx.imps.createImp({ name: 'web', networkIds });
+  await ctx.imps.createImp({ name: 'db', networkIds });
+
+  const missing = ctx.logs.filter((line) => line.includes('imp-network ACCEPT is missing'));
+
+  expect(missing).toHaveLength(1);
+});
+
+test('a join whose table nft refuses and whose undo throws twice says it may have applied', async () => {
+  const state = { refuse: false };
+
+  await using ctx = await setupEgress(() => {
+    const result = state.refuse ? Promise.reject(new Error('nft exited 1')) : Promise.resolve();
+
+    return result;
+  });
+
+  const undos: string[] = [];
+
+  state.refuse = true;
+
+  const error = await readRejection(
+    ctx.egress.changeNetworks({
+      write: () => Promise.resolve(),
+      undo: () => {
+        undos.push('undo');
+
+        return Promise.reject(new Error('the database is gone'));
+      },
+    }),
+  );
+
+  expect(undos).toEqual(['undo', 'undo']);
+
+  expect(String(error)).toContain(
+    'nft exited 1; the network change could not be undone and may have applied',
+  );
 });

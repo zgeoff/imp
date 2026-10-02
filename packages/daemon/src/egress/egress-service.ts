@@ -135,6 +135,9 @@ export function createEgressService(deps: EgressDeps): EgressService {
     // the networks' members, released slots left out
     members: readonly NetworkMember[];
     networkNames: ReadonlySet<string>;
+
+    // setup-net's ACCEPT was missing at the last check, and that was logged
+    peerAcceptMissing: boolean;
     released: Set<number>;
     unenforced: string | null;
     server: ResolverServer | null;
@@ -143,6 +146,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     slots: new Map(),
     members: [],
     networkNames: new Set(),
+    peerAcceptMissing: false,
     released: new Set(),
     unenforced: null,
     server: null,
@@ -180,6 +184,27 @@ export function createEgressService(deps: EgressDeps): EgressService {
       })),
     });
 
+  // Setup-net.sh's ACCEPT for marked traffic between imps, checked after each
+  // table with members: without it the imp-to-imp DROP takes every packet.
+  // Logged once until it is back.
+  const checkPeerAccept = async (): Promise<void> => {
+    try {
+      const rules = await readForwardRules();
+
+      const present = rules.split('\n').some((rule) => isPeerAccept(rule));
+
+      if (!present && !state.peerAcceptMissing) {
+        deps.log(
+          "impd: egress: setup-net.sh's imp-network ACCEPT is missing from FORWARD; imps on a network cannot reach each other until the host container starts again",
+        );
+      }
+
+      state.peerAcceptMissing = !present;
+    } catch (error) {
+      deps.log(`impd: egress: reading FORWARD: ${readErrorMessage(error)}`);
+    }
+  };
+
   // the slots from the database, then the whole table in one transaction;
   // impd's view of the slots changes only once nft has taken it
   const applyTable = (): Promise<void> =>
@@ -215,6 +240,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
       state.slots = slots;
       state.members = members;
+
+      if (state.unenforced === null && members.length > 0) {
+        await checkPeerAccept();
+      }
 
       state.networkNames = new Set(networkNames);
     });
@@ -313,20 +342,22 @@ export function createEgressService(deps: EgressDeps): EgressService {
     }
   };
 
-  // setup-net.sh's ACCEPT for marked traffic between imps: without it, the
-  // imp-to-imp DROP takes every packet, and networks fail closed
-  const checkPeerAccept = async (): Promise<void> => {
-    try {
-      const rules = await readForwardRules();
+  // an undo, tried twice; false when both throw, so the rows may still hold
+  // the change
+  const tryUndo = async (undo: () => Promise<void>): Promise<boolean> => {
+    for (const attempt of [1, 2]) {
+      try {
+        await undo();
 
-      if (!rules.includes('imp-network')) {
+        return true;
+      } catch (error) {
         deps.log(
-          "impd: egress: setup-net.sh's imp-network ACCEPT is missing from FORWARD; imps on a network cannot reach each other until the host container starts again",
+          `impd: egress: undoing a network change (try ${String(attempt)}): ${readErrorMessage(error)}`,
         );
       }
-    } catch (error) {
-      deps.log(`impd: egress: reading FORWARD: ${readErrorMessage(error)}`);
     }
+
+    return false;
   };
 
   const requirePolicy = (policy: EgressPolicy): void => {
@@ -389,8 +420,6 @@ export function createEgressService(deps: EgressDeps): EgressService {
       for (const slot of state.slots.keys()) {
         void resolveExactNames(slot);
       }
-
-      await checkPeerAccept();
     },
 
     stop: () => {
@@ -442,13 +471,16 @@ export function createEgressService(deps: EgressDeps): EgressService {
         try {
           await applyTable();
         } catch (error) {
-          try {
-            await change.undo(result);
-          } catch (undoError) {
-            deps.log(`impd: egress: undoing a network change: ${readErrorMessage(undoError)}`);
-          }
+          const undone = await tryUndo(() => change.undo(result));
 
           await tryApplyTable();
+
+          if (!undone) {
+            throw new Error(
+              `${readErrorMessage(error)}; the network change could not be undone and may have applied`,
+              { cause: error },
+            );
+          }
 
           throw error;
         }
@@ -574,6 +606,15 @@ async function runForwardRulesList(): Promise<string> {
   }
 
   return result.stdout;
+}
+
+// setup-net.sh's rule, as `iptables -S FORWARD` prints it
+function isPeerAccept(rule: string): boolean {
+  return (
+    rule.includes('--comment imp-network') &&
+    rule.includes('--mark 0x1000000/0x1000000') &&
+    rule.endsWith('-j ACCEPT')
+  );
 }
 
 // both directions: conntrack matches -s and -d on a flow's original tuple

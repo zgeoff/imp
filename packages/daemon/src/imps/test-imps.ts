@@ -207,7 +207,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     },
     readForwardRules: () =>
       Promise.resolve(
-        options.forwardRules ?? '-A FORWARD -m comment --comment imp-network -j ACCEPT\n',
+        options.forwardRules ??
+          '-A FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -m comment --comment imp-network -j ACCEPT\n',
       ),
     flushPair: (first, second) => {
       flushedPairs.push(`${first} ${second}`);
