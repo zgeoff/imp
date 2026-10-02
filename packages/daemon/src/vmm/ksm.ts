@@ -5,7 +5,8 @@ const KSM_DIR = '/sys/kernel/mm/ksm';
 const PAGE_BYTES = 4096;
 const MIB = 1024 ** 2;
 
-// Guest memory is one or two large private mappings; Firecracker's own are smaller
+// Guest memory is one backing's private mappings of this much or more in all;
+// Firecracker's own are smaller
 const GUEST_MAPPING_MIN_BYTES = 64 * MIB;
 
 // 6.7 keeps the merge flag across exec (3c6f33b7273a); 6.10 also has ksmd
@@ -76,36 +77,49 @@ export function readKsmHostStats(dir = KSM_DIR): KsmHostStats | null {
   }
 }
 
-// Whether every large private writable mapping in /proc/<pid>/smaps text
-// carries `mg` (VM_MERGEABLE); null when there is none
+// Whether every private writable mapping of the guest's memory in
+// /proc/<pid>/smaps text carries `mg` (VM_MERGEABLE); null when none shows.
+// A restore's memory, its template's mem file, can come in several mappings.
 export function checkMergeableMappings(smaps: string): boolean | null {
-  const mappings: { large: boolean; mergeable: boolean }[] = [];
+  const mappings: { backing: string; bytes: number; mergeable: boolean }[] = [];
+  let current: (typeof mappings)[number] | null = null;
 
   for (const line of smaps.split('\n')) {
-    const header = /^(?<start>[\da-f]+)-(?<end>[\da-f]+) rw-p /u.exec(line);
+    const header =
+      /^(?<start>[\da-f]+)-(?<end>[\da-f]+) (?<perms>\S+) \S+ \S+ \S+\s*(?<backing>.*)$/u.exec(
+        line,
+      );
 
     if (header?.groups !== undefined) {
       const bytes =
         Number.parseInt(header.groups['end'] ?? '0', 16) -
         Number.parseInt(header.groups['start'] ?? '0', 16);
 
-      mappings.push({ large: bytes >= GUEST_MAPPING_MIN_BYTES, mergeable: false });
-      continue;
-    }
+      // only rw-p memory can be guest memory; others end the one before
+      current =
+        header.groups['perms'] === 'rw-p'
+          ? { backing: header.groups['backing'] ?? '', bytes, mergeable: false }
+          : null;
 
-    const last = mappings.at(-1);
-
-    if (line.startsWith('VmFlags:') && last !== undefined) {
-      last.mergeable = line.split(/\s+/u).includes('mg');
-    }
-
-    // a mapping that is not rw-p ends the one before it
-    if (/^[\da-f]+-[\da-f]+ /u.test(line)) {
-      mappings.push({ large: false, mergeable: true });
+      if (current !== null) {
+        mappings.push(current);
+      }
+    } else if (line.startsWith('VmFlags:') && current !== null) {
+      current.mergeable = line.split(/\s+/u).includes('mg');
     }
   }
 
-  const guest = mappings.filter((mapping) => mapping.large);
+  // guest memory: every mapping of a backing, none for anonymous memory, that
+  // maps GUEST_MAPPING_MIN_BYTES or more in all
+  const bytesByBacking = new Map<string, number>();
+
+  for (const mapping of mappings) {
+    bytesByBacking.set(mapping.backing, (bytesByBacking.get(mapping.backing) ?? 0) + mapping.bytes);
+  }
+
+  const guest = mappings.filter(
+    (mapping) => (bytesByBacking.get(mapping.backing) ?? 0) >= GUEST_MAPPING_MIN_BYTES,
+  );
 
   if (guest.length === 0) {
     return null;

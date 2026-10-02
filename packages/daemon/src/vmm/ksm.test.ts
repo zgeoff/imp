@@ -29,11 +29,17 @@ test('IMP_KSM also needs a kernel built with KSM', () => {
 });
 
 // a mapping's smaps lines: its header, then VmFlags
-function writeMapping(start: number, mib: number, perms: string, flags: string): string {
+function writeMapping(
+  start: number,
+  mib: number,
+  perms: string,
+  flags: string,
+  backing = '',
+): string {
   const end = start + mib * 1024 ** 2;
 
   return [
-    `${start.toString(16)}-${end.toString(16)} ${perms} 00000000 00:00 0`,
+    `${start.toString(16)}-${end.toString(16)} ${perms} 00000000 00:00 0 ${backing}`.trimEnd(),
     'Rss:                 100 kB',
     `VmFlags: rd wr mr mw me ac ${flags}`,
   ].join('\n');
@@ -41,7 +47,7 @@ function writeMapping(start: number, mib: number, perms: string, flags: string):
 
 test('guest memory is mergeable when every large private writable mapping has mg', () => {
   const firecracker = writeMapping(0x40_00_00, 2, 'r-xp', '');
-  const heap = writeMapping(0x10_00_00_00, 1, 'rw-p', '');
+  const heap = writeMapping(0x10_00_00_00, 1, 'rw-p', '', '[heap]');
   const guest = writeMapping(0x7f_00_00_00_00_00, 512, 'rw-p', 'mg');
 
   expect(checkMergeableMappings([firecracker, heap, guest].join('\n'))).toBe(true);
@@ -54,6 +60,25 @@ test('guest memory is mergeable when every large private writable mapping has mg
   const shared = writeMapping(0x7f_00_00_00_00_00, 512, 'rw-s', '');
 
   expect(checkMergeableMappings([firecracker, shared].join('\n'))).toBeNull();
+});
+
+// as CI's 6.17 showed a template restore: the mem file in pieces, none of 64 MiB
+test('the guest memory of a restore, split into small mappings, is checked whole', () => {
+  const memFile = '/var/lib/imp/templates/abc/mem';
+  const firecracker = writeMapping(0x40_00_00, 2, 'r-xp', '', '/firecracker');
+
+  const pieces = [54, 20, 2, 40, 60].map((mib, index) =>
+    writeMapping(0x7f_00_00_00_00_00 + index * 0x10_00_00_00, mib, 'rw-p', 'mg', memFile),
+  );
+
+  expect(checkMergeableMappings([firecracker, ...pieces].join('\n'))).toBe(true);
+
+  const lost = writeMapping(0x7f_10_00_00_00_00, 30, 'rw-p', 'sd', memFile);
+
+  expect(checkMergeableMappings([firecracker, ...pieces, lost].join('\n'))).toBe(false);
+
+  // the pieces of a smaller backing are not guest memory
+  expect(checkMergeableMappings([firecracker, ...pieces.slice(1, 3)].join('\n'))).toBeNull();
 });
 
 test('the unshared size counts anonymous pages in full, not their Pss', () => {
