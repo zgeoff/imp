@@ -69,7 +69,21 @@ imp fork box box-2                # a second copy to try something else in
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
 
-`ls` and `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+`--memory` takes MiB or a unit (`512m`, `2g`). Commands that print imps, images, checkpoints or
+`info` take `--json`. `scripts/imp` runs the CLI from the repo.
+
+`imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n ended it.
+The CLI sets other codes itself:
+
+| Code | When                                                                                 |
+| ---- | ------------------------------------------------------------------------------------ |
+| 127  | the command could not start (`EXEC_FAILED`)                                          |
+| 141  | the CLI's own output closed, as in `imp exec box -- cat big \| head`                 |
+| 255  | imp failed: impd unreachable, a rejected token, an unknown imp, a dropped connection |
+
+A signal to the CLI (Ctrl-C without `-t`, SIGTERM, SIGHUP) goes to the command; a second one ends
+the session, so the CLI stops even when the command ignores it or impd stopped answering. Before the
+command starts, the first one ends the session. With `-t`, Ctrl-C is a key the command reads.
 
 ## Sleep and wake
 
