@@ -15,6 +15,7 @@
 
 let
   fakeKey = "fake-authkey-for-the-vm-test";
+  fakeBackupPassword = "fake-backup-password-for-the-vm-test";
   stateDir = "/var/lib/imp/tailscale";
 
   # Stands in for tailscaled: a socket, and its name in ps.
@@ -121,10 +122,15 @@ pkgs.testers.runNixOSTest {
     networking.firewall.allowedUDPPorts = [ 41641 ];
     services.imp = {
       tailscaleAuthKeyFile = "/etc/imp-test/authkey";
+      backupPasswordFile = "/etc/imp-test/backup-password";
+      environmentFile = "/etc/imp-test/imp-host.env";
       settings.IMP_TAILSCALE_HOSTNAME = "imp-vm";
     };
-    # A store file would do in a test, but the module takes a path outside it.
+    # A store file would do in a test, but the module takes paths outside it.
     environment.etc."imp-test/authkey".text = fakeKey;
+    environment.etc."imp-test/backup-password".text = fakeBackupPassword;
+    environment.etc."imp-test/imp-host.env".text =
+      "IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp\n";
     # 3 GiB is below what the formula needs, so imp-host refuses to start
     # until ramBudgetMiB is set; the test switches to this.
     specialisation.budget.configuration.services.imp.ramBudgetMiB = 1024;
@@ -258,6 +264,22 @@ pkgs.testers.runNixOSTest {
         host.fail("docker inspect -f '{{.Config.Env}}' imp-host | grep -qF ${fakeKey}")
         host.fail("grep -qF ${fakeKey} ${stateDir}/fake-up.log ${stateDir}/up.out")
         host.fail("journalctl -b --no-pager | grep -qF ${fakeKey}")
+
+    with subtest("the backup password: a file in the container, never a value"):
+        host.succeed("grep -qx IMP_BACKUP_PASSWORD_FILE=/run/imp/backup-password /etc/imp/imp-host.env")
+        host.succeed("grep -qx IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp /etc/imp/imp-host.env")
+        host.fail("grep -qF ${fakeBackupPassword} /etc/imp/imp-host.env")
+        host.fail("docker inspect imp-host | grep -qF ${fakeBackupPassword}")
+        host.fail("journalctl -b --no-pager | grep -qF ${fakeBackupPassword}")
+        assert host.succeed("docker exec imp-host cat /run/imp/backup-password").strip() == "${fakeBackupPassword}"
+        host.fail("docker exec imp-host sh -c 'echo x > /run/imp/backup-password'")
+
+    with subtest("no backup password: a warning, and backups stay off"):
+        host.succeed("rm /etc/imp-test/backup-password")
+        start_imp_host()
+        host.succeed("journalctl -u imp-host --no-pager | grep -q 'backup-password is missing or empty; backups stay off'")
+        host.succeed("grep -qx IMP_BACKUP_REPOSITORY= /etc/imp/imp-host.env")
+        host.fail("grep -q IMP_BACKUP_PASSWORD_FILE /etc/imp/imp-host.env")
 
     with subtest("the env file"):
         assert host.succeed("stat -c %a /etc/imp/imp-host.env").strip() == "600"

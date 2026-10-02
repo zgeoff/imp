@@ -38,6 +38,7 @@ let
   zfsHost = host {
     services.imp.tailscaleAuthKeyFile = "/run/secrets/imp-authkey";
     services.imp.environmentFile = "/run/secrets/imp-host.env";
+    services.imp.backupPasswordFile = "/run/secrets/backup-password";
     services.imp.settings.IMP_TAILSCALE_HOSTNAME = "imp-test";
   };
   xfsHost = host {
@@ -60,6 +61,14 @@ let
       2222
     ];
   };
+  publicHost = host {
+    services.imp.publicPorts = [
+      "443:7443"
+      "80:7480"
+    ];
+  };
+  backupInSettings = host { services.imp.settings.IMP_BACKUP_PASSWORD_FILE = "/x"; };
+  publicPortsInSettings = host { services.imp.settings.IMP_PUBLIC_PORTS = "-p 443:7443"; };
   poolElsewhere = host { services.imp.zfs.importPool = false; };
   noArcCap = host { services.imp.zfs.arcMaxMiB = lib.mkForce null; };
   flushing = host {
@@ -71,7 +80,12 @@ let
   xfsCfg = xfsHost.config;
   unit = zfsCfg.systemd.services.imp-host;
   ownCfg = ownFirewall.config;
-  sharedArgs = lib.escapeShellArgs (lib.flatten (lib.importJSON ../../imp-host.args.json).lines);
+  # the env words ($IMP_PUBLIC_PORTS) are options, empty here
+  sharedArgs = lib.escapeShellArgs (
+    lib.filter (word: !(lib.hasPrefix "$" word)) (
+      lib.flatten (lib.importJSON ../../imp-host.args.json).lines
+    )
+  );
 
   expect = name: cond: if cond then name else throw "eval check failed: ${name}";
   checks = [
@@ -125,6 +139,18 @@ let
     (expect "the args come from deploy/imp-host.args.json" (
       lib.hasInfix "/bin/docker run ${sharedArgs} " unit.serviceConfig.ExecStart
     ))
+    (expect "publicPorts publish before the image" (
+      lib.hasSuffix "-p 443:7443 -p 80:7480 ghcr.io/zgeoff/imp-host:latest" publicHost.config.systemd.services.imp-host.serviceConfig.ExecStart
+    ))
+    (expect "the backup password is mounted read-only, by path" (
+      lib.hasInfix "-v /run/imp-host/backup-password:/run/imp/backup-password:ro" unit.serviceConfig.ExecStart
+    ))
+    (expect "IMP_BACKUP_PASSWORD_FILE goes in backupPasswordFile, not settings" (
+      lib.any (lib.hasInfix "sets IMP_BACKUP_PASSWORD_FILE") (failed backupInSettings)
+    ))
+    (expect "IMP_PUBLIC_PORTS goes in publicPorts, not settings" (
+      lib.any (lib.hasInfix "sets IMP_PUBLIC_PORTS") (failed publicPortsInSettings)
+    ))
     (expect "the key file is mounted read-only, by path" (
       lib.hasInfix "-v /run/imp-host/tailscale-authkey:/run/imp/tailscale-authkey:ro -e 'IMP_TAILSCALE_AUTHKEY_FILE=/run/imp/tailscale-authkey'" unit.serviceConfig.ExecStart
     ))
@@ -138,10 +164,17 @@ let
     ))
   ];
 
-  zfsPre = lib.head unit.serviceConfig.ExecStartPre;
+  # the env writer, among the secret staging and the image load
+  writerOf =
+    cfg:
+    lib.findFirst (pre: lib.hasSuffix "-imp-host-env" (toString pre))
+      (throw "no imp-host-env in ExecStartPre")
+      cfg.systemd.services.imp-host.serviceConfig.ExecStartPre;
+  zfsPre = writerOf zfsCfg;
   ownStart = ownCfg.systemd.services.imp-firewall.serviceConfig.ExecStart;
-  ownPre = lib.head ownCfg.systemd.services.imp-host.serviceConfig.ExecStartPre;
-  xfsPre = lib.head xfsCfg.systemd.services.imp-host.serviceConfig.ExecStartPre;
+  ownPre = writerOf ownCfg;
+  xfsPre = writerOf xfsCfg;
+  stagePre = lib.head unit.serviceConfig.ExecStartPre;
 in
 # The settings file is a store path; read it at build time.
 pkgs.runCommand "imp-nixos-eval" { } ''
@@ -159,6 +192,10 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   ! grep -q TAILSCALE_AUTHKEY "$zfs"
   ! grep -q imp-authkey ${zfsPre}
   grep -qx 'export IMP_SECRETS=/run/secrets/imp-host.env' ${zfsPre}
+  grep -qx 'export IMP_BACKUP_STAGED=/run/imp-host/backup-password' ${zfsPre}
+  # the staging copies both secrets, by path
+  grep -q "stage /run/secrets/imp-authkey /run/imp-host/tailscale-authkey" ${stagePre}
+  grep -q "stage /run/secrets/backup-password /run/imp-host/backup-password" ${stagePre}
   # own: bootstrap.sh's ruleset, for sshd's ports, and the env file says so
   rules=$(echo ${lib.escapeShellArg ownStart} | sed -n 's/.* -f //p')
   grep -qx '		tcp dport { 22, 2222 } accept comment "SSH"' "$rules"

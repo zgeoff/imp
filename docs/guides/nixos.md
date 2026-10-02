@@ -27,7 +27,9 @@ meets the [host contract](../architecture/host-contract.md), as
             zfs.arcMaxMiB = 6400; # optional: 10 % of 64 GB, within 1 to 8 GiB, as bootstrap.sh picks
             settings.IMP_TAILSCALE_HOSTNAME = "imp";
             tailscaleAuthKeyFile = "/var/lib/imp-host/secrets/tailscale-authkey"; # root, 0400
-            environmentFile = "/run/secrets/imp-host.env"; # IMP_DNS_API_TOKEN and other secrets
+            backupPasswordFile = "/var/lib/imp-host/secrets/backup-password"; # root, 0400
+            # IMP_DNS_API_TOKEN, IMP_BACKUP_REPOSITORY, AWS_* and other secrets; root, 0400
+            environmentFile = "/var/lib/imp-host/secrets/imp-host.env";
           };
         }
       ];
@@ -55,6 +57,10 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes
   `/etc/imp/imp-host.env` (0600), and loads `imageArchive` or pulls `image` when the image is
   missing. With ZFS, it needs `imp-zfs-dataset.service`.
+- **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
+  listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
+  ([public imps](./https.md#public-imps)). Set `IMP_PUBLIC_IP` in `settings`, and open the ports in
+  `networking.firewall`. The module refuses `IMP_PUBLIC_PORTS` in `settings`.
 - **Firewall:** `hostFirewall`, by default `none`. The env file says `IMP_HOST_FIREWALL=none`,
   `networking.firewall` stays the host's firewall, and imp adds no host rules; it needs no inbound
   port ([Firewall](../architecture/host-contract.md#firewall)). With `own`, the module loads
@@ -89,6 +95,17 @@ not the file:
   also set `zfs_arc_max` in your own `boot.extraModprobeConfig` or `boot.kernelParams`: two values
   clash, and the budget counts only `arcMaxMiB`. Unset, each start keeps a cap that is already set,
   or else sets bootstrap.sh's 10 % of RAM within 1 to 8 GiB.
+
+## Backups
+
+`backupPasswordFile` names the restic repository password, outside the Nix store
+([backups](../architecture/backups.md)). Keep it at `/var/lib/imp-host/secrets/backup-password`,
+owned by root, mode 0400. Like the Tailscale key, a copy goes to `/run/imp-host` before each start
+and is mounted read-only into the container at `/run/imp/backup-password`, and
+`IMP_BACKUP_PASSWORD_FILE` names it; the password never goes into the env file. A missing or empty
+file only warns, and the module blanks `IMP_BACKUP_REPOSITORY`, so backups stay off. Put
+`IMP_BACKUP_REPOSITORY` and the `AWS_*` keys in `environmentFile`, such as
+`/var/lib/imp-host/secrets/imp-host.env` (root, 0400).
 
 ## The Tailscale key
 
