@@ -444,6 +444,40 @@ test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', 
   }
 });
 
+// Node's WebSocket fires `error` and no `close` for a refused upgrade
+function openSocketWithoutClose(url: string): WebSocket {
+  const socket = new WebSocket(url);
+
+  const listen = socket.addEventListener.bind(socket);
+
+  Object.defineProperty(socket, 'addEventListener', {
+    value: (type: string, listener: EventListener) => {
+      if (type !== 'close') {
+        listen(type, listener);
+      }
+    },
+  });
+
+  return socket;
+}
+
+test('a refused upgrade reported by an error alone is still UNAUTHORIZED', async () => {
+  await using ctx = await setupExecTest();
+
+  const session = openExecSession({
+    baseUrl: ctx.url,
+    token: 'not-the-token',
+    start: { name: 'dev', argv: ['cat'], tty: false },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: openSocketWithoutClose,
+  });
+
+  const outcome = await session.outcome;
+
+  expect(outcome).toEqual({ kind: 'unauthorized' });
+});
+
 test('openConsole with a session starts it and reports it', async () => {
   await using ctx = await setupExecTest();
 
