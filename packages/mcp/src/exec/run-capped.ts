@@ -50,6 +50,7 @@ export async function runCapped(
   const handle = await openExec(name, options.argv, {
     ...(options.cwd !== undefined && { cwd: options.cwd }),
     ...(options.env !== undefined && { env: options.env }),
+    killGraceMs: options.killGraceMs,
   });
 
   const stdout = createOutputCollector(options.maxOutputBytes, options.headBytes);
@@ -131,9 +132,9 @@ async function waitForStop(
   }
 }
 
-// SIGTERM to the process group, then SIGKILL to whatever is left of it after
-// the grace. While the leader lives, the session carries both. A leader that
-// exits on SIGTERM ends the session, so a second exec kills the rest.
+// SIGTERM to the process group, then SIGKILL to whatever is left after the
+// grace; the session carries both while the leader lives. After a leader
+// exits on SIGTERM, the agent kills the rest (or a second exec, if old).
 async function stopCommand(
   openExec: ImpClient['openExec'],
   name: string,
@@ -158,10 +159,14 @@ async function stopCommand(
     return;
   }
 
+  const started = await handle.started;
+
+  if (started.groupKill) {
+    return;
+  }
+
   // the rest of the group got SIGTERM with the leader, and the same grace
   await Bun.sleep(Math.max(0, graceEnd - Date.now()));
-
-  const started = await handle.started;
 
   await stopGroup(openExec, name, started.pid);
 }

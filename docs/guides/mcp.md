@@ -68,8 +68,10 @@ exit is a normal result, not a tool error.
   inside it. At the timeout the command's process group gets SIGTERM, and 2 s later SIGKILL goes to
   whatever is left of the group, and the result has `timedOut: true`. Closing the exec socket alone
   would send only SIGHUP, which `nohup` ignores. While the command itself runs, the exec session
-  carries both signals. A command that exits on SIGTERM ends its session, so a second exec runs
-  `kill -KILL -PID` for the rest of the group (a `nohup` child that ignores SIGTERM, say).
+  carries both signals. When the command exits on SIGTERM, the imp's agent kills the rest of the
+  group (a `nohup` child that ignores SIGTERM, say) at the end of the 2 s, before it reports the
+  exit. An imp whose agent predates protocol `0.8.0` cannot, so a second exec runs `kill -KILL -PID`
+  for it; stop and start the imp to update its agent.
 - **Cancel.** A `notifications/cancelled` for an exec stops the command the same way, and the
   request gets no response. When the client goes away (stdin closes), every exec still running is
   stopped before `imp mcp` exits.

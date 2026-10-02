@@ -105,6 +105,24 @@ test('a timeout sends SIGTERM to the command and reports timedOut', async () => 
 
   expect(ctx.guest.signals).toEqual(['sleepy:15']);
 
+  // the agent kills what is left of the group itself: no second exec
+  expect(ctx.guest.requests).toHaveLength(1);
+  expect(ctx.guest.requests[0]).toMatchObject({ killGraceMs: 50 });
+});
+
+test('on an old agent a second exec kills what is left of a stopped group', async () => {
+  await using ctx = await setupMcpTest({ oldAgent: true });
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const result = await ctx.runTool('imp_exec', {
+    name: 'dev',
+    command: 'sleepy',
+    timeoutSeconds: 1,
+  });
+
+  expect(result.structuredContent).toMatchObject({ timedOut: true, signal: 'SIGTERM' });
+
   // the leader exited on SIGTERM, so a second exec kills what is left
   expect(ctx.guest.requests[1]?.argv).toEqual([
     '/bin/sh',
