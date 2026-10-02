@@ -100,11 +100,8 @@ func setupUserCgroup() error {
 	if err := os.MkdirAll(inner.CgroupDir, 0o755); err != nil {
 		return err
 	}
-	if total := memTotal(); total > 2*userReserve {
-		limit := strconv.FormatInt(total-userReserve, 10)
-		if err := os.WriteFile(inner.CgroupDir+"/memory.max", []byte(limit), 0); err != nil {
-			log.Printf("boot: memory.max: %v", err)
-		}
+	if limit := userMemoryMax(memTotal()); limit != noMemoryLimit {
+		writeUserMemoryMax(limit)
 	}
 	return nil
 }

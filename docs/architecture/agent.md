@@ -27,10 +27,11 @@ container over the user disk:
 1. Mount `/proc`, `/sys`, `/dev`, cgroup2 (`nsdelegate`), a 16 MiB tmpfs on `/run` and its own
    `/dev/pts`.
 2. Set its own `oom_score_adj` to -1000, and make `/sys/fs/cgroup/user` with every controller and a
-   `memory.max` of the guest's memory less 64 MiB. Make `/sys/fs/cgroup/outer` with a `memory.max`
-   of 32 MiB, and a tmpfs of 8 MiB on `/run/outer`, for [outer execs](#outer-exec). A
-   [boot template](./boot-templates.md#make) parks after this step, and goes on with its claim's
-   values instead of the kernel command line.
+   `memory.max` of the guest's memory less 64 MiB. An
+   [elastic guest](./memory.md#how-the-guest-grows) moves that limit as its memory grows and
+   shrinks. Make `/sys/fs/cgroup/outer` with a `memory.max` of 32 MiB, and a tmpfs of 8 MiB on
+   `/run/outer`, for [outer execs](#outer-exec). A [boot template](./boot-templates.md#make) parks
+   after this step, and goes on with its claim's values instead of the kernel command line.
 3. Mount `vda` on `/user`, and grow its filesystem if the host grew the disk.
 4. Set the hostname and bring up loopback and `eth0` through netlink. With `imp.ip6`, turn off
    router advertisements and redirects on `eth0`, add the address with no duplicate address
