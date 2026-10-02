@@ -43,7 +43,8 @@ interface TerminalSize {
 interface Program {
   readonly argv: readonly string[];
 
-  // a subsystem runs without a tty even when the client asked for one
+  // a subsystem runs without a tty or a forwarded agent, even when the
+  // client asked for them
   readonly allowsTty: boolean;
   readonly feature?: AgentFeature;
 }
@@ -106,10 +107,19 @@ export function handleSession(session: Session, context: SshConnectionContext): 
     accept?.();
   });
 
-  // agent forwarding is #53; X11 is out of scope
-  session.on('auth-agent', (_accept: Reply, reject: Reply) => {
-    reject?.();
+  // OpenSSH asks with no reply wanted, so a failure later shows on stderr
+  session.on('auth-agent', (accept: Reply, reject: Reply) => {
+    if (state.started) {
+      reject?.();
+
+      return;
+    }
+
+    context.agent.enable();
+    accept?.();
   });
+
+  // X11 is out of scope
 
   session.on('x11', (_accept: Reply, reject: Reply) => {
     reject?.();
@@ -149,7 +159,9 @@ export function handleSession(session: Session, context: SshConnectionContext): 
     try {
       await context.awake;
 
-      request = buildRequest(program, tty);
+      const agentSocket = program.allowsTty ? await findAgentSocket(channel, newline) : null;
+
+      request = buildRequest(program, tty, agentSocket);
 
       stream = await context.backend.openExec(context.impName, request, program.feature);
     } catch (error) {
@@ -197,10 +209,33 @@ export function handleSession(session: Session, context: SshConnectionContext): 
       ? { cols: state.pty.cols, rows: state.pty.rows }
       : null;
 
-  const buildRequest = (program: Program, tty: boolean): AgentExecRequest => {
+  // The forwarded agent's socket, once the connection asked for one. A
+  // command still runs without it, with the reason on stderr.
+  const findAgentSocket = async (
+    channel: ServerChannel,
+    newline: string,
+  ): Promise<string | null> => {
+    try {
+      return await context.agent.findSocket();
+    } catch (error) {
+      channel.stderr.write(`imp: no agent forwarding: ${formatFailure(error)}${newline}`);
+
+      return null;
+    }
+  };
+
+  const buildRequest = (
+    program: Program,
+    tty: boolean,
+    agentSocket: string | null,
+  ): AgentExecRequest => {
     const env = [...state.env].map(([key, value]) => `${key}=${value}`);
 
     env.push(...context.sshEnv);
+
+    if (agentSocket !== null) {
+      env.push(`SSH_AUTH_SOCK=${agentSocket}`);
+    }
 
     if (tty && state.pty !== null && state.pty.term !== '') {
       env.push(`TERM=${state.pty.term}`);

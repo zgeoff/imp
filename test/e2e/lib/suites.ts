@@ -1,6 +1,6 @@
 // The images a suite boots besides impd's default. `base` is images/base,
 // the Docker image: slow to build, so only the suites that need it list it.
-export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws';
+export type FixtureImage = 'base' | 'e2e-tiny' | 'e2e-bare' | 'e2e-ws' | 'e2e-git';
 
 export interface Suite {
   readonly name: string;
@@ -26,6 +26,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
   { name: 'ssh', prefix: 'e2e-ssh-', images: ['e2e-tiny'] },
   { name: 'ssh-wake', prefix: 'e2e-sshw-', images: ['e2e-tiny'] },
+  { name: 'ssh-agent', prefix: 'e2e-ssha-', images: ['e2e-git'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },
@@ -35,11 +36,11 @@ export const SUITES: readonly Suite[] = [
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs: create, exec, checkpoint and restore, sleep, wake
-// by HTTP, restart, MCP, the SSH gateway and the dashboard in a browser.
+// `fast` is what CI runs: create, exec, checkpoints, sleep, HTTP wakes,
+// restart, MCP, SSH with agent forwarding, and the dashboard in a browser.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
-  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp', 'ssh', 'dashboard'],
+  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp', 'ssh', 'ssh-agent', 'dashboard'],
 };
 
 // generous: a suite's own waits fail long before this

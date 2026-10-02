@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -100,7 +101,10 @@ func TestRelaysWithHalfCloseBothWays(t *testing.T) {
 		t.Run(network, func(t *testing.T) {
 			address := "127.0.0.1:0"
 			if network == "unix" {
-				address = filepath.Join(t.TempDir(), "target.sock")
+				// relative: a unix socket path has a 108-byte limit, which
+				// a long TMPDIR passes
+				t.Chdir(t.TempDir())
+				address = "target.sock"
 			}
 			addr := listen(t, network, address, func(c net.Conn) {
 				got, _ := io.ReadAll(c)
@@ -181,12 +185,19 @@ func TestHostCloseEndsTheRelay(t *testing.T) {
 // After the host half-closed, a target that resets ends the relay without
 // STDOUT_EOF.
 func TestTargetResetEndsWithoutEOF(t *testing.T) {
+	// The target resets only once the host half-closed: a reset right after
+	// the accept can reach the agent before its connect completes, and the
+	// dial then fails with ECONNRESET instead of relaying.
 	addr := listen(t, "tcp", "127.0.0.1:0", func(c net.Conn) {
+		io.Copy(io.Discard, c)
 		c.Write([]byte("partial"))
 		c.(*net.TCPConn).SetLinger(0)
 	})
 	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "tcp", Address: addr.String()})
 	h.requireOK(t)
+	if err := h.w.Write(proto.TypeStdinEOF, nil); err != nil {
+		t.Fatal(err)
+	}
 
 	for {
 		f, err := h.r.Next()
@@ -198,4 +209,24 @@ func TestTargetResetEndsWithoutEOF(t *testing.T) {
 		}
 	}
 	h.waitServed(t)
+}
+
+// A symlink to a socket under the agent's own directory is refused before
+// the dial, so a forward cannot reach a forwarded ssh-agent as root.
+func TestSymlinkIntoImpDirIsRefused(t *testing.T) {
+	// relative: a unix socket path has a 108-byte limit
+	t.Chdir(t.TempDir())
+	old := impDir
+	impDir = "imp"
+	t.Cleanup(func() { impDir = old })
+	if err := os.MkdirAll(impDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listen(t, "unix", filepath.Join(impDir, "agent.sock"), func(net.Conn) {})
+	if err := os.Symlink(filepath.Join(impDir, "agent.sock"), "link.sock"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "unix", Address: "link.sock"})
+	h.requireError(t, proto.ErrBadRequest)
 }

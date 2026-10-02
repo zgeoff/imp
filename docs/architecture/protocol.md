@@ -4,9 +4,9 @@ impd and the guest agent (`imp-agent`, PID 1) talk over vsock. Firecracker expos
 as a unix socket; the host connects to it, sends `CONNECT 1024`, and then speaks this protocol. Each
 connection carries one request. The first frame is a JSON request; exec connections then carry
 binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
-both ways.
+both ways. An `agent.listen` connection stays open for the life of an SSH connection.
 
-Version `0.3.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
+Version `0.4.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
 ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
@@ -43,20 +43,21 @@ Every message after the handshake is a frame:
   connection. Senders split larger data into several frames.
 - JSON payloads are UTF-8 JSON objects. Raw payloads are opaque bytes.
 
-| Type | Name         | Direction    | Payload                                          |
-| ---: | ------------ | ------------ | ------------------------------------------------ |
-|    1 | `REQUEST`    | host → guest | JSON request; always the first frame             |
-|    2 | `RESPONSE`   | guest → host | JSON; the result of a unary request, or an error |
-|    3 | `STDIN`      | host → guest | raw bytes for the process stdin                  |
-|    4 | `STDIN_EOF`  | host → guest | empty; closes the process stdin                  |
-|    5 | `RESIZE`     | host → guest | JSON `{"cols":n,"rows":n}`                       |
-|    6 | `SIGNAL`     | host → guest | JSON `{"signal":n}` (Linux signal number)        |
-|    7 | `STARTED`    | guest → host | JSON `{"pid":n}`                                 |
-|    8 | `STDOUT`     | guest → host | raw bytes                                        |
-|    9 | `STDERR`     | guest → host | raw bytes                                        |
-|   10 | `EXIT`       | guest → host | JSON `{"code":n,"signal":n}`; the last frame     |
-|   11 | `DETACHED`   | guest → host | JSON `{"reason":s}`; ends a session connection   |
-|   12 | `STDOUT_EOF` | guest → host | empty; a dial target closed its side             |
+| Type | Name         | Direction    | Payload                                               |
+| ---: | ------------ | ------------ | ----------------------------------------------------- |
+|    1 | `REQUEST`    | host → guest | JSON request; always the first frame                  |
+|    2 | `RESPONSE`   | guest → host | JSON; the result of a unary request, or an error      |
+|    3 | `STDIN`      | host → guest | raw bytes for the process stdin                       |
+|    4 | `STDIN_EOF`  | host → guest | empty; closes the process stdin                       |
+|    5 | `RESIZE`     | host → guest | JSON `{"cols":n,"rows":n}`                            |
+|    6 | `SIGNAL`     | host → guest | JSON `{"signal":n}` (Linux signal number)             |
+|    7 | `STARTED`    | guest → host | JSON `{"pid":n}`                                      |
+|    8 | `STDOUT`     | guest → host | raw bytes                                             |
+|    9 | `STDERR`     | guest → host | raw bytes                                             |
+|   10 | `EXIT`       | guest → host | JSON `{"code":n,"signal":n}`; the last frame          |
+|   11 | `DETACHED`   | guest → host | JSON `{"reason":s}`; ends a session connection        |
+|   12 | `STDOUT_EOF` | guest → host | empty; a dial target closed its side                  |
+|   13 | `CONNECTION` | guest → host | JSON `{"id":n}`; a client of an `agent.listen` socket |
 
 Unknown frame types from the host are ignored.
 
@@ -76,6 +77,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `NO_SESSION`    | `session.attach` or `session.kill` named no session.                                     |
 | `SESSION_LIMIT` | A new session would be the 17th.                                                         |
 | `DIAL_FAILED`   | `dial` could not connect (refused, timed out, no such socket).                           |
+| `NO_CONNECTION` | `agent.accept` named no waiting client: it closed, timed out, or never was.              |
 | `FROZEN`        | `freeze` found the root filesystem already frozen.                                       |
 | `POWERING_OFF`  | `freeze` arrived after a poweroff started.                                               |
 | `INTERNAL`      | A system call failed (for example `FIFREEZE`).                                           |
@@ -301,8 +303,9 @@ listen on the guest's loopback or on a unix socket, which the guest IP cannot. S
 ```
 
 The agent gives up a connect after 5 s. A connect that fails gets `DIAL_FAILED`; a `network` other
-than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The agent does not check the address: the
-host decides what a dial may reach.
+than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The host decides what a dial may reach;
+the agent only refuses, with `BAD_REQUEST`, a unix path whose symlinks lead under `/run/imp/`, where
+its own sockets are (the agent dials as root).
 
 After the RESPONSE:
 
@@ -315,3 +318,40 @@ After the RESPONSE:
   target. Either side may close at any time.
 - Flow control is the stream itself: the agent writes to the target as it reads frames, and reads
   from the target as fast as the host takes frames.
+
+## `agent.listen` and `agent.accept`
+
+ssh-agent forwarding for the SSH gateway (`ssh -A`, [SSH guide](../guides/ssh.md#agent-forwarding)).
+Since `0.4.0`.
+
+`agent.listen` is a long-lived control connection. impd opens one per SSH connection that asked for
+agent forwarding and keeps it until that connection ends. It runs no process, so it does not count
+in `activity`'s `exec_sessions`; the SSH connection keeps the imp awake on its own.
+
+```json
+→ REQUEST {"op":"agent.listen"}
+← RESPONSE {"ok":true,"path":"/run/imp/ssh-agent/5f0c9a1b2d3e4f60/agent.sock","listener":"5f0c9a1b2d3e4f60"}
+← CONNECTION {"id":1}
+← CONNECTION {"id":2}
+```
+
+- The agent makes a directory under `/run/imp/ssh-agent/` (mode 0700) and a socket in it (mode
+  0600), both owned by the image's user, the one `exec` runs as. It hands them to the user only once
+  both exist. `/run` is a fresh tmpfs every boot.
+- The agent also checks each client's uid (`SO_PEERCRED`): the image's user or root. Others are
+  closed.
+- Each client gets a CONNECTION with a new id and waits for an `agent.accept`. At most 16 wait; more
+  are closed at once. One not accepted within 10 s is closed.
+- When the host closes the connection, or the vsock resets after a snapshot restore, the agent
+  closes the socket and waiting clients and removes the directory. A failure (an unknown user, a
+  failed chown) gets `INTERNAL`.
+
+`agent.accept` relays one waiting client, with the framing of [`dial`](#dial):
+
+```json
+→ REQUEST {"op":"agent.accept","listener":"5f0c9a1b2d3e4f60","connection":1}
+← RESPONSE {"ok":true}
+```
+
+The host refuses a client by closing the connection after the RESPONSE; the client sees the close at
+once. A client that is gone gets `NO_CONNECTION`.

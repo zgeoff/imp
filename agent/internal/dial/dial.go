@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -18,6 +20,12 @@ import (
 // dialTimeout bounds the connect, so a filtered port fails instead of
 // holding the host's channel open.
 const dialTimeout = 5 * time.Second
+
+// impDir holds the agent's own sockets, such as forwarded ssh-agents. The
+// agent dials as root, so a dial there could reach another user's agent;
+// impd refuses the path, and this refuses a symlink that leads there. A
+// variable for tests.
+var impDir = "/run/imp"
 
 // chunk is the most the relay reads from the target before it writes a frame.
 const chunk = 32 << 10
@@ -40,14 +48,21 @@ func Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
 	if err := w.WriteJSON(proto.TypeResponse, proto.OK{OK: true}); err != nil {
 		return err
 	}
+	return Relay(target, r, w)
+}
 
+// Relay copies bytes between target and the host connection until both
+// sides are done: the target's output ran out and the host half-closed. The
+// caller has already sent the RESPONSE, and closes target afterwards. The
+// agent's ssh-agent forwarding relays its clients here too.
+func Relay(target net.Conn, r *proto.Reader, w *proto.Writer) error {
 	// target → host. STDOUT_EOF tells the host the target closed its side;
 	// a read error ends the relay without it, so the host sees a reset.
 	outbound := make(chan error, 1)
-	safe.Go("dial output", func() {
+	safe.Go("relay output", func() {
 		outbound <- pumpOut(target, w)
 	}, func() {
-		outbound <- errors.New("dial output panicked")
+		outbound <- errors.New("relay output panicked")
 	})
 
 	// host → target. It reads until the host closes the connection, past
@@ -55,10 +70,10 @@ func Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
 	// quiet.
 	halfClosed := make(chan struct{})
 	inbound := make(chan error, 1)
-	safe.Go("dial input", func() {
+	safe.Go("relay input", func() {
 		inbound <- pumpIn(r, target, halfClosed)
 	}, func() {
-		inbound <- errors.New("dial input panicked")
+		inbound <- errors.New("relay input panicked")
 	})
 
 	// Done once the target's output ran out and the host half-closed. A
@@ -90,11 +105,27 @@ func open(req proto.Request) (net.Conn, error) {
 	if req.Address == "" {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "address is required"}
 	}
+	if req.Network == "unix" {
+		if err := checkSocketPath(req.Address); err != nil {
+			return nil, err
+		}
+	}
 	c, err := net.DialTimeout(req.Network, req.Address, dialTimeout)
 	if err != nil {
 		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
 	}
 	return c, nil
+}
+
+func checkSocketPath(address string) error {
+	path, err := filepath.EvalSymlinks(address)
+	if err != nil {
+		return &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
+	}
+	if path == impDir || strings.HasPrefix(path, impDir+"/") {
+		return &proto.Error{Code: proto.ErrBadRequest, Message: address + " leads to the agent's own sockets"}
+	}
+	return nil
 }
 
 func pumpOut(target net.Conn, w *proto.Writer) error {

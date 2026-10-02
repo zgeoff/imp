@@ -3,9 +3,10 @@ import type { Socket } from 'node:net';
 import { Server } from 'ssh2';
 import type { AuthContext, ClientInfo, Connection } from 'ssh2';
 import type { ImpRecord } from '../db/imps';
+import { createAgentForwarding } from './agent-forwarding';
 import type { AuthorizedKeys } from './authorized-keys';
 import { formatFailure } from './channel-io';
-import { handleForward, resolveTcpTarget } from './forward-channel';
+import { handleForward, resolveSocketTarget, resolveTcpTarget } from './forward-channel';
 import { handleSession } from './session-channel';
 import type { SshBackend, SshConnectionContext } from './ssh-connection-context';
 
@@ -279,12 +280,14 @@ function handleLogin(
   };
 
   void printWakeFailure();
+  const agent = createAgentForwarding({ client, impName: imp.name, backend, log: deps.log });
 
   const context: SshConnectionContext = {
     impName: imp.name,
     backend,
     awake,
     sshEnv,
+    agent,
     log: deps.log,
   };
 
@@ -295,6 +298,8 @@ function handleLogin(
 
   client.on('close', () => {
     release();
+
+    agent.stop();
     void updateLastActive();
   });
 
@@ -307,7 +312,7 @@ function handleLogin(
   });
 
   client.on('openssh.streamlocal', (accept, reject, request) => {
-    void handleForward(accept, reject, { network: 'unix', address: request.socketPath }, context);
+    void handleForward(accept, reject, resolveSocketTarget(request.socketPath), context);
   });
 
   // remote forwards (`ssh -R`) would listen in the host container

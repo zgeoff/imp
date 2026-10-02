@@ -85,11 +85,12 @@ Host box.imp
 | signals                              | sent to the command's process group                                                                 |
 | SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                          |
 | local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only    |
-| unix socket forward (`-L` to a path) | to any socket path in the imp                                                                       |
+| unix socket forward (`-L` to a path) | to any socket path in the imp but impd's own under `/run/imp/`                                      |
 | env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
 | credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
 | remote forward (`-R`)                | refused                                                                                             |
-| agent forwarding (`-A`), X11         | refused ([#53](https://github.com/zgeoff/imp/issues/53) tracks agent forwarding)                    |
+| agent forwarding (`-A`)              | a socket in the imp for `SSH_AUTH_SOCK` ([below](#agent-forwarding))                                |
+| X11                                  | refused                                                                                             |
 
 A forward to any other host is refused as administratively prohibited. Otherwise the gateway would
 be a way into other imps, the host container or the network beyond.
@@ -97,9 +98,39 @@ be a way into other imps, the host container or the network beyond.
 `scp` uses SFTP since OpenSSH 9.0. `scp -O` (the old protocol) and `rsync` run their own programs in
 the imp, so the image needs `scp` or `rsync` for them.
 
-The SFTP server and port forwarding need the agent from protocol `0.3.0`. An imp that still runs an
-older agent answers with `AGENT_OUTDATED`; stop and start it to update it
-([operations](./operations.md#upgrade)).
+The SFTP server and port forwarding need the agent from protocol `0.3.0`, and agent forwarding from
+`0.4.0`. An imp that still runs an older agent answers with `AGENT_OUTDATED`; stop and start it to
+update it ([operations](./operations.md#upgrade)).
+
+## Agent forwarding
+
+`ssh -A box@imp` (or `ForwardAgent yes`) lets commands in the imp use the ssh-agent on your machine:
+`git push` over SSH signs with your key, and the key never reaches the imp.
+
+```sh
+ssh -A box@imp
+ssh-add -l                    # your keys, from your machine
+git push                      # signed by your agent
+```
+
+- The imp gets a socket at `/run/imp/ssh-agent/<random>/agent.sock` and `SSH_AUTH_SOCK` points at
+  it. As with sshd, forwarding belongs to the connection: once a session asks, every later session
+  of that connection gets it, and SFTP never does.
+- The socket and its directory belong to the image's user (mode 0600 and 0700), and the agent also
+  checks each client's uid: only that user and root get through. The socket goes when the connection
+  ends, and `/run` starts empty on every boot.
+- A forced sleep (`imp sleep`) ends the socket; the connection's next session gets a new one.
+- Without an agent on your machine, `ssh-add` in the imp fails at once. An imp opens at most 16
+  agent channels at a time per connection; more of its clients are closed.
+- Without agent forwarding in the imp's agent, a command still runs, without `SSH_AUTH_SOCK`, and
+  stderr says why. OpenSSH asks for forwarding without waiting for an answer, so there is no other
+  way to tell it.
+
+> **WARNING:** Forward your agent only to an imp whose other users you trust with your keys. Every
+> SSH login runs as the same image user, so any key in `authorized_keys` can use your forwarded
+> agent while you are connected, and so can root in the imp: in images that run as root, that is
+> every command. They cannot copy your key, but they can sign with it until you disconnect.
+> `ssh-add -c` makes your agent ask before each use.
 
 ## Sleep and wake
 

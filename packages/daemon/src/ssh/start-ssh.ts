@@ -14,7 +14,13 @@ interface StartSshDeps {
   readonly db: ImpDatabase;
   readonly imps: Pick<
     ImpRuntime,
-    'requireRunning' | 'tracker' | 'openExec' | 'openDial' | 'recordActivity'
+    | 'requireRunning'
+    | 'tracker'
+    | 'openExec'
+    | 'openDial'
+    | 'openAgentListener'
+    | 'openAgentAccept'
+    | 'recordActivity'
   >;
   readonly log: (message: string) => void;
 }
@@ -48,6 +54,8 @@ export async function startSsh(deps: StartSshDeps): Promise<SshGateway | null> {
           tracker: imps.tracker,
           openExec: imps.openExec,
           openDial: imps.openDial,
+          openAgentListener: imps.openAgentListener,
+          openAgentAccept: imps.openAgentAccept,
           recordActivity: imps.recordActivity,
           findImp: (name) => findImpByName(deps.db, name),
         },

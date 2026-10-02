@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CommandResult } from './instance';
 import { REPO_ROOT, instance, runChecked, runCommand, runInContainer } from './instance';
@@ -93,7 +93,7 @@ export function runSsh(
   client: SshClient,
   user: string,
   args: readonly string[],
-  options: Readonly<{ stdin?: string; host?: string }> = {},
+  options: Readonly<{ stdin?: string; host?: string; env?: Readonly<Record<string, string>> }> = {},
 ): Promise<CommandResult> {
   const host = options.host ?? SSH_HOST;
 
@@ -101,11 +101,17 @@ export function runSsh(
 }
 
 // `ssh ARGS...` in the background, until the test stops it
-export function startSsh(client: SshClient, args: readonly string[], stdin?: string) {
+export function startSsh(
+  client: SshClient,
+  args: readonly string[],
+  stdin?: string,
+  env: Readonly<Record<string, string>> = {},
+) {
   const proc = Bun.spawn(['ssh', ...client.configArgs, ...args], {
     stdin: stdin === undefined ? 'ignore' : Buffer.from(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
+    env: { ...process.env, ...env },
   });
 
   return {
@@ -116,6 +122,63 @@ export function startSsh(client: SshClient, args: readonly string[], stdin?: str
       await proc.exited;
     },
   };
+}
+
+// The user's ssh-agent on this machine, holding a key made for the run.
+export interface LocalSshAgent extends AsyncDisposable {
+  // SSH_AUTH_SOCK for `ssh -A`
+  readonly socket: string;
+  readonly publicKey: string;
+
+  // the private key file, to look for its bytes where they must not be
+  readonly keyPath: string;
+}
+
+// The shell runs the agent until its stdin closes: when the suite's process
+// ends, even without afterAll, the pipe closes and the agent goes with it.
+const AGENT_WRAPPER = 'ssh-agent -D -a "$1" & agent=$!; cat >/dev/null; kill "$agent"';
+
+// `label` names the socket, the key file and the key's comment
+export async function startLocalSshAgent(
+  client: SshClient,
+  label = 'laptop',
+): Promise<LocalSshAgent> {
+  const socket = join(client.dir, `${label}.sock`);
+  const keyPath = join(client.dir, `${label}-key`);
+
+  const publicKey = await createKey(keyPath, `imp-e2e-${label}`);
+
+  const agent = Bun.spawn(['sh', '-c', AGENT_WRAPPER, 'sh', socket], {
+    stdin: 'pipe',
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
+
+  await waitForSocket(socket);
+  await runCommand(['ssh-add', '-q', keyPath], { env: { SSH_AUTH_SOCK: socket } });
+
+  return {
+    socket,
+    publicKey,
+    keyPath,
+    [Symbol.asyncDispose]: async () => {
+      await agent.stdin.end();
+
+      await agent.exited;
+    },
+  };
+}
+
+async function waitForSocket(path: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) {
+      throw new Error(`ssh-agent did not make ${path}`);
+    }
+
+    await Bun.sleep(20);
+  }
 }
 
 // The IPv6 link-local address of the host end of the tap whose IPv4

@@ -1,3 +1,5 @@
+import { openAgentAccept, openAgentListener } from '../agent-client/agent-forward-stream';
+import type { AgentListener } from '../agent-client/agent-forward-stream';
 import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity } from '../agent-client/agent-requests';
@@ -38,6 +40,15 @@ export interface ImpRuntime {
 
   // as openExec, for a connection to an address inside the guest
   readonly openDial: (name: string, target: DialTarget) => Promise<DialStream>;
+
+  // as openExec, for ssh-agent forwarding: a socket in the guest, and the
+  // relay for each of its clients
+  readonly openAgentListener: (name: string) => Promise<AgentListener>;
+  readonly openAgentAccept: (
+    name: string,
+    listener: string,
+    connection: number,
+  ) => Promise<DialStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
   // for the idle loop: the agent's activity, its sessions recorded on the
@@ -218,6 +229,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
         return openDialStream(paths.vsockSocket, target);
       }),
+    openAgentListener: (name) =>
+      openStream(name, (paths) => {
+        requireFeature(paths, 'agent-forwarding');
+
+        return openAgentListener(paths.vsockSocket);
+      }),
+    openAgentAccept: (name, listener, connection) =>
+      openStream(name, (paths) => openAgentAccept(paths.vsockSocket, listener, connection)),
 
     readActivity: async (imp) => {
       try {

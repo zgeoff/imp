@@ -1,6 +1,8 @@
 import type { Readable, Writable } from 'node:stream';
 import { ORPCError } from '@orpc/server';
+import type { ServerChannel } from 'ssh2';
 import { AgentError } from '../agent-client/agent-connection';
+import type { DialStream } from '../agent-client/dial-stream';
 import { readErrorMessage } from '../read-error-message';
 
 // Where a channel's input goes: an exec's stdin or a dialed connection.
@@ -51,6 +53,28 @@ export async function writeToChannel(channel: Writable, data: Uint8Array): Promi
     channel.on('drain', stopWaiting);
     channel.on('close', stopWaiting);
   });
+}
+
+// Relays a channel and a dial-framed stream both ways until the agent
+// closes it. The guest's EOF becomes the channel's EOF, and the client may
+// still send. Port forwards and agent channels both run here.
+export async function runChannelRelay(channel: ServerChannel, stream: DialStream): Promise<void> {
+  startChannelInput(channel, stream);
+
+  channel.once('close', stream.close);
+
+  try {
+    for await (const event of stream.events()) {
+      if (event.type === 'data') {
+        await writeToChannel(channel, event.data);
+      } else {
+        channel.eof();
+      }
+    }
+  } finally {
+    stream.close();
+    channel.destroy();
+  }
 }
 
 // what the client sees when an imp cannot wake or a program cannot start;

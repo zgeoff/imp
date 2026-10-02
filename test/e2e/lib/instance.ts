@@ -96,6 +96,21 @@ export function runInContainer(argv: readonly string[]): Promise<CommandResult> 
   return runCommand(['docker', 'exec', instance.container, ...argv]);
 }
 
+// This machine as the container sees it. Guests reach it through FORWARD
+// and MASQUERADE: #26's egress policies must keep that route open, or the
+// ssh-agent suite cannot reach its git server.
+export async function readContainerGateway(): Promise<string> {
+  const route = await runInContainer(['ip', '-4', 'route', 'show', 'default']);
+
+  const gateway = /via (?<ip>[\d.]+)/.exec(route.stdout)?.groups?.['ip'];
+
+  if (gateway === undefined) {
+    throw new Error(`no default route in ${instance.container}: ${route.stdout}`);
+  }
+
+  return gateway;
+}
+
 export async function readImpdLogTail(lines: number): Promise<string> {
   const result = await runCommand(['docker', 'logs', '--tail', String(lines), instance.container]);
 

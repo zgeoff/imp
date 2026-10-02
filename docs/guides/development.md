@@ -25,27 +25,28 @@ harness against a real instance when a change touches the lifecycle, the agent o
 `test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
 way a user would; the dashboard suite drives it through a browser. The suites run in this order:
 
-| Suite         | What it proves                                                                              |
-| ------------- | ------------------------------------------------------------------------------------------- |
-| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm            |
-| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot           |
-| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                             |
-| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                          |
-| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay               |
-| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused        |
-| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                       |
-| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                               |
-| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill              |
-| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory          |
-| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                          |
-| `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall |
-| `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake           |
-| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy              |
-| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake             |
+| Suite         | What it proves                                                                                                  |
+| ------------- | --------------------------------------------------------------------------------------------------------------- |
+| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                |
+| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                               |
+| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                 |
+| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                                              |
+| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                   |
+| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                            |
+| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                           |
+| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                                                   |
+| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                  |
+| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                              |
+| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                              |
+| `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                     |
+| `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                               |
+| `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp |
+| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                  |
+| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                 |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp, ssh, dashboard
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp, ssh, ssh-agent, dashboard
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```

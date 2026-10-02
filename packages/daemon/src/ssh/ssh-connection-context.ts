@@ -1,10 +1,17 @@
 import type { ImpRecord } from '../db/imps';
 import type { ImpRuntime } from '../imps/imp-runtime';
+import type { AgentForwarding } from './agent-forwarding';
 
 // What the gateway needs from impd.
 export interface SshBackend extends Pick<
   ImpRuntime,
-  'requireRunning' | 'tracker' | 'openExec' | 'openDial' | 'recordActivity'
+  | 'requireRunning'
+  | 'tracker'
+  | 'openExec'
+  | 'openDial'
+  | 'openAgentListener'
+  | 'openAgentAccept'
+  | 'recordActivity'
 > {
   readonly findImp: (name: string) => Promise<ImpRecord | undefined>;
 }
@@ -21,5 +28,8 @@ export interface SshConnectionContext {
 
   // SSH_CONNECTION and SSH_CLIENT, as sshd sets them
   readonly sshEnv: readonly string[];
+
+  // the connection's forwarded ssh-agent, for sessions that asked for it
+  readonly agent: AgentForwarding;
   readonly log: (message: string) => void;
 }

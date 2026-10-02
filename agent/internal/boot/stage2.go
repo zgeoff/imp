@@ -26,6 +26,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
+	"github.com/zgeoff/imp/agent/internal/sshagent"
 )
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
@@ -75,6 +76,7 @@ func Stage2() error {
 		Exec:     exec.NewManager(launcher),
 		Sessions: session.NewManager(launcher),
 		Services: sup,
+		Agents:   sshagent.NewManager(sshagent.Root, image.User),
 	}
 	// A shutdown request and a signal can race; only the first powers off.
 	// A panic on the way must still end the guest, so it falls back to a

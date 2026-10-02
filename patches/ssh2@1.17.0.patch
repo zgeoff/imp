@@ -1,5 +1,8 @@
+diff --git a/node_modules/ssh2/.bun-tag-9331a302ccd2b51a b/.bun-tag-9331a302ccd2b51a
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/lib/server.js b/lib/server.js
-index 306d6584c2514fd5238136049f02725fce09f91e..3ffb93e9513e6b94e765eba5368bbfb9685793aa 100644
+index 306d6584c2514fd5238136049f02725fce09f91e..52b072e5dd420f205208ba6a999ba450a9c27632 100644
 --- a/lib/server.js
 +++ b/lib/server.js
 @@ -551,11 +551,16 @@ class Client extends EventEmitter {
@@ -20,3 +23,27 @@ index 306d6584c2514fd5238136049f02725fce09f91e..3ffb93e9513e6b94e765eba5368bbfb9
              if (reason === undefined) {
                if (localChan === -1)
                  reason = CHANNEL_OPEN_FAILURE.RESOURCE_SHORTAGE;
+@@ -1304,6 +1309,13 @@ class Client extends EventEmitter {
+     return this;
+   }
+ 
++  // patched: open an agent channel to the client, for ssh-agent forwarding
++  // after an `auth-agent-req@openssh.com`
++  openssh_authAgent(cb) {
++    openChannel(this, 'auth-agent@openssh.com', cb);
++    return this;
++  }
++
+   rekey(cb) {
+     let error;
+ 
+@@ -1367,6 +1379,9 @@ function openChannel(self, type, opts, cb) {
+         localChan, initWindow, maxPacket, opts
+       );
+       break;
++    case 'auth-agent@openssh.com':
++      self._protocol.openssh_authAgent(localChan, initWindow, maxPacket);
++      break;
+     default:
+       throw new Error(`Unsupported channel type: ${type}`);
+   }

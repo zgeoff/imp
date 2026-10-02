@@ -78,6 +78,7 @@
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",
     "@types/bun": "catalog:",
+    "@types/ssh2": "catalog:",
     "@zgeoff/bun-test-extended": "catalog:",
     "@zgeoff/format-codemod": "catalog:",
     "@zgeoff/oxlint-config": "catalog:",
@@ -86,6 +87,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "ssh2": "catalog:",
     "tslib": "catalog:",
     "typescript": "catalog:",
     "zod": "catalog:"

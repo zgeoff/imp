@@ -1,6 +1,7 @@
 import { openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
 import { handleUnknownOp } from './agent-outdated';
+import type { AgentFeature } from './agent-outdated';
 import { readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES } from './frame-codec';
 
@@ -37,27 +38,38 @@ const DIAL_ANSWER_TIMEOUT_MS = 10_000;
 // Connects to an address in the guest through the agent (protocol `dial`).
 // Throws AgentError DIAL_FAILED when the agent cannot connect, and
 // AGENT_OUTDATED for an agent from before dial.
-export async function openDialStream(
+export function openDialStream(
   vsockPath: string,
   target: Readonly<DialTarget>,
   answerTimeoutMs = DIAL_ANSWER_TIMEOUT_MS,
 ): Promise<DialStream> {
+  return openRelayStream(vsockPath, { op: 'dial', ...target }, 'ssh', answerTimeoutMs);
+}
+
+// One request whose RESPONSE starts a relay with dial's framing; dial and
+// agent.accept both use it.
+export async function openRelayStream(
+  vsockPath: string,
+  request: Readonly<Record<string, unknown>>,
+  feature: AgentFeature,
+  answerTimeoutMs: number,
+): Promise<DialStream> {
   const connection = await openAgentConnection(vsockPath);
 
   try {
-    connection.sendJson(FRAME_TYPES.request, { op: 'dial', ...target });
+    connection.sendJson(FRAME_TYPES.request, request);
 
     const answer = await readFrameWithin(connection, answerTimeoutMs);
 
     if (answer?.type !== FRAME_TYPES.response) {
-      throw new Error('agent closed the dial connection before it answered');
+      throw new Error(`agent closed the ${String(request['op'])} connection before it answered`);
     }
 
     requireNoAgentError(answer);
   } catch (error) {
     connection.close();
 
-    return handleUnknownOp('ssh')(error);
+    return handleUnknownOp(feature)(error);
   }
 
   return {
