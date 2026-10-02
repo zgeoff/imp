@@ -236,7 +236,9 @@ test('enforce sleeps every idle imp, oldest first, when together they cannot rea
   expect([...host.awake.keys()]).toEqual(['big']);
   expect(host.logs).toEqual(['impd: governor: slept 3, RAM still over budget by 1000 MiB']);
 
-  // nothing is left to sleep: the next pass asks no imp and stays quiet
+  // nothing is left to sleep: the passes after it ask no imp and stay quiet
+  await host.governor.enforce();
+  await host.governor.enforce();
   await host.governor.enforce();
 
   expect(host.tried).toEqual(['old', 'mid', 'new']);

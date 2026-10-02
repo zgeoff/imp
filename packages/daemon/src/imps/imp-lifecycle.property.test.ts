@@ -320,9 +320,8 @@ test(
 
             expect(busy).toEqual([]);
 
-            // the governor brings measured usage under the budget, or sleeps
-            // every imp it may; with the queues cleared each sleep succeeds,
-            // so no imp it tried is left running
+            // this never reaches the shortfall, which the governor property
+            // "enforce on a crowded host" covers
             await ctx.governor.enforce();
 
             const usage = await ctx.governor.readUsage();
@@ -336,6 +335,7 @@ test(
 
             const overMib = usage.usedMib - ctx.config.ramBudgetMib;
 
+            // under the budget, or no imp the governor may sleep is running
             expect(overMib <= 0 || runningUnheld.length === 0).toBeTrue();
           },
         ),
