@@ -7,7 +7,20 @@ import { renderApp } from '../test-utils/render-app';
 function setupTest() {
   const fake = createFakeImpd();
 
-  fake.state.imps.push(buildImp({ name: 'web', ramMib: 300, rssMib: 340 }));
+  fake.state.imps.push(
+    buildImp({
+      name: 'web',
+      ramMib: 300,
+      rssMib: 340,
+      diskUsage: {
+        exclusiveBytes: 1024 * 1024 * 1024,
+        sharedBytes: 512 * 1024 * 1024,
+        measuredAt: new Date(),
+        isPartial: false,
+        isUpperBound: false,
+      },
+    }),
+  );
 
   fake.state.checkpoints.set('web', [
     { id: 'cp1', label: 'before-upgrade', createdAt: new Date(), sizeBytes: 2048, diskMib: 32_768 },
@@ -16,7 +29,7 @@ function setupTest() {
   return { fake, user: userEvent.setup() };
 }
 
-test('it shows the imp with its RAM and checkpoints', async () => {
+test('it shows the imp with its RAM, disk use and checkpoints', async () => {
   const ctx = setupTest();
 
   renderApp(ctx.fake, '/imps/web');
@@ -24,6 +37,7 @@ test('it shows the imp with its RAM and checkpoints', async () => {
   await screen.findByRole('heading', { name: 'web' });
 
   expect(screen.getByText('300 MiB owned, 340 MiB resident')).toBeInTheDocument();
+  expect(screen.getByText('1.0 GiB / 32.0 GiB, 512 MiB shared')).toBeInTheDocument();
 
   await screen.findByRole('row', { name: /before-upgrade/ });
 });

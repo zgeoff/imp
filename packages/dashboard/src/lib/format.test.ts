@@ -1,6 +1,13 @@
 import { expect, test } from 'bun:test';
 import { buildImp } from '../test-utils/fake-impd';
-import { formatBytes, formatCpuUse, formatDuration, formatMib, formatRelativeTime } from './format';
+import {
+  formatBytes,
+  formatCpuUse,
+  formatDiskUse,
+  formatDuration,
+  formatMib,
+  formatRelativeTime,
+} from './format';
 
 test('it formats sizes in binary units', () => {
   expect(formatBytes(512)).toBe('512 B');
@@ -43,4 +50,30 @@ test('it formats durations', () => {
   expect(formatDuration(45_000)).toBe('45s');
   expect(formatDuration(12 * 60_000)).toBe('12m');
   expect(formatDuration(200 * 60_000)).toBe('3h 20m');
+});
+
+test('it formats disk use over the disk size, with its markers', () => {
+  const usage = {
+    exclusiveBytes: 1536 * 1024 * 1024,
+    sharedBytes: 0,
+    measuredAt: new Date(),
+    isPartial: false,
+    isUpperBound: false,
+  };
+
+  expect(formatDiskUse(buildImp({ name: 'a', diskMib: 32_768 }))).toBe('— / 32.0 GiB');
+
+  expect(formatDiskUse(buildImp({ name: 'a', diskMib: 32_768, diskUsage: usage }))).toBe(
+    '1.5 GiB / 32.0 GiB',
+  );
+
+  expect(
+    formatDiskUse(
+      buildImp({
+        name: 'a',
+        diskMib: 32_768,
+        diskUsage: { ...usage, isPartial: true, isUpperBound: true },
+      }),
+    ),
+  ).toBe('≤1.5 GiB? / 32.0 GiB');
 });

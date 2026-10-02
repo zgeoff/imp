@@ -43,11 +43,18 @@ test('the CPU column shows the last sample over the limit', () => {
   );
 });
 
-test('imp top lists the busiest imp first, with traffic, wakes and awake time', () => {
+test('imp top lists the busiest imp first, with disk use, traffic, wakes and awake time', () => {
   const busy: Imp = {
     ...IMP,
     name: 'busy',
     cpu: { limit: 0.5, weight: 200 },
+    diskUsage: {
+      exclusiveBytes: 1203 * 1_048_576,
+      sharedBytes: 0,
+      measuredAt: new Date(0),
+      isPartial: false,
+      isUpperBound: true,
+    },
     resources: {
       wakeCount: 0,
       awakeMs: 7_200_000,
@@ -67,9 +74,33 @@ test('imp top lists the busiest imp first, with traffic, wakes and awake time', 
     .map((row) => row.split(/\s{2,}/));
 
   expect(rows).toEqual([
-    ['NAME', 'STATE', 'CPU', 'WEIGHT', 'THROTTLED', 'RAM', 'NET IN', 'NET OUT', 'WAKES', 'AWAKE'],
-    ['busy', 'running', '50% / 0.5', '200', '4s', '300 MiB', '2.0 KiB', '10 B', '0', '2h'],
-    ['idle', 'running', '2%', '100', '0s', '300 MiB', '2.0 KiB', '10 B', '3', '90s'],
+    [
+      'NAME',
+      'STATE',
+      'CPU',
+      'WEIGHT',
+      'THROTTLED',
+      'RAM',
+      'DISK',
+      'NET IN',
+      'NET OUT',
+      'WAKES',
+      'AWAKE',
+    ],
+    [
+      'busy',
+      'running',
+      '50% / 0.5',
+      '200',
+      '4s',
+      '300 MiB',
+      '<=1203 MiB / 8 GiB',
+      '2.0 KiB',
+      '10 B',
+      '0',
+      '2h',
+    ],
+    ['idle', 'running', '2%', '100', '0s', '300 MiB', '- / 8 GiB', '2.0 KiB', '10 B', '3', '90s'],
   ]);
 });
 

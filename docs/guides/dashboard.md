@@ -5,11 +5,12 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
 
 ## What it shows
 
-- **Imps**: every imp with its state, RAM, CPU, last activity and URL, and notes: why it failed, why
-  its next wake boots cold, which parts it runs outdated, and a hold that keeps it awake. Each row
-  has the buttons that fit its state (sleep, wake, start, stop, restart), the console and destroy.
-- **One imp**: its details, both URLs, CPU use with a form for the limit and the weight, the
-  checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
+- **Imps**: every imp with its state, RAM, CPU, disk use, last activity and URL, and notes: why it
+  failed, why its next wake boots cold, which parts it runs outdated, and a hold that keeps it
+  awake. Each row has the buttons that fit its state (sleep, wake, start, stop, restart), the
+  console and destroy.
+- **One imp**: its details with disk use, both URLs, CPU use with a form for the limit and the
+  weight, the checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
 - **Console**: a login shell in the browser (xterm.js), as `imp console` opens. It wakes a sleeping
   imp. Closing the tab ends the shell.
 - **Images**: add one from an image ref, or delete one.

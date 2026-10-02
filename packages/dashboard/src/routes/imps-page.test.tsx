@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { buildImp, createFakeImpd } from '../test-utils/fake-impd';
 import { renderApp } from '../test-utils/render-app';
 
-test('it lists every imp with its state, RAM and notes', async () => {
+test('it lists every imp with its state, RAM, disk and notes', async () => {
   const fake = createFakeImpd();
 
   fake.state.imps.push(
@@ -25,6 +25,7 @@ test('it lists every imp with its state, RAM and notes', async () => {
 
   expect(within(web).getByText('running')).toBeInTheDocument();
   expect(within(web).getByText(/300 MiB/)).toBeInTheDocument();
+  expect(within(web).getByText('— / 32.0 GiB')).toBeInTheDocument();
   expect(within(web).getByRole('button', { name: 'Sleep' })).toBeInTheDocument();
 
   const old = screen.getByRole('row', { name: /old/ });
