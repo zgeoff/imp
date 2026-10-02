@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.19.0](https://github.com/zgeoff/imp/compare/v0.18.0...v0.19.0) (2026-10-02)
+
+
+### Features
+
+* **daemon:** boot cold when the cpu changed since the sleep ([3a41dde](https://github.com/zgeoff/imp/commit/3a41ddec4956ecdda1f9bf030ba99c6c3839a49c))
+* **daemon:** give each new tap a mac derived from its slot ([4164e20](https://github.com/zgeoff/imp/commit/4164e2007aaa2ef81865820d9387581b7941837e))
+* **daemon:** let a move ticket keep a slot for the imp it brings ([24b6642](https://github.com/zgeoff/imp/commit/24b664206de141fb01efa831e95463c7630e076f))
+* **daemon:** move a sleeping imp with its memory ([9f2646e](https://github.com/zgeoff/imp/commit/9f2646efd8f9352ad81f41bc2f2fbf0fde0bb78d))
+* **e2e:** drive a second dev instance beside the run's own ([e504444](https://github.com/zgeoff/imp/commit/e50444433a77a6b7e97de94cc70786310cd65079))
+
+
+### Bug Fixes
+
+* **daemon:** carry an imp's cold boots in a move ([a643b8f](https://github.com/zgeoff/imp/commit/a643b8f2f992f8f412527568c89a93fa0020d5a0))
+* **daemon:** check the cold boots a move carries ([241ea32](https://github.com/zgeoff/imp/commit/241ea32c75f664d7bf7d811fd3899b6c0ce2155d))
+* **daemon:** close the warm move review's gaps ([a7a140c](https://github.com/zgeoff/imp/commit/a7a140ca7ea731d03832f7498aa55d3d32d27c54))
+* **daemon:** fit boot templates to the cpu facts and slot macs ([60c17ff](https://github.com/zgeoff/imp/commit/60c17ff64e44050f835fa4949ff9155016d06025))
+* **daemon:** free a refused stream's slot, keep moving imps off nets ([7b5d364](https://github.com/zgeoff/imp/commit/7b5d3644a2c85d8d5a838ace7e9bdcf5393fe29c))
+* **daemon:** join a network under the imp's lock, after [#27](https://github.com/zgeoff/imp/issues/27)'s migration ([b5d4e37](https://github.com/zgeoff/imp/commit/b5d4e372e60ac0255ae3272fdfc9aab8560a1bef))
+* **daemon:** keep move test settings from opening moves off the tailnet ([2c42220](https://github.com/zgeoff/imp/commit/2c42220038c02879aa9c6762838de11fbb4ca09b))
+* **daemon:** key boot templates to the cpu they were made on ([97c40ee](https://github.com/zgeoff/imp/commit/97c40eee6a16cd1db220c5633530462396c29a27))
+* **daemon:** refuse a warm move for an imp on a private network ([59fb2f5](https://github.com/zgeoff/imp/commit/59fb2f509014d573c69a9f379378f9cbc6333a6f))
+* **daemon:** refuse a warm move from an imp whose tap is gone ([5b1c41e](https://github.com/zgeoff/imp/commit/5b1c41e5dbb542f742d91a901a1a5e224ec1f4ee))
+
 ## [0.18.0](https://github.com/zgeoff/imp/compare/v0.17.0...v0.18.0) (2026-10-02)
 
 ### Features
