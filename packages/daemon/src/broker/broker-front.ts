@@ -30,6 +30,9 @@ export interface BrokerFrontDeps {
   readonly resolveTunnelTarget: (host: string) => Promise<string>;
   readonly log: (message: string) => void;
 
+  // opens a plain tunnel's upstream socket; tests point it at a local server
+  readonly dialTunnel?: (address: string, port: number) => Socket;
+
   // smaller limits for tests
   readonly maxConnectionsPerImp?: number;
   readonly headTimeoutMs?: number;
@@ -211,7 +214,9 @@ async function runConnection(
     return;
   }
 
-  startRelay(socket, createConnection({ host: address, port: head.port }), read.rest);
+  const dialTunnel = deps.dialTunnel ?? ((host, port) => createConnection({ host, port }));
+
+  startRelay(socket, dialTunnel(address, head.port), read.rest);
 }
 
 // The CONNECT head and any bytes after it, or null when the client sends

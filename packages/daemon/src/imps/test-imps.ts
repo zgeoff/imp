@@ -1,4 +1,5 @@
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
@@ -6,6 +7,7 @@ import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
+import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
@@ -65,8 +67,10 @@ interface ImpTestOptions {
   // vsock path and succeeds
   readonly installBundle?: InstallBundle;
 
-  // where the broker's plain tunnels dial, in place of DNS and its checks
+  // where the broker's plain tunnels dial, in place of DNS and its checks;
+  // by default a tunnel is refused, so no test reaches the network
   readonly resolveTunnelTarget?: (host: string) => Promise<string>;
+  readonly dialTunnel?: (address: string, port: number) => Socket;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -116,9 +120,10 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
         return Promise.resolve();
       }),
-    ...(options.resolveTunnelTarget !== undefined && {
-      resolveTunnelTarget: options.resolveTunnelTarget,
-    }),
+    resolveTunnelTarget:
+      options.resolveTunnelTarget ??
+      ((host) => Promise.reject(new TunnelRefusedError(`${host}: no network in tests`))),
+    ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
   });
 
   // a system drive file, as setupSystemFiles installs it
