@@ -228,3 +228,12 @@ test('missing keys are appended once, and rendering twice changes nothing', () =
 
   expect(renderEnv({ existing: once, image: 'imp-host:1', imageSet: true })).toBe(once);
 });
+
+test('blanking the key leaves every other line alone', () => {
+  const env =
+    'IMP_HOST_IMAGE=imp-host:1\nTAILSCALE_AUTHKEY=fake-key-for-tests\nIMP_TAILSCALE_HOSTNAME=imp\n';
+
+  expect(runFunction('blank_env_key', [], { stdin: env })).toBe(
+    'IMP_HOST_IMAGE=imp-host:1\nTAILSCALE_AUTHKEY=\nIMP_TAILSCALE_HOSTNAME=imp\n',
+  );
+});

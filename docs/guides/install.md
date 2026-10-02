@@ -109,8 +109,9 @@ bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /roo
 Run it in a root login, or with `sudo --preserve-env=SSH_CONNECTION`: plain `sudo` drops
 `SSH_CONNECTION`, which the firewall phase reads to keep your session's port open, so the script
 refuses it. `sudo -E` is not enough on Ubuntu 26.04, whose `sudo-rs` ignores `-E`. `--dry-run`
-prints every change and makes none. `--check` does the same and exits 1 when a change is pending. A
-run changes only what differs from what it wants, so a second run changes nothing.
+prints every change and makes none. `--check` does the same and exits 2 when a change is pending, 1
+on an error or a refusal, and 0 when nothing is pending. A run changes only what differs from what
+it wants, so a second run changes nothing.
 
 **CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
 partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS (or,
@@ -130,13 +131,17 @@ The phases run in order:
   applies both. Swap stays as the installer made it. With ZFS, also `zfs`, and the ARC cap in
   `/etc/modprobe.d/imp-zfs.conf`.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
-  `imp-firewall.service`. It refuses while `nftables.service` is enabled.
+  `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
+  enabled.
 - **imp:** Writes `/etc/imp/imp-host.env` (0600) and `/etc/systemd/system/imp-host.service`, pulls
   the image (or loads `--image-archive`), and starts the unit. The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
   orders it after `zfs.target`.
-- **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, then
-  creates, runs `uname -a` in, and destroys an imp from `ubuntu`. `--skip-health` skips it.
+- **tailscale:** With a key in the env file, waits for the node to be `Running`, then blanks the key
+  ([the Tailscale key](#the-tailscale-key)).
+- **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, and
+  that a joined tailnet node is `Running`. Then it creates, runs `uname -a` in, and destroys an imp
+  from `ubuntu`. `--skip-health` skips it.
 
 ### Disk layout
 
@@ -207,10 +212,13 @@ value is yours and stays.
 The key goes to `/etc/imp/imp-host.env` only, and is never printed. The host container is the
 tailnet node; the host OS stays off the tailnet, and you reach it over public SSH.
 
-Use a tagged, non-ephemeral, single-use key ([Tailscale guide](./tailscale.md)). After the first
-start the node keeps its state in `/var/lib/imp/tailscale`, so the spent key cannot join anything
-again. Leave it in the env file: `tailscale-up.sh` does nothing without a key, so a blank key keeps
-the node offline after the next restart.
+Use a tagged, non-ephemeral, single-use key ([Tailscale guide](./tailscale.md)). Once the node is
+`Running`, the script blanks the key in the env file: the node state in `/var/lib/imp/tailscale`
+keeps it joined, and `tailscale-up.sh` starts `tailscaled` from that state when there is no key. A
+later run with `--tailscale-authkey-file` sees the saved state and does not write the key again. An
+older image that still needs the key at every start keeps it, and the script warns. To join again
+(after the node was removed from the tailnet, say), delete `/var/lib/imp/tailscale` and run the
+script with a new key.
 
 ### Firewall
 

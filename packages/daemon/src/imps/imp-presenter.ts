@@ -95,7 +95,7 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       const local = buildLocalUrl(imp.name);
       const https = buildHttpsUrl(imp.name, context.config.https);
 
-      if (context.config.tailscaleAuthKey === null) {
+      if (!context.config.tailscaleEnabled) {
         return { local, https, tailnet: null };
       }
 

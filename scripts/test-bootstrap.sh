@@ -120,11 +120,20 @@ trap cleanup EXIT
 
 if [ -n "$stub" ]; then
   # Stands in for the release image: the unit runs it with the same flags,
-  # so every phase but the health check runs as on a server.
+  # so every phase but the health check runs as on a server. Its tailscale
+  # reports Running and it saves node state, so the bootstrap's tailscale
+  # phase (wait, then blank the key) runs too.
   image=imp-host-stub:test
   docker build -q -t "$image" - >/dev/null <<'EOF'
 FROM debian:trixie-slim
-CMD ["sleep", "infinity"]
+COPY --chmod=755 <<'SH' /usr/local/bin/tailscale
+#!/bin/sh
+echo '{"BackendState":"Running"}'
+SH
+COPY <<'SH' /usr/local/lib/imp/tailscale-up.sh
+# stand-in: starts tailscaled from the saved node state
+SH
+CMD ["sh", "-c", "mkdir -p /var/lib/imp/tailscale && echo stub >/var/lib/imp/tailscale/tailscaled.state && exec sleep infinity"]
 EOF
 fi
 # Not a real key: a marker the test looks for in the output.
@@ -188,6 +197,15 @@ bootstrap() {
   return "$rc"
 }
 
+# expect_exit WANT MODE: run bootstrap.sh in MODE and fail unless it exits
+# WANT (--check: 0 nothing pending, 2 changes pending, 1 an error).
+expect_exit() {
+  local want=$1 rc=0
+  shift
+  bootstrap "$@" || rc=$?
+  [ "$rc" = "$want" ] || fail "bootstrap.sh $* exited $rc, not $want"
+}
+
 # wait_for_imp_host: the unit's container runs, for 30 s at most.
 wait_for_imp_host() {
   local i
@@ -247,15 +265,16 @@ run_distro() {
   fi
 
   log "[$distro] --check on the fresh host"
-  if bootstrap --check; then fail "[$distro] --check found nothing to do on a fresh host"; fi
+  expect_exit 2 --check
   in_container test ! -e /etc/imp || fail "[$distro] --check changed the host"
 
   log "[$distro] first run"
   bootstrap --yes || fail "[$distro] the first run failed"
   if [ -n "$stub" ]; then
     ! grep -qF "$fake_key" <<<"$LAST_OUTPUT" || fail "[$distro] bootstrap.sh printed the Tailscale key"
-    in_container grep -qxF "TAILSCALE_AUTHKEY=$fake_key" /etc/imp/imp-host.env \
-      || fail "[$distro] the Tailscale key is not in imp-host.env"
+    grep -q 'change: blank TAILSCALE_AUTHKEY' <<<"$LAST_OUTPUT" || fail "[$distro] the key was not blanked"
+    in_container grep -qx "TAILSCALE_AUTHKEY=" /etc/imp/imp-host.env \
+      || fail "[$distro] imp-host.env still holds a Tailscale key"
   fi
   wait_for_imp_host || fail "[$distro] the imp-host container is not running"
   in_container systemctl -q is-active imp-firewall || fail "[$distro] imp-firewall is not active"
@@ -267,7 +286,7 @@ run_distro() {
   check_firewall_drops
 
   log "[$distro] --check after the first run"
-  bootstrap --check || fail "[$distro] --check found pending changes after a full run"
+  expect_exit 0 --check
   log "[$distro] second run"
   bootstrap --yes || fail "[$distro] the second run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the second run changed something"
@@ -288,23 +307,23 @@ run_device() {
 
   log "[$distro] --data-device refuses a device with ext4"
   storage_args=(--data-device "$ext4")
-  if bootstrap --check; then fail "[$distro] --check took a device with ext4"; fi
+  expect_exit 1 --check
   grep -q "holds ext4" <<<"$LAST_OUTPUT" || fail "[$distro] no 'holds ext4' refusal"
 
   log "[$distro] --data-device refuses a mounted device"
   in_container bash -c "mkdir -p /mnt/ext4 && mount $ext4 /mnt/ext4"
-  if bootstrap --check; then fail "[$distro] --check took a mounted device"; fi
+  expect_exit 1 --check
   grep -q "is mounted" <<<"$LAST_OUTPUT" || fail "[$distro] no 'is mounted' refusal"
 
   log "[$distro] --check sizes a loop file from the free space"
   storage_args=(--loop-file /var/auto.xfs)
-  if bootstrap --check; then fail "[$distro] --check with a loop file found nothing to do"; fi
+  expect_exit 2 --check
   grep -qE "GiB free on /; the loop file gets [0-9]+ GiB" <<<"$LAST_OUTPUT" \
     || fail "[$distro] --check did not size the loop file"
 
   log "[$distro] --storage zfs --check on an empty device"
   storage_args=(--storage zfs --data-device "$empty")
-  if bootstrap --check; then fail "[$distro] --check with zfs found nothing to do"; fi
+  expect_exit 2 --check
   local want
   for want in "would: apt-get install linux-headers-" "would: zpool create tank on $empty" \
     "would: zfs create tank/imp (mountpoint=legacy)" "would: write /etc/modprobe.d/imp-zfs.conf"; do
@@ -316,7 +335,7 @@ run_device() {
   bootstrap --yes || fail "[$distro] the --data-device run failed"
   in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nofail 0 2$' /etc/fstab \
     || fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
-  bootstrap --check || fail "[$distro] --check found pending changes after the --data-device run"
+  expect_exit 0 --check
 
   health=$saved_health
   teardown
@@ -340,7 +359,7 @@ run_zfs() {
   wait_for_imp_host || fail "[$distro] the imp-host container is not running on zfs"
 
   log "[$distro] zfs: --check and a second run"
-  bootstrap --check || fail "[$distro] --check found pending changes after the zfs run"
+  expect_exit 0 --check
   bootstrap --yes || fail "[$distro] the second zfs run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the second zfs run changed something"
 

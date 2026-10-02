@@ -184,7 +184,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     systemDrive: deps.systemFiles.systemDrive,
     storage: { backend: deps.storage.kind, ...storage },
     tailscale: {
-      enabled: deps.config.tailscaleAuthKey !== null,
+      enabled: deps.config.tailscaleEnabled,
       ...tailscale,
     },
   };

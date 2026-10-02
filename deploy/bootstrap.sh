@@ -4,7 +4,7 @@
 #
 #   bootstrap.sh --yes --data-device /dev/nvme1n1
 #   bootstrap.sh --yes --loop-file /srv/imp.xfs                # sized from the free space
-#   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 1 if a run would change anything
+#   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 2 if a run would change anything
 #   bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1
 #
 # Phases, in order: preflight, packages, storage, kernel, firewall, imp,
@@ -28,7 +28,10 @@ Usage: bootstrap.sh [--yes | --dry-run | --check] STORAGE [options]
 Modes (one):
   --yes                       make the changes
   --dry-run                   print the changes, make none
-  --check                     like --dry-run; exit 1 if any change is pending
+  --check                     like --dry-run; exit 2 if any change is pending
+
+Exit status: 0 done (or nothing pending), 1 an error or a refusal, 2 --check
+found changes pending.
 
 Storage:
   --storage xfs|zfs           the backend (default: the env file's, else xfs)
@@ -59,6 +62,8 @@ readonly ENV_FILE=$IMP_DIR/imp-host.env
 readonly FIREWALL_FILE=$IMP_DIR/firewall.nft
 readonly DATA_DIR=/var/lib/imp
 readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# Docker's apt signing key (https://docs.docker.com/engine/install/ubuntu/).
+readonly DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 # The template's IMP_RAM_BUDGET_MIB; a file still holding it gets the
 # computed budget, any other value is the operator's and stays.
 readonly TEMPLATE_BUDGET_MIB=16384
@@ -104,7 +109,9 @@ change() {
     return 0
   fi
   log "change: $what"
-  "$@"
+  # Explicit: a caller on the left of && (put_file ... && changed=1) runs
+  # with set -e off, and a failure must not pass for "nothing changed".
+  "$@" || die "failed: $what"
 }
 
 # put_file PATH MODE CONTENT: write PATH when its content or mode differs.
@@ -121,11 +128,12 @@ put_file() {
 
 write_file() {
   local path=$1 perm=$2 content=$3 tmp
-  mkdir -p "$(dirname "$path")"
-  tmp=$(mktemp "$path.XXXXXX")
-  chmod "$perm" "$tmp"
-  printf '%s\n' "$content" >"$tmp"
-  mv "$tmp" "$path"
+  mkdir -p "$(dirname "$path")" || return 1
+  tmp=$(mktemp "$path.XXXXXX") || return 1
+  if ! { chmod "$perm" "$tmp" && printf '%s\n' "$content" >"$tmp" && mv "$tmp" "$path"; }; then
+    rm -f "$tmp"
+    return 1
+  fi
 }
 
 # --- pure helpers (deploy/bootstrap.test.ts covers them) ---
@@ -182,10 +190,14 @@ mkfs_xfs_opts() {
 # loop_size_auto_gib AVAIL_GIB: the loop file's size from the free space on
 # /. The OS, Docker's images and logs keep the larger of 30 GiB and 15 %;
 # the file is sparse, but it must never grow into that and fill /.
-loop_size_auto_gib() {
+loop_size_auto_gib() { echo $(($1 - $(loop_reserve_gib "$1"))); }
+
+# loop_reserve_gib AVAIL_GIB: what / keeps for the OS when a loop file is
+# on it.
+loop_reserve_gib() {
   local keep=$(($1 * 15 / 100))
   [ "$keep" -lt 30 ] && keep=30
-  echo $(($1 - keep))
+  echo "$keep"
 }
 
 # fstab_line SOURCE KIND: the /etc/fstab entry for /var/lib/imp. nofail: a
@@ -576,6 +588,8 @@ ensure_docker() {
   if [ ! -s "$key" ]; then
     change "fetch Docker's apt key to $key" fetch_docker_key "$key" "$ID"
   fi
+  # A dry run has not fetched it; an existing key is checked every run.
+  [ ! -s "$key" ] || check_docker_key "$key"
   put_file /etc/apt/sources.list.d/docker.list 644 \
     "deb [arch=amd64 signed-by=$key] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" || true
   change "apt-get install docker-ce" apt_install docker-ce docker-ce-cli containerd.io
@@ -583,9 +597,19 @@ ensure_docker() {
 }
 
 fetch_docker_key() {
-  install -m 0755 -d "$(dirname "$1")"
-  curl -fsSL "https://download.docker.com/linux/$2/gpg" -o "$1"
-  chmod 0644 "$1"
+  install -m 0755 -d "$(dirname "$1")" || return 1
+  curl -fsSL "https://download.docker.com/linux/$2/gpg" -o "$1.new" || return 1
+  check_docker_key "$1.new" && chmod 0644 "$1.new" && mv "$1.new" "$1"
+}
+
+# check_docker_key FILE: the file holds Docker's key and only that key.
+check_docker_key() {
+  local fingerprints
+  fingerprints=$(gpg --show-keys --with-colons "$1" 2>/dev/null | awk -F: '$1 == "pub" { pub = 1 } $1 == "fpr" && pub { print $10; pub = 0 }')
+  if [ "$fingerprints" != "$DOCKER_KEY_FINGERPRINT" ]; then
+    rm -f "$1.new"
+    die "$1 is not Docker's apt key (want $DOCKER_KEY_FINGERPRINT, got ${fingerprints:-none})"
+  fi
 }
 
 # ensure_service UNIT: enabled and active.
@@ -742,8 +766,8 @@ prepare_loop_file() {
   if [ "$loop_size_gib" = auto ]; then
     loop_size_gib=$(loop_size_auto_gib "$avail_gib")
     log "${avail_gib} GiB free on /; the loop file gets ${loop_size_gib} GiB"
-  elif [ "$avail_gib" -lt "$loop_size_gib" ]; then
-    warn "$loop_file is sparse: ${loop_size_gib} GiB apparent, ${avail_gib} GiB free on /; imps can fill /"
+  elif [ $((avail_gib - loop_size_gib)) -lt "$(loop_reserve_gib "$avail_gib")" ]; then
+    warn "$loop_file is sparse: once full, ${loop_size_gib} GiB leaves under $(loop_reserve_gib "$avail_gib") GiB of the ${avail_gib} GiB free on / for the OS"
   fi
   [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] \
     || die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
@@ -848,14 +872,32 @@ ensure_firewall() {
     warn "sshd allows password logins; set PasswordAuthentication no"
   fi
 
-  local changed=
-  put_file "$FIREWALL_FILE" 644 "$(render_firewall "${ports[@]}")" && changed=1
+  local ruleset changed=
+  ruleset=$(render_firewall "${ports[@]}")
+  check_ruleset "$ruleset"
+  put_file "$FIREWALL_FILE" 644 "$ruleset" && changed=1
   put_file /etc/systemd/system/imp-firewall.service 644 "$(unit_imp_firewall)" && changed=1
   if [ -n "$changed" ]; then
     change "load the firewall" reload_unit imp-firewall
   else
     ensure_service imp-firewall
   fi
+}
+
+# check_ruleset RULESET: nft parses it against this kernel, so a bad ruleset
+# never replaces a good one, or leaves the host with none. Skipped in a dry
+# run before nftables is installed.
+check_ruleset() {
+  if ! command -v nft >/dev/null; then
+    dry || die "nft is missing"
+    return 0
+  fi
+  local file rc=0
+  file=$(mktemp)
+  printf '%s\n' "$1" >"$file"
+  nft -c -f "$file" || rc=$?
+  rm -f "$file"
+  [ "$rc" = 0 ] || die "nft rejects the firewall ruleset; nothing was loaded"
 }
 
 disable_ufw() {
@@ -892,8 +934,16 @@ ensure_imp() {
   budget=$(ram_budget_mib "$memtotal" "$arc")
   log "RAM: $((memtotal / 1024)) MiB, ZFS ARC cap ${arc} MiB, budget for awake imps ${budget} MiB"
 
+  # Once the node has joined, its state keeps it on the tailnet; the key is
+  # not written again (and the tailscale phase blanked it).
+  local key=$authkey
+  if [ -n "$key" ] && tailnet_joined; then
+    log "tailscale: the node has joined already; the key is not written again"
+    key=
+  fi
+
   local env changed=
-  env=$(BOOTSTRAP_AUTHKEY=$authkey render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
+  env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
     "$storage" "$zfs_root")
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
@@ -946,6 +996,11 @@ health() {
     die "imp-host publishes a port beyond loopback: $published"
   fi
 
+  if tailnet_joined; then
+    wait_for "the tailnet node to be Running" 120 tailscale_running
+    log "health: the tailnet node is Running"
+  fi
+
   # On a new host impd adds ubuntu:24.04 as `ubuntu` after it starts.
   wait_for "the ubuntu image" 600 has_ubuntu_image
   trap 'docker exec imp-host imp rm '"$name"' >/dev/null 2>&1 || true' EXIT
@@ -956,6 +1011,38 @@ health() {
   trap - EXIT
   log "health: impd answered; created, ran and destroyed an imp"
 }
+
+# tailnet_joined: the host container runs and holds node state.
+tailnet_joined() {
+  docker exec imp-host test -s /var/lib/imp/tailscale/tailscaled.state 2>/dev/null
+}
+
+tailscale_backend() {
+  docker exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock status --json 2>/dev/null \
+    | jq -r '.BackendState // empty'
+}
+
+tailscale_running() { [ "$(tailscale_backend)" = Running ]; }
+
+# ensure_tailscale: with a key in the env file, wait for the node to join,
+# then blank the key. The node state in /var/lib/imp/tailscale keeps it
+# joined, and tailscale-up.sh starts tailscaled from it with no key.
+ensure_tailscale() {
+  grep -qE '^TAILSCALE_AUTHKEY=.+' "$ENV_FILE" || return 0
+  phase tailscale
+  wait_for "the tailnet node to be Running" 180 tailscale_running
+  # An older image skips tailscaled without a key, which would take the
+  # node off the tailnet at its next start.
+  if ! docker exec imp-host grep -q 'saved node state' /usr/local/lib/imp/tailscale-up.sh; then
+    warn "this imp-host image needs TAILSCALE_AUTHKEY at every start; the key stays in $ENV_FILE"
+    return 0
+  fi
+  change "blank TAILSCALE_AUTHKEY in $ENV_FILE; the node state keeps it joined" \
+    write_file "$ENV_FILE" 600 "$(blank_env_key <"$ENV_FILE")"
+}
+
+# blank_env_key: the env file on stdin with TAILSCALE_AUTHKEY emptied.
+blank_env_key() { sed 's/^TAILSCALE_AUTHKEY=.*/TAILSCALE_AUTHKEY=/'; }
 
 has_ubuntu_image() { docker exec imp-host imp image ls 2>/dev/null | grep -q '^ubuntu '; }
 
@@ -980,9 +1067,10 @@ main() {
   ensure_imp
   if dry; then
     log "$changes change(s) pending"
-    [ "$mode" = check ] && [ "$changes" -gt 0 ] && exit 1
+    [ "$mode" = check ] && [ "$changes" -gt 0 ] && exit 2
     exit 0
   fi
+  ensure_tailscale
   log "$changes change(s) made"
   [ -n "$skip_health" ] || health
 }

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Join the tailnet as tag:imp (docs/guides/tailscale.md). Idempotent.
-# Runs inside the host container. Does nothing without TAILSCALE_AUTHKEY.
+# Runs inside the host container. Without TAILSCALE_AUTHKEY it starts
+# tailscaled from saved node state, so a joined node stays on the tailnet
+# after deploy/bootstrap.sh blanks the key; with neither it does nothing.
 #
 # Env: TAILSCALE_AUTHKEY         auth key (never printed; passed to tailscale via a 0600 file)
 #      IMP_TAILSCALE_HOSTNAME    tailnet hostname (default imp)
@@ -9,14 +11,20 @@
 #                                comma-separated as impd reads it (default "1.1.1.1,8.8.8.8")
 set -euo pipefail
 
-if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
-  echo "tailscale-up: TAILSCALE_AUTHKEY unset, skipping"
-  exit 0
-fi
-
 hostname=${IMP_TAILSCALE_HOSTNAME:-imp}
 state_dir=${IMP_TAILSCALE_STATE_DIR:-/var/lib/imp/tailscale}
 sock=/var/run/tailscale/tailscaled.sock
+
+# from_state: no key, so the node can only come back from its saved state.
+from_state=
+if [ -z "${TAILSCALE_AUTHKEY:-}" ]; then
+  if [ "$state_dir" = mem ] || [ ! -s "$state_dir/tailscaled.state" ]; then
+    echo "tailscale-up: TAILSCALE_AUTHKEY unset and no saved node state, skipping"
+    exit 0
+  fi
+  from_state=1
+  echo "tailscale-up: TAILSCALE_AUTHKEY unset; starting from the saved node state"
+fi
 
 ts() { timeout 90 tailscale --socket="$sock" "$@"; }
 # alive: tailscaled runs. A zombie does not count: PID 1 may not reap it.
@@ -63,8 +71,23 @@ for _ in $(seq 50); do
   case $(backend) in NoState | "") sleep 0.1 ;; *) break ;; esac
 done
 
+if [ -n "$from_state" ]; then
+  # Starting comes before Running when the saved state is good.
+  for _ in $(seq 150); do
+    case $(backend) in Running) break ;; *) sleep 0.1 ;; esac
+  done
+  if [ "$(backend)" != Running ]; then
+    echo "tailscale-up: the saved node state is $(backend), not Running; set TAILSCALE_AUTHKEY to join again" >&2
+    exit 1
+  fi
+fi
+
+# Without a key there is nothing to log in with: the saved node is used as
+# it is, even under another hostname.
 want_up=1
-if [ "$(backend)" = Running ] \
+if [ -n "$from_state" ]; then
+  want_up=0
+elif [ "$(backend)" = Running ] \
   && [ "$(ts status --json | jq -r '.Self.HostName')" = "$hostname" ]; then
   want_up=0
 fi
