@@ -8,6 +8,7 @@
     "build": "vite build",
     "dev": "vite dev",
     "e2e": "playwright test",
+    "e2e:install": "playwright install --only-shell chromium",
     "test": "bun test"
   },
   "dependencies": {

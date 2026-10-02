@@ -297,6 +297,21 @@ jobs:
         with:
           write-cache: ${{ env.WRITE_CACHE }}
 
+      # The dashboard suite's browser. The locked Playwright pins its Chromium
+      # build, so its version keys the cache; on a miss the suite downloads it.
+      - name: Read the Playwright version
+        id: playwright
+        working-directory: packages/dashboard
+        run:
+          echo "version=$(bun -p "require('@playwright/test/package.json').version")"
+          >>"$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
       - name: End-to-end tests
@@ -317,7 +332,10 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-results
-          path: .cache/e2e/
+          # the dashboard suite's Playwright traces and screenshots
+          path: |
+            .cache/e2e/
+            packages/dashboard/.test-results/
           if-no-files-found: ignore
           retention-days: 14
 

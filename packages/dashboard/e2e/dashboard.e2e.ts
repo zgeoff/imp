@@ -2,7 +2,12 @@
 import { expect, test } from '@playwright/test';
 
 const token = process.env['IMP_TOKEN'];
-const name = `e2e-dash-${String(Date.now() % 100_000)}`;
+
+// the harness's suite (test/e2e/suites/dashboard.e2e.ts) names the prefix,
+// so its cleanup finds the imp, and a small fixture image
+const prefix = process.env['E2E_IMP_PREFIX'] ?? 'e2e-dash-';
+const image = process.env['E2E_IMP_IMAGE'];
+const name = `${prefix}${String(Date.now() % 100_000)}`;
 
 test.skip(token === undefined, 'IMP_TOKEN names the token of the impd under test');
 
@@ -31,6 +36,11 @@ test('log in, create an imp, run a command in its console, destroy it', async ({
 
   await dialog.getByLabel('Name').fill(name);
   await dialog.getByLabel('Memory (MiB)').fill('512');
+
+  if (image !== undefined) {
+    await dialog.getByLabel('Image').selectOption(image);
+  }
+
   await dialog.getByRole('button', { name: 'Create' }).click();
 
   const row = page.getByRole('row', { name: new RegExp(name) });
