@@ -44,7 +44,15 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
   const calls: string[] = [];
 
   // pruneErrors: what the next prunes throw, one each
-  const state = { failCheck: false, failBackup: false, pruneErrors: [] as Error[] };
+  const state = {
+    failCheck: false,
+    failBackup: false,
+    pruneErrors: [] as Error[],
+
+    // runs as each restore starts
+    onRestore: null as ((dir: string) => Promise<void>) | null,
+  };
+
   const restores: string[] = [];
 
   const findSnapshot = (id: string): ResticSnapshot => {
@@ -108,12 +116,12 @@ function createFakeRestic(repoDir: string, readNow: () => Date) {
     },
     listSnapshots: () => Promise.resolve([...snapshots]),
     dump: (id, path) => Promise.resolve(readFileSync(resolvePath(id, path), 'utf8')),
-    restore: (id, dir, target) => {
+    restore: async (id, dir, target) => {
       restores.push(relative(findSnapshot(id).paths[0] ?? '', dir));
 
-      cpSync(resolvePath(id, dir), target, { recursive: true });
+      await state.onRestore?.(relative(findSnapshot(id).paths[0] ?? '', dir));
 
-      return Promise.resolve();
+      cpSync(resolvePath(id, dir), target, { recursive: true });
     },
   };
 
@@ -137,6 +145,8 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
     imps: harness.imps,
     grants: harness.broker,
     storage: harness.storage,
+    storageGate: harness.storageGate,
+    diskBudget: harness.diskBudget,
     restic: fake.restic,
     log: (message) => {
       logs.push(message);
@@ -791,4 +801,38 @@ test('a failed scheduled run waits twice as long each time, up to the interval',
   }
 
   expect(seen).toEqual([...steps.map(([, ran]) => ran), true, false]);
+});
+
+test('a restore holds the storage gate for its image and room for each file', async () => {
+  await using source = await setupTest();
+
+  await source.createDevImp();
+  await source.backups.runBackup();
+
+  await using fresh = await setupTest(source.repoDir);
+
+  fresh.fake.snapshots.push(...source.fake.snapshots);
+
+  await fresh.db.deleteFrom('images').execute();
+
+  rmSync(join(fresh.dataDir, 'images', 'base'), { recursive: true });
+
+  const seen: string[] = [];
+
+  // a GC would wait for each of these, so no image dir is taken before its row
+  fresh.fake.state.onRestore = async (dir) => {
+    const status = await fresh.diskBudget.readStatus();
+
+    const kind = dir.startsWith('images/') ? 'image' : 'file';
+
+    seen.push(
+      `${kind} joined=${String(fresh.storageGate.countInFlight() > 0)} held=${String(status.pendingBytes > 0)}`,
+    );
+  };
+
+  await fresh.backups.restoreBackup({ name: 'dev' });
+
+  expect(new Set(seen)).toEqual(
+    new Set(['image joined=true held=true', 'file joined=true held=true']),
+  );
 });

@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
+import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import { createImageService, planRootfs } from './image-service';
 
@@ -17,6 +18,8 @@ test('it refuses refs and build contexts that docker could read as flags', async
       config: loadConfig({ IMP_DATA_DIR: dataDir }),
       db,
       storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
     });
 
     for (const ref of ['--help', '-v/:/host', 'ubuntu --privileged', '']) {
@@ -46,6 +49,8 @@ test('it refuses a build context that is not on the impd host', async () => {
       config: loadConfig({ IMP_DATA_DIR: dataDir }),
       db,
       storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
     });
 
     const failure = await images

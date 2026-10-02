@@ -20,7 +20,6 @@ import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
-import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 
@@ -64,14 +63,14 @@ export interface ImageServiceDeps {
 
   // a build joins it until the image's row is written, a removal until its
   // rootfs is gone
-  readonly storageGate?: StorageGate;
+  readonly storageGate: StorageGate;
 
   // a build holds room for the unpacked tree and its ext4 file
-  readonly diskBudget?: Pick<DiskBudget, 'withRoom'>;
+  readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
-  const storageGate = deps.storageGate ?? createStorageGate();
+  const storageGate = deps.storageGate;
 
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
@@ -205,7 +204,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     // the tree unpacked, and the ext4 file written from it
     const buildBytes = 2 * (inspect.Size ?? 0);
-    const withRoom = deps.diskBudget?.withRoom ?? ((_bytes, task) => task());
+    const withRoom = deps.diskBudget.withRoom;
 
     return withRoom(buildBytes, () =>
       storageGate.join(async () => {

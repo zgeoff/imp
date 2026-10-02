@@ -67,7 +67,7 @@ export interface CheckpointServiceDeps {
   readonly freezer?: DiskFreezer;
 
   // a checkpoint is thin, but none is made past the reserve
-  readonly diskBudget?: Pick<DiskBudget, 'requireRoom'>;
+  readonly diskBudget: Pick<DiskBudget, 'requireRoom'>;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -170,7 +170,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
 
         const started = performance.now();
 
-        await deps.diskBudget?.requireRoom(0);
+        await deps.diskBudget.requireRoom(0);
 
         const created = await withConsistentDisk(imp, 'checkpoint', () =>
           createWithFreshId(imp.id),

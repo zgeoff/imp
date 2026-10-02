@@ -22,7 +22,6 @@ import { BACKUP_TREE, buildBackupPaths } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { BackupTree, StorageBackend } from '../storage/storage-backend';
-import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
 import type { BackupConfig } from './backup-config';
 import { BackupManifestSchema } from './backup-manifest';
@@ -108,11 +107,12 @@ export interface BackupServiceDeps {
   readonly log?: (message: string) => void;
   readonly now?: () => Date;
 
-  // a run joins it: its copies, snapshots and tree are storage no row names
-  readonly storageGate?: StorageGate;
+  // a run and a restored image join it: storage no row names yet
+  readonly storageGate: StorageGate;
 
-  // a run's copies are thin, but restic's cache grows: none starts past the reserve
-  readonly diskBudget?: Pick<DiskBudget, 'requireRoom'>;
+  // a run's copies are thin, but restic's cache grows: none starts past the
+  // reserve; a restore holds each file's size while it writes it
+  readonly diskBudget: Pick<DiskBudget, 'requireRoom' | 'withRoom'>;
 }
 
 // PRECONDITION_FAILED when impd has no repository set
@@ -129,7 +129,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   const storage = deps.storage;
   const paths = buildBackupPaths(deps.dataDir);
   const restic = deps.restic ?? createRestic({ config: deps.backup, cacheDir: paths.cache });
-  const storageGate = deps.storageGate ?? createStorageGate();
+  const storageGate = deps.storageGate;
+  const diskBudget = deps.diskBudget;
 
   // a run, a restore, a prune and a check never overlap
   const mutex = createKeyedMutex();
@@ -256,7 +257,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
   };
 
   const runBackup = async (): Promise<BackupRun> => {
-    await deps.diskBudget?.requireRoom(0);
+    await diskBudget.requireRoom(0);
 
     return storageGate.join(runJoinedBackup);
   };
@@ -412,9 +413,22 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     return point;
   };
 
-  // an image with the same digest is reused; the name gets a digest suffix
-  // when another image has it
-  const createRestoredImage = async (
+  // An image with the same digest is reused; the name gets a digest suffix
+  // when another image has it. It joins the storage gate until its row
+  // commits, so a GC never takes the image in between.
+  const createRestoredImage = (
+    point: ResticSnapshot,
+    base: string,
+    image: ManifestImage,
+    workDir: string,
+  ): Promise<string> =>
+    storageGate.join(() =>
+      diskBudget.withRoom(2 * image.sizeBytes, () =>
+        createJoinedImage(point, base, image, workDir),
+      ),
+    );
+
+  const createJoinedImage = async (
     point: ResticSnapshot,
     base: string,
     image: ManifestImage,
@@ -484,18 +498,20 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const created = { id: null as string | null };
 
     // One file at a time, each gone once written: ten checkpoints never sit
-    // on the host as ten full disks at once.
-    const writeRestoredFile = async (file: string, disk: string) => {
-      const fileDir = dirname(file);
+    // on the host as ten full disks at once. Its disk size is the most it
+    // can take, held before restic fetches it.
+    const writeRestoredFile = (file: string, disk: string, diskBytes: number) =>
+      diskBudget.withRoom(diskBytes, async () => {
+        const fileDir = dirname(file);
 
-      await restic.restore(point.id, join(base, fileDir), join(workDir, fileDir), []);
+        await restic.restore(point.id, join(base, fileDir), join(workDir, fileDir), []);
 
-      try {
-        await writeChangedBlocks(join(workDir, file), disk);
-      } finally {
-        rmSync(join(workDir, fileDir), { recursive: true, force: true });
-      }
-    };
+        try {
+          await writeChangedBlocks(join(workDir, file), disk);
+        } finally {
+          rmSync(join(workDir, fileDir), { recursive: true, force: true });
+        }
+      });
 
     const writeRestoredDisk = async (impId: string) => {
       created.id = impId;
@@ -505,7 +521,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       const disk = storage.resolveImpPaths(impId).disk;
 
       for (const checkpoint of imp.checkpoints) {
-        await writeRestoredFile(checkpoint.disk, disk);
+        await writeRestoredFile(checkpoint.disk, disk, checkpoint.diskBytes);
 
         const made = await createCheckpointDisk(impId);
 
@@ -519,7 +535,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         });
       }
 
-      await writeRestoredFile(imp.disk, disk);
+      await writeRestoredFile(imp.disk, disk, imp.diskBytes);
 
       await updateImpEgressPolicy(
         deps.db,
