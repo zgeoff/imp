@@ -71,7 +71,7 @@ let
   xfsCfg = xfsHost.config;
   unit = zfsCfg.systemd.services.imp-host;
   ownCfg = ownFirewall.config;
-  sharedArgs = lib.concatStringsSep " " (lib.flatten (lib.importJSON ../../imp-host.args.json).lines);
+  sharedArgs = lib.escapeShellArgs (lib.flatten (lib.importJSON ../../imp-host.args.json).lines);
 
   expect = name: cond: if cond then name else throw "eval check failed: ${name}";
   checks = [
