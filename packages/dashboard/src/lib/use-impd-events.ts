@@ -20,7 +20,8 @@ export function useImpdEvents(): void {
     const signal = controller.signal;
 
     const applyEvent = async (event: Readonly<ImpEvent>): Promise<void> => {
-      if (event.ev === 'ImpAdded' && event.reason === 'snapshot') {
+      // an exec in an imp's agent changes nothing the dashboard shows
+      if ((event.ev === 'ImpAdded' && event.reason === 'snapshot') || event.ev === 'AgentExec') {
         return;
       }
 

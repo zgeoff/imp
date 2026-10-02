@@ -1,5 +1,14 @@
 import { AgentError } from './agent-connection';
 
+interface Feature {
+  readonly since: readonly [number, number];
+  readonly missing: string;
+
+  // a version that is missing or does not parse fails the check, where
+  // the agent's own answer settles other features
+  readonly strict?: true;
+}
+
 // What a newer agent can do, and the first protocol version with it.
 // `ssh` is the dial op and `imp-agent sftp` on the system drive.
 const FEATURES = {
@@ -11,7 +20,15 @@ const FEATURES = {
   cp: { since: [0, 7], missing: 'no imp cp' },
   'reverse-forward': { since: [0, 9], missing: 'no reverse forwards' },
   services: { since: [0, 10], missing: 'no services API' },
-} as const;
+
+  // an older agent answers the op with UNKNOWN_OP; strict all the same,
+  // as a field it ignores would run the command in the container as root
+  'outer-exec': {
+    since: [0, 16],
+    missing: 'no exec --agent',
+    strict: true,
+  },
+} as const satisfies Record<string, Feature>;
 
 export type AgentFeature = keyof typeof FEATURES;
 
@@ -23,14 +40,25 @@ export function buildAgentOutdatedError(feature: AgentFeature): AgentError {
   );
 }
 
-// false for an agent version from before the feature; true for one that does
-// not parse, which the agent's own answer then settles
-export function hasFeature(agentVersion: string, feature: AgentFeature): boolean {
-  const [major, minor] = agentVersion.split('.').map(Number);
-  const [sinceMajor, sinceMinor] = FEATURES[feature].since;
+// a strict feature with no recorded version: impd failed to write the imp's
+// vm.json at its boot (it logs why), or the imp booted before impd kept it
+export function buildAgentUnknownError(feature: AgentFeature): AgentError {
+  return new AgentError(
+    'AGENT_OUTDATED',
+    `impd has no record of the imp's agent version, so it takes it to have ${FEATURES[feature].missing}; stop and start the imp to record it`,
+  );
+}
+
+// false for an agent version from before the feature; a missing version
+// (an imp booted before impd recorded them) or one that does not parse
+// passes unless the feature is strict, and the agent's answer settles it
+export function hasFeature(agentVersion: string | undefined, feature: AgentFeature): boolean {
+  const known: Feature = FEATURES[feature];
+  const [major, minor] = (agentVersion ?? '').split('.').map(Number);
+  const [sinceMajor, sinceMinor] = known.since;
 
   if (major === undefined || minor === undefined || Number.isNaN(major) || Number.isNaN(minor)) {
-    return true;
+    return known.strict !== true;
   }
 
   return major > sinceMajor || (major === sinceMajor && minor >= sinceMinor);

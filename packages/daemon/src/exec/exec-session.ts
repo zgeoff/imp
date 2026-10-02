@@ -398,10 +398,13 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         ...(control.session !== undefined && { session: control.session }),
         ...(control.killGraceMs !== undefined && { killGraceMs: control.killGraceMs }),
         ...(control.resumeFrom !== undefined && { resumeFrom: control.resumeFrom }),
+        ...(control.outer === true && { outer: true }),
         ...size,
       };
 
-      void runStream(() => backend.openExec(control.name, request));
+      const feature = control.outer === true ? 'outer-exec' : undefined;
+
+      void runStream(() => backend.openExec(control.name, request, feature));
 
       return;
     }

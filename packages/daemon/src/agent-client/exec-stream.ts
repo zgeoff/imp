@@ -24,6 +24,10 @@ export interface AgentExecRequest {
 
   // with a session: the output after this byte, not a replay
   readonly resumeFrom?: ResumeFrom;
+
+  // runs in the agent's own world, outside the inner container, as root:
+  // the exec.outer op, which an older agent refuses
+  readonly outer?: boolean;
 }
 
 // attaches to a session that exists
@@ -138,18 +142,21 @@ export async function openExecStream(
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  const { killGraceMs, resumeFrom, ...rest } = request;
+  const { killGraceMs, resumeFrom, outer, ...rest } = request;
+  const op = outer === true ? 'exec.outer' : 'exec';
 
-  const stream = await openStream(
+  const opening = openStream(
     vsockPath,
     {
-      op: 'exec',
+      op,
       ...rest,
       ...(killGraceMs !== undefined && { kill_grace_ms: killGraceMs }),
       ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
     },
     startTimeoutMs,
   );
+
+  const stream = await (outer === true ? opening.catch(handleUnknownOp('outer-exec')) : opening);
 
   // an agent from before sessions ignores the name and runs a plain exec,
   // which would die with its connection; a woken imp keeps its old agent

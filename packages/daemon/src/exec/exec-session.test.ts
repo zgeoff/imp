@@ -846,3 +846,48 @@ test('a plain exec whose output was dropped sends no failure after the close', a
   expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
   expect(peer.closes).toEqual([1011]);
 });
+
+test('an outer exec goes to the agent as outer, gated on its agent feature', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const opened: unknown[] = [];
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (name, request, feature) => {
+        opened.push({ name, request, feature });
+
+        return Promise.resolve(fake.stream);
+      },
+    }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, outer: true });
+
+  await Bun.sleep(5);
+
+  expect(opened).toEqual([
+    {
+      name: 'dev',
+      request: { argv: ['sh'], tty: true, outer: true },
+      feature: 'outer-exec',
+    },
+  ]);
+});
+
+test('an outer exec with a session or a tool is a bad message', async () => {
+  for (const start of [
+    { argv: ['sh'], tty: true, session: 'main' },
+    { argv: ['create', 'x'], tty: false, tool: 'tar' },
+  ]) {
+    const peer = buildFakePeer();
+    const session = createExecSession(peer.peer, buildBackend({}));
+
+    session.handleMessage({ type: 'start', name: 'dev', outer: true, ...start });
+
+    await Bun.sleep(5);
+
+    expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
+  }
+});

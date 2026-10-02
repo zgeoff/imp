@@ -68,6 +68,11 @@ export const ExecStartMessageSchema = z
     session: SessionNameSchema.optional(),
     tool: z.enum(EXEC_TOOLS).optional(),
 
+    // runs as root in the agent's own world, outside the container user
+    // code runs in, with the system drive's busybox: `imp exec --agent`.
+    // It needs host-wide manage scope, and no exec ticket starts one.
+    outer: z.boolean().optional(),
+
     // after the client's first SIGTERM, SIGINT, SIGHUP, SIGQUIT or SIGKILL,
     // how long the rest of the process group gets once the command exits
     // before the agent kills it; `started.groupKill` says if it will
@@ -97,6 +102,13 @@ export const ExecStartMessageSchema = z
         start.env === undefined &&
         start.cwd === undefined),
     { message: 'a tool takes no tty, session, env or cwd', path: ['tool'] },
+  )
+  .refine(
+    (start) => start.outer !== true || (start.tool === undefined && start.session === undefined),
+    {
+      message: 'an outer exec takes no tool or session',
+      path: ['outer'],
+    },
   );
 
 export const ExecAttachMessageSchema = z.object({

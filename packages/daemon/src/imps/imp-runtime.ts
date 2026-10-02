@@ -1,6 +1,10 @@
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
-import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
+import {
+  buildAgentOutdatedError,
+  buildAgentUnknownError,
+  hasFeature,
+} from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity, sendPing } from '../agent-client/agent-requests';
 import type { AgentActivity } from '../agent-client/agent-requests';
@@ -300,6 +304,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           requireFeature(paths, feature);
         }
 
+        // the egress broker's variables are for the imp's own code, not the
+        // agent's world
+        if (request.outer === true) {
+          requireFeature(paths, 'outer-exec');
+
+          return openExecStream(paths.vsockSocket, request);
+        }
+
         const base = await context.readExecEnv(imp, paths.vsockSocket);
 
         const env = mergeEnv(base, request.env ?? []);
@@ -579,10 +591,13 @@ async function writeAdoptedBoot(context: ImpContext, imp: ImpRecord): Promise<vo
 
 // fails before an old agent gets a request it cannot serve; an imp booted
 // before impd recorded agent versions has none, and its answer decides
+// unless the feature is strict
 function requireFeature(paths: ImpPaths, feature: AgentFeature): void {
   const agentVersion = readVmIdentity(paths)?.agentVersion;
 
-  if (agentVersion !== undefined && !hasFeature(agentVersion, feature)) {
-    throw buildAgentOutdatedError(feature);
+  if (!hasFeature(agentVersion, feature)) {
+    throw agentVersion === undefined
+      ? buildAgentUnknownError(feature)
+      : buildAgentOutdatedError(feature);
   }
 }
