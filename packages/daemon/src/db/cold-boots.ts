@@ -53,6 +53,20 @@ export async function writeUnknownBoot(
   });
 }
 
+// A moved imp's boots, newest first as its source listed them: written
+// oldest first, so they keep their order here
+export async function writeMovedBoots(
+  db: ImpDatabase,
+  impId: string,
+  boots: readonly Readonly<ColdBoot>[],
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    for (const boot of boots.toReversed()) {
+      await writeBootRow(trx, impId, { ...boot, at: new Date(boot.at) });
+    }
+  });
+}
+
 // the cause the imp's next cold boot records, whichever path boots it
 export async function writeNextBootCause(
   db: ImpDatabase,

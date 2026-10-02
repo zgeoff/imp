@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { readRejection } from '../read-rejection';
@@ -418,4 +419,37 @@ test('an imp on a private network is refused a warm move', async () => {
 
   expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
   expect(String(refused)).toContain('it is on private networks (lab)');
+});
+
+test('a warm move carries the cold boots, so the wake on the target finds its boot and adds none', async () => {
+  await using ctx = await setupWarmTest();
+
+  const before = await listColdBoots(ctx.source.db, ctx.impId);
+
+  await ctx.runMove();
+
+  const carried = await listColdBoots(ctx.target.db, ctx.impId);
+
+  // the wake as a real agent answers it: the boot the guest slept in
+  await writeUnknownBoot(ctx.target.db, ctx.impId, before[0]?.bootId ?? '', new Date());
+
+  const after = await listColdBoots(ctx.target.db, ctx.impId);
+
+  expect(before.map((boot) => boot.cause)).toEqual(['start']);
+  expect(carried).toEqual(before);
+  expect(after).toEqual(before);
+});
+
+test('a warm-moved imp whose memory cannot load here boots cold with the cause wake_fallback', async () => {
+  await using ctx = await setupWarmTest();
+
+  await ctx.runMove();
+
+  rmSync(ctx.target.storage.resolveImpPaths(ctx.impId).snapshotMeta, { force: true });
+
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  const boots = await listColdBoots(ctx.target.db, ctx.impId);
+
+  expect(boots.map((boot) => boot.cause)).toEqual(['wake_fallback', 'start']);
 });

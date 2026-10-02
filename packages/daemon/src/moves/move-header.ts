@@ -1,4 +1,4 @@
-import { ImageSourceSchema, WarmMoveSchema } from '@imp/api';
+import { ColdBootSchema, ImageSourceSchema, WarmMoveSchema } from '@imp/api';
 import * as z from 'zod';
 import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
@@ -38,6 +38,11 @@ const ImpSchema = z
     // a disk grown while the imp slept, whose guest grows at the next wake;
     // left out by an older source
     isDiskGrowPending: z.boolean().default(false),
+
+    // its last cold boots, newest first: a session that outlives a warm
+    // move still names the boots before it, and the wake on the target
+    // finds its own boot among them; left out by an older source
+    coldBoots: z.array(ColdBootSchema).readonly().default([]),
   })
   .readonly();
 

@@ -184,6 +184,9 @@ drive before them when `/move/offer` finds the target lacks it. The header carri
 - The drive lands under its sha256, which other snapshots trust: the target hashes what arrived and
   refuses a drive whose sum is not its name. Whether the drive came along or not, `meta.json` and
   `vm.json` must name this host's own path for that sha256.
+- The imp's last cold boots go along ([output offsets](./daemon.md#output-offsets)). The wake on the
+  target is a memory wake into the same boot, so it records no cold boot; a wake that cannot load
+  the memory boots cold with the cause `wake_fallback`.
 - The imp's disk grow, if one is pending, goes along: the first wake on the target grows the guest.
 - A tap that a failed destroy left in the slot is removed before the staged imp exists, so the wake
   makes it again with the slot's MAC.

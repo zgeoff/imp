@@ -10,6 +10,7 @@ import { writeChangedBlocks } from '../backup/write-changed-blocks';
 import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
+import { writeMovedBoots } from '../db/cold-boots';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
 import {
   SlotTakenError,
@@ -603,6 +604,9 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           ...(header.warm !== null && { slot: header.warm.move.slot }),
           prepareDisk: writeDisk,
         });
+
+        // the staged imp's own rows: they go with it if the stream fails
+        await writeMovedBoots(deps.db, header.imp.id, header.imp.coldBoots);
 
         if (header.warm !== null) {
           await writeWarmFiles(header.imp.id, header.warm, reader, count, temp, (file) => {
