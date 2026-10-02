@@ -197,7 +197,8 @@ the agent client directly. A separate SSH server (Go's `x/crypto/ssh`) would nee
 again and new RPCs for wakes and activity. The cost: `ssh2` has no post-quantum key exchange, and
 OpenSSH 10.1 and later warn about that ([SSH guide](../guides/ssh.md#set-up)). impd carries one
 patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward to another host is
-"administratively prohibited", not "connect failed".
+"administratively prohibited", not "connect failed"; and a server can open an
+`auth-agent@openssh.com` channel, for agent forwarding.
 
 - **Connections.** impd accepts each TCP connection and hands it to `ssh2`. A client must log in
   within 30 s; at most 32 connections wait to log in, and a 33rd is dropped. Six refused logins end
@@ -214,7 +215,14 @@ patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward t
   client's SSH window instead of growing impd's memory.
 - **Forwards.** `direct-tcpip` to the imp's own loopback and `direct-streamlocal` to a socket path
   use the agent's [`dial`](./protocol.md#dial), which connects from inside the guest. The channel
-  opens only once the dial worked. Remote forwards, agent forwarding and X11 are refused.
+  opens only once the dial worked. Remote forwards and X11 are refused.
+- **Agent forwarding.** After an `auth-agent-req@openssh.com`, the connection's sessions get
+  `SSH_AUTH_SOCK` from one [`agent.listen`](./protocol.md#agentlisten-and-agentaccept) socket in the
+  guest, opened on first use and closed with the connection. Each client of the socket becomes an
+  `auth-agent@openssh.com` channel to the user, relayed through `agent.accept`; past 16 open
+  channels, or when the user refuses the channel, the client is closed at once. A wake starts a new
+  VM, so a session in a VM other than the socket's gets a new socket. Any failure leaves the command
+  to run without `SSH_AUTH_SOCK`, with the reason on stderr.
 - **Stop.** impd ends every SSH connection before the sleep pass, as it closes exec sessions.
 
 The code is in `ssh/`. The host key is `<dataDir>/ssh/host_key`; `ssh2`'s own ed25519 generator
