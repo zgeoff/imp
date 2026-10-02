@@ -239,6 +239,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     rootToken: TEST_TOKEN,
     now: readClock,
     onRemove: revocations.revoke,
+    isFileKey: () => false,
   });
 
   // an image row whose rootfs is a small file in the data dir

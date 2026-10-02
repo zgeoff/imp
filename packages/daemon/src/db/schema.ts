@@ -111,6 +111,20 @@ export interface TokensTable {
   created_at: number;
 }
 
+// an SSH key bound to a token (docs/guides/ssh.md#keys-bound-to-tokens)
+export interface TokenSshKeysTable {
+  id: string;
+  token_id: string;
+
+  // `SHA256:<base64>` of the key blob; a key binds to one token at most
+  fingerprint: string;
+
+  // `<type> <base64>`, without the comment
+  public_key: string;
+  comment: string;
+  created_at: number;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -120,4 +134,5 @@ export interface DatabaseSchema {
   broker_audit: BrokerAuditTable;
   api_audit: ApiAuditTable;
   tokens: TokensTable;
+  token_ssh_keys: TokenSshKeysTable;
 }

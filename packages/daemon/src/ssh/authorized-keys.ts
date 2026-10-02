@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { utils } from 'ssh2';
 
-// One public key from authorized_keys.
-interface AuthorizedKey {
+// One public key from authorized_keys, or one bound to a token.
+export interface AuthorizedKey {
   readonly type: string;
 
   // the key in SSH wire format, as a client sends it
@@ -30,44 +31,58 @@ export function parseAuthorizedKeys(text: string): ParsedAuthorizedKeys {
 
   for (const [index, raw] of text.split('\n').entries()) {
     const line = raw.trim();
-    const where = `line ${String(index + 1)}`;
 
     if (line === '' || line.startsWith('#')) {
       continue;
     }
 
-    const [type = '', data = '', ...rest] = line.split(/\s+/);
+    const parsed = parsePublicKey(line);
 
-    if (!KEY_TYPE.test(type)) {
-      const reason = /^(?:sk-|ssh-dss)/.test(type)
-        ? `${type} keys are not supported`
-        : 'options are not supported; put the key type first';
-
-      problems.push(`${where}: ${reason}`);
+    if (typeof parsed === 'string') {
+      problems.push(`line ${String(index + 1)}: ${parsed}`);
       continue;
     }
 
-    const parsed = utils.parseKey(`${type} ${data}`);
-
-    if (parsed instanceof Error) {
-      problems.push(`${where}: ${parsed.message}`);
-      continue;
-    }
-
-    keys.push({
-      type: parsed.type,
-      blob: parsed.getPublicSSH(),
-      comment: rest.join(' '),
-      verify: (signed, signature, hashAlgo) => parsed.verify(signed, signature, hashAlgo),
-    });
+    keys.push(parsed);
   }
 
   return { keys, problems };
 }
 
+// one key line, or why it grants nothing
+export function parsePublicKey(line: string): AuthorizedKey | string {
+  const [type = '', data = '', ...rest] = line.trim().split(/\s+/);
+
+  if (!KEY_TYPE.test(type)) {
+    return /^(?:sk-|ssh-dss)/.test(type)
+      ? `${type} keys are not supported`
+      : 'options are not supported; put the key type first';
+  }
+
+  const parsed = utils.parseKey(`${type} ${data}`);
+
+  if (parsed instanceof Error) {
+    return parsed.message;
+  }
+
+  return {
+    type: parsed.type,
+    blob: parsed.getPublicSSH(),
+    comment: rest.join(' '),
+    verify: (signed, signature, hashAlgo) => parsed.verify(signed, signature, hashAlgo),
+  };
+}
+
+// `SHA256:<base64>` without padding, as `ssh-keygen -l` prints it
+export function formatKeyFingerprint(blob: Buffer): string {
+  const digest = createHash('sha256').update(blob).digest('base64');
+
+  return `SHA256:${digest.replace(/=+$/, '')}`;
+}
+
 export interface AuthorizedKeys {
   // the key a client offers, if the file authorizes it
-  readonly find: (blob: Buffer) => AuthorizedKey | null;
+  readonly findKey: (blob: Buffer) => AuthorizedKey | null;
 }
 
 interface FileState {
@@ -96,7 +111,7 @@ export function createAuthorizedKeys(path: string, log: (message: string) => voi
   };
 
   return {
-    find: (blob) => load().find((key) => key.blob.equals(blob)) ?? null,
+    findKey: (blob) => load().find((key) => key.blob.equals(blob)) ?? null,
   };
 }
 

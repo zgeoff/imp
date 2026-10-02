@@ -9,7 +9,8 @@ type ResourceKind =
   | 'secret'
   | 'grant'
   | 'backup'
-  | 'token';
+  | 'token'
+  | 'ssh-key';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.
