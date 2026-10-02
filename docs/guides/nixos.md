@@ -73,6 +73,10 @@ joins. `imp-host-tailscale.service` waits for the node to be `Running`, then lea
 `/var/lib/imp/tailscale` keeps it on the tailnet from then on. Remove the key from your secrets once
 the node has joined. To join again, delete the marker and give a new key.
 
+The module cannot see the node state before the container starts, because the ZFS dataset mounts
+inside it. On a pool that already holds node state, such as one an earlier `bootstrap.sh` run set
+up, leave `authKeyFile` unset, or create the marker before the first start.
+
 ## Check it
 
 ```sh
