@@ -58,7 +58,8 @@ export function runOnHosts<T>(
 }
 
 // the signal aborts the requests; the race ends the wait even when a call
-// does not watch it
+// does not watch it. The abort in finally also ends the calls still open
+// after another one failed, so none of them keeps the process alive.
 async function runWithTimeout<T>(
   call: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
@@ -76,5 +77,7 @@ async function runWithTimeout<T>(
     return await Promise.race([call(controller.signal), expired.promise]);
   } finally {
     clearTimeout(timer);
+
+    controller.abort();
   }
 }

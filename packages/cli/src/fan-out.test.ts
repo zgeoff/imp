@@ -48,8 +48,25 @@ test('each host answers or fails alone, and a silent one costs the timeout', asy
     },
   ]);
 
-  // the requests of the host that ran out of time are aborted
-  expect(signals.map((signal) => signal.aborted)).toEqual([false, true, false]);
+  // each host's requests end with its answer; the silent one's by the timeout
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, true, true]);
+});
+
+test('a call that fails aborts the requests still open beside it', async () => {
+  const signals: AbortSignal[] = [];
+
+  const answers = await runOnHosts([buildTarget('box')], (_client, signal) => {
+    signals.push(signal);
+
+    // one request rejects at once while the other never settles
+    return Promise.all([
+      Promise.reject(new Error('no such procedure')),
+      new Promise<never>(() => {}),
+    ]);
+  });
+
+  expect(answers).toEqual([{ host: 'box', error: 'no such procedure' }]);
+  expect(signals.map((signal) => signal.aborted)).toEqual([true]);
 });
 
 test('the saved hosts come in name order, and none at all is a usage error', () => {
