@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +32,10 @@ func sendParked(t *testing.T, sock string, req proto.Request) string {
 }
 
 func TestParkForClaim(t *testing.T) {
-	sock := filepath.Join(t.TempDir(), "agent.sock")
+	// relative, from the test's own directory: a socket path past 108 bytes
+	// fails to bind, and TMPDIR can be that long
+	t.Chdir(t.TempDir())
+	sock := "agent.sock"
 	listen := func() (net.Listener, error) { return net.Listen("unix", sock) }
 	listening := make(chan struct{})
 	listenOnce := func() (net.Listener, error) {
