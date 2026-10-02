@@ -665,9 +665,11 @@ async function setupZfsHost(env: Readonly<Record<string, string>> = {}) {
   return { host, zfs: pool.zfs, [Symbol.asyncDispose]: () => host[Symbol.asyncDispose]() };
 }
 
-test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', async () => {
-  await using source = await setupZfsHost();
-  await using target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
+// two ZFS hosts, and a stopped imp with one checkpoint moved from the source
+// to the target as ZFS streams
+async function setupZfsMove() {
+  const source = await setupZfsHost();
+  const target = await setupZfsHost({ IMP_PEER_URL: TARGET_URL });
 
   const targetApp = buildTestApp(target.host, target.host);
 
@@ -699,21 +701,62 @@ test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', asy
     await Bun.sleep(10);
   }
 
-  const checkpoints = await targetApp.client.checkpoints.list({ name: 'dev' });
+  return {
+    source,
+    target,
+    sourceApp,
+    targetApp,
+    [Symbol.asyncDispose]: async () => {
+      await source[Symbol.asyncDispose]();
+      await target[Symbol.asyncDispose]();
+    },
+  };
+}
 
-  const received = target.zfs.commands.filter((command) => command.startsWith('zfs recv'));
+test('between two ZFS hosts the disk and its checkpoints go as ZFS streams', async () => {
+  await using move = await setupZfsMove();
 
-  const moved = await targetApp.client.imps.get({ name: 'dev' });
-  const left = await findImpByName(source.host.db, 'dev');
+  const checkpoints = await move.targetApp.client.checkpoints.list({ name: 'dev' });
+
+  const received = move.target.zfs.commands.filter((command) => command.startsWith('zfs recv'));
+
+  const moved = await move.targetApp.client.imps.get({ name: 'dev' });
+  const left = await findImpByName(move.source.host.db, 'dev');
 
   expect(checkpoints.map((checkpoint) => checkpoint.label)).toEqual(['one']);
   expect(received).toHaveLength(2);
 
-  expect(target.zfs.listSnapshots()).toContain(
+  expect(move.target.zfs.listSnapshots()).toContain(
     `${ZFS_ROOT}/disks/${moved.id}@${checkpoints[0]?.id ?? ''}`,
   );
 
   expect(left).toBeUndefined();
+});
+
+test('after a move between ZFS hosts, a GC on either host finds nothing to drop or keep', async () => {
+  await using move = await setupZfsMove();
+
+  const sweeps = [];
+
+  for (const app of [move.sourceApp, move.targetApp]) {
+    const kept = await app.client.system.gc({});
+    const retired = await app.client.system.gc({ orphans: true });
+
+    sweeps.push(kept, retired);
+  }
+
+  expect(sweeps.map((sweep) => [sweep.dropped, sweep.kept])).toEqual(sweeps.map(() => [[], []]));
+
+  expect([
+    ...move.source.zfs.listSnapshots(),
+    ...move.target.zfs.listSnapshots(),
+  ]).not.toContainEqual(expect.stringContaining('@mv-'));
+
+  expect(
+    [...move.source.zfs.listDatasets(), ...move.target.zfs.listDatasets()].filter((name) =>
+      name.includes('/staging/'),
+    ),
+  ).toEqual([]);
 });
 
 // the first FILE_END frame's sum, one hex digit changed: a frame is a type
