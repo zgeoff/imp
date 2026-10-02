@@ -1,5 +1,7 @@
-import { ImageSourceSchema } from '@imp/api';
+import { ImageSourceSchema, WarmMoveSchema } from '@imp/api';
 import * as z from 'zod';
+import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
+import { VmIdentitySchema } from '../sleep/vm-identity';
 
 const CpuSchema = z.object({ limit: z.number().positive().nullable(), weight: z.int() }).readonly();
 
@@ -44,6 +46,30 @@ const StreamStepSchema = z
   })
   .readonly();
 
+// A box imp's resolved address, which the target's set lets in for the
+// seconds it has left
+const HeldAnswerSchema = z
+  .object({
+    names: z.array(z.string()).readonly(),
+    address: z.string(),
+    ttlS: z.int().positive(),
+  })
+  .readonly();
+
+const WarmSchema = z
+  .object({
+    move: WarmMoveSchema,
+
+    // the snapshot's record, which the target writes last, and vm.json
+    meta: SnapshotMetaSchema,
+    vm: VmIdentitySchema.nullable(),
+
+    // whether the system drive the snapshot reopens follows the disk
+    isDriveIncluded: z.boolean(),
+    answers: z.array(HeldAnswerSchema).readonly(),
+  })
+  .readonly();
+
 // What the target needs to rebuild the imp, as a backup manifest holds it:
 // no slot or address (the target gives new ones), no secret values
 export const MoveHeaderSchema = z
@@ -70,16 +96,25 @@ export const MoveHeaderSchema = z
     // ZFS to ZFS: the streams that follow in place of the checkpoint and
     // disk files, in order (docs/architecture/moves.md#zfs-to-zfs)
     streams: z.array(StreamStepSchema).readonly().nullable(),
+
+    // a warm move: the memory snapshot's files follow the disk
+    // (docs/architecture/moves.md#warm-moves); null for a cold one
+    warm: WarmSchema.nullable().default(null),
   })
   .readonly();
 
 export type MoveHeader = z.infer<typeof MoveHeaderSchema>;
 
-// `/move/offer`: which of the source's parts the target lacks
-export const MoveOfferSchema = z.object({ imageDigest: z.string() });
+// `/move/offer`: which of the source's parts the target lacks; a warm move
+// names the system drive its snapshot reopens
+export const MoveOfferSchema = z.object({
+  imageDigest: z.string(),
+  systemDrive: z.string().optional(),
+});
 
 export const MoveOfferReplySchema = z.object({
   needsImage: z.boolean(),
+  needsSystemDrive: z.boolean().default(false),
   storage: z.enum(['xfs', 'zfs']),
 });
 

@@ -2,14 +2,15 @@
 
 Each imp host runs its own impd, with its own imps, tokens and secrets. The CLI saves each host
 (`imp login`, `imp host ls`) and calls one at a time: the current host, or the one `--host` names.
-`imp move` takes a stopped imp from one host to another over the tailnet.
-[Moves](../architecture/moves.md) covers the stream and the tickets.
+`imp move` takes an imp from one host to another over the tailnet: a stopped one cold, a sleeping
+one with its memory. [Moves](../architecture/moves.md) covers the stream and the tickets.
 
 ## Moves
 
 ```sh
 imp move dev big-box            # dev, stopped, from the current host to the saved host big-box
-imp move dev big-box --stop     # stop it first if it runs or sleeps
+imp move dev big-box            # dev, sleeping: with its memory, when big-box can load it
+imp move dev big-box --stop     # stop it first if it runs or sleeps: a cold move
 imp --host small move dev big-box   # from a host other than the current one
 ```
 
@@ -39,6 +40,7 @@ as it does for a backup.
 | ------------------------------------------------------- | ------------------------------------------------------------ |
 | The ID and the name                                     | The slot, the guest address and the ports: the target picks  |
 | vCPUs, memory, disk size, HTTP port, CPU limit, weight  | The memory: the imp arrives `stopped` and boots cold         |
+| A warm move: the memory and the slot                    | A warm move: the source's broker CA (see below)              |
 | The disk, with everything in it (services too)          | Open connections and sessions: they end                      |
 | Each checkpoint, its label and time (with a new ID)     | Secret values: they never leave a host                       |
 | The egress policy                                       | Grants of a secret the target has no secret by that name for |
@@ -51,13 +53,35 @@ source's digest names an OCI config the target cannot check against a built root
 has an image by that name with another digest, the moved image's name gets a `-<8 hex>` suffix. A
 [template](./templates.md) stays a template, with the name of the imp it came from.
 
+### Warm moves
+
+A sleeping imp moves with its memory, and wakes on the target where it left off: its processes, its
+tmpfs and its page cache stay. The snapshot holds the host it was taken on, so the target must match
+it. `imp move` checks on the source, the target checks again at the ticket and at the stream, and a
+wake checks the CPU as it does on any host ([moves](../architecture/moves.md#warm-moves)). Otherwise
+the move is refused, and the message names each fact that differs; `imp move --stop` moves the imp
+cold instead.
+
+| The target must have                                  | Why                                                                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| The same Firecracker, snapshot format and host kernel | A snapshot loads only on these.                                                                                                |
+| The same CPU model and CPUID flags                    | The guest kernel picked its code paths from them. In practice: the same kind of machine.                                       |
+| The same `IMP_DATA_DIR` and storage backend           | The snapshot opens the disk and the system drive by path.                                                                      |
+| The same `IMP_SUBNET`, and the imp's slot free        | The guest keeps its address, its gateway and its MAC.                                                                          |
+| The same `IMP_BROKER_PORT`                            | Running processes keep `HTTPS_PROXY`.                                                                                          |
+| The same `IMP_DNS`, for an `open` imp                 | An open imp asks those servers itself; a `box` or `none` imp asks the host's resolver.                                         |
+| No IPv6 address in the imp                            | Its address is in the source's /64. `auto` makes a prefix per host; copy `<data>/net/ipv6-ula` to give two hosts the same one. |
+
+The target's broker CA goes into the guest at its first wake. A process that loaded the source's CA
+before the move fails TLS to the broker until it restarts. Open connections end, as at any sleep.
+
 ### URLs
 
-| URL                                    | After a move                                                    |
-| -------------------------------------- | --------------------------------------------------------------- |
-| `http://<tailnet-host>:<20000 + slot>` | Ends. The imp has a new host and slot: `imp url` on the target. |
-| `https://<name>.<domain>`              | Ends. It follows the target's domain, when the target has one.  |
-| `https://<name>.<tailnet>.ts.net`      | Comes back: the target takes the per-imp name after the commit. |
+| URL                                    | After a move                                                                                                                             |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `http://<tailnet-host>:<20000 + slot>` | Ends. The imp has a new host and slot: `imp url` on the target. A warm move keeps the slot, so the port stays and only the host changes. |
+| `https://<name>.<domain>`              | Ends. It follows the target's domain, when the target has one.                                                                           |
+| `https://<name>.<tailnet>.ts.net`      | Comes back: the target takes the per-imp name after the commit.                                                                          |
 
 The source removes the per-imp name before it asks the target to commit, so the two hosts never both
 serve it. A failed removal does not stop the commit. The target's pass then finds the service still
@@ -104,7 +128,8 @@ A verified copy waits on the target until the source commits or aborts it.
 - The tailnet only. The source refuses a peer URL that is not a literal tailnet address, and the
   target refuses a peer that the connected socket does not show on the tailnet. The tailnet ACL must
   let `tag:imp` reach `tag:imp` on the API port ([ACL](#the-acl)).
-- The imp must be stopped. A move with its memory comes later.
+- The imp must be stopped, or sleeping on a host the target matches ([warm moves](#warm-moves)). A
+  running imp moves with `--stop`, cold; `imp sleep` first keeps its memory.
 - The imp must be tailnet-only. A [public imp](./https.md#public-imps)'s credential and DNS record
   belong to the source's domain, so `imp move` refuses it: run `imp unexpose`, move it, then
   `imp expose` on the target. A marked imp refuses `imp expose` and `imp unexpose` with `MOVING`.

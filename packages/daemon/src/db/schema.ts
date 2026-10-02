@@ -81,6 +81,10 @@ interface ImpsTable {
 
   // the uid and gid its jailed Firecracker runs as (docs/architecture/daemon.md#the-jailer)
   jail_uid: number | null;
+
+  // 1 from a warm move's commit to the imp's first wake here, which installs
+  // this host's broker CA in the guest
+  trust_pending: Generated<number>;
 }
 
 // an imp's last cold boots (docs/architecture/daemon.md#output-offsets)
@@ -235,6 +239,9 @@ interface MoveSendsTable {
 
   // how the disk goes: `files`, or `zfs` streams to a ZFS target
   mode: 'files' | 'zfs';
+
+  // 1 when the memory snapshot goes too: a warm move
+  warm: Generated<number>;
   receipt: string | null;
   error: string | null;
   created_at: number;

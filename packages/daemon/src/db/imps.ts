@@ -53,6 +53,9 @@ export interface ImpRecord {
   // host keys (docs/guides/templates.md#identity)
   readonly isIdentityResetPending: boolean;
 
+  // a warm move's imp until its first wake here (docs/architecture/moves.md#warm-moves)
+  readonly isTrustPending: boolean;
+
   // set while the imp moves between hosts (moves/)
   readonly moveState: MoveState | null;
 }
@@ -183,6 +186,13 @@ export async function allocateSlot(
   }
 
   return slot;
+}
+
+// whether a warm move may keep `slot`: no imp and no live ticket holds it
+export async function isSlotFree(db: ImpDatabase, slot: number, now: number): Promise<boolean> {
+  const taken = await listTakenSlots(db, now);
+
+  return !taken.has(slot);
 }
 
 // A slot a warm move asks for, free of imps; its own ticket holds it
@@ -456,11 +466,17 @@ export async function updateImpCommitted(
   db: ImpDatabase,
   id: string,
   committedAt: number,
+  isWarm = false,
 ): Promise<ImpRecord> {
   const row = await db.transaction().execute(async (trx) => {
+    // a warm move's imp sleeps on the memory it brought, and its first wake
+    // installs this host's broker CA
     const updated = await trx
       .updateTable('imps')
-      .set({ move_state: null })
+      .set({
+        move_state: null,
+        ...(isWarm && { state: 'sleeping', slept_at: committedAt, trust_pending: 1 }),
+      })
       .where('id', '=', id)
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -479,6 +495,19 @@ export async function updateImpCommitted(
   emitImpWrite(db, { kind: 'changed', imp, reason: 'updated' });
 
   return imp;
+}
+
+// true once, for an imp whose CA install a warm move left to its first wake
+export async function claimTrustPending(db: ImpDatabase, id: string): Promise<boolean> {
+  const taken = await db
+    .updateTable('imps')
+    .set({ trust_pending: 0 })
+    .where('id', '=', id)
+    .where('trust_pending', '=', 1)
+    .returning('id')
+    .executeTakeFirst();
+
+  return taken !== undefined;
 }
 
 // sets or clears the move mark (moves/); the change goes out as `updated`
@@ -656,6 +685,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     awakeMs: row.awake_ms,
     awakeSince: toDate(row.awake_since),
     isIdentityResetPending: row.identity_reset_pending === 1,
+    isTrustPending: row.trust_pending === 1,
     publicAuth: readPublicAuth(row),
     moveState: row.move_state,
     jailUid: row.jail_uid,

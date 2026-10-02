@@ -398,10 +398,12 @@ export function buildRouter(deps: RouterDeps) {
         deps.moves.prepare(context.input.name, {
           stop: context.input.stop === true,
           targetStorage: context.input.targetStorage ?? 'xfs',
+          target: context.input.target ?? null,
         }),
       ),
+      facts: os.moves.facts.handler(() => deps.moves.readFacts()),
       receive: os.moves.receive.handler((context) =>
-        deps.moves.issueTicket(context.input.name, context.input.bytes),
+        deps.moves.issueTicket(context.input.name, context.input.bytes, context.input.warm),
       ),
       send: os.moves.send.handler((context) =>
         deps.moves.send(context.input.name, context.input.to, context.input.ticket),

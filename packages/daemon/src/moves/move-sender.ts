@@ -1,4 +1,4 @@
-import type { MovePlan, MoveStatus } from '@imp/api';
+import type { MovePlan, MoveStatus, WarmHost, WarmMove } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
@@ -11,6 +11,9 @@ import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
 import type { StreamedCommand } from '../process/run-stream';
 import { readErrorMessage } from '../read-error-message';
+import { readSnapshotMeta } from '../sleep/snapshot-meta';
+import type { SnapshotMeta } from '../sleep/snapshot-meta';
+import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImagePaths } from '../storage/data-layout';
 import type { MoveMode, StorageBackend } from '../storage/storage-backend';
 import {
@@ -34,6 +37,7 @@ import { ReceiptSchema, buildTicketHeader, parseTicket, readReceipt } from './mo
 import type { ReadonlyReceiptBody, ReceiptBody } from './move-tickets';
 import { readPeerUrlAddress } from './peer-address';
 import type { PeerRanges } from './peer-address';
+import { buildWarmMove, findWarmMismatches } from './warm-facts';
 
 export interface MoveSender {
   readonly prepare: (name: string, options: PrepareOptions) => Promise<MovePlan>;
@@ -49,16 +53,22 @@ export interface MoveSender {
 interface PrepareOptions {
   readonly stop: boolean;
   readonly targetStorage: 'xfs' | 'zfs';
+
+  // the target's facts, for a warm move; null from an older CLI or target
+  readonly target: WarmHost | null;
 }
 
 export interface MoveSenderDeps {
   readonly db: ImpDatabase;
   readonly dataDir: string;
-  readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource'>;
+  readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource' | 'resolveImpPaths'>;
   readonly imps: Pick<Imps, 'lockImp' | 'haltImp' | 'destroyImp'>;
   readonly grants: Pick<Broker, 'listGrants'>;
-  readonly egress: Pick<EgressService, 'readPolicy'>;
+  readonly egress: Pick<EgressService, 'readPolicy' | 'readAnswers'>;
   readonly ranges: PeerRanges;
+
+  // this host's facts, as a target of a warm move would read them
+  readonly readWarmHost: () => WarmHost;
 
   // after the receipt: the tailnet-names pass, which drops this host's name
   readonly releaseName: () => Promise<void>;
@@ -108,11 +118,19 @@ const ESTIMATE_SLACK_BYTES = 64 * 1024 * 1024;
 
 type SentFile = ReceiptBody['files'][number];
 
-// where a send goes, with its ticket, and how it carries the disk
+// where a send goes, with its ticket, how it carries the disk, and whether
+// the memory goes too
 interface SendTarget {
   readonly peer: string;
   readonly ticket: string;
   readonly mode: MoveMode;
+  readonly isWarm: boolean;
+}
+
+// a warm send's memory snapshot, and whether the target needs its drive
+interface WarmParts {
+  readonly meta: SnapshotMeta;
+  readonly isDriveIncluded: boolean;
 }
 
 // what a running send reports as it goes
@@ -231,9 +249,52 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return imp;
   };
 
+  // a sleeping imp's snapshot record, which a warm send carries
+  const requireMeta = (imp: ImpRecord): SnapshotMeta => {
+    const meta = readSnapshotMeta(deps.storage.resolveImpPaths(imp.id));
+
+    if (meta === null) {
+      throw new Error(`${imp.name} has no memory snapshot to move`);
+    }
+
+    return meta;
+  };
+
   // What a send carries after the header, in order: the image (when asked),
   // then each checkpoint oldest first and the disk, as files or as streams
   const openParts = async (
+    imp: ImpRecord,
+    mode: MoveMode,
+    isImageIncluded: boolean,
+    warm: WarmParts | null,
+  ): Promise<OpenedParts> => {
+    const opened = await openDiskParts(imp, mode, isImageIncluded);
+
+    if (warm === null) {
+      return opened;
+    }
+
+    // after the disk: the drive the snapshot reopens, then its two files
+    const paths = deps.storage.resolveImpPaths(imp.id);
+
+    const memory: StreamPart[] = [
+      ...(warm.isDriveIncluded && warm.meta.systemDrivePath !== undefined
+        ? [
+            {
+              kind: 'file' as const,
+              path: warm.meta.systemDrivePath,
+              file: { kind: 'system-drive' as const, sizeBytes: 0 },
+            },
+          ]
+        : []),
+      { kind: 'file', path: paths.vmstate, file: { kind: 'vmstate', sizeBytes: 0 } },
+      { kind: 'file', path: paths.memFile, file: { kind: 'mem', sizeBytes: 0 } },
+    ];
+
+    return { ...opened, parts: [...opened.parts, ...memory] };
+  };
+
+  const openDiskParts = async (
     imp: ImpRecord,
     mode: MoveMode,
     isImageIncluded: boolean,
@@ -301,8 +362,14 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
   // the bytes a send carries: the files' data, and the streams' estimate
   // with room to spare
-  const countBytes = async (imp: ImpRecord, mode: MoveMode): Promise<number> => {
-    const opened = await openParts(imp, mode, true);
+  const countBytes = async (
+    imp: ImpRecord,
+    mode: MoveMode,
+    meta: SnapshotMeta | null,
+  ): Promise<number> => {
+    const warm = meta === null ? null : { meta, isDriveIncluded: true };
+
+    const opened = await openParts(imp, mode, true, warm);
 
     try {
       let bytes = 0;
@@ -323,10 +390,28 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
   };
 
+  // a warm send's part of the header: what the target checks, the snapshot's
+  // record and vm.json, and a box imp's resolved addresses
+  const buildWarmHeader = async (
+    imp: ImpRecord,
+    warm: WarmParts,
+  ): Promise<NonNullable<MoveHeader['warm']>> => {
+    const egress = await deps.egress.readPolicy(imp.name);
+
+    return {
+      move: buildWarmMove(imp.slot, egress.mode, warm.meta, deps.readWarmHost()),
+      meta: warm.meta,
+      vm: readVmIdentity(deps.storage.resolveImpPaths(imp.id)),
+      isDriveIncluded: warm.isDriveIncluded,
+      answers: egress.mode === 'box' ? deps.egress.readAnswers(imp.slot) : [],
+    };
+  };
+
   const buildHeader = async (
     imp: ImpRecord,
     isImageIncluded: boolean,
     streams: MoveHeader['streams'],
+    warm: WarmParts | null,
   ): Promise<MoveHeader> => {
     const image = await findImageById(deps.db, imp.imageId);
 
@@ -370,6 +455,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         diskBytes: checkpoint.diskBytes,
       })),
       streams,
+      warm: warm === null ? null : await buildWarmHeader(imp, warm),
     };
   };
 
@@ -432,8 +518,13 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const image = await findImageById(deps.db, imp.imageId);
 
+    const meta = target.isWarm ? requireMeta(imp) : null;
+
     const offer = await sendToPeer(peer, MOVE_PATHS.offer, ticket, {
-      body: JSON.stringify({ imageDigest: image?.digest ?? '' }),
+      body: JSON.stringify({
+        imageDigest: image?.digest ?? '',
+        ...(meta !== null && { systemDrive: meta.systemDrive }),
+      }),
       signal,
       extraHeaders: { 'content-type': 'application/json' },
     });
@@ -446,12 +537,14 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       throw new Error('the target is not on ZFS any more; prepare the move again');
     }
 
-    const opened = await openParts(imp, target.mode, reply.needsImage);
+    const warm = meta === null ? null : { meta, isDriveIncluded: reply.needsSystemDrive };
+
+    const opened = await openParts(imp, target.mode, reply.needsImage, warm);
 
     const sent: SentFile[] = [];
 
     try {
-      const header = await buildHeader(imp, reply.needsImage, opened.streams);
+      const header = await buildHeader(imp, reply.needsImage, opened.streams, warm);
 
       const frames = encodeStream(header, opened.parts, progress.onData, (file) => {
         sent.push(file);
@@ -644,6 +737,31 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     };
   };
 
+  // A sleeping imp moves warm only to a target that can load its memory;
+  // else the refusal names each fact that differs
+  const checkWarmMove = async (
+    imp: ImpRecord,
+    meta: SnapshotMeta,
+    target: WarmHost | null,
+  ): Promise<WarmMove> => {
+    const egress = await deps.egress.readPolicy(imp.name);
+
+    const move = buildWarmMove(imp.slot, egress.mode, meta, deps.readWarmHost());
+
+    const mismatches =
+      target === null
+        ? ['the target does not say what it can load']
+        : findWarmMismatches(move, target);
+
+    if (mismatches.length > 0) {
+      throw new ORPCError('PRECONDITION_FAILED', {
+        message: `${imp.name} cannot move with its memory: ${mismatches.join('; ')}. imp move --stop moves it cold`,
+      });
+    }
+
+    return move;
+  };
+
   const requirePeer = (to: string): string => {
     const address = readPeerUrlAddress(to);
 
@@ -690,9 +808,13 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           throw buildPublicError(name);
         }
 
-        if (imp.state === 'running' || imp.state === 'sleeping') {
+        const isWarm = imp.state === 'sleeping' && !options.stop;
+
+        if (isWarm) {
+          // the snapshot is read here, under the lock, and again at the send
+        } else if (imp.state === 'running' || imp.state === 'sleeping') {
           if (!options.stop) {
-            throw buildInvalidStateError(imp.state, ['stopped'], 'move');
+            throw buildInvalidStateError(imp.state, ['stopped', 'sleeping'], 'move');
           }
 
           await deps.imps.haltImp(imp);
@@ -700,10 +822,12 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           throw buildInvalidStateError(imp.state, ['stopped'], 'move');
         }
 
+        const meta = isWarm ? requireMeta(imp) : null;
+        const warm = meta === null ? null : await checkWarmMove(imp, meta, options.target);
         const isZfs = deps.storage.kind === 'zfs' && options.targetStorage === 'zfs';
         const mode: MoveMode = isZfs ? 'zfs' : 'files';
 
-        const bytes = await countBytes(imp, mode);
+        const bytes = await countBytes(imp, mode, meta);
 
         await deps.db
           .insertInto('move_sends')
@@ -713,6 +837,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
             ticket: null,
             total_bytes: bytes,
             mode,
+            warm: isWarm ? 1 : 0,
             receipt: null,
             error: null,
             created_at: deps.now(),
@@ -732,7 +857,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
         const checkpoints = await listCheckpoints(deps.db, imp.id);
 
-        return { bytes, checkpoints: checkpoints.length };
+        return { bytes, checkpoints: checkpoints.length, warm };
       }),
 
     send: async (name, to, ticket) => {
@@ -754,7 +879,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         .where('imp_id', '=', imp.id)
         .execute();
 
-      startSend(imp, { peer, ticket, mode: row.mode }, row.total_bytes);
+      startSend(imp, { peer, ticket, mode: row.mode, isWarm: row.warm === 1 }, row.total_bytes);
 
       return readStatusOf(imp);
     },
@@ -805,7 +930,11 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
       // a send a crash cut short starts over, with a new ticket
       if (imp.moveState === 'sending' && !tasks.has(imp.id) && ticket !== undefined) {
-        startSend(imp, { peer: row.peer_url, ticket, mode: row.mode }, row.total_bytes);
+        startSend(
+          imp,
+          { peer: row.peer_url, ticket, mode: row.mode, isWarm: row.warm === 1 },
+          row.total_bytes,
+        );
 
         return readStatusOf(imp);
       }

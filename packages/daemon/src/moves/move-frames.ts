@@ -18,7 +18,16 @@ const HEADER_BYTES = 5;
 const MAX_PAYLOAD_BYTES = MOVE_BLOCK_BYTES + OFFSET_BYTES;
 
 export const MoveFileSchema = z.object({
-  kind: z.enum(['image-rootfs', 'image-config', 'checkpoint', 'disk', 'zfs-stream']),
+  kind: z.enum([
+    'image-rootfs',
+    'image-config',
+    'checkpoint',
+    'disk',
+    'zfs-stream',
+    'system-drive',
+    'vmstate',
+    'mem',
+  ]),
 
   // a checkpoint's place, oldest first, or a ZFS stream's
   index: z.int().nonnegative().optional(),

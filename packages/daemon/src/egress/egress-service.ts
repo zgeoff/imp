@@ -29,7 +29,7 @@ import type { AllowRules } from './egress-rules';
 import { buildElementChange, buildRuleset } from './egress-ruleset';
 import type { NetworkPeer } from './egress-ruleset';
 import { createEgressSets } from './egress-sets';
-import type { AddressAnswer } from './egress-sets';
+import type { AddressAnswer, HeldAnswer } from './egress-sets';
 import { resolveNetworkName } from './network-names';
 
 // impd's clamp on an answer's TTL, and the size of a box imp's set
@@ -97,6 +97,9 @@ export interface EgressService {
     answers: readonly AddressAnswer[],
   ) => Promise<void>;
   readonly runSweep: () => Promise<void>;
+
+  // a box slot's resolved addresses, for a warm move to carry
+  readonly readAnswers: (slot: number) => readonly HeldAnswer[];
 }
 
 // A table nft refuses runs `undo`, so the rows and the table agree. Imps the
@@ -572,6 +575,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     checkName,
     writeAnswers,
     runSweep,
+    readAnswers: (slot) => sets.listAnswers(slot, now()),
   };
 }
 

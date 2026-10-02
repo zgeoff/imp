@@ -31,6 +31,7 @@ function buildImp(): ImpRecord {
     awakeMs: 0,
     awakeSince: null,
     isIdentityResetPending: false,
+    isTrustPending: false,
     moveState: null,
     jailUid: null,
   };
