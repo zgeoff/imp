@@ -65,6 +65,10 @@ func (t *Tree) New() (*Group, error) {
 	path := filepath.Join(t.parent, strconv.FormatUint(t.next, 10))
 	t.mu.Unlock()
 
+	// the parent again: in the inner container, root can remove it
+	if err := os.MkdirAll(t.parent, 0o755); err != nil {
+		return nil, err
+	}
 	if err := os.Mkdir(path, 0o755); err != nil {
 		return nil, err
 	}
