@@ -33,6 +33,7 @@ type Server struct {
 	Sessions *session.Manager
 	Services *services.Supervisor
 	Agents   *sshagent.Manager
+	Dial     *dial.Dialer
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
 
@@ -122,7 +123,7 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 	if req.Op == proto.OpDial {
-		if err := dial.Serve(req, r, w); err != nil {
+		if err := s.Dial.Serve(req, r, w); err != nil {
 			log.Printf("dial %s %s: %v", req.Network, req.Address, err)
 		}
 		return

@@ -16,8 +16,9 @@ const LOOPBACK_HOSTS: Readonly<Record<string, string>> = {
   '::1': '[::1]',
 };
 
-// impd's own sockets in the guest, such as a forwarded ssh-agent's. The
-// agent dials as root, so a forward could reach another user's agent.
+// impd's own sockets in the guest, such as a forwarded ssh-agent's. Not a
+// boundary: the agent dials a unix socket as the image USER, who owns every
+// forwarded agent anyway. It keeps a root image's forward off them.
 const IMP_RUN_DIR = '/run/imp/';
 
 // the dial target for a direct-streamlocal channel, or null when it is

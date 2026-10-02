@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zgeoff/imp/agent/internal/cmdline"
+	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
@@ -77,6 +78,7 @@ func Stage2() error {
 		Sessions: session.NewManager(launcher),
 		Services: sup,
 		Agents:   sshagent.NewManager(sshagent.Root, image.User),
+		Dial:     dial.NewDialer(r, image.User, AgentPath),
 	}
 	// A shutdown request and a signal can race; only the first powers off.
 	// A panic on the way must still end the guest, so it falls back to a

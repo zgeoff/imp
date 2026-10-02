@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,7 +25,7 @@ func startServe(t *testing.T, req proto.Request) *host {
 	hostEnd, guestEnd := net.Pipe()
 	h := &host{conn: hostEnd, r: proto.NewReader(hostEnd), w: proto.NewWriter(hostEnd), served: make(chan error, 1)}
 	go func() {
-		h.served <- Serve(req, proto.NewReader(guestEnd), proto.NewWriter(guestEnd))
+		h.served <- testDialer("").Serve(req, proto.NewReader(guestEnd), proto.NewWriter(guestEnd))
 		guestEnd.Close()
 	}()
 	t.Cleanup(func() { hostEnd.Close() })
@@ -99,18 +98,23 @@ func listen(t *testing.T, network, address string, handle func(net.Conn)) net.Ad
 func TestRelaysWithHalfCloseBothWays(t *testing.T) {
 	for _, network := range []string{"tcp", "unix"} {
 		t.Run(network, func(t *testing.T) {
-			address := "127.0.0.1:0"
+			address, dir := "127.0.0.1:0", ""
 			if network == "unix" {
-				// relative: a unix socket path has a 108-byte limit, which
-				// a long TMPDIR passes
-				t.Chdir(t.TempDir())
+				// bound relative: a unix socket path has a 108-byte limit,
+				// which a long TMPDIR passes; the dial takes the absolute one
+				dir = t.TempDir()
+				t.Chdir(dir)
 				address = "target.sock"
 			}
 			addr := listen(t, network, address, func(c net.Conn) {
 				got, _ := io.ReadAll(c)
 				c.Write([]byte("got " + string(got)))
 			})
-			h := startServe(t, proto.Request{Op: proto.OpDial, Network: network, Address: addr.String()})
+			target := addr.String()
+			if network == "unix" {
+				target = filepath.Join(dir, address)
+			}
+			h := startServe(t, proto.Request{Op: proto.OpDial, Network: network, Address: target})
 			h.requireOK(t)
 
 			h.w.Write(proto.TypeStdin, []byte("hello "))
@@ -209,24 +213,4 @@ func TestTargetResetEndsWithoutEOF(t *testing.T) {
 		}
 	}
 	h.waitServed(t)
-}
-
-// A symlink to a socket under the agent's own directory is refused before
-// the dial, so a forward cannot reach a forwarded ssh-agent as root.
-func TestSymlinkIntoImpDirIsRefused(t *testing.T) {
-	// relative: a unix socket path has a 108-byte limit
-	t.Chdir(t.TempDir())
-	old := impDir
-	impDir = "imp"
-	t.Cleanup(func() { impDir = old })
-	if err := os.MkdirAll(impDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	listen(t, "unix", filepath.Join(impDir, "agent.sock"), func(net.Conn) {})
-	if err := os.Symlink(filepath.Join(impDir, "agent.sock"), "link.sock"); err != nil {
-		t.Fatal(err)
-	}
-
-	h := startServe(t, proto.Request{Op: proto.OpDial, Network: "unix", Address: "link.sock"})
-	h.requireError(t, proto.ErrBadRequest)
 }

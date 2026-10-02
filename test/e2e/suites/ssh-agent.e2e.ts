@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { createPrivateKey } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { utils } from 'ssh2';
 import { resolveImageName } from '../lib/fixtures';
@@ -108,6 +108,72 @@ test('only the image user and root reach the socket', async () => {
   // ssh-add exits 2 when it cannot reach the agent
   expect(result.stdout).toContain('nobody=2\n');
   expect(result.stdout).toContain('root=0\n');
+});
+
+// `ssh-add -l` on this machine through `ssh -N -L <socket>:<path>` to a socket
+// in the imp: what ssh-add printed, and what the forwarding ssh logged
+interface ForwardedList {
+  readonly listed: string;
+  readonly forwardLog: string;
+}
+
+async function listThroughUnixForward(path: string, label: string): Promise<ForwardedList> {
+  const local = join(client.dir, `${label}.sock`);
+
+  // INFO: the client logs a refused channel at that level
+  const forward = startSsh(client, [
+    '-N',
+    '-o',
+    'LogLevel=INFO',
+    '-L',
+    `${local}:${path}`,
+    `${name}@${SSH_HOST}`,
+  ]);
+
+  let listed = '';
+
+  try {
+    await waitFor(`the ${label} forward to listen`, () => {
+      if (!existsSync(local)) {
+        throw new Error(`no ${local} yet`);
+      }
+    });
+
+    const result = await runCommand(['ssh-add', '-l'], { env: { SSH_AUTH_SOCK: local } });
+
+    listed = `${result.stdout}${result.stderr}`;
+  } finally {
+    await forward.stop();
+
+    rmSync(local, { force: true });
+  }
+
+  const forwardLog = await new Response(forward.proc.stderr).text();
+
+  return { listed, forwardLog };
+}
+
+// The gateway dials a unix socket as the image user (dev), not as root: an
+// agent of dev's answers, a root-only socket does not, and a root agent on a
+// world-writable socket refuses dev by its peer uid.
+test("a unix socket forward reaches the image user's sockets, not root's", async () => {
+  await runShellInImp(
+    name,
+    [
+      'set -e',
+      "sudo sh -c 'ssh-agent -a /run/e2e-root.sock && ssh-agent -a /run/e2e-open.sock && chmod 666 /run/e2e-open.sock' >/dev/null",
+      'ssh-agent -a /tmp/e2e-dev.sock >/dev/null',
+    ].join('\n'),
+  );
+
+  const own = await listThroughUnixForward('/tmp/e2e-dev.sock', 'dev-fwd');
+  const rootOnly = await listThroughUnixForward('/run/e2e-root.sock', 'root-fwd');
+  const rootAgent = await listThroughUnixForward('/run/e2e-open.sock', 'open-fwd');
+
+  expect(own.listed).toContain('The agent has no identities.');
+  expect(rootOnly.listed).not.toContain('The agent has no identities.');
+  expect(rootOnly.forwardLog).toContain('open failed: connect failed');
+  expect(rootAgent.listed).not.toContain('The agent has no identities.');
 });
 
 // OpenSSH asks for forwarding only when it has an agent, so the connection
