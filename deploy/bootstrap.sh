@@ -7,8 +7,8 @@
 #   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 2 if a run would change anything
 #   bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1
 #
-# Phases, in order: preflight, packages, storage, kernel, firewall, imp,
-# health. Each phase compares the host with what it wants and changes only
+# Phases, in order: preflight, packages, storage, kernel, firewall, ipv6,
+# imp, health. Each phase compares the host with what it wants and changes only
 # the difference, so a second run changes nothing. --dry-run prints the
 # changes instead of making them.
 #
@@ -56,6 +56,14 @@ Options:
                               none: the platform owns the inbound firewall,
                               and a table loaded by an earlier run is removed
   --ssh-port N                one more SSH port to keep open (repeatable)
+  --ipv6 auto|on|off          imps' IPv6: on runs imp-host on a Docker network
+                              with IPv6, behind Docker's NAT66; auto (the
+                              first run's default) is on when the host has a
+                              global IPv6 default route. Later runs keep the
+                              env file's choice. off removes the network.
+  --ra-handled                the client that takes the host's router adverts
+                              (networkd, NetworkManager, dhcpcd) keeps them
+                              with forwarding on; see docs/guides/install.md#ipv6
   --skip-health               skip the closing health check
 EOF
 }
@@ -75,6 +83,15 @@ readonly TEMPLATE_BUDGET_MIB=16384
 readonly RAM_BUDGET_FLOOR_MIB=512
 # A loop file smaller than this is refused.
 readonly LOOP_MIN_GIB=20
+# With IPv6, imp-host runs on this Docker network. The bridge has a fixed
+# name so a host firewall can admit it; the name keeps clear of imp's own
+# interfaces (imp0, imp+).
+readonly HOST_NETWORK=imp-host
+readonly HOST_BRIDGE=br-imphost
+# accept_ra=2 for the uplink, when the kernel takes its router adverts.
+readonly RA_FILE=/etc/sysctl.d/90-imp-ipv6.conf
+# docker network inspect: IPv6 on, the bridge's name, then every subnet.
+readonly NETWORK_FORMAT='{{.EnableIPv6}} {{or (index .Options "com.docker.network.bridge.name") "unnamed"}}{{range .IPAM.Config}} {{.Subnet}}{{end}}'
 
 mode=
 storage=
@@ -91,6 +108,11 @@ authkey_file=
 extra_ssh_ports=()
 host_firewall=
 host_firewall_set=
+ipv6=
+ipv6_set=
+ipv6_auto=
+ipv6_subnet=
+ra_handled=
 skip_health=
 changes=0
 in_container=
@@ -238,6 +260,140 @@ ssh_ports_from_sshd_t() { awk 'tolower($1) == "port" { print $2 }'; }
 # local addresses on stdin, such as "[::]:22 (Stream)" or "0.0.0.0:2222".
 ssh_ports_from_listen() { grep -oE ':[0-9]+( |$)' | tr -d ': '; }
 
+# route_uplink ROUTE: the device of an `ip -6 route` line, or nothing.
+route_uplink() { awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }' <<<"$1"; }
+
+# route_is_ra ROUTE: the route came from a router advert.
+route_is_ra() { [[ " $1 " == *" proto ra "* ]]; }
+
+# ipv6_expand ADDR: the eight groups of an IPv6 address, colon-separated,
+# lower case and without leading zeros; fails on anything else.
+ipv6_expand() {
+  local addr=${1,,} i
+  local -a groups=() head=() tail=()
+  if [[ $addr == *::* ]]; then
+    [[ ${addr#*::} != *::* ]] || return 1
+    [ -z "${addr%%::*}" ] || IFS=: read -ra head <<<"${addr%%::*}"
+    [ -z "${addr#*::}" ] || IFS=: read -ra tail <<<"${addr#*::}"
+    groups=("${head[@]}")
+    for ((i = ${#head[@]} + ${#tail[@]}; i < 8; i++)); do groups+=(0); done
+    groups+=("${tail[@]}")
+  else
+    IFS=: read -ra groups <<<"$addr"
+  fi
+  [ ${#groups[@]} = 8 ] || return 1
+  for i in "${!groups[@]}"; do
+    [[ ${groups[i]} =~ ^[0-9a-f]{1,4}$ ]] || return 1
+    groups[i]=$(printf '%x' "0x${groups[i]}")
+  done
+  (
+    IFS=:
+    echo "${groups[*]}"
+  )
+}
+
+# ipv6_canon ADDR[/LEN]: ADDR as Docker prints it (RFC 5952): lower case,
+# no leading zeros, and the longest run of two or more zero groups as ::.
+ipv6_canon() {
+  local expanded suffix="" i
+  [[ $1 == */* ]] && suffix=/${1#*/}
+  expanded=$(ipv6_expand "${1%%/*}") || return 1
+  local -a groups
+  IFS=: read -ra groups <<<"$expanded"
+  local best=-1 best_len=1 run=0 start=0
+  for i in "${!groups[@]}"; do
+    if [ "${groups[i]}" = 0 ]; then
+      [ "$run" -gt 0 ] || start=$i
+      run=$((run + 1))
+      if [ "$run" -gt "$best_len" ]; then
+        best=$start best_len=$run
+      fi
+    else
+      run=0
+    fi
+  done
+  if [ "$best" -lt 0 ]; then
+    echo "$expanded$suffix"
+    return
+  fi
+  local left right
+  left=$(
+    IFS=:
+    echo "${groups[*]:0:best}"
+  )
+  right=$(
+    IFS=:
+    echo "${groups[*]:best+best_len}"
+  )
+  echo "$left::$right$suffix"
+}
+
+# subnet6 TEXT: TEXT as a canonical IPv6 /64 with no host bits; fails on
+# anything else.
+subnet6() {
+  local expanded
+  [[ $1 == */64 ]] || return 1
+  expanded=$(ipv6_expand "${1%/64}") || return 1
+  [[ $expanded == *:*:*:*:0:0:0:0 ]] || return 1
+  ipv6_canon "$1"
+}
+
+# random_ula64: a random unique local /64 (RFC 4193): fd, a 40-bit global
+# ID and subnet 0.
+random_ula64() {
+  local hex
+  hex=$(od -An -N5 -tx1 /dev/urandom | tr -d ' \n')
+  ipv6_canon "fd${hex:0:2}:${hex:2:4}:${hex:6:4}::/64"
+}
+
+# network_drift WANT INSPECT: how a network that docker network inspect
+# (NETWORK_FORMAT) describes as INSPECT differs from IPv6 on the /64 WANT
+# with the bridge HOST_BRIDGE; nothing when it matches.
+network_drift() {
+  local want=$1 enabled bridge subnet found="" have=()
+  read -r enabled bridge subnet <<<"$2"
+  if [ "$enabled" != true ]; then
+    echo "it has no IPv6"
+    return
+  fi
+  if [ "$bridge" != "$HOST_BRIDGE" ]; then
+    echo "its bridge is $bridge, not $HOST_BRIDGE"
+    return
+  fi
+  for subnet in $subnet; do
+    [[ $subnet == *:* ]] || continue
+    have+=("$subnet")
+    [ "$(ipv6_canon "$subnet")" != "$want" ] || found=1
+  done
+  [ -n "$found" ] || echo "its IPv6 subnet is ${have[*]:-none}, not $want"
+}
+
+# network_subnet6 INSPECT: the IPv6 subnet of a network with IPv6 and the
+# bridge HOST_BRIDGE, or nothing.
+network_subnet6() {
+  local enabled bridge subnets subnet
+  read -r enabled bridge subnets <<<"$1"
+  [ "$enabled" = true ] && [ "$bridge" = "$HOST_BRIDGE" ] || return 0
+  for subnet in $subnets; do
+    if [[ $subnet == *:* ]]; then
+      ipv6_canon "$subnet"
+      return
+    fi
+  done
+}
+
+# render_ra_file UPLINK: the sysctl.d file. The key's slash form keeps a
+# dotted interface name (eth0.100) whole.
+render_ra_file() {
+  printf '%s\n' "# Written by deploy/bootstrap.sh (docs/guides/install.md#ipv6). Docker turns on" \
+    "# IPv6 forwarding for imp-host's network; with forwarding on, the kernel" \
+    "# takes router adverts on $1 only with accept_ra=2." \
+    "net/ipv6/conf/$1/accept_ra = 2"
+}
+
+# ra_file_uplink: the uplink a RA_FILE on stdin names, or nothing.
+ra_file_uplink() { sed -n 's|^net/ipv6/conf/\(.*\)/accept_ra = 2$|\1|p' | tail -n 1; }
+
 # render_firewall PORT...: the nft ruleset. One transaction: create the
 # table, delete it, create it again, so a reload replaces only our rules and
 # never Docker's. Input only; Docker owns forwarding. The host itself is not
@@ -268,24 +424,29 @@ EOF
 }
 
 # render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT
-# HOST_FIREWALL: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
+# HOST_FIREWALL IPV6 SUBNET6: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
 # file) wins over TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE
 # is set when IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB
-# when it is empty or still the template's, IMP_STORAGE_BACKEND and
-# IMP_HOST_FIREWALL always, and IMP_ZFS_ROOT when ZFS_ROOT is non-empty. TAILSCALE_AUTHKEY comes from the
+# when it is empty or still the template's, IMP_STORAGE_BACKEND,
+# IMP_HOST_FIREWALL, IMP_HOST_IPV6 and IMP_HOST_NETWORK (from IPV6) always,
+# and IMP_ZFS_ROOT and IMP_HOST_SUBNET6 when theirs is non-empty. TAILSCALE_AUTHKEY comes from the
 # environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
 # non-empty.
 render_env() {
   local base=$1 template=$2 budget=$3 img=$4 img_set=$5
   [ -z "$base" ] && base=$template && img_set=1
   BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
-    STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 \
+    STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 IPV6=$9 SUBNET6=${10} \
+    NETWORK=$([ "$9" != on ] || echo "--network $HOST_NETWORK") \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
       /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
       /^IMP_STORAGE_BACKEND=/ { set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"]); next }
       /^IMP_ZFS_ROOT=/ && ENVIRON["ZFS_ROOT"] != "" { set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"]); next }
       /^IMP_HOST_FIREWALL=/ { set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"]); next }
+      /^IMP_HOST_IPV6=/ { set("IMP_HOST_IPV6", ENVIRON["IPV6"]); next }
+      /^IMP_HOST_NETWORK=/ { set("IMP_HOST_NETWORK", ENVIRON["NETWORK"]); next }
+      /^IMP_HOST_SUBNET6=/ && ENVIRON["SUBNET6"] != "" { set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"]); next }
       /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
         set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
       }
@@ -302,6 +463,9 @@ render_env() {
         if (!done["IMP_STORAGE_BACKEND"]) set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"])
         if (!done["IMP_ZFS_ROOT"] && ENVIRON["ZFS_ROOT"] != "") set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"])
         if (!done["IMP_HOST_FIREWALL"]) set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"])
+        if (!done["IMP_HOST_IPV6"]) set("IMP_HOST_IPV6", ENVIRON["IPV6"])
+        if (!done["IMP_HOST_NETWORK"]) set("IMP_HOST_NETWORK", ENVIRON["NETWORK"])
+        if (!done["IMP_HOST_SUBNET6"] && ENVIRON["SUBNET6"] != "") set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"])
       }
     ' <<<"$base"
 }
@@ -334,16 +498,21 @@ Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
 EnvironmentFile=/etc/imp/imp-host.env
 # A container left over from a crash would hold the name.
 ExecStartPre=-/usr/bin/docker rm -f imp-host
+# With IPv6 (IMP_HOST_NETWORK names it), the network imp-host on its /64,
+# created when it is missing; bootstrap.sh --check reports one that differs.
+ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
 # $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
-# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps)
+# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps);
+# $IMP_HOST_NETWORK too: with IPv6, `--network imp-host`
 # The arguments come from deploy/imp-host.args.json: edit that, then run
 # bun run render:deploy (the NixOS module reads the same file).
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \
+  $IMP_HOST_NETWORK \
   -v /var/lib/imp:/var/lib/imp \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /etc/imp:/etc/imp:ro \
@@ -417,6 +586,15 @@ IMP_ZFS_ROOT=
 # impd needs no inbound host port either way.
 IMP_HOST_FIREWALL=own
 
+# Imps' IPv6 (docs/guides/install.md#ipv6). on: imp-host runs on the Docker
+# network imp-host, with the /64 IMP_HOST_SUBNET6 and the bridge br-imphost,
+# behind Docker's NAT66; IMP_HOST_NETWORK is the docker run words for it.
+# off: Docker's default bridge, IPv4 only. deploy/bootstrap.sh writes all
+# three (--ipv6); empty IMP_HOST_IPV6 means it decides at its first run.
+IMP_HOST_IPV6=
+IMP_HOST_SUBNET6=
+IMP_HOST_NETWORK=
+
 # Off-host backups with restic (docs/architecture/backups.md): unset
 # IMP_BACKUP_REPOSITORY means none. The container sees /etc/imp read-only;
 # keep the password there, mode 0600, and a copy off the host.
@@ -488,6 +666,8 @@ parse_args() {
         ;;
       --ssh-port) extra_ssh_ports+=("${2:?--ssh-port needs a port}") && shift ;;
       --host-firewall) host_firewall=${2:?--host-firewall needs own or none} host_firewall_set=1 && shift ;;
+      --ipv6) ipv6=${2:?--ipv6 needs auto, on or off} ipv6_set=1 && shift ;;
+      --ra-handled) ra_handled=1 ;;
       --skip-health) skip_health=1 ;;
       -h | --help) usage && exit 0 ;;
       *) usage >&2 && die "unknown argument: $1" ;;
@@ -501,6 +681,7 @@ parse_args() {
   [[ $loop_size_gib =~ ^([1-9][0-9]*|auto)$ ]] || die "--loop-size must be a whole number of GiB, or auto"
   case ${storage:-xfs} in xfs | zfs) ;; *) die "--storage must be xfs or zfs" ;; esac
   case ${host_firewall:-own} in own | none) ;; *) die "--host-firewall must be own or none" ;; esac
+  case ${ipv6:-auto} in auto | on | off) ;; *) die "--ipv6 must be auto, on or off" ;; esac
   if [ -n "$zfs_pool" ] && ! [[ $zfs_pool =~ ^[A-Za-z][A-Za-z0-9_.:-]*$ ]]; then
     die "--zfs-pool must be a pool name: $zfs_pool"
   fi
@@ -536,6 +717,7 @@ preflight() {
 
   resolve_storage
   resolve_host_firewall
+  resolve_ipv6
   if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
@@ -587,6 +769,39 @@ resolve_host_firewall() {
   host_firewall=${host_firewall:-${env_value:-own}}
   case $host_firewall in own | none) ;; *) die "$ENV_FILE says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
   log "host firewall: $host_firewall"
+}
+
+# resolve_ipv6: the flag, else the env file's choice, else auto. The env
+# file keeps on or off, never auto, so a later run on a host whose IPv6
+# route is down for a moment does not take imps' IPv6 away.
+resolve_ipv6() {
+  local env_value="" uplink
+  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_IPV6=//p' "$ENV_FILE" | tail -n 1)
+  ipv6=${ipv6:-${env_value:-auto}}
+  case $ipv6 in
+    on | off) log "ipv6: $ipv6" ;;
+    auto)
+      ipv6_auto=1
+      if uplink=$(global_ipv6_uplink); then
+        ipv6=on
+        log "ipv6: on (auto: $uplink has a global IPv6 default route)"
+      else
+        ipv6=off
+        log "ipv6: off (auto: the host has no global IPv6 default route)"
+      fi
+      ;;
+    *) die "$ENV_FILE says IMP_HOST_IPV6=$ipv6; want on or off" ;;
+  esac
+}
+
+# global_ipv6_uplink: the uplink of the host's IPv6 default route, when it
+# has a global address (not fc00::/7, not link-local).
+global_ipv6_uplink() {
+  local uplink
+  uplink=$(route_uplink "$(ip -6 route show default 2>/dev/null | head -n 1)")
+  [ -n "$uplink" ] || return 1
+  ip -6 -o addr show dev "$uplink" scope global 2>/dev/null | awk '{ print $4 }' | grep -qvE '^f[cd]' || return 1
+  echo "$uplink"
 }
 
 ensure_packages() {
@@ -1046,6 +1261,201 @@ ssh_ports() {
   } | grep -E '^[0-9]+$' | sort -nu
 }
 
+# ensure_ipv6: with IPv6 on, imp-host's Docker network, and the host's
+# router adverts kept once Docker turns on forwarding. Before the imp phase,
+# so the unit's first start finds the network.
+ensure_ipv6() {
+  phase ipv6
+  if [ "$ipv6" = off ]; then
+    remove_ipv6
+    return
+  fi
+  if ! check_docker_ipv6; then
+    ipv6=off
+    remove_ipv6
+    return
+  fi
+
+  local inspect="" existing=""
+  if command -v docker >/dev/null && inspect=$(docker network inspect -f "$NETWORK_FORMAT" "$HOST_NETWORK" 2>/dev/null); then
+    existing=1
+  fi
+  resolve_subnet6 "$inspect"
+  ensure_router_adverts "$existing"
+
+  if [ -z "$existing" ]; then
+    change "create the $HOST_NETWORK network: $ipv6_subnet on the bridge $HOST_BRIDGE" create_host_network
+    return
+  fi
+  local drift others
+  drift=$(network_drift "$ipv6_subnet" "$inspect")
+  if [ -z "$drift" ]; then
+    log "network: $HOST_NETWORK, $ipv6_subnet on the bridge $HOST_BRIDGE"
+    return
+  fi
+  others=$(network_others)
+  [ -z "$others" ] || die "the $HOST_NETWORK network differs ($drift), and $others use it; move them off it, then run again"
+  change "recreate the $HOST_NETWORK network ($drift): stop imp-host, then create it with $ipv6_subnet" recreate_host_network
+}
+
+# resolve_subnet6 INSPECT: the env file's IMP_HOST_SUBNET6, else the
+# subnet of a network that is already right but for the env file, else a
+# new random one.
+resolve_subnet6() {
+  local env_value=""
+  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_SUBNET6=//p' "$ENV_FILE" | tail -n 1)
+  if [ -n "$env_value" ]; then
+    ipv6_subnet=$(subnet6 "$env_value") || die "$ENV_FILE says IMP_HOST_SUBNET6=$env_value; want an IPv6 /64"
+    return
+  fi
+  ipv6_subnet=$(network_subnet6 "$1")
+  [ -n "$ipv6_subnet" ] || ipv6_subnet=$(random_ula64)
+}
+
+# check_docker_ipv6: Docker writes the NAT66 and forward rules for an IPv6
+# network itself from 27.0, where ip6tables became the default. A Docker
+# without them refuses on, and turns auto off with a warning.
+check_docker_ipv6() {
+  # a dry run on a fresh host: the packages phase would install docker-ce
+  command -v docker >/dev/null || return 0
+  local version why=""
+  version=$(docker version -f '{{.Server.Version}}' 2>/dev/null) || die "cannot read the Docker daemon's version"
+  if ! version_ge "$version" 27.0; then
+    why="Docker $version predates 27.0, which writes IPv6 NAT and forward rules by default"
+  elif [ -f /etc/docker/daemon.json ] && [ "$(jq -r '.ip6tables' /etc/docker/daemon.json 2>/dev/null)" = false ]; then
+    why="/etc/docker/daemon.json sets ip6tables to false, so imp-host's network would have no NAT66"
+  fi
+  [ -n "$why" ] || return 0
+  [ -n "$ipv6_auto" ] || die "$why; fix that, or give --ipv6 off"
+  warn "$why; ipv6: off"
+  return 1
+}
+
+# ensure_router_adverts EXISTING: Docker sets net.ipv6.conf.all.forwarding=1
+# for an IPv6 network, and with forwarding on the kernel ignores router
+# adverts where accept_ra=1: a host whose IPv6 default route comes from them
+# loses it when it expires. accept_ra is per network namespace, so this
+# applies in a test container too. EXISTING: the network is there already.
+ensure_router_adverts() {
+  local route uplink live file_uplink=""
+  route=$(ip -6 route show default 2>/dev/null | head -n 1)
+  uplink=$(route_uplink "$route")
+  if [ -z "$uplink" ]; then
+    log "router adverts: the host has no IPv6 default route"
+    return
+  fi
+  [ -f "$RA_FILE" ] && file_uplink=$(ra_file_uplink <"$RA_FILE")
+  live=$(cat "/proc/sys/net/ipv6/conf/$uplink/accept_ra")
+  # Ours already (a second run finds 2), or the kernel's to take.
+  if [ "$file_uplink" = "$uplink" ] || { route_is_ra "$route" && [ "$live" = 1 ]; }; then
+    put_file "$RA_FILE" 644 "$(render_ra_file "$uplink")" || true
+    if [ "$live" != 2 ]; then
+      change "sysctl net/ipv6/conf/$uplink/accept_ra=2, so the kernel takes router adverts with forwarding on" \
+        sysctl -qw "net/ipv6/conf/$uplink/accept_ra=2"
+    fi
+    return
+  fi
+  if ! route_is_ra "$route"; then
+    log "router adverts: the IPv6 default route on $uplink does not come from them"
+    return
+  fi
+  if [ "$live" = 2 ]; then
+    log "router adverts: the kernel takes them on $uplink, with accept_ra=2"
+    return
+  fi
+  ra_userspace "$uplink" "$1"
+}
+
+# ra_userspace UPLINK EXISTING: accept_ra is 0, so a client takes the
+# router adverts. Stop unless its config keeps them with forwarding on, or
+# the operator says so (--ra-handled), or IPv6 was on already.
+ra_userspace() {
+  local uplink=$1 owner network_file=""
+  network_file=$(networkctl status "$uplink" 2>/dev/null | sed -n 's/^ *Network File: //p' || true)
+  if [ -n "$network_file" ] && [ "$network_file" != n/a ]; then
+    owner=systemd-networkd
+    # networkd's IPv6AcceptRA defaults to off once forwarding is on; yes keeps it
+    if cat "$network_file" "$network_file.d"/*.conf 2>/dev/null \
+      | grep -qiE '^[[:space:]]*IPv6AcceptRA[[:space:]]*=[[:space:]]*(yes|true|on|1)[[:space:]]*$'; then
+      log "router adverts: systemd-networkd takes them on $uplink, with IPv6AcceptRA=yes in $network_file"
+      return
+    fi
+  elif nmcli -t -f DEVICE,STATE device 2>/dev/null | grep -qx "$uplink:connected"; then
+    owner=NetworkManager
+  elif pgrep -x dhcpcd >/dev/null; then
+    owner=dhcpcd
+  else
+    owner="a client other than the kernel"
+  fi
+  if [ -n "$ra_handled" ]; then
+    log "router adverts: $owner takes them on $uplink; --ra-handled says it keeps them with forwarding on"
+    return
+  fi
+  if [ -n "$2" ]; then
+    log "router adverts: $owner takes them on $uplink; IPv6 was on already"
+    return
+  fi
+  die "the IPv6 default route on $uplink comes from router adverts that $owner takes. Docker turns on IPv6 forwarding for imp-host's network, and $owner may then drop them, and the route with them. Make it keep router adverts with forwarding on (systemd-networkd: IPv6AcceptRA=yes; netplan: accept-ra: true), then run again with --ra-handled; or give --ipv6 off (docs/guides/install.md#ipv6)"
+}
+
+# network_others: the containers on the network other than imp-host.
+network_others() {
+  docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$HOST_NETWORK" 2>/dev/null \
+    | tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
+}
+
+create_host_network() {
+  docker network create --ipv6 --subnet "$ipv6_subnet" \
+    -o "com.docker.network.bridge.name=$HOST_BRIDGE" "$HOST_NETWORK" >/dev/null
+}
+
+# stop_imp_host: stop the unit, so imp-host leaves the network.
+stop_imp_host() {
+  systemctl stop imp-host 2>/dev/null || true
+  docker rm -f imp-host >/dev/null 2>&1 || true
+}
+
+recreate_host_network() {
+  stop_imp_host
+  docker network rm "$HOST_NETWORK" >/dev/null && create_host_network
+}
+
+# remove_ipv6: with off, take out what an earlier run with on put in, but
+# only when --ipv6 off asks for it, as with the firewall: an env file that
+# says off beside the network is drift for the operator to settle.
+remove_ipv6() {
+  local network="" file=""
+  if command -v docker >/dev/null && docker network inspect "$HOST_NETWORK" >/dev/null 2>&1; then
+    network=1
+  fi
+  [ ! -f "$RA_FILE" ] || file=1
+  if [ -z "$network$file" ]; then
+    log "ipv6: off; imp-host runs on Docker's default bridge"
+    return
+  fi
+  if [ -z "$ipv6_set" ]; then
+    local msg="IMP_HOST_IPV6=off, but the $HOST_NETWORK network or $RA_FILE is still there; run with --ipv6 off to remove them"
+    dry || die "$msg"
+    warn "$msg"
+    changes=$((changes + 1))
+    return
+  fi
+  if [ -n "$network" ]; then
+    local others
+    others=$(network_others)
+    [ -z "$others" ] || die "$others use the $HOST_NETWORK network; move them off it, then run again"
+    warn "turning IPv6 off cold-boots every imp that has an IPv6 prefix at its next start"
+    change "stop imp-host and remove the $HOST_NETWORK network" remove_host_network
+  fi
+  # accept_ra stays 2 until a reboot, as forwarding stays on until then.
+  [ -z "$file" ] || change "remove $RA_FILE (accept_ra keeps its value until a reboot)" rm -f "$RA_FILE"
+}
+
+remove_host_network() {
+  stop_imp_host
+  docker network rm "$HOST_NETWORK" >/dev/null
+}
+
 reload_unit() {
   systemctl daemon-reload
   systemctl enable -q "$1"
@@ -1071,7 +1481,7 @@ ensure_imp() {
 
   local env changed=
   env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
-    "$storage" "$zfs_root" "$host_firewall")
+    "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
   if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] \
@@ -1130,6 +1540,7 @@ health() {
   fi
 
   check_storage_live
+  [ "$ipv6" != on ] || check_ipv6_live
 
   if tailnet_joined; then
     wait_for "the tailnet node to be Running" 120 tailscale_running
@@ -1140,7 +1551,8 @@ health() {
   wait_for "the ubuntu image" 600 has_ubuntu_image
   trap 'docker exec imp-host imp rm '"$name"' >/dev/null 2>&1 || true' EXIT
   docker exec imp-host imp rm "$name" >/dev/null 2>&1 || true
-  docker exec imp-host imp new "$name" --image ubuntu
+  # uname needs little memory; the default would take 2 GiB of a small host
+  docker exec imp-host imp new "$name" --image ubuntu --memory 512m
   docker exec imp-host imp exec "$name" -- uname -a
   docker exec imp-host imp rm "$name"
   trap - EXIT
@@ -1162,6 +1574,20 @@ check_storage_live() {
   fi
   log "health: impd stores imps on $storage${zfs_root:+ ($zfs_root)}"
 }
+
+# check_ipv6_live: with IPv6 on, the container has an IPv6 default route,
+# and impd took it (docs/architecture/networking.md#ipv6).
+check_ipv6_live() {
+  [ -n "$(docker exec imp-host ip -6 route show default)" ] \
+    || die "imp-host has no IPv6 default route on the $HOST_NETWORK network"
+  wait_for "impd to log its IPv6 plan" 60 impd_ipv6_line
+  local line
+  line=$(impd_ipv6_line)
+  case $line in *"ipv6: off"*) die "IPv6 is on, but $line" ;; esac
+  log "health: $line"
+}
+
+impd_ipv6_line() { docker logs imp-host 2>&1 | grep -o 'impd: ipv6: .*' | tail -n 1 | grep .; }
 
 # tailnet_joined: the host container runs and holds node state.
 tailnet_joined() {
@@ -1218,6 +1644,7 @@ main() {
   ensure_storage
   ensure_kernel
   ensure_firewall
+  ensure_ipv6
   ensure_imp
   if dry; then
     log "$changes change(s) pending"

@@ -163,6 +163,8 @@ interface EnvInput {
   readonly storage?: string;
   readonly zfsRoot?: string;
   readonly hostFirewall?: string;
+  readonly ipv6?: string;
+  readonly subnet6?: string;
 }
 
 function renderEnv(input: EnvInput): string {
@@ -175,6 +177,8 @@ function renderEnv(input: EnvInput): string {
     input.storage ?? 'xfs',
     input.zfsRoot ?? '',
     input.hostFirewall ?? 'own',
+    input.ipv6 ?? 'off',
+    input.subnet6 ?? '',
   ];
 
   return runFunction('render_env', args, { env: { BOOTSTRAP_AUTHKEY: input.key ?? '' } });
@@ -204,7 +208,8 @@ test('an existing env file keeps the operator values', () => {
     .replace('IMP_RAM_BUDGET_MIB=16384', 'IMP_RAM_BUDGET_MIB=30000')
     .replace('IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest', 'IMP_HOST_IMAGE=imp-host:pinned')
     .replace('TAILSCALE_AUTHKEY=', 'TAILSCALE_AUTHKEY=fake-old-key')
-    .replace('IMP_IDLE_TIMEOUT_S=60', 'IMP_IDLE_TIMEOUT_S=300');
+    .replace('IMP_IDLE_TIMEOUT_S=60', 'IMP_IDLE_TIMEOUT_S=300')
+    .replace('IMP_HOST_IPV6=', 'IMP_HOST_IPV6=off');
 
   expect(renderEnv({ existing })).toBe(existing);
 });
@@ -245,10 +250,121 @@ test('missing keys are appended once, and rendering twice changes nothing', () =
   });
 
   expect(once).toBe(
-    'IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\nIMP_STORAGE_BACKEND=xfs\nIMP_HOST_FIREWALL=own\n',
+    'IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\nIMP_STORAGE_BACKEND=xfs\nIMP_HOST_FIREWALL=own\nIMP_HOST_IPV6=off\nIMP_HOST_NETWORK=\n',
   );
 
   expect(renderEnv({ existing: once, image: 'imp-host:1', imageSet: true })).toBe(once);
+});
+
+test('ipv6 on names the network and keeps the subnet; off keeps the subnet for later', () => {
+  const on = renderEnv({ existing: template, ipv6: 'on', subnet6: 'fd12:3456:789a::/64' });
+
+  expect(getEnvValues(on, 'IMP_HOST_IPV6')).toEqual(['on']);
+  expect(getEnvValues(on, 'IMP_HOST_NETWORK')).toEqual(['--network imp-host']);
+  expect(getEnvValues(on, 'IMP_HOST_SUBNET6')).toEqual(['fd12:3456:789a::/64']);
+  expect(renderEnv({ existing: on, ipv6: 'on', subnet6: 'fd12:3456:789a::/64' })).toBe(on);
+
+  const off = renderEnv({ existing: on, ipv6: 'off' });
+
+  expect(getEnvValues(off, 'IMP_HOST_IPV6')).toEqual(['off']);
+  expect(getEnvValues(off, 'IMP_HOST_NETWORK')).toEqual(['']);
+  expect(getEnvValues(off, 'IMP_HOST_SUBNET6')).toEqual(['fd12:3456:789a::/64']);
+});
+
+test('it writes IPv6 addresses as Docker prints them', () => {
+  const cases: readonly (readonly [string, string])[] = [
+    ['fd12:0034:0:0::/64', 'fd12:34::/64'],
+    ['FD12:3456:789A:0001::', 'fd12:3456:789a:1::'],
+    ['2001:db8:0:0:1:0:0:1', '2001:db8::1:0:0:1'],
+    ['fd12:0:0:1::/64', 'fd12:0:0:1::/64'],
+    ['::1', '::1'],
+    ['1:2:3:4:5:6:7:8', '1:2:3:4:5:6:7:8'],
+  ];
+
+  for (const [input, want] of cases) {
+    expect(runFunction('ipv6_canon', [input])).toBe(`${want}\n`);
+  }
+});
+
+test('IMP_HOST_SUBNET6 must be a /64 with no host bits', () => {
+  expect(runFunction('subnet6', ['FD12:3456:789a:0::/64'])).toBe('fd12:3456:789a::/64\n');
+
+  for (const bad of ['fd12::/56', 'fd12::1/64', 'fd12:::/64', 'nope/64', '10.0.0.0/64']) {
+    expect(() => runFunction('subnet6', [bad])).toThrow('subnet6 exited 1');
+  }
+});
+
+test('a random subnet is a unique local /64', () => {
+  const subnet = runFunction('random_ula64').trim();
+
+  expect(subnet).toMatch(/^fd[0-9a-f]{2}:[0-9a-f:]+\/64$/);
+  expect(runFunction('subnet6', [subnet]).trim()).toBe(subnet);
+});
+
+test('a network differs on IPv6, the bridge name or the subnet', () => {
+  const want = 'fd12:3456:789a::/64';
+
+  const readDrift = (inspect: string): string =>
+    runFunction('network_drift', [want, inspect]).trim();
+
+  expect(readDrift('true br-imphost 172.18.0.0/16 fd12:3456:789a::/64')).toBe('');
+  expect(readDrift('false br-imphost 172.18.0.0/16')).toBe('it has no IPv6');
+
+  expect(readDrift('true unnamed 172.18.0.0/16 fd12:3456:789a::/64')).toBe(
+    'its bridge is unnamed, not br-imphost',
+  );
+
+  expect(readDrift('true br-imphost 172.18.0.0/16 fd00::/64')).toBe(
+    'its IPv6 subnet is fd00::/64, not fd12:3456:789a::/64',
+  );
+
+  // an existing right network gives its subnet to an env file without one
+  expect(runFunction('network_subnet6', ['true br-imphost 172.18.0.0/16 fd12:0:0:1::/64'])).toBe(
+    'fd12:0:0:1::/64\n',
+  );
+
+  expect(runFunction('network_subnet6', ['true unnamed fd12::/64'])).toBe('');
+});
+
+test('it reads the uplink and the origin of an IPv6 default route', () => {
+  const route = 'default via fe80::1 dev eth0.100 proto ra metric 1024 expires 1797sec pref medium';
+
+  expect(runFunction('route_uplink', [route])).toBe('eth0.100\n');
+  expect(() => runFunction('route_is_ra', [route])).not.toThrow();
+  expect(() => runFunction('route_is_ra', ['default via fe80::1 dev eth0 proto static'])).toThrow();
+});
+
+test('the accept_ra file keeps a dotted interface name whole', () => {
+  const file = runFunction('render_ra_file', ['eth0.100']);
+
+  expect(file).toContain('\nnet/ipv6/conf/eth0.100/accept_ra = 2\n');
+  expect(runFunction('ra_file_uplink', [], { stdin: file })).toBe('eth0.100\n');
+});
+
+test('the unit creates the network as bootstrap.sh does', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'imp-docker-'));
+
+  try {
+    const docker = path.join(dir, 'docker');
+
+    writeFileSync(docker, '#!/bin/sh\necho "$@" >&2\n', { mode: 0o755 });
+
+    const created = Bun.spawnSync(
+      ['bash', '-c', 'source "$1"; ipv6_subnet=fd12::/64 create_host_network', 'test', script],
+      { env: { PATH: `${dir}:${process.env['PATH'] ?? ''}` } },
+    );
+
+    const args = created.stderr.toString().trim();
+    const unit = readDeployFile('imp-host.service').replaceAll('"$$IMP_HOST_SUBNET6"', 'fd12::/64');
+
+    expect(args).toBe(
+      'network create --ipv6 --subnet fd12::/64 -o com.docker.network.bridge.name=br-imphost imp-host',
+    );
+
+    expect(unit).toContain(`/usr/bin/docker ${args} ;;`);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });
 
 test('blanking the key leaves every other line alone', () => {

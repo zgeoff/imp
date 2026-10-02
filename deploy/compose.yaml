@@ -42,7 +42,22 @@ services:
       # 443 and 80. They serve public imps only.
       # - 443:7443
       # - 80:7480
+    # Imps' IPv6 (docs/guides/install.md#ipv6): uncomment these two lines
+    # and the networks block below, and set IMP_HOST_SUBNET6 to a unique
+    # local /64 in the shell or a .env next to this file.
+    # networks:
+    #   - imp-host
     # SIGTERM makes impd sleep every awake imp, so memory survives; give it
     # the time (docs/guides/operations.md).
     stop_grace_period: 120s
     restart: unless-stopped
+
+# networks:
+#   imp-host:
+#     name: imp-host
+#     enable_ipv6: true
+#     driver_opts:
+#       com.docker.network.bridge.name: br-imphost
+#     ipam:
+#       config:
+#         - subnet: ${IMP_HOST_SUBNET6:?set IMP_HOST_SUBNET6 to a /64}

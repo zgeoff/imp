@@ -22,16 +22,21 @@ Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
 EnvironmentFile=/etc/imp/imp-host.env
 # A container left over from a crash would hold the name.
 ExecStartPre=-/usr/bin/docker rm -f imp-host
+# With IPv6 (IMP_HOST_NETWORK names it), the network imp-host on its /64,
+# created when it is missing; bootstrap.sh --check reports one that differs.
+ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
 # $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
-# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps)
+# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps);
+# $IMP_HOST_NETWORK too: with IPv6, `--network imp-host`
 # The arguments come from deploy/imp-host.args.json: edit that, then run
 # bun run render:deploy (the NixOS module reads the same file).
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \
+  $IMP_HOST_NETWORK \
   -v /var/lib/imp:/var/lib/imp \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /etc/imp:/etc/imp:ro \
