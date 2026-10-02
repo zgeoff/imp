@@ -13,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -294,7 +296,10 @@ func (f *fileInfo) Name() string       { return f.name }
 func (f *fileInfo) Size() int64        { return f.st.Size }
 func (f *fileInfo) ModTime() time.Time { return time.Unix(f.st.Mtim.Unix()) }
 func (f *fileInfo) IsDir() bool        { return f.Mode().IsDir() }
-func (f *fileInfo) Sys() any           { return &f.st }
+
+// Sys is a *syscall.Stat_t, as os.Stat's is: callers type-assert it.
+// unix.Stat_t has the same layout.
+func (f *fileInfo) Sys() any { return (*syscall.Stat_t)(unsafe.Pointer(&f.st)) }
 
 func (f *fileInfo) Mode() fs.FileMode {
 	m := fs.FileMode(f.st.Mode & 0o777)
