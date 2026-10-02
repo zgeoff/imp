@@ -2,10 +2,8 @@
 # as a module. imp's flake exports it as nixosModules.imp. The host contract
 # is in docs/architecture/host-contract.md; the guide is docs/guides/nixos.md.
 #
-# The platform owns the inbound firewall (networking.firewall), so the env
-# file says IMP_HOST_FIREWALL=none and the module adds no host rules: impd
-# needs no inbound host port, and its own nft tables live in the container's
-# network namespace.
+# The module takes pkgs from the system that imports it and never imports
+# nixpkgs itself; the flake's own pin is for its checks.
 {
   config,
   lib,
@@ -16,9 +14,22 @@
 let
   cfg = config.services.imp;
   docker = "${config.virtualisation.docker.package}/bin/docker";
-  stateDir = "/var/lib/imp-host";
-  joined = "${stateDir}/tailscale-joined";
   zfs = cfg.storage == "zfs";
+  ownFirewall = cfg.hostFirewall == "own";
+
+  # The docker run arguments, shared with deploy/imp-host.service and
+  # bootstrap.sh (scripts/render-imp-host.ts writes those two from it).
+  sharedArgs = lib.flatten (lib.importJSON ../imp-host.args.json).lines;
+  # The key file, read by tailscale inside the container and only when the
+  # node has to join (host/scripts/tailscale-up.sh).
+  keyPath = "/run/imp/tailscale-authkey";
+  keyArgs = lib.optionals (cfg.tailscaleAuthKeyFile != null) [
+    "-v"
+    "${cfg.tailscaleAuthKeyFile}:${keyPath}:ro"
+    "-e"
+    "IMP_TAILSCALE_AUTHKEY_FILE=${keyPath}"
+  ];
+  runArgs = sharedArgs ++ keyArgs ++ [ cfg.image ];
 
   # The module's own keys; settings may not set them (an assertion below).
   # No secret goes here: it is in the Nix store.
@@ -26,12 +37,15 @@ let
     IMP_HOST_IMAGE = cfg.image;
     IMP_STORAGE_BACKEND = cfg.storage;
     IMP_ZFS_ROOT = if zfs then cfg.zfs.root else "";
-    IMP_HOST_FIREWALL = "none";
+    IMP_HOST_FIREWALL = cfg.hostFirewall;
   };
-  settings = cfg.settings // moduleSettings;
-  overridden = lib.attrNames (lib.intersectAttrs moduleSettings cfg.settings);
+  overridden = lib.attrNames (
+    lib.intersectAttrs (moduleSettings // { TAILSCALE_AUTHKEY = ""; }) cfg.settings
+  );
   settingsFile = pkgs.writeText "imp-host-settings.env" (
-    lib.concatStrings (lib.mapAttrsToList (key: value: "${key}=${toString value}\n") settings)
+    lib.concatStrings (
+      lib.mapAttrsToList (key: value: "${key}=${toString value}\n") (cfg.settings // moduleSettings)
+    )
   );
 
   writeEnv = pkgs.writeShellScript "imp-host-env" ''
@@ -46,12 +60,8 @@ let
     export IMP_SETTINGS=${settingsFile}
     export IMP_STORAGE=${cfg.storage}
     export IMP_RAM_BUDGET=${lib.optionalString (cfg.ramBudgetMiB != null) (toString cfg.ramBudgetMiB)}
-    export IMP_ARC_MAX=${lib.optionalString (cfg.zfs.arcMaxMiB != null) (toString cfg.zfs.arcMaxMiB)}
+    export IMP_ARC_MAX=${lib.optionalString zfs (toString cfg.zfs.arcMaxMiB)}
     export IMP_SECRETS=${lib.optionalString (cfg.environmentFile != null) cfg.environmentFile}
-    export IMP_AUTHKEY_FILE=${
-      lib.optionalString (cfg.tailscale.authKeyFile != null) cfg.tailscale.authKeyFile
-    }
-    export IMP_JOINED=${joined}
     exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../bootstrap.sh}
   '';
 
@@ -75,35 +85,10 @@ let
     }
   '';
 
-  # Wait for the node to join, then restart imp-host without the key: the
-  # node state in /var/lib/imp/tailscale keeps it on the tailnet.
-  tailscaleJoin = pkgs.writeShellScript "imp-host-tailscale" ''
-    set -euo pipefail
-    export PATH=${
-      lib.makeBinPath [
-        pkgs.coreutils
-        config.systemd.package
-        pkgs.jq
-      ]
-    }
-    for i in $(seq 180); do
-      state=$(${docker} exec imp-host tailscale --socket=/var/run/tailscale/tailscaled.sock \
-        status --json 2>/dev/null | jq -r '.BackendState // empty' || true)
-      [ "$state" = Running ] && break
-      if [ "$i" = 180 ]; then
-        echo "imp-host-tailscale: the node is not Running after 180 s (state: ''${state:-none})" >&2
-        exit 1
-      fi
-      sleep 1
-    done
-    label=$(${docker} inspect -f '{{index .Config.Labels "imp.tailscale-keyless"}}' imp-host)
-    if [ "$label" != 1 ]; then
-      echo "imp-host-tailscale: this image needs TAILSCALE_AUTHKEY at every start; the key stays" >&2
-      exit 0
-    fi
-    touch ${joined}
-    echo "imp-host-tailscale: the node is Running; restarting imp-host without the key"
-    systemctl restart --no-block imp-host.service
+  # bootstrap.sh's ruleset for hostFirewall = "own", for the SSH ports.
+  firewallRules = pkgs.runCommand "imp-firewall.nft" { } ''
+    ${pkgs.bash}/bin/bash -c 'source "$1"; shift; render_firewall "$@"' render \
+      ${../bootstrap.sh} ${lib.escapeShellArgs (map toString config.services.openssh.ports)} >$out
   '';
 in
 {
@@ -139,18 +124,27 @@ in
       pool = lib.mkOption {
         type = lib.types.str;
         default = "tank";
-        description = "The pool. The module imports it at boot; it does not create it.";
+        description = "The pool. The module expects it and never creates it.";
+      };
+      importPool = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Import the pool at boot (boot.zfs.extraPools). False when the system imports it some other way.";
       };
       root = lib.mkOption {
         type = lib.types.str;
         default = "${cfg.zfs.pool}/imp";
         defaultText = lib.literalExpression ''"''${config.services.imp.zfs.pool}/imp"'';
-        description = "imp's dataset, created with mountpoint=legacy when missing.";
+        description = "imp's dataset, created with mountpoint=legacy when it is missing.";
       };
       arcMaxMiB = lib.mkOption {
-        type = lib.types.nullOr lib.types.ints.positive;
-        default = null;
-        description = "The ZFS ARC cap. null: 10 % of RAM within 1 to 8 GiB, as deploy/bootstrap.sh sets it.";
+        type = lib.types.ints.positive;
+        example = 6400;
+        description = ''
+          The ZFS ARC cap, set with boot.extraModprobeConfig. The RAM budget
+          leaves room for it. deploy/bootstrap.sh uses 10 % of RAM, within 1
+          to 8 GiB.
+        '';
       };
     };
 
@@ -159,7 +153,21 @@ in
       default = null;
       description = ''
         IMP_RAM_BUDGET_MIB, the RAM awake imps may use. null: RAM less the
-        larger of 8 GiB and 15 %, less the ARC cap, measured at each start.
+        larger of 8 GiB and 15 %, less zfs.arcMaxMiB, measured at each start.
+      '';
+    };
+
+    hostFirewall = lib.mkOption {
+      type = lib.types.enum [
+        "own"
+        "none"
+      ];
+      default = "none";
+      description = ''
+        none: networking.firewall (or another platform firewall) owns the
+        host's inbound traffic, and imp adds no host rules. own: imp loads
+        bootstrap.sh's nft table, which admits SSH only; it needs
+        networking.firewall.enable = false.
       '';
     };
 
@@ -187,18 +195,19 @@ in
       example = "/run/secrets/imp-host.env";
       description = ''
         An env file of secrets (IMP_DNS_API_TOKEN, AWS_SECRET_ACCESS_KEY),
-        outside the Nix store. Read at each start.
+        outside the Nix store. Copied into imp-host.env at each start.
       '';
     };
 
-    tailscale.authKeyFile = lib.mkOption {
+    tailscaleAuthKeyFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       example = "/run/secrets/imp-tailscale-authkey";
       description = ''
         A tagged auth key for the host container's node, outside the Nix
-        store. Read only until the node joins; then the module restarts
-        imp-host without it, and the key can go.
+        store. It is mounted read-only into the container, and tailscale
+        reads it only when the node has to join: when the pool holds no node
+        state, or the saved node does not reach Running.
       '';
     };
   };
@@ -210,20 +219,30 @@ in
         message = "services.imp: the imp-host image is x86_64 only";
       }
       {
-        assertion = !(config.networking.nftables.enable && config.networking.nftables.flushRuleset);
-        message = "services.imp: networking.nftables.flushRuleset would flush Docker's rules on every reload; leave it false";
+        assertion = overridden == [ ];
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile) instead";
       }
       {
-        assertion = overridden == [ ];
-        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root) instead";
+        assertion = !zfs || config.networking.hostId != null;
+        message = "services.imp: ZFS needs networking.hostId, and a reinstall must keep the same one, or the pool will not import";
       }
       {
         assertion = zfs || (config.fileSystems ? "/var/lib/imp");
         message = "services.imp: with storage = \"xfs\", declare /var/lib/imp (XFS with reflink) in fileSystems";
       }
+      {
+        assertion = !(ownFirewall && config.networking.firewall.enable);
+        message = "services.imp: hostFirewall = \"own\" needs networking.firewall.enable = false; two firewalls each drop what the other admits";
+      }
+      {
+        assertion = !(config.networking.nftables.enable && config.networking.nftables.flushRuleset);
+        message = "services.imp: networking.nftables.flushRuleset would flush Docker's rules on every reload; leave it false";
+      }
     ];
 
     virtualisation.docker.enable = true;
+    # nft, to inspect the imp table
+    environment.systemPackages = lib.mkIf ownFirewall [ pkgs.nftables ];
 
     boot.kernelModules = [
       "kvm"
@@ -239,19 +258,22 @@ in
       "vm.swappiness" = 1;
     };
     boot.supportedFilesystems.zfs = lib.mkIf zfs true;
-    boot.zfs.extraPools = lib.mkIf zfs [ cfg.zfs.pool ];
+    boot.zfs.extraPools = lib.mkIf (zfs && cfg.zfs.importPool) [ cfg.zfs.pool ];
+    boot.extraModprobeConfig = lib.mkIf zfs ''
+      options zfs zfs_arc_max=${toString (cfg.zfs.arcMaxMiB * 1024 * 1024)}
+    '';
 
     systemd.tmpfiles.rules = [
       "d /etc/imp 0755 root root -"
       "d /var/lib/imp 0755 root root -"
-      "d ${stateDir} 0700 root root -"
     ];
 
-    # imp's dataset, with mountpoint=legacy: the host never mounts it.
+    # imp's dataset, with mountpoint=legacy: the host never mounts it. Made
+    # only when missing; the pool is the operator's.
     systemd.services.imp-zfs-dataset = lib.mkIf zfs {
       description = "imp's ZFS dataset";
-      requires = [ "zfs-import-${cfg.zfs.pool}.service" ];
-      after = [ "zfs-import-${cfg.zfs.pool}.service" ];
+      wants = [ "zfs-import.target" ];
+      after = [ "zfs-import.target" ];
       path = [ config.boot.zfs.package ];
       serviceConfig = {
         Type = "oneshot";
@@ -260,15 +282,33 @@ in
       script = ''
         root=${lib.escapeShellArg cfg.zfs.root}
         if ! zfs list -H -o name "$root" >/dev/null 2>&1; then
-          zfs create -p -o mountpoint=legacy "$root"
-        elif [ "$(zfs get -H -o value mountpoint "$root")" != legacy ]; then
-          zfs set mountpoint=legacy "$root"
+          zfs create -o mountpoint=legacy "$root"
         fi
+        [ "$(zfs get -H -o value mountpoint "$root")" = legacy ] \
+          || { echo "imp-zfs-dataset: $root has mountpoint $(zfs get -H -o value mountpoint "$root"), not legacy" >&2; exit 1; }
       '';
     };
 
-    # deploy/imp-host.service, in Nix; deploy/nixos.test.ts keeps the docker
-    # run flags equal.
+    # deploy/bootstrap.sh's imp-firewall.service, for hostFirewall = "own".
+    systemd.services.imp-firewall = lib.mkIf ownFirewall {
+      description = "imp host firewall (inbound SSH only)";
+      unitConfig.DefaultDependencies = false;
+      wants = [ "network-pre.target" ];
+      before = [
+        "network-pre.target"
+        "shutdown.target"
+      ];
+      conflicts = [ "shutdown.target" ];
+      wantedBy = [ "sysinit.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.nftables}/bin/nft -f ${firewallRules}";
+        ExecReload = "${pkgs.nftables}/bin/nft -f ${firewallRules}";
+        ExecStop = "${pkgs.nftables}/bin/nft delete table inet imp_host";
+      };
+    };
+
     systemd.services.imp-host = {
       description = "imp host (impd, Firecracker, tailscaled)";
       documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/guides/nixos.md" ];
@@ -289,35 +329,13 @@ in
           # A container left over from a crash would hold the name.
           "-${docker} rm -f imp-host"
         ];
-        ExecStart = lib.concatStringsSep " " [
-          "${docker} run --rm --name imp-host --hostname imp-host"
-          "--init --privileged --device /dev/kvm"
-          "--env-file /etc/imp/imp-host.env"
-          "-v /var/lib/imp:/var/lib/imp"
-          "-v /var/run/docker.sock:/var/run/docker.sock"
-          "-v /etc/imp:/etc/imp:ro"
-          "-p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080"
-          (lib.escapeShellArg cfg.image)
-        ];
+        ExecStart = "${docker} run ${lib.escapeShellArgs runArgs}";
         # SIGTERM makes impd sleep every awake imp; it gets up to 120 s.
         ExecStop = "${docker} stop -t 120 imp-host";
         TimeoutStartSec = "15min";
         TimeoutStopSec = 150;
         Restart = "on-failure";
         RestartSec = 5;
-      };
-    };
-
-    systemd.services.imp-host-tailscale = lib.mkIf (cfg.tailscale.authKeyFile != null) {
-      description = "Join imp-host to the tailnet, then drop the key";
-      # Each start of imp-host pulls it in, until the node has joined.
-      wantedBy = [ "imp-host.service" ];
-      after = [ "imp-host.service" ];
-      requires = [ "imp-host.service" ];
-      unitConfig.ConditionPathExists = "!${joined}";
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = tailscaleJoin;
       };
     };
   };
