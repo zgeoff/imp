@@ -69,7 +69,9 @@ Options:
                               in a container. Off by default: merged pages let
                               guests time each other (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
   --no-ksm                    turn it off again: remove the boot rule, stop
-                              ksmd and set IMP_KSM=0
+                              ksmd, unmerge its pages and set IMP_KSM=0;
+                              running imps keep the merge flag until they
+                              restart
   --skip-health               skip the closing health check
 EOF
 }
@@ -1169,17 +1171,25 @@ module_present() {
 
 write_param() { echo "$2" >"$1"; }
 
-# ensure_ksm: with --ksm, ksmd runs now and at boot; with --no-ksm, it stops
-# and its boot rule goes. KSM is global to the
-# kernel, so a container refuses it, and so does a kernel older than 6.10.
+# ksm_merges: ksmd runs, or pages it merged are still shared
+ksm_merges() {
+  local dir=${KSM_DIR:-/sys/kernel/mm/ksm}
+  [ "$(cat "$dir/run" 2>/dev/null || echo 0)" = 1 ] \
+    || [ "$(cat "$dir/pages_shared" 2>/dev/null || echo 0)" -gt 0 ]
+}
+
+# ensure_ksm: with --ksm, ksmd runs now and at boot; with --no-ksm, its boot
+# rule goes and run=2 stops ksmd and unmerges every merged page. A running imp
+# keeps its merge flag until it restarts. KSM is global to the kernel, so a
+# container refuses --ksm, and so does a kernel older than 6.10.
 ensure_ksm() {
   [ -n "$ksm" ] || return 0
   phase ksm
   local rule=/etc/tmpfiles.d/imp-ksm.conf
   if [ "$ksm" = off ]; then
     [ ! -f "$rule" ] || change "remove $rule" rm -f "$rule"
-    [ -n "$in_container" ] || [ "$(cat /sys/kernel/mm/ksm/run 2>/dev/null || echo 0)" != 1 ] \
-      || change "stop ksmd" write_param /sys/kernel/mm/ksm/run 0
+    [ -n "$in_container" ] || ! ksm_merges \
+      || change "stop ksmd and unmerge its pages" write_param /sys/kernel/mm/ksm/run 2
     return 0
   fi
   [ -z "$in_container" ] || die "--ksm cannot run in a container: KSM is global to the host's kernel"

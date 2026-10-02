@@ -254,6 +254,32 @@ test('--ksm sets IMP_KSM=1, --no-ksm 0; without either the operator’s IMP_KSM 
   expect(getEnvValues(renderEnv({ existing: template }), 'IMP_KSM')).toEqual(['']);
 });
 
+test('--no-ksm unmerges while ksmd runs or pages it merged are still shared', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'imp-ksm-'));
+
+  const checkMerges = (run: string, shared: string): boolean => {
+    writeFileSync(path.join(dir, 'run'), `${run}\n`);
+    writeFileSync(path.join(dir, 'pages_shared'), `${shared}\n`);
+
+    try {
+      runFunction('ksm_merges', [], { env: { KSM_DIR: dir } });
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  try {
+    expect(checkMerges('1', '0')).toBe(true);
+    expect(checkMerges('0', '12')).toBe(true);
+    expect(checkMerges('0', '0')).toBe(false);
+    expect(checkMerges('2', '0')).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('--ksm needs Linux 6.10 and starts ksmd with zero-page merging at boot', () => {
   const checkSupport = (release: string): boolean => {
     try {
