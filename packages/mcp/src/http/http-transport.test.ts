@@ -112,6 +112,9 @@ function setupTransportTest(options: Readonly<TransportTestOptions> = {}) {
     openSession,
     sendInSession,
     endKey: (key: string) => ends.get(key)?.abort(),
+
+    // a new credential for the same caller, as a token made again under its name
+    renewKey: (key: string) => ends.delete(key),
     [Symbol.asyncDispose]: () => transport.close(),
   };
 }
@@ -345,24 +348,22 @@ test('DELETE ends a session', async () => {
 test("a caller's sessions end with what it authenticated with", async () => {
   await using ctx = setupTransportTest();
 
+  const ping = { jsonrpc: '2.0', id: 1, method: 'ping' };
+
   const session = await ctx.openSession('alice');
+  const bob = await ctx.openSession('bob');
 
   ctx.endKey('alice');
 
-  const after = await ctx.sendInSession('alice', session, {
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'ping',
-  });
+  const refused = await ctx.sendInSession('alice', session, ping);
 
-  expect(after.status).toBe(401);
+  // with a new credential alice is known again, but the old session is gone
+  ctx.renewKey('alice');
 
-  const bob = await ctx.openSession('bob');
+  const ended = await ctx.sendInSession('alice', session, ping);
+  const kept = await ctx.sendInSession('bob', bob, ping);
 
-  // bob's session stays
-  const ping = await ctx.sendInSession('bob', bob, { jsonrpc: '2.0', id: 1, method: 'ping' });
-
-  expect(ping.status).toBe(200);
+  expect([refused.status, ended.status, kept.status]).toEqual([401, 404, 200]);
 });
 
 test('a full caller evicts its least recently used idle session, and a busy one stays', async () => {
