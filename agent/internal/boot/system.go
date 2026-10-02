@@ -53,6 +53,9 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	if follow := memoryFollower(params); follow != nil {
+		go follow()
+	}
 	// a boot template parks here, before the user disk is touched; the
 	// restored copy goes on with its claim's values, never the template's
 	// cmdline

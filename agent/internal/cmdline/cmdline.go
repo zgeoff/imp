@@ -22,6 +22,10 @@ type Params struct {
 	// Template is set on the cold boot that makes a boot template: the agent
 	// waits for a claim instead of mounting the user disk.
 	Template bool
+	// HotplugMemory is set for an elastic guest, whose memory grows and
+	// shrinks while it runs: the host onlines its plugged memory with
+	// memhp_default_state.
+	HotplugMemory bool
 	// Raw holds every imp.* key (without the prefix), including unknown ones.
 	Raw map[string]string
 }
@@ -41,6 +45,9 @@ func Parse(line string) Params {
 	p := Params{Raw: make(map[string]string)}
 	for _, field := range split(line) {
 		key, val, _ := strings.Cut(field, "=")
+		if key == "memhp_default_state" {
+			p.HotplugMemory = true
+		}
 		name, ok := strings.CutPrefix(key, "imp.")
 		if !ok {
 			continue

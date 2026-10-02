@@ -56,3 +56,12 @@ func TestParseIPv6(t *testing.T) {
 		t.Fatalf("no IPv6 given, got %+v", q)
 	}
 }
+
+func TestParseHotplugMemory(t *testing.T) {
+	if Parse("imp.hostname=a").HotplugMemory {
+		t.Fatal("a guest without memhp_default_state has hot-plug memory")
+	}
+	if !Parse("imp.hostname=a memhp_default_state=online_movable").HotplugMemory {
+		t.Fatal("memhp_default_state did not mark hot-plug memory")
+	}
+}

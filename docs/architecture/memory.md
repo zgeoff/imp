@@ -27,6 +27,10 @@ The mechanism is virtio-mem.
   reports `plugged_size_mib`, which is what the guest holds. impd counts the plugged size everywhere
   and never the requested one: an unplug can stop partway. impd sends each request under the imp's
   lifecycle lock, so that a sleep never sees its guest change size.
+- **The inner container.** User code runs in the agent's inner container, whose `memory.max` is the
+  guest's memory less 64 MiB. In a guest booted with `memhp_default_state`, the agent reads
+  `MemTotal` every 250 ms and moves that limit with it, so plugged memory is the user's too. Without
+  this, the container hits its boot-time limit while the guest still has memory to give.
 - **Firecracker.** Memory hot-plug came in Firecracker v1.14.0. impd is tested with v1.17.0, the
   version `host/Dockerfile` pins.
 - **Free pages.** The balloon stays at 0 for free page reporting. impd never inflates it, so its

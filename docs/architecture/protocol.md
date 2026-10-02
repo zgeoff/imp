@@ -7,17 +7,18 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.16.0` adds `exec.outer`, an exec in the agent's own world (`0.15.0` adds session output
-offsets: a generation per session process, `resume_from`, `output` in STARTED, `boot_id` in `ping`
-and `activity`, and error `data`; `0.14.0` runs user code in the inner container, reports it in
-`ping` and adds `INNER_DOWN`, `0.13.0` adds `claim` and the `stage` of a parked boot template's
-`ping`, `0.12.0` reports a template copy's identity reset in `ping`, `0.11.0` kills a stopped exec's
-whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards, `0.8.0`
-kills what is left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar`
-for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`, `0.4.0`
-`agent.listen` and `agent.accept`, `0.3.0` `dial` and `imp-agent sftp`, `0.2.0` sessions; `0.1.0`
-was the first). The Go side is `agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.17.0` moves the inner container's memory limit with an elastic guest's memory, and impd
+grows no guest whose agent is older (`0.16.0` adds `exec.outer`, an exec in the agent's own world,
+`0.15.0` adds session output offsets: a generation per session process, `resume_from`, `output` in
+STARTED, `boot_id` in `ping` and `activity`, and error `data`; `0.14.0` runs user code in the inner
+container, reports it in `ping` and adds `INNER_DOWN`, `0.13.0` adds `claim` and the `stage` of a
+parked boot template's `ping`, `0.12.0` reports a template copy's identity reset in `ping`, `0.11.0`
+kills a stopped exec's whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds `listen` for
+reverse forwards, `0.8.0` kills what is left of a stopped exec's process group, `kill_grace_ms`;
+`0.7.0` runs `imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0`
+added `grow`, `0.4.0` `agent.listen` and `agent.accept`, `0.3.0` `dial` and `imp-agent sftp`,
+`0.2.0` sessions; `0.1.0` was the first). The Go side is `agent/internal/proto`; the host side is
+the agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
