@@ -207,6 +207,15 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
       }
 
+      // The CLI sends a path on its own machine. impd sees it only when the
+      // two share a filesystem (the dev container mounts the repo); a host
+      // running the release image does not.
+      if (!existsSync(contextDir)) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `build context ${contextDir} does not exist on the impd host; build the image there and use \`imp image add\``,
+        });
+      }
+
       const tag = `imp/${NameSchema.parse(name)}:latest`;
       const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
 

@@ -127,6 +127,14 @@ async function main(): Promise<void> {
   const setupDefaultImage = async (): Promise<void> => {
     try {
       await images.seedDefaultImage();
+
+      const existing = await images.listImages();
+
+      if (!existing.some((image) => image.name === config.defaultImage)) {
+        printLog(
+          `impd: warning: no image named ${config.defaultImage} (IMP_DEFAULT_IMAGE); imp new uses ubuntu until \`imp image add <ref> --name ${config.defaultImage}\` adds it`,
+        );
+      }
     } catch (error) {
       console.error('impd: could not add the default image:', error);
     } finally {
