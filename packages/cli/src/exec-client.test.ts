@@ -421,6 +421,42 @@ test('a lost session or an impd restart attaches again by itself', async () => {
   }
 });
 
+test('keys typed while it attaches again reach the new session', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'start') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+      peer.send({ type: 'detached', reason: 'lost' });
+    }
+
+    if (message['type'] === 'attach') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: false });
+    }
+
+    if (message['stdin'] === 'typed') {
+      peer.send({ type: 'exit', code: 0, signal: null });
+    }
+  });
+
+  const ctx = setupTerminal(impd, { reattachDelayMs: 50 });
+  const code = runExec(SESSION_BOX, ctx.io);
+
+  while (!ctx.output.join('').includes('attaching again')) {
+    await Bun.sleep(1);
+  }
+
+  ctx.stdin.write('typed');
+
+  const exitCode = await code;
+
+  expect(exitCode).toBe(0);
+
+  expect(impd.received).toEqual([
+    { type: 'start', name: 'box', argv: ['sh'], tty: true, session: 'main' },
+    { type: 'attach', name: 'box', session: 'main' },
+    { stdin: 'typed' },
+  ]);
+});
+
 test('a takeover ends the CLI without attaching again', async () => {
   await using impd = startFakeImpd((peer, message) => {
     if (message['type'] === 'start') {

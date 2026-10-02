@@ -136,6 +136,11 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
       token: config.token,
       start,
       onStarted: (started) => {
+        // keys typed while the session was away go to the new socket
+        if (state.reattachUntil !== null && !state.draining) {
+          stdin.resume();
+        }
+
         state.reattachUntil = null;
 
         if (isRaw && !started.created && started.session !== null) {
@@ -349,6 +354,8 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
       if (state.reattachUntil === null) {
         state.reattachUntil = Date.now() + (io.reattachWindowMs ?? REATTACH_WINDOW_MS);
+
+        stdin.pause();
 
         writeNotice(`lost the connection to session ${session?.name ?? ''}; attaching again`);
       }
