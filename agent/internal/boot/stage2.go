@@ -35,7 +35,7 @@ import (
 // (docs/architecture/agent.md#exec-cgroups).
 const ExecCgroupRoot = "/sys/fs/cgroup/imp-exec"
 
-// Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
+// Stage2 runs as PID 1 on the user disk. It configures
 // the hostname and network, starts services, and serves the host on vsock.
 // It returns only on failure. Stage 1 calls it in the same process after the
 // switch of root: an exec would start the runtime again, which on a restored
@@ -43,9 +43,6 @@ const ExecCgroupRoot = "/sys/fs/cgroup/imp-exec"
 func Stage2(params cmdline.Params) error {
 	r := reaper.New()
 
-	if err := mountSystem(); err != nil {
-		return err
-	}
 	// Problems below are logged, not fatal: an agent that answers on vsock
 	// with a broken network is still reachable to debug.
 	if err := setHostname(params.Hostname); err != nil {

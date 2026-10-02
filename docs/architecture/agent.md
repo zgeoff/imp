@@ -22,23 +22,23 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 
 **Stage 1** runs from the system drive:
 
-1. Mount `/proc`, `/sys` and `/dev`.
+1. Mount `/proc`, `/sys` and `/dev`, then cgroup2, `/dev/pts` and `/dev/shm` on them. A
+   [boot template](./boot-templates.md#make) parks after this step.
 2. Mount `vda` on `/newroot`, and grow its filesystem to fill the disk, which the host may have
    grown since the last boot. A failed grow is logged, and the boot goes on.
 3. Mount a fresh tmpfs on `/newroot/run`, and bind the system drive to `/newroot/run/imp/sys`.
-4. Move `/dev`, `/proc` and `/sys` into the new root, `switch_root` to it, and go on as stage 2 in
-   the same process. There is no exec: on a restored template, a new runtime would fault in every
-   page it touches.
+4. Move `/dev`, `/proc` and `/sys`, with what is mounted on them, into the new root, `switch_root`
+   to it, and go on as stage 2 in the same process. There is no exec: on a restored template, a new
+   runtime would fault in every page it touches.
 
 **Stage 2** runs in the user's root:
 
-1. Mount cgroup2, `/dev/pts` and `/dev/shm`.
-2. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
+1. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
    With `imp.ip6`, turn off router advertisements and redirects on `eth0`, add the address with no
    duplicate address detection, and add a default route via `imp.gw6`.
-3. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
-4. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
-5. Make the [exec cgroup](#exec-cgroups) parent, and listen on vsock port 1024.
+2. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
+3. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
+4. Make the [exec cgroup](#exec-cgroups) parent, and listen on vsock port 1024.
 
 `/run` is a tmpfs every boot, so stale pid files and sockets from the last boot never reach a new
 one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly, with no wrapper.
