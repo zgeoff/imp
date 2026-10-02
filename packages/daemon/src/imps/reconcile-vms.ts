@@ -12,12 +12,14 @@ import {
 } from '../sleep/snapshot-meta';
 import { buildImpPaths, buildWatchdogSlot } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { isImpVm } from '../vmm/firecracker-process';
 import type { ImpContext } from './imp-context';
 import type { LockedImp } from './imp-lock';
 import type { ImpVmOps } from './imp-vm-ops';
 
 // What a restart makes of the VMs the last impd left: every Firecracker on an
-// imp's API socket, found by its pid file or in /proc, that no record owns.
+// imp's API socket and of its owner (isImpVm), found by its pid file or in
+// /proc, that no record owns.
 export interface VmReconciler {
   // under the imp's lock: kills the VMs its record does not own, resumes one
   // a cut sleep left paused, and adopts one a cut wake left running
@@ -48,18 +50,23 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
   };
 
   // the pid file a start wrote, and every process on the exact socket: impd
-  // can die before the file, and a retried start leaves two
-  const findVms = (paths: ImpPaths): number[] => {
+  // can die before the file, and a retried start leaves two. Either is the
+  // imp's only when its owner is.
+  const findVms = (imp: LockedImp, paths: ImpPaths): number[] => {
     const pids = new Set(
       context.vms
         .listVms()
-        .filter((vm) => vm.apiSocket === paths.apiSocket)
+        .filter((vm) => vm.apiSocket === paths.apiSocket && isImpVm(vm.owner, imp.id, imp.jailUid))
         .map((vm) => vm.pid),
     );
 
     const filed = context.vms.readPid(paths);
 
-    if (filed !== null && context.vms.isVmAlive(filed, paths)) {
+    if (
+      filed !== null &&
+      context.vms.isVmAlive(filed, paths) &&
+      isImpVm(context.vms.readVmOwner(filed), imp.id, imp.jailUid)
+    ) {
       pids.add(filed);
     }
 
@@ -108,7 +115,7 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
       }
 
       if (state === 'Paused') {
-        await context.vms.resumeVm(paths);
+        await context.vms.resumeVm(pid, paths);
       }
 
       await context.admission?.admit({
@@ -175,12 +182,12 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
   // a sleep resumes a paused VM when its snapshot fails; one cut short by
   // impd's death never did
   const checkPaused = async (imp: LockedImp, paths: ImpPaths): Promise<void> => {
-    if ((await context.vms.readVmState(paths)) !== 'Paused') {
+    if (imp.pid === null || (await context.vms.readVmState(paths)) !== 'Paused') {
       return;
     }
 
     try {
-      await context.vms.resumeVm(paths);
+      await context.vms.resumeVm(imp.pid, paths);
 
       context.log(`impd: ${imp.name}: resumed the VM a cut sleep left paused`);
     } catch (error) {
@@ -196,7 +203,7 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
 
       // a running, creating or failed record owns its pid
       const owned = imp.state === 'sleeping' || imp.state === 'stopped' ? null : imp.pid;
-      const orphans = findVms(paths).filter((pid) => pid !== owned);
+      const orphans = findVms(imp, paths).filter((pid) => pid !== owned);
       const [only] = orphans;
 
       if (imp.state === 'sleeping' && only !== undefined && orphans.length === 1) {
@@ -246,7 +253,7 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
       for (const vm of context.vms.listVms()) {
         const id = parseImpId(dataDir, vm.apiSocket);
 
-        if (id !== null && !ids.has(id)) {
+        if (id !== null && !ids.has(id) && isImpVm(vm.owner, id, null)) {
           await stopOrphan(id, vm.pid, buildImpPaths(dataDir, id));
         }
       }

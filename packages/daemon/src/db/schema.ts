@@ -78,6 +78,9 @@ interface ImpsTable {
   // the cause the next cold boot records, when impd knew it before the
   // boot: `recovery`, `wake_fallback` or `restore`
   next_boot_cause: Generated<ColdBootCause | null>;
+
+  // the uid and gid its jailed Firecracker runs as (docs/architecture/daemon.md#the-jailer)
+  jail_uid: number | null;
 }
 
 // an imp's last cold boots (docs/architecture/daemon.md#output-offsets)

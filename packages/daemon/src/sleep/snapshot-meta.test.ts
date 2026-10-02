@@ -1,8 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildSnapshotIdentity, findColdBootReason, readSnapshotMeta } from './snapshot-meta';
+import {
+  buildSnapshotIdentity,
+  findColdBootReason,
+  readSnapshotMeta,
+  writeSnapshotMeta,
+} from './snapshot-meta';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 import { findOutdatedParts } from './vm-identity';
 
@@ -116,6 +121,43 @@ test('an older or newer meta still reads, so the imp stays asleep', () => {
     writeFileSync(paths.snapshotMeta, JSON.stringify({ ...older, futureField: true }));
 
     expect(readSnapshotMeta(paths)).toEqual(older);
+  });
+});
+
+test('a planted symlink or FIFO as meta.json reads as no snapshot and is replaced on write', () => {
+  withTempDir((dir) => {
+    const paths = buildImpPaths(dir, 'imp1');
+    const outside = `${dir}/outside`;
+
+    const meta = {
+      firecrackerVersion: 'v1.17.0',
+      snapshotVersion: 'v12.0.0',
+      hostKernel: '6.6.87',
+      guestKernel: '1b2c3d',
+      systemDrive: '4e5f6a',
+      createdAt: 1,
+      memoryMib: 512,
+      ramMib: 60,
+    };
+
+    mkdirSync(paths.snapshotDir, { recursive: true });
+    writeFileSync(paths.vmstate, 'vmstate');
+    writeFileSync(paths.memFile, 'mem');
+    writeFileSync(outside, JSON.stringify(meta));
+    symlinkSync(outside, paths.snapshotMeta);
+
+    expect(readSnapshotMeta(paths)).toBeNull();
+
+    writeSnapshotMeta(paths, meta);
+
+    expect(readFileSync(outside, 'utf8')).toBe(JSON.stringify(meta));
+    expect(readSnapshotMeta(paths)).toEqual(meta);
+
+    rmSync(paths.snapshotMeta);
+
+    Bun.spawnSync(['mkfifo', paths.snapshotMeta]);
+
+    expect(readSnapshotMeta(paths)).toBeNull();
   });
 });
 

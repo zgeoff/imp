@@ -125,7 +125,13 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   // a new disk stays the size of its image: the fake clone copies every byte
   const config: Config = {
-    ...loadConfig({ IMP_DATA_DIR: dataDir, IMP_BOOT_TEMPLATES: 'false', ...options.env }),
+    // unjailed unless a test asks: the fake VMs have no cgroups
+    ...loadConfig({
+      IMP_DATA_DIR: dataDir,
+      IMP_BOOT_TEMPLATES: 'false',
+      IMP_JAILER: 'false',
+      ...options.env,
+    }),
     defaultDiskBytes: 0,
   };
 

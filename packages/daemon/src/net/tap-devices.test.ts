@@ -43,7 +43,7 @@ function buildFakeIp(
 test('it creates the tap with the host end of the slot /30', async () => {
   const fake = buildFakeIp({});
 
-  await createTapDevices(fake.run).setupTap(ADDRESS);
+  await createTapDevices(fake.run, () => null).setupTap(ADDRESS);
 
   expect(fake.calls).toEqual([
     'ip tuntap add imp1 mode tap',
@@ -103,7 +103,7 @@ test('it treats an existing tap and address as done', async () => {
     addr: 'Error: ipv4: Address already assigned.',
   });
 
-  await createTapDevices(fake.run).setupTap(ADDRESS);
+  await createTapDevices(fake.run, () => null).setupTap(ADDRESS);
 
   expect(fake.calls).toHaveLength(7);
 });
@@ -111,11 +111,43 @@ test('it treats an existing tap and address as done', async () => {
 test('it fails on any other ip error', async () => {
   const fake = buildFakeIp({ link: 'Cannot find device "imp1"' });
 
-  await createTapDevices(fake.run).removeTap('imp1');
+  await createTapDevices(fake.run, () => null).removeTap('imp1');
 
   const failing = buildFakeIp({ tuntap: 'Operation not permitted' });
 
-  const error = await readRejection(createTapDevices(failing.run).setupTap(ADDRESS));
+  const error = await readRejection(createTapDevices(failing.run, () => null).setupTap(ADDRESS));
 
   expect(readErrorMessage(error)).toContain('not permitted');
+});
+
+test('a jailed VM gets a tap it owns; one with another owner is made again', async () => {
+  const owner = { uid: 900_001, gid: 900_001 };
+  const fresh = buildFakeIp({});
+
+  await createTapDevices(fresh.run, () => null).setupTap(ADDRESS, owner);
+
+  expect(fresh.calls[0]).toBe('ip tuntap add imp1 mode tap user 900001 group 900001');
+
+  const unowned = buildFakeIp({});
+
+  await createTapDevices(unowned.run, () => ({ uid: -1, gid: -1 })).setupTap(ADDRESS, owner);
+
+  expect(unowned.calls.slice(0, 2)).toEqual([
+    'ip link del imp1',
+    'ip tuntap add imp1 mode tap user 900001 group 900001',
+  ]);
+
+  const owned = buildFakeIp({ tuntap: 'ioctl(TUNSETIFF): Device or resource busy' });
+
+  await createTapDevices(owned.run, () => owner).setupTap(ADDRESS, owner);
+
+  expect(owned.calls[0]).toBe('ip tuntap add imp1 mode tap user 900001 group 900001');
+});
+
+test('an unjailed VM keeps whatever tap is there', async () => {
+  const fake = buildFakeIp({ tuntap: 'ioctl(TUNSETIFF): Device or resource busy' });
+
+  await createTapDevices(fake.run, () => ({ uid: 900_001, gid: 900_001 })).setupTap(ADDRESS);
+
+  expect(fake.calls[0]).toBe('ip tuntap add imp1 mode tap');
 });

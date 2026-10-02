@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, lchownSync, mkdirSync, rmSync } from 'node:fs';
 import { isDiskFullError } from '../api-errors';
 import type { ImpContext } from '../imps/imp-context';
 import type { LockedImp } from '../imps/imp-lock';
@@ -7,6 +7,9 @@ import { readErrorMessage } from '../read-error-message';
 import { buildSnapshotIdentity, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildWatchdogSlot } from '../storage/data-layout';
+
+// root in the container; the test's own uid in a unit test
+const IMPD_USER = { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 };
 
 // The silent VM's memory, for a post-mortem, in a slot only the owner reads;
 // the VM stops. Without room, or on a failed snapshot, it logs why and leaves
@@ -28,9 +31,10 @@ export async function writeWatchdogSnapshot(
   rmSync(slot.snapshotDir, { recursive: true, force: true });
 
   const writeSlot = async () => {
-    mkdirSync(slot.snapshotDir, { recursive: true, mode: 0o700 });
+    // a jailed VM opens the files impd makes in it, so it can pass through
+    mkdirSync(slot.snapshotDir, { recursive: true, mode: 0o711 });
 
-    const cgroup = context.cgroups.setup(imp.id, imp.cpu);
+    const cgroup = context.cgroups.setup(imp.id, imp.cpu, imp.memoryMib);
 
     await ops.withSleepSlot(() => context.vms.sleepVm(pid, paths, cgroup, slot));
 
@@ -41,9 +45,13 @@ export async function writeWatchdogSnapshot(
       ramMib: 0,
     });
 
+    // the VM's own files back to impd: only the owner reads them
     for (const file of [slot.vmstate, slot.memFile, slot.snapshotMeta]) {
+      lchownSync(file, IMPD_USER.uid, IMPD_USER.gid);
       chmodSync(file, 0o600);
     }
+
+    chmodSync(slot.snapshotDir, 0o700);
   };
 
   try {

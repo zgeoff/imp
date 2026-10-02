@@ -1,6 +1,10 @@
 import { expect, test } from 'bun:test';
 import type { CpuSettings } from '../db/imps';
 import { findImpByName, updateImpActivity, updateImpState, updateImpStateIf } from '../db/imps';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
+import { hasSnapshot } from '../sleep/snapshot-meta';
+import { buildImpPaths } from '../storage/data-layout';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { buildTestApp, setupImpTest } from './test-imps';
 
@@ -14,6 +18,9 @@ function buildRecordingCgroups() {
 
   const cgroups: CpuCgroups = {
     isEnforced: true,
+    isMemoryEnforced: false,
+    readOomKills: () => null,
+    hasOomKillSinceStart: () => false,
     setup: (_impId, cpu) => {
       calls.push(`setup ${formatCpu(cpu)}`);
 
@@ -30,11 +37,28 @@ function buildRecordingCgroups() {
 
       return Promise.resolve();
     },
+    setGuestMib: () => {},
+    kill: () => {},
     removeOrphans: () => [],
     readCpuStat: () => null,
   };
 
   return { cgroups, calls };
+}
+
+// cgroups that make one for each VM until `cgroups.isUp` turns false, as a
+// host whose delegation went away
+function buildSwitchedCgroups() {
+  const state = { isUp: true };
+  const recording = buildRecordingCgroups();
+
+  const cgroups: CpuCgroups = {
+    ...recording.cgroups,
+    setup: () =>
+      state.isUp ? { procsPath: '/nonexistent', liftLimit: () => {}, applyLimit: () => {} } : null,
+  };
+
+  return { cgroups, state };
 }
 
 async function setupCpuTest() {
@@ -231,4 +255,45 @@ test('a running imp shows the sampler cache: RAM, then CPU after a second pass',
 
   expect(second.resources?.sample?.cpuPercent).toBe(50);
   expect(second.resources?.sample?.cpuThrottledMs).toBe(2000);
+});
+
+test('a jailed VM does not start without its cgroup, and says why', async () => {
+  await using ctx = await setupImpTest({ env: { IMP_JAILER: 'true' } });
+
+  await ctx.createTestImage('ubuntu');
+
+  const error = await readRejection(ctx.imps.createImp({ name: 'dev' }));
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(readErrorMessage(error)).toStartWith('a jailed VM starts only in its own cgroup');
+  expect(imp).toMatchObject({ state: 'error' });
+  expect(imp?.error).toContain('set IMP_JAILER=false');
+  expect(ctx.fake.boots).toEqual([]);
+});
+
+test('a jailed wake without its cgroup leaves the imp asleep, with its memory', async () => {
+  const switched = buildSwitchedCgroups();
+
+  await using ctx = await setupImpTest({ cgroups: switched.cgroups, env: { IMP_JAILER: 'true' } });
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.sleepImp('dev');
+
+  switched.state.isUp = false;
+
+  const error = await readRejection(ctx.imps.wakeImp('dev'));
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(readErrorMessage(error)).toStartWith('a jailed VM starts only in its own cgroup');
+  expect(imp?.state).toBe('sleeping');
+  expect(hasSnapshot(buildImpPaths(ctx.dataDir, imp?.id ?? ''))).toBeTrue();
+  expect(ctx.fake.wakes).toEqual([]);
+
+  switched.state.isUp = true;
+
+  const woken = await ctx.imps.wakeImp('dev');
+
+  expect(woken.state).toBe('running');
+  expect(ctx.fake.wakes).toHaveLength(1);
 });

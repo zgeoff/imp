@@ -194,18 +194,106 @@ network and balloon, and starts the VM. It also runs the sleep (pause, snapshot,
 and checks a pid's command line, so a recycled pid never counts as a live VM. Every API call times
 out: 10 s, or 120 s for a snapshot create or load.
 
+#### The jailer
+
+With `IMP_JAILER=true`, the default, each VM runs under Firecracker's jailer: in a chroot at
+`<data>/jail/firecracker/<id>/root`, as the imp's own uid and gid, with no capabilities, in
+Firecracker's default seccomp filters on every thread. Each imp gets its uid at create, the lowest
+free one from 900000 up (65536 of them), and keeps it in the `jail_uid` column.
+
+Before each boot or wake, impd prepares the chroot:
+
+1. It kills every process of the imp's uid: `cgroup.kill` on the imp's cgroup, then SIGKILL to each
+   process `/proc` lists for the uid, until none is left. Each SIGKILL goes through a pidfd
+   (`pidfd_open`, the uid read again, `pidfd_send_signal`), so a pid that exits and goes to another
+   process between the scan and the kill is never hit. Without pidfd (glibc before 2.36, or a kernel
+   before 5.3) impd reads the uid again just before `kill()`, which narrows that window but does not
+   close it. One that a guest escape forked from Firecracker cannot outlive it, race the root work
+   in the jail below, or run on as the next imp that gets the uid. A process that survives 1 s of
+   this stops the start, and a destroy, so the uid stays taken.
+2. It unmounts what an earlier run left, and refuses to go on while anything stays mounted. It then
+   deletes the whole jail and makes it again: the last VM owned the chroot and may have left
+   symlinks in it.
+3. It empties `run/` of everything but the log, gives it to the imp's uid until the seal below, and
+   chowns the disk to the uid. The snapshot files the VM loads are root's, readable by the imp's
+   group (0640). Every directory stays root's, so the VM can write into its files but never swap one
+   for a symlink or a FIFO. A snapshot file that is not a regular file stops the start.
+4. It binds the chroot to itself and makes it private, then binds in the imp's directory at its own
+   absolute path. On ZFS it binds the snapshot dataset too. Every bind is `nosuid,nodev`, on each
+   submount too (`nosuid=recursive`, util-linux 2.39 and kernel 5.12 or later): no setuid file and
+   no device node in the imp's files works in the jail. The kernel and the system drive go in
+   read-only. A last `--make-rprivate` stops mount events between the jail and the imp's real
+   directory: a mount or unmount under `imps/<id>`, such as a ZFS dataset's, does not reach into a
+   running jail, and the jail's own unmounts do not reach out.
+
+Firecracker binds its API and vsock sockets in `run/`, so the VM owns `run/` while it is configured
+or while a snapshot loads. impd then seals it, giving it back to root, before `InstanceStart` or the
+resume: no guest code runs while the VM can change `run/`. The seal then reads `run/`: the two
+sockets, and impd's log and pid file as root's regular files with one link each, are all it may
+hold. Anything else proves a compromised VM, so the seal deletes nothing while that VM runs: it
+fails the start or the wake, and impd kills the VM. The next prepare's sweep, after every process of
+the uid is gone, deletes what it left. The seal writes the pid file anew. A sleep writes the
+snapshot into new empty files that impd makes for it, and gives them back to root once the VM and
+every process of its uid are gone, before anything loads them. impd opens every file of its own
+beside a VM, such as the log, the pid file and `meta.json`, with `O_NOFOLLOW` and refuses anything
+but a regular file. It checks that each socket is a socket before it connects.
+
+The jailer then makes `/dev/kvm`, `/dev/net/tun` and the rest in the chroot, drops to the uid and
+execs Firecracker in place. Firecracker's argv is `--id <id> ... --api-sock <absolute path>`, so
+every path is the same inside the jail and out: old snapshots still load, the host reaches the
+sockets where it always did, and a restart re-adopts the VM by its API socket as before. A jailed
+process can put any socket in its argv, so the reconcile after a restart takes a process as imp X's
+VM only when `/proc/<pid>/status` shows it runs as X's jail uid, or as root (an unjailed VM), or
+`/proc/<pid>/cgroup` is `/imps/X`. A jail cannot change any of these, so it cannot get another imp's
+VM killed or its snapshot dropped as an orphan. The liveness check asks the same of a running imp's
+pid, so a recycled pid whose argv a jail forged counts as a lost VM, and no re-adopt moves it into
+the imp's cgroup. impd starts it without `--daemonize`, `--new-pid-ns` or `--cgroup`: the pid it
+spawns is the VM's, and impd's own cgroup writer stays the only one.
+
+A jailed Firecracker cannot open a tap it does not own, so impd makes each tap with
+`ip tuntap add ... user <uid> group <gid>`, and makes it again when its owner differs. impd keeps
+the binds while the VM runs and unmounts them when it exits: at a stop, a sleep, a failed start, or
+when the liveness check finds it gone. A destroy deletes the jail, and the reconcile at start
+deletes the jails of imps that no longer exist. impd still reads `smaps_rollup` and signals the VM
+as root.
+
+A jailed VM starts only inside its cgroup: `cgroup.kill` is what stops every process of it at once,
+faster than a fork chain can outrun a `/proc` scan. Without a delegated `cpu` controller, or when
+the cgroup's setup fails, a jailed boot or wake fails with
+`a jailed VM starts only in its own cgroup, and it has none: ...`, and a sleeping imp stays asleep
+with its snapshot. On a host without cgroup delegation, set `IMP_JAILER=false`: VMs then run as
+root, unjailed and with no CPU or memory limits.
+
+`IMP_JAILER=false` runs Firecracker as root, as before. An unjailed start empties `run/` first, as a
+prepare does, so what a jailed VM of the imp left there does not fail its seal. Either way impd
+adopts, stops and cleans up after VMs of the other kind, and a snapshot from either wakes under the
+other, so the setting can change across a restart.
+
 #### cgroups
 
 `host/scripts/setup-cgroups.sh` runs first in the host container. In a private cgroup v2 namespace
-(`/proc/self/cgroup` reads `0::/`), it moves every process to `/init`, enables the `cpu` controller
-at the root and makes `imps/` with `cpu` enabled. In any other namespace it changes nothing, and
-impd stores CPU settings without enforcing them. impd makes `imps/<id>` for each VM, writes
-`cpu.max` and `cpu.weight`, and starts Firecracker inside it
+(`/proc/self/cgroup` reads `0::/`), it moves every process to `/init`, enables the `cpu` and
+`memory` controllers at the root and makes `imps/` with both enabled. In any other namespace it
+changes nothing, and impd stores CPU settings without enforcing them; with the jailer on, no VM
+starts there ([the jailer](#the-jailer)). impd makes `imps/<id>` for each VM, writes `cpu.max` and
+`cpu.weight`, and starts Firecracker (or the jailer) inside it
 (`sh -c 'echo $$ > cgroup.procs; exec setsid firecracker'`), so no VM thread runs outside the limit.
-A sleep or a wake writes `cpu.max` as `max` while the snapshot is made or loaded. impd removes the
-cgroup when the VM exits, and its reconcile at start removes `imps/*` dirs that no imp owns. The
-resource sampler reads `cpu.stat`, the tap's byte counters and `smaps_rollup` once per imp every 5
-s, and the presenter and the telemetry read that cache.
+With the memory controller it also writes `memory.max` at the guest's memory plus 256 MiB, or plus
+an eighth of the guest above 2 GiB, `memory.swap.max` as 0 and `memory.oom.group` as 1: an OOM kill
+takes the whole VM, and the liveness check marks the imp stopped with the error
+`its memory limit killed firecracker` when `oom_kill` in `memory.events` rose since the VM's start
+or its adopt. A sleep or a wake that the limit cuts short names it the same way, when `oom_kill`
+rose during it: a count alone may be an older kill's, in a cgroup that a busy remove kept. The room
+above the guest holds Firecracker and the page cache of its disk and snapshot I/O, which the kernel
+reclaims at `memory.max` before it kills. A 1536 MiB guest with 1300 MiB in use slept, woke, rewrote
+all of it and moved 3 GiB through its disk without an OOM kill. `memory.high` stays `max`: at the
+guest plus 128 MiB its throttling made that disk I/O take 20.7 s instead of 9.4 s. `setGuestMib`
+moves the limit when the guest's plugged memory changes (memory hot-plug calls it); the size it sets
+lasts through a sleep and is forgotten at a stop. A sleep or a wake writes `cpu.max` as `max` while
+the snapshot is made or loaded. impd removes the cgroup when the VM exits, and its reconcile at
+start removes `imps/*` dirs that no imp owns. The resource sampler reads `cpu.stat`, the tap's byte
+counters and `smaps_rollup` once per imp every 5 s, and the presenter and the telemetry read that
+cache.
 
 ### sleep: snapshot metadata
 

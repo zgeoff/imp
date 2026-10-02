@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { requireSocket } from './vm-files';
 
 // Typed calls to the Firecracker API over its unix socket.
 
@@ -118,6 +119,8 @@ export function createFirecrackerClient(
     body?: unknown,
     timeoutMs = timeouts.requestMs,
   ): Promise<string> => {
+    requireSocket(socketPath);
+
     const init: BunFetchRequestInit = {
       method,
       unix: socketPath,

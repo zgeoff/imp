@@ -4,6 +4,7 @@ import type { FirecrackerPaths } from '../vmm/firecracker-process';
 // The /var/lib/imp layout (docs/architecture/storage.md#the-data-directory).
 
 export interface ImpPaths extends FirecrackerPaths {
+  readonly impId: string;
   readonly dir: string;
   readonly runDir: string;
   readonly disk: string;
@@ -30,6 +31,7 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
   const runDir = join(dir, 'run');
 
   return {
+    impId,
     dir,
     runDir,
     disk: join(dir, 'disk.ext4'),

@@ -1,5 +1,6 @@
 import { createConnection } from 'node:net';
 import type { Socket } from 'node:net';
+import { requireSocket } from '../vmm/vm-files';
 import { createFrameDecoder, encodeFrame, encodeJsonFrame } from './frame-codec';
 import type { AgentFrame, FrameType } from './frame-codec';
 
@@ -52,6 +53,8 @@ export class AgentError extends Error {
 // Rejects when the agent is not listening yet, so callers can retry.
 export function openAgentConnection(vsockPath: string, timeoutMs = 2000): Promise<AgentConnection> {
   return new Promise((resolve, reject) => {
+    requireSocket(vsockPath);
+
     const socket = createConnection({ path: vsockPath });
 
     const timer = setTimeout(() => {

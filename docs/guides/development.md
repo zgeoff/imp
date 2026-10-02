@@ -65,7 +65,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, jail
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -82,9 +82,9 @@ The `acceptance` set is the definition of done: the tailscale suite fails withou
 the timing limits fail the run. Any other set skips tailscale without a key and only warns about a
 missed limit. The harness starts Pebble for the https suite, which needs no domain and reboots the
 instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble)). The `fast` set
-takes about 3.5 minutes, most of it idle timeouts in the sleep suite. The full set adds docker,
-images, scale and tailscale; at its defaults the scale suite alone took about 75 seconds in the last
-acceptance run.
+takes about 4.5 minutes, most of it idle timeouts in the sleep suite and the jail suite's two
+reboots. The full set adds docker, images, scale and tailscale; at its defaults the scale suite
+alone took about 75 seconds in the last acceptance run.
 
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default

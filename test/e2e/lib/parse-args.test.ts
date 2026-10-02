@@ -40,6 +40,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'boot-templates',
     'inner',
     'chaos',
+    'jail',
     'backups',
   ]);
 });
@@ -72,6 +73,7 @@ test('it expands a set and drops duplicates', () => {
     'templates',
     'boot-templates',
     'inner',
+    'jail',
   ]);
 });
 

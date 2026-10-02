@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import * as z from 'zod';
 import { ServicesListSchema } from '../agent-client/service-requests';
 import { SeenSessionSchema } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
 import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';
+import { readRegularFile } from '../vmm/vm-files';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
 // What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
@@ -112,7 +113,7 @@ export function readLoadingMeta(paths: Readonly<ImpPaths>): SnapshotMeta | null 
   const path = buildLoadingPath(paths);
 
   try {
-    return SnapshotMetaSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    return SnapshotMetaSchema.parse(JSON.parse(readRegularFile(path)));
   } catch {
     return null;
   }
@@ -125,7 +126,7 @@ export function readSnapshotMeta(paths: Readonly<ImpPaths>): SnapshotMeta | null
   }
 
   try {
-    return SnapshotMetaSchema.parse(JSON.parse(readFileSync(paths.snapshotMeta, 'utf8')));
+    return SnapshotMetaSchema.parse(JSON.parse(readRegularFile(paths.snapshotMeta)));
   } catch {
     return null;
   }

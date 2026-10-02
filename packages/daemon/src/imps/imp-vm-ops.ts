@@ -28,12 +28,14 @@ import {
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import type { VmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import type { ImpCgroup } from '../vmm/cpu-cgroups';
 import { TemplateRestoreError } from '../vmm/template-vm';
 import type { StartedVm } from '../vmm/vm-runner';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
+import { OOM_KILL_TRIGGER, startOomWatch } from './oom-kill';
 import { startCounting } from './read-running-imp-usage';
 import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
@@ -47,6 +49,11 @@ const CLAIM_SEED_BYTES = 64;
 
 // how long a sleep waits for the services list it records
 const SERVICES_FOR_SLEEP_MS = 1000;
+
+// why a jailed VM does not start without its cgroup: cgroup.kill is what
+// stops every process a guest escape forks, faster than any /proc scan
+const NO_JAIL_CGROUP =
+  'a jailed VM starts only in its own cgroup, and it has none: the cpu controller is not delegated to /sys/fs/cgroup/imps, or the setup of imps/<id> failed (see the log); set IMP_JAILER=false on a host without cgroup delegation';
 
 // How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
 // for it, and give way once `isWanted` turns false, or sleep it at once.
@@ -151,6 +158,17 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
   };
 
+  // the cgroup a VM starts in; a jailed VM refuses to start without one
+  const setupVmCgroup = (imp: LockedImp): ImpCgroup | null => {
+    const cgroup = context.cgroups.setup(imp.id, imp.cpu, imp.memoryMib);
+
+    if (cgroup === null && context.findJailUser(imp) !== null) {
+      throw new Error(NO_JAIL_CGROUP);
+    }
+
+    return cgroup;
+  };
+
   // A cold boot: a restore of the shape's boot template when one is ready,
   // else the kernel's boot. A template that fails to restore goes, and the
   // imp boots the kernel (docs/architecture/boot-templates.md#restore).
@@ -161,7 +179,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     hostSteps: Readonly<Record<string, number>>,
     diskReady: Promise<unknown>,
   ): Promise<StartedVm> => {
-    const cgroup = context.cgroups.setup(imp.id, imp.cpu);
+    const cgroup = setupVmCgroup(imp);
     const template = context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
 
     // a disk that fails is the create's failure, not the template's
@@ -246,6 +264,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       dns: context.config.dns,
       cgroup,
       isIdentityReset: imp.isIdentityResetPending,
+      jail: context.findJailUser(imp),
     });
 
     context.log(
@@ -300,7 +319,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       // a box or none imp never runs where nft cannot hold it in
       await context.egress.requireImp(imp.id);
-      await context.taps.setupTap(address);
+      await context.taps.setupTap(address, context.findJailUser(imp));
 
       // the host's part before the VM, for the boot's log line
       const hostSteps = {
@@ -421,8 +440,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     removeSnapshotMeta(paths);
 
+    const hasOomKill = startOomWatch(context.cgroups, imp.id);
+
     try {
-      const cgroup = context.cgroups.setup(imp.id, imp.cpu);
+      const cgroup = context.cgroups.setup(imp.id, imp.cpu, imp.memoryMib);
 
       const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup, paths));
 
@@ -455,21 +476,25 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         throw error;
       }
 
-      context.log(
-        `impd: ${imp.name}: sleep failed after firecracker stopped: ${readErrorMessage(error)}`,
-      );
+      // a snapshot's page cache counts against the memory limit
+      const isOomKill = hasOomKill();
+      const message = readErrorMessage(error);
+      const failure = isOomKill ? `${OOM_KILL_TRIGGER} (${message})` : message;
+
+      context.log(`impd: ${imp.name}: sleep failed after firecracker stopped: ${failure}`);
 
       removeSnapshot(paths);
       context.admission?.release(imp.id);
 
       await updateState(imp, {
         reason: 'stopped',
-        detail: { trigger: reason },
+        detail: { trigger: isOomKill ? OOM_KILL_TRIGGER : reason },
         state: 'stopped',
         pid: null,
+        ...(isOomKill && { error: OOM_KILL_TRIGGER }),
       });
 
-      throw error;
+      throw isOomKill ? new Error(`sleep failed: ${OOM_KILL_TRIGGER}`, { cause: error }) : error;
     }
 
     context.admission?.release(imp.id);
@@ -539,6 +564,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       return startColdImpVm(imp, 'wake_fallback', mismatch);
     }
 
+    // before the load and the admission: a wake that cannot start keeps the
+    // imp asleep, with its snapshot
+    const cgroup = setupVmCgroup(imp);
+
     // a woken VM faults its pages back in; it grows toward what it owned
     await context.admission?.admit({
       id: imp.id,
@@ -551,7 +580,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     setSnapshotLoading(paths);
 
-    const woken = await loadSnapshot(imp, paths);
+    const woken = await loadSnapshot(imp, paths, cgroup);
 
     if (woken instanceof Error) {
       return startAfterFailedWake(imp, paths, woken);
@@ -648,19 +677,28 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   };
 
   // the woken VM, or why the load or the agent failed; the VM is gone then
-  const loadSnapshot = async (imp: LockedImp, paths: ImpPaths) => {
+  const loadSnapshot = async (imp: LockedImp, paths: ImpPaths, cgroup: ImpCgroup | null) => {
+    const hasOomKill = startOomWatch(context.cgroups, imp.id);
+
     try {
       // a container restart takes the taps with it
       await context.egress.requireImp(imp.id);
-      await context.taps.setupTap(context.findAddress(imp.slot));
+      await context.taps.setupTap(context.findAddress(imp.slot), context.findJailUser(imp));
 
       return await context.vms.wakeVm({
         firecrackerBin: context.config.firecrackerBin,
         paths,
-        cgroup: context.cgroups.setup(imp.id, imp.cpu),
+        cgroup,
+        jail: context.findJailUser(imp),
+        readOnlyFiles: [context.identity.systemDrivePath],
       });
     } catch (error) {
-      return error instanceof Error ? error : new Error(readErrorMessage(error));
+      const failure = error instanceof Error ? error : new Error(readErrorMessage(error));
+
+      // the first line is the failure the record keeps: the limit, not the API error
+      return hasOomKill()
+        ? new Error(`wake failed: ${OOM_KILL_TRIGGER}\n${failure.message}`, { cause: failure })
+        : failure;
     }
   };
 

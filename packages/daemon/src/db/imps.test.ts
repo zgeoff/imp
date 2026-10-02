@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { subscribeImpWrites } from './imp-write-feed';
 import {
+  JAIL_UIDS,
   allocateSlot,
   createImp,
   createImpInFreeSlot,
@@ -99,6 +100,23 @@ test('it throws when every slot is taken', async () => {
   const message = await readRejectionMessage(allocateSlot(ctx.db, 2));
 
   expect(message).toBe('every one of the 2 slots is taken');
+});
+
+test('each imp gets its own jail uid, the lowest free one', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const a = await createImp(ctx.db, buildNewImp(ctx.image.id, 'a', 0));
+  const b = await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 1));
+
+  expect([a.jailUid, b.jailUid]).toEqual([JAIL_UIDS.first, JAIL_UIDS.first + 1]);
+
+  await removeImp(ctx.db, a.id);
+
+  const c = await createImp(ctx.db, buildNewImp(ctx.image.id, 'c', 2));
+  const found = await findImpById(ctx.db, c.id);
+
+  expect(c.jailUid).toBe(JAIL_UIDS.first);
+  expect(found?.jailUid).toBe(JAIL_UIDS.first);
 });
 
 test('it rejects a duplicate name', async () => {

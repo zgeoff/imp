@@ -300,8 +300,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
             await context.vms.stopVm(imp.pid, paths, false);
           }
 
-          // the VM is gone: an empty cgroup can go
+          // the VM is gone: an empty cgroup and its jail can go; a jail mount
+          // would keep a ZFS disk busy
           await context.cgroups.remove(imp.id);
+          await context.vms.removeJail(paths);
           await context.taps.removeTap(context.findAddress(imp.slot).tap);
 
           // out of the firewall before another imp can take the slot

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { buildImpPaths } from '../storage/data-layout';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { setupImpTest, writeTestSnapshot } from './test-imps';
 
 test('a VM that died after its sleep wrote the snapshot is asleep, not stopped', async () => {
@@ -38,4 +39,33 @@ test('a dead VM with a snapshot from an earlier sleep is stopped', async () => {
   const found = await ctx.imps.getImp('dev');
 
   expect(found.state).toBe('stopped');
+});
+
+test('a VM that its memory limit killed is stopped, and says so', async () => {
+  const cgroups: CpuCgroups = {
+    isEnforced: true,
+    isMemoryEnforced: true,
+    readOomKills: () => 1,
+    hasOomKillSinceStart: () => true,
+    setup: () => null,
+    apply: () => {},
+    adopt: () => {},
+    remove: () => Promise.resolve(),
+    setGuestMib: () => {},
+    kill: () => {},
+    removeOrphans: () => [],
+    readCpuStat: () => null,
+  };
+
+  await using ctx = await setupImpTest({ cgroups });
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.imps.createImp({ name: 'dev' });
+
+  ctx.fake.alive.clear();
+
+  const found = await ctx.imps.getImp('dev');
+
+  expect(found.state).toBe('stopped');
+  expect(found.error).toBe('its memory limit killed firecracker');
 });

@@ -6,7 +6,7 @@ import type { DatabaseSchema } from './schema';
 // every disk before sizes was a 32 GiB sparse file
 const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
 
-const MIGRATIONS: Record<string, Migration> = {
+export const MIGRATIONS: Record<string, Migration> = {
   '001_create_initial_schema': {
     async up(db: Kysely<DatabaseSchema>) {
       await db.schema
@@ -379,6 +379,25 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
 
       await db.schema.alterTable('imps').addColumn('next_boot_cause', 'text').execute();
+    },
+  },
+
+  // a uid per imp for its jailed Firecracker (#27), in order of creation,
+  // from the start of db/imps.ts JAIL_UIDS
+  '016_add_imp_jail_uid': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('imps').addColumn('jail_uid', 'integer').execute();
+      await db.schema.createIndex('imps_jail_uid').on('imps').column('jail_uid').unique().execute();
+
+      const rows = await db.selectFrom('imps').select('id').orderBy('created_at').execute();
+
+      for (const [index, row] of rows.entries()) {
+        await db
+          .updateTable('imps')
+          .set({ jail_uid: 900_000 + index })
+          .where('id', '=', row.id)
+          .execute();
+      }
     },
   },
 };

@@ -9,9 +9,17 @@ import {
 import { join } from 'node:path';
 import type { CpuSettings } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
+import { readProcessCgroup } from './process-owner';
 
 // cpu.max's period: a limit of 1.5 cores is a quota of 150000 per 100000 µs
 const PERIOD_US = 100_000;
+
+// Room above the guest's memory for Firecracker and the page cache of its
+// disk and snapshot I/O, which the kernel reclaims at memory.max before any
+// OOM kill (docs/architecture/daemon.md#cgroups)
+const MEMORY_MIN_OVERHEAD_MIB = 256;
+const MEMORY_OVERHEAD_DIVISOR = 8;
+const BYTES_PER_MIB = 1024 * 1024;
 
 // rmdir answers EBUSY until the kernel lets go of an exited process
 const REMOVE_TRIES = 40;
@@ -39,14 +47,17 @@ export interface CpuCgroups {
   // false without a private cgroup v2 namespace: limits are kept, not applied
   readonly isEnforced: boolean;
 
+  // whether the memory controller is on too, for each VM's memory limit
+  readonly isMemoryEnforced: boolean;
+
   // makes the cgroup with the imp's settings; null when not enforced
-  readonly setup: (impId: string, cpu: CpuSettings) => ImpCgroup | null;
+  readonly setup: (impId: string, cpu: CpuSettings, memoryMib: number) => ImpCgroup | null;
 
   // new settings on a cgroup a VM may be running in
   readonly apply: (impId: string, cpu: CpuSettings) => void;
 
   // a VM impd re-adopts joins its cgroup when it is anywhere else
-  readonly adopt: (impId: string, pid: number, cpu: CpuSettings) => void;
+  readonly adopt: (impId: string, pid: number, cpu: CpuSettings, memoryMib: number) => void;
 
   // after the VM exited; waits out the moment its exited Firecracker still
   // counts as inside
@@ -56,9 +67,25 @@ export interface CpuCgroups {
   // harmless: setup reuses it and writes the settings again, the spawn's
   // baseline hides its old cpu.stat, and a destroy or a stop removes it.
 
+  // the guest's memory, base plus hot-plugged, for its memory limit: raised
+  // before a plug, lowered once an unplug's RSS has fallen
+  readonly setGuestMib: (impId: string, guestMib: number) => void;
+
   // removes the cgroup of every id not in `impIds`; returns those ids
   readonly removeOrphans: (impIds: ReadonlySet<string>) => string[];
   readonly readCpuStat: (impId: string) => CpuStat | null;
+
+  // how often the kernel killed a process in the cgroup for its memory
+  // limit (memory.events oom_kill); null without the file
+  readonly readOomKills: (impId: string) => number | null;
+
+  // whether it did since the last setup or adopt, for a VM found dead: a
+  // cgroup that a busy remove kept still counts an older VM's kill
+  readonly hasOomKillSinceStart: (impId: string) => boolean;
+
+  // SIGKILL to every process in the cgroup at once (cgroup.kill), so one that
+  // forked from Firecracker cannot outlive it; nothing without the cgroup
+  readonly kill: (impId: string) => void;
 }
 
 interface CpuCgroupOptions {
@@ -94,15 +121,69 @@ export function parseCpuStat(text: string): CpuStat | null {
   return { usageUsec, throttledUsec: fields.get('throttled_usec') ?? 0 };
 }
 
+// memory.max: the guest plus 256 MiB, or an eighth of it when that is more
+export function buildMemoryMax(memoryMib: number): string {
+  const overhead = Math.max(
+    MEMORY_MIN_OVERHEAD_MIB,
+    Math.ceil(memoryMib / MEMORY_OVERHEAD_DIVISOR),
+  );
+
+  return String((memoryMib + overhead) * BYTES_PER_MIB);
+}
+
+// memory.events' oom_kill; null without the field
+export function parseOomKills(text: string): number | null {
+  const match = /^oom_kill (?<count>\d+)$/m.exec(text);
+
+  return match?.groups === undefined ? null : Number(match.groups['count']);
+}
+
 export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
   const imps = join(options.root, 'imps');
   const procRoot = options.procRoot ?? '/proc';
-  const isEnforced = isCpuDelegated(imps);
+  const isEnforced = isControllerDelegated(imps, 'cpu');
+  const isMemoryEnforced = isEnforced && isControllerDelegated(imps, 'memory');
   const findDir = (impId: string): string => join(imps, impId);
+
+  const guestMibs = new Map<string, number>();
+
+  // oom_kill when the VM in each cgroup started or was adopted
+  const oomBaselines = new Map<string, number>();
+
+  const readOomKills = (impId: string): number | null => {
+    try {
+      const events = readFileSync(join(findDir(impId), 'memory.events'), 'utf8');
+
+      return parseOomKills(events);
+    } catch {
+      return null;
+    }
+  };
+
+  const setOomBaseline = (impId: string): void => {
+    oomBaselines.set(impId, readOomKills(impId) ?? 0);
+  };
 
   const writeSettings = (impId: string, cpu: CpuSettings, limit: number | null): void => {
     writeFileSync(join(findDir(impId), 'cpu.weight'), String(cpu.weight));
     writeFileSync(join(findDir(impId), 'cpu.max'), formatCpuMax(limit));
+  };
+
+  // No swap, and an OOM kill takes the whole VM, never one thread of it. No
+  // memory.high: its throttling halved a guest's disk throughput.
+  const writeMemory = (impId: string): void => {
+    const guestMib = guestMibs.get(impId);
+
+    if (!isMemoryEnforced || guestMib === undefined) {
+      return;
+    }
+
+    const dir = findDir(impId);
+
+    writeFileSync(join(dir, 'memory.max'), buildMemoryMax(guestMib));
+    writeFileSync(join(dir, 'memory.high'), 'max');
+    writeFileSync(join(dir, 'memory.swap.max'), '0');
+    writeFileSync(join(dir, 'memory.oom.group'), '1');
   };
 
   // a failed write costs the limit, never the boot or the wake
@@ -114,14 +195,21 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
     }
   };
 
-  const setup = (impId: string, cpu: CpuSettings): ImpCgroup | null => {
+  const setup = (impId: string, cpu: CpuSettings, memoryMib: number): ImpCgroup | null => {
     if (!isEnforced) {
       return null;
     }
 
     try {
+      // a size setGuestMib gave outlives a sleep; a stop forgets it
+      if (!guestMibs.has(impId)) {
+        guestMibs.set(impId, memoryMib);
+      }
+
       mkdirSync(findDir(impId), { recursive: true });
+      setOomBaseline(impId);
       writeSettings(impId, cpu, cpu.limit);
+      writeMemory(impId);
     } catch (error) {
       options.log(`impd: cgroup ${impId}: ${readErrorMessage(error)}; this VM runs unlimited`);
 
@@ -145,6 +233,7 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
 
   return {
     isEnforced,
+    isMemoryEnforced,
     setup,
     apply: (impId, cpu) => {
       if (isEnforced && existsSync(findDir(impId))) {
@@ -153,12 +242,18 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
         });
       }
     },
-    adopt: (impId, pid, cpu) => {
-      if (!isEnforced || readProcessCgroup(procRoot, pid) === `/imps/${impId}`) {
+    adopt: (impId, pid, cpu, memoryMib) => {
+      if (!isEnforced) {
         return;
       }
 
-      const cgroup = setup(impId, cpu);
+      if (readProcessCgroup(pid, procRoot) === `/imps/${impId}`) {
+        setOomBaseline(impId);
+
+        return;
+      }
+
+      const cgroup = setup(impId, cpu, memoryMib);
 
       if (cgroup !== null) {
         tryWrite(impId, `move pid ${String(pid)}`, () => {
@@ -166,7 +261,19 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
         });
       }
     },
+    setGuestMib: (impId, guestMib) => {
+      guestMibs.set(impId, guestMib);
+
+      if (isMemoryEnforced && existsSync(findDir(impId))) {
+        tryWrite(impId, 'set the memory limit', () => {
+          writeMemory(impId);
+        });
+      }
+    },
     remove: async (impId) => {
+      guestMibs.delete(impId);
+      oomBaselines.delete(impId);
+
       if (!isEnforced) {
         return;
       }
@@ -204,6 +311,19 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
 
       return orphans;
     },
+    kill: (impId) => {
+      if (isEnforced && existsSync(findDir(impId))) {
+        tryWrite(impId, 'kill', () => {
+          writeFileSync(join(findDir(impId), 'cgroup.kill'), '1');
+        });
+      }
+    },
+    readOomKills,
+    hasOomKillSinceStart: (impId) => {
+      const baseline = oomBaselines.get(impId);
+
+      return baseline !== undefined && (readOomKills(impId) ?? 0) > baseline;
+    },
     readCpuStat: (impId) => {
       try {
         const stat = readFileSync(join(findDir(impId), 'cpu.stat'), 'utf8');
@@ -216,24 +336,15 @@ export function createCpuCgroups(options: CpuCgroupOptions): CpuCgroups {
   };
 }
 
-// the entrypoint hands the cpu controller to imps/ only in a private
-// cgroup v2 namespace
-function isCpuDelegated(imps: string): boolean {
+// the entrypoint hands controllers to imps/ only in a private cgroup v2
+// namespace
+function isControllerDelegated(imps: string, controller: string): boolean {
   try {
-    return readFileSync(join(imps, 'cgroup.subtree_control'), 'utf8').split(/\s+/).includes('cpu');
+    const delegated = readFileSync(join(imps, 'cgroup.subtree_control'), 'utf8');
+
+    return delegated.split(/\s+/).includes(controller);
   } catch {
     return false;
-  }
-}
-
-// the cgroup v2 path of a process, such as /imps/<id>; null when gone
-function readProcessCgroup(procRoot: string, pid: number): string | null {
-  try {
-    const text = readFileSync(join(procRoot, String(pid), 'cgroup'), 'utf8');
-
-    return text.trim().replace(/^0::/, '');
-  } catch {
-    return null;
   }
 }
 

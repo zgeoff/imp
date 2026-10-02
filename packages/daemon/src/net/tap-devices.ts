@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 import type { SlotAddress } from './addressing';
@@ -6,18 +7,29 @@ import { GATEWAY_IP6 } from './addressing6';
 // Tap devices for imp slots (docs/architecture/networking.md#addressing). An
 // interface, so tests fake it.
 export interface TapDevices {
-  // creates `imp<slot>` with the host end of the /30 and brings it up;
-  // succeeds when it already exists. With IPv6, the tap also gets the
-  // gateway fe80::1 and a route to the imp's /128.
-  readonly setupTap: (address: SlotAddress) => Promise<void>;
+  // creates `imp<slot>` with the host end of the /30 and brings it up. With
+  // IPv6, the tap also gets the gateway fe80::1 and a route to the imp's
+  // /128. A jailed Firecracker owns its tap (docs/architecture/daemon.md#the-jailer).
+  readonly setupTap: (address: SlotAddress, owner?: TapOwner | null) => Promise<void>;
 
   // succeeds when it is already gone
   readonly removeTap: (tap: string) => Promise<void>;
 }
 
+interface TapOwner {
+  readonly uid: number;
+  readonly gid: number;
+}
+
 type RunCommand = (argv: readonly string[]) => Promise<CommandResult>;
 
-export function createTapDevices(run: RunCommand = runCommand): TapDevices {
+// a tap's owner and group from sysfs, -1 for none; null when it is not there
+type ReadOwner = (tap: string) => TapOwner | null;
+
+export function createTapDevices(
+  run: RunCommand = runCommand,
+  readOwner: ReadOwner = readTapOwner,
+): TapDevices {
   // `tolerated`: stderr fragments that mean the change is already in place
   const runIp = async (args: readonly string[], tolerated: readonly string[]): Promise<void> => {
     const result = await run(['ip', ...args]);
@@ -50,12 +62,24 @@ export function createTapDevices(run: RunCommand = runCommand): TapDevices {
     }
   };
 
+  const removeTap = async (tap: string): Promise<void> => {
+    await runIp(['link', 'del', tap], ['cannot find', 'does not exist']);
+  };
+
   return {
-    setupTap: async (address) => {
+    setupTap: async (address, owner = null) => {
       const cidr = `${address.hostIp}/${String(address.prefixLength)}`;
       const ipv6 = address.guestIp6 !== null;
+      const current = readOwner(address.tap);
 
-      await runIp(['tuntap', 'add', address.tap, 'mode', 'tap'], ['exists', 'busy']);
+      if (owner !== null && current !== null && !isSameOwner(current, owner)) {
+        await removeTap(address.tap);
+      }
+
+      const ownerArgs =
+        owner === null ? [] : ['user', String(owner.uid), 'group', String(owner.gid)];
+
+      await runIp(['tuntap', 'add', address.tap, 'mode', 'tap', ...ownerArgs], ['exists', 'busy']);
       await runIp(['addr', 'add', cidr, 'dev', address.tap], ['exists', 'already assigned']);
 
       // before the link is up: a guest never sets the host's routes, with
@@ -79,8 +103,23 @@ export function createTapDevices(run: RunCommand = runCommand): TapDevices {
         await runIp(['-6', 'route', 'replace', `${address.guestIp6}/128`, 'dev', address.tap], []);
       }
     },
-    removeTap: async (tap) => {
-      await runIp(['link', 'del', tap], ['cannot find', 'does not exist']);
-    },
+    removeTap,
   };
+}
+
+function isSameOwner(a: Readonly<TapOwner>, b: Readonly<TapOwner>): boolean {
+  return a.uid === b.uid && a.gid === b.gid;
+}
+
+function readTapOwner(tap: string): TapOwner | null {
+  try {
+    const dir = `/sys/class/net/${tap}`;
+
+    return {
+      uid: Number(readFileSync(`${dir}/owner`, 'utf8').trim()),
+      gid: Number(readFileSync(`${dir}/group`, 'utf8').trim()),
+    };
+  } catch {
+    return null;
+  }
 }
