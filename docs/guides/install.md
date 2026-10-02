@@ -3,13 +3,11 @@
 imp runs on one Linux machine, in one host container, in one of two ways:
 
 - **The release image** for a server: impd, the `imp` CLI, the guest kernel and the system drive are
-  baked in, and nothing from the repo is mounted. [Run the release image](#run-the-release-image)
-  covers it.
+  baked in, and nothing from the repo is mounted. [Bootstrap a server](#bootstrap-a-server) sets up
+  a fresh server with one command; [run the release image](#run-the-release-image) covers the steps
+  by hand.
 - **The dev instance** for working on imp: `scripts/dev.sh` builds the host container and runs impd
   from the repo. The [set up](#set-up) steps below cover it.
-
-A one-command server bootstrap is on the [roadmap](https://github.com/zgeoff/imp/issues/41)
-([#9](https://github.com/zgeoff/imp/issues/9)).
 
 ## Needs
 
@@ -88,6 +86,116 @@ restarts and day-to-day care.
   match.
 - If the host runs Tailscale with MagicDNS, the container uses public resolvers instead, because its
   own tailscaled would capture `100.100.100.100`.
+
+## Bootstrap a server
+
+[`deploy/bootstrap.sh`](../../deploy/bootstrap.sh) takes a fresh Ubuntu 24.04 or Debian 13 server,
+x86_64 with KVM, to a running impd. It is one file with no other repo files, so copy it to the
+server and run it as root:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/main/deploy/bootstrap.sh
+install -m 0600 /dev/null /root/ts-key && vi /root/ts-key        # the auth key, one line
+bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
+bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
+```
+
+`--dry-run` prints every change and makes none. `--check` does the same and exits 1 when a change is
+pending. A run changes only what differs from what it wants, so a second run changes nothing.
+
+**CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
+partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS. Check
+the device name with `lsblk` before the run all the same.
+
+The phases run in order:
+
+- **preflight:** Checks root, the OS, x86_64, `/dev/kvm` and `vmx`/`svm`, before any change.
+- **packages:** Installs `xfsprogs`, `nftables`, `jq` and Docker CE from Docker's apt repo. A Docker
+  that is already installed stays.
+- **storage:** Makes `--data-device` XFS with reflink (fstab by UUID), or creates the `--loop-file`
+  on the root filesystem (fstab `loop`). Mounts it on `/var/lib/imp`. With `/var/lib/imp` already
+  mounted, it only checks it is XFS with reflink.
+- **kernel:** Writes `vm.overcommit_memory = 1` and `vm.swappiness = 1` to
+  `/etc/sysctl.d/90-imp.conf`, and `kvm`, `tun` and `loop` to `/etc/modules-load.d/imp.conf`, and
+  applies both. Swap stays as the installer made it.
+- **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
+  `imp-firewall.service`. It refuses while `nftables.service` is enabled.
+- **imp:** Writes `/etc/imp/imp-host.env` (0600) and `/etc/systemd/system/imp-host.service`, pulls
+  the image (or loads `--image-archive`), and starts the unit.
+- **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, then
+  creates, runs `uname -a` in, and destroys an imp from `ubuntu`. `--skip-health` skips it.
+
+### Disk layout
+
+Give imp a disk or a partition of its own. Put the OS on the rest:
+
+| Mount          | Size                              | Notes                                                            |
+| -------------- | --------------------------------- | ---------------------------------------------------------------- |
+| `/`            | 50–100 GiB                        | The OS, Docker's images and the env file.                        |
+| swap           | what the installer makes, ≤ 8 GiB | `vm.swappiness = 1` keeps guest memory in RAM.                   |
+| `/var/lib/imp` | the rest                          | XFS with reflink: imp disks, snapshots, memory files and images. |
+
+OVH Rise and Vultr bare metal ship two NVMe disks, and their installers can put the OS on a RAID 1
+of both. Either keep the second disk out of the RAID and give it as `--data-device`, or make a RAID
+array or partition for imp in the installer and give that (`--data-device /dev/md2`). The script
+does not partition disks.
+
+`--loop-file /srv/imp.xfs --loop-size 400` puts a sparse XFS file on the root filesystem instead. It
+needs 20 GiB free and puts a loop device in the I/O path; use it only when no disk or partition is
+free.
+
+The storage phase has one backend today, XFS. ZFS ([#11](https://github.com/zgeoff/imp/issues/11))
+adds a second.
+
+### RAM budget
+
+The script sets `IMP_RAM_BUDGET_MIB` to the RAM the kernel reports, less the larger of 8 GiB and 15
+%. The host keeps that for itself, Docker, impd and the page cache. On a 64 GB box:
+
+| What                                    | MiB    |
+| --------------------------------------- | ------ |
+| MemTotal (64 GB reports about 62.5 GiB) | 64,000 |
+| Kept for the host: max(8192, 15 %)      | 9,600  |
+| `IMP_RAM_BUDGET_MIB`                    | 54,400 |
+
+That is about 170 awake imps at the 317 MiB that `STATUS.md` measured for an imp filling 256 MiB, or
+26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
+
+The script writes the budget when the env file holds the template's `16384` or nothing. Any other
+value is yours and stays. With ZFS, cap `zfs_arc_max` and take the ARC out of the budget too.
+
+### The Tailscale key
+
+The key goes to `/etc/imp/imp-host.env` only, and is never printed. The host container is the
+tailnet node; the host OS stays off the tailnet, and you reach it over public SSH.
+
+Use a tagged, non-ephemeral, single-use key ([Tailscale guide](./tailscale.md)). After the first
+start the node keeps its state in `/var/lib/imp/tailscale`, so the spent key cannot join anything
+again. Leave it in the env file: `tailscale-up.sh` does nothing without a key, so a blank key keeps
+the node offline after the next restart.
+
+### Firewall
+
+The `inet imp_host` table filters input only: loopback, established connections, ICMP and ICMPv6,
+the DHCP clients, and SSH. Docker keeps the forwarding rules, and a reload replaces this table
+alone. The SSH ports are those `sshd -T`, `ssh.socket` and the live `sshd` listeners report, plus
+`--ssh-port`. The script refuses the run when the current SSH session's port is not among them, and
+warns when `sshd` allows password logins.
+
+### Test it
+
+`scripts/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on
+Debian 13 and Ubuntu 24.04, with a loop file and Docker inside. It checks `--check` on the fresh
+host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*` and
+`kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel settings
+and does not apply them.
+
+```sh
+scripts/test-bootstrap.sh --stub                              # a stand-in image (what CI runs)
+scripts/test-bootstrap.sh --image imp-host:<tag> --health     # a release image; boots an imp
+```
+
+Nothing has run on a real OVH or Vultr server yet.
 
 ## Run the release image
 
