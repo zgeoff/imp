@@ -6,6 +6,14 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { NameSchema } from './name-schema';
+import {
+  AuditEntrySchema,
+  BrokerRuleSchema,
+  SecretKindSchema,
+  SecretNameSchema,
+  SecretSchema,
+  SecretValueSchema,
+} from './secret-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { SystemInfoSchema } from './system-info-schema';
 
@@ -128,6 +136,52 @@ export const impContract = {
     kill: base
       .input(z.object({ name: NameSchema, session: SessionNameSchema }))
       .output(EmptySchema),
+  },
+
+  // credentials the broker adds to an imp's requests (docs/guides/connectors.md)
+  secrets: {
+    // `replace` swaps the value and rules of a secret that exists; `rules`
+    // is for kind `custom` only, where it is required
+    add: base
+      .input(
+        z.object({
+          name: SecretNameSchema,
+          kind: SecretKindSchema,
+          value: SecretValueSchema,
+          rules: z.array(BrokerRuleSchema).min(1).max(16).optional(),
+          replace: z.boolean().optional(),
+        }),
+      )
+      .output(SecretSchema),
+
+    list: base.output(z.array(SecretSchema)),
+
+    // revokes it from every imp
+    delete: base.input(z.object({ name: SecretNameSchema })).output(EmptySchema),
+  },
+
+  grants: {
+    // the broker adds the secret to the imp's requests to its hosts
+    add: base.input(z.object({ name: NameSchema, secret: SecretNameSchema })).output(EmptySchema),
+
+    delete: base
+      .input(z.object({ name: NameSchema, secret: SecretNameSchema }))
+      .output(EmptySchema),
+
+    // the secrets granted to the imp
+    list: base.input(NameInputSchema).output(z.array(SecretNameSchema)),
+  },
+
+  audit: {
+    // newest first; one imp's, or every imp's
+    list: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          limit: z.int().min(1).max(1000).optional(),
+        }),
+      )
+      .output(z.array(AuditEntrySchema)),
   },
 
   system: {

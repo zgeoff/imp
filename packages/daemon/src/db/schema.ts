@@ -29,6 +29,10 @@ interface ImpsTable {
   pid: number | null;
   firecracker_version: string | null;
   http_port: Generated<number>;
+
+  // what the broker does with a CONNECT to a host no grant covers: `open`
+  // tunnels it; #26 adds the policies that refuse it
+  egress_policy: Generated<string>;
 }
 
 interface CheckpointsTable {
@@ -39,8 +43,40 @@ interface CheckpointsTable {
   size_bytes: number | null;
 }
 
+// A secret's metadata. Its value is a file in <dataDir>/secrets, never a row.
+interface SecretsTable {
+  name: string;
+  kind: string;
+
+  // BrokerRule[] as JSON
+  rules: string;
+  created_at: number;
+}
+
+interface GrantsTable {
+  imp_id: string;
+  secret_name: string;
+}
+
+interface BrokerAuditTable {
+  id: Generated<number>;
+  imp_id: string;
+  secret_name: string;
+  at: number;
+  method: string;
+  host: string;
+  path: string;
+  status: number;
+  request_bytes: number;
+  response_bytes: number;
+  duration_ms: number;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
   checkpoints: CheckpointsTable;
+  secrets: SecretsTable;
+  grants: GrantsTable;
+  broker_audit: BrokerAuditTable;
 }

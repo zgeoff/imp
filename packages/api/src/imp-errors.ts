@@ -2,7 +2,7 @@ import * as z from 'zod';
 import { defineErrors } from './define-errors';
 import { ImpStateSchema } from './imp-schema';
 
-const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint', 'session']);
+const ResourceKindSchema = z.enum(['imp', 'image', 'checkpoint', 'session', 'secret', 'grant']);
 
 const ResourceDataSchema = z.object({
   kind: ResourceKindSchema,
