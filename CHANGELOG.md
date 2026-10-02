@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.2](https://github.com/zgeoff/imp/compare/v0.2.1...v0.2.2) (2026-10-02)
+
+### Bug Fixes
+
+- **https:** keep the acme account key with its url
+  ([31706c5](https://github.com/zgeoff/imp/commit/31706c5da442d34d01437e330735b69047f49525))
+- **net:** keep the acme account key and url together
+  ([647c2fd](https://github.com/zgeoff/imp/commit/647c2fdc5f68de804e467233e943ccc77299edfc))
+- **net:** move the v0.1.1 acme account into account.json
+  ([68a2451](https://github.com/zgeoff/imp/commit/68a2451caa0785ad79f6c48f914456753bff2a1b))
+- **test:** take test ports from below the kernel's ephemeral range
+  ([c8f004a](https://github.com/zgeoff/imp/commit/c8f004acd7860c647ea52321c99f6571824d8479))
+
 ## [0.2.1](https://github.com/zgeoff/imp/compare/v0.2.0...v0.2.1) (2026-10-02)
 
 ### Bug Fixes
