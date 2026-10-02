@@ -1,8 +1,9 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
 import type { FirecrackerPaths, VmOwner } from '../vmm/firecracker-process';
+import type { JailUser } from '../vmm/jail';
 import { TemplateRestoreError } from '../vmm/template-vm';
 import type { TemplateRestorePlan } from '../vmm/template-vm';
 import type { VmRunner } from '../vmm/vm-runner';
@@ -85,6 +86,10 @@ export function buildFakeVmm() {
 
   // every restore's whole plan: what its jail binds and who it runs as
   const restorePlans: TemplateRestorePlan[] = [];
+
+  // each wake's jail user, and which of the files its jail prepare hands the
+  // VM were there when it began
+  const wakeJails: { jail: JailUser | null; files: string[] }[] = [];
 
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
@@ -209,6 +214,10 @@ export function buildFakeVmm() {
         }),
       wakeVm: (plan) =>
         runInGeneration(async () => {
+          const files = [plan.paths.disk, plan.paths.vmstate, plan.paths.memFile];
+
+          wakeJails.push({ jail: plan.jail, files: files.filter((file) => existsSync(file)) });
+
           try {
             const vm = await startFakeVm('wake', plan.paths);
 
@@ -404,6 +413,7 @@ export function buildFakeVmm() {
     templateBuilds,
     restores,
     restorePlans,
+    wakeJails,
     sweeps,
 
     // the runner for a new impd; the one before it goes quiet

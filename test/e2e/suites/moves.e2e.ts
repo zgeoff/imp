@@ -189,6 +189,26 @@ async function readAllowSet(slot: number, target?: DevInstance): Promise<string[
   return [...elements.matchAll(/\d+\.\d+\.\d+\.\d+/gv)].map((match) => match[0]);
 }
 
+// On B: the uid the imp's Firecracker runs as, and the owners of its disk
+// and its tap. The wake's jail prepare gives the disk to that uid.
+async function readJailOwnersOnB(id: string, slot: number): Promise<string[]> {
+  const dir = `/var/lib/imp/imps/${id}`;
+
+  const result = await runInContainer(
+    [
+      'sh',
+      '-c',
+      `pid=$(pgrep -f 'firecracker.*imps/${id}/' | head -n 1)
+      disk=$(ls ${dir}/disk.ext4 ${dir}/disk/rootfs.ext4 2>/dev/null | head -n 1)
+      stat -c %u "/proc/$pid" "$disk"
+      cat /sys/class/net/imp${String(slot)}/owner`,
+    ],
+    hosts.b,
+  );
+
+  return result.stdout.trim().split('\n');
+}
+
 // sleeps the imp on A and moves it warm; the CLI's line names it
 async function runWarmMove(name: string): Promise<void> {
   await runImp('hold', name, '0');
@@ -250,12 +270,17 @@ test('a sleeping open imp moves with its memory and reaches out at once on the t
   );
 
   const row = await requireImp(open, hosts.b);
+  const owners = await readJailOwnersOnB(row.id, row.slot);
+
+  const uid = owners[0] ?? '';
 
   expect(mark).toBe('warm-ok');
   expect(after).toBe(pid);
   expect(lookup).toBe('dns-ok');
   expect(fetched).toBe('http-ok');
   expect(row.coldBootReason).toBeUndefined();
+  expect(Number(uid)).toBeGreaterThanOrEqual(900_000);
+  expect(owners).toEqual([uid, uid, uid]);
 });
 
 test('a sleeping box imp keeps its list, and the target’s broker answers right after the wake', async () => {

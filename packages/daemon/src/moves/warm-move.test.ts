@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
-import { findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
+import { JAIL_UIDS, findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { FetchHook } from './test-moves';
@@ -15,7 +16,31 @@ interface WarmTestOptions {
   readonly hook?: FetchHook;
   readonly partBytes?: number;
   readonly readTapMac?: (tap: string) => string | null;
+  readonly isJailed?: boolean;
 }
+
+// a cgroup for every VM, as a jailed start needs
+const JAIL_CGROUPS: CpuCgroups = {
+  isEnforced: true,
+  isMemoryEnforced: true,
+  readOomKills: () => null,
+  hasOomKillSinceStart: () => false,
+  setup: (impId) => ({
+    procsPath: `/cg/${impId}/cgroup.procs`,
+    liftLimit: () => {},
+    applyLimit: () => {},
+  }),
+  apply: () => {},
+  adopt: () => {},
+  remove: () => Promise.resolve(),
+  setGuestMib: () => {},
+  kill: () => {},
+  removeOrphans: () => [],
+  readCpuStat: () => null,
+};
+
+// both hosts run every VM under the jailer
+const JAILED_HOST = { cgroups: JAIL_CGROUPS, env: { IMP_JAILER: 'true' } };
 
 // Two impds and a sleeping `dev` in slot 1 of the source. `isShared`: both
 // report the target's facts (setupMoveHosts).
@@ -25,6 +50,7 @@ async function setupWarmTest(options: WarmTestOptions = {}) {
     ...(options.hook !== undefined && { hook: options.hook }),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
     ...(options.readTapMac !== undefined && { readTapMac: options.readTapMac }),
+    ...(options.isJailed === true && { source: JAILED_HOST, target: JAILED_HOST }),
   });
 
   await createUbuntuImage(hosts.source);
@@ -89,6 +115,33 @@ test('a sleeping imp moves with its memory into its slot, and wakes from it ther
   expect(left).toBeUndefined();
   expect(woken.state).toBe('running');
   expect(ctx.target.fake.wakes).toHaveLength(1);
+});
+
+// The target's Firecracker runs as the uid the target gives the imp, never
+// the source's; the wake's jail prepare chowns the disk and the snapshot to
+// it (docs/architecture/daemon.md#the-jailer), so they must be there by then
+test('a jailed imp moved warm wakes as its own jail uid on the target, its files in place', async () => {
+  await using ctx = await setupWarmTest({ isJailed: true });
+
+  const before = await findImpByName(ctx.source.db, 'dev');
+
+  await ctx.runMove();
+
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  const paths = ctx.target.storage.resolveImpPaths(ctx.impId);
+  const uid = moved?.jailUid ?? -1;
+
+  // the source's first imp holds 900000, so dev's there is 900001; the
+  // target has no other imp
+  expect(before?.jailUid).toBe(JAIL_UIDS.first + 1);
+  expect(uid).toBe(JAIL_UIDS.first);
+
+  expect(ctx.target.fake.wakeJails).toEqual([
+    { jail: { uid, gid: uid }, files: [paths.disk, paths.vmstate, paths.memFile] },
+  ]);
 });
 
 test('a sleeping imp is refused a warm move with each fact the target lacks, and stays', async () => {
