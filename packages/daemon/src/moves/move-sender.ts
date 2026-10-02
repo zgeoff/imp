@@ -762,12 +762,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         ? ['the target does not say what it can load']
         : findWarmMismatches(move, target);
 
-    // the guest knows its gateway by this tap's MAC; a tap made before taps
-    // took their slot's MAC has a random one, which no target tap has
+    // The guest knows its gateway by this tap's MAC. A tap made before taps
+    // took their slot's MAC has a random one, which no target tap has; with
+    // no tap (a host restart removed it), the guest may still hold one
     const address = deriveSlotAddress(imp.slot, { subnet: deps.config.subnet, portBase: 0 });
     const tapMac = (deps.readTapMac ?? readTapMac)(address.tap);
 
-    if (tapMac !== null && tapMac !== address.hostMac) {
+    if (tapMac === null) {
+      mismatches.push(`it has no tap ${address.tap} since a restart; wake it once first`);
+    } else if (tapMac !== address.hostMac) {
       mismatches.push(`its tap ${address.tap} has a MAC from before slot MACs (${tapMac})`);
     }
 

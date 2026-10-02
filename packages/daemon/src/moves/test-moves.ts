@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
+import { deriveSlotAddress } from '../net/addressing';
 import { buildImagePaths } from '../storage/data-layout';
 import { readWarmHost } from './warm-facts';
 
@@ -18,7 +19,7 @@ interface MoveHostsOptions {
   readonly hook?: FetchHook;
   readonly partBytes?: number;
 
-  // the source's taps' MACs; none by default
+  // the source's taps' MACs; each slot's own by default
   readonly readTapMac?: (tap: string) => string | null;
 
   // Both hosts report the target's warm facts, and the source's VMs open
@@ -44,6 +45,7 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
 
   const facts = readWarmHost(target.config, target.readIdentity(), target.storage.kind);
   const shared = options.isShared === true ? { readWarmHost: () => facts } : {};
+  const slotPlan = { subnet: source.config.subnet, portBase: 0 };
 
   const sourceImpd =
     options.isShared === true
@@ -59,7 +61,9 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
 
   const sourceApp = buildTestApp(source, sourceImpd, undefined, {}, null, {
     ...shared,
-    readTapMac: options.readTapMac ?? (() => null),
+    readTapMac:
+      options.readTapMac ??
+      ((tap) => deriveSlotAddress(Number(tap.slice('imp'.length)), slotPlan).hostMac),
     fetch: (request) =>
       hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
     ...(options.partBytes !== undefined && { partBytes: options.partBytes }),

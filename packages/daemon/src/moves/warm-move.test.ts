@@ -369,7 +369,7 @@ test('a pending disk grow goes along, and the first wake on the target grows the
   expect(grown?.isDiskGrowPending).toBe(false);
 });
 
-test("a tap with a MAC from before slot MACs refuses a warm move, and the target's slot tap goes", async () => {
+test("a tap with a MAC from before slot MACs, or none, refuses a warm move, and the target's slot tap goes", async () => {
   await using refused = await setupWarmTest({ readTapMac: () => '02:aa:bb:cc:dd:ee' });
 
   const facts = await refused.targetApp.client.moves.facts();
@@ -378,12 +378,22 @@ test("a tap with a MAC from before slot MACs refuses a warm move, and the target
     refused.sourceApp.client.moves.prepare({ name: 'dev', target: facts }),
   );
 
+  // a host restart took the tap: the guest may still hold the old MAC
+  await using gone = await setupWarmTest({ readTapMac: () => null });
+
+  const goneFacts = await gone.targetApp.client.moves.facts();
+
+  const noTap = await readRejection(
+    gone.sourceApp.client.moves.prepare({ name: 'dev', target: goneFacts }),
+  );
+
   await using ctx = await setupWarmTest();
 
   await ctx.runMove();
 
   expect(rejection).toMatchObject({ code: 'PRECONDITION_FAILED' });
   expect(String(rejection)).toContain('has a MAC from before slot MACs');
+  expect(String(noTap)).toContain('wake it once first');
   expect(ctx.target.removedTaps).toContain(`imp${String(ctx.slot)}`);
 });
 
