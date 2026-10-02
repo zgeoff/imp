@@ -17,6 +17,7 @@ import {
 } from '../lib/imp-cli';
 import { createImp, holdImp, writeGuestFile } from '../lib/imps';
 import type { DevInstance } from '../lib/instance';
+import { runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
@@ -249,7 +250,29 @@ test('a sleeping box imp keeps its list, and the target’s broker answers right
 
   const pid = await readSleeperPid((script) => runImp('exec', box, '--', 'sh', '-c', script));
 
+  // a lookup on A, whose answer the move carries into B's set for the slot
+  await runImp(
+    'exec',
+    box,
+    '--',
+    'curl',
+    '-sS',
+    '-o',
+    '/dev/null',
+    '--max-time',
+    '10',
+    'http://example.com/',
+  );
+
   await runWarmMove(box);
+
+  // read before the guest can look anything up again on B
+  const moved = await requireImp(box, hosts.b);
+
+  const held = await runInContainer(
+    ['nft', 'list', 'set', 'inet', 'imp_egress', `allow${String(moved.slot)}`],
+    hosts.b,
+  );
 
   // the broker call first: the target installs its CA at the first wake
   const body = await runShellOnB(box, 'curl -sS --fail https://api.github.com/user');
@@ -266,6 +289,7 @@ test('a sleeping box imp keeps its list, and the target’s broker answers right
     'curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://example.org/ || true',
   );
 
+  expect(held.stdout).toContain('elements = {');
   expect(JSON.parse(body)).toEqual({ authorized: true });
   expect(upstream.seen.at(-1)?.authorization).toBe(`Bearer ${tokens.b}`);
   expect(mark).toBe('warm-ok');
