@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"golang.org/x/sys/unix"
 )
 
 // updateHosts points the 127.0.1.1 line of the hosts file at name. It runs
@@ -34,8 +35,17 @@ func updateHosts(fsys fsroot.FS, path, name string) error {
 	}
 	if isLink {
 		// in place, through the link
-		f, err := fsys.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0)
+		// O_NONBLOCK: a FIFO there fails instead of blocking the boot
+		f, err := fsys.OpenFile(path, os.O_WRONLY|unix.O_NONBLOCK, 0)
 		if err != nil {
+			return err
+		}
+		if err := fsroot.CheckRegular(f, path); err != nil {
+			f.Close()
+			return err
+		}
+		if err := f.Truncate(0); err != nil {
+			f.Close()
 			return err
 		}
 		_, err = f.WriteString(out)

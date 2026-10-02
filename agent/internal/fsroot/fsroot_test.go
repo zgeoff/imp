@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // setup makes a root dir and an "outside" dir next to it, which no path in
@@ -129,5 +131,36 @@ func TestStatSysIsASyscallStatT(t *testing.T) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok || st.Ino != want.Sys().(*syscall.Stat_t).Ino {
 		t.Fatalf("Sys() = %#v", fi.Sys())
+	}
+}
+
+func TestReadFileRefusesAFIFOWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	if err := unix.Mkfifo(filepath.Join(dir, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.ReadFile("/fifo"); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("ReadFile of a FIFO = %v, want ErrNotRegular", err)
+	}
+}
+
+func TestAMagicLinkDoesNotResolve(t *testing.T) {
+	// a root with a real /proc: /proc/self/root is a magic link, which
+	// could lead out of any root
+	r, err := Open("/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := r.ReadFile("/proc/self/root/proc/self/status"); !errors.Is(err, unix.ELOOP) {
+		t.Fatalf("a read through /proc/self/root = %v, want ELOOP", err)
+	}
+	if _, err := r.ReadFile("/proc/self/status"); err != nil {
+		t.Fatalf("a plain /proc read: %v", err)
 	}
 }

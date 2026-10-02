@@ -132,13 +132,33 @@ func (r *Root) parent(p string) (*os.File, string, error) {
 	return dir, filepath.Base(clean), nil
 }
 
+// ReadFile reads a regular file. O_NONBLOCK and the check keep a FIFO or a
+// device the user put at p from blocking the agent.
 func (r *Root) ReadFile(p string) ([]byte, error) {
-	f, err := r.OpenFile(p, os.O_RDONLY, 0)
+	f, err := r.OpenFile(p, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if err := CheckRegular(f, p); err != nil {
+		return nil, err
+	}
 	return io.ReadAll(f)
+}
+
+// ErrNotRegular is a read of something other than a regular file.
+var ErrNotRegular = errors.New("not a regular file")
+
+// CheckRegular fails unless f, opened at p, is a regular file.
+func CheckRegular(f *os.File, p string) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return &fs.PathError{Op: "read", Path: p, Err: ErrNotRegular}
+	}
+	return nil
 }
 
 func (r *Root) ReadDir(p string) ([]fs.DirEntry, error) {
