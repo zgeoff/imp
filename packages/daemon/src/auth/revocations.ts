@@ -1,29 +1,30 @@
-// Ends what a token opened when it is removed: its dashboard event streams,
-// its event streams over the API, and its /exec and /tunnel sockets. A
-// session cookie needs nothing here: it names the token, which is gone.
+// Ends what a token or a bound SSH key opened when it is removed: event
+// streams, /exec and /tunnel sockets, ssh logins. A session cookie needs
+// nothing here: it names the token, which is gone.
 export interface Revocations {
-  // aborts when the token is removed; null for a caller with no token
-  readonly readSignal: (tokenId: string | null) => AbortSignal | null;
-  readonly revoke: (tokenId: string) => void;
+  // aborts when the token or key is removed; null for a caller with no id
+  readonly readSignal: (id: string | null) => AbortSignal | null;
+  readonly revoke: (id: string) => void;
 }
 
-// A removed token's id stays revoked for good: a request authenticated just
-// before the removal asks for its signal after it, and gets an aborted one.
+// A removed id stays revoked for good: a request authenticated just before
+// the removal asks for its signal after it, and gets an aborted one. Ids are
+// random, so a key bound again gets a new one.
 export function createRevocations(): Revocations {
   const controllers = new Map<string, AbortController>();
   const revoked = new Set<string>();
 
   return {
-    readSignal: (tokenId) => {
-      if (tokenId === null) {
+    readSignal: (id) => {
+      if (id === null) {
         return null;
       }
 
-      if (revoked.has(tokenId)) {
+      if (revoked.has(id)) {
         return AbortSignal.abort();
       }
 
-      const existing = controllers.get(tokenId);
+      const existing = controllers.get(id);
 
       if (existing !== undefined) {
         return existing.signal;
@@ -31,14 +32,14 @@ export function createRevocations(): Revocations {
 
       const controller = new AbortController();
 
-      controllers.set(tokenId, controller);
+      controllers.set(id, controller);
 
       return controller.signal;
     },
-    revoke: (tokenId) => {
-      revoked.add(tokenId);
-      controllers.get(tokenId)?.abort();
-      controllers.delete(tokenId);
+    revoke: (id) => {
+      revoked.add(id);
+      controllers.get(id)?.abort();
+      controllers.delete(id);
     },
   };
 }

@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiAudit } from '../audit/api-audit';
+import { createRevocations } from '../auth/revocations';
 import { setupTestDatabase } from '../db/test-database';
+import { createAuthorizedKeys } from './authorized-keys';
 import { createFakeSshBackend } from './fake-ssh-backend';
 import { startSsh } from './start-ssh';
 
@@ -21,8 +23,11 @@ async function startWithSshDir(setup: (sshDir: string) => void) {
   try {
     const gateway = await startSsh({
       audit: createApiAudit({ db: database.db, now: Date.now, log: () => {} }),
-      config: { dataDir, sshPort: 0 },
+      config: { dataDir, sshPort: 0, sshAuthorizedKeys: true },
       db: database.db,
+      authorizedKeys: createAuthorizedKeys(join(sshDir, 'authorized_keys'), () => {}),
+      tokens: { findSshKey: () => null },
+      revocations: createRevocations(),
       imps: createFakeSshBackend().backend,
       log: (message) => {
         logs.push(message);

@@ -10,6 +10,7 @@ test('it fills every setting from its default when the env is empty', () => {
     proxyPort: 7080,
     portBase: 20_000,
     sshPort: 22,
+    sshAuthorizedKeys: true,
     brokerPort: 7081,
     egressDnsPort: 7053,
     brokerTestUpstreams: null,

@@ -1,19 +1,26 @@
-import { join } from 'node:path';
 import { withAuditedOpen } from '../audit/api-audit';
 import type { ApiAudit } from '../audit/api-audit';
+import type { Revocations } from '../auth/revocations';
+import type { TokenStore } from '../auth/token-store';
 import type { Config } from '../config';
 import { findImpByName } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { ImpRuntime } from '../imps/imp-runtime';
 import { readErrorMessage } from '../read-error-message';
-import { createAuthorizedKeys } from './authorized-keys';
+import type { AuthorizedKeys } from './authorized-keys';
 import { loadOrCreateHostKey, readFingerprint, setupSshDir } from './host-key';
+import { createLoginKeys } from './login-keys';
 import { startSshGateway } from './ssh-gateway';
 import type { SshGateway } from './ssh-gateway';
 
 interface StartSshDeps {
-  readonly config: Pick<Config, 'dataDir' | 'sshPort'>;
+  readonly config: Pick<Config, 'dataDir' | 'sshPort' | 'sshAuthorizedKeys'>;
   readonly db: ImpDatabase;
+
+  // <data>/ssh/authorized_keys (createAuthorizedKeys)
+  readonly authorizedKeys: AuthorizedKeys;
+  readonly tokens: Pick<TokenStore, 'findSshKey'>;
+  readonly revocations: Pick<Revocations, 'readSignal'>;
   readonly imps: Pick<
     ImpRuntime,
     | 'requireRunning'
@@ -52,19 +59,23 @@ export async function startSsh(deps: StartSshDeps): Promise<SshGateway | null> {
     const gateway = await startSshGateway(
       {
         hostKey,
-        authorizedKeys: createAuthorizedKeys(join(sshDir, 'authorized_keys'), deps.log),
+        keys: createLoginKeys({
+          findBound: deps.tokens.findSshKey,
+          file: deps.config.sshAuthorizedKeys ? deps.authorizedKeys : null,
+        }),
+        readRevocation: deps.revocations.readSignal,
         backend: {
           requireRunning: imps.requireRunning,
           tracker: imps.tracker,
 
           // each shell, command or sftp an ssh login opens is audited,
-          // as the key that logged in
-          openExec: (name, request, feature, keyName) =>
+          // as who logged in
+          openExec: (name, request, feature, actor) =>
             withAuditedOpen(
               deps.audit,
               {
                 procedure: 'ssh',
-                actor: { kind: 'ssh', name: keyName },
+                actor,
                 impName: name,
                 startedAt: deps.now(),
               },

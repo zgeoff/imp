@@ -1,6 +1,7 @@
 import type { AgentListener } from '../agent-client/agent-forward-stream';
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import type { AuditActor } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
 import { createActivityTracker } from '../imps/activity-tracker';
 import type { ImpRuntime } from '../imps/imp-runtime';
@@ -114,8 +115,14 @@ export function createFakeSshBackend() {
   const agentAccepts: FakeAgentAccept[] = [];
   const tracker = createActivityTracker();
 
+  // who each exec ran as, for the audit
+  const actors: AuditActor[] = [];
+
   const fake: {
     wakes: number;
+
+    // imp lookups by name, as a login makes them
+    lookups: number;
     wakeError: Error | null;
     execError: Error | null;
     dialError: Error | null;
@@ -127,6 +134,7 @@ export function createFakeSshBackend() {
   } = {
     pid: FAKE_IMP.pid ?? 0,
     wakes: 0,
+    lookups: 0,
     wakeError: null,
     execError: null,
     dialError: null,
@@ -273,6 +281,8 @@ export function createFakeSshBackend() {
 
   const backend: SshBackend & Pick<ImpRuntime, 'openExec'> = {
     findImp: (name) => {
+      fake.lookups += 1;
+
       const found = name === FAKE_IMP.name ? FAKE_IMP : undefined;
 
       return Promise.resolve(found);
@@ -288,11 +298,17 @@ export function createFakeSshBackend() {
     },
     tracker,
     recordActivity: () => Promise.resolve(),
-    openExec,
+    openExec: (name, request, feature, actor?: AuditActor) => {
+      if (actor !== undefined) {
+        actors.push(actor);
+      }
+
+      return openExec(name, request, feature);
+    },
     openDial,
     openAgentListener,
     openAgentAccept,
   };
 
-  return { backend, fake, execs, dials, agentListeners, agentAccepts, tracker };
+  return { backend, fake, actors, execs, dials, agentListeners, agentAccepts, tracker };
 }

@@ -1,5 +1,6 @@
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import type { AuditActor } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
 import type { ImpRuntime } from '../imps/imp-runtime';
 import type { AgentForwarding } from './agent-forwarding';
@@ -16,12 +17,12 @@ export interface SshBackend extends Pick<
 > {
   readonly findImp: (name: string) => Promise<ImpRecord | undefined>;
 
-  // the runtime's, with the name of the key that logged in, for the audit
+  // the runtime's, with who logged in, for the audit
   readonly openExec: (
     name: string,
     request: AgentExecRequest,
     feature: AgentFeature | undefined,
-    keyName: string,
+    actor: AuditActor,
   ) => Promise<ExecStream>;
 }
 
@@ -29,8 +30,9 @@ export interface SshBackend extends Pick<
 export interface SshConnectionContext {
   readonly impName: string;
 
-  // the comment of the key that logged in
-  readonly keyName: string;
+  // who logged in: the token a key is bound to, or `key <comment>` for a
+  // key in authorized_keys
+  readonly actor: AuditActor;
   readonly backend: SshBackend;
 
   // settles once the imp is awake, or rejects with why it could not wake; a

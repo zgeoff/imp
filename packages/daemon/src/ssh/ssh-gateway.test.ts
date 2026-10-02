@@ -4,15 +4,20 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ORPCError } from '@orpc/server';
-import { Client } from 'ssh2';
+import { Client, utils } from 'ssh2';
 import type { ClientChannel, ExecOptions } from 'ssh2';
 import { AgentError } from '../agent-client/agent-connection';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
+import { createRevocations } from '../auth/revocations';
+import { loadTokenStore } from '../auth/token-store';
+import type { TokenStore } from '../auth/token-store';
+import { setupTestDatabase } from '../db/test-database';
 import { readRejection } from '../read-rejection';
 import { MAX_AGENT_CHANNELS } from './agent-forwarding';
 import { createAuthorizedKeys } from './authorized-keys';
 import { FAKE_IMP, createFakeSshBackend } from './fake-ssh-backend';
 import { createEd25519Key } from './host-key';
+import { createLoginKeys } from './login-keys';
 import { startSshGateway } from './ssh-gateway';
 import type { SshGateway } from './ssh-gateway';
 
@@ -34,7 +39,14 @@ afterEach(async () => {
   }
 });
 
-async function startTestGateway(keysText = `${USER_KEY.public}\n`) {
+interface GatewayOptions {
+  // false: as IMP_SSH_AUTHORIZED_KEYS=false
+  readonly fileKeys?: boolean;
+}
+
+// The gateway over a fake impd, with authorized_keys holding `keysText` and
+// a real token store, so a test can bind keys to tokens
+async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: GatewayOptions = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-ssh-'));
   const keysPath = join(dir, 'authorized_keys');
   const logs: string[] = [];
@@ -48,10 +60,27 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`) {
 
   const parts = createFakeSshBackend();
 
+  const database = await setupTestDatabase();
+
+  const authorizedKeys = createAuthorizedKeys(keysPath, writeLog);
+  const revocations = createRevocations();
+
+  const tokens = await loadTokenStore({
+    db: database.db,
+    rootToken: 'root-secret',
+    now: Date.now,
+    onRemove: revocations.revoke,
+    isFileKey: (blob) => authorizedKeys.findKey(blob) !== null,
+  });
+
   const gateway = await startSshGateway(
     {
       hostKey: HOST_KEY,
-      authorizedKeys: createAuthorizedKeys(keysPath, writeLog),
+      keys: createLoginKeys({
+        findBound: tokens.findSshKey,
+        file: options.fileKeys === false ? null : authorizedKeys,
+      }),
+      readRevocation: revocations.readSignal,
       backend: parts.backend,
       log: writeLog,
     },
@@ -61,11 +90,12 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`) {
 
   cleanups.push(async () => {
     await gateway.stop();
+    await database[Symbol.asyncDispose]();
 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  return { ...parts, gateway, logs, keysPath };
+  return { ...parts, gateway, logs, keysPath, tokens, revocations };
 }
 
 // `agent`: a socket path for the client's ssh-agent, which turns on
@@ -747,4 +777,183 @@ test('a command runs without the socket when the imp cannot make one', async () 
   const again = await runCommand(ctx.client, 'git push');
 
   expect(again.stderr).toBe('imp: no agent forwarding: INTERNAL: unknown user "dev"\n');
+});
+
+// keys bound to tokens (docs/guides/ssh.md#keys-bound-to-tokens)
+
+interface GatewayTest {
+  readonly tokens: Pick<TokenStore, 'remove' | 'removeKey'>;
+  readonly fingerprint: string;
+}
+
+function readPublicBlob(line: string): Buffer {
+  const parsed = utils.parseKey(line);
+
+  if (parsed instanceof Error) {
+    throw parsed;
+  }
+
+  return parsed.getPublicSSH();
+}
+
+const BOUND_KEY = createEd25519Key();
+const DEV_KEY = createEd25519Key();
+
+function waitForClose(client: Client): Promise<void> {
+  return new Promise((resolve) => {
+    client.once('close', () => {
+      resolve();
+    });
+  });
+}
+
+async function runTrue(client: Client): Promise<void> {
+  const channel = await openExecChannel(client, 'true');
+
+  await readResult(channel);
+}
+
+test('a key bound to a token logs in to its imps, as the token', async () => {
+  const ctx = await startTestGateway();
+
+  ctx.fake.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  await ctx.tokens.create({
+    name: 'boxes',
+    scope: 'exec',
+    imps: ['bo*'],
+    sshKeys: [BOUND_KEY.public],
+  });
+
+  const client = await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
+
+  await runTrue(client);
+
+  expect(ctx.actors).toEqual([{ kind: 'ssh', name: 'boxes' }]);
+});
+
+test('a key bound to dev-* is refused on another imp before any imp lookup', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({
+    name: 'dev',
+    scope: 'exec',
+    imps: ['dev-*'],
+    sshKeys: [DEV_KEY.public],
+  });
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
+
+  expect(ctx.fake.lookups).toBe(0);
+  expect(ctx.fake.wakes).toBe(0);
+});
+
+test('a key on a read-only token is refused as an unknown key is, and opens nothing', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({
+    name: 'viewer',
+    scope: 'read',
+    imps: null,
+    sshKeys: [BOUND_KEY.public],
+  });
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private));
+
+  expect(ctx.fake.wakes).toBe(0);
+  expect(ctx.tracker.count(FAKE_IMP.id)).toBe(0);
+});
+
+test('a key in authorized_keys does not bind, and an unbound key gets nothing back', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const inFile = await readRejection(ctx.tokens.addKey('ci', USER_KEY.public));
+
+  expect(inFile).toMatchObject({ code: 'CONFLICT' });
+
+  const added = await ctx.tokens.addKey('ci', BOUND_KEY.public);
+
+  await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
+
+  await ctx.tokens.removeKey('ci', added.fingerprint);
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private));
+});
+
+test('a bound key added to authorized_keys later still logs in only as its token', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({
+    name: 'dev',
+    scope: 'exec',
+    imps: ['dev-*'],
+    sshKeys: [DEV_KEY.public],
+  });
+
+  // a new mtime, even on a coarse clock
+  await Bun.sleep(10);
+
+  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n${DEV_KEY.public}\n`, { mode: 0o600 });
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
+});
+
+test('with authorized_keys off, its keys log in nowhere and bound keys still do', async () => {
+  const ctx = await startTestGateway(`${USER_KEY.public}\n`, { fileKeys: false });
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [BOUND_KEY.public] });
+
+  await assertRefused(openClient(ctx.gateway));
+  await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
+});
+
+test('a key in authorized_keys is audited as key and its comment', async () => {
+  const ctx = await startTestGateway(`${USER_KEY.public} me@laptop\n`);
+
+  ctx.fake.onExec = (run) => {
+    run.emit({ type: 'exit', code: 0, signal: 0 });
+  };
+
+  const client = await openClient(ctx.gateway);
+
+  await runTrue(client);
+
+  expect(ctx.actors).toEqual([{ kind: 'ssh', name: 'key me@laptop' }]);
+});
+
+test.each([
+  ['the token', (ctx: GatewayTest) => ctx.tokens.remove('ci')],
+  ['the key', (ctx: GatewayTest) => ctx.tokens.removeKey('ci', ctx.fingerprint)],
+])('removing %s ends its live ssh connection', async (_what, remove) => {
+  const gateway = await startTestGateway();
+
+  await gateway.tokens.create({ name: 'ci', scope: 'exec', imps: null });
+
+  const added = await gateway.tokens.addKey('ci', BOUND_KEY.public);
+  const client = await openClient(gateway.gateway, FAKE_IMP.name, BOUND_KEY.private);
+
+  const closed = waitForClose(client);
+
+  await remove({ tokens: gateway.tokens, fingerprint: added.fingerprint });
+  await closed;
+});
+
+test('a login whose key was removed as it logged in ends at once', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null, sshKeys: [BOUND_KEY.public] });
+
+  // the removal lands after the key was found, before the connection
+  // watches for it
+  const keyId = ctx.tokens.findSshKey(readPublicBlob(BOUND_KEY.public))?.keyId ?? '';
+
+  ctx.revocations.revoke(keyId);
+
+  const client = await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
+
+  await waitForClose(client);
 });
