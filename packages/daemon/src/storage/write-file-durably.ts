@@ -17,11 +17,26 @@ export function writeFileDurably(path: string, text: string): void {
   renameSync(next, path);
 
   // the rename itself lives in the directory
-  const dir = openSync(dirname(path), 'r');
+  writeToDisk([dirname(path)]);
+}
 
-  try {
-    fsyncSync(dir);
-  } finally {
-    closeSync(dir);
+// Renames `from` to `to` and flushes the directory, so the new name outlives
+// a power loss.
+export function writeRenamed(from: string, to: string): void {
+  renameSync(from, to);
+  writeToDisk([dirname(to)]);
+}
+
+// Flushes each file or directory from the page cache to the disk: written
+// files, and the directories whose renames hold them.
+export function writeToDisk(paths: readonly string[]): void {
+  for (const path of paths) {
+    const fd = openSync(path, 'r');
+
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
   }
 }

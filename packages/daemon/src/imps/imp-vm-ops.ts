@@ -16,6 +16,7 @@ import {
   readSnapshotMeta,
   removeSnapshot,
   removeSnapshotMeta,
+  setSnapshotLoading,
   writeSnapshotMeta,
 } from '../sleep/snapshot-meta';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
@@ -396,6 +397,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const started = performance.now();
 
+    setSnapshotLoading(paths);
+
     const woken = await loadSnapshot(imp, paths);
 
     if (woken instanceof Error) {
@@ -435,7 +438,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     });
 
     // after the record: impd dying before it leaves a sleeping imp with its
-    // snapshot, whose live VM the next reconcile adopts
+    // loading record, whose live VM the next reconcile adopts
     removeSnapshotMeta(paths);
 
     if (!running.isDiskGrowPending) {

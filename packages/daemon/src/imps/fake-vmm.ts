@@ -7,7 +7,7 @@ import type { VmRunner } from '../vmm/vm-runner';
 // what every fake agent's ping reports
 export const FAKE_AGENT_VERSION = '0.1.0';
 
-export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady' | 'grow';
+export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady' | 'grow' | 'vmState';
 
 // What the next call of a step does, within the VmRunner contract; each step
 // below says what fail and die mean for it. A hang waits for releaseHangs(),
@@ -231,8 +231,14 @@ export function buildFakeVmm() {
           return outcome === 'ok';
         }),
       readGuestUptimeMs: () => runInGeneration(() => Promise.resolve(guest.uptimeMs)),
+
+      // fail: the API does not answer, as while a large load runs
       readVmState: (paths) =>
-        runInGeneration(() => Promise.resolve(findServing(paths)?.state ?? null)),
+        runInGeneration(async () => {
+          const outcome = await pickOutcome('vmState');
+
+          return outcome === 'ok' ? (findServing(paths)?.state ?? null) : null;
+        }),
       resumeVm: (paths) =>
         runInGeneration(() => {
           const vm = findServing(paths);

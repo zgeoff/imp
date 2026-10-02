@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import { readSnapshotMeta } from '../sleep/snapshot-meta';
+import { readLoadingMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import { removeUnusedSystemDrives } from '../storage/remove-unused-system-drives';
@@ -32,7 +32,7 @@ async function listDrivesInUse(
 
   for (const imp of await listImps(db)) {
     const paths = findPaths(imp.id);
-    const meta = readSnapshotMeta(paths);
+    const meta = readSnapshotMeta(paths) ?? readLoadingMeta(paths);
 
     if (meta?.systemDrivePath !== undefined) {
       drives.add(basename(meta.systemDrivePath));

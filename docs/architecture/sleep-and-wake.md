@@ -29,8 +29,9 @@ waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8](#4-got
    VM maps it `MAP_PRIVATE` ([gotcha 3](#4-gotchas)).
 5. Deletes `api.sock` and `vsock.sock`, and runs `fallocate --dig-holes` on the mem file. A 2 GiB
    file with 300 MiB in use becomes 381 MiB. A failure here only costs disk.
-6. Writes `meta.json`, flushed and renamed into place, and sets the state to `sleeping`. The tap
-   stays. `meta.json` is the snapshot's commit record: without it the files never load.
+6. Flushes `vmstate`, `mem` and the directory to the disk, then writes `meta.json`, flushed and
+   renamed into place, and sets the state to `sleeping`. The tap stays. `meta.json` is the
+   snapshot's commit record: without it the files never load, even after a power loss.
 
 If Firecracker is gone after a failed sleep, impd drops the snapshot and marks the imp `stopped`.
 
@@ -69,12 +70,14 @@ other imps; an admission the disk keeps from making room fails with that `DISK_F
    On no snapshot or a snapshot that cannot load, it boots the disk cold instead.
 2. It reserves RAM: the larger of what the VM owned at sleep and `IMP_WAKE_RESERVE_MIB`.
 3. It creates the tap if it is gone (a container restart removes taps).
-4. It starts Firecracker, which first removes a stale `vsock.sock` ([gotcha 1](#4-gotchas)), and
-   makes `PUT /snapshot/load` with `resume_vm: true` the first API call.
+4. It renames `meta.json` to `meta.json.loading`: from here the guest may run and write its disk, so
+   after a crash the snapshot must not load again. It starts Firecracker, which first removes a
+   stale `vsock.sock` ([gotcha 1](#4-gotchas)), and makes `PUT /snapshot/load` with
+   `resume_vm: true` the first API call.
 5. It pings the agent for up to 10 s, then sends `resumed` with the host time. Without it the guest
    clock is behind by the time asleep.
-6. It sets the state to `running` and deletes `meta.json`: the VM now runs on that memory. Pages
-   then fault in lazily from the mem file.
+6. It sets the state to `running` and deletes `meta.json.loading`: the VM now runs on that memory.
+   Pages then fault in lazily from the mem file.
 
 If the load or the agent fails, impd kills the new Firecracker, drops the snapshot and boots the
 disk cold. The loaded guest may have written the disk, so the snapshot no longer matches it. The imp
@@ -152,10 +155,13 @@ it does not keep the imp off.
   - A VM its record does not own is killed: a second one on a running imp's socket, one on a stopped
     imp's, or one on the socket of an imp with no record.
   - A running imp's VM that a cut sleep left paused (`GET /` says `Paused`) is resumed.
-  - A VM a cut wake left on a sleeping imp is killed if `GET /` says it never loaded, and the
-    snapshot stays. One that loaded gets the rest of the wake: the RAM reservation, the agent's ping
-    and version check, and the guest clock. If any of it fails, the VM is killed and the snapshot
-    dropped, since the guest may have written the disk; the imp boots cold.
+  - A VM a cut wake left on a sleeping imp is killed if `GET /` says it never loaded, and
+    `meta.json.loading` goes back to `meta.json`: the snapshot stays. `GET /` gets 10 s to answer,
+    since Firecracker answers nothing during a large load. A VM that loaded gets the rest of the
+    wake: the RAM reservation, the agent's ping and version check, and the guest clock. If any of it
+    fails, the VM is killed and the snapshot dropped, since the guest may have written the disk; the
+    imp boots cold.
+  - A sleeping imp with `meta.json.loading` and no VM left drops its snapshot and boots cold next.
   - Half-written files go: a sleep's `.new` snapshot files, `meta.json.new`, `vm.json.new` and the
     watchdog slot's.
 

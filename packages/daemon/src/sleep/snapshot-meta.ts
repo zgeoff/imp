@@ -3,7 +3,7 @@ import * as z from 'zod';
 import { AgentSessionSchema } from '../agent-client/agent-requests';
 import { ServicesListSchema } from '../agent-client/service-requests';
 import type { ImpPaths } from '../storage/data-layout';
-import { writeFileDurably } from '../storage/write-file-durably';
+import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
 // What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
@@ -83,6 +83,35 @@ export function writeSnapshotMeta(
 // wake drops it once the VM runs on its memory.
 export function removeSnapshotMeta(paths: Readonly<ImpPaths>): void {
   rmSync(paths.snapshotMeta, { force: true });
+  rmSync(buildLoadingPath(paths), { force: true });
+}
+
+// where the record waits while a wake loads it
+function buildLoadingPath(paths: Pick<ImpPaths, 'snapshotMeta'>): string {
+  return `${paths.snapshotMeta}.loading`;
+}
+
+// Before a load: from here the guest may run and write its disk, so after a
+// crash the snapshot no longer loads. Reconcile reads the record here to adopt
+// the VM the load left, or drops the snapshot when there is none.
+export function setSnapshotLoading(paths: Readonly<ImpPaths>): void {
+  writeRenamed(paths.snapshotMeta, buildLoadingPath(paths));
+}
+
+// the load never started the guest: its disk is as the snapshot left it
+export function resetSnapshotLoading(paths: Readonly<ImpPaths>): void {
+  writeRenamed(buildLoadingPath(paths), paths.snapshotMeta);
+}
+
+// the record of a load a crash cut short, or null
+export function readLoadingMeta(paths: Readonly<ImpPaths>): SnapshotMeta | null {
+  const path = buildLoadingPath(paths);
+
+  try {
+    return SnapshotMetaSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+  } catch {
+    return null;
+  }
 }
 
 // null when there is no complete snapshot to load

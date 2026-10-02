@@ -2,7 +2,13 @@ import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { updateImpActivity } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
-import { readSnapshotMeta, removeSnapshot, removeSnapshotMeta } from '../sleep/snapshot-meta';
+import {
+  readLoadingMeta,
+  readSnapshotMeta,
+  removeSnapshot,
+  removeSnapshotMeta,
+  resetSnapshotLoading,
+} from '../sleep/snapshot-meta';
 import { buildImpPaths, buildWatchdogSlot } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import type { ImpContext } from './imp-context';
@@ -20,7 +26,26 @@ export interface VmReconciler {
   readonly killUnknownVms: (ids: ReadonlySet<string>) => Promise<void>;
 }
 
+// how long GET / may stay silent before a VM counts as dead: Firecracker
+// answers nothing while it loads a large snapshot
+const STATE_WAIT_MS = 10_000;
+const STATE_RETRY_MS = 250;
+
 export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconciler {
+  const readVmStateWithin = async (paths: ImpPaths) => {
+    const deadline = Date.now() + STATE_WAIT_MS;
+
+    for (;;) {
+      const state = await context.vms.readVmState(paths);
+
+      if (state !== null || Date.now() >= deadline) {
+        return state;
+      }
+
+      await Bun.sleep(STATE_RETRY_MS);
+    }
+  };
+
   // the pid file a start wrote, and every process on the exact socket: impd
   // can die before the file, and a retried start leaves two
   const findVms = (paths: ImpPaths): number[] => {
@@ -59,15 +84,22 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
   // never started. One that loaded gets the rest of the wake; one that fails
   // it ran the guest, which may have written the disk, so the snapshot goes.
   const wakeOrphan = async (imp: LockedImp, paths: ImpPaths, pid: number): Promise<LockedImp> => {
-    const state = await context.vms.readVmState(paths);
+    const state = await readVmStateWithin(paths);
 
+    const loading = readLoadingMeta(paths);
+
+    // the guest never ran, so its disk is as the snapshot left it
     if (state === 'Not started') {
       await stopOrphan(imp.name, pid, paths);
+
+      if (loading !== null) {
+        resetSnapshotLoading(paths);
+      }
 
       return imp;
     }
 
-    const meta = readSnapshotMeta(paths);
+    const meta = loading ?? readSnapshotMeta(paths);
 
     try {
       if (state === null) {
@@ -167,6 +199,15 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
 
       // more than one wake ran: whichever loaded, the snapshot is spent
       if (imp.state === 'sleeping' && orphans.length > 1) {
+        removeSnapshot(paths);
+
+        return ops.updateState(imp, { reason: 'repaired', state: 'stopped', pid: null });
+      }
+
+      // a load ran and its VM is gone: the guest may have written its disk
+      if (imp.state === 'sleeping' && readLoadingMeta(paths) !== null) {
+        context.log(`impd: ${imp.name}: a wake was cut and its VM is gone; it boots cold next`);
+
         removeSnapshot(paths);
 
         return ops.updateState(imp, { reason: 'repaired', state: 'stopped', pid: null });

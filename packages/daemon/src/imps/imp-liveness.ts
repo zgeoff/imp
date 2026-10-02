@@ -1,6 +1,6 @@
 import { findImpById, updateImpStateIf } from '../db/imps';
 import type { ImpRecord, ImpStateChange } from '../db/imps';
-import { hasSnapshot, readSnapshotMeta } from '../sleep/snapshot-meta';
+import { hasSnapshot, readLoadingMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import type { ImpPaths } from '../storage/data-layout';
 import type { ImpContext } from './imp-context';
 
@@ -13,7 +13,10 @@ export async function checkLiveness(
   canRepair: boolean,
 ): Promise<ImpRecord> {
   const paths = context.findPaths(imp.id);
-  const lostSnapshot = imp.state === 'sleeping' && !hasSnapshot(paths);
+
+  // a wake a crash cut short is reconcile's to settle
+  const lostSnapshot =
+    imp.state === 'sleeping' && !hasSnapshot(paths) && readLoadingMeta(paths) === null;
 
   const lostVm =
     imp.state === 'running' && (imp.pid === null || !context.vms.isVmAlive(imp.pid, paths));

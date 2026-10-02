@@ -1,7 +1,12 @@
 import { expect, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { findImpByName } from '../db/imps';
-import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
+import {
+  readLoadingMeta,
+  readSnapshotMeta,
+  setSnapshotLoading,
+  writeSnapshotMeta,
+} from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
 import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
@@ -152,6 +157,9 @@ test('a VM a cut wake left before its load is killed, and the snapshot stays', a
 
   const paths = await ctx.findPaths('dev');
 
+  // the wake set its record aside; the load never ran the guest
+  setSnapshotLoading(paths);
+
   const pid = ctx.fake.spawnOrphan({ paths, state: 'Not started' });
   const impd = ctx.restartImpd();
 
@@ -161,7 +169,8 @@ test('a VM a cut wake left before its load is killed, and the snapshot stays', a
 
   expect(ctx.fake.alive.has(pid)).toBeFalse();
   expect(imp?.state).toBe('sleeping');
-  expect(existsSync(paths.snapshotMeta)).toBeTrue();
+  expect(readSnapshotMeta(paths)).not.toBeNull();
+  expect(readLoadingMeta(paths)).toBeNull();
 });
 
 test('a VM a cut wake left whose agent does not answer is killed, and the imp boots cold', async () => {
@@ -269,4 +278,60 @@ test('a VM on the socket of an imp with no record is killed', async () => {
 
   expect(ctx.fake.alive.has(pid)).toBeFalse();
   expect(ctx.fake.alive.has(foreign)).toBeTrue();
+});
+
+test('a wake cut during its load, with no VM left, leaves the imp stopped, never on the old snapshot', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  const waking = ctx.fake.hold('wake');
+
+  void ctx.client.imps.wake({ name: 'dev' });
+
+  await waking.reached;
+
+  // the load runs the guest, which may write its disk; impd dies here
+  expect(readSnapshotMeta(paths)).toBeNull();
+  expect(readLoadingMeta(paths)).not.toBeNull();
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const imp = await findImpByName(ctx.db, 'dev');
+  const broken = await findBrokenInvariants(ctx, true);
+
+  expect(imp?.state).toBe('stopped');
+  expect(existsSync(paths.vmstate)).toBeFalse();
+  expect(broken).toEqual([]);
+});
+
+test('a wake cut during its load whose VM runs on is adopted, and its record goes', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  setSnapshotLoading(paths);
+
+  const pid = ctx.fake.spawnOrphan({ paths });
+
+  // GET / is silent for a while, as during a large load
+  ctx.fake.queue('vmState', 'fail', 'fail');
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(imp).toMatchObject({ state: 'running', pid });
+  expect(readLoadingMeta(paths)).toBeNull();
+  expect(readSnapshotMeta(paths)).toBeNull();
 });
