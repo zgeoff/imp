@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/zgeoff/imp/compare/v0.8.0...v0.9.0) (2026-10-02)
+
+### Features
+
+- **images:** upload a build context from the client
+  ([38c8c71](https://github.com/zgeoff/imp/commit/38c8c715fb3afc04b2ec0d7ac5eb2a1793ab3efa))
+
 ## [0.8.0](https://github.com/zgeoff/imp/compare/v0.7.0...v0.8.0) (2026-10-02)
 
 ### Features
