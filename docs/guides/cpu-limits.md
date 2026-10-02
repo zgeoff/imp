@@ -11,6 +11,7 @@ imp new box --cpu-limit 1.5 --cpu-weight 200
 imp set box --cpu-limit 0.5        # applies at once when box runs
 imp set box --cpu-limit none       # no limit
 imp set box --cpus 4               # vCPUs: only while box is stopped
+imp set box --http-port 3000       # the port box's URL reaches, from the next request
 ```
 
 | Setting        | Default             | Range                       | Meaning                                                            |

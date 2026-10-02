@@ -69,4 +69,14 @@ export type ServiceDef = z.infer<typeof ServiceDefSchema>;
 
 export type Service = z.infer<typeof ServiceSchema>;
 
+// What services.list answers. A running imp's agent lists its services; a
+// sleeping imp's come from what its last sleep recorded, and `recorded` is
+// false when that sleep recorded none, so an empty list is not news.
+export const ServiceListSchema = z.object({
+  services: z.array(ServiceSchema).readonly(),
+  recorded: z.boolean(),
+});
+
+export type ServiceList = z.infer<typeof ServiceListSchema>;
+
 export type ServiceLog = z.infer<typeof ServiceLogSchema>;

@@ -1,4 +1,4 @@
-import type { ImpEvent, Service, ServiceDef, ServiceLog } from '@imp/api';
+import type { ImpEvent, Service, ServiceDef, ServiceList, ServiceLog } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import {
@@ -31,7 +31,7 @@ import type { ImpRuntime } from '../imps/imp-runtime';
 // call wakes or boots the imp and counts as an exec, except a list and a
 // log follow: they only look at an imp that runs.
 export interface ServiceApi {
-  readonly listServices: (name: string) => Promise<Service[]>;
+  readonly listServices: (name: string) => Promise<ServiceList>;
   readonly addService: (
     name: string,
     def: Readonly<ServiceDef>,
@@ -206,14 +206,17 @@ export function createServiceApi(parts: ServiceApiParts): ServiceApi {
       const found = await findRunningAgent(runtime, name);
 
       if (found.vsockPath === null) {
-        return (parts.readSleptServices(found.imp)?.services ?? []).map((service) =>
-          toApiService(service),
-        );
+        const slept = parts.readSleptServices(found.imp);
+
+        return {
+          services: (slept?.services ?? []).map((service) => toApiService(service)),
+          recorded: slept !== undefined,
+        };
       }
 
       const listed = await sendServicesList(found.vsockPath).catch(handleAgentError(''));
 
-      return listed.services.map((service) => toApiService(service));
+      return { services: listed.services.map((service) => toApiService(service)), recorded: true };
     },
 
     addService: async (name, def, rights) => {

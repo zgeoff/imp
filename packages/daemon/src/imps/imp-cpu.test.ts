@@ -84,6 +84,19 @@ test('a running imp takes a new limit at once; a sleeping one at its wake', asyn
   ]);
 });
 
+test('update sets the HTTP port and leaves the CPU settings as they were', async () => {
+  await using ctx = await setupCpuTest();
+
+  await ctx.client.imps.create({ name: 'dev', cpuLimit: 1.5 });
+
+  const updated = await ctx.client.imps.update({ name: 'dev', httpPort: 3000 });
+  const read = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(updated.httpPort).toBe(3000);
+  expect(read.httpPort).toBe(3000);
+  expect(read.cpu).toEqual({ limit: 1.5, weight: 100 });
+});
+
 test('the vCPU count changes only while stopped, and limits stay within the host', async () => {
   await using ctx = await setupCpuTest();
 

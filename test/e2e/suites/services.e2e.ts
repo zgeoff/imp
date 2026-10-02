@@ -206,9 +206,15 @@ test('a sleeping imp keeps its service, and a reboot starts it from the file', a
   await runImp('sleep', name);
   await assertState(name, 'sleeping');
 
+  // the list the sleep recorded, without a wake
+  const asleep = await listServices();
+
+  await assertState(name, 'sleeping');
+
   const woken = await getThroughProxy(name);
   const services = await listServices();
 
+  expect(asleep.map((service) => [service.name, service.pid])).toEqual([['web', firstPid]]);
   expect(woken).toBe('hello from a service');
   expect(services[0]?.pid).toBe(firstPid);
 
@@ -238,6 +244,37 @@ test('a file written by hand starts on its first restart', async () => {
   });
 
   expect(late.argv).toEqual(['sleep', '3600']);
+}, 60_000);
+
+test('add --http-port points the imp URL at the new service', async () => {
+  await runShellInImp(name, 'mkdir -p /srv/alt && echo hello from alt > /srv/alt/index.html');
+
+  await runImp(
+    'service',
+    'add',
+    name,
+    'alt',
+    '--http-port',
+    '8081',
+    '--cmd',
+    'busybox httpd -f -p 8081 -h /srv/alt',
+  );
+
+  const body = await waitFor('the proxy to reach port 8081', async () => {
+    const text = await getThroughProxy(name);
+
+    expect(text).toBe('hello from alt');
+
+    return text;
+  });
+
+  await runImp('set', name, '--http-port', '8080');
+  await runImp('service', 'rm', name, 'alt');
+
+  const back = await getThroughProxy(name);
+
+  expect(body).toBe('hello from alt');
+  expect(back).toBe('hello from a service');
 }, 60_000);
 
 test('remove stops the service and deletes its file; its log stays', async () => {

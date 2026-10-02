@@ -26,9 +26,9 @@ import {
 } from './secret-schema';
 import {
   ServiceDefSchema,
+  ServiceListSchema,
   ServiceLogSchema,
   ServiceNameSchema,
-  ServiceSchema,
 } from './service-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { StorageGcSchema } from './storage-schema';
@@ -146,7 +146,7 @@ export const impContract = {
 
     // a running VM takes a new CPU limit or weight at once, a sleeping or
     // stopped one when it next starts; vcpus only while stopped. A null
-    // cpuLimit removes the limit.
+    // cpuLimit removes the limit. httpPort applies to the next request.
     update: base
       .input(
         z.object({
@@ -154,6 +154,7 @@ export const impContract = {
           cpuLimit: CpuLimitSchema.nullable().optional(),
           cpuWeight: CpuWeightSchema.optional(),
           vcpus: z.int().min(1).max(32).optional(),
+          httpPort: z.int().min(1).max(65_535).optional(),
         }),
       )
       .output(ImpSchema),
@@ -246,9 +247,10 @@ export const impContract = {
   },
 
   // the services the imp's agent supervises (docs/guides/services.md); each
-  // call wakes a sleeping imp and boots a stopped one, as an exec does
+  // call but list and a log follow wakes a sleeping imp and boots a stopped
+  // one, as an exec does
   services: {
-    list: base.input(NameInputSchema).output(z.array(ServiceSchema)),
+    list: base.input(NameInputSchema).output(ServiceListSchema),
 
     // writes /etc/imp/services.d/<service>.json and starts it; CONFLICT
     // when the service exists, unless `replace`

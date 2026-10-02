@@ -249,7 +249,7 @@ export function createFakeImpd(): FakeImpd {
 
     // the dashboard shows no services yet
     services: {
-      list: os.services.list.handler(() => []),
+      list: os.services.list.handler(() => ({ services: [], recorded: true })),
       add: os.services.add.handler(() => {
         throw new Error('not in the fake');
       }),

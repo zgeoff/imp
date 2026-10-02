@@ -1,8 +1,9 @@
 import { ServiceRestartSchema } from '@imp/api';
 import type { ServiceDef, ServiceLog } from '@imp/api';
+import { ORPCError } from '@orpc/client';
 import { defineCommand } from '../define-command';
 import { formatOutput, formatServices } from '../format-output';
-import { runAction } from '../run-action';
+import { formatError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
@@ -111,9 +112,16 @@ const addCommand = defineCommand({
     user: { type: 'string', description: "user to run as (default the image's)" },
     restart: { type: 'string', description: 'always (default), on-failure or never' },
     replace: { type: 'boolean', description: 'replace a service by that name' },
+    'http-port': {
+      type: 'string',
+      description: "then point the imp's URL at this port (imp set; needs manage)",
+    },
   },
   run: (context) =>
     runAction(context.host, async (client) => {
+      const name = context.args.name;
+      const httpPort = readHttpPort(context.args['http-port']);
+
       const def = buildServiceDef(context.args.service, {
         cmd: context.args.cmd,
         argv: splitAfterSeparator(process.argv),
@@ -124,12 +132,46 @@ const addCommand = defineCommand({
       });
 
       await client.services.add({
-        name: context.args.name,
+        name,
         service: def,
         ...(context.args.replace === true && { replace: true }),
       });
+
+      if (httpPort === undefined) {
+        return;
+      }
+
+      // a second call: the port is the imp's, not the service's
+      try {
+        await client.imps.update({ name, httpPort });
+      } catch (error) {
+        throw new Error(formatPortRefusal(name, def.name, httpPort, error), { cause: error });
+      }
     }),
 });
+
+function readHttpPort(text: string | undefined): number | undefined {
+  if (text === undefined) {
+    return undefined;
+  }
+
+  const port = Number(text);
+
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new UsageError('--http-port must be a port from 1 to 65535');
+  }
+
+  return port;
+}
+
+// The service runs either way; say so, and how to set the port after.
+function formatPortRefusal(name: string, service: string, port: number, error: unknown): string {
+  const forbidden = error instanceof ORPCError && error.code === 'FORBIDDEN';
+  const retry = `imp set ${name} --http-port ${String(port)}`;
+  const reason = forbidden ? 'setting the HTTP port needs a token with manage' : formatError(error);
+
+  return `service ${service} was added and runs, but the HTTP port was not set: ${reason}. Run \`${retry}\` to set it.`;
+}
 
 const lsCommand = defineCommand({
   meta: {
@@ -141,16 +183,18 @@ const lsCommand = defineCommand({
     runAction(context.host, async (client) => {
       const name = context.args.name;
 
-      const [services, imp] = await Promise.all([
+      const [listed, imp] = await Promise.all([
         client.services.list({ name }),
         client.imps.get({ name }),
       ]);
 
-      if (imp.state === 'sleeping') {
+      if (!listed.recorded) {
+        console.error(`${name} is sleeping, and its last sleep recorded no services list`);
+      } else if (imp.state === 'sleeping') {
         console.error(`${name} is sleeping: its services as they were when it went to sleep`);
       }
 
-      console.log(formatOutput(services, context.args.json, formatServices));
+      console.log(formatOutput(listed.services, context.args.json, formatServices));
     }),
 });
 

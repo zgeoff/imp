@@ -101,6 +101,7 @@ export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema
 
 export {
   ServiceDefSchema,
+  ServiceListSchema,
   ServiceLogSchema,
   ServiceNameSchema,
   ServiceRestartSchema,
@@ -108,7 +109,7 @@ export {
   ServiceStateSchema,
 } from './service-schema';
 
-export type { Service, ServiceDef, ServiceLog } from './service-schema';
+export type { Service, ServiceDef, ServiceList, ServiceLog } from './service-schema';
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';

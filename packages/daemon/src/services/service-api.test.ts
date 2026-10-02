@@ -66,8 +66,8 @@ function buildServiceAgent(knowsServices: boolean) {
   // bytes, as in the guest's file
   const logs = new Map<string, Buffer>();
 
-  // the agent refuses every log open while it is set
-  const failing = { logs: false };
+  // the agent refuses every log open, or every list, while it is set
+  const failing = { logs: false, list: false };
   const follows: Follow[] = [];
 
   const toService = (def: z.infer<typeof AgentDefSchema>): AgentService => ({
@@ -123,7 +123,9 @@ function buildServiceAgent(knowsServices: boolean) {
 
     const index = services.findIndex((service) => service.name === request.service);
 
-    if (request.op === 'services.list') {
+    if (request.op === 'services.list' && failing.list) {
+      sendError(socket, 'INTERNAL');
+    } else if (request.op === 'services.list') {
       sendResponse(socket, { services, ...(knowsServices && { image_user: IMAGE_USER }) });
     } else if (!knowsServices) {
       sendError(socket, 'UNKNOWN_OP');
@@ -264,13 +266,17 @@ test('an added service lists with its command, its source, and only its env keys
 
   ctx.agent.services[0] = { ...web, last_exit: { code: 137, signal: 9 } };
 
-  const services = await ctx.client.services.list({ name: 'dev' });
+  const listed = await ctx.client.services.list({ name: 'dev' });
+
+  const services = listed.services;
 
   expect(ctx.agent.requests.find((request) => request.op === 'services.add')?.def).toEqual({
     name: 'web',
     argv: ['node', 'server.js'],
     env: ['PORT=3000', 'TOKEN=s3cret'],
   });
+
+  expect(listed.recorded).toBe(true);
 
   expect(services).toEqual([
     {
@@ -405,7 +411,9 @@ test('an agent from before the services API is AGENT_OUTDATED, and still lists',
     ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } }),
   );
 
-  const services = await ctx.client.services.list({ name: 'dev' });
+  const listed = await ctx.client.services.list({ name: 'dev' });
+
+  const services = listed.services;
 
   expect(added).toMatchObject({ code: 'AGENT_OUTDATED' });
 
@@ -570,10 +578,28 @@ test('a list of a sleeping imp is the one its sleep recorded, and wakes nothing'
   const stopped = await ctx.client.services.list({ name: 'dev' }).catch(readCode);
   const imp = await ctx.client.imps.get({ name: 'dev' });
 
-  expect(asleep.map((service) => [service.name, service.state])).toEqual([['web', 'running']]);
+  expect(asleep.services.map((service) => [service.name, service.state])).toEqual([
+    ['web', 'running'],
+  ]);
+
+  expect(asleep.recorded).toBe(true);
   expect(stopped).toBe('INVALID_STATE');
   expect(imp.state).toBe('stopped');
   expect(ctx.fake.wakes).toEqual([]);
+});
+
+test('a sleep the agent gave no list to lists none, and says it recorded none', async () => {
+  await using ctx = await setupServiceTest();
+
+  await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
+
+  ctx.agent.failing.list = true;
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const asleep = await ctx.client.services.list({ name: 'dev' });
+
+  expect(asleep).toEqual({ services: [], recorded: false });
 });
 
 test('a follow keeps a character split across a sleep whole', async () => {

@@ -54,7 +54,7 @@ reader skips a kind or a field it does not know.
 | `adopted`  | impd started and found the imp's VM still running.                                       |
 | `held`     | A hold was set or cleared.                                                               |
 | `restored` | A checkpoint restore finished.                                                           |
-| `updated`  | `imp set` changed the imp's CPU limit, weight or vCPUs.                                  |
+| `updated`  | `imp set` changed the imp's CPU limit, weight, vCPUs or HTTP port.                       |
 
 `detail` comes with `booted`, `woke`, `slept` and `restored`: `durationMs`, `steps` (milliseconds
 per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.

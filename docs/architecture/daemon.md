@@ -300,8 +300,8 @@ copies.
 
 `services.list` reads the guest's services the same way: it never wakes or boots. The sleep asks the
 agent for its services list (1 s at most) next to the sessions and writes it to the same
-`snapshot/meta.json`. A list of a sleeping imp returns that copy, or `[]` when the sleep has none,
-and a stopped imp is `INVALID_STATE`.
+`snapshot/meta.json`. A list answers `{services, recorded}`: a sleeping imp's is that copy, or no
+services with `recorded: false` when the sleep has none. A stopped imp is `INVALID_STATE`.
 
 ### ssh: the gateway
 

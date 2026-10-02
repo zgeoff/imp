@@ -50,13 +50,14 @@ export const setCommand = defineCommand({
   meta: {
     name: 'set',
     description:
-      "Change an imp's CPU limit or weight (at once when running), or its vCPUs (stopped only)",
+      "Change an imp's CPU limit or weight (at once when running), its vCPUs (stopped only), or its HTTP port",
   },
   args: {
     name: nameArg,
     'cpu-limit': cpuLimitArg,
     'cpu-weight': cpuWeightArg,
     cpus: { type: 'string', description: 'vCPU count; the imp must be stopped' },
+    'http-port': { type: 'string', description: "the port the imp's URL reaches" },
     json: jsonArg,
   },
   run: (context) =>
@@ -64,10 +65,13 @@ export const setCommand = defineCommand({
       const change = {
         ...readCpuArgs(context.args),
         ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
+        ...(context.args['http-port'] !== undefined && {
+          httpPort: parseCount(context.args['http-port'], 'http-port'),
+        }),
       };
 
       if (Object.keys(change).length === 0) {
-        throw new UsageError('imp set needs --cpu-limit, --cpu-weight or --cpus');
+        throw new UsageError('imp set needs --cpu-limit, --cpu-weight, --cpus or --http-port');
       }
 
       const imp = await client.imps.update({ name: context.args.name, ...change });

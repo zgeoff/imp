@@ -281,16 +281,29 @@ function buildAwakeValues(change: Readonly<ImpStateChange>) {
   };
 }
 
-// a new limit or weight; the caller applies it to a running VM
-export async function updateImpCpu(
+// what imps.update changes; the caller applies a new CPU limit or weight
+// to a running VM
+interface ImpSettings {
+  readonly cpu: Readonly<CpuSettings>;
+  readonly vcpus: number;
+  readonly httpPort: number;
+}
+
+export async function updateImpSettings(
   db: ImpDatabase,
   id: string,
-  cpu: Readonly<CpuSettings>,
-  vcpus: number,
+  settings: Readonly<ImpSettings>,
 ): Promise<ImpRecord> {
+  const cpu = settings.cpu;
+
   const row = await db
     .updateTable('imps')
-    .set({ cpu_limit: cpu.limit, cpu_weight: cpu.weight, vcpus })
+    .set({
+      cpu_limit: cpu.limit,
+      cpu_weight: cpu.weight,
+      vcpus: settings.vcpus,
+      http_port: settings.httpPort,
+    })
     .where('id', '=', id)
     .returningAll()
     .executeTakeFirstOrThrow();

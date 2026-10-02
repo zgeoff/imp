@@ -120,8 +120,11 @@ test('without a prefix, text goes out as it comes', () => {
 });
 
 // An impd that records each call's path and input and answers {} to every
-// call, with a log stream for services.logs.
-function startRecordingImpd() {
+// call, FORBIDDEN to the paths in `refused`, or what `answers` gives.
+function startRecordingImpd(
+  refused: readonly string[] = [],
+  answers: Readonly<Record<string, unknown>> = {},
+) {
   const calls: { path: string; input: unknown }[] = [];
 
   const server = Bun.serve({
@@ -139,7 +142,13 @@ function startRecordingImpd() {
 
       calls.push({ path, input });
 
-      return Response.json({ json: {}, meta: [] });
+      if (refused.includes(path)) {
+        const error = { defined: false, code: 'FORBIDDEN', status: 403, message: 'forbidden' };
+
+        return Response.json({ json: error, meta: [] }, { status: 403 });
+      }
+
+      return Response.json({ json: answers[path] ?? {}, meta: [] });
     },
   });
 
@@ -173,6 +182,77 @@ test('service add sends the definition, with --env given more than once', async 
       },
     },
   ]);
+});
+
+test('service add --http-port adds the service, then sets the port', async () => {
+  using impd = startRecordingImpd();
+
+  await runCommand(serviceCommand, {
+    rawArgs: ['add', 'box', 'web', '--cmd', 'httpd -f -p 8081', '--http-port', '8081'],
+  });
+
+  expect(process.exitCode).toBe(0);
+  expect(impd.calls.map((call) => call.path)).toEqual(['/rpc/services/add', '/rpc/imps/update']);
+  expect(impd.calls[1]?.input).toEqual({ name: 'box', httpPort: 8081 });
+});
+
+test('a refused port says the service runs, and how to set the port', async () => {
+  using impd = startRecordingImpd(['/rpc/imps/update']);
+
+  const stderr = spyOn(console, 'error').mockImplementation(() => {
+    // captured
+  });
+
+  await runCommand(serviceCommand, {
+    rawArgs: ['add', 'box', 'web', '--cmd', 'httpd', '--http-port', '8081'],
+  });
+
+  expect(stderr).toHaveBeenCalledWith(
+    'imp: service web was added and runs, but the HTTP port was not set: setting the HTTP port needs a token with manage. Run `imp set box --http-port 8081` to set it.',
+  );
+
+  expect(process.exitCode).toBe(1);
+  expect(impd.calls).toHaveLength(2);
+});
+
+test('a bad --http-port fails before any call', async () => {
+  using impd = startRecordingImpd();
+
+  const stderr = spyOn(console, 'error').mockImplementation(() => {
+    // captured
+  });
+
+  await runCommand(serviceCommand, {
+    rawArgs: ['add', 'box', 'web', '--cmd', 'httpd', '--http-port', '70000'],
+  });
+
+  expect(stderr).toHaveBeenCalledWith('imp: --http-port must be a port from 1 to 65535');
+  expect(process.exitCode).toBe(2);
+  expect(impd.calls).toEqual([]);
+});
+
+test('ls says when a sleeping imp’s last sleep recorded no list', async () => {
+  using impd = startRecordingImpd([], {
+    '/rpc/services/list': { services: [], recorded: false },
+    '/rpc/imps/get': { state: 'sleeping' },
+  });
+
+  const stderr = spyOn(console, 'error').mockImplementation(() => {
+    // captured
+  });
+
+  const stdout = spyOn(console, 'log').mockImplementation(() => {
+    // captured
+  });
+
+  await runCommand(serviceCommand, { rawArgs: ['ls', 'box', '--json'] });
+
+  expect(stderr).toHaveBeenCalledWith(
+    'box is sleeping, and its last sleep recorded no services list',
+  );
+
+  expect(stdout).toHaveBeenCalledWith('[]');
+  expect(impd.calls).toHaveLength(2);
 });
 
 test('logs with a bad line count fails before any call', async () => {

@@ -6,9 +6,9 @@ import {
   listImps,
   removeImp,
   updateImpActivity,
-  updateImpCpu,
   updateImpDisk,
   updateImpHold,
+  updateImpSettings,
   updateImpState,
 } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -72,7 +72,7 @@ export interface ImpCommands {
 
   // a running VM takes a new limit or weight at once, a sleeping or stopped
   // one when it next starts; the vCPU count only while stopped, since a
-  // memory snapshot fixes it
+  // memory snapshot fixes it. The HTTP port holds from the next request.
   readonly updateImp: (name: string, change: ImpUpdate) => Promise<Imp>;
 }
 
@@ -80,6 +80,7 @@ interface ImpUpdate {
   readonly cpuLimit?: number | null | undefined;
   readonly cpuWeight?: number | undefined;
   readonly vcpus?: number | undefined;
+  readonly httpPort?: number | undefined;
 }
 
 interface ImpCommandParts {
@@ -345,7 +346,11 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         const cpu = resolveCpuSettings(change, imp.cpu, context.hostCpus);
 
-        const updated = await updateImpCpu(context.db, imp.id, cpu, vcpus);
+        const updated = await updateImpSettings(context.db, imp.id, {
+          cpu,
+          vcpus,
+          httpPort: change.httpPort ?? imp.httpPort,
+        });
 
         if (updated.state === 'running') {
           context.cgroups.apply(imp.id, cpu);

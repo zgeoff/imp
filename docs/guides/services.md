@@ -20,7 +20,8 @@ does. `imp service ls` and `imp logs -f` only look ([following](#following-a-log
 
 - `ls` on a sleeping imp prints the services as they were when it went to sleep, and stderr says so.
   The list is empty when that sleep recorded none: impd from before the services API put it to
-  sleep, or the agent did not answer in time.
+  sleep, or the agent did not answer in time. The API's `services.list` then answers
+  `recorded: false`, and stderr says so, so an empty list is not taken for an imp with no services.
 - `ls` on a stopped imp fails with `INVALID_STATE`.
 - A follow of an imp that does not run waits for it to run.
 
@@ -30,19 +31,24 @@ does. `imp service ls` and `imp logs -f` only look ([following](#following-a-log
 service. The file is on the imp's disk, so the service starts again at every boot, and a checkpoint
 or a fork carries it.
 
-| Flag        | Meaning                                                                        |
-| ----------- | ------------------------------------------------------------------------------ |
-| `--cmd`     | The command, run by `/bin/sh -c`. Or give the argv after `--`.                 |
-| `--env`     | `KEY=VALUE`, merged over the image env. Give it once per variable.             |
-| `--cwd`     | Working directory (default `/`).                                               |
-| `--user`    | `name`, `uid`, `name:group` or `uid:gid` (default the image's user).           |
-| `--restart` | `always` (default), `on-failure` or `never`.                                   |
-| `--replace` | Replace a service with the same name: the old one stops before the new starts. |
+| Flag          | Meaning                                                                        |
+| ------------- | ------------------------------------------------------------------------------ |
+| `--cmd`       | The command, run by `/bin/sh -c`. Or give the argv after `--`.                 |
+| `--env`       | `KEY=VALUE`, merged over the image env. Give it once per variable.             |
+| `--cwd`       | Working directory (default `/`).                                               |
+| `--user`      | `name`, `uid`, `name:group` or `uid:gid` (default the image's user).           |
+| `--restart`   | `always` (default), `on-failure` or `never`.                                   |
+| `--replace`   | Replace a service with the same name: the old one stops before the new starts. |
+| `--http-port` | Then point the imp's URL at this port, as `imp set --http-port` does.          |
 
 A service name is a lowercase letter or digit, then up to 62 lowercase letters, digits or `-`
 (`^[a-z0-9][a-z0-9-]{0,62}$`). The file name is the service's name: a `name` field inside a file is
 ignored. A name that is taken, by a running service or by a file, fails with `CONFLICT` unless
 `--replace`.
+
+`--http-port` makes a second call after the add: the port belongs to the imp, not the service, and
+changing it needs a token with `manage`. When that call is refused, the service still runs, and the
+error says so and gives the `imp set` command to run.
 
 `--replace` takes the new definition whole. Nothing carries over from the old one: without `--user`,
 the new service runs as the image's user, whatever the old one ran as.

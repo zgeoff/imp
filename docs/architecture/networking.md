@@ -128,7 +128,8 @@ Known limits:
 ## The wake proxy
 
 The proxy forwards HTTP and WebSockets to an imp's HTTP port. The port is set at create
-(`imp new --http-port`, default 8080).
+(`imp new --http-port`, default 8080) and changed with `imp set --http-port`, which holds from the
+next request.
 
 - **Host routing.** On `IMP_PROXY_PORT` (default 7080), the first label of the Host header names the
   imp: `<name>.imp.localhost:7080`, or any `<name>.<domain>`.
