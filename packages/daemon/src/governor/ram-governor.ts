@@ -201,8 +201,10 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
       const time = now();
 
+      // each with its name, for the decision event when it sleeps
       const candidates = usage.awake.map((imp) => ({
         id: imp.id,
+        name: imp.name,
         ramMib: usage.byImp.get(imp.id) ?? 0,
         lastActiveAt: imp.lastActiveAt,
         held: imp.holdUntil !== null && imp.holdUntil > time,
@@ -214,27 +216,27 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       // one victim per pass: after a skip or a failure the rest of the pick is
       // stale, and sleeping it could cost imps their memory for an admission
       // that then gives up
-      const [id] = picked.victims;
+      const [victim] = picked.victims;
 
-      if (id === undefined || (!picked.enough && whenShort === 'giveUp')) {
+      if (victim === undefined || (!picked.enough && whenShort === 'giveUp')) {
         return { fits: false, slept, diskFull, missingMib, effectiveMib: usage.effectiveMib };
       }
 
-      const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
+      const outcome = await deps.trySleepImp(victim.id, reason, { by: 'governor' });
 
       if (outcome === 'slept') {
-        reservations.delete(id);
+        reservations.delete(victim.id);
 
         slept += 1;
 
         emitDecision({
           decision: 'slept',
-          name: usage.awake.find((imp) => imp.id === id)?.name ?? id,
+          name: victim.name,
           trigger: reason,
           usedMib: usage.effectiveMib,
         });
       } else {
-        passed.add(id);
+        passed.add(victim.id);
 
         diskFull ||= outcome === 'diskFull';
       }

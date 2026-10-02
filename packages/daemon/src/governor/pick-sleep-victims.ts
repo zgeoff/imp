@@ -8,9 +8,9 @@ export interface VictimCandidate {
   readonly busy: boolean;
 }
 
-export interface SleepVictims {
+export interface SleepVictims<Candidate extends VictimCandidate> {
   // oldest first
-  readonly victims: string[];
+  readonly victims: Candidate[];
 
   // false when every eligible imp together frees less than asked: `victims`
   // then lists all of them
@@ -18,10 +18,10 @@ export interface SleepVictims {
 }
 
 // The least recently active imps whose RAM together frees `needMib`.
-export function pickSleepVictims(
-  candidates: readonly VictimCandidate[],
+export function pickSleepVictims<Candidate extends VictimCandidate>(
+  candidates: readonly Candidate[],
   needMib: number,
-): SleepVictims {
+): SleepVictims<Candidate> {
   if (needMib <= 0) {
     return { victims: [], enough: true };
   }
@@ -30,11 +30,11 @@ export function pickSleepVictims(
     .filter((candidate) => !candidate.held && !candidate.busy)
     .toSorted((a, b) => a.lastActiveAt - b.lastActiveAt);
 
-  const victims: string[] = [];
+  const victims: Candidate[] = [];
   let freed = 0;
 
   for (const candidate of eligible) {
-    victims.push(candidate.id);
+    victims.push(candidate);
 
     freed += candidate.ramMib;
 

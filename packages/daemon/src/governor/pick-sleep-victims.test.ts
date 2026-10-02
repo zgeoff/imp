@@ -2,6 +2,13 @@ import { expect, test } from 'bun:test';
 import { pickSleepVictims } from './pick-sleep-victims';
 import type { VictimCandidate } from './pick-sleep-victims';
 
+// the pick, by id
+function pickIds(candidates: readonly VictimCandidate[], needMib: number) {
+  const picked = pickSleepVictims(candidates, needMib);
+
+  return { victims: picked.victims.map((victim) => victim.id), enough: picked.enough };
+}
+
 function buildCandidate(id: string, ramMib: number, lastActiveAt: number): VictimCandidate {
   return { id, ramMib, lastActiveAt, held: false, busy: false };
 }
@@ -13,8 +20,8 @@ test('it picks the least recently active imps until enough RAM is free', () => {
     buildCandidate('mid', 400, 200),
   ];
 
-  expect(pickSleepVictims(candidates, 300)).toEqual({ victims: ['old'], enough: true });
-  expect(pickSleepVictims(candidates, 700)).toEqual({ victims: ['old', 'mid'], enough: true });
+  expect(pickIds(candidates, 300)).toEqual({ victims: ['old'], enough: true });
+  expect(pickIds(candidates, 700)).toEqual({ victims: ['old', 'mid'], enough: true });
 });
 
 test('it skips held and busy imps', () => {
@@ -24,13 +31,13 @@ test('it skips held and busy imps', () => {
     buildCandidate('free', 400, 200),
   ];
 
-  expect(pickSleepVictims(candidates, 300)).toEqual({ victims: ['free'], enough: true });
+  expect(pickIds(candidates, 300)).toEqual({ victims: ['free'], enough: true });
 });
 
 test('it frees exactly what is needed', () => {
   const candidates = [buildCandidate('a', 300, 1), buildCandidate('b', 200, 2)];
 
-  expect(pickSleepVictims(candidates, 500)).toEqual({ victims: ['a', 'b'], enough: true });
+  expect(pickIds(candidates, 500)).toEqual({ victims: ['a', 'b'], enough: true });
 });
 
 test('it lists every eligible imp, oldest first, when together they are not enough', () => {
@@ -40,12 +47,12 @@ test('it lists every eligible imp, oldest first, when together they are not enou
     buildCandidate('old', 100, 2),
   ];
 
-  expect(pickSleepVictims(candidates, 500)).toEqual({ victims: ['old', 'new'], enough: false });
+  expect(pickIds(candidates, 500)).toEqual({ victims: ['old', 'new'], enough: false });
 });
 
 test('it needs no victim when nothing is missing', () => {
   const candidates = [buildCandidate('a', 100, 1)];
 
-  expect(pickSleepVictims(candidates, 0)).toEqual({ victims: [], enough: true });
-  expect(pickSleepVictims(candidates, -50)).toEqual({ victims: [], enough: true });
+  expect(pickIds(candidates, 0)).toEqual({ victims: [], enough: true });
+  expect(pickIds(candidates, -50)).toEqual({ victims: [], enough: true });
 });
