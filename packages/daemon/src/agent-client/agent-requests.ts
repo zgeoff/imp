@@ -109,7 +109,7 @@ export async function sendActivity(vsockPath: string, timeoutMs = 1000): Promise
 // and AGENT_OUTDATED for an agent from before sessions.
 export async function sendSessionKill(vsockPath: string, session: string): Promise<void> {
   const response = await sendAgentRequest(vsockPath, { op: 'session.kill', session }).catch(
-    handleUnknownOp,
+    handleUnknownOp('sessions'),
   );
 
   OkResponseSchema.parse(response);

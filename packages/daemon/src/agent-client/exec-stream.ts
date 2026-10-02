@@ -40,6 +40,10 @@ export interface ExecStream {
   readonly session: string | null;
   readonly created: boolean;
   readonly writeStdin: (data: Uint8Array) => void;
+
+  // resolves once the stdin written so far is on its way to the guest; a
+  // writer that waits for it holds no more than a socket buffer of it
+  readonly stdinDrained: () => Promise<void>;
   readonly closeStdin: () => void;
   readonly resize: (cols: number, rows: number) => void;
 
@@ -80,7 +84,7 @@ export async function openExecStream(
   // which would die with its connection; a woken imp keeps its old agent
   if (request.session !== undefined && stream.session === null) {
     stream.close();
-    throw buildAgentOutdatedError();
+    throw buildAgentOutdatedError('sessions');
   }
 
   return stream;
@@ -95,7 +99,7 @@ export function openAttachStream(
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
   return openStream(vsockPath, { op: 'session.attach', ...request }, startTimeoutMs).catch(
-    handleUnknownOp,
+    handleUnknownOp('sessions'),
   );
 }
 
@@ -136,6 +140,7 @@ async function openStream(
     writeStdin: (data) => {
       connection.send(FRAME_TYPES.stdin, data);
     },
+    stdinDrained: connection.drained,
     closeStdin: () => {
       connection.send(FRAME_TYPES.stdinEof);
     },

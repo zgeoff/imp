@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { CONSOLE_SHELL } from '@imp/api';
 import { AgentError } from '@imp/daemon/src/agent-client/agent-connection';
 import type {
   AgentAttachRequest,
@@ -10,7 +11,6 @@ import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/tes
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from '../create-imp-client';
 import { ExecError, toExecError } from './exec-error';
-import { CONSOLE_SHELL } from './open-exec';
 import { openExecSession } from './open-exec-session';
 
 const BIG_BYTES = 512 * 1024;
@@ -165,6 +165,7 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
         emitEvent({ type: 'detached', reason: 'taken_over' });
       }
     },
+    stdinDrained: () => Promise.resolve(),
     closeStdin: () => {
       record('eof');
 

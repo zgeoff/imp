@@ -16,6 +16,7 @@ error.
 | `IMP_API_PORT`              | `7070`            | The control API: `/rpc`, `/exec`, `/health` and the dashboard.                                                                                   |
 | `IMP_PROXY_PORT`            | `7080`            | The wake proxy with Host-header routing.                                                                                                         |
 | `IMP_PORT_BASE`             | `20000`           | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                 |
+| `IMP_SSH_PORT`              | `22`              | The [SSH gateway](./ssh.md), on IPv4 in the container's namespace. `0` turns it off.                                                             |
 | `IMP_BROKER_PORT`           | `7081`            | The credential broker on every guest's gateway ([connectors](./connectors.md)). Only guests reach it.                                            |
 | `IMP_BROKER_TEST_UPSTREAMS` | none              | Tests only: a file of fake upstreams for granted hosts ([development](./development.md#end-to-end-tests)). impd logs each load.                  |
 | `IMP_RAM_BUDGET_MIB`        | `16384`           | The RAM budget for awake imps.                                                                                                                   |

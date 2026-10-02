@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.2.0"
+const Version = "0.3.0"
 
 // Op names.
 const (
@@ -17,6 +17,9 @@ const (
 	// sessions: exec with a session name starts or attaches one
 	OpSessionAttach = "session.attach"
 	OpSessionKill   = "session.kill"
+
+	// dial connects to an address in the guest and relays bytes
+	OpDial = "dial"
 )
 
 // Request is the first frame on every connection. Fields beyond Op are
@@ -41,6 +44,10 @@ type Request struct {
 
 	// resumed
 	UnixMs int64 `json:"unix_ms,omitempty"`
+
+	// dial: "tcp" with "host:port", or "unix" with a socket path
+	Network string `json:"network,omitempty"`
+	Address string `json:"address,omitempty"`
 }
 
 // Error codes.
@@ -53,6 +60,7 @@ const (
 	ErrInternal    = "INTERNAL"
 	ErrNoSession   = "NO_SESSION"
 	ErrSessionCap  = "SESSION_LIMIT"
+	ErrDialFailed  = "DIAL_FAILED"
 )
 
 type Error struct {

@@ -84,6 +84,8 @@ From the milestone work:
 | Free page reporting                  | 988 → 91 MiB RSS          | ~15 s after the guest frees 900 MiB                   |
 | Image sizes (unpacked)               | base 490 MiB, dev 1.7 GiB |                                                       |
 | Guest kernel build                   | 8m35s first, ~32 s again  | `kernel/build.sh`                                     |
+| `ssh` to a sleeping imp, to output   | 185–194 ms                | wake about 104 ms; e2e-tiny and a 512 MiB ubuntu imp  |
+| `scp` 200 MB up / down               | 1.7 s / 1.1 s             | to a 512 MiB ubuntu imp, through the SSH gateway      |
 
 ## Known gaps
 

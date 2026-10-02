@@ -1,6 +1,7 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
 // from the system drive (stage 1); it switches root to the user disk and
 // re-execs itself as "imp-agent stage2". See docs/architecture/agent.md ("Boot").
+// "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway.
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/boot"
 	"github.com/zgeoff/imp/agent/internal/proto"
+	"github.com/zgeoff/imp/agent/internal/sftpserver"
 )
 
 func main() {
@@ -23,6 +25,14 @@ func main() {
 	switch {
 	case len(os.Args) > 1 && os.Args[1] == "version":
 		fmt.Println(proto.Version)
+		return
+	case len(os.Args) > 1 && os.Args[1] == "sftp":
+		// not PID 1: an exec of impd's SSH gateway. It must never reach the
+		// reboot below, which a root user could run.
+		if err := sftpserver.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "imp-agent sftp: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	case len(os.Args) > 1 && os.Args[1] == "stage2":
 		err = boot.Stage2()

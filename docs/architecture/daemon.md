@@ -11,10 +11,10 @@ On start, impd reads its [configuration](../guides/configuration.md), copies the
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
 token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
 drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
-the API, opens the proxy listeners and the credential broker, and starts four timers: the idle loop
-every 2 s, the governor every 5 s, a proxy listener sync every 30 s, and a broker sync every 60 s.
-It adds a default image in the background; `/health` reports `ready: true` once that finishes,
-whether it worked or not.
+the API, opens the proxy listeners and the credential broker and the
+[SSH gateway](#ssh-the-gateway), and starts four timers: the idle loop every 2 s, the governor every
+5 s, a proxy listener sync every 30 s, and a broker sync every 60 s. It adds a default image in the
+background; `/health` reports `ready: true` once that finishes, whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -96,7 +96,7 @@ lock, so two calls never change one imp at once.
 | `shutdown-gate.ts`    | Closed once the SIGTERM sleep pass starts. After that no VM boots or wakes.                                                                           |
 | `imp-liveness.ts`     | Marks an imp with a dead VM or a lost snapshot `stopped`, or `sleeping` when its VM died after the sleep wrote the snapshot.                          |
 | `imp-presenter.ts`    | Imp records as the API shows them, and their URLs.                                                                                                    |
-| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, and proxied requests and WebSockets.                                          |
+| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, proxied requests and WebSockets, and SSH connections.                         |
 
 - **Anything that needs a VM** wakes a sleeping imp and cold-boots a stopped one. An exec counts its
   session before the wake, so no background sleep slips in between.
@@ -112,12 +112,12 @@ lock, so two calls never change one imp at once.
 The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a boot or a wake, the
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
-a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
-an imp's lock: a victim locked by the time its turn comes is skipped. It sleeps one victim at a time
-and picks again after each, so a skip or a failed sleep never leads to more sleeps than the new pick
-needs. Every 5 s it also sleeps imps while the measured use is over the budget, all it may sleep
-when they cannot bring it under. [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the
-rules and the numbers.
+a hold, a taken lock, an open exec session, a proxied request or an SSH connection is never picked.
+It never waits for an imp's lock: a victim locked by the time its turn comes is skipped. It sleeps
+one victim at a time and picks again after each, so a skip or a failed sleep never leads to more
+sleeps than the new pick needs. Every 5 s it also sleeps imps while the measured use is over the
+budget, all it may sleep when they cannot bring it under.
+[Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
 ### idle: the idle loop
 
@@ -189,6 +189,36 @@ that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads t
 more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from there. A stopped imp
 has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
 copies.
+
+### ssh: the gateway
+
+The SSH gateway is in impd itself, on `ssh2`, so it reaches the lifecycle, the activity tracker and
+the agent client directly. A separate SSH server (Go's `x/crypto/ssh`) would need the exec protocol
+again and new RPCs for wakes and activity. The cost: `ssh2` has no post-quantum key exchange, and
+OpenSSH 10.1 and later warn about that ([SSH guide](../guides/ssh.md#set-up)). impd carries one
+patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward to another host is
+"administratively prohibited", not "connect failed".
+
+- **Connections.** impd accepts each TCP connection and hands it to `ssh2`. A client must log in
+  within 30 s; at most 32 connections wait to log in, and a 33rd is dropped. Six refused logins end
+  the connection. A keepalive every 15 s drops a client that misses 3.
+- **Login.** Public keys only, from `<dataDir>/ssh/authorized_keys`, read again when the file
+  changes. The SSH user names the imp. The key check and the imp lookup give the same refusal, and
+  nothing before a verified signature for a known imp touches the imp. A login opens an `ssh`
+  connection in the activity tracker and starts the wake; channels wait for it. A failed wake
+  reaches each channel as an error on stderr and exit status 255, not as a refused login.
+- **Sessions.** A shell, a command or the `sftp` subsystem is an agent exec, as `imp exec` is: the
+  pty and its size, `TERM`, `LANG` and `LC_*`, and `SSH_CONNECTION` go with it, and resizes and
+  signals follow it. SFTP runs `/run/imp/sys/imp-agent sftp` from the system drive. Client input
+  pauses until the agent connection has taken the last chunk, so a slow guest holds back the
+  client's SSH window instead of growing impd's memory.
+- **Forwards.** `direct-tcpip` to the imp's own loopback and `direct-streamlocal` to a socket path
+  use the agent's [`dial`](./protocol.md#dial), which connects from inside the guest. The channel
+  opens only once the dial worked. Remote forwards, agent forwarding and X11 are refused.
+- **Stop.** impd ends every SSH connection before the sleep pass, as it closes exec sessions.
+
+The code is in `ssh/`. The host key is `<dataDir>/ssh/host_key`; `ssh2`'s own ed25519 generator
+writes an unreadable key about once in 256, so impd checks each key it makes and makes another.
 
 ### proxy: the wake proxy
 

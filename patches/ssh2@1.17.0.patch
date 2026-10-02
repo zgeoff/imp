@@ -1,0 +1,22 @@
+diff --git a/lib/server.js b/lib/server.js
+index 306d6584c2514fd5238136049f02725fce09f91e..3ffb93e9513e6b94e765eba5368bbfb9685793aa 100644
+--- a/lib/server.js
++++ b/lib/server.js
+@@ -551,11 +551,16 @@ class Client extends EventEmitter {
+           let replied = false;
+ 
+           let accept;
+-          const reject = () => {
++          // patched: an optional CHANNEL_OPEN_FAILURE code, so a server can
++          // refuse a forward as administratively prohibited
++          const reject = (code) => {
+             if (replied)
+               return;
+             replied = true;
+ 
++            if (typeof code === 'number')
++              reason = code;
++
+             if (reason === undefined) {
+               if (localChan === -1)
+                 reason = CHANNEL_OPEN_FAILURE.RESOURCE_SHORTAGE;

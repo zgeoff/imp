@@ -118,15 +118,21 @@ once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
 The [dashboard](./docs/guides/dashboard.md) at `http://localhost:7070/ui/` shows the same imps,
 checkpoints, images and RAM in a browser, with a console.
 
+## SSH
+
+With your public key in `/var/lib/imp/ssh/authorized_keys`, `ssh box@imp` lands in the imp `box`
+over the tailnet, and wakes it if it sleeps. `scp`, `sftp`, port forwards and editors that work over
+SSH, such as VS Code Remote SSH, work too. The [SSH guide](./docs/guides/ssh.md) has the setup.
+
 ## Sleep and wake
 
-An imp counts as busy while it has an open shell or command, a request in flight, an open TCP
-connection, or real CPU work. A coding agent that waits on a model API keeps its connection open, so
-it stays awake. After a quiet minute the imp sleeps.
+An imp counts as busy while it has an open shell or command, an SSH connection, a request in flight,
+an open TCP connection, or real CPU work. A coding agent that waits on a model API keeps its
+connection open, so it stays awake. After a quiet minute the imp sleeps.
 
-Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, or a `console` wakes it.
-Background processes, tmpfs contents and everything else in memory come back as they were. TCP
-connections do not survive a sleep.
+Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, a `console` or an SSH login
+wakes it. Background processes, tmpfs contents and everything else in memory come back as they were.
+TCP connections do not survive a sleep.
 
 Every imp serves its port 8080 at two URLs:
 

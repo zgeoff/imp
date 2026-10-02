@@ -150,6 +150,7 @@ up() {
       -v /var/run/docker.sock:/var/run/docker.sock \
       -p $((7070 + offset)):7070 -p $((7080 + offset)):7080 \
       -p $((20000 + offset))-$((20063 + offset)):20000-20063 \
+      -p 127.0.0.1:$((2222 + offset)):22 \
       -e IMP_STORAGE_GIB="${IMP_STORAGE_GIB:-200}" \
       -e IMP_UPLINK_MTU="$(read_uplink_mtu)" \
       -e IMP_KERNEL="$(in_container "$kernel")" \

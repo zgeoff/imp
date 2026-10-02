@@ -51,6 +51,25 @@
           { "from": "file", "name": "ImpDatabase" },
           // a live socket; reading and writing it is the point
           { "from": "package", "name": "Socket", "package": "node:net" },
+          // the SSH gateway's live connections, channels and login requests,
+          // ssh2's record of a client, which the gateway only reads, and the
+          // client side its tests drive
+          {
+            "from": "package",
+            "name": [
+              "Connection",
+              "Session",
+              "ServerChannel",
+              "AuthContext",
+              "ClientInfo",
+              "Client",
+              "ClientChannel"
+            ],
+            "package": "ssh2"
+          },
+          // live streams the SSH gateway relays between
+          { "from": "package", "name": ["Readable", "Writable"], "package": "node:stream" },
+          { "from": "package", "name": "Buffer", "package": "@types/node" },
           // live servers, sockets and streams the proxy relays between
           { "from": "file", "name": "ProxyServer" },
           {

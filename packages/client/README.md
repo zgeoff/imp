@@ -84,8 +84,8 @@ try {
 }
 ```
 
-`imp.openConsole` opens the root user's login shell with a tty, as `imp console` does. With
-[xterm.js](https://xtermjs.org):
+`imp.openConsole` opens a login shell with a tty, the shell of the image's user, as `imp console`
+does. With [xterm.js](https://xtermjs.org):
 
 ```ts
 const shell = await imp.openConsole('dev', { cols: term.cols, rows: term.rows });

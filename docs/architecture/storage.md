@@ -29,6 +29,7 @@ On XFS:
 ```text
 /var/lib/imp/
   token
+  ssh/host_key  ssh/authorized_keys
   db/imp.sqlite
   system/vmlinux  system/drives/<sha256>.squashfs
   images/<digest>/rootfs.ext4  images/<digest>/config.json

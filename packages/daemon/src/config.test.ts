@@ -9,6 +9,7 @@ test('it fills every setting from its default when the env is empty', () => {
     apiPort: 7070,
     proxyPort: 7080,
     portBase: 20_000,
+    sshPort: 22,
     brokerPort: 7081,
     brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
@@ -62,6 +63,12 @@ test('it rejects invalid values', () => {
   expect(() => loadConfig({ IMP_API_PORT: 'http' })).toThrow();
   expect(() => loadConfig({ IMP_DNS: 'one.one.one.one' })).toThrow();
   expect(() => loadConfig({ IMP_SUBNET: '10.66.0.0' })).toThrow();
+});
+
+test('IMP_SSH_PORT=0 turns the SSH gateway off', () => {
+  expect(loadConfig({ IMP_SSH_PORT: '2222' }).sshPort).toBe(2222);
+  expect(loadConfig({ IMP_SSH_PORT: '0' }).sshPort).toBeNull();
+  expect(() => loadConfig({ IMP_SSH_PORT: '-1' })).toThrow();
 });
 
 test('it needs the root dataset with the zfs backend', () => {

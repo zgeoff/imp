@@ -3,9 +3,10 @@
 impd and the guest agent (`imp-agent`, PID 1) talk over vsock. Firecracker exposes the guest vsock
 as a unix socket; the host connects to it, sends `CONNECT 1024`, and then speaks this protocol. Each
 connection carries one request. The first frame is a JSON request; exec connections then carry
-binary frames for stdin, output, resizes, signals and the exit.
+binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
+both ways.
 
-Version `0.2.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
+Version `0.3.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
 ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
@@ -42,19 +43,20 @@ Every message after the handshake is a frame:
   connection. Senders split larger data into several frames.
 - JSON payloads are UTF-8 JSON objects. Raw payloads are opaque bytes.
 
-| Type | Name        | Direction    | Payload                                          |
-| ---: | ----------- | ------------ | ------------------------------------------------ |
-|    1 | `REQUEST`   | host → guest | JSON request; always the first frame             |
-|    2 | `RESPONSE`  | guest → host | JSON; the result of a unary request, or an error |
-|    3 | `STDIN`     | host → guest | raw bytes for the process stdin                  |
-|    4 | `STDIN_EOF` | host → guest | empty; closes the process stdin                  |
-|    5 | `RESIZE`    | host → guest | JSON `{"cols":n,"rows":n}`                       |
-|    6 | `SIGNAL`    | host → guest | JSON `{"signal":n}` (Linux signal number)        |
-|    7 | `STARTED`   | guest → host | JSON `{"pid":n}`                                 |
-|    8 | `STDOUT`    | guest → host | raw bytes                                        |
-|    9 | `STDERR`    | guest → host | raw bytes                                        |
-|   10 | `EXIT`      | guest → host | JSON `{"code":n,"signal":n}`; the last frame     |
-|   11 | `DETACHED`  | guest → host | JSON `{"reason":s}`; ends a session connection   |
+| Type | Name         | Direction    | Payload                                          |
+| ---: | ------------ | ------------ | ------------------------------------------------ |
+|    1 | `REQUEST`    | host → guest | JSON request; always the first frame             |
+|    2 | `RESPONSE`   | guest → host | JSON; the result of a unary request, or an error |
+|    3 | `STDIN`      | host → guest | raw bytes for the process stdin                  |
+|    4 | `STDIN_EOF`  | host → guest | empty; closes the process stdin                  |
+|    5 | `RESIZE`     | host → guest | JSON `{"cols":n,"rows":n}`                       |
+|    6 | `SIGNAL`     | host → guest | JSON `{"signal":n}` (Linux signal number)        |
+|    7 | `STARTED`    | guest → host | JSON `{"pid":n}`                                 |
+|    8 | `STDOUT`     | guest → host | raw bytes                                        |
+|    9 | `STDERR`     | guest → host | raw bytes                                        |
+|   10 | `EXIT`       | guest → host | JSON `{"code":n,"signal":n}`; the last frame     |
+|   11 | `DETACHED`   | guest → host | JSON `{"reason":s}`; ends a session connection   |
+|   12 | `STDOUT_EOF` | guest → host | empty; a dial target closed its side             |
 
 Unknown frame types from the host are ignored.
 
@@ -73,6 +75,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `EXEC_FAILED`   | `exec` could not start the process (bad argv, cwd, or user).                             |
 | `NO_SESSION`    | `session.attach` or `session.kill` named no session.                                     |
 | `SESSION_LIMIT` | A new session would be the 17th.                                                         |
+| `DIAL_FAILED`   | `dial` could not connect (refused, timed out, no such socket).                           |
 | `FROZEN`        | `freeze` found the root filesystem already frozen.                                       |
 | `POWERING_OFF`  | `freeze` arrived after a poweroff started.                                               |
 | `INTERNAL`      | A system call failed (for example `FIFREEZE`).                                           |
@@ -284,3 +287,31 @@ as `exited`; the next attach gets the replay and EXIT, and the session is gone a
 
 The name is free at once. The process group gets SIGHUP, and SIGKILL 2 s later if the process is
 still running. An attached viewer gets the EXIT. `NO_SESSION` if there is no session of that name.
+
+## `dial`
+
+Connects to an address inside the guest and relays bytes, for the SSH gateway's port forwarding
+([SSH guide](../guides/ssh.md)). The agent dials from inside the guest, so it reaches programs that
+listen on the guest's loopback or on a unix socket, which the guest IP cannot. Since `0.3.0`.
+
+```json
+→ REQUEST {"op":"dial","network":"tcp","address":"127.0.0.1:8080"}
+→ REQUEST {"op":"dial","network":"unix","address":"/run/user/0/app.sock"}
+← RESPONSE {"ok":true}
+```
+
+The agent gives up a connect after 5 s. A connect that fails gets `DIAL_FAILED`; a `network` other
+than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The agent does not check the address: the
+host decides what a dial may reach.
+
+After the RESPONSE:
+
+- host → guest: STDIN carries bytes for the target. STDIN_EOF closes the target's write side (a TCP
+  half-close); later STDIN frames are ignored.
+- guest → host: STDOUT carries bytes from the target. STDOUT_EOF says the target closed its write
+  side; no STDOUT follows it.
+- The agent closes the connection once it sent STDOUT_EOF and got STDIN_EOF. A target that fails (a
+  reset) closes the connection without STDOUT_EOF, and the host closing the connection closes the
+  target. Either side may close at any time.
+- Flow control is the stream itself: the agent writes to the target as it reads frames, and reads
+  from the target as fast as the host takes frames.

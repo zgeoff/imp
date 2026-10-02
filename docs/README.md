@@ -36,6 +36,7 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp`, the tools a coding agent gets, the guard, and how exec
   output, timeouts and cancels work.
+- [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the
   wildcard certificate, its renewal, the DNS records, and testing with Pebble.

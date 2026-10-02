@@ -7,6 +7,9 @@ export interface Terminal {
   // raw bytes, as keys typed at the terminal
   readonly type: (text: string) => void;
 
+  // as a user who resizes the terminal window
+  readonly resize: (cols: number, rows: number) => void;
+
   // resolves once the terminal has shown `text`, counting from `since`
   readonly waitForText: (text: string, since?: number) => Promise<void>;
 
@@ -25,12 +28,21 @@ export async function openTerminal(
 ): Promise<Terminal> {
   const impEnv = await readImpEnv();
 
+  return openCommandTerminal([join(REPO_ROOT, 'scripts', 'imp'), ...args], impEnv, size);
+}
+
+// Runs any command on a pseudo-terminal, such as `ssh` into an imp.
+export function openCommandTerminal(
+  argv: readonly string[],
+  env: Readonly<Record<string, string>> = {},
+  size?: Readonly<{ cols: number; rows: number }>,
+): Terminal {
   const decoder = new TextDecoder();
 
   const shown = { text: '' };
 
-  const proc = Bun.spawn([join(REPO_ROOT, 'scripts', 'imp'), ...args], {
-    env: { ...process.env, ...impEnv },
+  const proc = Bun.spawn([...argv], {
+    env: { ...process.env, ...env },
     terminal: {
       ...(size ?? DEFAULT_SIZE),
       data: (_terminal, data) => {
@@ -52,6 +64,9 @@ export async function openTerminal(
   return {
     type: (text) => {
       proc.terminal?.write(text);
+    },
+    resize: (cols, rows) => {
+      proc.terminal?.resize(cols, rows);
     },
     waitForText: (text, since = 0) =>
       waitFor(
