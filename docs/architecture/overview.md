@@ -62,6 +62,10 @@ This page gives the shape and the main decisions. The other architecture pages g
 - The guest has no inner container yet. Fly runs user code in a container inside the VM, so the
   agent survives a user who breaks PID 1 or runs `rm -rf /`. imp runs user code next to the agent.
   That risk is accepted for a personal platform ([#28](https://github.com/zgeoff/imp/issues/28)).
+- KASLR is off in every guest: Firecracker loads the uncompressed `vmlinux` at its link address, and
+  the guest logs `KASLR disabled`, although the config has `RANDOMIZE_BASE=y`. Every imp has the
+  same kernel layout, so a kernel exploit needs no address leak. Imps restored from one
+  [boot template](./boot-templates.md#accepted-risks) also share the slab freelist seeds.
 
 ## Host: one privileged container
 
