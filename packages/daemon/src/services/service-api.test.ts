@@ -13,6 +13,8 @@ import {
   encodeJsonFrame,
 } from '../agent-client/frame-codec';
 import type { AgentService } from '../agent-client/service-requests';
+import { subscribeImpWrites } from '../db/imp-write-feed';
+import { updateImpActivity } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
@@ -640,6 +642,46 @@ test('a follow keeps a character split across a sleep whole', async () => {
   await iterator.return?.();
 
   expect(events).toEqual(['web:a', 'sleeping:sleeping', 'awake', 'web:é\n']);
+});
+
+test('a follow goes on soon after a wake whose event a listener delays', async () => {
+  await using ctx = await setupServiceTest();
+
+  await ctx.client.services.add({ name: 'dev', service: { name: 'web', argv: ['httpd'] } });
+
+  // a write per wake: the event then reaches the follow while the wake
+  // still holds the imp
+  const unsubscribe = subscribeImpWrites(ctx.db, (write) => {
+    if (write.kind === 'changed' && write.reason === 'woke') {
+      void updateImpActivity(ctx.db, write.imp.id, new Date());
+    }
+  });
+
+  const stream = await ctx.client.services.logs({ name: 'dev', service: 'web', follow: true });
+
+  const iterator = stream[Symbol.asyncIterator]();
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  ctx.agent.stopFollows();
+
+  const asleep = await iterator.next();
+
+  const wokeAt = Date.now();
+
+  await ctx.client.imps.wake({ name: 'dev' });
+
+  const awake = await iterator.next();
+
+  const waitedMs = Date.now() - wokeAt;
+
+  await iterator.return?.();
+
+  unsubscribe();
+
+  expect(asleep.value).toEqual({ type: 'sleeping', state: 'sleeping' });
+  expect(awake.value).toEqual({ type: 'awake' });
+  expect(waitedMs).toBeLessThan(2000);
 });
 
 test('a follow ends with the error when its log keeps failing to open', async () => {

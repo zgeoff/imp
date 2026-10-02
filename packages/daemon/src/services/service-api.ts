@@ -331,7 +331,11 @@ async function* readFollowedLogs(
           yield { type: 'sleeping', state: found.imp.state };
         }
 
-        await waitForImpChange(context.events, name, signal, FOLLOW_RECHECK_MS);
+        // a running imp a wake or boot still holds sends no event when the
+        // lock goes: look again soon, not at the next event
+        const waitMs = found.imp.state === 'running' ? FOLLOW_RETRY_MS : FOLLOW_RECHECK_MS;
+
+        await waitForImpChange(context.events, name, signal, waitMs);
 
         continue;
       }
