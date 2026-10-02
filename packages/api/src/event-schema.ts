@@ -30,6 +30,9 @@ export const ImpChangeReasonSchema = z.enum([
 
   // made public or tailnet-only, or given a new credential
   'exposed',
+
+  // a forced sleep or stop ended its leases (docs/guides/leases.md)
+  'released',
 ]);
 
 export type ImpChangeReason = z.infer<typeof ImpChangeReasonSchema>;
@@ -45,6 +48,9 @@ export const ImpEventDetailSchema = z
 
     // milliseconds per step, as impd logs them
     steps: z.record(z.string(), z.int()).readonly().optional(),
+
+    // `released`: how many leases a forced sleep or stop ended
+    released: z.int().positive().optional(),
   })
   .readonly();
 
@@ -93,6 +99,11 @@ export const ImpEventSchema = z.discriminatedUnion('ev', [
     usedMib: z.int().nonnegative(),
     budgetMib: z.int().positive(),
     reserveMib: z.int().nonnegative().optional(),
+
+    // `refused`: the RAM still missing, and how many awake imps it could
+    // not sleep; never their names, which not every reader may see
+    neededMib: z.int().nonnegative().optional(),
+    protectedCount: z.int().nonnegative().optional(),
   }),
 ]);
 

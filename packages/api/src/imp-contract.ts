@@ -16,6 +16,7 @@ import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
+import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
 import { NameSchema } from './name-schema';
 import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
 import {
@@ -51,6 +52,17 @@ const NameInputSchema = z.object({ name: NameSchema });
 // a checkpoint is addressed by its id or by its label
 const CheckpointRefSchema = z.string().min(1);
 const EmptySchema = z.object({});
+
+// a sleep or stop that ends the imp's leases rather than fail with LEASED
+const ForceInputSchema = z.object({ name: NameSchema, force: z.boolean().optional() });
+
+// `hold` is the label `imps.hold` writes, which never blocks a sleep: a lease
+// with it would not lease anything
+const LeaseInputSchema = z.object({
+  name: NameSchema,
+  label: LeaseLabelSchema.refine((label) => label !== 'hold', 'hold is the label imps.hold writes'),
+  ttlSeconds: LeaseTtlSchema,
+});
 
 // cores; below 0.1 the VMM thread starves and a boot times out. impd also
 // refuses more than the host has.
@@ -103,10 +115,12 @@ export const impContract = {
     // cold boot of a stopped imp; a running imp is returned as it is
     start: base.input(NameInputSchema).output(ImpSchema),
 
-    // agent shutdown, then SIGKILL after a timeout; memory is lost
-    stop: base.input(NameInputSchema).output(ImpSchema),
+    // agent shutdown, then SIGKILL after a timeout; memory is lost. LEASED
+    // on an imp with a lease from `leases.*`, unless `force` ends them.
+    stop: base.input(ForceInputSchema).output(ImpSchema),
 
-    sleep: base.input(NameInputSchema).output(ImpSchema),
+    // LEASED as for stop
+    sleep: base.input(ForceInputSchema).output(ImpSchema),
 
     // restartError: false refuses an imp in error with INVALID_STATE instead
     // of booting it again
@@ -114,7 +128,8 @@ export const impContract = {
       .input(z.object({ name: NameSchema, restartError: z.boolean().optional() }))
       .output(ImpSchema),
 
-    // seconds = 0 releases a hold
+    // the caller's lease labelled `hold`, which never blocks a sleep or a
+    // stop; seconds = 0 releases it and a hold from before leases
     hold: base
       .input(z.object({ name: NameSchema, seconds: z.int().nonnegative() }))
       .output(ImpSchema),
@@ -180,6 +195,26 @@ export const impContract = {
         }),
       )
       .output(ImpSchema),
+  },
+
+  // Each caller's own hold on an imp (docs/guides/leases.md). Only the
+  // caller's leases are touched; the label `hold` is the one `imps.hold` writes.
+  leases: {
+    // boots or wakes the imp, then creates the lease or moves its end later;
+    // RAM_BUDGET_EXCEEDED keeps no lease
+    acquire: base.input(LeaseInputSchema).output(LeaseSchema),
+
+    // LEASE_NOT_HELD once the lease ended or was released; wakes nothing
+    renew: base.input(LeaseInputSchema).output(LeaseSchema),
+
+    release: base
+      .input(z.object({ name: NameSchema, label: LeaseLabelSchema }))
+      .output(z.object({ released: z.boolean() })),
+
+    // live leases, of every imp the caller may reach unless it names one
+    list: base
+      .input(z.object({ name: NameSchema.optional(), label: LeaseLabelSchema.optional() }))
+      .output(z.array(LeaseSchema)),
   },
 
   checkpoints: {
