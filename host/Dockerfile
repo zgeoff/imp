@@ -176,7 +176,9 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 # No --target: the image's own bun (linux x64, glibc) becomes the runtime,
 # which matches the debian runtime stage and needs no download.
-RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
+# --external cpu-features: ssh2 loads this optional native module in a
+# try/catch, and --ignore-scripts leaves its .node file unbuilt.
+RUN bun build --compile --external cpu-features packages/daemon/src/main.ts --outfile /out/impd \
  && bun build --compile packages/cli/src/main.ts --outfile /out/imp
 
 # --- dashboard: the web dashboard's static files. Its own stage: the build
