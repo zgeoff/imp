@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { existsSync, statSync } from 'node:fs';
+import { listColdBoots } from '../db/cold-boots';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { buildImpPaths, buildWatchdogSlot } from '../storage/data-layout';
@@ -69,6 +70,11 @@ test('restart: the VM is killed and the imp boots cold, saying why', async () =>
   expect(imp.state).toBe('running');
   expect(imp.coldBootReason).toBe('the watchdog restarted it: its agent stopped answering');
   expect(imp.agentSilentSince).toBeUndefined();
+
+  // the restart ended every session generation: a client learns why
+  const boots = await listColdBoots(ctx.db, ctx.created.id);
+
+  expect(boots.map((boot) => boot.cause)).toEqual(['watchdog', 'start']);
 });
 
 test('snapshot: the memory goes to the owner-only watchdog slot, then a cold boot', async () => {

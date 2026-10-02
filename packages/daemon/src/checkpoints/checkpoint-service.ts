@@ -11,6 +11,7 @@ import {
   toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
+import { writeNextBootCause } from '../db/cold-boots';
 import { readEgressPolicy } from '../db/egress';
 import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -219,6 +220,13 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         });
 
         const sized = toLockedImp(halted, resized);
+
+        // a stopped imp boots later, from whatever path: that boot is the
+        // restore's
+        if (!wasAwake) {
+          await writeNextBootCause(deps.db, imp.id, 'restore');
+        }
+
         const booted = wasAwake ? await deps.imps.bootImp(sized) : sized;
         const ms = Math.round(performance.now() - started);
 

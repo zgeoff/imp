@@ -6,7 +6,7 @@ import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
 
 const AgentErrorResponseSchema = z.object({
-  error: z.object({ code: z.string(), message: z.string() }),
+  error: z.object({ code: z.string(), message: z.string(), data: z.unknown().optional() }),
 });
 
 // a claim flushes the disk and reseeds the CRNG: well under a second
@@ -24,6 +24,9 @@ const PingResponseSchema = z.object({
 
   // an agent parked in a boot template, waiting for its claim
   stage: z.literal('template').optional(),
+
+  // the guest's boot_id; an agent from before output offsets leaves it out
+  boot_id: z.string().optional(),
 });
 
 export const OkResponseSchema = z.object({ ok: z.literal(true) });
@@ -33,19 +36,25 @@ const GROW_TIMEOUT_MS = 20_000;
 
 export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).readonly();
 
-export const AgentSessionSchema = z
-  .object({
-    name: z.string(),
-    pid: z.int(),
-    argv: z.array(z.string()).readonly(),
-    state: z.enum(['running', 'exited']),
-    attached: z.boolean(),
-    cols: z.int(),
-    rows: z.int(),
-    started_unix_ms: z.int(),
-    exit: AgentExitSchema.optional(),
-  })
-  .readonly();
+// a session as the agent lists it; impd adds when it saw the list
+export const AgentSessionObjectSchema = z.object({
+  name: z.string(),
+  pid: z.int(),
+  argv: z.array(z.string()).readonly(),
+  state: z.enum(['running', 'exited']),
+  attached: z.boolean(),
+  cols: z.int(),
+  rows: z.int(),
+  started_unix_ms: z.int(),
+  exit: AgentExitSchema.optional(),
+
+  // an agent from before output offsets leaves these out
+  execution_generation: z.string().optional(),
+  boot_id: z.string().optional(),
+  end: z.int().nonnegative().optional(),
+});
+
+const AgentSessionSchema = AgentSessionObjectSchema.readonly();
 
 const ActivityResponseSchema = z.object({
   tcp_established: z.int().nonnegative(),
@@ -71,7 +80,9 @@ export function requireNoAgentError(frame: AgentFrame): void {
   const parsed = AgentErrorResponseSchema.safeParse(decodeJsonPayload(frame));
 
   if (parsed.success) {
-    throw new AgentError(parsed.data.error.code, parsed.data.error.message);
+    const error = parsed.data.error;
+
+    throw new AgentError(error.code, error.message, error.data);
   }
 }
 

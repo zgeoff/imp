@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import * as z from 'zod';
-import { AgentSessionSchema } from '../agent-client/agent-requests';
 import { ServicesListSchema } from '../agent-client/service-requests';
+import { SeenSessionSchema } from '../sessions/session-cache';
 import type { ImpPaths } from '../storage/data-layout';
 import { writeFileDurably, writeRenamed } from '../storage/write-file-durably';
 import type { HostIdentity, VmIdentity } from './vm-identity';
@@ -34,7 +34,7 @@ const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
 
   // the guest's sessions as it went to sleep, so listing them does not wake
   // it; left out by an older impd
-  sessions: z.array(AgentSessionSchema).readonly().optional(),
+  sessions: z.array(SeenSessionSchema).readonly().optional(),
 
   // and its services, for services.list; left out when the agent did not
   // answer in time, or by an older impd

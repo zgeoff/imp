@@ -123,6 +123,7 @@ test('it lists a running imp’s sessions from its agent', async () => {
       cols: 120,
       rows: 40,
       startedAt: new Date(STARTED_AT),
+      continuity: 'none',
     },
     {
       name: 'job',
@@ -134,6 +135,7 @@ test('it lists a running imp’s sessions from its agent', async () => {
       rows: 40,
       startedAt: new Date(STARTED_AT),
       exit: { code: null, signal: 'SIGKILL' },
+      continuity: 'none',
     },
   ]);
 
@@ -169,7 +171,8 @@ test('a sleeping imp lists the sessions it went to sleep with, without a wake', 
 
   const meta = readSnapshotMeta(buildImpPaths(ctx.config.dataDir, ctx.imp.id));
 
-  expect(meta?.sessions).toEqual([buildSession('main', { attached: false })]);
+  expect(meta?.sessions).toMatchObject([buildSession('main', { attached: false })]);
+  expect(meta?.sessions?.[0]?.observed_unix_ms).toBeNumber();
 
   ctx.agent.ops.length = 0;
 
@@ -233,4 +236,38 @@ test('a list of an unknown imp is NOT_FOUND', async () => {
   const rejection = await readRejection(ctx.client.sessions.list({ name: 'nope' }));
 
   expect(rejection).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'imp', name: 'nope' } });
+});
+
+test('a session from an agent with offsets lists its generation and its end as last seen', async () => {
+  const generation = 'b'.repeat(32);
+
+  await using ctx = await setupSessionTest([
+    buildSession('main', { execution_generation: generation, boot_id: 'boot-x', end: 4096 }),
+  ]);
+
+  const before = Date.now();
+
+  const [session] = await ctx.client.sessions.list({ name: 'dev' });
+
+  expect(session).toMatchObject({
+    continuity: 'offsets',
+    executionGeneration: generation,
+    bootId: 'boot-x',
+    end: 4096,
+  });
+
+  expect(session?.endObservedAt?.getTime()).toBeGreaterThanOrEqual(before);
+
+  // a sleep keeps the generation and when impd saw the end
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const [slept] = await ctx.client.sessions.list({ name: 'dev' });
+
+  expect(slept).toMatchObject({
+    continuity: 'offsets',
+    executionGeneration: generation,
+    end: 4096,
+  });
+
+  expect(slept?.endObservedAt?.getTime()).toBeGreaterThanOrEqual(before);
 });

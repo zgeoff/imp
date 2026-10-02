@@ -1,4 +1,4 @@
-import type { ApiActor, ImageSource, ImpState, MoveState, Scope } from '@imp/api';
+import type { ApiActor, ColdBootCause, ImageSource, ImpState, MoveState, Scope } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -74,6 +74,19 @@ interface ImpsTable {
 
   // set while the imp moves between hosts: nothing wakes or changes it
   move_state: MoveState | null;
+
+  // the cause the next cold boot records, when impd knew it before the
+  // boot: `recovery`, `wake_fallback` or `restore`
+  next_boot_cause: Generated<ColdBootCause | null>;
+}
+
+// an imp's last cold boots (docs/architecture/daemon.md#output-offsets)
+interface ImpColdBootsTable {
+  seq: Generated<number>;
+  imp_id: string;
+  boot_id: string;
+  cause: ColdBootCause;
+  at: number;
 }
 
 interface CheckpointsTable {
@@ -224,6 +237,7 @@ interface MoveSendsTable {
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
+  imp_cold_boots: ImpColdBootsTable;
   checkpoints: CheckpointsTable;
   secrets: SecretsTable;
   grants: GrantsTable;

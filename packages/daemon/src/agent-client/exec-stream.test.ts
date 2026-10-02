@@ -156,7 +156,13 @@ test('it attaches to a session: STARTED, the replay, then detached', async () =>
   const stream = await openAttachStream(vsock.path, { session: 'main', cols: 80, rows: 24 });
   const events = await collectEvents(stream);
 
-  expect(stream).toMatchObject({ pid: 42, session: 'main', created: false });
+  // an agent from before offsets: the replay as before
+  expect(stream).toMatchObject({
+    pid: 42,
+    session: 'main',
+    created: false,
+    output: { continuity: 'none' },
+  });
 
   expect(events).toEqual([
     { type: 'stdout', data: new TextEncoder().encode('replay') },
@@ -168,6 +174,54 @@ test('it attaches to a session: STARTED, the replay, then detached', async () =>
     session: 'main',
     cols: 80,
     rows: 24,
+  });
+});
+
+test('a resume goes to the agent in its shape, without wake, and STARTED places the data', async () => {
+  const generation = 'e'.repeat(32);
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: 'boot-1',
+          execution_generation: generation,
+          buffer_start: 10,
+          end: 20,
+          offset: 10,
+          prelude: 0,
+          resume: { kind: 'gap', from: 4, to: 10 },
+        },
+      }),
+    );
+  });
+
+  const stream = await openAttachStream(vsock.path, {
+    session: 'main',
+    resumeFrom: { executionGeneration: generation, offset: 4 },
+    wake: false,
+  });
+
+  stream.close();
+
+  expect(decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() })).toEqual({
+    op: 'session.attach',
+    session: 'main',
+    resume_from: { execution_generation: generation, offset: 4 },
+  });
+
+  expect(stream.output).toEqual({
+    continuity: 'offsets',
+    bootId: 'boot-1',
+    executionGeneration: generation,
+    bufferStart: 10,
+    end: 20,
+    offset: 10,
+    prelude: 0,
+    coldBoots: [],
+    resume: { kind: 'gap', from: 4, to: 10 },
   });
 });
 

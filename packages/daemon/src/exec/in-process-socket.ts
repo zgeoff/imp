@@ -56,6 +56,8 @@ export function createInProcessSocket(
       const copy = Uint8Array.from(data).buffer;
 
       emitEvent(() => new MessageEvent('message', { data: copy }));
+
+      return true;
     },
     close: (code = CLOSE_NORMAL, reason = '') => {
       stopSocket(code, reason);

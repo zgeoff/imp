@@ -1,18 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { ImpEventDetail } from '@imp/api';
+import type { ColdBootCause, ImpEventDetail } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity } from '../agent-client/agent-requests';
-import type { AgentSession } from '../agent-client/agent-requests';
 import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError } from '../api-errors';
+import { removeNextBootCause, writeColdBoot, writeUnknownBoot } from '../db/cold-boots';
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
+import { toSeenSessions } from '../sessions/session-cache';
+import type { SeenSession } from '../sessions/session-cache';
 import { waitForGuestAge } from '../sleep/guest-age';
 import {
   buildSnapshotIdentity,
@@ -66,8 +68,12 @@ export interface ImpVmOps {
   // the full text goes to the log, its first line to the record
   readonly writeFailure: (imp: LockedImp, error: unknown) => Promise<void>;
 
-  // boots the imp's disk; a memory snapshot is dropped first
-  readonly startImpVm: (imp: LockedImp) => Promise<LockedImp>;
+  // boots the imp's disk; a memory snapshot is dropped first. `cause` is
+  // what the boot records (docs/architecture/daemon.md#output-offsets).
+  readonly startImpVm: (
+    imp: LockedImp,
+    cause: Extract<ColdBootCause, 'start' | 'restore'>,
+  ) => Promise<LockedImp>;
 
   // a new imp's first boot while its disk is still being sized: a template
   // restore runs up to the parked guest meanwhile
@@ -93,7 +99,7 @@ export interface ImpVmOps {
   readonly growGuestDisk: (imp: LockedImp) => Promise<LockedImp>;
 
   // kills the VM without asking its agent, which may not answer, and boots
-  // the disk cold; `reason` says why on the imp
+  // the disk cold, the watchdog's restart; `reason` says why on the imp
   readonly startFreshImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
 
   // runs a snapshot write in one of the host-wide sleep slots
@@ -248,13 +254,16 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   };
 
   // `reason` says why a wake booted cold instead; null for a create or a start
-  // `isWake` when the boot stands in for a wake, which it counts as
+  // `cause` is the typed reason the boot records; a wake_fallback counts as
+  // the wake it stands in for
   const startColdImpVm = async (
     imp: LockedImp,
+    cause: Exclude<ColdBootCause, 'recovery' | 'unknown'>,
     reason: string | null,
-    isWake = false,
     diskReady: Promise<unknown> = Promise.resolve(),
   ): Promise<LockedImp> => {
+    const isWake = cause === 'wake_fallback';
+
     try {
       gate.requireOpen();
     } catch (error) {
@@ -310,6 +319,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       await updateImpActivity(context.db, imp.id, new Date());
 
+      // an agent from before output offsets has no boot_id; its sessions
+      // have no generations for a boot to end
+      await (vm.bootId === undefined
+        ? removeNextBootCause(context.db, imp.id)
+        : writeColdBoot(context.db, imp.id, { bootId: vm.bootId, cause, at: new Date() }));
+
       const running = await updateState(imp, {
         reason: 'booted',
         detail: {
@@ -349,10 +364,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     }
   };
 
-  const startImpVm = (imp: LockedImp): Promise<LockedImp> => startColdImpVm(imp, null);
+  const startImpVm: ImpVmOps['startImpVm'] = (imp, cause) => startColdImpVm(imp, cause, null);
 
   const startNewImpVm = (imp: LockedImp, diskReady: Promise<unknown>): Promise<LockedImp> =>
-    startColdImpVm(imp, null, false, diskReady);
+    startColdImpVm(imp, 'start', null, diskReady);
 
   const stopImpVm = async (imp: LockedImp): Promise<LockedImp> => {
     const paths = context.findPaths(imp.id);
@@ -375,7 +390,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   // in between, since an open exec or attach keeps an imp from sleeping
   const readSessionsForSleep = async (imp: LockedImp, paths: ImpPaths) => {
     const seen = await sendActivity(paths.vsockSocket).then(
-      (activity) => activity.sessions,
+      (activity) => toSeenSessions(activity.sessions, new Date()),
       () => context.sessions.read(imp.id) ?? [],
     );
 
@@ -519,7 +534,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         `impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot it can load'}`,
       );
 
-      return startColdImpVm(imp, mismatch, true);
+      return startColdImpVm(imp, 'wake_fallback', mismatch);
     }
 
     // a woken VM faults its pages back in; it grows toward what it owned
@@ -561,6 +576,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     startCounting(context, imp, woken.pid);
 
     await updateImpActivity(context.db, imp.id, new Date());
+
+    // a memory wake keeps the boot; one that slept before impd kept cold
+    // boots has no row for it yet
+    if (woken.bootId !== undefined) {
+      await writeUnknownBoot(context.db, imp.id, woken.bootId, new Date());
+    }
 
     const running = await updateState(imp, {
       reason: 'woke',
@@ -686,7 +707,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       pid: null,
     });
 
-    return startColdImpVm(stopped, failure, true);
+    return startColdImpVm(stopped, 'wake_fallback', failure);
   };
 
   const requireRunningImp = async (imp: LockedImp): Promise<LockedImp> => {
@@ -708,7 +729,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       await context.vms.stopVm(imp.pid, context.findPaths(imp.id), false);
     }
 
-    return startImpVm(imp);
+    return startImpVm(imp, 'start');
   };
 
   const startFreshImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
@@ -725,7 +746,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       pid: null,
     });
 
-    return startColdImpVm(stopped, reason);
+    return startColdImpVm(stopped, 'watchdog', reason);
   };
 
   return {
@@ -762,6 +783,6 @@ function formatTimings(timings: Readonly<Record<string, number>>): string {
 }
 
 // a sleeping imp has no client attached: the sleep closed every connection
-function setDetached(session: AgentSession): AgentSession {
+function setDetached(session: SeenSession): SeenSession {
   return { ...session, attached: false };
 }

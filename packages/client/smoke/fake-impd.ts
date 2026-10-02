@@ -87,6 +87,7 @@ function buildFakeStream(request: Readonly<AgentExecRequest>): ExecStream {
     session: null,
     created: false,
     groupKill: false,
+    output: null,
     writeStdin: (data) => {
       const text = new TextDecoder().decode(data);
 
