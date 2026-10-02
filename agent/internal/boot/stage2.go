@@ -16,6 +16,7 @@ import (
 	"github.com/mdlayher/vsock"
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/cgroup"
 	"github.com/zgeoff/imp/agent/internal/cmdline"
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
@@ -29,6 +30,10 @@ import (
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
 )
+
+// ExecCgroupRoot holds one cgroup leaf per non-tty exec
+// (docs/architecture/agent.md#exec-cgroups).
+const ExecCgroupRoot = "/sys/fs/cgroup/imp-exec"
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
 // the hostname and network, starts services, and serves the host on vsock.
@@ -74,8 +79,14 @@ func Stage2() error {
 	}
 	launcher := launch.New(r, image)
 	dialer := dial.NewDialer(r, image.User, AgentPath)
+	// Each non-tty exec gets a cgroup leaf, so a stop kills its escapees too.
+	execCgroups, err := cgroup.NewTree(ExecCgroupRoot)
+	if err != nil {
+		log.Printf("stage2: exec cgroups: %v; a stop reaches only the process group", err)
+		execCgroups = nil
+	}
 	srv := &server.Server{
-		Exec:     exec.NewManager(launcher),
+		Exec:     exec.NewManager(launcher, execCgroups),
 		Sessions: session.NewManager(launcher),
 		Services: sup,
 		Listen:   listen.NewManager(listen.AgentRoot, listen.ForwardRoot, image.User, dialer),

@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/cgroup"
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
+	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -256,5 +259,54 @@ func TestHangupDuringGrace(t *testing.T) {
 	}
 	if took := time.Since(sent); took < grace {
 		t.Fatalf("Serve returned %s after SIGTERM, before the %s grace", took, grace)
+	}
+}
+
+// TestCgroupSpawnFallsBack: a leaf that is not a cgroup (here a plain
+// directory) cannot take the child, so the command runs without one and its
+// leaf goes.
+func TestCgroupSpawnFallsBack(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "imp-exec")
+	tree, err := cgroup.NewTree(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), tree)
+	h := startExec(t, m, proto.Request{Argv: []string{"echo", "ran"}, KillGraceMs: 100})
+	h.started(t)
+	out, exit := h.wait(t, 5*time.Second)
+	if exit.Code != 0 || strings.TrimSpace(out) != "ran" {
+		t.Fatalf("exit = %+v, output %q", exit, out)
+	}
+	leaves, _ := os.ReadDir(parent)
+	if len(leaves) != 0 || tree.Ended() != 0 {
+		t.Fatalf("leaves left: %v, ended %d", leaves, tree.Ended())
+	}
+}
+
+// TestCgroupKillsEscapees stops a command whose child left the process group
+// with setsid and ignores SIGTERM: cgroup.kill reaches it at the deadline.
+// It needs root and a writable cgroup2, as in a guest.
+func TestCgroupKillsEscapees(t *testing.T) {
+	tree, err := cgroup.NewTree("/sys/fs/cgroup/imp-exec-test")
+	if os.Geteuid() != 0 || err != nil {
+		t.Skip("needs root and a writable cgroup2")
+	}
+	t.Cleanup(func() { os.Remove("/sys/fs/cgroup/imp-exec-test") })
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	child := fmt.Sprintf(`trap "" TERM; echo $$ > %s; exec sleep 300`, pidFile)
+	m := NewManager(launch.New(testReaper, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), tree)
+	h := startExec(t, m, proto.Request{
+		Argv:        []string{"sh", "-c", fmt.Sprintf("setsid sh -c '%s' >/dev/null 2>&1 & exec sleep 300", child)},
+		KillGraceMs: 300,
+	})
+	h.started(t)
+	escapee := readPid(t, pidFile)
+	killAfter(t, escapee)
+
+	signal(t, h, syscall.SIGTERM)
+	h.wait(t, 10*time.Second)
+	if alive(escapee) {
+		t.Fatalf("escapee %d survived the stop", escapee)
 	}
 }

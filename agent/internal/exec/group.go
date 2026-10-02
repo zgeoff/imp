@@ -6,6 +6,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/cgroup"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
 
@@ -86,6 +87,23 @@ func killGroup(pgid int, deadline time.Time) {
 	}
 	if !waitGroupEmpty(pgid, time.Now().Add(groupKillWait)) {
 		log.Printf("exec: process group %d outlived SIGKILL by %s; sending the exit anyway", pgid, groupKillWait)
+	}
+}
+
+// killCgroup waits for g to empty until deadline, then kills what is left
+// with cgroup.kill and waits up to groupKillWait for that to go. It reaches
+// the members that left the process group (setsid, a double fork); they get
+// no SIGTERM first, only the kill at the deadline.
+func killCgroup(g *cgroup.Group, deadline time.Time) {
+	if g.WaitEmpty(deadline) {
+		return
+	}
+	if err := g.Kill(); err != nil {
+		log.Printf("exec: cgroup.kill: %v", err)
+		return
+	}
+	if !g.WaitEmpty(time.Now().Add(groupKillWait)) {
+		log.Printf("exec: a cgroup outlived cgroup.kill by %s; sending the exit anyway", groupKillWait)
 	}
 }
 

@@ -50,6 +50,19 @@ with backoff. The services ops add, restart and remove a service and stream its 
 ([protocol](./protocol.md#servicesadd-servicesremove-servicesrestart)), behind `imp service` and
 `imp logs` ([services](../guides/services.md)).
 
+### Exec cgroups
+
+Each non-tty exec starts in a cgroup v2 leaf of its own, `/sys/fs/cgroup/imp-exec/<n>`, through
+`clone3` with `CLONE_INTO_CGROUP`, so no child can fork before it is inside. A stop kills the leaf
+with `cgroup.kill` ([protocol](./protocol.md#exec)). The parent holds no process and enables no
+controller. A leaf goes when its exec ends, or later, once a child it left behind (a `nohup` job)
+exits: the next exec sweeps only the leaves of ended execs. When the leaf or the spawn into it
+fails, the agent logs it once and the exec runs without one, as before.
+
+A command runs as root unless the image says otherwise, so it can move itself out of its leaf, and a
+`dockerd` started from an exec puts its containers in cgroups of its own; a stop does not reach
+those. A tty exec has no leaf: its session leader owns the terminal's process group.
+
 ## Sessions
 
 A session keeps a program on a pty alive without a host connection

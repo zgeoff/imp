@@ -89,7 +89,11 @@ nohup npm test >/tmp/test.log 2>&1 &
 ```
 
 Then read `/tmp/test.log` with later calls. Such a job is outside the call and the timeout does not
-stop it. A process that calls `setsid` leaves the process group, so a stop does not reach it either.
+stop it: only a stop of the command that started it does. On an agent at protocol `0.11.0` or later,
+that stop also reaches a child that left the process group with `setsid` or a double fork; such a
+child gets no SIGTERM, only SIGKILL at the end of the 2 s. It does not reach a process that moved
+itself to another cgroup (commands run as root unless the image says otherwise), or the containers
+of a `dockerd` started from an exec ([exec cgroups](../architecture/agent.md#exec-cgroups)).
 
 Only exec and the file tools stop on a cancel. A create, fork or restore that impd has started runs
 to its end, and its result is sent despite the cancel, so the agent learns the name of what it made.

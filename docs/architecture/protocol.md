@@ -7,11 +7,11 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.10.0`, which adds the services ops (`0.9.0` adds `listen` for reverse forwards, `0.8.0`
-kills what is left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar`
-for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`). The Go side is
-`agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.11.0`, which kills a stopped exec's whole cgroup (`0.10.0` adds the services ops, `0.9.0`
+adds `listen` for reverse forwards, `0.8.0` kills what is left of a stopped exec's process group,
+`kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the
+image's USER, `0.5.0` added `grow`). The Go side is `agent/internal/proto`; the host side is the
+agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -285,13 +285,15 @@ Details:
   pty as controlling terminal). SIGNAL goes to the whole group.
 - **Stopping the group.** With `kill_grace_ms`, the first SIGNAL of SIGTERM, SIGINT, SIGHUP, SIGQUIT
   or SIGKILL starts a deadline that much later; other signals do not. When the process exits after
-  it, the guest waits for the rest of its group to exit, sends SIGKILL to the group at the deadline,
-  and waits up to 5 s more for it to go (a member in uninterruptible sleep can outlast that; the
-  guest logs it). Only then does it drain the output and send EXIT, so EXIT means the group is gone.
-  Without a stop signal, a background child outlives its command as before. An agent from before
-  `0.8.0` ignores the field and leaves STARTED without it, which tells the host to clean up itself.
-  Known limits: a member that left the group (`setsid`, or a daemon that double-forks into a new
-  group) is not killed.
+  it, the guest waits for the rest of the command to exit, kills what is left at the deadline, and
+  waits up to 5 s more for it to go (a member in uninterruptible sleep can outlast that; the guest
+  logs it). Only then does it drain the output and send EXIT, so EXIT means the command is gone.
+  Since `0.11.0` the non-tty command starts in a cgroup of its own, and the kill is `cgroup.kill`:
+  it also reaches a member that left the group with `setsid` or a double fork. Such a member gets no
+  SIGTERM, only the kill at the deadline. Without a cgroup (one cannot be made), or before `0.11.0`,
+  the kill is SIGKILL to the process group, and a member that left it lives on. Without a stop
+  signal, a background child outlives its command as before. An agent from before `0.8.0` ignores
+  the field and leaves STARTED without it.
 - **stdin.** Without `tty`, STDIN_EOF closes the stdin pipe. With `tty`, STDIN_EOF is ignored; send
   `\x04` as STDIN for an EOF at the terminal.
 - **Output after exit.** Output is forwarded until both streams reach EOF, or for at most 500 ms

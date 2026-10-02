@@ -184,6 +184,22 @@ test('a timeout kills the whole process group, a nohup child that ignores SIGTER
   }
 });
 
+test('a timeout kills a child that left the process group with setsid', async () => {
+  for (const name of [tiny, full]) {
+    const result = await session.runTool('imp_exec', {
+      name,
+      command: `setsid sh -c 'trap "" TERM HUP; sleep 304' >/dev/null 2>&1 & sleep 305`,
+      timeoutSeconds: 2,
+    });
+
+    expect(readData(result)).toMatchObject({ timedOut: true });
+
+    const left = await countSleeps(name, '30[45]');
+
+    expect({ name, left }).toEqual({ name, left: 0 });
+  }
+});
+
 test('a job started with nohup and & outlives the call that started it', async () => {
   const started = await runShell(tiny, 'nohup sleep 303 >/tmp/job.log 2>&1 &');
 

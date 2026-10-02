@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zgeoff/imp/agent/internal/cgroup"
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -52,11 +53,16 @@ const (
 // Manager runs exec sessions and counts the live ones.
 type Manager struct {
 	launcher *launch.Launcher
-	active   atomic.Int64
+	// cgroups gives each non-tty exec a leaf; nil runs them without one,
+	// and a stop then reaches only the process group.
+	cgroups *cgroup.Tree
+	active  atomic.Int64
+
+	leafFailed sync.Once
 }
 
-func NewManager(l *launch.Launcher) *Manager {
-	return &Manager{launcher: l}
+func NewManager(l *launch.Launcher, cgroups *cgroup.Tree) *Manager {
+	return &Manager{launcher: l, cgroups: cgroups}
 }
 
 // Active returns the number of running exec sessions.
@@ -73,6 +79,9 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
 			Error: &proto.Error{Code: proto.ErrExecFailed, Message: err.Error()},
 		})
+	}
+	if s.group != nil {
+		defer m.cgroups.Release(s.group)
 	}
 	// A panic in the session ends it as a host hangup would: its pipes
 	// close, which stops the pumps, and the process gets SIGHUP. In Serve
@@ -129,7 +138,11 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	// the signal (nohup). They go before the drain, so their last output
 	// still reaches EOF and the host before EXIT.
 	if deadline, ok := s.stop.due(); ok {
-		killGroup(s.proc.Pid, deadline)
+		if s.group != nil {
+			killCgroup(s.group, deadline)
+		} else {
+			killGroup(s.proc.Pid, deadline)
+		}
 	}
 	for _, o := range s.outputs {
 		o.f.SetReadDeadline(time.Now().Add(drainGrace))
@@ -155,7 +168,10 @@ type output struct {
 }
 
 type session struct {
-	proc    *proc.Process
+	proc *proc.Process
+	// group is the exec's cgroup leaf; nil with a tty, or when the exec
+	// runs without one
+	group   *cgroup.Group
 	tty     *os.File // pty master, nil without a tty
 	stdin   *os.File // write end of the stdin pipe, nil with a tty
 	outputs []output
@@ -205,17 +221,44 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 	s.stdin = pipes[0][1]
 	s.outputs = []output{{pipes[1][0], proto.TypeStdout}, {pipes[2][0], proto.TypeStderr}}
 	spec.Files = []*os.File{pipes[0][0], pipes[1][1], pipes[2][1]}
+	group := m.newGroup()
+	if group != nil {
+		spec.Cgroup = group.Dir()
+	}
 
 	p, err := m.launcher.Start(spec)
 	for _, f := range spec.Files {
 		f.Close()
 	}
 	if err != nil {
+		if group != nil {
+			m.cgroups.Release(group)
+		}
 		s.close()
 		return nil, err
 	}
-	s.proc = p
+	if group != nil && !p.InCgroup {
+		m.cgroups.Release(group)
+		group = nil
+	}
+	s.proc, s.group = p, group
 	return s, nil
+}
+
+// newGroup makes a leaf for a new exec, or returns nil when there is no tree
+// or the leaf cannot be made (logged once).
+func (m *Manager) newGroup() *cgroup.Group {
+	if m.cgroups == nil {
+		return nil
+	}
+	g, err := m.cgroups.New()
+	if err != nil {
+		m.leafFailed.Do(func() {
+			log.Printf("exec: no cgroup for execs (%v); a stop reaches only the process group", err)
+		})
+		return nil
+	}
+	return g
 }
 
 // input applies host frames until the connection ends. If the host goes away

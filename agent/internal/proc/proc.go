@@ -7,9 +7,11 @@ package proc
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/zgeoff/imp/agent/internal/reaper"
@@ -28,13 +30,22 @@ type Spec struct {
 	// TTY makes the child a session leader with Files[0] as its controlling
 	// terminal. Otherwise the child gets its own process group.
 	TTY bool
+	// Cgroup, if set, is the directory of the cgroup v2 leaf the child is
+	// born in (clone3 with CLONE_INTO_CGROUP).
+	Cgroup *os.File
 }
 
 // Process is a started child.
 type Process struct {
 	Pid  int
 	Done <-chan reaper.Status
+	// InCgroup reports whether the child started in Spec.Cgroup. A spawn
+	// into the cgroup that fails is retried without it.
+	InCgroup bool
 }
+
+// cgroupFallback logs the first spawn that could not use its cgroup.
+var cgroupFallback sync.Once
 
 // Signal sends sig to the child's process group (the child leads it).
 func (p *Process) Signal(sig syscall.Signal) error {
@@ -68,14 +79,33 @@ func Start(r *reaper.Reaper, s Spec) (*Process, error) {
 		sys.Setctty = true
 		sys.Ctty = 0
 	}
+	if s.Cgroup != nil {
+		sys.UseCgroupFD = true
+		sys.CgroupFD = int(s.Cgroup.Fd())
+	}
 	attr := &syscall.ProcAttr{Dir: dir, Env: s.Env, Files: fds, Sys: sys}
+	inCgroup := s.Cgroup != nil
 	pid, done, err := r.Start(func() (int, error) {
-		return syscall.ForkExec(path, s.Argv, attr)
+		pid, err := syscall.ForkExec(path, s.Argv, attr)
+		if err == nil || !inCgroup {
+			return pid, err
+		}
+		// No clone3, or a cgroup gone from under us: the command still runs,
+		// and a stop falls back to its process group.
+		sys.UseCgroupFD = false
+		pid, retryErr := syscall.ForkExec(path, s.Argv, attr)
+		if retryErr == nil {
+			inCgroup = false
+			cgroupFallback.Do(func() {
+				log.Printf("proc: cannot start in a cgroup (%v); execs run without one", err)
+			})
+		}
+		return pid, retryErr
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", s.Argv[0], err)
 	}
-	return &Process{Pid: pid, Done: done}, nil
+	return &Process{Pid: pid, Done: done, InCgroup: inCgroup}, nil
 }
 
 // UserEnv returns env with HOME set to user's home from /etc/passwd. Root
