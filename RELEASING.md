@@ -47,8 +47,10 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
      `imp-host:X.Y.Z` and attests the image and every asset.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
-   - **npm:** after publish, packs `@zgeoff/imp-client`, checks the tarball and publishes it. It is
-     skipped until [npm](#npm) is turned on, and for a version npm already has.
+   - **npm-pack** and **npm-publish:** after publish, npm-pack packs `@zgeoff/imp-client`, checks
+     the tarball and uploads it; npm-publish, the only job with the OIDC token, publishes it. npm's
+     `latest` moves only when `vX.Y.Z` is the newest release; an older one goes out under
+     `previous`. Both are skipped until [npm](#npm) is turned on, and for a version npm already has.
 
 The kernel layer stays in the GitHub Actions cache, so the image job and later releases reuse it.
 Without that cache, the kernel build takes about 15 to 25 minutes on a hosted runner. A second run

@@ -231,7 +231,7 @@ jobs:
   # the PR, CI runs on it, and the job turns on auto-merge.
   release-please:
     if: github.event_name == 'push' && vars.RELEASE_APP_ID != ''
-    needs: [gitleaks, checks, go, shellcheck, cli]
+    needs: [gitleaks, checks, go, shellcheck, cli, client]
     runs-on: ubuntu-latest
     permissions:
       contents: write

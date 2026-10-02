@@ -73,8 +73,8 @@ cat > tsconfig.json <<'JSON'
 }
 JSON
 
-# no skipLibCheck, so the bundled declarations are checked too; @orpc/shared's
-# declarations name @opentelemetry/api, an optional peer of oRPC
+# no skipLibCheck, so the bundled declarations are checked too, which needs
+# the optional peer @opentelemetry/api (the README says so)
 npm install --no-audit --no-fund --silent @opentelemetry/api
 "$root/node_modules/.bin/tsc" -p tsconfig.json
 echo "the declarations check in a strict project"

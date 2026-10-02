@@ -20,8 +20,13 @@ rm -rf "$stage"
 mkdir -p "$stage"
 cp -R "$package/dist" "$package/README.md" "$root/LICENSE" "$stage/"
 
-jq '
-  del(.scripts, .devDependencies)
+# a catalog: dependency becomes a caret range on the catalog's version, so
+# the published ranges follow the workspace's pins
+jq --slurpfile workspace "$root/package.json" '
+  .dependencies |= with_entries(
+    if .value == "catalog:" then .value = "^" + $workspace[0].workspaces.catalog[.key] else . end
+  )
+  | del(.scripts, .devDependencies)
   | .exports = { ".": { types: "./dist/index.d.ts", default: "./dist/index.js" } }
   | .files = ["dist"]
   | .sideEffects = false
