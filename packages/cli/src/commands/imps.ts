@@ -6,7 +6,7 @@ import { formatImp, formatImps, formatOutput } from '../format-output';
 import { parseDuration } from '../parse-duration';
 import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
-import { detachKeyArg, jsonArg, nameArg, readDetachKey } from './common-args';
+import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -180,7 +180,8 @@ export const execCommand = defineCommand({
   },
 });
 
-// `--no-session` parses to session: false
+// `--no-session` parses to session: false. With no terminal on stdin, as
+// in a script, the shell runs without a session unless one is named.
 export const consoleCommand = defineCommand({
   meta: {
     name: 'console',
@@ -191,17 +192,15 @@ export const consoleCommand = defineCommand({
     name: nameArg,
     session: {
       type: 'string',
-      description:
-        'session to start or attach to; --no-session for a shell that ends with the terminal',
-      default: DEFAULT_SESSION,
+      description: `session to start or attach to (default ${DEFAULT_SESSION} on a terminal); --no-session for a shell that ends with the terminal`,
     },
     'detach-key': detachKeyArg,
   },
   run: async (context) => {
-    const session: unknown = context.args.session;
+    const session = readConsoleSession(context.args.session, process.stdin.isTTY);
     const detachKey = readDetachKey(context.args['detach-key']);
 
-    if (detachKey === undefined) {
+    if (session === undefined || detachKey === undefined) {
       return;
     }
 
@@ -219,6 +218,21 @@ export const consoleCommand = defineCommand({
     process.exit(code);
   },
 });
+
+// the named session, the default on a terminal, or null for none;
+// undefined once a bad name is reported
+export function readConsoleSession(
+  session: unknown,
+  isTerminal: boolean,
+): string | null | undefined {
+  if (session === false || (session === undefined && !isTerminal)) {
+    return null;
+  }
+
+  const name = typeof session === 'string' ? session : DEFAULT_SESSION;
+
+  return readSessionName(name);
+}
 
 // everything after `--` (main.ts keeps it from citty), else the
 // positionals after the name

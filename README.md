@@ -90,16 +90,21 @@ and set these codes themselves:
 | 2    | a usage error, such as no command after `--`                                         |
 | 127  | the command could not start (`EXEC_FAILED`)                                          |
 | 141  | the CLI's own output closed, as in `imp exec box -- cat big \| head`                 |
+| 254  | another terminal attached to the session and took it over                            |
 | 255  | imp failed: impd unreachable, a rejected token, an unknown imp, a dropped connection |
 
 `imp console box` starts the session `main`, or attaches to it if it runs (`--session <name>` names
-another, `--no-session` gives a shell that ends with the terminal). Ctrl-] detaches
-(`--detach-key ctrl-<key>` or `none`), and closing the terminal does too: the shell keeps running in
-the imp, and through a sleep. `imp sessions box` lists the sessions without waking the imp,
-`imp attach box [main]` shows the session's recent output and goes on live from any machine, and
-`imp sessions kill box main` ends one. One terminal is attached at a time: a new attach takes the
-session over. When impd restarts or the imp sleeps under an attached terminal, the CLI attaches
-again by itself. A detach exits 0.
+another, `--no-session` gives a shell that ends with the terminal). Without a terminal on stdin, as
+in a script, it runs without a session unless `--session` names one. Ctrl-] detaches
+(`--detach-key ctrl-<key>` or `none`; Escape, Backspace, Tab, Enter and Return cannot be the key),
+and closing the terminal does too: the shell keeps running in the imp, and through a sleep.
+`imp sessions box` lists the sessions without waking the imp, `imp attach box [main]` shows the
+session's recent output and goes on live from any machine, and `imp sessions kill box main` ends
+one. One terminal is attached at a time: a new attach takes the session over. When impd restarts,
+the imp sleeps, or the connection drops under an attached terminal, the CLI attaches again by itself
+for up to 60 s, waiting 1 s, then 2 s, then 4 s and at most 8 s between tries. Meanwhile the detach
+key still detaches and Ctrl-C gives up (130); other keys wait for the session. It does not attach
+again once another terminal attached. A detach exits 0.
 
 A signal to the CLI (Ctrl-C without `-t`, SIGTERM, SIGHUP) goes to the command, except in a session,
 where it detaches; a second one ends the session with 128 + n, so the CLI stops even when the

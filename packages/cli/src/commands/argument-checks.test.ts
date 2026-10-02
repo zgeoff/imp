@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
 import { imageCommand } from './image';
-import { consoleCommand, newCommand } from './imps';
+import { consoleCommand, newCommand, readConsoleSession } from './imps';
 import { sessionsCommand } from './sessions';
 
 // These fail before any call to impd, so they need none: IMP_URL points
@@ -84,8 +84,24 @@ test('a detach key that is not ctrl-<key> is a usage error', async () => {
   await runCommand(consoleCommand, { rawArgs: ['box', '--detach-key', 'esc'] });
 
   expect(stderr).toHaveBeenCalledWith(
-    String.raw`imp: --detach-key takes ctrl-<key> (a-z, @, [, \, ], ^ or _) or none, got esc`,
+    String.raw`imp: --detach-key takes ctrl-<key> (a-z but h, i, j and m; @, \, ], ^ or _) or none, got esc`,
   );
 
   expect(process.exitCode).toBe(2);
+});
+
+test('an empty session name is a usage error', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(consoleCommand, { rawArgs: ['box', '--session', ''] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: a session needs a name');
+  expect(process.exitCode).toBe(2);
+});
+
+test('console uses the session main by default only on a terminal', () => {
+  expect(readConsoleSession(undefined, true)).toBe('main');
+  expect(readConsoleSession(undefined, false)).toBeNull();
+  expect(readConsoleSession('work', false)).toBe('work');
+  expect(readConsoleSession(false, true)).toBeNull();
 });

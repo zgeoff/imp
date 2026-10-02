@@ -1,5 +1,6 @@
 import { DEFAULT_DETACH_KEY, parseDetachKey } from '../detach-key';
 import { printError } from '../run-action';
+import { UsageError } from '../usage-error';
 
 export const nameArg = { type: 'positional', description: 'imp name', required: true } as const;
 export const jsonArg = { type: 'boolean', description: 'print JSON' } as const;
@@ -19,4 +20,16 @@ export function readDetachKey(text: string): number | null | undefined {
 
     return undefined;
   }
+}
+
+// the session name, or undefined once an empty one is reported; impd checks
+// the rest of its form
+export function readSessionName(session: string): string | undefined {
+  if (session === '') {
+    printError(new UsageError('a session needs a name'));
+
+    return undefined;
+  }
+
+  return session;
 }

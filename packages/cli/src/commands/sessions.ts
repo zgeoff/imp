@@ -4,7 +4,7 @@ import { runExec } from '../exec-client';
 import { formatOutput, formatSessions } from '../format-output';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
-import { detachKeyArg, jsonArg, nameArg, readDetachKey } from './common-args';
+import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { readTermEnv } from './imps';
 
 // `imp sessions kill <name> <session>` shares the command with
@@ -54,9 +54,10 @@ export const attachCommand = defineCommand({
     'detach-key': detachKeyArg,
   },
   run: async (context) => {
+    const session = readSessionName(context.args.session ?? DEFAULT_SESSION);
     const detachKey = readDetachKey(context.args['detach-key']);
 
-    if (detachKey === undefined) {
+    if (session === undefined || detachKey === undefined) {
       return;
     }
 
@@ -66,7 +67,7 @@ export const attachCommand = defineCommand({
       argv: [],
       tty: true,
       env: readTermEnv(),
-      session: { name: context.args.session ?? DEFAULT_SESSION, attachOnly: true, detachKey },
+      session: { name: session, attachOnly: true, detachKey },
     });
 
     process.exit(code);

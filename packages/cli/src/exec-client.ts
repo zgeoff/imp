@@ -1,11 +1,12 @@
 import { writeSync } from 'node:fs';
 import { constants } from 'node:os';
 import type { Readable } from 'node:stream';
-import { EXEC_CLOSE_RESTARTING } from '@imp/api';
 import { openExecSession } from '@zgeoff/imp-client';
 import type { ExecOutcome, ExecSession, ExecSessionOptions } from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
+import { createImpClient } from './create-imp-client';
+import { findDetachKey } from './detach-key';
 import { formatUnauthorized } from './run-action';
 import { createModeWatcher } from './terminal-modes';
 
@@ -41,17 +42,27 @@ export interface ExecIo {
   readonly writeOutput: (fd: 1 | 2, data: Uint8Array) => void;
   readonly connect?: ExecSessionOptions['connect'];
 
-  // how long a lost session is tried again, and the pause between tries
+  // how long a lost session is tried again, and the first pause between
+  // tries; each later pause doubles, up to REATTACH_MAX_DELAY_MS
   readonly reattachWindowMs?: number;
   readonly reattachDelayMs?: number;
+
+  // whether another client is attached to the session; it must not wake
+  // the imp
+  readonly isAttachedElsewhere?: (imp: string, session: string) => Promise<boolean>;
 }
 
-// Exit codes, as ssh and shells use them: the command's own code, 128 + n
-// for a signal, 127 when it could not start, 141 (128 + SIGPIPE) when our
-// output went away, and 255 when imp itself failed. A detach exits 0.
+// Exit codes as ssh and shells use them (the README has the table): 127
+// could not start, 141 our output went away, 254 another client took the
+// session over, 255 imp failed. A detach exits 0.
 const EXEC_FAILED_CODE = 127;
 const BROKEN_PIPE_CODE = 141;
+const TAKEN_OVER_CODE = 254;
 const IMP_FAILED_CODE = 255;
+
+// ctrl-c in a raw terminal, and the code SIGINT gives
+const CTRL_C = 0x03;
+const INTERRUPTED_CODE = 130;
 
 // the first one goes to the command; a second ends the session, so the CLI
 // still stops when the command ignores it or impd stopped answering
@@ -60,6 +71,10 @@ const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
 // impd restarts in seconds, and a wake takes less than one
 const REATTACH_WINDOW_MS = 60_000;
 const REATTACH_DELAY_MS = 1000;
+const REATTACH_MAX_DELAY_MS = 8000;
+
+// input typed while the session is away waits for it, up to this much
+const MAX_PENDING_INPUT = 64 * 1024;
 
 // before a replay: the terminal shows the session, not what was there
 const CLEAR_SCREEN = '\u001B[H\u001B[2J';
@@ -108,8 +123,14 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
     draining: false,
     stdinStarted: false,
 
+    // a session that never started has nothing to attach to again
+    started: false,
+
     // set while a lost session is being attached again
     reattachUntil: null as number | null,
+    reattachTries: 0,
+    pendingInput: [] as Uint8Array[],
+    pendingBytes: 0,
   };
 
   const writeNotice = (text: string): void => {
@@ -136,15 +157,19 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
       token: config.token,
       start,
       onStarted: (started) => {
-        // keys typed while the session was away go to the new socket
-        if (state.reattachUntil !== null && !state.draining) {
-          stdin.resume();
-        }
+        const wasAway = state.reattachUntil !== null;
 
+        state.started = true;
         state.reattachUntil = null;
+        state.reattachTries = 0;
 
         if (isRaw && !started.created && started.session !== null) {
           io.writeOutput(1, encoder.encode(CLEAR_SCREEN));
+        }
+
+        if (wasAway) {
+          writeNotice(`attached again to session ${started.session ?? ''}`);
+          sendPendingInput();
         }
 
         startStdin();
@@ -217,37 +242,73 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
   const sendStdin = (chunk: Uint8Array): void => {
     const key = isRaw && session !== null ? session.detachKey : null;
-    const at = key === null ? -1 : chunk.indexOf(key);
+    const found = key === null ? null : findDetachKey(chunk, key);
+    const before = found === null ? chunk : chunk.subarray(0, found.at);
 
-    if (at !== -1) {
-      if (at > 0) {
-        current.session.sendStdin(chunk.subarray(0, at));
-      }
-
-      handleDetachKey();
-
-      return;
+    if (state.reattachUntil !== null) {
+      holdInput(before);
+    } else if (before.byteLength > 0) {
+      sendInput(before);
     }
 
-    if (current.session.sendStdin(chunk) || state.draining) {
+    if (found !== null && !state.ended) {
+      handleDetachKey();
+    }
+  };
+
+  const sendInput = (data: Uint8Array): void => {
+    if (current.session.sendStdin(data) || state.draining) {
       return;
     }
 
     void waitAndResume();
   };
 
+  // while the session is away: ctrl-c gives up, anything else waits for it
+  const holdInput = (data: Uint8Array): void => {
+    if (isRaw && data.includes(CTRL_C)) {
+      stopSession(INTERRUPTED_CODE);
+
+      return;
+    }
+
+    if (state.pendingBytes + data.byteLength > MAX_PENDING_INPUT) {
+      return;
+    }
+
+    state.pendingInput.push(new Uint8Array(data));
+
+    state.pendingBytes += data.byteLength;
+  };
+
+  const sendPendingInput = (): void => {
+    const pending = state.pendingInput;
+
+    state.pendingInput = [];
+    state.pendingBytes = 0;
+
+    for (const data of pending) {
+      sendInput(data);
+    }
+  };
+
   const waitAndResume = async (): Promise<void> => {
+    const waiting = current.session;
+
     state.draining = true;
 
     stdin.pause();
 
-    await current.session.waitForDrain();
+    await waiting.waitForDrain();
+
+    // a reattach took over stdin; it reads on for the detach key
+    if (state.ended || current.session !== waiting || state.reattachUntil !== null) {
+      return;
+    }
 
     state.draining = false;
 
-    if (!state.ended) {
-      stdin.resume();
-    }
+    stdin.resume();
   };
 
   const sendStdinEof = (): void => {
@@ -312,20 +373,33 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
   }
 
   // whether the outcome leaves the session running, so the CLI may attach
-  // again: never after another client took it over
+  // again: never after another client took it over, or once the window is
+  // over
   const canReattach = (outcome: ExecOutcome): boolean => {
-    if (session === null) {
+    if (session === null || !state.started) {
       return false;
     }
 
-    if (state.reattachUntil !== null) {
-      return Date.now() < state.reattachUntil && outcome.kind !== 'failed';
+    if (state.reattachUntil !== null && Date.now() >= state.reattachUntil) {
+      return false;
     }
 
-    return (
-      (outcome.kind === 'detached' && outcome.reason === 'lost') ||
-      (outcome.kind === 'closed' && outcome.closeCode === EXEC_CLOSE_RESTARTING)
-    );
+    if (outcome.kind === 'detached') {
+      return outcome.reason === 'lost' || outcome.reason === 'slow';
+    }
+
+    return outcome.kind === 'closed' || outcome.kind === 'unreachable';
+  };
+
+  const isAttachedElsewhere = io.isAttachedElsewhere ?? createAttachedCheck(config);
+
+  // the pause before the next try: 1 s, 2 s, 4 s, then the cap
+  const readReattachDelay = (): number => {
+    const first = io.reattachDelayMs ?? REATTACH_DELAY_MS;
+
+    state.reattachTries += 1;
+
+    return Math.min(first * 2 ** (state.reattachTries - 1), REATTACH_MAX_DELAY_MS);
   };
 
   const waitForOutcome = async (): Promise<void> => {
@@ -352,17 +426,37 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
         return;
       }
 
+      const sessionName = session?.name ?? '';
+
       if (state.reattachUntil === null) {
         state.reattachUntil = Date.now() + (io.reattachWindowMs ?? REATTACH_WINDOW_MS);
 
-        stdin.pause();
+        // stdin reads on, for the detach key and ctrl-c
+        if (state.draining) {
+          state.draining = false;
 
-        writeNotice(`lost the connection to session ${session?.name ?? ''}; attaching again`);
+          stdin.resume();
+        }
+
+        writeNotice(`lost the connection to session ${sessionName}; attaching again`);
       }
 
-      await Bun.sleep(io.reattachDelayMs ?? REATTACH_DELAY_MS);
+      await Bun.sleep(readReattachDelay());
+
+      // a terminal that was away must not take the session from a newer one
+      const elsewhere = state.ended ? false : await isAttachedElsewhere(options.name, sessionName);
 
       if (state.ended) {
+        return;
+      }
+
+      if (elsewhere) {
+        stopSession(TAKEN_OVER_CODE);
+
+        console.error(
+          `imp: another client attached to ${formatSession(options.name, sessionName)}`,
+        );
+
         return;
       }
 
@@ -373,6 +467,22 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
   void waitForOutcome();
 
   return done.promise;
+}
+
+// asks impd's last view of the sessions, which never wakes the imp; when
+// impd cannot answer, the attach itself finds out
+function createAttachedCheck(
+  config: CliConfig,
+): (imp: string, session: string) => Promise<boolean> {
+  return async (imp, session) => {
+    try {
+      const sessions = await createImpClient(config).sessions.list({ name: imp });
+
+      return sessions.some((entry) => entry.name === session && entry.attached);
+    } catch {
+      return false;
+    }
+  };
 }
 
 function formatSession(imp: string, session: string): string {
@@ -417,7 +527,7 @@ function buildOutcomeResult(
     }
     case 'detached': {
       if (outcome.reason === 'taken_over') {
-        return { code: 0, message: `another client attached to ${session}` };
+        return { code: TAKEN_OVER_CODE, message: `another client attached to ${session}` };
       }
 
       const why =
