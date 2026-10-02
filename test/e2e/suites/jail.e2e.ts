@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { createImp, holdImp, waitForExec } from '../lib/imps';
-import { checkHealthReady, runDevScript, runInContainer } from '../lib/instance';
+import { checkHealthReady, readImpdLogSince, runDevScript, runInContainer } from '../lib/instance';
 import type { MemoryProof } from '../lib/memory-proof';
 import { checkMemoryProof, startMemoryProof } from '../lib/memory-proof';
 import { setupSuite } from '../lib/setup-suite';
@@ -112,10 +112,32 @@ async function waitForRam(): Promise<void> {
   });
 }
 
-async function checkNoJailMounts(): Promise<void> {
+async function checkNoJailMounts(id = ''): Promise<void> {
   const mounts = await readContainerFile('/proc/self/mounts');
 
-  expect(mounts).not.toContain(' /var/lib/imp/jail/');
+  expect(mounts).not.toContain(` /var/lib/imp/jail/${id}`);
+}
+
+// The imp's own jail: a boot template build, which the second cold boot of a
+// shape starts in the background, has its jail mounted while it runs.
+async function checkNoImpJailMounts(): Promise<void> {
+  const row = await requireImp(name);
+
+  await checkNoJailMounts(`firecracker/${row.id}/`);
+}
+
+// A cold boot from `since` on started a build, which impd logs the end of:
+// built, refused or failed. A restore of a template made earlier started none.
+async function waitForTemplateBuildEnd(since: Readonly<Date>): Promise<void> {
+  await waitFor('the boot template build to end', async () => {
+    const log = await readImpdLogSince(since);
+
+    if (log.includes(`${name}: restored boot template`)) {
+      return;
+    }
+
+    expect(log).toMatch(/impd: boot template [0-9a-f]{12} (?:built in|build refused|build failed)/);
+  });
 }
 
 async function checkNoOomKills(): Promise<void> {
@@ -174,7 +196,7 @@ test('a full guest sleeps and wakes under the limit', async () => {
   await runImp('sleep', name);
   await assertState(name, 'sleeping');
   await checkNoOomKills();
-  await checkNoJailMounts();
+  await checkNoImpJailMounts();
   await runImp('wake', name);
   await waitForExec(name);
   await checkMemoryProof(proof);
@@ -260,7 +282,7 @@ test('a VM over its memory limit is stopped, and says why', async () => {
 
   expect(stopped.error).toBe('its memory limit killed firecracker');
 
-  await checkNoJailMounts();
+  await checkNoImpJailMounts();
 });
 
 test('a jailed VM starts, stops and is removed cleanly', async () => {
@@ -269,10 +291,14 @@ test('a jailed VM starts, stops and is removed cleanly', async () => {
   await checkRunsJailed();
   await runImp('stop', name);
   await assertState(name, 'stopped');
-  await checkNoJailMounts();
+  await checkNoImpJailMounts();
 
   const row = await requireImp(name);
 
+  const since = new Date();
+
+  // the second cold boot of the shape since the last reboot: it starts a
+  // jailed boot template build in the background
   await runImp('start', name);
   await waitForExec(name);
 
@@ -285,5 +311,9 @@ test('a jailed VM starts, stops and is removed cleanly', async () => {
   expect(jail.exitCode).not.toBe(0);
   expect(cgroup.exitCode).not.toBe(0);
 
+  await checkNoJailMounts(`firecracker/${row.id}/`);
+
+  // once the build ends, it leaves no jail mounted either
+  await waitForTemplateBuildEnd(since);
   await checkNoJailMounts();
 });
