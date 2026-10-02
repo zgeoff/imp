@@ -68,6 +68,7 @@ imp fork box box-2                # a second copy to try something else in
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
+| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
 
 `--memory` takes MiB or a unit (`512m`, `2g`). Commands that print imps, images, checkpoints or
 `info` take `--json`. `scripts/imp` runs the CLI from the repo.
