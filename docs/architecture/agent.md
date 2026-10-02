@@ -142,12 +142,14 @@ A session keeps a program on a pty alive without a host connection
 and into the attached viewer's queue, and never waits for the viewer. The history keeps the last
 256–512 KiB of raw output. A VT parser (`charmbracelet/x/ansi`) reads the output that the history
 drops, so the history knows the terminal modes in effect where its kept output starts, and cuts it
-between escape sequences.
+between escape sequences. Apart from it, a raw ring keeps exactly the last 256 KiB, which a resume
+reads by offset ([output offsets](./protocol.md#output-offsets)). Each start of the process is a new
+generation, and the agent keeps the last one that ended under each name as `previous`.
 
-Each session holds up to 512 KiB of history and a 2 MiB queue for its viewer. Input waits in a queue
-of 4 STDIN frames before the pty, at most 4 MiB when the host sends frames of the 1 MiB maximum;
-typed input is a few bytes a frame. With the cap of 16 sessions, the worst case per imp is about 40
-MiB of output buffers and 64 MiB of input, before the programs' own memory.
+Each session holds up to 512 KiB of history, the 256 KiB ring and a 2 MiB queue for its viewer.
+Input waits in a queue of 4 STDIN frames before the pty, at most 4 MiB when the host sends frames of
+the 1 MiB maximum; typed input is a few bytes a frame. With the cap of 16 sessions, the worst case
+per imp is about 44 MiB of output buffers and 64 MiB of input, before the programs' own memory.
 
 The history sits behind a `Screen` interface. A terminal emulator that keeps the cell grid (such as
 `charmbracelet/x/vt`) could replace it, so that a replay shows the screen as it is instead of raw

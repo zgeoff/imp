@@ -107,10 +107,40 @@ With `session: 'main'`, `openConsole` and `openExec` start that session, or atta
 and the shell outlives the handle: `close()` detaches.
 `imp.openAttach('dev', 'main', { cols, rows })` attaches to a running session; its `stdout` starts
 with a replay of the recent output. `sessions.list` names them without waking the imp. `started`
-resolves with `{ pid, session, created }`. When impd ends the socket while the session runs on,
-`exit` rejects with `DETACHED`, and its `data.reason` says why: `taken_over` (another client
-attached; one is attached at a time), `slow` (the client fell too far behind) or `lost` (impd lost
-the guest, as when the imp slept; attach again).
+resolves with `{ pid, session, created, groupKill, output }`. When impd ends the socket while the
+session runs on, `exit` rejects with `DETACHED`, and its `data.reason` says why: `taken_over`
+(another client attached; one is attached at a time), `slow` (the client fell too far behind) or
+`lost` (impd lost the guest, as when the imp slept; attach again).
+
+### Resuming a session
+
+`started.output` places the data in the session's output. With `continuity: 'offsets'` it has the
+generation (`executionGeneration`, one run of the process), the `bootId`, `bufferStart` and `end`,
+and `offset`, the offset of the first data byte after `prelude` mode bytes; `{ continuity: 'none' }`
+means an imp whose agent predates offsets, or an older impd. `exit` resolves with `offset`, and
+`DETACHED` has `data.offset`: the offset after the last byte received. Keep the generation and that
+offset, and resume from them:
+
+```ts
+const tail = await imp.openAttach('dev', 'main', {
+  resumeFrom: { executionGeneration, offset },
+  wake: false,
+});
+
+const { output } = await tail.started;
+```
+
+`output.resume` says how the resume was met: `exact`; `gap`, whose bytes `[from, to)` are gone (a
+terminal should attach again without `resumeFrom`, since the data can start inside an escape
+sequence); or `generation_changed`, a new process, whose data starts at `firstOffset`. A resume can
+repeat bytes you have: drop those below your high-water mark. `output.coldBoots` lists the imp's
+last cold boots, newest first, with a `cause` (`start`, `wake_fallback`, `watchdog`, `restore`,
+`recovery`, `unknown`); the first one after your `bootId` ended your generation. `wake: false`
+rejects with `InvalidStateError` instead of booting or waking the imp.
+
+A disconnected client cannot recover bytes below `bufferStart`, any byte of a generation that a cold
+boot ended, or the output of an exec without `session`. Keep what you received if you need them.
+`system.info()` has `features.sessionOffsets` on an impd that carries offsets.
 
 With a tty, `sendSignal('SIGINT')` and `sendSignal('SIGQUIT')` send ^C and ^\ as keys, so they reach
 the foreground job; other signals, and every signal without a tty, go to the process. A write after
@@ -124,9 +154,13 @@ the command did not run to its exit, `exit` rejects with an `ExecError` whose `c
 in the table below, plus `EXEC_FAILED` when the command cannot start and `INNER_DOWN` when the imp's
 container is down) or one of `UNAUTHORIZED` (also for an exec ticket that expired or was used),
 `UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`, `DETACHED`, `BAD_MESSAGE`, `CLOSED`,
-`OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error data. An abort before the command
-starts, during the ticket call or the connect, rejects with the abort's reason instead, an
-`AbortError` by default; after the start it ends the session as `CLOSED`.
+`OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error data. Three codes reject as their
+own subclasses, with typed `data`: `NoSessionError` (`NO_SESSION`:
+`{ bootId, coldBoots, previous? }`, or no data from an agent without offsets), `InvalidStateError`
+(`INVALID_STATE`: `{ state, allowed, coldBoots? }`) and `InvalidResumeError` (`INVALID_RESUME`:
+`{ end, bufferStart }`, a resume past the end). An abort before the command starts, during the
+ticket call or the connect, rejects with the abort's reason instead, an `AbortError` by default;
+after the start it ends the session as `CLOSED`.
 
 ## Errors
 
@@ -136,7 +170,7 @@ A failed call throws an `ORPCError`. impd's errors carry a `code` and typed `dat
 | --------------------- | ---------------------------------------------------- | -------------------------------------- |
 | `NOT_FOUND`           | No imp, image, checkpoint or session has that name.  | `{ kind, name }`                       |
 | `CONFLICT`            | The name is taken.                                   | `{ kind, name }`                       |
-| `INVALID_STATE`       | The imp's state does not allow the call.             | `{ state, allowed }`                   |
+| `INVALID_STATE`       | The imp's state does not allow the call.             | `{ state, allowed, coldBoots? }`       |
 | `RAM_BUDGET_EXCEEDED` | The host has no room, even after sleeping idle imps. | `{ budgetMib, usedMib, requestedMib }` |
 | `SERVICE_UNAVAILABLE` | impd is stopping.                                    |                                        |
 | `FORBIDDEN`           | An exec ticket was used for another imp.             |                                        |
