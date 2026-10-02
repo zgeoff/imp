@@ -12,9 +12,10 @@ Every VM gets a balloon before `InstanceStart`:
 With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
 snapshot is smaller.
 
-To sleep an imp, impd takes the imp's lock and reads the RAM the VM owns now, for the next wake's
-reservation. Then it waits for a slot of a host-wide semaphore (2 sleeps at a time,
-[gotcha 8](#4-gotchas)) and:
+To sleep an imp, impd takes the imp's lock. If the guest has been up for less than
+`IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500), impd waits for the rest first
+([young guests](#young-guests)). It reads the RAM the VM owns now, for the next wake's reservation.
+Then it waits for a slot of a host-wide semaphore (2 sleeps at a time, [gotcha 8](#4-gotchas)) and:
 
 1. Pauses the VM (`PATCH /vm`).
 2. Writes a full snapshot to `vmstate.new` and `mem.new` (`PUT /snapshot/create`). If the pause or
@@ -43,6 +44,9 @@ not: it sleeps the least recently active imp, idle or not.
 Neither waits for an imp's lock. If the lock is taken, the sleep is skipped. The governor holds its
 admission lock while it sleeps, and a boot under the imp's lock may be waiting for admission, so
 waiting would deadlock. The type of the governor's sleep admits only a try-lock.
+
+A background sleep that waits for a young guest gives way when the imp turns busy meanwhile, such as
+a request that arrives during the wait: the imp stays awake and the sleep counts as skipped.
 
 ## Wake
 
@@ -367,20 +371,54 @@ agent does not use either: the host already knows when it woke the VM, and the a
 the correct time without the host. The clocks do not jump at resume, so a monotonic-against-realtime
 check sees nothing.
 
-### Open: slow wakes after back-to-back cycles
+### Young guests
 
-A wake normally takes about 80 ms. When an imp is slept again within about a second of a wake or an
-exec, the next wake takes 650–850 ms, and the delay grows with each back-to-back cycle. A snapshot
-taken at least 3 s after a wake restores fast again. Normal idle timeouts never hit it.
-[#33](https://github.com/zgeoff/imp/issues/33) tracks it.
+A host kernel before Linux 6.7 wakes a guest slowly when its snapshot was taken less than about a
+second after the VM started. The wake then takes 0.75–1.1 s, not about 0.1 s. Measured on WSL2 (host
+kernel 6.6.87), 1 GiB guest, 2 vCPUs, with the sleep right after `imp start`:
 
-What was measured during a slow wake:
+| Sleep after the cold boot                    | Wakes                      |
+| -------------------------------------------- | -------------------------- |
+| at once (guest uptime about 0.45 s)          | 6 of 6: 750–1076 ms        |
+| 0.3 s or more later                          | 10 of 10: 61–135 ms (impd) |
+| at once after a wake or an exec, older guest | 8 of 8: 75–92 ms           |
 
-- The agent accepts the vsock `CONNECT` at once but answers about 700 ms later.
-- Both vCPU threads are busy, mostly in kernel time, with only about 300 minor faults. Lazy page
-  loading is not the cause.
-- Disabling free page reporting does not help. Skipping the `resumed` clock set does not help.
+**Cause.** At a restore, Firecracker sets each vCPU's TSC to its saved value. KVM's legacy TSC code
+treats a TSC written within one second's worth of cycles of the vCPU's start as an attempt to keep
+vCPUs in sync, and keeps the start-time offset instead. So the restored TSC starts again near 0. The
+guest clocksource is `tsc`, and the guest clock does not go backwards: it stands still until the TSC
+passes the saved value. In that time the guest's timers do not expire, the deadline timer fires
+about 10,000 times per vCPU, and the agent does not answer. The wake takes as long as the guest's
+age at the snapshot.
 
-Working theory: the guest does about 0.7 s of kernel work after each resume (for example clock and
-timer catch-up, or deferred work queued while paused). A snapshot taken while that work still runs
-captures it, so the next resume repeats it and adds more.
+The evidence from one slow wake:
+
+- A guest `rdtsc` read 0.828 s before the sleep and 1.028 s 1.1 s after the wake. With the snapshot
+  at 2.7 s, the TSC went on from its value.
+- Guest `CLOCK_MONOTONIC` moved 0.2 s in 1.1 s of wall time. A `sleep 0.05` in the guest returned
+  after 0.8 s.
+- `LOC` in `/proc/interrupts` went from about 200 to 8,000–12,000 per vCPU, against about 100 in a
+  fast wake.
+- On the host, one vCPU thread ran without a break for 560–780 ms, in the guest, with no page faults
+  and under 2 ms of run delay. Page faults on the mem file and host CPU contention are ruled out.
+
+Linux 6.7 fixed this upstream ([bf328e22e472](https://git.kernel.org/torvalds/c/bf328e22e472), "KVM:
+x86: Don't sync user-written TSC against startup values"): the one-second rule now applies only
+after userspace has written a TSC once. 6.6.87 does not have it.
+
+**What impd does.** Before the pause, impd asks the agent for the guest's uptime (`ping`
+`uptime_ms`, `CLOCK_BOOTTIME`). Like the TSC, it leaves out time asleep. Below
+`IMP_SLEEP_MIN_GUEST_UPTIME_MS` (default 1500; the TSC also counts about 0.2 s before the kernel
+starts, so the margin is about 0.7 s) impd waits for the rest. That costs up to about 1.2 s, only
+for a sleep within 1.5 s of a cold boot, and on the sleep, not the wake. A woken guest is always
+older than that, so the wait never repeats. On a host kernel with the fix, `0` turns the wait off;
+impd does not read the kernel version, since backports make it unreliable. An agent that does not
+answer does not hold the sleep.
+
+`scripts/bench-wake.sh` measures it on any host: a cold boot, a sleep at once and a wake, 3 cycles,
+and a limit on the median wake. With the wait off on WSL2: median 793 ms. With the default: median
+142 ms, and each sleep waited about 1.05 s.
+
+The prototype saw slow wakes after back-to-back wake and sleep cycles and took them for work that
+built up across resumes. It was this effect: each cycle kept the guest young, and its uptime is what
+counts, not how soon the sleep follows a wake.
