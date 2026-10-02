@@ -144,6 +144,17 @@ export async function listImps(db: ImpDatabase): Promise<ImpRecord[]> {
   return rows.map((row) => toImpRecord(row));
 }
 
+// imps by state; a state no imp is in is absent
+export async function countImpsByState(db: ImpDatabase): Promise<Map<ImpState, number>> {
+  const rows = await db
+    .selectFrom('imps')
+    .select((eb) => ['state', eb.fn.countAll<number>().as('count')])
+    .groupBy('state')
+    .execute();
+
+  return new Map(rows.map((row) => [row.state, row.count]));
+}
+
 // Fields the change leaves out keep their value; null clears one.
 export async function updateImpState(
   db: ImpDatabase,

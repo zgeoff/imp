@@ -9,6 +9,12 @@
   },
   "dependencies": {
     "@imp/api": "workspace:*",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
+    "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
+    "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/sdk-metrics": "catalog:",
+    "@opentelemetry/sdk-trace-base": "catalog:",
     "@orpc/server": "catalog:",
     "@peculiar/x509": "catalog:",
     "acme-client": "catalog:",
