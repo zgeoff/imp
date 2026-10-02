@@ -87,7 +87,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       return false;
     }
 
-    if (imp.holdUntil !== null && imp.holdUntil.getTime() > Date.now()) {
+    if (imp.holdUntil !== null && imp.holdUntil.getTime() > context.now()) {
       return false;
     }
 
