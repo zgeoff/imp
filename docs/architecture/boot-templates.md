@@ -75,6 +75,27 @@ and checkpoint see a normal imp. If a step fails, impd kills the VM:
 - A disk that fails to clone, grow or download fails the create, as on a cold boot, and the template
   stays.
 
+## The jail
+
+With `IMP_JAILER=true` every template VM runs under the jailer, as an imp's does
+([the jailer](./daemon.md#the-jailer)):
+
+- **A build** runs as uid 899999, one below the imps' uids, in the jail and cgroup `tpl-build`,
+  whose `memory.max` caps it as an imp's does. Builds run one at a time, so they share the uid, and
+  each prepare first kills every process of it. The tap `imp-tpl` is the uid's. The build's work dir
+  is bound in; the kernel and the system drive are bound in read-only. The placeholder disk is a 1
+  MiB file of the uid's inside the chroot only, so no build writes the shared one. impd makes the
+  empty snapshot files for the VM to write, seals `run/` before `InstanceStart`, and once the VM and
+  every process of the uid are gone, it releases the jail's mounts and checks that each file is a
+  regular file with one name. Only then are the files root's, mode 0644, and renamed into place. A
+  restart's sweep of orphan jails kills and removes a build that impd's death cut short.
+- **A restore** runs as the imp's uid in its jail. The template's `vmstate` and `mem`, and the
+  system drive its snapshot names, are bound in read-only, file by file: a template evicted under a
+  live bind stays readable to that VM, and no jail can write or swap them. The placeholder is a file
+  of the imp's uid inside the chroot. The disk is cloned while the restore runs, so the prepare
+  skips it; impd checks that it is a regular file and gives it to the uid once it is ready, before
+  the `PATCH` that points `rootfs` at it. The seal comes after the load, before the resume.
+
 ## Limits
 
 A template costs RAM while it builds and disk for its mem file, up to the whole memory. So:

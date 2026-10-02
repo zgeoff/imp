@@ -9,11 +9,13 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  truncateSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import type { CommandResult } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths } from '../storage/data-layout';
+import type { FirecrackerPaths } from './firecracker-process';
 import { isProcessOfUid, stopProcessOfUid } from './process-owner';
 import { writeRegularFile } from './vm-files';
 
@@ -33,11 +35,40 @@ interface JailPlan {
 
   // files the VM only reads, such as the kernel and the system drive
   readonly readOnlyFiles: readonly string[];
+
+  // the template's placeholder disk on a restore (scratchFiles)
+  readonly scratchFiles?: readonly string[];
+
+  // a restore starts before its disk is cloned: setupDiskOwner later
+  readonly isDiskLate?: boolean;
 }
+
+// A template build's jail (docs/architecture/boot-templates.md#make): its
+// work dir bound in, run/ the VM's until the seal.
+interface BuildJailPlan {
+  readonly id: string;
+  readonly user: JailUser;
+  readonly workDir: string;
+  readonly paths: RunPaths;
+  readonly readOnlyFiles: readonly string[];
+  readonly scratchFiles: readonly string[];
+}
+
+// the sockets, the log and the pid file of one VM, in its run/
+export interface RunPaths extends FirecrackerPaths {
+  readonly runDir: string;
+}
+
+// a placeholder disk's size: what the template's snapshot recorded
+const SCRATCH_BYTES = 1024 * 1024;
 
 export interface Jails {
   // a clean chroot with its binds; the command that starts Firecracker in it
   readonly prepare: (plan: Readonly<JailPlan>) => Promise<readonly string[]>;
+  readonly prepareBuild: (plan: Readonly<BuildJailPlan>) => Promise<readonly string[]>;
+
+  // the disk of a restore, once cloned: a regular file, the jail uid's
+  readonly setupDiskOwner: (paths: ImpPaths, user: Readonly<JailUser>) => void;
 
   // unmounts the binds once the VM is gone; nothing to do is no error
   readonly release: (impId: string) => Promise<void>;
@@ -55,7 +86,18 @@ export interface Jails {
   // run/ back to impd before any guest code runs, the VM's sockets bound.
   // Anything else there proves a compromised VM: it throws, deletes nothing
   // while the VM runs, and the caller kills it; the next prepare sweeps.
-  readonly seal: (paths: ImpPaths, pid: number) => void;
+  readonly seal: (paths: RunPaths, pid: number) => void;
+}
+
+// what setupChroot builds: the jail's id, its binds and its VM's files
+interface ChrootPlan {
+  readonly id: string;
+  readonly user: JailUser;
+  readonly dirs: readonly string[];
+  readonly readOnlyFiles: readonly string[];
+  readonly scratchFiles: readonly string[];
+  readonly apiSocket: string;
+  readonly setupFiles: () => void;
 }
 
 // root in the container; the test's own uid in a unit test
@@ -175,47 +217,96 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
     await runMount(['mount', '-o', 'remount,bind,ro,nosuid,nodev', target]);
   };
 
+  // A file of the jail uid's own inside the chroot only, never on the host
+  // path: a placeholder disk the VM opens read-write.
+  const setupScratchFile = (target: string, user: Readonly<JailUser>): void => {
+    mkdirSync(dirname(target), { recursive: true });
+    closeSync(openSync(target, 'wx', 0o600));
+    truncateSync(target, SCRATCH_BYTES);
+    lchownSync(target, user.uid, user.gid);
+  };
+
+  // No process of the uid, no mount left, then a new chroot with its binds.
+  // `setupFiles` runs between: root works on the VM's files then.
+  const setupChroot = async (chroot: Readonly<ChrootPlan>): Promise<readonly string[]> => {
+    const root = findRoot(chroot.id);
+
+    await stopJailProcesses(chroot.id, chroot.user.uid);
+    await removeMounts(chroot.id);
+
+    // never delete under a mount: that would reach the imp's own files
+    if (listMountsUnder(readMounts(), root).length > 0) {
+      throw new Error(`jail ${chroot.id}: ${root} still has mounts`);
+    }
+
+    chroot.setupFiles();
+
+    // the last VM owned the chroot and may have left symlinks in it: a new
+    // one each time, so no mkdir or mount below follows them
+    rmSync(findJailDir(chroot.id), { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+
+    // a mount of its own, private, so no bind below leaks out or in
+    await runMount(['mount', '--bind', root, root]);
+    await runMount(['mount', '--make-private', root]);
+
+    for (const dir of chroot.dirs) {
+      await setupDirBind(dir, join(root, dir));
+    }
+
+    for (const file of chroot.readOnlyFiles) {
+      await setupReadOnlyBind(file, join(root, file));
+    }
+
+    for (const file of chroot.scratchFiles) {
+      if (chroot.dirs.some((dir) => file.startsWith(`${dir}/`))) {
+        throw new Error(`jail ${chroot.id}: ${file} is inside a bound directory`);
+      }
+
+      setupScratchFile(join(root, file), chroot.user);
+    }
+
+    await runMount(['mount', '--make-rprivate', root]);
+
+    return buildJailerCommand({
+      jailerBin: deps.jailerBin,
+      firecrackerBin: deps.firecrackerBin,
+      chrootBase: deps.chrootBase,
+      impId: chroot.id,
+      user: chroot.user,
+      apiSocket: chroot.apiSocket,
+    });
+  };
+
   return {
-    prepare: async (plan) => {
-      const root = findRoot(plan.impId);
-
-      await stopJailProcesses(plan.impId, plan.user.uid);
-      await removeMounts(plan.impId);
-
-      // never delete under a mount: that would reach the imp's own files
-      if (listMountsUnder(readMounts(), root).length > 0) {
-        throw new Error(`jail ${plan.impId}: ${root} still has mounts`);
-      }
-
-      setupOwnership(plan.paths, plan.user);
-
-      // the last VM owned the chroot and may have left symlinks in it: a new
-      // one each time, so no mkdir or mount below follows them
-      rmSync(findJailDir(plan.impId), { recursive: true, force: true });
-      mkdirSync(root, { recursive: true });
-
-      // a mount of its own, private, so no bind below leaks out or in
-      await runMount(['mount', '--bind', root, root]);
-      await runMount(['mount', '--make-private', root]);
-
-      for (const dir of listBoundDirs(plan.paths)) {
-        await setupDirBind(dir, join(root, dir));
-      }
-
-      for (const file of plan.readOnlyFiles) {
-        await setupReadOnlyBind(file, join(root, file));
-      }
-
-      await runMount(['mount', '--make-rprivate', root]);
-
-      return buildJailerCommand({
-        jailerBin: deps.jailerBin,
-        firecrackerBin: deps.firecrackerBin,
-        chrootBase: deps.chrootBase,
-        impId: plan.impId,
+    prepare: (plan) =>
+      setupChroot({
+        id: plan.impId,
         user: plan.user,
+        dirs: listBoundDirs(plan.paths),
+        readOnlyFiles: plan.readOnlyFiles,
+        scratchFiles: plan.scratchFiles ?? [],
         apiSocket: plan.paths.apiSocket,
-      });
+        setupFiles: () => {
+          setupOwnership(plan.paths, plan.user, plan.isDiskLate ?? false);
+        },
+      }),
+    prepareBuild: (plan) =>
+      setupChroot({
+        id: plan.id,
+        user: plan.user,
+        dirs: [plan.workDir],
+        readOnlyFiles: plan.readOnlyFiles,
+        scratchFiles: plan.scratchFiles,
+        apiSocket: plan.paths.apiSocket,
+        setupFiles: () => {
+          setupImpdRunDir(plan.paths);
+          lchownSync(plan.paths.runDir, plan.user.uid, plan.user.gid);
+        },
+      }),
+    setupDiskOwner: (paths, user) => {
+      requireRegularFile(paths.disk);
+      lchownSync(paths.disk, user.uid, user.gid);
     },
     release: removeMounts,
     sweepRunDir: async (paths) => {
@@ -253,7 +344,7 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
 
       if (planted.length > 0) {
         throw new Error(
-          `jail ${paths.impId}: the VM left ${planted.join(', ')} in run/; a VM that writes there is compromised`,
+          `${paths.runDir}: the VM left ${planted.join(', ')} there; a VM that writes there is compromised`,
         );
       }
 
@@ -318,23 +409,26 @@ function decodeMountPath(field: string): string {
 // What the VM may write: run/ until it is sealed, the disk, and the snapshot
 // files it loads. Directories stay impd's, so the VM can write into a file,
 // never replace one with a symlink or a FIFO that impd then opens as root.
-function setupOwnership(paths: Readonly<ImpPaths>, user: Readonly<JailUser>): void {
+function setupOwnership(
+  paths: Readonly<ImpPaths>,
+  user: Readonly<JailUser>,
+  isDiskLate: boolean,
+): void {
   // nothing the last VM left in run/ is there when the next one loads a snapshot
   setupImpdRunDir(paths);
   lchownSync(paths.runDir, user.uid, user.gid);
   setupImpdDir(paths.snapshotDir);
 
-  for (const file of [paths.disk, paths.vmstate, paths.memFile]) {
-    if (file !== paths.disk && !existsSync(file)) {
-      continue;
-    }
-
-    if (!lstatSync(file).isFile()) {
-      throw new Error(`${file} is not a regular file`);
+  for (const file of [paths.vmstate, paths.memFile]) {
+    if (existsSync(file)) {
+      requireRegularFile(file);
     }
   }
 
-  lchownSync(paths.disk, user.uid, user.gid);
+  if (!isDiskLate) {
+    requireRegularFile(paths.disk);
+    lchownSync(paths.disk, user.uid, user.gid);
+  }
 
   // the VM reads its snapshot, never writes it: impd's, readable by its group
   for (const file of [paths.vmstate, paths.memFile]) {
@@ -344,9 +438,15 @@ function setupOwnership(paths: Readonly<ImpPaths>, user: Readonly<JailUser>): vo
   }
 }
 
+function requireRegularFile(file: string): void {
+  if (!lstatSync(file).isFile()) {
+    throw new Error(`${file} is not a regular file`);
+  }
+}
+
 // run/ as impd's, with only the VM's sockets and impd's own files left in
 // it: only once nothing of the jail's uid runs, since the delete recurses
-function setupImpdRunDir(paths: Readonly<ImpPaths>): void {
+function setupImpdRunDir(paths: Readonly<RunPaths>): void {
   setupImpdDir(paths.runDir);
 
   for (const name of readdirSync(paths.runDir)) {
@@ -360,7 +460,7 @@ function setupImpdRunDir(paths: Readonly<ImpPaths>): void {
 
 // The VM's two sockets, and the log and the pid file impd made: regular
 // files of impd's with one name, not ones the VM made or linked to.
-function isSealedEntry(paths: Readonly<ImpPaths>, path: string): boolean {
+function isSealedEntry(paths: Readonly<RunPaths>, path: string): boolean {
   const entry = lstatSync(path);
 
   if (path === paths.apiSocket || path === paths.vsockSocket) {
@@ -380,6 +480,19 @@ function setupImpdDir(dir: string): void {
   setupRealDir(dir);
   lchownSync(dir, IMPD_USER.uid, IMPD_USER.gid);
   chmodSync(dir, 0o755);
+}
+
+// A template's file, once the build's uid is gone: the regular file it wrote,
+// with one name, then root's and readable by every jail that restores it.
+export function setupTemplateFile(file: string): void {
+  const entry = lstatSync(file);
+
+  if (!entry.isFile() || entry.nlink !== 1) {
+    throw new Error(`${file} is not a regular file with one name`);
+  }
+
+  lchownSync(file, IMPD_USER.uid, IMPD_USER.gid);
+  chmodSync(file, 0o644);
 }
 
 // a snapshot file the VM wrote or reads: impd's, readable by the jail's group

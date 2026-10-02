@@ -532,7 +532,7 @@ export function createVmRunner(jails: Jails): VmRunner {
 
       return { agentVersion: ping.version, firecrackerVersion, bootId: ping.boot_id };
     },
-    buildTemplateVm,
-    loadTemplateVm,
+    buildTemplateVm: (plan) => buildTemplateVm(plan, jails),
+    loadTemplateVm: (plan) => loadTemplateVm(plan, jails),
   };
 }

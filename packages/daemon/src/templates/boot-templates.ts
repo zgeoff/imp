@@ -21,6 +21,8 @@ import { readErrorMessage } from '../read-error-message';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { DiskBudget } from '../storage/disk-budget';
 import { BASE_BOOT_ARGS, VM_DEVICES } from '../vmm/configure-vm';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
+import type { JailUser } from '../vmm/jail';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 
 // The cmdline of every template: the agent parks for a claim, and nothing in
@@ -41,6 +43,9 @@ const TEMPLATE_ADDRESS: SlotAddress = {
   tailnetPort: 0,
 };
 
+// the jail and cgroup every build runs in, one at a time, with no CPU limit
+const BUILD_JAIL_ID = 'tpl-build';
+const BUILD_CPU = { limit: null, weight: 100 };
 const PLACEHOLDER_BYTES = 1024 * 1024;
 const PLACEHOLDER_NAME = 'placeholder.ext4';
 const MIB = 1024 * 1024;
@@ -73,6 +78,11 @@ interface TemplateFiles {
   readonly buildId: string;
   readonly vmstate: string;
   readonly memFile: string;
+
+  // what the snapshot reopens on a restore: the system drive it booted, and
+  // the placeholder it saw as its disk
+  readonly systemDrivePath: string;
+  readonly placeholderPath: string;
 }
 
 export interface BootTemplates {
@@ -111,6 +121,10 @@ export interface BootTemplateDeps {
   readonly bootReservePercent: number;
   readonly buildVm: (plan: Readonly<TemplateBuildPlan>) => Promise<void>;
   readonly taps: TapDevices;
+
+  // who a build runs as (TEMPLATE_BUILD_UID); null runs it unjailed
+  readonly jail: JailUser | null;
+  readonly cgroups: Pick<CpuCgroups, 'setup' | 'remove'>;
   readonly admission?: RamAdmission | undefined;
   readonly diskBudget?: Pick<DiskBudget, 'withRoom'> | undefined;
   readonly now?: () => number;
@@ -202,7 +216,13 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
       return null;
     }
 
-    return { key, buildId: meta.buildId, ...files };
+    return {
+      key,
+      buildId: meta.buildId,
+      ...files,
+      systemDrivePath: meta.systemDrivePath,
+      placeholderPath: placeholder,
+    };
   };
 
   const listTemplateKeys = (): string[] =>
@@ -275,31 +295,47 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
     const started = performance.now();
 
-    await deps.taps.setupTap(TEMPLATE_ADDRESS);
+    await deps.taps.setupTap(TEMPLATE_ADDRESS, deps.jail);
 
     const snapshotDir = join(work, 'snapshot');
 
-    await deps.buildVm({
-      firecrackerBin: deps.firecrackerBin,
-      kernelPath: deps.kernelPath,
-      systemDrivePath: deps.identity.systemDrivePath,
-      bootArgs: TEMPLATE_BOOT_ARGS,
-      vcpus: shape.vcpus,
-      memoryMib: shape.memoryMib,
-      paths: {
-        apiSocket: join(runDir, 'api.sock'),
-        vsockSocket: join(runDir, 'vsock.sock'),
-        logFile: join(runDir, 'firecracker.log'),
-        pidFile: join(runDir, 'pid'),
-      },
-      placeholderPath: placeholder,
-      tap: TEMPLATE_ADDRESS.tap,
-      guestMac: TEMPLATE_ADDRESS.guestMac,
-      minGuestUptimeMs: deps.minGuestUptimeMs,
-      snapshotDir,
-      vmstate: join(snapshotDir, 'vmstate'),
-      memFile: join(snapshotDir, 'mem'),
-    });
+    // memory.max caps a build too, and cgroup.kill stops all of it
+    const cgroup = deps.cgroups.setup(BUILD_JAIL_ID, BUILD_CPU, shape.memoryMib);
+
+    if (cgroup === null && deps.jail !== null) {
+      throw new Error('a jailed template build needs its own cgroup, and it has none');
+    }
+
+    try {
+      await deps.buildVm({
+        firecrackerBin: deps.firecrackerBin,
+        kernelPath: deps.kernelPath,
+        systemDrivePath: deps.identity.systemDrivePath,
+        bootArgs: TEMPLATE_BOOT_ARGS,
+        vcpus: shape.vcpus,
+        memoryMib: shape.memoryMib,
+        workDir: work,
+        paths: {
+          runDir,
+          apiSocket: join(runDir, 'api.sock'),
+          vsockSocket: join(runDir, 'vsock.sock'),
+          logFile: join(runDir, 'firecracker.log'),
+          pidFile: join(runDir, 'pid'),
+        },
+        placeholderPath: placeholder,
+        tap: TEMPLATE_ADDRESS.tap,
+        guestMac: TEMPLATE_ADDRESS.guestMac,
+        jailId: BUILD_JAIL_ID,
+        jail: deps.jail,
+        cgroup,
+        minGuestUptimeMs: deps.minGuestUptimeMs,
+        snapshotDir,
+        vmstate: join(snapshotDir, 'vmstate'),
+        memFile: join(snapshotDir, 'mem'),
+      });
+    } finally {
+      await deps.cgroups.remove(BUILD_JAIL_ID);
+    }
 
     // zero pages become holes, before any VM maps the file; never after
     await runCommand(['fallocate', '--dig-holes', join(snapshotDir, 'mem')]);
@@ -321,7 +357,14 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
     deps.log(`impd: boot template ${key.slice(0, 12)} built in ${String(ms)}ms`);
 
-    return { key, buildId, vmstate: join(root, key, 'vmstate'), memFile: join(root, key, 'mem') };
+    return {
+      key,
+      buildId,
+      vmstate: join(root, key, 'vmstate'),
+      memFile: join(root, key, 'mem'),
+      systemDrivePath: meta.systemDrivePath,
+      placeholderPath: placeholder,
+    };
   };
 
   // A build takes free RAM and holds disk room for its mem file, which can be

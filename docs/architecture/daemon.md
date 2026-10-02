@@ -264,6 +264,9 @@ the cgroup's setup fails, a jailed boot or wake fails with
 with its snapshot. On a host without cgroup delegation, set `IMP_JAILER=false`: VMs then run as
 root, unjailed and with no CPU or memory limits.
 
+Boot template VMs are jailed too: a build as uid 899999, a restore as the imp's own uid
+([the jail](./boot-templates.md#the-jail)).
+
 `IMP_JAILER=false` runs Firecracker as root, as before. An unjailed start empties `run/` first, as a
 prepare does, so what a jailed VM of the imp left there does not fail its seal. Either way impd
 adopts, stops and cleans up after VMs of the other kind, and a snapshot from either wakes under the

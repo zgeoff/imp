@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { TemplateBuildPlan } from '../vmm/template-vm';
 import { buildTemplateKey, createBootTemplates } from './boot-templates';
@@ -40,6 +42,10 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
   const failing = { isFailing: false };
   const clock = { ms: 1_000_000 };
 
+  // what the build asked of the taps and cgroups, and whether it gets one
+  const cgroupCalls: string[] = [];
+  const cgroupState = { isUp: true };
+
   const deps: BootTemplateDeps = {
     dataDir,
     identity: buildIdentity(dataDir, 'd1'),
@@ -61,7 +67,29 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
       writeFileSync(plan.vmstate, 'vmstate');
       writeFileSync(plan.memFile, 'mem');
     },
-    taps: { setupTap: () => Promise.resolve(), removeTap: () => Promise.resolve() },
+    taps: {
+      setupTap: (address, owner) => {
+        cgroupCalls.push(`tap ${address.tap} ${String(owner?.uid ?? 'root')}`);
+
+        return Promise.resolve();
+      },
+      removeTap: () => Promise.resolve(),
+    },
+    jail: null,
+    cgroups: {
+      setup: (impId, _cpu, memoryMib) => {
+        cgroupCalls.push(`setup ${impId} ${String(memoryMib)}`);
+
+        return cgroupState.isUp
+          ? { procsPath: `/cg/${impId}/cgroup.procs`, liftLimit: () => {}, applyLimit: () => {} }
+          : null;
+      },
+      remove: (impId) => {
+        cgroupCalls.push(`remove ${impId}`);
+
+        return Promise.resolve();
+      },
+    },
     admission: {
       admit: (request) => {
         admitted.push(
@@ -105,6 +133,8 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
     gate,
     failing,
     clock,
+    cgroupCalls,
+    cgroupState,
     store: createBootTemplates(deps),
     [Symbol.dispose]() {
       rmSync(dataDir, { recursive: true, force: true });
@@ -182,6 +212,46 @@ test('every build names the same placeholder disk, which the snapshot records', 
 
   expect(parked).toEqual([true, true]);
   expect(ctx.builds[0]?.bootArgs).not.toContain('imp.ip');
+});
+
+test('a jailed build runs as the build uid, owns its tap, and has a cgroup sized to it', async () => {
+  using ctx = setupStore({ jail: { uid: 899_999, gid: 899_999 } });
+
+  const files = await ctx.store.buildTemplate(SHAPE);
+
+  const [plan] = ctx.builds;
+
+  expect(plan).toMatchObject({
+    jailId: 'tpl-build',
+    jail: { uid: 899_999, gid: 899_999 },
+    cgroup: { procsPath: '/cg/tpl-build/cgroup.procs' },
+  });
+
+  expect(plan?.workDir).toContain('.build-');
+  expect(plan?.paths.runDir).toBe(join(plan?.workDir ?? '', 'run'));
+
+  expect(ctx.cgroupCalls).toEqual([
+    'tap imp-tpl 899999',
+    'setup tpl-build 512',
+    'remove tpl-build',
+  ]);
+
+  // a restore reopens the drive the snapshot booted, and the placeholder
+  expect(files).toMatchObject({
+    systemDrivePath: ctx.deps.identity.systemDrivePath,
+    placeholderPath: join(ctx.dataDir, 'templates', PLACEHOLDER),
+  });
+});
+
+test('a jailed build without its cgroup fails before any VM starts', async () => {
+  using ctx = setupStore({ jail: { uid: 899_999, gid: 899_999 } });
+
+  ctx.cgroupState.isUp = false;
+
+  const refusal = await readRejection(ctx.store.buildTemplate(SHAPE));
+
+  expect(readErrorMessage(refusal)).toContain('needs its own cgroup');
+  expect(ctx.builds).toEqual([]);
 });
 
 test('a failing build backs off, and its third failure turns the key off', async () => {
