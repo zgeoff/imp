@@ -1,0 +1,59 @@
+name: Nix
+
+# `nix flake check`: the NixOS module's eval check, and a NixOS VM that runs
+# it on a ZFS pool with a stand-in image (docs/guides/nixos.md#test-it).
+on:
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - deploy/**
+      - .github/workflows/nix.yml
+  push:
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - deploy/**
+      - .github/workflows/nix.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  flake-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # the VM check needs KVM; fail here first, and clearly
+      - name: Check KVM
+        run: scripts/check-kvm.sh
+
+      # the nix daemon builds as the nixbld users, who must open /dev/kvm
+      - name: Open KVM to the builders
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          extra_nix_config: |
+            system-features = kvm nixos-test benchmark big-parallel
+
+      - name: Format
+        run: git ls-files -z '*.nix' | xargs -0 nix fmt -- --check
+
+      - name: Flake check
+        run: nix flake check -L
