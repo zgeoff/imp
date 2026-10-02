@@ -1,4 +1,4 @@
-// Limits per public imp (docs/guides/https.md#limits). They count by imp,
+// Limits per public imp (docs/guides/https.md#how-it-works-1). They count by imp,
 // not by client: behind Docker's userland proxy every client can share one
 // source address, so a limit by address would lock everyone out at once.
 

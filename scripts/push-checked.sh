@@ -17,7 +17,7 @@ cd "$wt"
 export TMPDIR="$root/.cache/push-tmp"
 rm -rf "$TMPDIR" && mkdir -p "$TMPDIR"
 bun install --frozen-lockfile > /dev/null
-for gate in format:check lint lint:shell typecheck deadcode test; do
+for gate in format:check lint lint:shell lint:docs typecheck deadcode test; do
   if ! bun run "$gate" > "$root/.cache/push-$gate.log" 2>&1; then
     echo "push-checked: $gate failed; see .cache/push-$gate.log" >&2
     exit 1
