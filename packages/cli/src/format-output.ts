@@ -19,7 +19,7 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'IP', 'URL'],
+    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'IP', 'URL', 'NOTE'],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -29,8 +29,26 @@ export function formatImps(imps: readonly Imp[]): string {
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
       imp.ip,
       imp.url,
+      formatNote(imp),
     ]),
   );
+}
+
+// what an upgrade means for the imp (docs/guides/operations.md#upgrade)
+function formatNote(imp: Imp): string {
+  const notes: string[] = [];
+
+  if (imp.coldBootReason !== undefined) {
+    const when = imp.state === 'sleeping' ? 'boots cold' : 'booted cold';
+
+    notes.push(`${when}: ${imp.coldBootReason}`);
+  }
+
+  if (imp.outdated !== undefined) {
+    notes.push(`outdated: ${imp.outdated.join(', ')}`);
+  }
+
+  return notes.join('; ');
 }
 
 export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
