@@ -206,7 +206,9 @@ On XFS that is about 170 awake imps at the 317 MiB that `STATUS.md` measured for
 MiB, or 26 at 2 GiB each fully used. Sleeping imps cost disk, not RAM.
 
 The script writes the budget when the env file holds the template's `16384` or nothing. Any other
-value is yours and stays.
+value is yours and stays. On a host too small for the formula, where the budget comes out below 512
+MiB, the script refuses the run, prints the RAM and the formula, and asks you to set
+`IMP_RAM_BUDGET_MIB` in `/etc/imp/imp-host.env` yourself.
 
 ### The Tailscale key
 
