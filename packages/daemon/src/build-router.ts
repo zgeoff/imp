@@ -65,7 +65,7 @@ export interface RouterDeps {
   readonly checkpoints: CheckpointService;
   readonly templates: TemplateService;
   readonly broker: Broker;
-  readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy'>;
+  readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy' | 'isEnforced'>;
   readonly networks: NetworkService;
 
   // null when no repository is set
@@ -666,14 +666,16 @@ const SYSTEM_FEATURES = { sessionOffsets: true, leases: true } as const;
 // the awake imps were given
 // (docs/architecture/sleep-and-wake.md#the-ram-governor).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
-  const [imps, usage, tailscale, storage] = await Promise.all([
+  const [imps, usage, tailscale, storage, defaultImage] = await Promise.all([
     listImps(deps.db),
     deps.governor.readUsage(),
     deps.readTailscale(),
     deps.diskBudget.readStatus(),
+    deps.images.findDefaultImage(),
   ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
+  const sleeping = imps.filter((imp) => imp.state === 'sleeping');
 
   return {
     version: packageJson.version,
@@ -681,6 +683,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     ramUsedMib: usage.usedMib,
     ramReservedMib: usage.reservedMib,
     ramCommittedMib: running.reduce((sum, imp) => sum + imp.memoryMib, 0),
+    ramSleepingMib: sleeping.reduce((sum, imp) => sum + imp.memoryMib, 0),
     awakeCount: running.length,
     impCount: imps.length,
     sessionCount: imps.reduce((sum, imp) => sum + (deps.imps.countSessions(imp) ?? 0), 0),
@@ -701,6 +704,8 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       names: deps.readTailnetNames?.() ?? null,
     },
     cpu: deps.imps.readCpuHost(),
+    defaults: { memoryMib: deps.config.defaultMemoryMib, image: defaultImage?.name ?? null },
+    egress: { isEnforced: deps.egress.isEnforced() },
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
     features: SYSTEM_FEATURES,
   };

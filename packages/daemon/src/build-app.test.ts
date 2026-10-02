@@ -27,6 +27,7 @@ test('it serves system.info from config and the database', async () => {
     ramUsedMib: 0,
     ramReservedMib: 0,
     ramCommittedMib: 0,
+    ramSleepingMib: 0,
     awakeCount: 0,
     impCount: 0,
     sessionCount: 0,
@@ -35,6 +36,8 @@ test('it serves system.info from config and the database', async () => {
     ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
     cpu: { hostCpus: 8, limitsEnforced: false },
+    defaults: { memoryMib: 2048, image: null },
+    egress: { isEnforced: true },
     public: null,
     features: { sessionOffsets: true, leases: true },
   });
@@ -307,6 +310,16 @@ test('it sleeps, wakes and holds an imp', async () => {
   const asleep = await ctx.client.imps.sleep({ name: 'dev' });
 
   expect(asleep.state).toBe('sleeping');
+
+  // placement reads what the sleepers take back on a wake, and the default
+  const sleepingInfo = await ctx.client.system.info();
+
+  expect(sleepingInfo).toMatchObject({
+    ramSleepingMib: 2048,
+    ramCommittedMib: 0,
+    defaults: { memoryMib: 2048, image: 'ubuntu' },
+  });
+
   expect(asleep.sleptAt).toBeInstanceOf(Date);
   expect(ctx.fake.alive.size).toBe(0);
 

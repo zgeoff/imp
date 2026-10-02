@@ -264,9 +264,13 @@ test('without nft, box and none are refused, and so is a boot of such an imp', a
   await ctx.imps.createImp({ name: 'shut', policy: { mode: 'none', allow: [] } });
   await ctx.imps.stopImp('shut');
 
+  expect(ctx.egress.isEnforced()).toBeTrue();
+
   state.broken = true;
 
   await ctx.egress.start();
+
+  expect(ctx.egress.isEnforced()).toBeFalse();
 
   const refused = await readRejection(
     ctx.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: [] } }),

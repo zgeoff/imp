@@ -49,6 +49,10 @@ export const SystemInfoSchema = z.object({
 
   // the memory awake imps were given; the most they can grow to
   ramCommittedMib: z.int().nonnegative(),
+
+  // the memory sleeping imps were given, which their wakes take back;
+  // optional for an impd from before it
+  ramSleepingMib: z.int().nonnegative().optional(),
   awakeCount: z.int().nonnegative(),
   impCount: z.int().nonnegative(),
 
@@ -94,6 +98,15 @@ export const SystemInfoSchema = z.object({
   // the host's cores, the most a CPU limit may be; whether limits hold
   // (false outside a private cgroup v2 namespace: they are kept, not applied)
   cpu: z.object({ hostCpus: z.int().positive(), limitsEnforced: z.boolean() }).optional(),
+
+  // what a create gets when it names no memory or image: image is the
+  // image impd would pick now, null when it has none. Optional for an impd
+  // from before it.
+  defaults: z.object({ memoryMib: z.int().positive(), image: z.string().nullable() }).optional(),
+
+  // whether nft enforces the box and none egress policies; an impd that
+  // cannot refuses them. Optional for an impd from before it.
+  egress: z.object({ isEnforced: z.boolean() }).optional(),
 
   // public imps (docs/guides/https.md#public-imps): the IP their records
   // point at, and how many there are; null without IMP_PUBLIC_IP. Optional
