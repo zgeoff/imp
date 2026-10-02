@@ -161,9 +161,11 @@ Known limits:
 A guest on a tap could send router advertisements or redirects, and the host container, which
 forwards, could take one as its route out. Nothing a guest sends changes the container's routes:
 
-- `setup-net.sh` sets `accept_ra=2` on the uplink only, so it keeps its own default route with
-  forwarding on. The defaults get `accept_ra=0` and `accept_redirects=0`, and impd sets both on each
-  tap before it comes up.
+- `setup-net.sh` sets `accept_ra=2` on the uplink only, so it keeps a default route learned from
+  adverts with forwarding on. That one is best effort: Docker's default route is static. The
+  defaults get `accept_ra=0` and `accept_redirects=0`, and impd sets both on each tap before it
+  comes up. setup-net and impd write a key only when it differs, so values from
+  `docker run --sysctl` and a read-only `/proc/sys` work.
 - `ip6tables INPUT` accepts only router solicitations and neighbour solicitations and advertisements
   from the taps, with a hop limit of 255. Everything else is dropped.
 

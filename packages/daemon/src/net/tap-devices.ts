@@ -29,14 +29,23 @@ export function createTapDevices(run: RunCommand = runCommand): TapDevices {
     }
   };
 
-  // a kernel with IPv6 disabled has no keys for it; the tap then has no
-  // IPv6 to guard
+  // A kernel with IPv6 disabled has no keys for it; the tap then has no
+  // IPv6 to guard. A key that already holds its value (a tap takes the
+  // container's defaults) is not written, so a read-only /proc/sys works.
   const runSysctls = async (tap: string, values: Readonly<Record<string, string>>) => {
     for (const [key, value] of Object.entries(values)) {
-      const result = await run(['sysctl', '-qw', `net.ipv6.conf.${tap}.${key}=${value}`]);
+      const name = `net.ipv6.conf.${tap}.${key}`;
+
+      const current = await run(['sysctl', '-n', name]);
+
+      if (current.exitCode === 0 && current.stdout.trim() === value) {
+        continue;
+      }
+
+      const result = await run(['sysctl', '-qw', `${name}=${value}`]);
 
       if (result.exitCode !== 0 && !result.stderr.includes('cannot stat')) {
-        throw new Error(`sysctl net.ipv6.conf.${tap}.${key}: ${result.stderr.trim()}`);
+        throw new Error(`sysctl ${name}: ${result.stderr.trim()}`);
       }
     }
   };

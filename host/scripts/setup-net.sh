@@ -50,13 +50,20 @@ rule6() {
 out6=
 if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
   out6=$(ip -6 route show default | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+  # A key that holds its value already (docker run --sysctl) is not
+  # written, so a read-only /proc/sys works.
+  set6() {
+    [ "$(sysctl -n "$1")" = "$2" ] || sysctl -qw "$1=$2"
+  }
   # Forwarding stops every interface taking router advertisements, unless
-  # accept_ra=2: the uplink keeps its own. Taps take none, and no redirects.
-  if [ -n "$out6" ]; then
-    sysctl -qw "net.ipv6.conf.$out6.accept_ra=2"
+  # accept_ra=2: the uplink keeps its own. Docker's default route is static,
+  # so failing that is only a warning. Taps take none, and no redirects.
+  if [ -n "$out6" ] && ! set6 "net.ipv6.conf.$out6.accept_ra" 2 2>/dev/null; then
+    echo "setup-net: cannot set accept_ra=2 on $out6; a route it learns from adverts will lapse" >&2
   fi
-  sysctl -qw net.ipv6.conf.default.accept_ra=0 net.ipv6.conf.default.accept_redirects=0
-  sysctl -qw net.ipv6.conf.all.forwarding=1
+  set6 net.ipv6.conf.default.accept_ra 0
+  set6 net.ipv6.conf.default.accept_redirects 0
+  set6 net.ipv6.conf.all.forwarding 1
 
   # Router and neighbour solicitations and neighbour adverts, as only a
   # neighbour sends them (hop limit 255); never adverts or redirects.
