@@ -439,8 +439,9 @@ by content and no exactly-once promise.
   the `imp_cold_boots` table. A client finds the first boot after its own `bootId`, so a later boot
   (an attach that started a stopped imp) never hides the cause that ended its generation. If a
   client's own `bootId` is not in `coldBoots`, its generation ended at or before the oldest boot
-  listed, and impd does not know the cause. That happens after more than 4 cold boots, and after a
-  move: the rows stay on the old host, and the first boot on the new one records `start`.
+  listed, and impd does not know the cause. That happens after more than 4 cold boots. A
+  [move](./moves.md), cold or warm, carries the rows to the new host, where the first boot after a
+  cold move records `start`.
 - `previous`: per session name, the agent keeps the last generation that ended and left the name in
   this boot, as `{ executionGeneration, end, exitCode }` (at most 16 names). The agent writes it
   once the process has ended, not at a kill, so `end` and `exitCode` are final. A new generation

@@ -468,3 +468,22 @@ test('a warm-moved imp whose memory cannot load here boots cold with the cause w
 
   expect(boots.map((boot) => boot.cause)).toEqual(['wake_fallback', 'start']);
 });
+
+test('a carried boot whose time is ahead of the target is clamped to now', async () => {
+  await using ctx = await setupWarmTest();
+
+  const [boot] = await listColdBoots(ctx.source.db, ctx.impId);
+
+  await ctx.source.db
+    .updateTable('imp_cold_boots')
+    .set({ at: ctx.target.now() + 60 * 60 * 1000 })
+    .where('boot_id', '=', boot?.bootId ?? '')
+    .execute();
+
+  await ctx.runMove();
+
+  const [carried] = await listColdBoots(ctx.target.db, ctx.impId);
+
+  expect(carried?.bootId).toBe(boot?.bootId ?? '');
+  expect(Date.parse(carried?.at ?? '')).toBeLessThanOrEqual(ctx.target.now());
+});

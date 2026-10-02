@@ -1,4 +1,4 @@
-import { ColdBootSchema, ImageSourceSchema, WarmMoveSchema } from '@imp/api';
+import { ColdBootCauseSchema, ImageSourceSchema, WarmMoveSchema } from '@imp/api';
 import * as z from 'zod';
 import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
@@ -15,6 +15,11 @@ const CheckpointSchema = z
     createdAt: z.coerce.date(),
     diskBytes: z.int().positive(),
   })
+  .readonly();
+
+// a boot as the source kept it: the guest's boot_id is the kernel's UUID
+const MovedBootSchema = z
+  .object({ bootId: z.uuid(), cause: ColdBootCauseSchema, at: z.iso.datetime() })
   .readonly();
 
 const ImpSchema = z
@@ -39,10 +44,10 @@ const ImpSchema = z
     // left out by an older source
     isDiskGrowPending: z.boolean().default(false),
 
-    // its last cold boots, newest first: a session that outlives a warm
-    // move still names the boots before it, and the wake on the target
-    // finds its own boot among them; left out by an older source
-    coldBoots: z.array(ColdBootSchema).readonly().default([]),
+    // Its last cold boots, newest first, cold move or warm: a client from
+    // before the move finds its own boot among them. A warm move's wake on
+    // the target finds the boot it slept in. Left out by an older source.
+    coldBoots: z.array(MovedBootSchema).max(4).readonly().default([]),
   })
   .readonly();
 

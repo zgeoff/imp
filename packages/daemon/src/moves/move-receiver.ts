@@ -606,7 +606,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         });
 
         // the staged imp's own rows: they go with it if the stream fails
-        await writeMovedBoots(deps.db, header.imp.id, header.imp.coldBoots);
+        await writeMovedBoots(deps.db, header.imp.id, header.imp.coldBoots, deps.now());
 
         if (header.warm !== null) {
           await writeWarmFiles(header.imp.id, header.warm, reader, count, temp, (file) => {

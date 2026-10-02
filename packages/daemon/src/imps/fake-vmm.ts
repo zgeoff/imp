@@ -46,6 +46,11 @@ interface Hold {
   readonly release: () => void;
 }
 
+// a boot_id as the kernel writes one, a UUID, here made from the VM's pid
+export function buildFakeBootId(pid: number): string {
+  return `00000000-0000-4000-8000-${String(pid).padStart(12, '0')}`;
+}
+
 // One fake host for every impd the test starts. Firecrackers outlive impd, so
 // `alive` is shared; each impd gets its own runner, and a runner whose impd
 // was replaced never settles a call again, like a process that is gone.
@@ -193,7 +198,7 @@ export function buildFakeVmm() {
           const started = await startFakeVm('boot', plan.paths);
 
           // each cold boot is a new guest kernel, with its own boot_id
-          const bootId = guest.hasBootId ? `boot-${String(started.pid)}` : undefined;
+          const bootId = guest.hasBootId ? buildFakeBootId(started.pid) : undefined;
           const vm = { ...started, bootId };
 
           if (bootId !== undefined) {
