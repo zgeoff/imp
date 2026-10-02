@@ -15,6 +15,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'scale',
     'restart',
     'tailscale',
+    'sessions',
   ]);
 });
 

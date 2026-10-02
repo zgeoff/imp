@@ -22,6 +22,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'scale', prefix: 'e2e-scale-', images: ['e2e-tiny'] },
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
   { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
+  { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
