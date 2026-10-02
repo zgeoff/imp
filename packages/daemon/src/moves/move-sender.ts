@@ -7,6 +7,7 @@ import { listCheckpoints } from '../db/checkpoints';
 import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { listNetworkMembers } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
@@ -768,6 +769,17 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     if (tapMac !== null && tapMac !== address.hostMac) {
       mismatches.push(`its tap ${address.tap} has a MAC from before slot MACs (${tapMac})`);
+    }
+
+    // the guest holds its peers' addresses, which are other imps' on the target
+    const members = await listNetworkMembers(deps.db);
+
+    const networks = members
+      .filter((member) => member.impId === imp.id)
+      .map((member) => member.network);
+
+    if (networks.length > 0) {
+      mismatches.push(`it is on private networks (${networks.join(', ')}); imp net leave first`);
     }
 
     if (mismatches.length > 0) {
