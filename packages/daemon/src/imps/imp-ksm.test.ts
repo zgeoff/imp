@@ -13,10 +13,15 @@ interface KsmTestOptions {
 
 // impd with fake VMs whose unshared size is 400 MiB and whose Pss is 300
 async function setupKsmTest(options: KsmTestOptions = {}) {
+  const mergeable = options.mergeable === undefined ? true : options.mergeable;
+
   const harness = await setupImpTest({
     env: { ...options.env },
     readUnsharedRamMib: () => 400,
-    checkGuestMerge: () => options.mergeable ?? true,
+    checkGuestMerge: () => Promise.resolve(mergeable),
+
+    // what KSM saves in each VM; the host's figure counts other processes too
+    readKsmProfitMib: () => Promise.resolve(60),
     readKsmHostStats: () => HOST_STATS,
   });
 
@@ -89,9 +94,20 @@ test('imp info shows the saving, the headroom and the imps KSM cannot merge', as
     sharedMib: 120,
     profitMib: 100,
     zeroMib: 4,
-    headroomMib: 50,
+    headroomMib: 30,
     unmergeable: 1,
   });
 
   expect(ctx.harness.logs.some((line) => line.includes('KSM cannot merge'))).toBe(true);
+});
+
+test('a merge flag impd cannot read is logged, not counted as lost', async () => {
+  await using ctx = await setupKsmTest({ env: { IMP_KSM: '1' }, mergeable: null });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const info = await ctx.client.system.info();
+
+  expect(info.ksm?.unmergeable).toBe(0);
+  expect(ctx.harness.logs.some((line) => line.includes('cannot read whether KSM'))).toBe(true);
 });

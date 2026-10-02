@@ -2,7 +2,13 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkKsmHost, checkKsmKernel, checkMergeableMappings, readKsmHostStats } from './ksm';
+import {
+  checkKsmHost,
+  checkKsmKernel,
+  checkMergeableMappings,
+  parseKsmStat,
+  readKsmHostStats,
+} from './ksm';
 import { countUnsharedMib, parseSmapsRollup } from './vm-stats';
 
 test('IMP_KSM needs Linux 6.10 or later', () => {
@@ -84,4 +90,21 @@ test('it reads the host counters from the KSM sysfs directory', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('it reads ksm_stat, with the merge flags that 6.12 adds', () => {
+  const stat = parseKsmStat(
+    [
+      'ksm_rmap_items 5120',
+      'ksm_zero_pages 12',
+      'ksm_merging_pages 4096',
+      'ksm_process_profit 16252928',
+      'ksm_merge_any: yes',
+      'ksm_mergeable: yes',
+    ].join('\n'),
+  );
+
+  expect(stat.get('ksm_process_profit')).toBe('16252928');
+  expect(stat.get('ksm_merge_any')).toBe('yes');
+  expect(parseKsmStat('ksm_rmap_items 0\n').has('ksm_merge_any')).toBe(false);
 });

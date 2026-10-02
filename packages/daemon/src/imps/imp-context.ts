@@ -84,7 +84,8 @@ export interface ImpServiceDeps {
   // with IMP_KSM: the RAM a sleep records for the wake reserve, and whether
   // KSM may merge a VM's guest memory (null: unknown)
   readonly readUnsharedRamMib?: (pid: number, apiSocket: string) => number | null;
-  readonly checkGuestMerge?: (pid: number) => boolean | null;
+  readonly checkGuestMerge?: (pid: number) => Promise<boolean | null>;
+  readonly readKsmProfitMib?: (pid: number) => Promise<number | null>;
 
   // the host's live tailnet name, null when tailscaled does not answer; the
   // configured name can be taken by an older node (`imp-1`)
@@ -147,7 +148,7 @@ export interface ImpContext {
   // what a sleep records as the imp's RAM: its Pss, or with IMP_KSM its
   // unshared size, since a wake splits what KSM merged
   readonly readSleepRamMib: (pid: number, apiSocket: string) => number | null;
-  readonly checkGuestMerge: (pid: number) => boolean | null;
+  readonly checkGuestMerge: (pid: number) => Promise<boolean | null>;
 
   readonly mergeFlags: MergeFlags;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;

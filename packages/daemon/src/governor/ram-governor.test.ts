@@ -433,7 +433,7 @@ test('the KSM headroom counts against the budget, so a merged page that splits s
 
     // two guests whose Pss KSM halved: 300 MiB each, 300 MiB merged away
     readRamMib: () => 300,
-    readHeadroomMib: () => headroom.mib,
+    readHeadroomMib: () => Promise.resolve(headroom.mib),
     isBusy: () => false,
     trySleepImp: buildFakeSleep((id) => {
       slept.push(id);

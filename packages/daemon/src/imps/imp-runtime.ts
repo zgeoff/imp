@@ -481,7 +481,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
                 context.cgroups.adopt(imp.id, imp.pid, imp.cpu, imp.memoryMib);
 
                 startCounting(context, imp, imp.pid);
-                checkMergeFlag(context, imp, imp.pid);
+
+                await checkMergeFlag(context, imp, imp.pid);
               }
 
               if (ready) {

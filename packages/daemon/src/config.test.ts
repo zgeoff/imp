@@ -326,6 +326,16 @@ test('IMP_KSM starts Firecracker through ksm-exec and keeps all of the saving fr
   });
 
   expect(custom.ksm).toEqual({ execBin: '/usr/local/bin/ksm-exec', headroomPercent: 0 });
-  expect(() => loadConfig({ IMP_KSM: '1', IMP_KSM_HEADROOM_PERCENT: '101' })).toThrow();
+
+  expect(() => loadConfig({ IMP_KSM: '1', IMP_KSM_HEADROOM_PERCENT: '101' })).toThrow(
+    'IMP_KSM_HEADROOM_PERCENT 101',
+  );
+
   expect(() => loadConfig({ IMP_KSM: 'yes' })).toThrow();
+});
+
+test('IMP_KSM=0 is off, and then the headroom setting is not read', () => {
+  const config = loadConfig({ IMP_KSM: '0', IMP_KSM_HEADROOM_PERCENT: 'lots' });
+
+  expect(config.ksm).toBeNull();
 });

@@ -107,9 +107,10 @@ export interface RamGovernorDeps {
   readonly listAwake: () => Promise<AwakeImp[]>;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
 
-  // RAM to keep free besides the budget's use: with IMP_KSM, a share of what
-  // KSM saves, since a guest's writes split merged pages faster than a tick
-  readonly readHeadroomMib?: () => number;
+  // RAM to keep free besides the budget's use, given the awake VMs' pids: with
+  // IMP_KSM, a share of what KSM saves in them, since writes split merged
+  // pages faster than a tick
+  readonly readHeadroomMib?: (pids: readonly number[]) => Promise<number>;
 
   // true while the imp's lifecycle lock is taken or it has open exec sessions
   // or proxied requests: never a victim
@@ -211,7 +212,9 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       }
     }
 
-    const headroomMib = deps.readHeadroomMib?.() ?? 0;
+    const headroom = deps.readHeadroomMib?.(awake.map((imp) => imp.pid)) ?? Promise.resolve(0);
+
+    const headroomMib = await headroom;
 
     effectiveMib += headroomMib;
 

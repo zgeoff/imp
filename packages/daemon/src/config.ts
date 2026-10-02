@@ -23,6 +23,7 @@ import type { WatchdogAction } from './watchdog/agent-watchdog';
 const PortSchema = z.coerce.number().pipe(z.int().min(1).max(65_535));
 const CountSchema = z.coerce.number().pipe(z.int().positive());
 const DnsServersSchema = z.array(z.ipv4()).min(1);
+const PercentSchema = z.coerce.number().pipe(z.int().min(0).max(100));
 
 const EnvSchema = z.object({
   IMP_DATA_DIR: z.string().default('/var/lib/imp'),
@@ -55,9 +56,11 @@ const EnvSchema = z.object({
   IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
   IMP_DISK_RESERVE_GIB: CountSchema.optional(),
   IMP_BUILD_CONTEXT_MAX_MIB: CountSchema.default(1024),
-  IMP_KSM: z.literal('1').optional(),
+  IMP_KSM: z.enum(['0', '1']).default('0'),
   IMP_KSM_EXEC: z.string().default('ksm-exec'),
-  IMP_KSM_HEADROOM_PERCENT: z.coerce.number().pipe(z.int().min(0).max(100)).default(100),
+
+  // read only with IMP_KSM=1
+  IMP_KSM_HEADROOM_PERCENT: z.string().default('100'),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
   IMP_SUBNET6: z.string().default('auto'),
@@ -349,10 +352,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
     jailerBin: parsed.IMP_JAILER === 'true' ? parsed.IMP_JAILER_BIN : null,
     jailDir: join(parsed.IMP_DATA_DIR, 'jail'),
-    ksm:
-      parsed.IMP_KSM === undefined
-        ? null
-        : { execBin: parsed.IMP_KSM_EXEC, headroomPercent: parsed.IMP_KSM_HEADROOM_PERCENT },
+    ksm: parseKsmConfig(parsed),
     kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
     kernelSource: parsed.IMP_KERNEL ?? null,
     systemDriveSource:
@@ -402,6 +402,26 @@ function checkPublicPorts(
       );
     }
   }
+}
+
+function parseKsmConfig(
+  parsed: Readonly<
+    Pick<z.infer<typeof EnvSchema>, 'IMP_KSM' | 'IMP_KSM_EXEC' | 'IMP_KSM_HEADROOM_PERCENT'>
+  >,
+): Config['ksm'] {
+  if (parsed.IMP_KSM === '0') {
+    return null;
+  }
+
+  const headroom = PercentSchema.safeParse(parsed.IMP_KSM_HEADROOM_PERCENT);
+
+  if (!headroom.success) {
+    throw new Error(
+      `IMP_KSM_HEADROOM_PERCENT ${parsed.IMP_KSM_HEADROOM_PERCENT} is not a whole number from 0 to 100`,
+    );
+  }
+
+  return { execBin: parsed.IMP_KSM_EXEC, headroomPercent: headroom.data };
 }
 
 // IMP_TAILNET_IDENTITIES is a JSON array of rules, such as
