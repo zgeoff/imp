@@ -5,6 +5,7 @@ import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
@@ -99,7 +100,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // no background sleep slips in between the wake and the open.
   const openStream = async (
     name: string,
-    open: (paths: ImpPaths) => Promise<ExecStream>,
+    open: (paths: ImpPaths, imp: ImpRecord) => Promise<ExecStream>,
   ): Promise<ExecStream> => {
     const opened = { release: () => {} };
 
@@ -112,7 +113,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
       await updateImpActivity(context.db, imp.id, new Date());
 
-      const stream = await open(context.findPaths(imp.id));
+      const stream = await open(context.findPaths(imp.id), imp);
 
       return {
         ...stream,
@@ -161,7 +162,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
   return {
     openExec: (name, request) =>
-      openStream(name, (paths) => {
+      openStream(name, async (paths, imp) => {
         // fail before an old agent runs the command as a plain exec
         const agentVersion = readVmIdentity(paths)?.agentVersion;
 
@@ -173,7 +174,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           throw buildAgentOutdatedError();
         }
 
-        return openExecStream(paths.vsockSocket, request);
+        const base = await context.readExecEnv(imp, paths.vsockSocket);
+
+        const env = mergeEnv(base, request.env ?? []);
+
+        return openExecStream(paths.vsockSocket, {
+          ...request,
+          ...(env.length > 0 && { env }),
+        });
       }),
     openAttach: (name, request) =>
       openStream(name, (paths) => openAttachStream(paths.vsockSocket, request)),

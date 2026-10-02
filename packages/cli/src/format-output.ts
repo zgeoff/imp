@@ -1,4 +1,4 @@
-import type { Checkpoint, Image, Imp, Session } from '@imp/api';
+import type { AuditEntry, Checkpoint, Image, Imp, Secret, Session } from '@imp/api';
 
 type Row = readonly string[];
 
@@ -110,6 +110,35 @@ export function formatImages(images: readonly Image[]): string {
       image.ref,
       image.digest.slice(0, 19),
       `${String(Math.round(image.sizeBytes / 1_048_576))} MiB`,
+    ]),
+  );
+}
+
+export function formatSecrets(secrets: readonly Secret[]): string {
+  return formatTable(
+    ['NAME', 'KIND', 'HOSTS', 'IMPS'],
+    secrets.map((secret) => [
+      secret.name,
+      secret.kind,
+      secret.rules.map((rule) => rule.host).join(','),
+      secret.imps.length === 0 ? '-' : secret.imps.join(','),
+    ]),
+  );
+}
+
+export function formatAudit(entries: readonly AuditEntry[]): string {
+  return formatTable(
+    ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS'],
+    entries.map((entry) => [
+      entry.at.toISOString(),
+      entry.imp,
+      entry.secret,
+      entry.method,
+      entry.host,
+      entry.path,
+      String(entry.status),
+      `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
+      String(entry.durationMs),
     ]),
   );
 }

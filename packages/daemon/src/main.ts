@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
+import { createBroker } from './broker/broker-service';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
@@ -71,6 +72,9 @@ async function main(): Promise<void> {
   await storage.start(live);
 
   const images = createImageService({ config, db, storage });
+
+  const broker = await createBroker({ config, db, log: printLog });
+
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
 
@@ -83,8 +87,10 @@ async function main(): Promise<void> {
     storage,
     identity: readHostIdentity(config.firecrackerBin, systemFiles),
     log: printLog,
+    readExecEnv: broker.readExecEnv,
     onImpsChanged: () => {
       void proxyHolder.proxy?.syncListeners();
+      void broker.applyGrants();
     },
     readTailnetHostname: async () => {
       const status = await readTailscale();
@@ -121,6 +127,7 @@ async function main(): Promise<void> {
     images,
     governor,
     checkpoints,
+    broker,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
@@ -151,6 +158,11 @@ async function main(): Promise<void> {
         });
 
   https?.start();
+
+  const brokerPort = await broker.listen(config.brokerPort);
+
+  console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
+
   const idle = createIdleLoop({ config, db, imps, log: printLog });
 
   const tickers = [
@@ -159,6 +171,9 @@ async function main(): Promise<void> {
 
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),
+
+    // terminators follow grants; this also renews leaves near their end
+    startTicker('broker', 60_000, broker.applyGrants, printLog),
   ];
 
   // ready either way: a failed seed leaves `imp image add` to the user
@@ -199,6 +214,7 @@ async function main(): Promise<void> {
     }
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
+    await runStopStep('broker', readStepMs(), () => broker.stop());
 
     api.closeExecSessions();
 

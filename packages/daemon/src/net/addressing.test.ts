@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { countSlots, deriveSlotAddress, parseSubnet } from './addressing';
+import { countSlots, deriveSlotAddress, findPeerSlot, parseIpv4, parseSubnet } from './addressing';
 
 const plan = { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 };
 
@@ -55,4 +55,28 @@ test('it rejects malformed, misaligned and too-small subnets', () => {
   expect(() => parseSubnet('10.66.0.300/16')).toThrow('not an IPv4 CIDR');
   expect(() => parseSubnet('10.66.0.1/16')).toThrow('host bits');
   expect(() => parseSubnet('10.66.0.0/31')).toThrow('/30');
+});
+
+test('it reads IPv4 addresses, and the v4-mapped form only when asked', () => {
+  expect(parseIpv4('10.66.0.2')).toBe(0x0a_42_00_02);
+  expect(parseIpv4('::ffff:10.66.0.2')).toBeNull();
+  expect(parseIpv4('::ffff:10.66.0.2', true)).toBe(0x0a_42_00_02);
+
+  for (const bad of ['10.66.0', '10.66.0.256', '::1', 'a.b.c.d', '10.66.0.2 ']) {
+    expect(parseIpv4(bad, true)).toBeNull();
+  }
+});
+
+test('a peer maps to its slot only on its own gateway', () => {
+  const subnet = plan.subnet;
+
+  expect(findPeerSlot('10.66.0.2', '10.66.0.1', subnet)).toBe(0);
+  expect(findPeerSlot('10.66.1.6', '10.66.1.5', subnet)).toBe(65);
+  expect(findPeerSlot('::ffff:10.66.0.6', '::ffff:10.66.0.5', subnet)).toBe(1);
+
+  // another slot's gateway, the host end as a peer, and outside the subnet
+  expect(findPeerSlot('10.66.0.6', '10.66.0.1', subnet)).toBeNull();
+  expect(findPeerSlot('10.66.0.1', '10.66.0.0', subnet)).toBeNull();
+  expect(findPeerSlot('10.67.0.2', '10.67.0.1', subnet)).toBeNull();
+  expect(findPeerSlot('172.17.0.1', '172.17.0.2', subnet)).toBeNull();
 });

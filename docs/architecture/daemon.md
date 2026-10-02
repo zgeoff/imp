@@ -11,9 +11,10 @@ On start, impd reads its [configuration](../guides/configuration.md), copies the
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
 token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
 drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
-the API, opens the proxy listeners and starts three timers: the idle loop every 2 s, the governor
-every 5 s, and a proxy listener sync every 30 s. It adds a default image in the background;
-`/health` reports `ready: true` once that finishes, whether it worked or not.
+the API, opens the proxy listeners and the credential broker, and starts four timers: the idle loop
+every 2 s, the governor every 5 s, a proxy listener sync every 30 s, and a broker sync every 60 s.
+It adds a default image in the background; `/health` reports `ready: true` once that finishes,
+whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -193,6 +194,19 @@ The proxy serves HTTP and WebSockets for every imp: by Host header on `IMP_PROXY
 port per imp at `IMP_PORT_BASE + slot`. A request wakes or boots the imp, then goes to the imp's
 HTTP port, without the dashboard's session cookie. WebSockets are relayed message by message.
 [Networking](./networking.md#the-wake-proxy) has the details.
+
+### broker: credential connectors
+
+The broker holds secrets for imps and adds them to their requests
+([connectors](../guides/connectors.md)). Its front port takes each guest's `CONNECT`, names the imp
+from the connection's two ends, and pipes a granted host's connection into a TLS terminator: one Bun
+server per (imp, host) on a unix socket in `<data>/broker/run`, with a leaf from the host CA in
+`<data>/broker/ca`. The terminator reads the grant and the value for each request, so a revoke takes
+effect at once. Any other host is a plain tunnel to a checked public address. Values live in
+`<data>/secrets`, one 0600 file each; the database keeps names, hosts and grants, and the audit
+rows. Every exec of an imp with a grant gets the proxy and CA variables, once one exec per boot has
+written the CA bundle into the guest. A 60 s ticker, and every create and destroy, stops terminators
+that no grant covers and renews leaves near their end.
 
 ### checkpoints: checkpoint, restore, fork
 

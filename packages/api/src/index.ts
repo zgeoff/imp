@@ -32,6 +32,18 @@ export { IMP_ERRORS } from './imp-errors';
 export { ImpSchema, ImpStateSchema } from './imp-schema';
 export type { Imp, ImpState, OutdatedPart } from './imp-schema';
 export { NameSchema } from './name-schema';
+
+export {
+  AuditEntrySchema,
+  BrokerHostSchema,
+  BrokerRuleSchema,
+  SecretKindSchema,
+  SecretNameSchema,
+  SecretSchema,
+  SecretValueSchema,
+} from './secret-schema';
+
+export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema';
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';

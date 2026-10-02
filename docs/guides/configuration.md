@@ -10,30 +10,32 @@ compose file pass to the container. An empty variable counts as unset.
 impd reads these when it starts (`packages/daemon/src/config.ts`). A bad value stops impd with an
 error.
 
-| Variable                   | Default           | Meaning                                                                                                                                          |
-| -------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `IMP_DATA_DIR`             | `/var/lib/imp`    | The data directory ([layout](../architecture/storage.md#the-data-directory)).                                                                    |
-| `IMP_API_PORT`             | `7070`            | The control API: `/rpc`, `/exec`, `/health` and the dashboard.                                                                                   |
-| `IMP_PROXY_PORT`           | `7080`            | The wake proxy with Host-header routing.                                                                                                         |
-| `IMP_PORT_BASE`            | `20000`           | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                 |
-| `IMP_RAM_BUDGET_MIB`       | `16384`           | The RAM budget for awake imps.                                                                                                                   |
-| `IMP_IDLE_TIMEOUT_S`       | `60`              | Seconds with no activity before an imp sleeps.                                                                                                   |
-| `IMP_IDLE_CPU_PERCENT`     | `10`              | Firecracker CPU, in percent of one core, above which an imp counts as busy.                                                                      |
-| `IMP_BOOT_RESERVE_PERCENT` | `50`              | The RAM reserved before a cold boot, as a percentage of the imp's memory (1–100).                                                                |
-| `IMP_WAKE_RESERVE_MIB`     | `256`             | The least RAM reserved before a wake.                                                                                                            |
-| `IMP_DEFAULT_VCPUS`        | `2`               | vCPUs for `imp new` without `--cpus`.                                                                                                            |
-| `IMP_DEFAULT_MEMORY_MIB`   | `2048`            | Memory for `imp new` without `--memory`.                                                                                                         |
-| `IMP_DEFAULT_IMAGE`        | `base`            | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                       |
-| `IMP_STORAGE_BACKEND`      | `xfs`             | `xfs` or `zfs` ([storage](../architecture/storage.md)). impd refuses a data dir the other backend wrote.                                         |
-| `IMP_ZFS_ROOT`             | none              | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                              |
-| `IMP_DNS`                  | `1.1.1.1,8.8.8.8` | Guest DNS servers, comma-separated IPv4 addresses.                                                                                               |
-| `IMP_SUBNET`               | `10.66.0.0/16`    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535.                                |
-| `IMP_FIRECRACKER_BIN`      | `firecracker`     | The Firecracker binary.                                                                                                                          |
-| `IMP_KERNEL`               | none              | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                  |
-| `IMP_SYSTEM_DRIVE`         | none              | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own. |
-| `TAILSCALE_AUTHKEY`        | none              | Set means the host joins the tailnet; impd then reports tailnet URLs.                                                                            |
-| `IMP_TAILSCALE_HOSTNAME`   | `imp`             | The tailnet hostname to ask for.                                                                                                                 |
-| `IMP_DASHBOARD_DIR`        | none              | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                 |
+| Variable                    | Default           | Meaning                                                                                                                                          |
+| --------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `IMP_DATA_DIR`              | `/var/lib/imp`    | The data directory ([layout](../architecture/storage.md#the-data-directory)).                                                                    |
+| `IMP_API_PORT`              | `7070`            | The control API: `/rpc`, `/exec`, `/health` and the dashboard.                                                                                   |
+| `IMP_PROXY_PORT`            | `7080`            | The wake proxy with Host-header routing.                                                                                                         |
+| `IMP_PORT_BASE`             | `20000`           | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                 |
+| `IMP_BROKER_PORT`           | `7081`            | The credential broker on every guest's gateway ([connectors](./connectors.md)). Only guests reach it.                                            |
+| `IMP_BROKER_TEST_UPSTREAMS` | none              | Tests only: a file of fake upstreams for granted hosts ([development](./development.md#end-to-end-tests)). impd logs each load.                  |
+| `IMP_RAM_BUDGET_MIB`        | `16384`           | The RAM budget for awake imps.                                                                                                                   |
+| `IMP_IDLE_TIMEOUT_S`        | `60`              | Seconds with no activity before an imp sleeps.                                                                                                   |
+| `IMP_IDLE_CPU_PERCENT`      | `10`              | Firecracker CPU, in percent of one core, above which an imp counts as busy.                                                                      |
+| `IMP_BOOT_RESERVE_PERCENT`  | `50`              | The RAM reserved before a cold boot, as a percentage of the imp's memory (1–100).                                                                |
+| `IMP_WAKE_RESERVE_MIB`      | `256`             | The least RAM reserved before a wake.                                                                                                            |
+| `IMP_DEFAULT_VCPUS`         | `2`               | vCPUs for `imp new` without `--cpus`.                                                                                                            |
+| `IMP_DEFAULT_MEMORY_MIB`    | `2048`            | Memory for `imp new` without `--memory`.                                                                                                         |
+| `IMP_DEFAULT_IMAGE`         | `base`            | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                       |
+| `IMP_STORAGE_BACKEND`       | `xfs`             | `xfs` or `zfs` ([storage](../architecture/storage.md)). impd refuses a data dir the other backend wrote.                                         |
+| `IMP_ZFS_ROOT`              | none              | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                              |
+| `IMP_DNS`                   | `1.1.1.1,8.8.8.8` | Guest DNS servers, comma-separated IPv4 addresses.                                                                                               |
+| `IMP_SUBNET`                | `10.66.0.0/16`    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535.                                |
+| `IMP_FIRECRACKER_BIN`       | `firecracker`     | The Firecracker binary.                                                                                                                          |
+| `IMP_KERNEL`                | none              | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                  |
+| `IMP_SYSTEM_DRIVE`          | none              | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own. |
+| `TAILSCALE_AUTHKEY`         | none              | Set means the host joins the tailnet; impd then reports tailnet URLs.                                                                            |
+| `IMP_TAILSCALE_HOSTNAME`    | `imp`             | The tailnet hostname to ask for.                                                                                                                 |
+| `IMP_DASHBOARD_DIR`         | none              | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                 |
 
 [Sleep and wake](../architecture/sleep-and-wake.md#the-ram-governor) explains the RAM and idle
 settings.

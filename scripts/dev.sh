@@ -26,6 +26,9 @@
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
 #      IMP_STORAGE_BACKEND=zfs with IMP_ZFS_ROOT runs on a ZFS dataset instead
 #      of the XFS file (scripts/zfs-host-test.sh; the host needs the module).
+#      IMP_BROKER_PORT moves the credential broker. A dev instance always reads
+#      <IMP_DEV_DATA>/broker-test-upstreams.json when it exists: the fake
+#      upstreams the connectors suite puts in for granted hosts.
 #      HTTPS (docs/guides/https.md) passes through the same way: IMP_DOMAIN,
 #      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
 #      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
@@ -46,7 +49,7 @@ tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT
   IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
   IMP_STORAGE_BACKEND IMP_ZFS_ROOT
   IMP_DOMAIN IMP_DNS_PROVIDER IMP_DNS_API_URL IMP_ACME_DIRECTORY IMP_ACME_EMAIL IMP_HTTPS_PORT
-  IMP_HTTP_PORT IMP_E2E)
+  IMP_HTTP_PORT IMP_E2E IMP_BROKER_PORT)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -145,6 +148,7 @@ up() {
       -e IMP_KERNEL="$(in_container "$kernel")" \
       -e IMP_SYSTEM_DRIVE="$(in_container "$system")" \
       -e IMP_DEFAULT_IMAGE="${IMP_DEFAULT_IMAGE:-}" "${tuning[@]}" \
+      -e IMP_BROKER_TEST_UPSTREAMS=/data/broker-test-upstreams.json \
       -e IMP_DASHBOARD_DIR=/src/packages/dashboard/dist \
       "$IMP_HOST_IMAGE" >/dev/null
     echo "dev.sh: started $name"

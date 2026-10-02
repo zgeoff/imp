@@ -175,6 +175,23 @@ export function createFakeImpd(): FakeImpd {
         return {};
       }),
     },
+
+    // the dashboard shows no secrets yet
+    secrets: {
+      add: os.secrets.add.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      list: os.secrets.list.handler(() => []),
+      delete: os.secrets.delete.handler(() => ({})),
+    },
+    grants: {
+      add: os.grants.add.handler(() => ({})),
+      delete: os.grants.delete.handler(() => ({})),
+      list: os.grants.list.handler(() => []),
+    },
+    audit: {
+      list: os.audit.list.handler(() => []),
+    },
     system: {
       info: os.system.info.handler(() => fake.info),
     },

@@ -9,6 +9,8 @@ test('it fills every setting from its default when the env is empty', () => {
     apiPort: 7070,
     proxyPort: 7080,
     portBase: 20_000,
+    brokerPort: 7081,
+    brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
     idleTimeoutS: 60,
     idleCpuPercent: 10,

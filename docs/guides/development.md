@@ -36,6 +36,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
 | `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
+| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory   |
 | `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                   |
 | `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy       |
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake      |
@@ -79,6 +80,17 @@ for a memory snapshot of each imp (count × memory). It restarts the instance wi
 timeout, so the RAM governor, not idleness, decides which imps sleep; the suites after it keep that
 timeout. On a smaller machine, lower the budget and the count, for example
 `E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`.
+
+The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
+default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists
+(`IMP_BROKER_TEST_UPSTREAMS`):
+
+```json
+{ "ca": "-----BEGIN CERTIFICATE-----…", "upstreams": { "github.com": "https://172.17.0.1:9443" } }
+```
+
+The broker then sends granted requests for those hosts to the fake, and trusts `ca` next to the
+usual roots: verification stays on. The suite writes the file and removes it when it ends.
 
 A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the timings the suites
 measure. A suite file also runs on its own against a running instance:

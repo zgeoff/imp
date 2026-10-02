@@ -10,15 +10,16 @@
   "dependencies": {
     "@imp/api": "workspace:*",
     "@orpc/server": "catalog:",
+    "@peculiar/x509": "catalog:",
     "acme-client": "catalog:",
     "elysia": "catalog:",
     "kysely": "catalog:",
+    "reflect-metadata": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
-    "@peculiar/x509": "catalog:",
     "fast-check": "catalog:"
   }
 }

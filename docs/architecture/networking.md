@@ -2,7 +2,8 @@
 
 Every imp gets its own tap device and its own /30, routed through the host container. No two imps
 share a layer-2 network, so they cannot see each other. The wake proxy gives each imp an HTTP URL on
-the host and on the tailnet, and an HTTPS URL on your own domain when one is set.
+the host and on the tailnet, and an HTTPS URL on your own domain when one is set. The credential
+broker listens on every imp's gateway.
 
 ## Addressing
 
@@ -22,7 +23,17 @@ container's own network namespace and never touch the host's.
 - `MASQUERADE` for the imp subnet out of the container's default route.
 - `FORWARD -i imp+ -o imp+ DROP`: no imp-to-imp traffic.
 - `INPUT -i imp+` drops everything except replies to connections the container opened (the proxy
-  dials into guests).
+  dials into guests), and the credential broker's port, `IMP_BROKER_PORT`. That rule is inserted
+  first, above the drop.
+- The broker listens on every address, so
+  `raw PREROUTING ! -i imp+ -p tcp --dport $IMP_BROKER_PORT -m addrtype --dst-type LOCAL -j DROP`
+  drops its port for anything but a guest. It sits in `raw`, before `INPUT`, where tailscaled later
+  puts its `ts-input` chain first and would accept tailnet packets. Both broker rules carry the
+  comment `imp-broker`; a start with another port removes the old ones.
+- `raw PREROUTING -i imp+ -m rpfilter --invert -j DROP`: a strict reverse-path check on the taps
+  only, so a guest cannot send with another imp's address. The broker names the imp by its address.
+  A `rp_filter` sysctl would set the floor for `eth0` and `tailscale0` too, and break an exit node,
+  subnet routes, or a container on more than one network.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
   smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
   records stall.
@@ -47,6 +58,15 @@ The proxy forwards HTTP and WebSockets to an imp's HTTP port. The port is set at
   and 80 redirects to them. They bind the tailnet IP and loopback only, and accept exactly
   `<name>.<domain>` for an imp and `<domain>` for impd's API
   ([HTTPS](../guides/https.md#listeners)).
+
+## The credential broker
+
+Guests reach the broker on their gateway at `IMP_BROKER_PORT` (default 7081), through `HTTPS_PROXY`.
+It takes `CONNECT` only. A granted host goes to a TLS terminator that adds the credential; any other
+host gets a plain tunnel to a checked public address. A tunnel starts inside the host container,
+past the `INPUT` drop, so it refuses every private, shared, loopback and link-local range, IPv6, and
+the container's own addresses. The broker also drops a guest that dials another imp's gateway. The
+[connectors guide](../guides/connectors.md) has the whole design.
 
 ## URLs
 

@@ -92,6 +92,9 @@ From the milestone work:
   exposure (`imp url --public`) is not built ([#52](https://github.com/zgeoff/imp/issues/52)).
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
+- Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
+  in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
+  its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 

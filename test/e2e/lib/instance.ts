@@ -16,6 +16,9 @@ if (offset !== 0 && (process.env['IMP_DEV_NAME'] ?? '') === '') {
 // shifts by IMP_DEV_PORT_OFFSET, so worktrees run instances side by side.
 export const instance = {
   container: process.env['IMP_DEV_NAME'] ?? 'imp-dev',
+
+  // mounted at /data in the container
+  dataDir: process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev'),
   apiUrl: process.env['IMP_URL'] ?? `http://localhost:${String(7070 + offset)}`,
   proxyPort: 7080 + offset,
   impPortBase: 20_000 + offset,
