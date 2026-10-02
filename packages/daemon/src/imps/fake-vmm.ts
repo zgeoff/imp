@@ -41,6 +41,9 @@ export function buildFakeVmm() {
 
   const counter = { nextPid: 1000, generation: 0 };
 
+  // what every fake agent reports as its uptime: old enough to sleep at once
+  const guest = { uptimeMs: 60_000 };
+
   const queues = new Map<VmStep, VmOutcome[]>();
   const holds = new Map<VmStep, { gate: PromiseWithResolvers<void>; reached: () => void }>();
 
@@ -169,6 +172,7 @@ export function buildFakeVmm() {
 
           return outcome === 'ok';
         }),
+      readGuestUptimeMs: () => runInGeneration(() => Promise.resolve(guest.uptimeMs)),
     };
   };
 
@@ -215,6 +219,11 @@ export function buildFakeVmm() {
       hangs.gate.resolve();
 
       hangs.gate = Promise.withResolvers<void>();
+    },
+
+    // the uptime every agent reports from now on
+    setGuestUptime: (uptimeMs: number) => {
+      guest.uptimeMs = uptimeMs;
     },
 
     setPace: (pace: (step: VmStep) => Promise<void>) => {

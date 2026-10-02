@@ -17,6 +17,7 @@ test('it fills every setting from its default when the env is empty', () => {
     idleCpuPercent: 10,
     bootReservePercent: 50,
     wakeReserveMib: 256,
+    sleepMinGuestUptimeMs: 1500,
     defaultVcpus: 2,
     defaultMemoryMib: 2048,
     dns: ['1.1.1.1', '8.8.8.8'],
@@ -43,6 +44,7 @@ test('it reads and coerces values from the env', () => {
     IMP_DNS: '9.9.9.9 , 1.0.0.1',
     IMP_SUBNET: '10.99.0.0/24',
     IMP_KERNEL: '/src/kernel/out/vmlinux',
+    IMP_SLEEP_MIN_GUEST_UPTIME_MS: '0',
     TAILSCALE_AUTHKEY: 'tskey-auth-test',
   });
 
@@ -53,6 +55,7 @@ test('it reads and coerces values from the env', () => {
   expect(config.kernelPath).toBe('/tmp/imp/system/vmlinux');
   expect(config.kernelSource).toBe('/src/kernel/out/vmlinux');
   expect(config.tailscaleAuthKey).toBe('tskey-auth-test');
+  expect(config.sleepMinGuestUptimeMs).toBe(0);
 });
 
 test('it treats an empty variable as unset', () => {

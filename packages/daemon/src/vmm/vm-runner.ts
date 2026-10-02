@@ -1,5 +1,5 @@
 import { mkdirSync, renameSync, rmSync } from 'node:fs';
-import { sendResumed, sendShutdown } from '../agent-client/agent-requests';
+import { sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
@@ -64,6 +64,10 @@ export interface VmRunner {
   readonly stopVm: (pid: number, paths: ImpPaths, graceful: boolean) => Promise<void>;
   readonly isVmAlive: (pid: number, paths: ImpPaths) => boolean;
   readonly isAgentReady: (paths: ImpPaths) => Promise<boolean>;
+
+  // the guest's uptime from the agent's ping, without the time asleep; null
+  // when the agent does not answer
+  readonly readGuestUptimeMs: (paths: ImpPaths) => Promise<number | null>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the
@@ -300,6 +304,15 @@ export function createVmRunner(): VmRunner {
         return true;
       } catch {
         return false;
+      }
+    },
+    readGuestUptimeMs: async (paths) => {
+      try {
+        const ping = await sendPing(paths.vsockSocket);
+
+        return ping.uptime_ms;
+      } catch {
+        return null;
       }
     },
   };

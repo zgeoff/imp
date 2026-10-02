@@ -151,19 +151,21 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     return policy.by === 'governor' || imp.lastActiveAt.getTime() <= policy.seenActiveAt;
   };
 
-  // the caller holds the lock; a failure leaves the imp as sleepImpVm left it
+  // the caller holds the lock; a failure leaves the imp as sleepImpVm left it.
+  // `isWanted` lets a sleep that waits for a young guest give way.
   const sleepIfRunning = async (
     imp: LockedImp | undefined,
     reason: string,
+    isWanted?: () => boolean,
   ): Promise<SleepOutcome> => {
     if (imp?.state !== 'running') {
       return 'skipped';
     }
 
     try {
-      await ops.sleepImpVm(imp, reason);
+      const after = await ops.sleepImpVm(imp, reason, isWanted);
 
-      return 'slept';
+      return after.state === 'sleeping' ? 'slept' : 'skipped';
     } catch (error) {
       context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
@@ -227,7 +229,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       lock.tryWithImpId,
       (imp, reason, policy) =>
         imp !== undefined && isSleepAllowed(imp, policy)
-          ? sleepIfRunning(imp, reason)
+          ? sleepIfRunning(imp, reason, () => isSleepAllowed(imp, policy))
           : Promise.resolve<SleepOutcome>('skipped'),
     ),
 

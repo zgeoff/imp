@@ -4,6 +4,7 @@ import type { AgentSession } from '../agent-client/agent-requests';
 import { updateImpActivity, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
+import { waitForGuestAge } from '../sleep/guest-age';
 import {
   buildSnapshotIdentity,
   findColdBootReason,
@@ -40,9 +41,14 @@ export interface ImpVmOps {
   // agent shutdown, then the memory goes too: a stopped imp boots cold
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
-  // snapshots the VM and stops it (DESIGN 2.8). A failed snapshot leaves the
-  // VM running; a failure after the kill stops the imp.
-  readonly sleepImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
+  // snapshots the VM and stops it (DESIGN 2.8); a failed snapshot leaves it
+  // running, a failure after the kill stops the imp. A sleep that waits for a
+  // young guest gives way, still running, once `isWanted` turns false.
+  readonly sleepImpVm: (
+    imp: LockedImp,
+    reason: string,
+    isWanted?: () => boolean,
+  ) => Promise<LockedImp>;
 
   // the running imp, woken or booted first
   readonly requireRunningImp: (imp: LockedImp) => Promise<LockedImp>;
@@ -182,7 +188,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return seen.map((session) => setDetached(session));
   };
 
-  const sleepImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
+  const sleepImpVm = async (
+    imp: LockedImp,
+    reason: string,
+    isWanted: () => boolean = () => true,
+  ): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
     const paths = context.findPaths(imp.id);
@@ -190,6 +200,18 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     if (pid === null) {
       throw new Error(`${imp.name} is running without a firecracker pid`);
+    }
+
+    const waitedMs = await waitForGuestAge({
+      readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
+      minUptimeMs: context.config.sleepMinGuestUptimeMs,
+      isWanted,
+    });
+
+    if (waitedMs === null) {
+      context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);
+
+      return imp;
     }
 
     const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
@@ -217,9 +239,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       }
 
       const sleepMs = Math.round(performance.now() - started);
+      const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
 
       context.log(
-        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason}), ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
+        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
       );
     } catch (error) {
       if (context.vms.isVmAlive(pid, paths)) {
