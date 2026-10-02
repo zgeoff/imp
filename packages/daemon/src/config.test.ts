@@ -25,6 +25,7 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultImage: 'base',
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
+    dashboardDir: null,
   });
 });
 

@@ -27,6 +27,7 @@ const EnvSchema = z.object({
   IMP_DEFAULT_IMAGE: z.string().default('base'),
   TAILSCALE_AUTHKEY: z.string().optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
+  IMP_DASHBOARD_DIR: z.string().optional(),
 });
 
 export interface Config {
@@ -65,6 +66,10 @@ export interface Config {
   // the tailnet hostname impd asks for; per-imp URLs use the name the node
   // got (http://<name>:<tailnetPort>), which differs while an older node holds it
   readonly tailscaleHostname: string;
+
+  // the web dashboard's built files (packages/dashboard/dist), served at /;
+  // null serves a note that this impd has none
+  readonly dashboardDir: string | null;
 }
 
 function splitList(value: string): string[] {
@@ -106,5 +111,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
+    dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
   };
 }

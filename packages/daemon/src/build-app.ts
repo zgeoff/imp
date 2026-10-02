@@ -1,9 +1,13 @@
 import { EXEC_CLOSE_RESTARTING, EXEC_PATH, EXEC_TICKET_PARAM } from '@imp/api';
 import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
+import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import { Elysia } from 'elysia';
+import { isAuthenticated } from './auth/authenticate';
+import { createSessionRoutes } from './auth/session-routes';
 import { buildRouter } from './build-router';
 import type { RouterDeps } from './build-router';
+import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
 import { ANY_IMP_GRANT, buildGrantedBackend } from './exec/exec-grant';
 import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
@@ -27,6 +31,8 @@ export function buildApp(deps: AppDeps) {
   // expected errors (NOT_FOUND, INVALID_STATE, …) go to the client; anything
   // else is a bug or a host failure worth a log line
   const handler = new RPCHandler(buildRouter({ ...deps, execTickets }), {
+    // a GET is what a link or an <img> on any page can make the browser send
+    plugins: [new StrictGetMethodPlugin()],
     interceptors: [
       onError((failure) => {
         if (!(failure instanceof ORPCError)) {
@@ -45,14 +51,19 @@ export function buildApp(deps: AppDeps) {
   // each exec socket's grant, by its upgrade request
   const grants = new WeakMap<Request, ExecGrant>();
 
+  const sessionRoutes = createSessionRoutes(deps);
+  const dashboard = createDashboardFiles(deps.config.dashboardDir);
+
   const app = new Elysia()
     .get('/health', () => ({ status: 'ok', ready: deps.isReady() }))
+    .post('/auth/login', (context) => sessionRoutes.login(context.request), { parse: 'none' })
+    .post('/auth/logout', (context) => sessionRoutes.logout(context.request), { parse: 'none' })
 
     // parse: 'none' leaves the body unread for oRPC
     .all(
       '/rpc*',
       async (context) => {
-        if (!isAuthorized(context.request.headers.get('authorization'), deps.token)) {
+        if (!isAuthenticated(context.request, deps.token, deps.now())) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
@@ -64,7 +75,8 @@ export function buildApp(deps: AppDeps) {
     )
 
     // text frames are JSON control (Elysia parses them), binary frames are
-    // channel-tagged stream data (packages/api exec-protocol)
+    // channel-tagged stream data (packages/api exec-protocol). The token or a
+    // ticket, never the session cookie: the dashboard gets tickets over /rpc.
     .ws(EXEC_PATH, {
       beforeHandle: (context) => {
         // Elysia ends the upgrade on any returned value, null included
@@ -122,7 +134,12 @@ export function buildApp(deps: AppDeps) {
         sessions.get(ws.id)?.session.handleClose();
         sessions.delete(ws.id);
       },
-    });
+    })
+
+    // under its own prefix, so no dashboard route can shadow the API's
+    .get('/', () => Response.redirect(DASHBOARD_PATH, 302))
+    .get(DASHBOARD_PATH, (context) => dashboard.serve(context.request))
+    .get(`${DASHBOARD_PATH}*`, (context) => dashboard.serve(context.request));
 
   return {
     app,
