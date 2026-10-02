@@ -16,7 +16,7 @@ export type {
 
 export { ExecError } from './exec/exec-error';
 export type { ExecClientErrorCode } from './exec/exec-error';
-export { CONSOLE_SHELL } from './exec/open-exec';
+export { CONSOLE_SHELL } from '@imp/api';
 
 export type {
   AttachOptions,

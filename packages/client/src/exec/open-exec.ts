@@ -1,3 +1,4 @@
+import { CONSOLE_SHELL } from '@imp/api';
 import type { ImpContract } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError, toExecError } from './exec-error';
@@ -62,18 +63,6 @@ export interface ExecDeps {
 
 const DEFAULT_MAX_UNREAD_BYTES = 8 * 1024 * 1024;
 const TTY_SIGNAL_KEYS: Readonly<Record<string, string>> = { SIGINT: '\u0003', SIGQUIT: '\u001C' };
-
-// The login shell from the image's /etc/passwd, else bash, else sh. Plain
-// sh, because the image may have neither awk nor getent.
-export const CONSOLE_SHELL = [
-  'shell=',
-  'while IFS=: read -r user _ _ _ _ _ login; do',
-  '  if [ "$user" = root ]; then shell=$login; break; fi',
-  'done < /etc/passwd',
-  '[ -x "$shell" ] || shell=/bin/bash',
-  '[ -x "$shell" ] || shell=/bin/sh',
-  'exec "$shell" -l',
-].join('\n');
 
 // The socket authenticates with a single-use exec ticket, which works in a
 // browser and in Node, whose WebSocket sends no custom headers.

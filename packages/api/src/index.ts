@@ -39,6 +39,7 @@ export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';
 export { ImpSchema, ImpStateSchema } from './imp-schema';
 export type { Imp, ImpState, OutdatedPart } from './imp-schema';
+export { CONSOLE_SHELL } from './login-shell';
 export { NameSchema } from './name-schema';
 
 export {
