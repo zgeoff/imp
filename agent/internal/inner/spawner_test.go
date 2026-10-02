@@ -167,3 +167,25 @@ func TestAnExitNeverOvertakesItsSpawnReply(t *testing.T) {
 		}
 	}
 }
+
+func TestASpawnWhoseCgroupFailsRunsOutsideItAndSaysSo(t *testing.T) {
+	c, _ := pair(t)
+	null := devnull(t)
+	// a plain directory is no cgroup: clone3 refuses it, and the retry runs
+	// the child without one
+	dir, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	p, err := c.Start(proc.Spec{Argv: []string{"/bin/true"}, Files: []*os.File{null, null, null}, Cgroup: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := <-p.Done; st.Code != 0 {
+		t.Fatalf("status %+v", st)
+	}
+	if p.InCgroup {
+		t.Fatal("InCgroup for a spawn that could not use its cgroup")
+	}
+}

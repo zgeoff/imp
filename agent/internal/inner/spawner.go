@@ -57,12 +57,15 @@ func (s *spawner) write(m message, fds []int) error {
 }
 
 func (s *spawner) reply(id uint64, pid int, fds []int, err error) {
-	m := message{ID: id, Op: opReply, Pid: pid}
+	s.send(message{ID: id, Op: opReply, Pid: pid}, fds, err)
+}
+
+func (s *spawner) send(m message, fds []int, err error) {
 	if err != nil {
 		m.Error, m.Errno = err.Error(), errnoOf(err)
 	}
 	if werr := s.write(m, fds); werr != nil {
-		log.Printf("inner: reply %d: %v", id, werr)
+		log.Printf("inner: reply %d: %v", m.ID, werr)
 	}
 }
 
@@ -108,7 +111,7 @@ func (s *spawner) spawn(m message, fds []int) {
 	s.procs[p.Pid] = p
 	s.mu.Unlock()
 	// the reply goes before the exit can: the exit waits for it
-	s.reply(m.ID, p.Pid, nil, nil)
+	s.send(message{ID: m.ID, Op: opReply, Pid: p.Pid, InCgroup: p.InCgroup}, nil, nil)
 	safe.Go("inner: wait", func() {
 		st := <-p.Done
 		s.mu.Lock()
