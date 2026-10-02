@@ -193,6 +193,58 @@ test('a policy change nft does not take leaves the old policy in place', async (
   expect(changed).toEqual({ mode: 'none', allow: [] });
 });
 
+test('a create during a failing policy change leaves nft and the database agreeing', async () => {
+  const applied: string[] = [];
+  const held = Promise.withResolvers<void>();
+  const reached = Promise.withResolvers<void>();
+  const state = { holding: false };
+
+  // nft refuses dev's box set; the first create after dev's waits in nft
+  await using ctx = await setupEgress(async (script) => {
+    if (script.includes('allow0')) {
+      throw new Error('nft: table busy');
+    }
+
+    if (!state.holding && script.includes('imp1')) {
+      state.holding = true;
+
+      reached.resolve();
+
+      await held.promise;
+    }
+
+    applied.push(script);
+  });
+
+  await ctx.imps.createImp({ name: 'dev' });
+
+  // a create waits in nft, a second queues behind it, and the policy change
+  // comes while both wait
+  const first = ctx.imps.createImp({ name: 'first' });
+
+  await reached.promise;
+
+  const second = ctx.imps.createImp({ name: 'second' });
+
+  await Bun.sleep(50);
+
+  const change = readRejection(ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com'] }));
+
+  await Bun.sleep(50);
+
+  held.resolve();
+
+  const [failed, ...created] = await Promise.all([change, first, second]);
+  const kept = await ctx.egress.readPolicy('dev');
+
+  const tables = applied.filter((script) => script.includes('delete table inet imp_egress'));
+
+  expect(String(failed)).toContain('nft: table busy');
+  expect(created.map((imp) => imp.state)).toEqual(['running', 'running']);
+  expect(kept).toEqual({ mode: 'open', allow: [] });
+  expect(tables.at(-1)).toContain('imp2');
+});
+
 test('without nft, box and none are refused, and so is a boot of such an imp', async () => {
   const state = { broken: false };
 

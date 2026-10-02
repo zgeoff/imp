@@ -148,6 +148,15 @@ export function createEgressService(deps: EgressDeps): EgressService {
       state.slots = slots;
     });
 
+  // after a failed apply: nft may still refuse, and keeps its last table
+  const tryApplyTable = async (): Promise<void> => {
+    try {
+      await applyTable();
+    } catch (error) {
+      deps.log(`impd: egress: rebuilding the table: ${readErrorMessage(error)}`);
+    }
+  };
+
   const writeAnswers = async (
     slot: number,
     names: readonly string[],
@@ -300,20 +309,24 @@ export function createEgressService(deps: EgressDeps): EgressService {
       }
     },
 
-    addSlot: async (slot) => {
-      state.released.delete(slot);
-      sets.clear(slot);
+    // under the policy lock: a table built here must not carry a policy
+    // row that a failed setPolicy is about to put back
+    addSlot: (slot) =>
+      mutex.runExclusive('policy', async () => {
+        state.released.delete(slot);
+        sets.clear(slot);
 
-      await applyTable();
+        await applyTable();
 
-      void resolveExactNames(slot);
-    },
+        void resolveExactNames(slot);
+      }),
 
-    releaseSlot: async (slot) => {
-      state.released.add(slot);
+    releaseSlot: (slot) =>
+      mutex.runExclusive('policy', async () => {
+        state.released.add(slot);
 
-      await applyTable();
-    },
+        await applyTable();
+      }),
 
     readPolicy: async (name) => {
       const imp = await findImpByName(deps.db, name);
@@ -327,7 +340,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
       return policy;
     },
 
-    // one change at a time, so a rollback never undoes a later change
+    // one change at a time, slots included, so a rollback never undoes a
+    // later change
     setPolicy: (name, policy) =>
       mutex.runExclusive('policy', async () => {
         requirePolicy(policy);
@@ -350,11 +364,13 @@ export function createEgressService(deps: EgressDeps): EgressService {
           sets.clear(imp.slot);
         }
 
-        // nft still holds the old table, so the row goes back to match it
+        // the row goes back, and the table is built again from it, so nft
+        // and the database agree whichever table nft last took
         try {
           await applyTable();
         } catch (error) {
           await writeEgressPolicy(deps.db, imp.id, previous);
+          await tryApplyTable();
 
           throw error;
         }
