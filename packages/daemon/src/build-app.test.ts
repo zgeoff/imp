@@ -40,6 +40,7 @@ test('it serves system.info from config and the database', async () => {
     egress: { isEnforced: true },
     public: null,
     features: { sessionOffsets: true, leases: true },
+    ksm: null,
   });
 });
 

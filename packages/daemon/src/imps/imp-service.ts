@@ -44,6 +44,9 @@ export type ImpService = ImpCommands &
     readonly countSessions: (imp: ImpRecord) => number | undefined;
     readonly readBootStatus: (imp: ImpRecord) => BootStatus;
 
+    // with IMP_KSM, whether the imp's guest memory lost its merge flag
+    readonly isUnmergeable: (id: string) => boolean;
+
     // every lifecycle event, as each write to the imps lands
     readonly events: EventBus;
 
@@ -128,6 +131,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     }),
     countSessions: (imp) => countSessions(context, imp),
     readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
+    isUnmergeable: (id) => context.mergeFlags.isLost(id),
     lockImp: lock.withImp,
     lockImpId: lock.withImpId,
     haltImp: ops.stopImpVm,

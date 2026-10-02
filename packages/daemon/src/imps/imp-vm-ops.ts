@@ -31,6 +31,7 @@ import type { ImpPaths } from '../storage/data-layout';
 import type { ImpCgroup } from '../vmm/cpu-cgroups';
 import { TemplateRestoreError } from '../vmm/template-vm';
 import type { StartedVm } from '../vmm/vm-runner';
+import { checkMergeFlag } from './check-merge-flag';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
@@ -333,6 +334,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const vm = await startColdVm(imp, paths, address, hostSteps, diskReady);
 
       startCounting(context, imp, vm.pid);
+      checkMergeFlag(context, imp, vm.pid);
 
       // its sleeps record this, whatever the host boots by then
       writeIdentity(imp, paths, {
@@ -428,7 +430,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     reason: string,
     waitedMs: number,
   ): Promise<LockedImp> => {
-    const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
+    const ramMib = context.readSleepRamMib(pid, paths.apiSocket) ?? 0;
 
     const sessions = await readSessionsForSleep(imp, paths);
 
@@ -608,6 +610,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     );
 
     startCounting(context, imp, woken.pid);
+    checkMergeFlag(context, imp, woken.pid);
 
     await updateImpActivity(context.db, imp.id, new Date());
 

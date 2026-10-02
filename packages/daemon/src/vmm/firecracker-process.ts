@@ -40,6 +40,23 @@ export interface FirecrackerPaths {
 
 const SOCKET_WAIT_MS = 3000;
 
+// setsid and exec keep the pid; the jailer execs Firecracker in place too.
+// `mergeWrapper` (ksm-exec) runs first, outside the jailer's chroot: the merge
+// flag outlives its setuid and exec, so the chroot needs no copy of it.
+export function buildSpawnArgv(
+  command: readonly string[],
+  cgroupProcs: string | null,
+  mergeWrapper: string | null,
+): string[] {
+  const wrapped = mergeWrapper === null ? command : [mergeWrapper, ...command];
+
+  if (cgroupProcs === null) {
+    return ['setsid', ...wrapped];
+  }
+
+  return ['sh', '-c', 'echo $$ > "$1" && shift && exec setsid "$@"', 'sh', cgroupProcs, ...wrapped];
+}
+
 // Starts `command`, Firecracker or the jailer that execs it, detached (setsid)
 // so it outlives an impd restart, and waits for its API socket. With
 // `cgroupProcs` it joins that cgroup before the exec.
@@ -47,18 +64,13 @@ export async function startFirecracker(
   command: readonly string[],
   paths: Readonly<FirecrackerPaths>,
   cgroupProcs: string | null = null,
+  mergeWrapper: string | null = null,
 ) {
   rmSync(paths.apiSocket, { force: true });
   rmSync(paths.vsockSocket, { force: true });
 
   const log = setupLogFile(paths.logFile);
-
-  // setsid and exec keep the pid: this process is not a group leader, so no
-  // fork; the jailer execs Firecracker in place too
-  const argv =
-    cgroupProcs === null
-      ? ['setsid', ...command]
-      : ['sh', '-c', 'echo $$ > "$1" && shift && exec setsid "$@"', 'sh', cgroupProcs, ...command];
+  const argv = buildSpawnArgv(command, cgroupProcs, mergeWrapper);
 
   const child = Bun.spawn(argv, {
     stdin: 'ignore',

@@ -43,6 +43,7 @@ import { createStorageGate } from '../storage/storage-gate';
 import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
+import type { KsmHostStats } from '../vmm/ksm';
 import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
 
@@ -119,6 +120,12 @@ export interface ImpTestOptions {
 
   // IPv6 for imps, as impd resolved it; none by default
   readonly ipv6?: Ipv6Plan;
+
+  // IMP_KSM's readers: the unshared size a sleep records, the merge flag, and
+  // the host counters
+  readonly readUnsharedRamMib?: (pid: number) => number | null;
+  readonly checkGuestMerge?: (pid: number) => boolean | null;
+  readonly readKsmHostStats?: () => KsmHostStats | null;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -294,6 +301,11 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
       hostCpus: options.hostCpus ?? 8,
       ...(options.cgroups !== undefined && { cgroups: options.cgroups }),
+      ...(options.readUnsharedRamMib !== undefined && {
+        readUnsharedRamMib: options.readUnsharedRamMib,
+      }),
+      ...(options.checkGuestMerge !== undefined && { checkGuestMerge: options.checkGuestMerge }),
+      ...(options.readKsmHostStats !== undefined && { readKsmHostStats: options.readKsmHostStats }),
     });
   };
 
@@ -344,6 +356,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     advance: (ms: number) => {
       clock.offsetMs += ms;
     },
+    readKsmHostStats: options.readKsmHostStats ?? null,
     restartImpd: startImpd,
     createSystemDrive,
     readIdentity: () => host.identity,
@@ -380,6 +393,7 @@ type AppParts = Pick<
   | 'revocations'
   | 'egress'
   | 'readIdentity'
+  | 'readKsmHostStats'
 >;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
@@ -469,6 +483,7 @@ export function buildTestApp(
     imps,
     images: ctx.images,
     governor: impd.governor,
+    ...(ctx.readKsmHostStats !== null && { readKsmHostStats: ctx.readKsmHostStats }),
     checkpoints,
     templates,
     backups: null,

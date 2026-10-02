@@ -119,7 +119,7 @@ test('a boot that fails leaves the imp in error with no VM and no reservation', 
 
   expect(rejection).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(state).toBe('error');
-  expect(usage).toEqual({ usedMib: 0, reservedMib: 0 });
+  expect(usage).toEqual({ usedMib: 0, reservedMib: 0, headroomMib: 0 });
   expect(broken).toEqual([]);
 });
 
@@ -242,7 +242,7 @@ test('a cold boot that fails after its admit releases the reservation', async ()
 
   expect(rejection).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
   expect(state).toBe('error');
-  expect(usage).toEqual({ usedMib: 0, reservedMib: 0 });
+  expect(usage).toEqual({ usedMib: 0, reservedMib: 0, headroomMib: 0 });
   expect(broken).toEqual([]);
 });
 

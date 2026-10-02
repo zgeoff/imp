@@ -3,11 +3,16 @@ import { createImpService } from '../imps/imp-service';
 import type { ImpServiceDeps, Imps } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { buildImpPaths } from '../storage/data-layout';
+import { readKsmHostStats } from '../vmm/ksm';
+import type { KsmHostStats } from '../vmm/ksm';
 import { readOwnedRamMib } from '../vmm/vm-stats';
 import { createRamGovernor } from './ram-governor';
 import type { RamAdmission, RamGovernor } from './ram-governor';
 
-type GovernedDeps = Omit<ImpServiceDeps, 'admission'>;
+type GovernedDeps = Omit<ImpServiceDeps, 'admission'> & {
+  // the KSM counters, for the headroom IMP_KSM keeps
+  readonly readKsmHostStats?: () => KsmHostStats | null;
+};
 
 // The imp service and the RAM governor need each other: the service asks the
 // governor before every boot, the governor sleeps imps through the service.
@@ -28,6 +33,19 @@ export function createGovernedImps(deps: GovernedDeps): {
   };
 
   const imps = createImpService({ ...deps, readRamMib, admission });
+  const ksm = deps.config.ksm;
+  const readKsm = deps.readKsmHostStats ?? readKsmHostStats;
+
+  // general_profit is negative while KSM's metadata outweighs what it merged
+  const readHeadroomMib = (): number => {
+    if (ksm === null) {
+      return 0;
+    }
+
+    const profitMib = readKsm()?.profitMib ?? 0;
+
+    return Math.ceil((Math.max(profitMib, 0) * ksm.headroomPercent) / 100);
+  };
 
   const governor = createRamGovernor({
     budgetMib: deps.config.ramBudgetMib,
@@ -50,6 +68,7 @@ export function createGovernedImps(deps: GovernedDeps): {
       );
     },
     readRamMib,
+    readHeadroomMib,
 
     // an open exec session or proxied request pins the imp, like a hold
     isBusy: (id) => imps.isImpBusy(id) || imps.tracker.count(id) > 0,

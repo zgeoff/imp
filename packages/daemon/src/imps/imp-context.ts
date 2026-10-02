@@ -28,10 +28,19 @@ import type { BootTemplates } from '../templates/boot-templates';
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { JailUser } from '../vmm/jail';
+import { checkGuestMemoryMergeable } from '../vmm/ksm';
 import type { VmRunner } from '../vmm/vm-runner';
-import { readCpuTicks, readOwnedRamMib, readRssMib, readVmMemory } from '../vmm/vm-stats';
+import {
+  readCpuTicks,
+  readOwnedRamMib,
+  readRssMib,
+  readUnsharedRamMib,
+  readVmMemory,
+} from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
+import { createMergeFlags } from './check-merge-flag';
+import type { MergeFlags } from './check-merge-flag';
 import { growFilesystem } from './imp-disk';
 import { createResourceSampler } from './resource-sampler';
 import type { ResourceSampler } from './resource-sampler';
@@ -71,6 +80,11 @@ export interface ImpServiceDeps {
   readonly ipv6?: Ipv6Plan | null;
   readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib?: (pid: number, apiSocket: string) => number | null;
+
+  // with IMP_KSM: the RAM a sleep records for the wake reserve, and whether
+  // KSM may merge a VM's guest memory (null: unknown)
+  readonly readUnsharedRamMib?: (pid: number, apiSocket: string) => number | null;
+  readonly checkGuestMerge?: (pid: number) => boolean | null;
 
   // the host's live tailnet name, null when tailscaled does not answer; the
   // configured name can be taken by an older node (`imp-1`)
@@ -129,6 +143,13 @@ export interface ImpContext {
   readonly admission: RamAdmission | undefined;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib: (pid: number, apiSocket: string) => number | null;
+
+  // what a sleep records as the imp's RAM: its Pss, or with IMP_KSM its
+  // unshared size, since a wake splits what KSM merged
+  readonly readSleepRamMib: (pid: number, apiSocket: string) => number | null;
+  readonly checkGuestMerge: (pid: number) => boolean | null;
+
+  readonly mergeFlags: MergeFlags;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly readServiceUrl: (name: string) => string | null;
   readonly now: () => number;
@@ -188,6 +209,12 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readRssMib: deps.readRssMib ?? readRssMib,
+    readSleepRamMib:
+      deps.config.ksm === null
+        ? (deps.readRamMib ?? readOwnedRamMib)
+        : (deps.readUnsharedRamMib ?? readUnsharedRamMib),
+    checkGuestMerge: deps.checkGuestMerge ?? checkGuestMemoryMergeable,
+    mergeFlags: createMergeFlags(),
     readTailnetHostname: deps.readTailnetHostname,
     readServiceUrl: deps.readServiceUrl ?? (() => null),
     now: deps.now ?? Date.now,

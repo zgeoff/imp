@@ -78,6 +78,9 @@ interface RamUsage {
 
   // reservations for boots and wakes the measurement does not show yet
   readonly reservedMib: number;
+
+  // kept free for merged pages that writes split again (IMP_KSM)
+  readonly headroomMib: number;
 }
 
 // The part of the governor the imp lifecycle calls.
@@ -103,6 +106,10 @@ export interface RamGovernorDeps {
   readonly budgetMib: number;
   readonly listAwake: () => Promise<AwakeImp[]>;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
+
+  // RAM to keep free besides the budget's use: with IMP_KSM, a share of what
+  // KSM saves, since a guest's writes split merged pages faster than a tick
+  readonly readHeadroomMib?: () => number;
 
   // true while the imp's lifecycle lock is taken or it has open exec sessions
   // or proxied requests: never a victim
@@ -204,7 +211,11 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       }
     }
 
-    return { awake, byImp, usedMib, effectiveMib };
+    const headroomMib = deps.readHeadroomMib?.() ?? 0;
+
+    effectiveMib += headroomMib;
+
+    return { awake, byImp, usedMib, effectiveMib, headroomMib };
   };
 
   // what fits without sleeping anything
@@ -381,7 +392,8 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
       return {
         usedMib: usage.usedMib,
-        reservedMib: usage.effectiveMib - usage.usedMib,
+        reservedMib: usage.effectiveMib - usage.usedMib - usage.headroomMib,
+        headroomMib: usage.headroomMib,
       };
     },
 

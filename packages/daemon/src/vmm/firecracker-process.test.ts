@@ -2,7 +2,13 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isFirecrackerAlive, listFirecrackers, readPidFile } from './firecracker-process';
+import {
+  buildSpawnArgv,
+  isFirecrackerAlive,
+  listFirecrackers,
+  readPidFile,
+} from './firecracker-process';
+import { buildJailerCommand } from './jail';
 import { readProcessCgroup } from './process-owner';
 
 // A stand-in whose command line reads `firecracker ... --api-sock <socket>`,
@@ -76,6 +82,49 @@ test('a pid file reads as its pid, and anything else as none', () => {
     const broken = readPidFile(pidFile);
 
     expect([missing, written, broken]).toEqual([null, 4242, null]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+const JAILER_COMMAND = buildJailerCommand({
+  jailerBin: 'jailer',
+  firecrackerBin: '/usr/local/bin/firecracker',
+  chrootBase: '/var/lib/imp/jail',
+  impId: 'imp',
+  user: { uid: 900_000, gid: 900_000 },
+  apiSocket: 'api.sock',
+});
+
+test('the merge wrapper goes before the jailer, so the chroot needs no copy of it', () => {
+  expect(buildSpawnArgv(JAILER_COMMAND, null, null)).toEqual(['setsid', ...JAILER_COMMAND]);
+
+  expect(buildSpawnArgv(JAILER_COMMAND, null, 'ksm-exec')).toEqual([
+    'setsid',
+    'ksm-exec',
+    ...JAILER_COMMAND,
+  ]);
+
+  expect(buildSpawnArgv(['firecracker', '--api-sock', 'api.sock'], null, 'ksm-exec')).toEqual([
+    'setsid',
+    'ksm-exec',
+    'firecracker',
+    '--api-sock',
+    'api.sock',
+  ]);
+});
+
+// /usr/bin/env stands in for ksm-exec: it execs the rest of its argv
+test('in a cgroup, the shell records its pid and execs the wrapper and the command', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-fc-argv-'));
+
+  try {
+    const procs = join(dir, 'cgroup.procs');
+    const argv = buildSpawnArgv(['echo', '--api-sock', 'api.sock'], procs, '/usr/bin/env');
+    const result = Bun.spawnSync(argv);
+
+    expect(result.stdout.toString()).toBe('--api-sock api.sock\n');
+    expect(readFileSync(procs, 'utf8').trim()).toBe(String(result.pid));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
