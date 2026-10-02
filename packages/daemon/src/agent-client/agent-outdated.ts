@@ -9,6 +9,7 @@ const FEATURES = {
   grow: { since: [0, 5], missing: 'no online disk grow' },
   'unix-dial-as-user': { since: [0, 6], missing: 'no safe unix socket forwarding' },
   cp: { since: [0, 7], missing: 'no imp cp' },
+  'reverse-forward': { since: [0, 9], missing: 'no reverse forwards' },
 } as const;
 
 export type AgentFeature = keyof typeof FEATURES;

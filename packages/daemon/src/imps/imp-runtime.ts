@@ -1,5 +1,3 @@
-import { openAgentAccept, openAgentListener } from '../agent-client/agent-forward-stream';
-import type { AgentListener } from '../agent-client/agent-forward-stream';
 import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity } from '../agent-client/agent-requests';
@@ -8,6 +6,8 @@ import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { openAccept, openListener } from '../agent-client/listener-stream';
+import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { mergeEnv } from '../exec/merge-env';
@@ -46,13 +46,19 @@ export interface ImpRuntime {
     kind: Extract<ConnectionKind, 'ssh' | 'tunnel'>,
   ) => Promise<DialStream>;
 
-  // as openExec, for ssh-agent forwarding: a socket in the guest, and the
-  // relay for each of its clients
-  readonly openAgentListener: (name: string) => Promise<AgentListener>;
-  readonly openAgentAccept: (
+  // as openExec, for ssh-agent forwarding and reverse forwards: a socket in
+  // the guest, and the relay for each client. A null `kind` counts for
+  // nothing: a reverse forward alone does not keep the imp awake.
+  readonly openListener: (
+    name: string,
+    spec: ListenSpec,
+    kind: Extract<ConnectionKind, 'ssh'> | null,
+  ) => Promise<GuestListener>;
+  readonly openAccept: (
     name: string,
     listener: string,
     connection: number,
+    kind: Extract<ConnectionKind, 'ssh' | 'tunnel'>,
   ) => Promise<DialStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
@@ -127,14 +133,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // no background sleep slips in between the wake and the open.
   const openStream = async <T extends { readonly close: () => void }>(
     name: string,
-    kind: ConnectionKind,
+    kind: ConnectionKind | null,
     open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
   ): Promise<T> => {
     const opened = { release: () => {} };
 
     try {
       const running = await requireRunning(name, (found) => {
-        opened.release = context.tracker.open(found.id, kind);
+        if (kind !== null) {
+          opened.release = context.tracker.open(found.id, kind);
+        }
       });
 
       const imp = running.imp;
@@ -238,14 +246,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
         return openDialStream(paths.vsockSocket, target);
       }),
-    openAgentListener: (name) =>
-      openStream(name, 'ssh', (paths) => {
-        requireFeature(paths, 'agent-forwarding');
+    openListener: (name, spec, kind) =>
+      openStream(name, kind, (paths) => {
+        const feature = spec.network === 'ssh-agent' ? 'agent-forwarding' : 'reverse-forward';
 
-        return openAgentListener(paths.vsockSocket);
+        requireFeature(paths, feature);
+
+        return openListener(paths.vsockSocket, spec);
       }),
-    openAgentAccept: (name, listener, connection) =>
-      openStream(name, 'ssh', (paths) => openAgentAccept(paths.vsockSocket, listener, connection)),
+    openAccept: (name, listener, connection, kind) =>
+      openStream(name, kind, (paths) => openAccept(paths.vsockSocket, listener, connection)),
 
     readActivity: async (imp) => {
       try {

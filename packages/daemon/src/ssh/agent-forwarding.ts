@@ -1,5 +1,6 @@
 import type { Connection, ServerChannel } from 'ssh2';
-import type { AgentListener } from '../agent-client/agent-forward-stream';
+import type { GuestListener } from '../agent-client/listener-stream';
+import { runGuestListener } from '../reverse/run-guest-listener';
 import { formatFailure, runChannelRelay } from './channel-io';
 import type { SshBackend } from './ssh-connection-context';
 
@@ -21,11 +22,11 @@ export interface AgentForwarding {
 interface AgentForwardingDeps {
   readonly client: Connection;
   readonly impName: string;
-  readonly backend: Pick<SshBackend, 'requireRunning' | 'openAgentListener' | 'openAgentAccept'>;
+  readonly backend: Pick<SshBackend, 'requireRunning' | 'openListener' | 'openAccept'>;
   readonly log: (message: string) => void;
 }
 
-async function stopListenerWhenOpen(listening: Promise<AgentListener>): Promise<void> {
+async function stopListenerWhenOpen(listening: Promise<GuestListener>): Promise<void> {
   try {
     const listener = await listening;
 
@@ -40,7 +41,7 @@ async function stopListenerWhenOpen(listening: Promise<AgentListener>): Promise<
 // Each client of it becomes an `auth-agent@openssh.com` channel.
 export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwarding {
   const state: {
-    listening: Promise<AgentListener> | null;
+    listening: Promise<GuestListener> | null;
 
     // tells a stale listener from the current one
     generation: number;
@@ -75,9 +76,9 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
   };
 
   // an accept that impd closes at once: the guest client sees the close
-  const stopGuestClient = async (listener: AgentListener, id: number): Promise<void> => {
+  const stopGuestClient = async (listener: GuestListener, id: number): Promise<void> => {
     try {
-      const stream = await deps.backend.openAgentAccept(deps.impName, listener.id, id);
+      const stream = await deps.backend.openAccept(deps.impName, listener.id, id, 'ssh');
 
       stream.close();
     } catch {
@@ -98,7 +99,7 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
 
   // A client that refuses the channel (it has no agent) gets the guest
   // client closed at once, so `ssh-add` fails fast.
-  const sendToClientAgent = async (listener: AgentListener, id: number): Promise<void> => {
+  const sendToClientAgent = async (listener: GuestListener, id: number): Promise<void> => {
     let channel: ServerChannel;
 
     try {
@@ -112,7 +113,7 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
     }
 
     try {
-      const relay = await deps.backend.openAgentAccept(deps.impName, listener.id, id);
+      const relay = await deps.backend.openAccept(deps.impName, listener.id, id, 'ssh');
 
       await runChannelRelay(channel, relay);
     } catch (error) {
@@ -122,13 +123,7 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
     }
   };
 
-  const handleConnection = async (listener: AgentListener, id: number): Promise<void> => {
-    if (state.channels >= MAX_AGENT_CHANNELS) {
-      await stopGuestClient(listener, id);
-
-      return;
-    }
-
+  const handleConnection = async (listener: GuestListener, id: number): Promise<void> => {
     state.channels += 1;
 
     try {
@@ -140,11 +135,13 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
 
   // A listener ends with its agent connection (a forced sleep resets it);
   // the next session then listens again.
-  const runListener = async (listener: AgentListener, generation: number): Promise<void> => {
+  const runListener = async (listener: GuestListener, generation: number): Promise<void> => {
     try {
-      for await (const id of listener.connections()) {
-        void handleConnection(listener, id);
-      }
+      await runGuestListener(listener, {
+        deliver: (id) => handleConnection(listener, id),
+        refuse: (id) => stopGuestClient(listener, id),
+        isFull: () => state.channels >= MAX_AGENT_CHANNELS,
+      });
     } catch (error) {
       writeLog(`the guest socket ended: ${formatFailure(error)}`);
     } finally {
@@ -156,11 +153,11 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
     }
   };
 
-  const openListener = async (generation: number): Promise<AgentListener> => {
-    let listener: AgentListener;
+  const openListener = async (generation: number): Promise<GuestListener> => {
+    let listener: GuestListener;
 
     try {
-      listener = await deps.backend.openAgentListener(deps.impName);
+      listener = await deps.backend.openListener(deps.impName, { network: 'ssh-agent' }, 'ssh');
     } catch (error) {
       if (state.generation === generation) {
         state.listening = null;
@@ -206,7 +203,7 @@ export function createAgentForwarding(deps: AgentForwardingDeps): AgentForwardin
 
       const listener = await state.listening;
 
-      return listener.path;
+      return listener.path ?? null;
     },
     stop: () => {
       state.stopped = true;

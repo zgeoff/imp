@@ -27,8 +27,8 @@ interface StartSshDeps {
     | 'tracker'
     | 'openExec'
     | 'openDial'
-    | 'openAgentListener'
-    | 'openAgentAccept'
+    | 'openListener'
+    | 'openAccept'
     | 'recordActivity'
   >;
   readonly log: (message: string) => void;
@@ -82,8 +82,8 @@ export async function startSsh(deps: StartSshDeps): Promise<SshGateway | null> {
               () => imps.openExec(name, request, feature),
             ),
           openDial: imps.openDial,
-          openAgentListener: imps.openAgentListener,
-          openAgentAccept: imps.openAgentAccept,
+          openListener: imps.openListener,
+          openAccept: imps.openAccept,
           recordActivity: imps.recordActivity,
           findImp: (name) => findImpByName(deps.db, name),
         },

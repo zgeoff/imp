@@ -1,6 +1,6 @@
-import type { AgentListener } from '../agent-client/agent-forward-stream';
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
 import type { AuditActor } from '../auth/caller';
 import type { ImpRecord } from '../db/imps';
 import { createActivityTracker } from '../imps/activity-tracker';
@@ -84,9 +84,11 @@ interface FakeDial {
   readonly input: readonly string[];
 }
 
-// a guest ssh-agent socket the gateway opened; the test connects clients
-interface FakeAgentListener {
+// a guest socket the gateway opened (ssh-agent or a remote forward); the
+// test connects clients
+interface FakeListener {
   readonly id: string;
+  readonly spec: ListenSpec;
   readonly connect: (id: number) => void;
 
   // the agent connection ended, as after a forced sleep
@@ -95,12 +97,22 @@ interface FakeAgentListener {
 }
 
 // the relay for one guest client; the test sends what the client asks
-interface FakeAgentAccept {
+interface FakeAccept {
   readonly listener: string;
   readonly id: number;
   readonly input: readonly string[];
   readonly send: (data: string) => void;
   readonly state: { closed: boolean };
+}
+
+// where a fake listener's socket is: an ssh-agent's, the path asked for, or
+// none for a port
+function readFakePath(spec: ListenSpec, id: string): string | null {
+  if (spec.network === 'ssh-agent') {
+    return `/run/imp/ssh-agent/${id}/agent.sock`;
+  }
+
+  return spec.network === 'unix' ? (spec.path ?? `/run/imp/forward/${id}/sock`) : null;
 }
 
 const decoder = new TextDecoder();
@@ -111,8 +123,8 @@ const encoder = new TextEncoder();
 export function createFakeSshBackend() {
   const execs: FakeExec[] = [];
   const dials: FakeDial[] = [];
-  const agentListeners: FakeAgentListener[] = [];
-  const agentAccepts: FakeAgentAccept[] = [];
+  const listeners: FakeListener[] = [];
+  const accepts: FakeAccept[] = [];
   const tracker = createActivityTracker();
 
   // who each exec ran as, for the audit
@@ -126,7 +138,7 @@ export function createFakeSshBackend() {
     wakeError: Error | null;
     execError: Error | null;
     dialError: Error | null;
-    agentListenError: Error | null;
+    listenError: Error | null;
 
     // the VM's pid; a test changes it to stand for a wake
     pid: number;
@@ -138,7 +150,7 @@ export function createFakeSshBackend() {
     wakeError: null,
     execError: null,
     dialError: null,
-    agentListenError: null,
+    listenError: null,
     onExec: null,
   };
 
@@ -214,17 +226,18 @@ export function createFakeSshBackend() {
     return Promise.resolve(stream);
   };
 
-  const openAgentListener: SshBackend['openAgentListener'] = () => {
-    if (fake.agentListenError !== null) {
-      return Promise.reject(fake.agentListenError);
+  const openListener: SshBackend['openListener'] = (_name, spec) => {
+    if (fake.listenError !== null) {
+      return Promise.reject(fake.listenError);
     }
 
     const queue = createEventQueue<number>();
-    const id = `fake${String(agentListeners.length + 1)}`;
+    const id = `fake${String(listeners.length + 1)}`;
     const state = { closed: false };
 
-    agentListeners.push({
+    listeners.push({
       id,
+      spec,
       connect: queue.emit,
       end: () => {
         queue.emit(null);
@@ -232,8 +245,9 @@ export function createFakeSshBackend() {
       state,
     });
 
-    const listener: AgentListener = {
-      path: `/run/imp/ssh-agent/${id}/agent.sock`,
+    const listener: GuestListener = {
+      path: readFakePath(spec, id),
+      port: spec.network === 'tcp' ? spec.port || 40_000 + listeners.length : null,
       id,
       connections: () => readEvents(queue.next),
       close: () => {
@@ -246,12 +260,12 @@ export function createFakeSshBackend() {
     return Promise.resolve(listener);
   };
 
-  const openAgentAccept: SshBackend['openAgentAccept'] = (_name, listener, id) => {
+  const openAccept: SshBackend['openAccept'] = (_name, listener, id) => {
     const queue = createEventQueue<DialEvent>();
     const input: string[] = [];
     const state = { closed: false };
 
-    agentAccepts.push({
+    accepts.push({
       listener,
       id,
       input,
@@ -307,9 +321,9 @@ export function createFakeSshBackend() {
       return openExec(name, request, feature);
     },
     openDial,
-    openAgentListener,
-    openAgentAccept,
+    openListener,
+    openAccept,
   };
 
-  return { backend, fake, actors, execs, dials, agentListeners, agentAccepts, tracker };
+  return { backend, fake, actors, execs, dials, listeners, accepts, tracker };
 }

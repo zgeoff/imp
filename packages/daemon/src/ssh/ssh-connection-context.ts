@@ -8,12 +8,7 @@ import type { AgentForwarding } from './agent-forwarding';
 // What the gateway needs from impd.
 export interface SshBackend extends Pick<
   ImpRuntime,
-  | 'requireRunning'
-  | 'tracker'
-  | 'openDial'
-  | 'openAgentListener'
-  | 'openAgentAccept'
-  | 'recordActivity'
+  'requireRunning' | 'tracker' | 'openDial' | 'openListener' | 'openAccept' | 'recordActivity'
 > {
   readonly findImp: (name: string) => Promise<ImpRecord | undefined>;
 
