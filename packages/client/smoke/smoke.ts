@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { CLIENT_VERSION, ExecError, createImpClient, openExecSession } from '@zgeoff/imp-client';
-import type { ExecOutcome } from '@zgeoff/imp-client';
+import type { ExecOutcome, ExecSessionOptions } from '@zgeoff/imp-client';
 
 // The client's smoke against fake-impd.ts, from the packed package under
 // Node, Bun and a compiled Bun binary (scripts/check-client-runtimes.sh).
@@ -19,8 +19,9 @@ const CHECKS: readonly (readonly [string, () => Promise<void>])[] = [
   ['a console with a resize and a key', checkConsole],
   ['impd under a path prefix', checkPrefix],
   ['a bad token', checkBadToken],
+  ['a used exec ticket', checkUsedTicket],
   ['a closed port', checkClosedPort],
-  ['an abort during the ticket call', checkAbort],
+  ['an abort during the ticket call and the connect', checkAbort],
 ];
 
 const DEADLINE_MS = 30_000;
@@ -139,6 +140,31 @@ async function checkBadToken(): Promise<void> {
   assert.equal(outcome.kind, 'unauthorized');
 }
 
+// a good token, but a ticket the first socket redeemed: Node reports the
+// refused upgrade with an error and no close
+async function checkUsedTicket(): Promise<void> {
+  const issued = await imp.exec.ticket({ name: 'smoke' });
+
+  const ticket = issued.ticket;
+  const started = Promise.withResolvers<null>();
+
+  const first = openExecSession({
+    ...buildRawSession(impd.url, impd.token),
+    ticket,
+    onStarted: () => {
+      started.resolve(null);
+    },
+  });
+
+  await started.promise;
+
+  first.stop();
+
+  const outcome = await openRawSession(impd.url, impd.token, ticket);
+
+  assert.deepEqual(outcome, { kind: 'unauthorized', ticketRefused: true });
+}
+
 async function checkClosedPort(): Promise<void> {
   const closed = createImpClient({ url: impd.closedUrl, token: impd.token });
 
@@ -149,7 +175,7 @@ async function checkClosedPort(): Promise<void> {
   assert.equal(outcome.kind, 'unreachable');
 }
 
-// the abort lands while the ticket request is in flight
+// the first abort lands while the ticket request is in flight
 async function checkAbort(): Promise<void> {
   const controller = new AbortController();
 
@@ -165,18 +191,39 @@ async function checkAbort(): Promise<void> {
 
   const opened = aborting.openExec('smoke', ['cat'], { signal: controller.signal });
 
-  await assert.rejects(opened, (error: unknown) => {
-    assert.ok(error instanceof Error, String(error));
-    assert.equal(error.name, 'AbortError', error.message);
+  await assert.rejects(opened, isAbortError);
 
-    return true;
-  });
+  // the ticket is in, and the socket is still connecting
+  const connecting = new AbortController();
+
+  const handle = await imp.openExec('smoke', ['cat'], { signal: connecting.signal });
+
+  connecting.abort();
+
+  await assert.rejects(handle.started, isAbortError);
+  await assert.rejects(handle.exit, isAbortError);
 }
 
-// an exec socket with no ticket and no header, as a browser opens one, so
-// impd refuses the upgrade and the session asks /rpc why
-function openRawSession(url: string, token: string): Promise<ExecOutcome> {
+function isAbortError(error: unknown): boolean {
+  assert.ok(error instanceof Error, String(error));
+  assert.equal(error.name, 'AbortError', error.message);
+
+  return true;
+}
+
+// an exec socket with no header, as a browser opens one: with no ticket or a
+// used one, impd refuses the upgrade and the session asks /rpc why
+function openRawSession(url: string, token: string, ticket?: string): Promise<ExecOutcome> {
   const session = openExecSession({
+    ...buildRawSession(url, token),
+    ...(ticket !== undefined && { ticket }),
+  });
+
+  return session.outcome;
+}
+
+function buildRawSession(url: string, token: string): ExecSessionOptions {
+  return {
     baseUrl: url,
     token,
     start: { name: 'smoke', argv: ['cat'], tty: false },
@@ -185,9 +232,7 @@ function openRawSession(url: string, token: string): Promise<ExecOutcome> {
     },
     onOutput: () => {},
     connect: (socketUrl) => new WebSocket(socketUrl),
-  });
-
-  return session.outcome;
+  };
 }
 
 async function readUntil(
