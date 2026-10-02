@@ -46,3 +46,13 @@ func TestParseResetIdentity(t *testing.T) {
 		t.Fatal("no reset with imp.reset_identity=1")
 	}
 }
+
+func TestParseIPv6(t *testing.T) {
+	p := Parse("imp.ip=10.66.0.2/30 imp.ip6=fd12:3456:789a::a42:2/128 imp.gw6=fe80::1")
+	if p.IP6 != "fd12:3456:789a::a42:2/128" || p.GW6 != "fe80::1" {
+		t.Fatalf("got %+v", p)
+	}
+	if q := Parse("imp.ip=10.66.0.2/30"); q.IP6 != "" || q.GW6 != "" {
+		t.Fatalf("no IPv6 given, got %+v", q)
+	}
+}

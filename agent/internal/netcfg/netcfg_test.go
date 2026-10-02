@@ -13,6 +13,7 @@ func TestParseAddr(t *testing.T) {
 		wantErr bool
 	}{
 		{cidr: "10.66.0.2/30", want: "10.66.0.2/30"},
+		{cidr: "fd12:3456:789a::a42:2/128", want: "fd12:3456:789a::a42:2/128"},
 		{cidr: "10.66.0.2", wantErr: true},
 		{cidr: "10.66.0.300/30", wantErr: true},
 		{cidr: "not-an-ip", wantErr: true},
@@ -38,6 +39,7 @@ func TestParseGateway(t *testing.T) {
 		wantErr bool
 	}{
 		{gw: "10.66.0.1", want: "10.66.0.1"},
+		{gw: "fe80::1", want: "fe80::1"},
 		{gw: "", want: "<nil>"},
 		{gw: "10.66.0.1/30", wantErr: true},
 		{gw: "gateway", wantErr: true},
@@ -101,5 +103,28 @@ func TestWriteResolvConf(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWriteIPv6Conf(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "eth0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIPv6Conf(root, "eth0", map[string]string{"accept_ra": "0"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "eth0", "accept_ra"))
+	if err != nil || string(got) != "0\n" {
+		t.Errorf("accept_ra = %q, %v; want 0", got, err)
+	}
+	if err := writeIPv6Conf(root, "nope", map[string]string{"accept_ra": "0"}); err == nil {
+		t.Error("a missing interface wrote without an error")
+	}
+}
+
+func TestUp6WithoutAnAddressDoesNothing(t *testing.T) {
+	if err := Up6("no-such-link", "", ""); err != nil {
+		t.Errorf("Up6 with no address: %v", err)
 	}
 }

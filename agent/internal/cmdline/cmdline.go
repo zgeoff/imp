@@ -10,8 +10,12 @@ import (
 type Params struct {
 	Hostname string
 	// IP is the guest address in CIDR form, e.g. 10.66.0.2/30.
-	IP  string
-	GW  string
+	IP string
+	GW string
+	// IP6 is the guest's IPv6 /128 and GW6 its link-local gateway; both
+	// empty when the host gives imps no IPv6.
+	IP6 string
+	GW6 string
 	DNS []string
 	// ResetIdentity is set on the first boot of an imp made from a template.
 	ResetIdentity bool
@@ -49,6 +53,10 @@ func Parse(line string) Params {
 			p.GW = val
 		case "reset_identity":
 			p.ResetIdentity = val == "1"
+		case "ip6":
+			p.IP6 = val
+		case "gw6":
+			p.GW6 = val
 		case "dns":
 			for _, s := range strings.Split(val, ",") {
 				if s = strings.TrimSpace(s); s != "" {

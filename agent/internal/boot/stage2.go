@@ -56,6 +56,9 @@ func Stage2() error {
 	if err := netcfg.Up("eth0", params.IP, params.GW); err != nil {
 		log.Printf("network: %v", err)
 	}
+	if err := netcfg.Up6("eth0", params.IP6, params.GW6); err != nil {
+		log.Printf("network (IPv6): %v", err)
+	}
 	if err := netcfg.WriteResolvConf(params.DNS); err != nil {
 		log.Printf("resolv.conf: %v", err)
 	}
