@@ -1,8 +1,8 @@
 name: CI
 
-# The gates every change to main must pass. Each job is one required status
-# check in .github/rulesets/main.json, so a job's name is part of that
-# contract: rename both together.
+# The gates every change to main must pass, then the release on main. Each
+# gate job is one required status check in .github/rulesets/main.json, so a
+# gate's name is part of that contract: rename both together.
 on:
   push:
     branches: [main]
@@ -156,5 +156,128 @@ jobs:
           shellcheck --version
           scripts/shellcheck.sh
 
+  # Compiles the CLI for every platform, as a release does, and runs the
+  # linux-x64 one. The release workflow runs each binary on its own platform;
+  # macOS runners cost too much for every pull request.
+  cli:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build:cli
+
+      - name: Run
+        run: dist/imp-linux-x64 --version
+
   # Main-only jobs (the release, the KVM end-to-end suite) go below with
   # `if: github.event_name == 'push'` and `needs:` on the gates above.
+
+  # A release takes two runs of this job (RELEASING.md):
+  # - after a releasable commit lands on main, release-please opens or updates
+  #   the release PR (version bump and changelog), and the sync step makes
+  #   that PR pass the checks job
+  # - after the release PR merges, release-please tags vX.Y.Z and creates the
+  #   GitHub release, and the job starts release.yml for the tag
+  #
+  # GITHUB_TOKEN events start no workflows, so a release PR it opens gets no
+  # CI and the owner merges it by hand. With a release App configured
+  # (vars.RELEASE_APP_ID), its token opens the PR, CI runs on it, and the job
+  # turns on auto-merge.
+  release-please:
+    if: github.event_name == 'push'
+    needs: [gitleaks, checks, go, shellcheck, cli]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    timeout-minutes: 10
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        if: vars.RELEASE_APP_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+
+      # The release PR bumps package versions that bun.lock records too, and
+      # writes a CHANGELOG.md that oxfmt reformats: repair both so the PR
+      # passes the checks job like any other. The PR output stays a string
+      # here: env is evaluated even when the step is skipped, and fromJSON of
+      # an empty output would fail the run that tags a release.
+      - name: Checkout
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        if: steps.release.outputs.prs_created == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      # The token goes in the push URL only, never into .git/config; Actions
+      # masks it in the log.
+      - name: Sync lockfile and formatting on release PR
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          PR: ${{ steps.release.outputs.pr }}
+          TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          branch=$(jq -r .headBranchName <<<"$PR")
+          git fetch --depth=1 origin "$branch"
+          git checkout -B "$branch" FETCH_HEAD
+          bun install
+          bun run format
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: sync lockfile and format release files"
+            git push "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:$branch"
+          fi
+
+      # Reads no release-please outputs: prs_created is false when the open
+      # release PR needed no update, for example after a run that failed past
+      # creating it. release-please labels its open PR "autorelease: pending".
+      # GitHub merges the PR once its required checks pass, or at once when
+      # no ruleset requires any.
+      - name: Auto-merge release PR
+        if: steps.app-token.outputs.token != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          for pr in $(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --label "autorelease: pending" --json number --jq '.[].number'); do
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash
+          done
+
+      # A run of its own, outside this workflow's concurrency group, so an
+      # hour-long release never holds up CI on main. release.yml comes from
+      # main and checks out the tag. A dispatch is the one GITHUB_TOKEN event
+      # that starts a workflow.
+      - name: Start the release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"

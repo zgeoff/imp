@@ -35,6 +35,7 @@
   "type": "module",
   "scripts": {
     "audit": "bun audit",
+    "build:cli": "./scripts/build-cli.sh",
     "deadcode": "knip",
     "lint": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",

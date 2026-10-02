@@ -6,6 +6,7 @@
 .cache
 .data*
 build
+dist
 kernel/.build
 kernel/out
 .env
