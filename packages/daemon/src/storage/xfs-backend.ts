@@ -14,7 +14,10 @@ import { basename, dirname, join } from 'node:path';
 import * as z from 'zod';
 import { printLog } from '../process/print-log';
 import { runChecked } from '../process/run-command';
+import { countOwnerBytes } from './count-owner-bytes';
+import type { OwnedFile } from './count-owner-bytes';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
+import { readExtents } from './fiemap';
 import { createReflinkClone } from './reflink';
 import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from './storage-backend';
 
@@ -27,6 +30,9 @@ const CopiesSchema = z.record(
 );
 
 type Copies = z.infer<typeof CopiesSchema>;
+
+// a usage pass stops here and reports what it read (fiemap.ts)
+const USAGE_DEADLINE_MS = 20_000;
 
 // an image directory being written, renamed into place once complete; a
 // hidden name, as image-service's `.build-` work directories
@@ -148,6 +154,39 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
         });
       }
     }
+  };
+
+  // Every file that holds disk blocks, with whoever removing it frees them.
+  // The backup tree's reflinks hold blocks between runs, so it is an owner.
+  const listOwnedFiles = (impIds: readonly string[]) => {
+    const files: { owner: string; path: string }[] = [];
+
+    for (const impId of impIds) {
+      const paths = resolveImpPaths(impId);
+
+      const checkpoints = listEntries(paths.checkpointsDir).map((id) =>
+        buildCheckpointDisk(impId, id),
+      );
+
+      for (const path of [paths.disk, ...checkpoints, paths.memFile, paths.vmstate]) {
+        files.push({ owner: `imp:${impId}`, path });
+      }
+    }
+
+    for (const name of listEntries(join(deps.dataDir, 'images'))) {
+      if (!name.startsWith('.')) {
+        files.push({
+          owner: `image:${name}`,
+          path: join(deps.dataDir, 'images', name, 'rootfs.ext4'),
+        });
+      }
+    }
+
+    for (const path of listFilesUnder(backup.tree)) {
+      files.push({ owner: 'backup', path });
+    }
+
+    return files.filter((file) => existsSync(file.path));
   };
 
   // made once, and again at a start after someone removed it to free space,
@@ -401,6 +440,44 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
     stop: () => Promise.resolve(),
 
+    measureUsage: async (imps) => {
+      const deadline = Date.now() + USAGE_DEADLINE_MS;
+      const owned: OwnedFile[] = [];
+      let isPartial = false;
+
+      for (const file of listOwnedFiles(imps.map((imp) => imp.impId))) {
+        // a file removed since the listing holds nothing
+        const read = await readExtents(file.path, deadline).catch((error: unknown) => {
+          if (existsSync(file.path)) {
+            throw error;
+          }
+
+          return null;
+        });
+
+        if (read !== null) {
+          owned.push({ owner: file.owner, extents: read.extents });
+        }
+
+        if (read !== null && !read.isComplete) {
+          isPartial = true;
+          break;
+        }
+      }
+
+      const totals = countOwnerBytes(owned);
+
+      const report = new Map(
+        imps.map((imp) => {
+          const total = totals.get(`imp:${imp.impId}`) ?? { exclusiveBytes: 0, sharedBytes: 0 };
+
+          return [imp.impId, { ...total, isUpperBound: false }];
+        }),
+      );
+
+      return { imps: report, isPartial };
+    },
+
     readUsage: () => {
       const stats = statfsSync(deps.dataDir);
 
@@ -410,6 +487,16 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       });
     },
   };
+}
+
+function listFilesUnder(dir: string): string[] {
+  if (!existsSync(dir)) {
+    return [];
+  }
+
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 function listEntries(dir: string): string[] {

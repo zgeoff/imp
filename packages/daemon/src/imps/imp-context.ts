@@ -14,6 +14,7 @@ import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
 import type { DiskBudget } from '../storage/disk-budget';
+import type { CachedDiskUsage } from '../storage/disk-usage-cache';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
@@ -62,6 +63,9 @@ export interface ImpServiceDeps {
   // holds room for its memory file while it writes
   readonly diskBudget?: DiskBudget;
 
+  // the last usage pass's numbers for an imp (disk-usage-cache.ts)
+  readonly readDiskUsage?: (impId: string) => CachedDiskUsage | undefined;
+
   // grows a disk's filesystem on the host while no VM has it open; false
   // leaves the grow to the guest's next boot (imp-disk.ts)
   readonly growFilesystem?: (disk: string) => Promise<boolean>;
@@ -86,6 +90,7 @@ export interface ImpContext {
   readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly storageGate: StorageGate;
   readonly diskBudget: DiskBudget;
+  readonly readDiskUsage: (impId: string) => CachedDiskUsage | undefined;
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
@@ -111,6 +116,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
+    readDiskUsage: deps.readDiskUsage ?? (() => {}),
     storageGate: deps.storageGate ?? createStorageGate(),
     diskBudget:
       deps.diskBudget ??

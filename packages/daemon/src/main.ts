@@ -28,6 +28,7 @@ import { readHostIdentity } from './sleep/vm-identity';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { createDiskBudget } from './storage/disk-budget';
+import { createDiskUsageCache } from './storage/disk-usage-cache';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { createStorageGate } from './storage/storage-gate';
@@ -95,6 +96,7 @@ async function main(): Promise<void> {
   });
 
   const images = createImageService({ config, db, storage, storageGate, diskBudget });
+  const diskUsage = createDiskUsageCache({ db, storage, log: printLog });
 
   const broker = await createBroker({ config, db, log: printLog });
 
@@ -113,6 +115,7 @@ async function main(): Promise<void> {
     readExecEnv: broker.readExecEnv,
     storageGate,
     diskBudget,
+    readDiskUsage: diskUsage.read,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -135,6 +138,11 @@ async function main(): Promise<void> {
 
   // an imp that comes or goes opens or closes its proxy port and its grants
   subscribeImpWrites(db, (write) => {
+    // storage comes or goes with an imp or a checkpoint
+    if (write.kind !== 'changed') {
+      diskUsage.requestRefresh();
+    }
+
     if (isImpSetWrite(write)) {
       void proxyHolder.proxy?.syncListeners();
       void broker.applyGrants();
@@ -239,6 +247,9 @@ async function main(): Promise<void> {
 
     // what a crash or a failed removal left; start sweeps the same way
     startTicker('gc', 3_600_000, gc.runScheduled, printLog),
+
+    // FIEMAP over every file on XFS: often enough for `imp ls`
+    startTicker('disk-usage', 300_000, diskUsage.runPass, printLog),
     ...(backups === null
       ? []
       : [
@@ -253,6 +264,9 @@ async function main(): Promise<void> {
           ),
         ]),
   ];
+
+  // the first usage numbers soon after start, not a ticker interval later
+  diskUsage.requestRefresh();
 
   // ready either way: a failed seed leaves `imp image add` to the user
   const setupDefaultImage = async (): Promise<void> => {
@@ -282,6 +296,8 @@ async function main(): Promise<void> {
     const started = performance.now();
     const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));
     const readStepMs = () => Math.min(STOP_STEP_MAX_MS, readLeftMs());
+
+    diskUsage.stop();
 
     await runStopStep('tickers', readStepMs(), () =>
       Promise.all(tickers.map((ticker) => ticker.stop())),

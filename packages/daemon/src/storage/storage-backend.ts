@@ -39,6 +39,21 @@ interface StorageUsage {
   readonly availableBytes: number;
 }
 
+// Exclusive is what removing the imp frees; shared, what it holds with an
+// image, another imp or the backup tree. docs/architecture/storage.md has more.
+export interface ImpDiskUsage {
+  readonly exclusiveBytes: number;
+  readonly sharedBytes: number;
+  readonly isUpperBound: boolean;
+}
+
+export interface DiskUsageReport {
+  readonly imps: ReadonlyMap<string, ImpDiskUsage>;
+
+  // a pass cut short at its time limit counts only the files it read
+  readonly isPartial: boolean;
+}
+
 // What the database holds when impd starts. Anything else a backend finds is
 // left over from a crash, and start drops it.
 export interface LiveStorage {
@@ -112,6 +127,11 @@ export interface StorageBackend {
   readonly openBackupTree: (request: BackupTreeRequest) => Promise<BackupTree>;
 
   readonly readUsage: () => Promise<StorageUsage>;
+
+  // each imp's usage; slow on XFS, so a cache calls it now and then
+  readonly measureUsage: (
+    imps: readonly { readonly impId: string; readonly checkpointIds: readonly string[] }[],
+  ) => Promise<DiskUsageReport>;
 
   // waits for background work (a ZFS reclaim) to finish, before impd exits
   readonly stop: () => Promise<void>;

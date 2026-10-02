@@ -804,3 +804,42 @@ test('dropUnnamed retires what the database does not name and leaves staging alo
   expect(ctx.fake.listSnapshots()).toContain(`${ROOT}/disks/a@cp-1`);
   expect(ctx.fake.listSnapshots()).not.toContain(`${ROOT}/disks/a@cp-lost`);
 });
+
+test('usage counts the retired checkpoints and is an upper bound under a fork', async () => {
+  await using ctx = await setupStarted();
+
+  const MIB = 1_048_576;
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-old');
+  await ctx.createCheckpoint('a', 'cp-new');
+  await ctx.backend.restoreCheckpoint('a', 'cp-old', () => Promise.resolve());
+  await ctx.createImp('c');
+
+  const imps = [
+    { impId: 'a', checkpointIds: ['cp-old', 'cp-new'] },
+    { impId: 'c', checkpointIds: [] },
+  ];
+
+  const before = await ctx.backend.measureUsage(imps);
+
+  // the fake: each dataset holds 1 MiB of its own and refers to 3
+  expect(before.imps.get('a')).toEqual({
+    exclusiveBytes: 2 * MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  expect(before.imps.get('c')).toEqual({
+    exclusiveBytes: MIB,
+    sharedBytes: 2 * MIB,
+    isUpperBound: false,
+  });
+
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-new' });
+
+  const after = await ctx.backend.measureUsage(imps);
+
+  expect(after.imps.get('a')?.isUpperBound).toBe(true);
+  expect(after.imps.get('c')?.isUpperBound).toBe(false);
+});

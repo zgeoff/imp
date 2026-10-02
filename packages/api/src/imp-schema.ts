@@ -21,6 +21,21 @@ export const ImpSchema = z.object({
 
   // the disk's size; the guest's filesystem fills it
   diskMib: z.int().positive(),
+
+  // what the imp's disk, checkpoints and memory take on the host, as last
+  // measured: exclusive is what a destroy frees, shared what it holds with
+  // an image, another imp or the backup tree. Left out until measured.
+  diskUsage: z
+    .object({
+      exclusiveBytes: z.int().nonnegative(),
+      sharedBytes: z.int().nonnegative(),
+      measuredAt: z.date(),
+
+      // the pass hit its time limit; a fork holds a snapshot (ZFS)
+      isPartial: z.boolean(),
+      isUpperBound: z.boolean(),
+    })
+    .optional(),
   ip: z.ipv4(),
   slot: z.int().nonnegative(),
   port: z.int().positive(),

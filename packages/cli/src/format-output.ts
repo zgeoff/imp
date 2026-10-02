@@ -31,7 +31,21 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'DISK', 'SESSIONS', 'IP', 'URL', 'NOTE'],
+    [
+      'NAME',
+      'STATE',
+      'IMAGE',
+      'VCPUS',
+      'MEMORY',
+      'RAM',
+      'DISK',
+      'USED',
+      'SHARED',
+      'SESSIONS',
+      'IP',
+      'URL',
+      'NOTE',
+    ],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -40,12 +54,33 @@ export function formatImps(imps: readonly Imp[]): string {
       `${String(imp.memoryMib)} MiB`,
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
       formatDiskMib(imp.diskMib),
+      ...formatDiskUsage(imp.diskUsage),
       imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
       formatNote(imp),
     ]),
   );
+}
+
+// what a destroy frees, and what the imp shares; `<=` when a fork holds a
+// snapshot of it, `?` when the last pass was cut short
+function formatDiskUsage(usage: Imp['diskUsage']): [string, string] {
+  if (usage === undefined) {
+    return ['-', '-'];
+  }
+
+  const bound = usage.isUpperBound ? '<=' : '';
+  const partial = usage.isPartial ? '?' : '';
+
+  return [
+    `${bound}${formatBytesMib(usage.exclusiveBytes)}${partial}`,
+    `${formatBytesMib(usage.sharedBytes)}${partial}`,
+  ];
+}
+
+function formatBytesMib(bytes: number): string {
+  return `${String(Math.round(bytes / 1_048_576))} MiB`;
 }
 
 // GiB when whole, as sizes are given

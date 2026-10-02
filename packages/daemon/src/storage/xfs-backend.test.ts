@@ -12,10 +12,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readExtents } from './fiemap';
 import { createXfsBackend } from './xfs-backend';
 
-function setupTest() {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+function setupTest(parentDir = tmpdir()) {
+  const dataDir = mkdtempSync(`${parentDir}/impd-xfs-test-`);
 
   return {
     dataDir,
@@ -247,4 +248,44 @@ test('start allocates the reserve file once, and again after it was removed', as
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+// tmpfs has no FIEMAP; the checkout's own filesystem usually does
+const USAGE_DIR = join(import.meta.dir, '../../../../.cache');
+
+mkdirSync(USAGE_DIR, { recursive: true });
+
+const hasFiemap = await readExtents(import.meta.path, Number.POSITIVE_INFINITY).then(
+  () => true,
+  () => false,
+);
+
+test.skipIf(!hasFiemap)('usage counts the blocks of each imp and its checkpoints', async () => {
+  using ctx = setupTest(USAGE_DIR);
+
+  mkdirSync(ctx.imageDir, { recursive: true });
+
+  await ctx.backend.createImage('sha256:abc', writeImage);
+  await ctx.backend.createImpDisk('a', { kind: 'image', digest: 'sha256:abc' });
+  await ctx.backend.createImpDisk('b', { kind: 'image', digest: 'sha256:abc' });
+
+  writeFileSync(ctx.backend.resolveImpPaths('a').disk, Buffer.alloc(1_048_576, 1));
+
+  await ctx.backend.createCheckpoint('a', 'cp-1');
+
+  const report = await ctx.backend.measureUsage([
+    { impId: 'a', checkpointIds: ['cp-1'] },
+    { impId: 'b', checkpointIds: [] },
+  ]);
+
+  // copies here, so nothing is shared; the disk and its checkpoint are 1 MiB each
+  expect(report.isPartial).toBeFalse();
+
+  expect(report.imps.get('a')).toEqual({
+    exclusiveBytes: 2 * 1_048_576,
+    sharedBytes: 0,
+    isUpperBound: false,
+  });
+
+  expect(report.imps.get('b')?.exclusiveBytes).toBe(4096);
 });

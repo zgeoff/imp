@@ -196,3 +196,52 @@ test('a gc lists what it removed, and says when a dry run removed nothing', () =
   expect(formatGc({ dryRun: true, dropped: [...dropped] })).toContain('dry run: nothing removed');
   expect(formatGc({ dryRun: false, dropped: [] })).toBe('nothing to remove');
 });
+
+test('the imp list shows what a destroy frees and what the imp shares', () => {
+  const imp = {
+    id: 'i1',
+    name: 'dev',
+    image: 'ubuntu',
+    state: 'running',
+    vcpus: 2,
+    memoryMib: 512,
+    diskMib: 32_768,
+    ip: '10.0.0.2',
+    slot: 0,
+    port: 7100,
+    httpPort: 8080,
+    url: 'http://dev.imp.localhost:7080',
+    createdAt: new Date(0),
+    lastActiveAt: new Date(0),
+  } as const;
+
+  const usage = {
+    exclusiveBytes: 300 * 1_048_576,
+    sharedBytes: 1200 * 1_048_576,
+    measuredAt: new Date(0),
+    isPartial: false,
+    isUpperBound: false,
+  };
+
+  const rows = formatImps([
+    { ...imp, diskUsage: usage },
+    { ...imp, name: 'forked', diskUsage: { ...usage, isUpperBound: true, isPartial: true } },
+    { ...imp, name: 'new' },
+  ]).split('\n');
+
+  const start = rows[0]?.indexOf('USED') ?? 0;
+
+  expect(
+    rows.map((row) =>
+      row
+        .slice(start)
+        .split(/\s{2,}/)
+        .slice(0, 2),
+    ),
+  ).toEqual([
+    ['USED', 'SHARED'],
+    ['300 MiB', '1200 MiB'],
+    ['<=300 MiB?', '1200 MiB?'],
+    ['-', '-'],
+  ]);
+});

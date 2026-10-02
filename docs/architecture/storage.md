@@ -241,6 +241,26 @@ without `--image` uses `IMP_DEFAULT_IMAGE` (default `base`), else `ubuntu`.
 The [images guide](../guides/images.md) covers what an image can contain: services, Docker in the
 guest, and how to make your own.
 
+## Disk usage
+
+`imp ls` shows two numbers for each imp. USED is what a destroy of the imp would free: its disk, its
+checkpoints and its memory snapshot. SHARED is what it refers to that others hold too: the image and
+the source of a fork. A pass measures every imp at start, every 5 minutes, and 10 s after a change
+to the list of imps; `imp ls` reads the last pass, and `--json` gives its time.
+
+On ZFS, one `zfs list` gives it all. USED is the disk's `used` (with its snapshots), plus each
+retired dataset that holds the imp's checkpoints after a restore, plus the memory file. SHARED is
+`referenced - usedbydataset`, what the disk took from its origin. When a fork, or a backup tree,
+clones one of the imp's snapshots, a destroy frees less than USED, which `imp ls` marks with `<=`.
+
+On XFS, a reflink leaves no count of who holds a block, so impd reads every file's extents with the
+FIEMAP ioctl: each imp's disk, checkpoints, memory and vmstate, each image, and `backup/tree`, whose
+reflinks hold blocks between backup runs. An extent that only one owner holds is that owner's; one
+that two hold is shared. It reads 1024 extents per call and yields between calls, so impd stays
+responsive. It never asks the kernel to flush first (`FIEMAP_FLAG_SYNC`), so blocks not yet written
+count as their owner's. FIEMAP takes the file's inode lock, so a VM's write to that file waits for
+the one call. A pass stops after 20 s, and `imp ls` marks a partial result with `?`.
+
 ## Disk budget
 
 Disks are sparse and clones are thin, so the sizes imps are given can add up to more than the host

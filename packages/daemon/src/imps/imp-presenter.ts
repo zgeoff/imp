@@ -56,6 +56,12 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       api.error = imp.error;
     }
 
+    const diskUsage = context.readDiskUsage(imp.id);
+
+    if (diskUsage !== undefined) {
+      api.diskUsage = diskUsage;
+    }
+
     const paths = context.findPaths(imp.id);
 
     if (imp.state === 'running' && imp.pid !== null) {

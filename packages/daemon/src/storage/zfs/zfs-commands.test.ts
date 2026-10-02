@@ -4,6 +4,7 @@ import {
   parseZfsList,
   parseZfsMounts,
   parseZfsRelease,
+  parseZfsSpace,
   parseZfsVersion,
 } from './zfs-commands';
 
@@ -156,4 +157,23 @@ test('it lists the tree oldest first and fails with the stderr of zfs', async ()
   expect(failure).toContain(
     "zfs destroy tank/imp/disks/a@cp-x exited 1: cannot destroy 'tank/imp/disks/a@cp-x': snapshot has dependent clones",
   );
+});
+
+test('it parses the space columns, with the clones of a snapshot', () => {
+  const stdout = [
+    'tank/imp/disks/a\t2048\t4096\t1024\t-',
+    'tank/imp/disks/a@cp-1\t512\t3072\t-\ttank/imp/disks/b,tank/imp/staging/bk-1',
+    '',
+  ].join('\n');
+
+  expect(parseZfsSpace(stdout)).toEqual([
+    { name: 'tank/imp/disks/a', used: 2048, referenced: 4096, usedByDataset: 1024, clones: [] },
+    {
+      name: 'tank/imp/disks/a@cp-1',
+      used: 512,
+      referenced: 3072,
+      usedByDataset: 0,
+      clones: ['tank/imp/disks/b', 'tank/imp/staging/bk-1'],
+    },
+  ]);
 });

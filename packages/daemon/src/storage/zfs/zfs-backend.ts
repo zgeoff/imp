@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   rmdirSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -832,12 +833,68 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       await reclaim.running;
     },
 
+    measureUsage: async (imps) => {
+      const space = await zfs.listSpace(deps.root);
+
+      const byName = new Map(space.map((entry) => [entry.name, entry]));
+
+      const report = new Map(
+        imps.map((imp) => {
+          const disk = buildDiskName(imp.impId);
+
+          const checkpointIds = new Set(imp.checkpointIds);
+
+          // after a restore, the imp's older checkpoints live on a retired
+          // dataset; its whole `used` goes with them
+          const retiredSnapshots = space.filter(
+            (entry) =>
+              entry.name.startsWith(`${datasets.retired}/`) &&
+              CHECKPOINT_SNAPSHOT.test(entry.name) &&
+              checkpointIds.has(readSnapshotId(entry.name)),
+          );
+
+          const retiredNames = new Set(
+            retiredSnapshots.map((entry) => entry.name.split('@')[0] ?? ''),
+          );
+
+          const snapshots = [
+            ...space.filter((entry) => entry.name.startsWith(`${disk}@`)),
+            ...retiredSnapshots,
+          ];
+
+          const found = byName.get(disk);
+
+          const usage = {
+            exclusiveBytes:
+              (found?.used ?? 0) +
+              [...retiredNames].reduce((sum, name) => sum + (byName.get(name)?.used ?? 0), 0) +
+              readAllocatedBytes(resolveImpPaths(imp.impId).memFile),
+
+            // what it refers to from its origin: the image or a checkpoint
+            sharedBytes: Math.max(0, (found?.referenced ?? 0) - (found?.usedByDataset ?? 0)),
+
+            // a fork holds blocks a destroy would otherwise free; the imp's
+            // own disk, cloned from a retired checkpoint, is not a fork
+            isUpperBound: snapshots.some((entry) => entry.clones.some((clone) => clone !== disk)),
+          };
+
+          return [imp.impId, usage];
+        }),
+      );
+
+      return { imps: report, isPartial: false };
+    },
+
     readUsage: async () => {
       const usage = await zfs.readUsage(deps.root);
 
       return { usedBytes: usage.used, availableBytes: usage.available };
     },
   };
+}
+
+function readAllocatedBytes(path: string): number {
+  return existsSync(path) ? statSync(path).blocks * 512 : 0;
 }
 
 function readZfsModuleVersion(): string | null {
