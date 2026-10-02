@@ -1,0 +1,13 @@
+{
+  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service and bootstrap.sh's copy; deploy/nixos/module.nix reads this file. A word $NAME (unbraced) is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md).",
+  "lines": [
+    ["--rm", "--name", "imp-host", "--hostname", "imp-host"],
+    ["--init", "--privileged", "--device", "/dev/kvm", "--cgroupns=private"],
+    ["--env-file", "/etc/imp/imp-host.env"],
+    ["-v", "/var/lib/imp:/var/lib/imp"],
+    ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
+    ["-v", "/etc/imp:/etc/imp:ro"],
+    ["-p", "127.0.0.1:7070:7070", "-p", "127.0.0.1:7080:7080"],
+    ["$IMP_PUBLIC_PORTS"]
+  ]
+}

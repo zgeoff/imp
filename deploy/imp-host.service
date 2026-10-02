@@ -27,6 +27,8 @@ ExecStartPre=-/usr/bin/docker rm -f imp-host
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
 # $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
 # public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps)
+# The arguments come from deploy/imp-host.args.json: edit that, then run
+# bun run render:deploy (the NixOS module reads the same file).
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \

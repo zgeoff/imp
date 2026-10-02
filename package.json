@@ -75,6 +75,7 @@
     "lint": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error",
     "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",
     "lint:docs": "bun scripts/check-doc-refs.ts",
+    "render:deploy": "bun scripts/render-imp-host.ts",
     "lint:shell": "./scripts/shellcheck.sh",
     "test": "bun test",
     "test:pebble": "bun test ./test/integration/acme-issuer.pebble.ts",
