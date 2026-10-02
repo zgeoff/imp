@@ -136,6 +136,25 @@ test('a failed send after the receipt points at --resume', async () => {
   expect(String(error)).toContain('imp move dev b --resume, or --abort');
 });
 
+test('a failed send the target did not undo points at --abort, not at nothing changed', async () => {
+  const ctx = setupRun(
+    'move',
+    {
+      prepare: { bytes: 10, checkpoints: 0 },
+      send: IDLE,
+      status: { ...IDLE, state: 'sending', error: 'Unable to connect' },
+    },
+    { receive: { ticket: 't.s', expiresAt: new Date(0), peerUrl: 'http://100.64.0.2:7070' } },
+  );
+
+  const rejection = await readRejection(runMove(ctx.run));
+
+  const error = String(rejection);
+
+  expect(error).toContain('the imp stays marked here: run imp move dev b --abort once b answers');
+  expect(error).not.toContain('nothing changed');
+});
+
 test('resume commits with a fresh ticket from the target', async () => {
   const ctx = setupRun(
     'resume',

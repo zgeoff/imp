@@ -127,13 +127,23 @@ function requireDone(run: MoveRun, status: Readonly<MoveStatus>): void {
     return;
   }
 
-  // the target holds a verified copy: only a commit or an abort ends it
-  const hint =
-    status.state === 'moved'
-      ? `; run imp move ${run.name} ${run.toHost} --resume, or --abort`
-      : '; nothing changed on either host';
+  throw new Error(
+    `${run.name}: the move failed: ${status.error ?? 'unknown error'}${readFailureHint(run, status)}`,
+  );
+}
 
-  throw new Error(`${run.name}: the move failed: ${status.error ?? 'unknown error'}${hint}`);
+function readFailureHint(run: MoveRun, status: Readonly<MoveStatus>): string {
+  // the target holds a verified copy: only a commit or an abort ends it
+  if (status.state === 'moved') {
+    return `; run imp move ${run.name} ${run.toHost} --resume, or --abort`;
+  }
+
+  // the target did not confirm the abort, so the mark stays on
+  if (status.state === 'sending') {
+    return `; the imp stays marked here: run imp move ${run.name} ${run.toHost} --abort once ${run.toHost} answers`;
+  }
+
+  return '; nothing changed on either host';
 }
 
 export const moveCommand = defineCommand({

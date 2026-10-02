@@ -601,15 +601,19 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
         task.isDone = true;
       } catch (error) {
-        task.error = readErrorMessage(error);
+        const message = readErrorMessage(error);
 
-        deps.log(`impd: move: ${imp.name}: ${task.error}`);
+        deps.log(`impd: move: ${imp.name}: ${message}`);
 
         const fresh = await findImpById(deps.db, imp.id);
 
         if (fresh?.moveState === 'sending') {
           await resetSend(imp, peer, ticket);
         }
+
+        // only now: a caller that sees the error sees the mark as the
+        // reset left it
+        task.error = message;
       } finally {
         finished.set(imp.id, { error: task.error, isDone: task.isDone });
         tasks.delete(imp.id);
