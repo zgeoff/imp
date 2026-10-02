@@ -22,6 +22,9 @@ export const instance = {
   apiUrl: process.env['IMP_URL'] ?? `http://localhost:${String(7070 + offset)}`,
   proxyPort: 7080 + offset,
   impPortBase: 20_000 + offset,
+
+  // the SSH gateway, published on localhost by scripts/dev.sh
+  sshPort: 2222 + offset,
 } as const;
 
 const HealthSchema = z.object({ ready: z.boolean() });
