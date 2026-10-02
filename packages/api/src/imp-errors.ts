@@ -11,6 +11,7 @@ const ResourceKindSchema = z.enum([
   'grant',
   'backup',
   'token',
+  'ssh-key',
 ]);
 
 const ResourceDataSchema = z.object({

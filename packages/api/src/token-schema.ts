@@ -15,6 +15,22 @@ export const ImpPatternSchema = z
     'must be an imp name, with * for any run of characters, such as dev-*',
   );
 
+// the most SSH keys one token holds
+export const MAX_SSH_KEYS = 16;
+
+// An SSH public key line, as in a `.pub` file: `<type> <base64> [comment]`
+export const SshPublicKeySchema = z.string().trim().min(1).max(16_384);
+
+// What the API shows of a key bound to a token; never the key itself
+export const SshKeySchema = z.object({
+  // `SHA256:<base64>`, as `ssh-keygen -l` prints it
+  fingerprint: z.string(),
+  type: z.string(),
+  comment: z.string(),
+});
+
+export type SshKey = z.infer<typeof SshKeySchema>;
+
 // What the API shows of a token. The secret is shown once, by tokens.create.
 export const TokenSchema = z.object({
   name: NameSchema,
@@ -22,6 +38,9 @@ export const TokenSchema = z.object({
 
   // the imps it may touch; null for every imp and the host itself
   imps: z.array(ImpPatternSchema).readonly().nullable(),
+
+  // the SSH keys that log in as it (docs/guides/ssh.md#keys-bound-to-tokens)
+  sshKeys: z.array(SshKeySchema).readonly(),
   createdAt: z.date(),
 });
 

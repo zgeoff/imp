@@ -26,7 +26,15 @@ import {
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
-import { IdentitySchema, ImpPatternSchema, ScopeSchema, TokenSchema } from './token-schema';
+import {
+  IdentitySchema,
+  ImpPatternSchema,
+  MAX_SSH_KEYS,
+  ScopeSchema,
+  SshKeySchema,
+  SshPublicKeySchema,
+  TokenSchema,
+} from './token-schema';
 
 const base = oc.errors(IMP_ERRORS);
 const NameInputSchema = z.object({ name: NameSchema });
@@ -280,12 +288,24 @@ export const impContract = {
           name: NameSchema,
           scope: ScopeSchema,
           imps: z.array(ImpPatternSchema).min(1).max(32).optional(),
+          sshKeys: z.array(SshPublicKeySchema).min(1).max(MAX_SSH_KEYS).optional(),
         }),
       )
       .output(z.object({ token: TokenSchema, secret: z.string() })),
 
-    // ends its dashboard sessions, event streams and sockets too
+    // ends its dashboard sessions, event streams, sockets and ssh logins too
     delete: base.input(NameInputSchema).output(EmptySchema),
+
+    // binds an SSH key, so a login with it runs as the token; CONFLICT for a
+    // key bound to any token or listed in authorized_keys
+    addKey: base
+      .input(z.object({ name: NameSchema, key: SshPublicKeySchema }))
+      .output(SshKeySchema),
+
+    // ends the ssh logins made with the key
+    removeKey: base
+      .input(z.object({ name: NameSchema, fingerprint: z.string() }))
+      .output(EmptySchema),
 
     // who the caller is, and what it may do
     whoami: base.output(IdentitySchema),
