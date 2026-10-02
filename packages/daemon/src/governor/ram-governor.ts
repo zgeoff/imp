@@ -20,7 +20,10 @@ interface AwakeImp {
 
 interface AdmissionRequest {
   readonly id: string;
-  readonly name: string;
+
+  // the imp's name; null for work that is no imp's, such as a boot
+  // template's build, which has no GovernorDecision event
+  readonly name: string | null;
   readonly reserveMib: number;
 
   // the imp's configured memory: a guest that can grow past the whole budget
@@ -131,6 +134,22 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       budgetMib: deps.budgetMib,
       ...decision,
     });
+  };
+
+  const emitAdmission = (
+    request: AdmissionRequest,
+    decision: 'admitted' | 'refused',
+    usedMib: number,
+  ): void => {
+    if (request.name !== null) {
+      emitDecision({
+        decision,
+        name: request.name,
+        trigger: 'admission',
+        usedMib,
+        reserveMib: request.reserveMib,
+      });
+    }
   };
 
   const readReservation = (id: string): number => {
@@ -269,14 +288,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         if (request.memoryMib > deps.budgetMib) {
           const usage = await readEffectiveUsage(request.id);
 
-          emitDecision({
-            decision: 'refused',
-            name: request.name,
-            trigger: 'admission',
-            usedMib: usage.effectiveMib,
-            reserveMib: request.reserveMib,
-          });
-
+          emitAdmission(request, 'refused', usage.effectiveMib);
           throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
         }
 
@@ -286,7 +298,12 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         const room =
           request.maySleepImps === false
             ? await readFreeRoom(request.id, findMissing)
-            : await makeRoom(request.id, `to make room for ${request.name}`, 'giveUp', findMissing);
+            : await makeRoom(
+                request.id,
+                `to make room for ${request.name ?? request.id}`,
+                'giveUp',
+                findMissing,
+              );
 
         const diskFull = room.diskFull ? (deps.readDiskFullError?.() ?? null) : null;
 
@@ -298,14 +315,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         if (!room.fits) {
           const usage = await readEffectiveUsage(request.id);
 
-          emitDecision({
-            decision: 'refused',
-            name: request.name,
-            trigger: 'admission',
-            usedMib: usage.effectiveMib,
-            reserveMib: request.reserveMib,
-          });
-
+          emitAdmission(request, 'refused', usage.effectiveMib);
           throw buildRamBudgetError(deps.budgetMib, usage.effectiveMib, request.reserveMib);
         }
 
@@ -314,13 +324,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           until: now() + RESERVATION_TTL_MS,
         });
 
-        emitDecision({
-          decision: 'admitted',
-          name: request.name,
-          trigger: 'admission',
-          usedMib: room.effectiveMib,
-          reserveMib: request.reserveMib,
-        });
+        emitAdmission(request, 'admitted', room.effectiveMib);
       }),
 
     release: (id) => {

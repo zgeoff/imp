@@ -30,12 +30,21 @@ const EventLineSchema = z.object({
   ev: z.string(),
   reason: z.string().optional(),
   name: z.string().optional(),
-  imp: z.object({ name: z.string() }).optional(),
+  imp: z.object({ name: z.string(), state: z.string() }).optional(),
 });
 
+// each change the events test makes, with the state after it
+const EV_CHANGES = [
+  { line: 'ImpAdded created', state: 'creating' },
+  { line: 'ImpChanged booted', state: 'running' },
+  { line: 'ImpChanged slept', state: 'sleeping' },
+  { line: 'ImpChanged woke', state: 'running' },
+  { line: 'ImpRemoved', state: null },
+] as const;
+
 // Each line `imp events` prints, as `name ev reason`, to `onLine` as it comes;
-// the governor's decisions are left out, since they depend on what else is
-// awake.
+// a snapshot line ends with the imp's state. The governor's decisions are
+// left out, since they depend on what else is awake.
 async function collectEvents(
   stdout: ReadableStream<Uint8Array>,
   onLine: (line: string) => void,
@@ -55,12 +64,57 @@ async function collectEvents(
       const event = EventLineSchema.parse(JSON.parse(line));
 
       if (event.ev !== 'GovernorDecision') {
-        const words = [event.imp?.name ?? event.name, event.ev, event.reason];
+        const words = [
+          event.imp?.name ?? event.name,
+          event.ev,
+          event.reason,
+          event.reason === 'snapshot' ? event.imp?.state : undefined,
+        ];
 
         onLine(words.filter((word) => word !== undefined).join(' '));
       }
     }
   }
+}
+
+// A stream that ends reconnects to a snapshot, which stands for the changes
+// it missed, up to the first that reaches its state; one that comes again
+// right after the snapshot counts once.
+function buildEvChanges(lines: readonly string[]): string[] {
+  const filled: string[] = [];
+  let isAfterSnapshot = false;
+
+  for (const line of lines) {
+    const state = /^ImpAdded snapshot (?<state>\w+)$/.exec(line)?.groups?.['state'];
+
+    if (state === undefined) {
+      if (!isAfterSnapshot || filled.at(-1) !== line) {
+        filled.push(line);
+      }
+
+      isAfterSnapshot = false;
+      continue;
+    }
+
+    const next = filled.length;
+
+    const reached = EV_CHANGES.findIndex(
+      (change, index) => index >= next - 1 && change.state === state,
+    );
+
+    // a state no change reaches stays, so the comparison shows it
+    if (reached === -1) {
+      filled.push(line);
+    }
+
+    for (const change of EV_CHANGES.slice(next, reached + 1)) {
+      filled.push(change.line);
+    }
+
+    isAfterSnapshot = true;
+  }
+
+  return filled;
 }
 
 test('imp new boots the default image and the first exec answers within the limit', async () => {
@@ -210,7 +264,7 @@ test('imp events streams a create, sleep, wake and rm, and the api audit log has
 
   try {
     await waitFor('the snapshot from imp events', () => {
-      expect(seen).toContain(`${anchorName} ImpAdded snapshot`);
+      expect(seen).toContain(`${anchorName} ImpAdded snapshot running`);
     });
 
     await runImp('new', eventsName, '--memory', '512');
@@ -228,13 +282,18 @@ test('imp events streams a create, sleep, wake and rm, and the api audit log has
     await removeImps(anchorName);
   }
 
-  expect(seen.filter((line) => line.startsWith(`${eventsName} `))).toEqual([
-    `${eventsName} ImpAdded created`,
-    `${eventsName} ImpChanged booted`,
-    `${eventsName} ImpChanged slept`,
-    `${eventsName} ImpChanged woke`,
-    `${eventsName} ImpRemoved`,
-  ]);
+  // a reconnect says why on stderr
+  const warnings = await new Response(events.stderr).text();
+
+  if (warnings !== '') {
+    console.warn(warnings.trimEnd());
+  }
+
+  const evLines = seen
+    .filter((line) => line.startsWith(`${eventsName} `))
+    .map((line) => line.slice(eventsName.length + 1));
+
+  expect(buildEvChanges(evLines)).toEqual(EV_CHANGES.map((change) => change.line));
 
   const audit = await runImp('audit', eventsName, '--kind', 'api', '--json');
 
