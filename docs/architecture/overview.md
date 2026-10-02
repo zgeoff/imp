@@ -92,7 +92,8 @@ host/             host container Dockerfile (dev and release), entrypoint, stora
                   and tailnet setup
 deploy/           compose file, systemd unit and env file for the release image
 kernel/           guest kernel config and build
-scripts/          acceptance.sh and dev helpers
+scripts/          dev helpers and test-e2e.sh, the end-to-end harness's entry point
+test/e2e/         end-to-end suites, their helpers and fixture images
 docs/             this documentation
 ```
 

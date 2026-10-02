@@ -42,10 +42,10 @@ To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` re
 
 ## Checks
 
-`scripts/acceptance.sh --clean` drives a real instance through every feature: shell, Docker,
-bring-your-own images, checkpoints and forks, sleep and wake, the scale test, restart survival and
-Tailscale. [STATUS.md](../../STATUS.md) has the latest results. The
-[development guide](./development.md) lists the other checks.
+`scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each:
+lifecycle, Docker, bring-your-own images, checkpoints and forks, sleep and wake (with the WebSocket
+relay), the scale test, restart survival and Tailscale. [STATUS.md](../../STATUS.md) has the latest
+results. The [development guide](./development.md) lists the other checks.
 
 ## Troubleshooting
 

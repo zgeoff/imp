@@ -7,7 +7,7 @@ import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
 import { buildBootArgs, createVmRunner } from './vm-runner';
 
-test('it builds the smoke-boot kernel cmdline with the slot addressing', () => {
+test('it builds the kernel cmdline with the slot addressing', () => {
   const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
 
   const args = buildBootArgs({
