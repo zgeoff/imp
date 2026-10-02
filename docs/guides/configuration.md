@@ -149,15 +149,19 @@ without it ([CPU limits](./cpu-limits.md)).
 
 `scripts/dev.sh` runs one host container for development. It reads these on your machine:
 
-| Variable              | Default                                        | Meaning                                                |
-| --------------------- | ---------------------------------------------- | ------------------------------------------------------ |
-| `IMP_DEV_NAME`        | `imp-dev`                                      | The container name.                                    |
-| `IMP_DEV_PORT_OFFSET` | `0`                                            | Added to every published port, for parallel instances. |
-| `IMP_DEV_DATA`        | `<repo>/.data/dev`                             | The host directory that holds the XFS file.            |
-| `IMP_KERNEL`          | `kernel/out/vmlinux`, else `.cache/vmlinux-ci` | The guest kernel; a path under the repo.               |
-| `IMP_SYSTEM_DRIVE`    | `build/imp-system.squashfs`                    | The system drive; a path under the repo.               |
-| `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                               |
-| `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                        |
+| Variable              | Default                                        | Meaning                                                         |
+| --------------------- | ---------------------------------------------- | --------------------------------------------------------------- |
+| `IMP_DEV_NAME`        | `imp-dev`                                      | The container name.                                             |
+| `IMP_DEV_PORT_OFFSET` | `0`                                            | Added to every published port, for parallel instances.          |
+| `IMP_DEV_DATA`        | `<repo>/.data/dev`                             | The host directory that holds the XFS file.                     |
+| `IMP_KERNEL`          | `kernel/out/vmlinux`, else `.cache/vmlinux-ci` | The guest kernel; a path under the repo.                        |
+| `IMP_SYSTEM_DRIVE`    | `build/imp-system.squashfs`                    | The system drive; a path under the repo.                        |
+| `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                                        |
+| `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                                 |
+| `IMP_DEV_NETWORK`     | none                                           | A Docker network for the container.                             |
+| `IMP_DEV_IP`          | none                                           | The container's address on `IMP_DEV_NETWORK`.                   |
+| `IMP_DEV_PUBLISH`     | `1`                                            | `0` publishes no ports: impd answers on `IMP_DEV_IP:7070` only. |
+| `IMP_DEV_TAILNET`     | none                                           | `0` keeps the container off the tailnet, whatever key there is. |
 
 `dev.sh` passes `.env` in the repo root to Docker as an env file, so `IMP_DNS_API_TOKEN` and any
 other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first of:
