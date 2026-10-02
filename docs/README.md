@@ -40,6 +40,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [HTTPS on your own domain](./guides/https.md): `https://<name>.<domain>` on the tailnet, the
   wildcard certificate, its renewal, the DNS records, and testing with Pebble.
+- [Events, audit and telemetry](./guides/events.md): `imp events` and the event stream, the API
+  audit log, and OpenTelemetry metrics and spans.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
 - [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
   `main`.

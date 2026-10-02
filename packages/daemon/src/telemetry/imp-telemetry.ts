@@ -4,7 +4,7 @@ import { ROOT_CONTEXT, metrics, trace } from '@opentelemetry/api';
 import type { BatchObservableCallback } from '@opentelemetry/api';
 import type { EventBus } from '../events/event-bus';
 
-// impd's instruments (docs/guides/telemetry.md). Every attribute comes from a
+// impd's instruments (docs/guides/events.md). Every attribute comes from a
 // closed set, never an imp's name, so a series count stays bounded.
 const SCOPE = 'impd';
 
