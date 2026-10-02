@@ -144,8 +144,6 @@ function formatErrorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// impd passes the agent's EXEC_FAILED on with the code already in the
-// message; until it stops doing so, the code is not added twice
 function formatCoded(code: string, message: string): string {
-  return message.startsWith(`${code}: `) ? message : `${code}: ${message}`;
+  return `${code}: ${message}`;
 }

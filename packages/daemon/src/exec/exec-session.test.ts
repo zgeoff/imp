@@ -185,10 +185,7 @@ test('it reports an exec that cannot start and closes the socket', async () => {
 
   await Bun.sleep(5);
 
-  expect(peer.sent).toEqual([
-    { type: 'error', code: 'EXEC_FAILED', message: 'EXEC_FAILED: no such file' },
-  ]);
-
+  expect(peer.sent).toEqual([{ type: 'error', code: 'EXEC_FAILED', message: 'no such file' }]);
   expect(peer.closes).toEqual([1011]);
 });
 

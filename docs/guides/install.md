@@ -72,8 +72,10 @@ restarts and day-to-day care.
 
 ## What `dev.sh up` does
 
-- Builds the `dev` target of `host/Dockerfile` as the host image, and `build/imp-system.squashfs`
-  (the agent's system drive) when it is missing.
+- Builds the `dev` target of `host/Dockerfile` as the host image, and rebuilds
+  `build/imp-system.squashfs` (the agent's system drive) from `agent/`, so a changed agent reaches
+  the next imp. The Docker cache makes the rebuild take about half a second when the agent is
+  unchanged. With `IMP_SYSTEM_DRIVE` set, it uses that drive as it is.
 - Starts the container with `--privileged --device /dev/kvm`, the Docker socket, and the repo
   mounted at `/src` and at its own path.
 - Keeps data in `.data/dev/imp.xfs`, a sparse XFS file that the container loop-mounts on

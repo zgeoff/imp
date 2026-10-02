@@ -318,7 +318,7 @@ function buildErrorMessage(error: unknown): ExecServerMessage {
   }
 
   if (error instanceof AgentError) {
-    return { type: 'error', code: error.code, message: error.message };
+    return { type: 'error', code: error.code, message: error.detail };
   }
 
   return { type: 'error', message: readErrorMessage(error) };

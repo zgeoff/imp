@@ -16,6 +16,8 @@
 #      IMP_DEV_DATA (default <repo>/.data/dev) holds the sparse XFS file.
 #      IMP_KERNEL (default kernel/out/vmlinux, else .cache/vmlinux-ci) is the guest kernel.
 #      IMP_SYSTEM_DRIVE (default build/imp-system.squashfs) is the system drive.
+#      Without it, every up rebuilds the default drive from agent/; the docker
+#      cache makes that a no-op when the agent is unchanged.
 #      Both are repo-relative or absolute paths under the repo.
 #      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
 #      it (CI builds and loads it first, with its own cache).
@@ -96,10 +98,10 @@ up() {
   else
     docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
   fi
-  if [ ! -f "$system" ]; then
-    echo "dev.sh: building the system drive"
+  if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
   fi
+  [ -f "$system" ] || { echo "dev.sh: no system drive at $system" >&2; exit 1; }
 
   if is_running; then
     echo "dev.sh: $name already running"
