@@ -84,6 +84,13 @@ else
     # parent pointers); these flags keep the fs mountable there.
     mkfs.xfs -q -m reflink=1 -i nrext64=0,exchange=0 -n parent=0 "$file"
   fi
+  # A killed container can leave its loop device attached for a while; a
+  # second mount of the same file would let two kernels write one XFS.
+  attached=$(losetup -j "$file" -n -O NAME)
+  if [ -n "$attached" ]; then
+    echo "setup-storage: $file is still attached to $attached; wait for it to detach, or losetup -d it once nothing uses it" >&2
+    exit 1
+  fi
   mount -o loop "$file" "$root"
   mounted=$file
   echo "setup-storage: mounted $file on $root"
