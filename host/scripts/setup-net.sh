@@ -32,7 +32,19 @@ rule() {
 # step with packages/daemon/src/config.ts.
 subnet=${IMP_SUBNET:-10.66.0.0/16}
 rule nat POSTROUTING -s "$subnet" -o "$out" -j MASQUERADE
-# No imp-to-imp traffic.
+# No imp-to-imp traffic, except between two imps on one network: impd's
+# nftables table marks those packets (docs/guides/networks.md). The ACCEPT
+# goes first in FORWARD: `rule` appends, which would put it under the DROP.
+# It is tagged, so a start removes any other form of it.
+peer_mark=0x1000000/0x1000000
+peer_rule=(-i imp+ -o imp+ -m mark --mark "$peer_mark" -m comment --comment imp-network -j ACCEPT)
+stale=$(iptables -S FORWARD | grep -- '--comment imp-network' \
+  | grep -v -- "--mark $peer_mark .*-j ACCEPT\$" || true)
+while read -r spec; do
+  # shellcheck disable=SC2086 # the saved rule is split back into its words
+  [ -z "$spec" ] || iptables ${spec/#-A/-D}
+done <<<"$stale"
+iptables -C FORWARD "${peer_rule[@]}" 2>/dev/null || iptables -I FORWARD 1 "${peer_rule[@]}"
 rule filter FORWARD -i imp+ -o imp+ -j DROP
 rule filter FORWARD -i imp+ -o "$out" -j ACCEPT
 rule filter FORWARD -i "$out" -o imp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT

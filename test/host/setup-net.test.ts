@@ -122,3 +122,17 @@ sysctl -n net.ipv6.conf.up0.accept_ra net.ipv6.conf.default.accept_ra net.ipv6.c
     ]);
   },
 );
+
+test.skipIf(!canUnshare)('a marked packet between taps is accepted ahead of the drop', () => {
+  const rules = runInNetns(`${UPLINK}
+iptables -A FORWARD -m mark --mark 0x2/0x2 -m comment --comment imp-network -j ACCEPT
+bash "$SETUP_NET" >/dev/null
+bash "$SETUP_NET" >/dev/null
+iptables -S FORWARD | grep -- '-i imp+ -o imp+'
+`);
+
+  expect(rules.trim().split('\n')).toEqual([
+    '-A FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -m comment --comment imp-network -j ACCEPT',
+    '-A FORWARD -i imp+ -o imp+ -j DROP',
+  ]);
+});
