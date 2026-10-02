@@ -94,6 +94,23 @@ restarts and day-to-day care.
 The release image runs the compiled impd from `/usr/local/bin/impd` with the kernel and the system
 drive from `/usr/local/share/imp`. `imp info` shows the kernel version and the sha256 of both.
 
+### Get it
+
+Each release pushes the image to `ghcr.io/zgeoff/imp-host`, tagged with its version and `latest`,
+for linux/amd64 only. The GitHub release has the CLI for Linux and macOS (`imp-linux-x64`,
+`imp-linux-arm64`, `imp-darwin-x64`, `imp-darwin-arm64`), the guest kernel `vmlinux` and the system
+drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and `SHA256SUMS` over
+all of them. [RELEASING.md](../../RELEASING.md) shows how to check the checksums and the provenance
+attestations.
+
+```sh
+docker pull ghcr.io/zgeoff/imp-host:latest
+gh release download -R zgeoff/imp -p 'imp-linux-x64' -p SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.local/bin/imp
+```
+
+Both deploy files run `latest`; set `IMP_HOST_IMAGE` to pin a version.
+
 ### Build it
 
 ```sh

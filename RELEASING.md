@@ -1,0 +1,107 @@
+# Releasing
+
+Releases come from `main` through [release-please](https://github.com/googleapis/release-please)
+(manifest mode, one package at the root) and two workflows: the `release-please` and `release` jobs
+in `.github/workflows/ci.yml`, and `.github/workflows/release.yml`.
+
+## What a release ships
+
+| Where                                          | What                                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `ghcr.io/zgeoff/imp-host:X.Y.Z` and `:latest`  | The host image (`host/build-release.sh`), linux/amd64, with a provenance attestation. |
+| GitHub release `vX.Y.Z`: `imp-<os>-<arch>`     | The CLI for `linux-x64`, `linux-arm64`, `darwin-x64` and `darwin-arm64`.              |
+| GitHub release `vX.Y.Z`: `vmlinux`             | The guest kernel, x86_64.                                                             |
+| GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
+| GitHub release `vX.Y.Z`: `SHA256SUMS`          | The sha256 of every asset above, with a provenance attestation per asset.             |
+
+The image, `impd --version`, `imp --version` and every `package.json` carry the same version: the
+tag without the `v`. The host image, the kernel and the drive are x86_64 only, because Firecracker
+in the image and the guest kernel config are.
+
+Check an asset or the image:
+
+```sh
+sha256sum -c SHA256SUMS
+gh attestation verify imp-linux-x64 -R zgeoff/imp
+gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
+```
+
+## Flow
+
+1. A `feat:` or `fix:` commit lands on `main`. After the gates pass, the `release-please` job opens
+   or updates the release PR: the version bump in every `package.json`, `CHANGELOG.md` and
+   `.release-please-manifest.json`. It then syncs `bun.lock` (which records the workspace versions)
+   and the formatting on the PR branch. Before 1.0, a `feat:` bumps the minor version and a `fix:`
+   the patch.
+2. The release PR merges (see [Tokens](#tokens) for who merges it).
+3. On that merge, `release-please` tags `vX.Y.Z` and creates the GitHub release. The `release` job
+   then runs `release.yml` for the tag:
+   - **build:** checks out the tag, runs `scripts/build-release-assets.sh` and
+     `host/build-release.sh`, and runs `host/check-release-image.sh`, which fails when `impd` or
+     `imp` in the image reports another version, or when the image's kernel or drive differs from
+     `SHA256SUMS`. Then it pushes `imp-host:X.Y.Z` and attests the image and every asset.
+   - **smoke:** runs each CLI binary on its own platform and checks its checksum and version.
+   - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
+     the newest release.
+
+The build job keeps the kernel layer in the GitHub Actions cache. Without that cache, the kernel
+build takes about 15 to 25 minutes on a hosted runner.
+
+## Tokens
+
+`GITHUB_TOKEN` events start no workflows. A release PR opened with `GITHUB_TOKEN` gets no CI run,
+and its merge does not start the run that tags the release.
+
+- **No App (the setup today):** the `release-please` job runs with `GITHUB_TOKEN`. The release PR
+  has no checks, so the owner merges it by hand. The merge is a push to `main`, so CI runs, and its
+  `release-please` job tags and publishes. While `.github/rulesets/main.json` is applied, its
+  required checks never report on the release PR, so merging needs the owner's bypass.
+- **With a release App:** the job opens the PR with the App's token, CI runs on it, and the job
+  merges it once it is mergeable. To set it up:
+  1. Create a GitHub App (or reuse `zgeoff-release`) with no webhook, and give it Contents and Pull
+     requests read and write. Install it on `zgeoff/imp`.
+  2. Add the Actions variable `RELEASE_APP_ID` (the App's client ID) and the Actions secret
+     `RELEASE_APP_PRIVATE_KEY` (its private key).
+
+Either way, release-please needs repo Settings → Actions → General → "Allow GitHub Actions to create
+and approve pull requests".
+
+The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
+settings, so a server pulls it without a login.
+
+## Dry run
+
+Run the release workflow with no tag:
+
+```sh
+gh workflow run release.yml
+```
+
+It builds and checks everything for the current `main` as a release would, pushes
+`ghcr.io/zgeoff/imp-host:dryrun-<sha>` and attests it and the assets, and leaves the assets as the
+`release-assets` workflow artifact. It uploads nothing to a release and leaves `latest` alone. The
+version it checks is the one in `package.json`. Delete old `dryrun-` tags in the package settings.
+
+Locally, with no push:
+
+```sh
+scripts/build-release-assets.sh                                   # dist/ and dist/SHA256SUMS
+IMP_VERSION=$(jq -r .version package.json) host/build-release.sh
+host/check-release-image.sh "imp-host:$(jq -r .version package.json)" "$(jq -r .version package.json)" dist/SHA256SUMS
+```
+
+`bun run build:cli` builds only the CLI binaries, in `dist/`. Pass target names to narrow the set:
+`scripts/build-cli.sh linux-x64`.
+
+## Republish
+
+When a release was tagged but its build or publish failed, fix the cause on `main` if it is in the
+workflow, then run the release workflow for the tag:
+
+```sh
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+It builds the tag's sources, not `main`'s. It replaces the release assets (`--clobber`) and the
+`X.Y.Z` image tag, and moves `latest` only when `vX.Y.Z` is the newest release. A fix to the sources
+needs a new release, not a republish.

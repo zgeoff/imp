@@ -21,7 +21,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 
 ## Guides
 
-- [Install](./guides/install.md): what imp needs, and how to run it with `scripts/dev.sh`.
+- [Install](./guides/install.md): what imp needs, how to run it with `scripts/dev.sh`, and how to
+  get and run the release image.
 - [Configuration](./guides/configuration.md): every variable for impd, the host container, the dev
   instance and the CLI.
 - [Images](./guides/images.md): the shipped images, what a guest takes from an image, services,
@@ -30,6 +31,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [Operations](./guides/operations.md): restarts, the RAM budget, logs, checks and troubleshooting.
 - [Development](./guides/development.md): the local checks, git hooks, CI and the branch rules on
   `main`.
+- [Releasing](../RELEASING.md): what a release ships, how release-please and the release workflow
+  make one, the dry run and a republish.
 
 [STATUS.md](../STATUS.md) has the measurements and the known gaps. The
 [roadmap](https://github.com/zgeoff/imp/issues/41) has what comes next.

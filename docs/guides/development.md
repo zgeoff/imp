@@ -31,7 +31,7 @@ Lefthook installs the hooks with `bun install`.
 ## CI
 
 `.github/workflows/ci.yml` runs the gates on every push to `main` and every pull request, in four
-jobs:
+required jobs:
 
 | Job          | What it runs                                                                  |
 | ------------ | ----------------------------------------------------------------------------- |
@@ -39,6 +39,10 @@ jobs:
 | `checks`     | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`. |
 | `go`         | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                |
 | `shellcheck` | `bun run lint:shell`.                                                         |
+
+The `cli` job also compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64
+binary. It is not a required check. On `main`, the `release-please` and `release` jobs make releases
+([RELEASING.md](../../RELEASING.md)).
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
 
