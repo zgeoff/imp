@@ -98,27 +98,19 @@ test('exec passes stdout, stdin, stderr and exit codes through', async () => {
 
   expect(echoed).toBe('hello-stdout');
 
-  const stdin = await tryImp(['exec', name, '--', 'cat'], {
-    stdin: 'hello stdin\n',
-  });
+  const stdin = await tryImp(['exec', name, '--', 'cat'], { stdin: 'hello stdin\n' });
 
   expect(stdin.stdout).toBe('hello stdin\n');
 
   const lines = Array.from({ length: 20_000 }, (_, index) => String(index + 1)).join('\n');
 
-  const large = await tryImp(['exec', name, '--', 'wc', '-l'], {
-    stdin: `${lines}\n`,
-  });
+  const large = await tryImp(['exec', name, '--', 'wc', '-l'], { stdin: `${lines}\n` });
 
   expect(large.stdout.trim()).toBe('20000');
 
   const failed = await tryImp(['exec', name, '--', 'sh', '-c', 'echo to-stderr >&2; exit 7']);
 
-  expect(failed).toMatchObject({
-    exitCode: 7,
-    stdout: '',
-    stderr: 'to-stderr\n',
-  });
+  expect(failed).toMatchObject({ exitCode: 7, stdout: '', stderr: 'to-stderr\n' });
 
   const signalled = await tryImp(['exec', name, '--', 'sh', '-c', 'kill -TERM $$']);
 
