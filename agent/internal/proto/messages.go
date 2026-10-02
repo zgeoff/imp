@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.7.0"
+const Version = "0.8.0"
 
 // Op names.
 const (
@@ -41,6 +41,11 @@ type Request struct {
 	Cols uint16   `json:"cols,omitempty"`
 	Rows uint16   `json:"rows,omitempty"`
 	User string   `json:"user,omitempty"`
+
+	// exec: once a host stop signal arrives and the process exits, the rest
+	// of its process group gets this long, counted from the signal, before
+	// SIGKILL. 0 leaves the group alone.
+	KillGraceMs int64 `json:"kill_grace_ms,omitempty"`
 
 	// exec, session.attach, session.kill: the session name
 	Session string `json:"session,omitempty"`
@@ -161,6 +166,10 @@ type Started struct {
 	// when the connection attached to a session that already ran.
 	Session string `json:"session,omitempty"`
 	Created bool   `json:"created,omitempty"`
+	// KillGraceMs echoes a non-tty exec's kill_grace_ms (as clamped), so the
+	// host knows this agent will kill a stopped command's group; older ones
+	// omit it.
+	KillGraceMs int64 `json:"kill_grace_ms,omitempty"`
 }
 
 // Detached is why the guest ended a session connection without an EXIT.

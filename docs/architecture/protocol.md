@@ -6,9 +6,10 @@ connection carries one request. The first frame is a JSON request; exec connecti
 binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
 both ways. An `agent.listen` connection stays open for the life of an SSH connection.
 
-Version `0.7.0`, which runs `imp-agent tar` for `imp cp` (`0.6.0` dials a unix socket as the image's
-USER, `0.5.0` added `grow`). The Go side is `agent/internal/proto`; the host side is the agent
-client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.8.0`, which kills what is left of a stopped exec's process group (`kill_grace_ms`;
+`0.7.0` runs `imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0`
+added `grow`). The Go side is `agent/internal/proto`; the host side is the agent client in impd
+([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -189,14 +190,15 @@ Firecracker process to exit.
            "cwd":"","tty":false,"cols":0,"rows":0,"user":""}
 ```
 
-| Field          | Meaning                                                                         |
-| -------------- | ------------------------------------------------------------------------------- |
-| `argv`         | Required. `argv[0]` is looked up in the `PATH` of the final env.                |
-| `env`          | `KEY=VALUE` entries. They override the image default env key by key.            |
-| `cwd`          | Working directory. Default: the image `workdir`, else `$HOME`, else `/`.        |
-| `tty`          | Run on a new pty. stdout and stderr then both arrive as STDOUT.                 |
-| `cols`, `rows` | The initial pty size. Default 80x24. Ignored without `tty`.                     |
-| `user`         | `name`, `uid`, `name:group` or `uid:gid`. Default: the image `user`, else root. |
+| Field           | Meaning                                                                                |
+| --------------- | -------------------------------------------------------------------------------------- |
+| `argv`          | Required. `argv[0]` is looked up in the `PATH` of the final env.                       |
+| `env`           | `KEY=VALUE` entries. They override the image default env key by key.                   |
+| `cwd`           | Working directory. Default: the image `workdir`, else `$HOME`, else `/`.               |
+| `tty`           | Run on a new pty. stdout and stderr then both arrive as STDOUT.                        |
+| `cols`, `rows`  | The initial pty size. Default 80x24. Ignored without `tty`.                            |
+| `user`          | `name`, `uid`, `name:group` or `uid:gid`. Default: the image `user`, else root.        |
+| `kill_grace_ms` | Kill the rest of the group after a host stop signal; at most 60000. 0 or `tty`: never. |
 
 The default env comes from `/etc/imp/image.json` (`{"env":[],"workdir":"","user":""}`), merged over
 `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `HOME=/root` and
@@ -205,7 +207,8 @@ The default env comes from `/etc/imp/image.json` (`{"env":[],"workdir":"","user"
 Sequence:
 
 1. The guest starts the process. If that fails, it sends RESPONSE with `EXEC_FAILED` and closes.
-   Otherwise it sends STARTED `{"pid":n}`.
+   Otherwise it sends STARTED `{"pid":n}`, with the `kill_grace_ms` it applies (clamped; absent with
+   `tty` or 0).
 2. Both sides stream:
    - host → guest: STDIN, STDIN_EOF, RESIZE, SIGNAL.
    - guest → host: STDOUT, STDERR.
@@ -217,6 +220,15 @@ Details:
 
 - **Process group.** The process leads its own process group (with `tty`, its own session, with the
   pty as controlling terminal). SIGNAL goes to the whole group.
+- **Stopping the group.** With `kill_grace_ms`, the first SIGNAL of SIGTERM, SIGINT, SIGHUP, SIGQUIT
+  or SIGKILL starts a deadline that much later; other signals do not. When the process exits after
+  it, the guest waits for the rest of its group to exit, sends SIGKILL to the group at the deadline,
+  and waits up to 5 s more for it to go (a member in uninterruptible sleep can outlast that; the
+  guest logs it). Only then does it drain the output and send EXIT, so EXIT means the group is gone.
+  Without a stop signal, a background child outlives its command as before. An agent from before
+  `0.8.0` ignores the field and leaves STARTED without it, which tells the host to clean up itself.
+  Known limits: a member that left the group (`setsid`, or a daemon that double-forks into a new
+  group) is not killed.
 - **stdin.** Without `tty`, STDIN_EOF closes the stdin pipe. With `tty`, STDIN_EOF is ignored; send
   `\x04` as STDIN for an EOF at the terminal.
 - **Output after exit.** Output is forwarded until both streams reach EOF, or for at most 500 ms
