@@ -75,15 +75,27 @@ export async function readImpEnv(): Promise<Record<string, string>> {
   return { IMP_URL: instance.apiUrl, IMP_TOKEN: impToken };
 }
 
+interface ImpRunOptions {
+  readonly stdin?: string;
+
+  // a token in place of the run's root token, such as a scoped one
+  readonly token?: string;
+}
+
 // Runs the imp CLI as a user would and returns what happened, failure
 // included.
 export async function tryImp(
   args: readonly string[],
-  options: Readonly<{ stdin?: string }> = {},
+  options: ImpRunOptions = {},
 ): Promise<CommandResult> {
   const env = await readImpEnv();
 
-  return runCommand([IMP_SCRIPT, ...args], { ...options, env });
+  const runAs = options.token ?? env['IMP_TOKEN'] ?? '';
+
+  return runCommand([IMP_SCRIPT, ...args], {
+    ...(options.stdin !== undefined && { stdin: options.stdin }),
+    env: { ...env, IMP_TOKEN: runAs },
+  });
 }
 
 // Starts the imp CLI for a command that runs until stopped, such as
