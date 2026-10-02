@@ -96,6 +96,18 @@ export async function runImp(...args: readonly string[]): Promise<string> {
   return result.stdout;
 }
 
+// A long-running imp command, such as `imp events`, as a child the test reads
+// and kills
+export async function startImp(...args: readonly string[]) {
+  const env = await readImpEnv();
+
+  return Bun.spawn([IMP_SCRIPT, ...args], {
+    env: { ...process.env, ...env },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
 // `imp exec NAME -- ARGV...`, without the final newline
 export async function runInImp(name: string, ...argv: readonly string[]): Promise<string> {
   const stdout = await runImp('exec', name, '--', ...argv);

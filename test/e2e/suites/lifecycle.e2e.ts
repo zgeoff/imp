@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import * as z from 'zod';
 import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
@@ -11,15 +12,56 @@ import {
   runImp,
   runInImp,
   runShellInImp,
+  startImp,
   tryImp,
 } from '../lib/imp-cli';
-import { registerImp, removeImps } from '../lib/imps';
+import { createImp, registerImp, removeImps } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
 
 const prefix = setupSuite('lifecycle');
 const name = `${prefix}a`;
+const eventsName = `${prefix}ev`;
+const anchorName = `${prefix}anchor`;
+
+const EventLineSchema = z.object({
+  ev: z.string(),
+  reason: z.string().optional(),
+  name: z.string().optional(),
+  imp: z.object({ name: z.string() }).optional(),
+});
+
+// Each line `imp events` prints, as `name ev reason`, to `onLine` as it comes;
+// the governor's decisions are left out, since they depend on what else is
+// awake.
+async function collectEvents(
+  stdout: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+): Promise<void> {
+  const decoder = new TextDecoder();
+
+  let buffered = '';
+
+  for await (const chunk of stdout) {
+    buffered += decoder.decode(chunk, { stream: true });
+
+    const lines = buffered.split('\n');
+
+    buffered = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const event = EventLineSchema.parse(JSON.parse(line));
+
+      if (event.ev !== 'GovernorDecision') {
+        const words = [event.imp?.name ?? event.name, event.ev, event.reason];
+
+        onLine(words.filter((word) => word !== undefined).join(' '));
+      }
+    }
+  }
+}
 
 test('imp new boots the default image and the first exec answers within the limit', async () => {
   registerImp(name);
@@ -149,4 +191,62 @@ test('rm removes the imp and its network device', async () => {
 
   expect(listed.split('\n').some((line) => line.startsWith(`${name} `))).toBeFalse();
   expect(tap.exitCode).not.toBe(0);
+});
+
+test('imp events streams a create, sleep, wake and rm, and the api audit log has them', async () => {
+  // an imp already there, whose snapshot line says the stream is open
+  await createImp(anchorName, '--memory', '512');
+
+  registerImp(eventsName);
+
+  const events = await startImp('events');
+
+  const seen: string[] = [];
+
+  const collecting = collectEvents(events.stdout, (line) => {
+    seen.push(line);
+  });
+
+  try {
+    await waitFor('the snapshot from imp events', () => {
+      expect(seen).toContain(`${anchorName} ImpAdded snapshot`);
+    });
+
+    await runImp('new', eventsName, '--memory', '512');
+    await runImp('sleep', eventsName);
+    await runImp('wake', eventsName);
+    await runImp('rm', eventsName);
+
+    await waitFor('the rm in imp events', () => {
+      expect(seen).toContain(`${eventsName} ImpRemoved`);
+    });
+  } finally {
+    events.kill();
+
+    await collecting;
+    await removeImps(anchorName);
+  }
+
+  expect(seen.filter((line) => line.startsWith(`${eventsName} `))).toEqual([
+    `${eventsName} ImpAdded created`,
+    `${eventsName} ImpChanged booted`,
+    `${eventsName} ImpChanged slept`,
+    `${eventsName} ImpChanged woke`,
+    `${eventsName} ImpRemoved`,
+  ]);
+
+  const audit = await runImp('audit', eventsName, '--kind', 'api', '--json');
+
+  const calls = z
+    .array(z.object({ procedure: z.string(), actor: z.string() }))
+    .parse(JSON.parse(audit));
+
+  expect(calls.map((call) => call.procedure)).toEqual([
+    'imps.destroy',
+    'imps.wake',
+    'imps.sleep',
+    'imps.create',
+  ]);
+
+  expect(calls.every((call) => call.actor === 'token')).toBeTrue();
 });
