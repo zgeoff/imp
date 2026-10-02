@@ -124,15 +124,24 @@ With your public key in `/var/lib/imp/ssh/authorized_keys`, `ssh box@imp` lands 
 over the tailnet, and wakes it if it sleeps. `scp`, `sftp`, port forwards and editors that work over
 SSH, such as VS Code Remote SSH, work too. The [SSH guide](./docs/guides/ssh.md) has the setup.
 
+## Ports
+
+`imp proxy box 5432 3001:3000` makes port 5432 in the imp reachable at `localhost:5432` on your
+machine, and port 3000 at `localhost:3001`; a local `0` takes any free port and prints it. A
+connection wakes the imp and keeps it awake while it is open, and a server that listens on the imp's
+loopback only is reachable too. It needs no SSH key: it goes to impd with the CLI's token. Ctrl-C
+stops it. A busy local port fails at once and names the port. impd allows 256 open connections per
+imp; a forced sleep resets the open ones, and the next one wakes the imp.
+
 ## Sleep and wake
 
-An imp counts as busy while it has an open shell or command, an SSH connection, a request in flight,
-an open TCP connection, or real CPU work. A coding agent that waits on a model API keeps its
-connection open, so it stays awake. After a quiet minute the imp sleeps.
+An imp counts as busy while it has an open shell or command, an SSH or `imp proxy` connection, a
+request in flight, an open TCP connection, or real CPU work. A coding agent that waits on a model
+API keeps its connection open, so it stays awake. After a quiet minute the imp sleeps.
 
-Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, a `console` or an SSH login
-wakes it. Background processes, tmpfs contents and everything else in memory come back as they were.
-TCP connections do not survive a sleep.
+Sleeping costs disk, not RAM. A request to the imp's URL, an `exec`, a `console`, an SSH login or an
+`imp proxy` connection wakes it. Background processes, tmpfs contents and everything else in memory
+come back as they were. TCP connections do not survive a sleep.
 
 Every imp serves its port 8080 at two URLs:
 

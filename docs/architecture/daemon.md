@@ -31,15 +31,16 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, and the exec WebSocket at `/exec`. Both take the bearer token in an `Authorization` header.
-A browser cannot set that header on a WebSocket, so `/exec` also takes a `ticket` query parameter:
-`exec.ticket` gives a single-use ticket for one existing imp, valid for 30 s. The token itself is
-never accepted in a URL, where logs and browser history would keep it; no client used the old
-`token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
-router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
-contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
-while impd stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a
-session request to an agent from before sessions. The token is made on first start and kept in
+`/rpc`, the exec WebSocket at `/exec`, and the tunnel WebSocket at `/tunnel`. Each takes the bearer
+token in an `Authorization` header. A browser cannot set that header on a WebSocket, so `/exec` also
+takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket for one existing imp,
+valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The token itself is never
+accepted in a URL, where logs and browser history would keep it; no client used the old `token`
+query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The router maps
+each procedure of the contract in `packages/api` to a service call. Errors come from the contract:
+`NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd
+stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a session
+request to an agent from before sessions. The token is made on first start and kept in
 `<dataDir>/token`, readable by the owner only. `/rpc` takes POST only: a GET is what a link or an
 image on any page can make a browser send.
 
@@ -96,7 +97,7 @@ lock, so two calls never change one imp at once.
 | `shutdown-gate.ts`    | Closed once the SIGTERM sleep pass starts. After that no VM boots or wakes.                                                                           |
 | `imp-liveness.ts`     | Marks an imp with a dead VM or a lost snapshot `stopped`, or `sleeping` when its VM died after the sleep wrote the snapshot.                          |
 | `imp-presenter.ts`    | Imp records as the API shows them, and their URLs.                                                                                                    |
-| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, proxied requests and WebSockets, and SSH connections.                         |
+| `activity-tracker.ts` | Counts the host-side connections that keep an imp awake: exec sessions, proxied requests and WebSockets, SSH connections, and tunnels.                |
 
 - **Anything that needs a VM** wakes a sleeping imp and cold-boots a stopped one. An exec counts its
   session before the wake, so no background sleep slips in between.
@@ -112,11 +113,11 @@ lock, so two calls never change one imp at once.
 The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a boot or a wake, the
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
-a hold, a taken lock, an open exec session, a proxied request or an SSH connection is never picked.
-It never waits for an imp's lock: a victim locked by the time its turn comes is skipped. It sleeps
-one victim at a time and picks again after each, so a skip or a failed sleep never leads to more
-sleeps than the new pick needs. Every 5 s it also sleeps imps while the measured use is over the
-budget, all it may sleep when they cannot bring it under.
+a hold, a taken lock, an open exec session, a proxied request, an SSH connection or a tunnel is
+never picked. It never waits for an imp's lock: a victim locked by the time its turn comes is
+skipped. It sleeps one victim at a time and picks again after each, so a skip or a failed sleep
+never leads to more sleeps than the new pick needs. Every 5 s it also sleeps imps while the measured
+use is over the budget, all it may sleep when they cannot bring it under.
 [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
 ### idle: the idle loop
@@ -157,6 +158,31 @@ stdin, resizes and signals to the guest, and sends output and the exit back. Whe
 wait for the client, output stops; the agent connection then stops reading, so a slow client slows
 the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
 after 30 s without an answer, so a client that vanished without a close lets go of its session.
+
+### tunnel: `imp proxy`
+
+`imp proxy <name> 5432 3001:3000` listens on local ports and opens one `/tunnel` WebSocket per TCP
+connection (`packages/api/src/tunnel-protocol.ts`). The client sends
+`{"type":"open","name":"box","port":5432}`; impd wakes the imp and dials `127.0.0.1:<port>` in the
+guest through the agent's [`dial`](./protocol.md#dial), so a server that listens on the guest's
+loopback only is reachable. impd answers `{"type":"opened"}`, or `{"type":"error","code",...}` and a
+close: `NOT_FOUND`, `DIAL_FAILED`, `AGENT_OUTDATED` for an agent from before `dial`, and
+`TUNNEL_LIMIT` past 256 open tunnels per imp.
+
+- **Bytes.** Binary messages carry the bytes both ways. `{"type":"eof"}` is a TCP half-close from
+  that side, so a client that half-closes still gets its reply.
+- **Flow control.** Neither end of a WebSocket can pause its reads, so each side acks the bytes it
+  delivered onward (`{"type":"ack","bytes":n}`), and a sender keeps at most 1 MiB unacked. impd acks
+  once the guest connection took the bytes; the CLI acks once its TCP socket did.
+- **The end.** impd closes with 1000 once both sides sent their eof, with 4000 when the connection
+  in the guest ended without one (a reset, or a forced sleep), and with 1012 when impd stops. The
+  CLI resets the local connection for anything but 1000.
+- **Activity.** An open tunnel counts as a `tunnel` connection from before the wake, so it keeps the
+  imp awake, and neither the idle loop nor the governor sleeps the imp under it.
+
+The CLI listens on 127.0.0.1 and ::1 before it calls impd, so a busy port fails at once, then checks
+the imp exists with `imps.get`, which does not wake it. Each local socket stays paused until
+`opened`.
 
 ### sessions: detachable consoles
 

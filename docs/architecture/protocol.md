@@ -293,8 +293,9 @@ still running. An attached viewer gets the EXIT. `NO_SESSION` if there is no ses
 ## `dial`
 
 Connects to an address inside the guest and relays bytes, for the SSH gateway's port forwarding
-([SSH guide](../guides/ssh.md)). The agent dials from inside the guest, so it reaches programs that
-listen on the guest's loopback or on a unix socket, which the guest IP cannot. Since `0.3.0`.
+([SSH guide](../guides/ssh.md)) and `imp proxy` ([daemon](./daemon.md#tunnel-imp-proxy)). The agent
+dials from inside the guest, so it reaches programs that listen on the guest's loopback or on a unix
+socket, which the guest IP cannot. Since `0.3.0`.
 
 ```json
 → REQUEST {"op":"dial","network":"tcp","address":"127.0.0.1:8080"}

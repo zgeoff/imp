@@ -37,9 +37,9 @@ VM then fails the sleep, instead of holding the imp's lock for good.
 ### Background sleeps
 
 The idle loop and the governor decide from a record they read earlier, so the sleep checks again
-under the imp's lock. Both skip an imp with a hold, an open exec session, a proxied connection or an
-SSH connection. The idle loop also skips an imp that was active since it looked. The governor does
-not: it sleeps the least recently active imp, idle or not.
+under the imp's lock. Both skip an imp with a hold, an open exec session, a proxied connection, an
+SSH connection or a tunnel. The idle loop also skips an imp that was active since it looked. The
+governor does not: it sleeps the least recently active imp, idle or not.
 
 Neither waits for an imp's lock. If the lock is taken, the sleep is skipped. The governor holds its
 admission lock while it sleeps, and a boot under the imp's lock may be waiting for admission, so
@@ -114,8 +114,8 @@ A woken imp keeps its old agent and kernel until its next cold boot (`imp stop`,
   again after the wake.
 
 Anything that needs a VM wakes a sleeping imp and cold-boots a stopped one: `exec`, `console`, the
-proxy, an SSH login, `start`, `wake` and `hold`. `stop` frees the memory; it does not keep the imp
-off.
+proxy, an SSH login, an `imp proxy` connection, `start`, `wake` and `hold`. `stop` frees the memory;
+it does not keep the imp off.
 
 ## Restarts
 
@@ -139,8 +139,8 @@ off.
 
 Every 2 s, an imp counts as active when it has any of these:
 
-- an open exec session (an attached session included), proxied connection or SSH connection, counted
-  on the host; a detached session counts only through its CPU and TCP;
+- an open exec session (an attached session included), proxied connection, SSH connection or
+  `imp proxy` tunnel, counted on the host; a detached session counts only through its CPU and TCP;
 - established guest TCP connections, from the agent's `activity` (loopback does not count);
 - Firecracker CPU above `IMP_IDLE_CPU_PERCENT` of one core (default 10; an idle guest uses about
   0.4);
