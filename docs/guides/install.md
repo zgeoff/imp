@@ -12,7 +12,8 @@ imp runs on one Linux machine, in one host container, in one of two ways:
 ## Needs
 
 - `/dev/kvm`: bare metal, or a VM with nested virtualization (WSL2 works).
-- Docker. The host container is privileged and mounts the Docker socket.
+- Docker. The host container runs as root with the capabilities in
+  [privileges](../architecture/host-contract.md#privileges), and mounts the Docker socket.
 - A host kernel with the iptables `rpfilter` and `addrtype` matches (`xt_rpfilter`, `xt_addrtype`).
   The host container loads its rules into its own network namespace, and the guard against spoofed
   guest addresses and the broker's port rule need both. Most distribution kernels and WSL2 have
@@ -78,8 +79,9 @@ restarts and day-to-day care.
   `build/imp-system.squashfs` (the agent's system drive) from `agent/`, so a changed agent reaches
   the next imp. The Docker cache makes the rebuild take about half a second when the agent is
   unchanged. With `IMP_SYSTEM_DRIVE` set, it uses that drive as it is.
-- Starts the container with `--privileged --device /dev/kvm`, the Docker socket, and the repo
-  mounted at `/src` and at its own path.
+- Starts the container with the deploy's privileges (`deploy/imp-host.args.json`, with this
+  checkout's seccomp profile), the loop devices, the Docker socket, and the repo mounted at `/src`
+  and at its own path.
 - Keeps data in `.data/dev/imp.xfs`, a sparse XFS file that the container loop-mounts on
   `/var/lib/imp`.
 - Publishes the API on 7070, the proxy on 7080, and per-imp ports 20000–20063.
@@ -449,9 +451,16 @@ hand.
 
 ### Start it
 
-Use one of the two, not both. Both run the container with `--init --privileged --device /dev/kvm` in
-a private cgroup namespace (for [CPU limits](./cpu-limits.md)), the host's Docker socket and
-`/var/lib/imp`, and give impd 120 seconds to sleep every imp on stop.
+Use one of the two, not both. Both run the container with the privileges of
+[`deploy/imp-host.args.json`](../../deploy/imp-host.args.json)
+([privileges](../architecture/host-contract.md#privileges)) in a private cgroup namespace (for
+[CPU limits](./cpu-limits.md)), the host's Docker socket and `/var/lib/imp`, and give impd 120
+seconds to sleep every imp on stop. Both need the seccomp profile at
+`/etc/imp/imp-host.seccomp.json`:
+
+```sh
+install -D -m 0644 deploy/imp-host.seccomp.json /etc/imp/imp-host.seccomp.json
+```
 
 - **systemd:** [`deploy/imp-host.service`](../../deploy/imp-host.service) runs `docker run` in the
   foreground, so systemd supervises it.
@@ -467,6 +476,10 @@ a private cgroup namespace (for [CPU limits](./cpu-limits.md)), the host's Docke
   ```sh
   docker compose -f deploy/compose.yaml up -d
   ```
+
+  With `IMP_STORAGE_BACKEND=zfs`, add `-f deploy/compose.zfs.yaml` for `/dev/zfs`. On a host booted
+  with `ipv6.disable=1`, delete the `net.ipv6` sysctls from the compose file: Docker refuses a
+  sysctl the kernel does not have. The systemd unit checks both at each start.
 
   On shutdown, `dockerd` stops the container and systemd waits 90 seconds for `docker.service` by
   default. Give it the 120 seconds impd needs with a drop-in:

@@ -217,10 +217,10 @@ should start with the imp are small JSON files in `/etc/imp/services.d`.
 
 ## How it works
 
-impd, the control plane, runs in one privileged container with its own network namespace. It starts
-a Firecracker process for each awake imp, gives each imp its own tap device and /30 subnet, and
-keeps imp disks as copy-on-write clones on XFS. Inside each guest, a small Go agent runs as PID 1
-and serves commands, terminals and freeze requests over vsock.
+impd, the control plane, runs in one container with its own network namespace and only the
+privileges it uses. It starts a Firecracker process for each awake imp, gives each imp its own tap
+device and /30 subnet, and keeps imp disks as copy-on-write clones on XFS. Inside each guest, a
+small Go agent runs as PID 1 and serves commands, terminals and freeze requests over vsock.
 
 The [architecture overview](./docs/architecture/overview.md) has the design and the reasoning behind
 each decision. [docs/](./docs/README.md) covers the daemon, the agent protocol, storage, networking,

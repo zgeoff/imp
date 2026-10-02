@@ -13,8 +13,8 @@ does nothing. Otherwise it:
 
 1. Replaces `/etc/resolv.conf` with public resolvers (`IMP_DNS`, default `1.1.1.1,8.8.8.8`) if it
    points at `100.100.100.100`. See [DNS](#dns).
-2. Starts `tailscaled` in kernel TUN mode (`tailscale0`) unless one already runs. The container is
-   privileged and has its own netns, so the TUN device and routes never touch the host.
+2. Starts `tailscaled` in kernel TUN mode (`tailscale0`) unless one already runs. The container has
+   `NET_ADMIN`, `/dev/net/tun` and its own netns, so the TUN device and routes never touch the host.
 3. With saved state, waits up to 15 s for the saved node to be `Running`. If it is, it skips the
    login and never uses a key, which would make a second node; `deploy/bootstrap.sh` blanks the key
    once the node has joined. If the saved node needs a login instead (`NeedsLogin`: it logged out,

@@ -31,10 +31,16 @@ deploy/upgrade.sh
 ```
 
 1. It pulls `IMP_HOST_IMAGE` (from the environment, else `/etc/imp/imp-host.env`). It stops there
-   when the host already runs that image.
+   when the host already runs that image. It refuses an image from before the unprivileged host (no
+   `imp.host-contract` label) once the unit or compose file runs without `--privileged`.
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
-3. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
+3. It installs the new image's seccomp profile in `/etc/imp/imp-host.seccomp.json` and, for the
+   systemd unit, its `imp-host.service`, so a change to the
+   [privileges](../architecture/host-contract.md#privileges) reaches the server. Keep local changes
+   to the unit in a drop-in (`imp-host.service.d/`). A compose file is the operator's: upgrade.sh
+   leaves it and says when it still runs `--privileged`.
+4. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
    back, prints the boot status counts from `imp info`, and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
@@ -83,6 +89,11 @@ from before this upgrade scheme (the first release with `system/drives/`) does n
 in the new snapshot records, and every sleeping imp boots cold once. The same happens once the other
 way: an older impd hashed the drive with another hash and wrote no drive path, so its snapshots boot
 cold with `the snapshot is from an older impd`.
+
+**CAUTION:** A rollback to an image from before the unprivileged host needs the old unit with
+`--privileged`, which `docker tag` does not bring back; upgrade.sh refuses it. Run
+`deploy/bootstrap.sh` of that release with the old image instead: it writes the unit that image
+needs. Under compose, put `privileged: true` back in the compose file.
 
 **CAUTION:** `deploy/bootstrap.sh` blanks the spent Tailscale key once the node has joined, and the
 image starts `tailscaled` from its saved state. An image without the `imp.tailscale-keyless` label

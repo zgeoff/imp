@@ -119,8 +119,11 @@ From the milestone work:
   have no AAAA records.
 - The jailer ([#27](https://github.com/zgeoff/imp/issues/27)) runs each VM, boot template VMs too,
   in a chroot as its own uid, with seccomp and a memory limit; the `jail` e2e suite checks it, the
-  OOM report, a restart and a rollback to `IMP_JAILER=false`. The host container is still privileged
-  ([#75](https://github.com/zgeoff/imp/issues/75)).
+  OOM report, a restart and a rollback to `IMP_JAILER=false`. The host container runs without
+  `--privileged` ([#75](https://github.com/zgeoff/imp/issues/75)), on an explicit capability list
+  ([privileges](./docs/architecture/host-contract.md#privileges)). That stops accidents, not an
+  escape: root in the container can still become root on the host, through the Docker socket or
+  through `SYS_ADMIN` (a new procfs, then `core_pattern`), so it is no security boundary.
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
   its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).
