@@ -83,7 +83,9 @@ var waitAndGrow = disk.WaitAndGrow
 
 // grow resizes the root filesystem once the disk reaches diskBytes. A frozen
 // filesystem would block the resize, so a grow during a freeze fails with
-// FROZEN, and a freeze waits for a grow.
+// FROZEN, and a freeze waits for a grow. impd sends grow, freeze and thaw
+// under the imp's lock, which orders them; freezeMu guards the agent's own
+// state, whatever the order they arrive in.
 func (s *Server) grow(diskBytes int64) error {
 	s.freezeMu.Lock()
 	defer s.freezeMu.Unlock()

@@ -1,8 +1,10 @@
 import { statSync } from 'node:fs';
 import type { ImpEventDetail } from '@imp/api';
 import { ORPCError } from '@orpc/server';
+import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
+import { buildAgentOutdatedApiError } from '../api-errors';
 import { updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
@@ -413,6 +415,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       await setGrowPending(imp, true);
 
+      if (error instanceof AgentError && error.code === 'AGENT_OUTDATED') {
+        throw buildAgentOutdatedApiError(
+          "the disk grew, but the imp's agent is too old to grow its filesystem while it runs; its next boot does (stop and start the imp)",
+        );
+      }
+
       throw new ORPCError('INTERNAL_SERVER_ERROR', {
         message: `the disk grew, but the guest did not grow its filesystem (its next wake or boot does): ${message}`,
         cause: error,
@@ -487,12 +495,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       return imp;
     }
 
-    // a guest writes its disk from the moment it runs
-    await context.diskBudget.requireRoom(0);
-
+    // a wake goes through below the reserve, so a full disk never strands an
+    // imp's work; a cold boot writes the disk from the start, and waits
     if (imp.state === 'sleeping') {
       return wakeImpVm(imp);
     }
+
+    await context.diskBudget.requireRoom(0);
 
     requireTransition(imp.state, 'running', 'start');
 

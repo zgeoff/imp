@@ -128,6 +128,16 @@ test('a running guest grows at once; a failed grow is retried at the next wake',
   const disk6 = await ctx.readDisk('dev');
 
   expect(disk6.isGrowPending).toBeFalse();
+
+  // an agent from before grow: the next boot grows the filesystem
+  ctx.fake.queue('grow', 'die');
+
+  const outdated = await ctx.client.imps
+    .resizeDisk({ name: 'dev', diskMib: 5 * GIB_MIB })
+    .catch((error: unknown) => error);
+
+  expect(outdated).toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(String(outdated)).toContain('its next boot does');
 });
 
 test('a sleeping guest grows when it wakes, and a cold boot needs no grow call', async () => {
@@ -191,7 +201,7 @@ test('a checkpoint keeps its disk size, and a restore or a fork takes it', async
   expect(disk5).toEqual({ fileBytes: 2 * 1024 ** 3, isGrowPending: false });
 });
 
-test('past the reserve, creates, resizes and wakes are refused, and a sleep keeps its VM', async () => {
+test('past the reserve, creates and resizes are refused, a sleep keeps its VM, a wake goes on', async () => {
   await using ctx = await setupDiskTest();
 
   await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB, memoryMib: 1024 });
@@ -217,13 +227,17 @@ test('past the reserve, creates, resizes and wakes are refused, and a sleep keep
     ctx.client.imps
       .resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB })
       .catch((error: unknown) => error),
-    ctx.client.imps.wake({ name: 'idle' }).catch((error: unknown) => error),
     ctx.client.checkpoints.create({ name: 'dev' }).catch((error: unknown) => error),
   ]);
 
   for (const refusal of refusals) {
     expect(refusal).toMatchObject({ code: 'DISK_FULL' });
   }
+
+  // its disk and memory exist already: a full disk must not strand its work
+  const woken = await ctx.client.imps.wake({ name: 'idle' });
+
+  expect(woken.state).toBe('running');
 
   const info = await ctx.client.system.info();
 

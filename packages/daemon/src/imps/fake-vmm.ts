@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
@@ -168,10 +169,14 @@ export function buildFakeVmm() {
         return alive.has(pid);
       },
 
-      // fail and die: the guest did not grow
+      // fail: the guest did not grow; die: its agent is from before grow
       growDrive: (paths, diskBytes) =>
         runInGeneration(async () => {
           const outcome = await pickOutcome('grow');
+
+          if (outcome === 'die') {
+            throw buildAgentOutdatedError('grow');
+          }
 
           if (outcome !== 'ok') {
             throw new FakeVmError('grow failed');
