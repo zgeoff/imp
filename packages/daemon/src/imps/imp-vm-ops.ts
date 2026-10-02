@@ -79,8 +79,10 @@ export interface ImpVmOps {
   // restore runs up to the parked guest meanwhile
   readonly startNewImpVm: (imp: LockedImp, diskReady: Promise<unknown>) => Promise<LockedImp>;
 
-  // agent shutdown, then the memory goes too: a stopped imp boots cold
-  readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
+  // agent shutdown, then the memory goes too: a stopped imp boots cold. Not
+  // `graceful`, it kills Firecracker at once: for a guest whose disk and
+  // memory are thrown away next.
+  readonly stopImpVm: (imp: LockedImp, graceful?: boolean) => Promise<LockedImp>;
 
   // snapshots the VM and stops it (docs/architecture/sleep-and-wake.md#sleep);
   // a failed snapshot leaves it running, a failure after the kill stops the
@@ -369,11 +371,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   const startNewImpVm = (imp: LockedImp, diskReady: Promise<unknown>): Promise<LockedImp> =>
     startColdImpVm(imp, 'start', null, diskReady);
 
-  const stopImpVm = async (imp: LockedImp): Promise<LockedImp> => {
+  const stopImpVm = async (imp: LockedImp, graceful = true): Promise<LockedImp> => {
     const paths = context.findPaths(imp.id);
 
     if (imp.pid !== null) {
-      await context.vms.stopVm(imp.pid, paths, true);
+      await context.vms.stopVm(imp.pid, paths, graceful);
     }
 
     await context.cgroups.remove(imp.id);

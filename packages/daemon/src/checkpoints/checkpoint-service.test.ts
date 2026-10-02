@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -22,7 +23,7 @@ import {
 async function setupTest() {
   // freeze, thaw, clone and stop calls in the order they happen
   const events: string[] = [];
-  const state = { failClone: false };
+  const state = { failClone: false, failSwap: false };
 
   const createClone = (source: string, target: string): Promise<void> => {
     if (state.failClone) {
@@ -41,7 +42,21 @@ async function setupTest() {
   const checkpoints = createCheckpointService({
     config: harness.config,
     db: harness.db,
-    imps: harness.imps,
+    imps: {
+      ...harness.imps,
+
+      // failSwap takes the staged clone away once the VM is down, so the
+      // rename that follows the halt fails
+      haltImp: async (imp, graceful) => {
+        const halted = await harness.imps.haltImp(imp, graceful);
+
+        if (state.failSwap) {
+          rmSync(`${buildImpPaths(harness.dataDir, imp.id).disk}.new`);
+        }
+
+        return halted;
+      },
+    },
     storage: harness.storage,
     diskBudget: harness.diskBudget,
     log: () => {},
@@ -174,7 +189,7 @@ test('it rejects a taken label and a label shaped like an id', async () => {
   expect(idLike).toMatchObject({ code: 'BAD_REQUEST' });
 });
 
-test('it restores a running imp: stop, swap the disk, drop the snapshot, boot', async () => {
+test('it restores a running imp: kill, swap the disk, drop the snapshot, boot', async () => {
   await using ctx = await setupTest();
 
   const imp = await ctx.imps.createImp({ name: 'dev' });
@@ -193,7 +208,9 @@ test('it restores a running imp: stop, swap the disk, drop the snapshot, boot', 
   const restored = await ctx.checkpoints.restoreCheckpoint('dev', 'v1');
 
   expect(restored.state).toBe('running');
-  expect(ctx.fake.stops[0]).toEqual({ pid: 1001, graceful: true });
+
+  // the old guest's disk and memory are thrown away: no graceful shutdown
+  expect(ctx.fake.stops).toEqual([{ pid: 1001, graceful: false }]);
 
   const devDisk = await ctx.readDisk('dev');
 
@@ -352,6 +369,35 @@ test('a restore whose clone fails leaves a running imp running on its own disk',
   expect(rejection).toMatchObject({ message: 'clone failed' });
   expect(record).toMatchObject({ state: 'running', pid: 1001 });
   expect(ctx.fake.stops).toEqual([]);
+  expect(disk).toBe('changed');
+});
+
+test('a restore whose swap fails after the kill leaves the imp stopped on its old disk', async () => {
+  await using ctx = await setupTest();
+
+  const imp = await ctx.imps.createImp({ name: 'dev' });
+
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  await ctx.checkpoints.createCheckpoint('dev', 'v1');
+  await ctx.writeDisk('dev', 'changed');
+
+  mkdirSync(paths.snapshotDir, { recursive: true });
+  writeFileSync(join(paths.snapshotDir, 'memory'), 'old');
+
+  ctx.state.failSwap = true;
+
+  const rejection = await ctx.checkpoints
+    .restoreCheckpoint('dev', 'v1')
+    .catch((error: unknown) => error);
+
+  const record = await findImpByName(ctx.db, 'dev');
+  const disk = await ctx.readDisk('dev');
+
+  expect(rejection).toMatchObject({ code: 'ENOENT' });
+  expect(ctx.fake.stops).toEqual([{ pid: 1001, graceful: false }]);
+  expect(record).toMatchObject({ state: 'stopped', pid: null });
+  expect(existsSync(paths.snapshotDir)).toBe(false);
   expect(disk).toBe('changed');
 });
 
