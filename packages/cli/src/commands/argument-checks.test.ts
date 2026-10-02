@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
 import { imageCommand } from './image';
@@ -177,4 +180,32 @@ test('token new needs a known scope and well-formed imp patterns', async () => {
   );
 
   expect(process.exitCode).toBe(2);
+});
+
+test('token key add refuses a private key, an empty file and a missing one', async () => {
+  const stderr = setupStderr();
+  const dir = mkdtempSync(join(tmpdir(), 'imp-cli-key-'));
+  const privateKey = join(dir, 'id_ed25519');
+  const empty = join(dir, 'empty.pub');
+
+  writeFileSync(privateKey, '-----BEGIN OPENSSH PRIVATE KEY-----\n');
+  writeFileSync(empty, '# nothing\n');
+
+  try {
+    await runCommand(tokenCommand, { rawArgs: ['key', 'add', 'ci', privateKey] });
+
+    expect(stderr).toHaveBeenCalledWith(`imp: ${privateKey} is a private key; give its .pub file`);
+
+    await runCommand(tokenCommand, { rawArgs: ['key', 'add', 'ci', empty] });
+
+    expect(stderr).toHaveBeenCalledWith(`imp: ${empty} holds no key`);
+
+    await runCommand(tokenCommand, {
+      rawArgs: ['new', 'ci', '--scope', 'exec', '--ssh-key', join(dir, 'missing.pub')],
+    });
+
+    expect(process.exitCode).toBe(2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -9,6 +9,7 @@ import type {
   Imp,
   Secret,
   Session,
+  SshKey,
   StorageGc,
   SystemInfo,
   Token,
@@ -244,14 +245,20 @@ export function formatSecrets(secrets: readonly Secret[]): string {
 
 export function formatTokens(tokens: readonly Token[]): string {
   return formatTable(
-    ['NAME', 'SCOPE', 'IMPS', 'CREATED'],
+    ['NAME', 'SCOPE', 'IMPS', 'SSH KEYS', 'CREATED'],
     tokens.map((token) => [
       token.name,
       token.scope,
       token.imps === null ? '*' : token.imps.join(','),
+      String(token.sshKeys.length),
       token.createdAt.toISOString(),
     ]),
   );
+}
+
+// `SHA256:... comment`, as `ssh-keygen -l` prints a key
+export function formatSshKey(key: SshKey): string {
+  return key.comment === '' ? key.fingerprint : `${key.fingerprint} ${key.comment}`;
 }
 
 export function formatIdentity(identity: Identity): string {
