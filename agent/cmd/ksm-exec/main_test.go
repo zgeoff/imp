@@ -47,7 +47,11 @@ func kernelAtLeast(t *testing.T, major, minor int) bool {
 	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
 }
 
-func TestTheExecedProgramKeepsTheMergeFlag(t *testing.T) {
+// buildKsmExec skips before Linux 6.7 or without KSM, else builds ksm-exec;
+// it returns that and this test binary, which runs as the child.
+func buildKsmExec(t *testing.T) (bin, self string) {
+	t.Helper()
+
 	if !kernelAtLeast(t, 6, 7) {
 		t.Skip("the merge flag survives exec from Linux 6.7")
 	}
@@ -55,7 +59,7 @@ func TestTheExecedProgramKeepsTheMergeFlag(t *testing.T) {
 		t.Skip("this kernel has no KSM")
 	}
 
-	bin := filepath.Join(t.TempDir(), "ksm-exec")
+	bin = filepath.Join(t.TempDir(), "ksm-exec")
 	build := exec.Command("go", "build", "-o", bin, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
@@ -66,6 +70,12 @@ func TestTheExecedProgramKeepsTheMergeFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	return bin, self
+}
+
+func TestTheExecedProgramKeepsTheMergeFlag(t *testing.T) {
+	bin, self := buildKsmExec(t)
+
 	child := exec.Command(bin, self)
 	child.Env = append(os.Environ(), childEnv+"=1")
 	out, err := child.Output()
@@ -74,6 +84,22 @@ func TestTheExecedProgramKeepsTheMergeFlag(t *testing.T) {
 	}
 	if string(out) != "1" {
 		t.Fatalf("the child's PR_GET_MEMORY_MERGE = %q, want 1", out)
+	}
+}
+
+// The jailer execs Firecracker in turn: the flag must outlive a second exec.
+func TestTheFlagOutlivesASecondExecAsTheJailers(t *testing.T) {
+	bin, self := buildKsmExec(t)
+
+	// sh stands in for the jailer: it execs the next program in place
+	child := exec.Command(bin, "sh", "-c", `exec "$0"`, self)
+	child.Env = append(os.Environ(), childEnv+"=1")
+	out, err := child.Output()
+	if err != nil {
+		t.Fatalf("ksm-exec: %v (%s)", err, out)
+	}
+	if string(out) != "1" {
+		t.Fatalf("the child's PR_GET_MEMORY_MERGE after two execs = %q, want 1", out)
 	}
 }
 
