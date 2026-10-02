@@ -71,14 +71,29 @@ init ignores every signal it can, as the kernel delivers to a namespace's init o
 handles, and Go handles nearly all of them. `kill -TERM 1` inside does nothing.
 
 When the inner init dies (a `reboot` inside, say), every process in the container dies with it. The
-agent ends the waits of what ran there, closes the sockets it served in the inner `/run`, and starts
-the container again after 1 s, doubling to 30 s, at most 5 times in 10 minutes. After `rm -rf /`,
-every start fails: the agent stays up, `ping` reports the container down with the last error, and a
-spawn fails with `INNER_DOWN` until a checkpoint restore or a new disk. Each start runs the services
-again. Helpers and impd's runs of the agent by its system drive path start from an fd the inner init
-opened before the pivot, so they work with `/run/imp/sys` unmounted inside. The guest kernel (6.1)
-left a cgroup once killed with `cgroup.kill` killing the next process cloned into it, so the agent
-ends the container by killing its init, never with `cgroup.kill`.
+agent ends the waits of what ran there, closes the sockets it served in the inner `/run`, ends the
+services' supervision, and starts the container again after 1 s, doubling to 30 s. Each new
+container gets its `/etc` files written and its image config read again, and its services started. A
+start that fails, or a container that dies within a minute of its start, is a bad start: after more
+than 5 in 10 minutes the agent gives up until the next boot, `ping` reports the container down with
+the last error, and a spawn fails with `INNER_DOWN`. A container that ran a while starts again
+however often it dies.
+
+After `rm -rf /` inside, the container stays up but has nothing to run: an exec fails at once with
+`EXEC_FAILED`. A checkpoint restore brings the files back. If the init then dies, every start fails
+and the agent gives up as above.
+
+The inner init's socket is close-on-exec, so no process it starts holds it, and it sets its own
+`oom_score_adj` back to 0 before it starts anything: the agent's -1000 must not reach the
+container's processes, or a memory hog would hang the guest instead of being killed. It runs each
+spawn on its own, and the agent gives a request 30 s: one spawn that hangs (a stat on a dead FUSE
+mount) holds neither the others nor a kill. The agent's reads of the user's files take regular files
+only, opened without blocking, so a FIFO at `/etc/hosts` cannot hold the boot.
+
+Helpers and impd's runs of the agent by its system drive path start from an fd the inner init opened
+before the pivot, so they work with `/run/imp/sys` unmounted inside. The guest kernel (6.1) left a
+cgroup once killed with `cgroup.kill` killing the next process cloned into it, so the agent ends the
+container by killing its init, never with `cgroup.kill`.
 
 ### Not a security boundary
 

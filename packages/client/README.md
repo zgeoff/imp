@@ -121,11 +121,12 @@ in a URL; a browser behind a proxy that adds the token works the same way.
 
 `exit` resolves with `{ code, signal }`, where `code` is null when a signal ended the command. When
 the command did not run to its exit, `exit` rejects with an `ExecError` whose `code` is impd's (as
-in the table below, plus `EXEC_FAILED` when the command cannot start) or one of `UNAUTHORIZED` (also
-for an exec ticket that expired or was used), `UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`,
-`DETACHED`, `BAD_MESSAGE`, `CLOSED`, `OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error
-data. An abort before the command starts, during the ticket call or the connect, rejects with the
-abort's reason instead, an `AbortError` by default; after the start it ends the session as `CLOSED`.
+in the table below, plus `EXEC_FAILED` when the command cannot start and `INNER_DOWN` when the imp's
+container is down) or one of `UNAUTHORIZED` (also for an exec ticket that expired or was used),
+`UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`, `DETACHED`, `BAD_MESSAGE`, `CLOSED`,
+`OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error data. An abort before the command
+starts, during the ticket call or the connect, rejects with the abort's reason instead, an
+`AbortError` by default; after the start it ends the session as `CLOSED`.
 
 ## Errors
 

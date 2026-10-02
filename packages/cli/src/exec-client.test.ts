@@ -167,6 +167,24 @@ test('it exits 127 when the command cannot start, and 255 for other refusals', a
   }
 });
 
+test('it explains INNER_DOWN and exits 255', async () => {
+  await using impd = startFakeImpd((peer) => {
+    peer.send({ type: 'error', code: 'INNER_DOWN', message: 'the inner container is down' });
+  });
+
+  const ctx = setupIo(impd);
+
+  const exitCode = await runExec(BOX, ctx.io);
+
+  const [error] = ctx.readErrors();
+
+  expect(exitCode).toBe(255);
+
+  expect(error).toStartWith(
+    'imp: INNER_DOWN: the inner container is down (the container in the imp',
+  );
+});
+
 test('it ends the session on a bad frame or bad JSON, and closes the socket', async () => {
   const replies: readonly ((peer: FakeImpdPeer) => void)[] = [
     (peer) => {
