@@ -87,7 +87,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 			panic(v)
 		}
 	}()
-	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid}); err != nil {
+	if err := w.WriteJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, KillGraceMs: s.stop.grace.Milliseconds()}); err != nil {
 		s.proc.Signal(syscall.SIGHUP)
 	}
 
@@ -125,6 +125,12 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 		}
 	}
 	s.exited.Store(true)
+	// A command stopped by the host may leave group members that ignored
+	// the signal (nohup). They go before the drain, so their last output
+	// still reaches EOF and the host before EXIT.
+	if deadline, ok := s.stop.due(); ok {
+		killGroup(s.proc.Pid, deadline)
+	}
 	for _, o := range s.outputs {
 		o.f.SetReadDeadline(time.Now().Add(drainGrace))
 	}
@@ -154,6 +160,7 @@ type session struct {
 	stdin   *os.File // write end of the stdin pipe, nil with a tty
 	outputs []output
 	exited  atomic.Bool
+	stop    stopTimer
 	mu      sync.Mutex // guards stdin close
 
 	// stdinQ carries STDIN payloads from input to writeStdin. Only input
@@ -167,7 +174,11 @@ type session struct {
 }
 
 func (m *Manager) start(req proto.Request) (*session, error) {
-	s := &session{stdinQ: make(chan []byte, stdinQueueChunks), done: make(chan struct{})}
+	s := &session{
+		stdinQ: make(chan []byte, stdinQueueChunks),
+		done:   make(chan struct{}),
+		stop:   stopTimer{grace: killGrace(req)},
+	}
 	if req.TTY {
 		p, master, err := m.launcher.StartPTY(req)
 		if err != nil {
@@ -238,6 +249,7 @@ func (s *session) input(r *proto.Reader) {
 		case proto.TypeSignal:
 			var sig proto.Signal
 			if json.Unmarshal(f.Payload, &sig) == nil && sig.Signal > 0 && !s.exited.Load() {
+				s.stop.arm(syscall.Signal(sig.Signal))
 				s.proc.Signal(syscall.Signal(sig.Signal))
 			}
 		default:

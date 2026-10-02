@@ -161,6 +161,7 @@ export function createFakeSshBackend() {
       pid: 42,
       session: null,
       created: false,
+      groupKill: false,
       writeStdin: (data) => {
         stdin.push(decoder.decode(data));
       },

@@ -16,7 +16,7 @@ const SIGTERM = 15;
 // A guest for the fake VMs, by argv: `head -c N PATH` reads from `files`, the
 // write script stores its stdin there, `/bin/sh -c` runs buildShellStream's
 // scripts, and `signals` holds each signal a command got as `command:number`.
-function buildFakeGuest() {
+function buildFakeGuest(oldAgent: boolean) {
   const files = new Map<string, Uint8Array>();
 
   const requests: AgentExecRequest[] = [];
@@ -41,11 +41,14 @@ function buildFakeGuest() {
 
     const command = program === '/bin/sh' ? script : request.argv.join(' ');
 
-    return Promise.resolve(
-      buildShellStream(command, (signal) => {
-        signals.push(`${command}:${String(signal)}`);
-      }),
-    );
+    const stream = buildShellStream(command, (signal) => {
+      signals.push(`${command}:${String(signal)}`);
+    });
+
+    return Promise.resolve({
+      ...stream,
+      groupKill: !oldAgent && request.killGraceMs !== undefined,
+    });
   };
 
   return { files, requests, signals, openExec };
@@ -212,6 +215,7 @@ function buildEventStream() {
       pid: 42,
       session: null,
       created: true,
+      groupKill: false,
       writeStdin: hooks.writeStdin ?? (() => {}),
       stdinDrained: () => Promise.resolve(),
       closeStdin: hooks.closeStdin ?? (() => {}),
@@ -244,10 +248,10 @@ export type ToolResult = z.infer<typeof ToolResultSchema>;
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
-export async function setupImpdTest() {
+export async function setupImpdTest(oldAgent = false) {
   const harness = await setupImpTest();
 
-  const guest = buildFakeGuest();
+  const guest = buildFakeGuest(oldAgent);
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
   const built = buildTestApp(harness, harness, TEST_TOKEN, {
@@ -279,12 +283,15 @@ export async function setupImpdTest() {
 
 interface McpTestOptions {
   readonly guard?: GuardOptions;
+
+  // the imp's agent predates the group kill (protocol 0.8.0)
+  readonly oldAgent?: boolean;
 }
 
 // an impd as setupImpdTest makes it, and an MCP server in process over its
 // client; `sent` holds every message the server wrote, parsed
 export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
-  const impd = await setupImpdTest();
+  const impd = await setupImpdTest(options.oldAgent);
 
   const sent: unknown[] = [];
 

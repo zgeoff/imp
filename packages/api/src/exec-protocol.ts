@@ -51,6 +51,9 @@ export const EXEC_MAX_STDIN_FRAME_BYTES = 65_536;
 // disk on the client's side cannot grow the client's memory
 export const EXEC_STDOUT_WINDOW_BYTES = 1_048_576;
 
+// the agent waits for the group at most this long before its SIGKILL
+const KILL_GRACE_MAX_MS = 60_000;
+
 export const ExecStartMessageSchema = z
   .object({
     type: z.literal('start'),
@@ -63,10 +66,19 @@ export const ExecStartMessageSchema = z
     rows: DimensionSchema.optional(),
     session: SessionNameSchema.optional(),
     tool: z.enum(EXEC_TOOLS).optional(),
+
+    // after the client's first SIGTERM, SIGINT, SIGHUP, SIGQUIT or SIGKILL,
+    // how long the rest of the process group gets once the command exits
+    // before the agent kills it; `started.groupKill` says if it will
+    killGraceMs: z.int().min(1).max(KILL_GRACE_MAX_MS).optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
     path: ['tty'],
+  })
+  .refine((start) => start.killGraceMs === undefined || !start.tty, {
+    message: 'a tty exec takes no kill grace',
+    path: ['killGraceMs'],
   })
   .refine(
     (start) =>
@@ -114,6 +126,11 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
     pid: z.int().positive(),
     session: SessionNameSchema.optional(),
     created: z.boolean().optional(),
+
+    // set when the start asked for a kill grace: true when the agent kills
+    // what is left of the group and sends the exit only once it is gone;
+    // false for an imp whose agent predates it
+    groupKill: z.boolean().optional(),
   }),
 
   // code is null when a signal ended the process
