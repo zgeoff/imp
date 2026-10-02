@@ -134,6 +134,8 @@ The phases run in order:
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
   enabled. With `--host-firewall none`, it does none of this ([Firewall](#firewall)).
+- **ipv6:** With IPv6 on, keeps the host's router adverts, then creates the `imp-host` Docker
+  network ([IPv6](#ipv6)). With `--ipv6 off`, removes what an earlier run made.
 - **imp:** Writes `/etc/imp/imp-host.env` (0600) and `/etc/systemd/system/imp-host.service`, pulls
   the image (or loads `--image-archive`), and starts the unit. The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
@@ -141,8 +143,9 @@ The phases run in order:
 - **tailscale:** With a key in the env file, waits for the node to be `Running`, then blanks the key
   ([the Tailscale key](#the-tailscale-key)).
 - **health:** Waits for `imp info`, checks that `imp-host` publishes ports on `127.0.0.1` only, and
-  that a joined tailnet node is `Running`. Then it creates, runs `uname -a` in, and destroys an imp
-  from `ubuntu`. `--skip-health` skips it.
+  that a joined tailnet node is `Running`. With IPv6 on, it checks that the container has an IPv6
+  default route and that impd logged IPv6 on. Then it creates, runs `uname -a` in, and destroys an
+  imp from `ubuntu`, with 512 MiB. `--skip-health` skips it.
 
 ### Disk layout
 
@@ -247,15 +250,76 @@ table, the flag removes the table and `imp-firewall.service`. Without the flag, 
 still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. imp
 needs no inbound port either way ([host contract](../architecture/host-contract.md#firewall)).
 
+### IPv6
+
+Imps get IPv6 only when the `imp-host` container has an IPv6 default route
+([IPv6](../architecture/networking.md#ipv6)). Docker's default bridge is IPv4 only, so with IPv6 on,
+`imp-host` runs on its own Docker network instead:
+
+```sh
+docker network create --ipv6 --subnet <IMP_HOST_SUBNET6> \
+  -o com.docker.network.bridge.name=br-imphost imp-host
+```
+
+Docker's NAT66 gives the container an IPv6 default route, and impd's `IMP_SUBNET6=auto` puts the
+imps behind its own NAT66 on top. The bridge has a fixed name, `br-imphost`, so a host firewall can
+admit it; on NixOS the module does ([IPv6 on NixOS](./nixos.md#ipv6)).
+
+- **`--ipv6 auto|on|off`:** `auto`, the first run's default, is on when the host's IPv6 default
+  route leaves through an interface with a global address. The env file records `IMP_HOST_IPV6=on`
+  or `off`, and later runs keep it, so a host whose route is down for a moment does not lose imps'
+  IPv6. `IMP_HOST_SUBNET6` is a random unique local /64, made once; `IMP_HOST_NETWORK` is
+  `--network imp-host`, the words the unit passes to `docker run`.
+- **Docker:** 27.0 or later, which writes the NAT66 and forward rules for the network itself. An
+  older Docker, or `"ip6tables": false` in `/etc/docker/daemon.json`, refuses `on` and turns `auto`
+  off with a warning.
+- **A network that differs:** another subnet, no IPv6, or another bridge name. `--check` reports it,
+  and a run stops `imp-host` and creates the network again, when nothing else is on it. The unit
+  only creates the network when it is missing, so after a manual change run the script.
+- **Off again:** `--ipv6 off` stops `imp-host`, removes the network and the router advert file
+  below, and `imp-host` comes back on the default bridge. Every imp that has an IPv6 prefix boots
+  cold at its next start ([a new prefix](../architecture/networking.md#a-new-prefix)). An env file
+  that says off beside the network is drift: `--check` exits 2, and `--yes` refuses.
+
+**CAUTION:** Docker turns on `net.ipv6.conf.all.forwarding` for an IPv6 network. With forwarding on,
+the kernel ignores router adverts on an interface with `accept_ra=1`. A host whose IPv6 default
+route comes from router adverts then loses the route when it expires, about half an hour later, and
+the host's IPv6 with it. The ipv6 phase settles this before it creates the network:
+
+- **The kernel takes the adverts** (`accept_ra` is 1): the script writes
+  `/etc/sysctl.d/90-imp-ipv6.conf` with `net/ipv6/conf/<uplink>/accept_ra = 2`, which keeps them
+  with forwarding on, and applies it. The slash form keeps a dotted name such as `eth0.100` whole.
+  The file stays when you roll the host back or remove imp; `--ipv6 off` removes it, and the live
+  value stays until a reboot.
+- **A client takes them** (`accept_ra` is 0): systemd-networkd (and netplan, which uses it),
+  NetworkManager or dhcpcd. networkd keeps them with forwarding on when the uplink's `.network` file
+  says `IPv6AcceptRA=yes` (netplan: `accept-ra: true`), and the script reads that. For any other
+  client the script stops, says which client it found, and asks you to check its config. Run again
+  with `--ra-handled` once it keeps router adverts with forwarding on. A later run with the network
+  in place only logs the client.
+- **A static route,** or no IPv6 default route: nothing to do.
+
+Docker also sets the `ip6tables` FORWARD policy to DROP when it turns forwarding on. Anything else
+on the host that forwards IPv6, such as dual-stack k3s or a VPN, needs its own accept rules, or
+`"ip-forward-no-drop": true` in `/etc/docker/daemon.json`
+([packet filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/)).
+
+A routed /64 instead of NAT66 is not automated: set `IMP_SUBNET6=<prefix>` and route the prefix to
+the container's address on `imp-host` ([IPv6](../architecture/networking.md#ipv6)).
+
 ### Test it
 
 `scripts/test-bootstrap.sh` runs the script in a privileged container with systemd as PID 1, on
 Debian 13 and Ubuntu 24.04 and 26.04, with a loop file and Docker inside. It checks `--check` on the
 fresh host, a first run, `--check` and a second run with no change. It fails when the host's `vm.*`
 and `kernel.*` sysctls or loaded modules change. In a container, the script writes the kernel
-settings and does not apply them. On Debian it also checks the `--data-device` refusals and what
-`--check --storage zfs` plans. `--zfs` adds a real ZFS run on Ubuntu 24.04, on a pool with a unique
-name that the test destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
+settings and does not apply them; `accept_ra`, which is per network namespace, it applies. Each
+distro runs with `--ipv6 on`, as CI has no IPv6 route out. On Debian it also checks a network with
+another subnet, `accept_ra=2` on a dotted interface with a fake router-advert route, `--ipv6 off`,
+the refusal when a client takes the adverts, the `--data-device` refusals and what
+`--check --storage zfs` plans. With `--health`, an imp also reaches an IPv6 address outside the
+container. `--zfs` adds a real ZFS run on Ubuntu 24.04, on a pool with a unique name that the test
+destroys; it needs the zfs module loaded on the host, which WSL2 does not have.
 
 ```sh
 scripts/test-bootstrap.sh --stub --zfs                        # a stand-in image (what CI runs)

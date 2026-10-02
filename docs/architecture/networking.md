@@ -216,9 +216,10 @@ note `no IPv6 until its next cold boot` for it.
 
 Known limits:
 
-- `auto` often means off. Docker networks are IPv4 only unless made with `--ipv6`, and the default
-  bridge is one of them. impd logs
+- `auto` means off on Docker's default bridge, which is IPv4 only. impd then logs
   `impd: ipv6: off (IMP_SUBNET6=auto, and the container has no IPv6 default route)`.
+  `bootstrap.sh --ipv6` and the NixOS module's `ipv6.enable` put the container on a network with
+  IPv6 ([IPv6](../guides/install.md#ipv6)).
 - A routed /64 needs a route to it on the network:
   `ip -6 route add <prefix> via <container address>`. The container's address can change when it is
   made again.
