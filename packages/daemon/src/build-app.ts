@@ -1,4 +1,4 @@
-import { EXEC_CLOSE_RESTARTING, EXEC_PATH, EXEC_TICKET_PARAM } from '@imp/api';
+import { EXEC_CLOSE_RESTARTING, EXEC_PATH, EXEC_TICKET_PARAM, TUNNEL_PATH } from '@imp/api';
 import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
@@ -14,6 +14,8 @@ import { createExecSession } from './exec/exec-session';
 import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
 import { isAuthorized } from './token';
+import { createTunnelLimits, createTunnelSession } from './tunnel/tunnel-session';
+import type { TunnelSession } from './tunnel/tunnel-session';
 
 // Bun pings an idle exec socket and closes it when no answer comes, so a
 // client that vanished without a close (a laptop lid, dropped Wi-Fi) lets
@@ -52,6 +54,14 @@ export function buildApp(deps: AppDeps) {
     string,
     { readonly session: ExecSession; readonly close: (code: number, reason: string) => void }
   >();
+
+  // per tunnel WebSocket: its session, and a close for impd's stop
+  const tunnels = new Map<
+    string,
+    { readonly session: TunnelSession; readonly close: (code: number, reason: string) => void }
+  >();
+
+  const tunnelLimits = createTunnelLimits();
 
   // each exec socket's grant, by its upgrade request
   const grants = new WeakMap<Request, ExecGrant>();
@@ -141,6 +151,50 @@ export function buildApp(deps: AppDeps) {
       },
     })
 
+    // `imp proxy`: the bearer header only. A ticket lives 30 s and redeems
+    // once, which suits a console, not a listener that opens a tunnel per
+    // connection for hours.
+    .ws(TUNNEL_PATH, {
+      beforeHandle: (context) => {
+        if (isAuthorized(context.request.headers.get('authorization'), deps.token)) {
+          // oxlint-disable-next-line unicorn/no-useless-undefined
+          return undefined;
+        }
+
+        return Response.json({ error: 'unauthorized' }, { status: 401 });
+      },
+      open: (ws) => {
+        const peer = {
+          close: (code: number, reason: string): void => {
+            ws.raw.close(code, reason);
+          },
+        };
+
+        const session = createTunnelSession(
+          {
+            sendText: (text) => {
+              ws.raw.send(text);
+            },
+            sendBinary: (data) => {
+              ws.raw.send(data);
+            },
+            close: peer.close,
+          },
+          { openDial: (name, target) => deps.imps.openDial(name, target, 'tunnel') },
+          tunnelLimits,
+        );
+
+        tunnels.set(ws.id, { session, close: peer.close });
+      },
+      message: (ws, message) => {
+        tunnels.get(ws.id)?.session.handleMessage(message);
+      },
+      close: (ws) => {
+        tunnels.get(ws.id)?.session.handleClose();
+        tunnels.delete(ws.id);
+      },
+    })
+
     // under its own prefix, so no dashboard route can shadow the API's
     .get('/', () => Response.redirect(DASHBOARD_PATH, 302))
     .get(DASHBOARD_PATH, (context) => dashboard.serve(context.request))
@@ -151,7 +205,7 @@ export function buildApp(deps: AppDeps) {
 
     // the client can tell impd went away on purpose
     closeExecSessions: () => {
-      for (const entry of sessions.values()) {
+      for (const entry of [...sessions.values(), ...tunnels.values()]) {
         entry.close(EXEC_CLOSE_RESTARTING, 'impd is restarting');
       }
     },

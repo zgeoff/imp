@@ -527,6 +527,92 @@ test('/exec rejects an expired ticket and the token in the query', async () => {
   }
 });
 
+// opens /tunnel and reports the first message for `open`, or 'rejected'
+async function tryTunnelSocket(
+  port: string,
+  query: string,
+  headers: Readonly<Record<string, string>>,
+): Promise<string> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel?${query}`, { headers });
+
+  const outcome = Promise.withResolvers<string>();
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'open', name: 'nope', port: 5432 }));
+  });
+
+  socket.addEventListener('message', (event) => {
+    outcome.resolve(String(event.data));
+  });
+
+  socket.addEventListener('error', () => {
+    outcome.resolve('rejected');
+  });
+
+  try {
+    return await outcome.promise;
+  } finally {
+    socket.close();
+  }
+}
+
+test('/tunnel takes the bearer header only, not a ticket', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+    const ticket = await tryTunnelSocket(port, `ticket=${issued.ticket}`, {});
+    const bearer = await tryTunnelSocket(port, '', { authorization: `Bearer ${TEST_TOKEN}` });
+
+    const message: unknown = JSON.parse(bearer);
+
+    expect(ticket).toBe('rejected');
+
+    // past the auth: the imp does not exist
+    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('impd stopping closes tunnels with 1012', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const socket = new WebSocket(`ws://127.0.0.1:${String(server.server?.port)}/tunnel`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
+
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<CloseEvent>();
+
+    socket.addEventListener('open', () => {
+      opened.resolve();
+    });
+
+    socket.addEventListener('close', closed.resolve);
+
+    await opened.promise;
+
+    ctx.closeExecSessions();
+
+    const event = await closed.promise;
+
+    expect(event.code).toBe(1012);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('exec.ticket refuses an imp that does not exist', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
