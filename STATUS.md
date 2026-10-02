@@ -116,7 +116,7 @@ From the milestone work:
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
   its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).
 - Scoped tokens and tailnet identity ([#29](https://github.com/zgeoff/imp/issues/29)): the `tokens`
-  e2e suite (3.5–4.2 s) checks scopes and imp patterns through the CLI. The `tailscale` suite's
+  e2e suite (3.5–4.8 s) checks scopes and imp patterns through the CLI. The `tailscale` suite's
   tailnet identity case passed once on the dev box (suite 31.4 s with it), with a rule for any
   member. SSH logins still go by `authorized_keys` only: every key there has `exec` on every imp,
   and keys tied to scoped tokens are not built.
