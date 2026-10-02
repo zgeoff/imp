@@ -11,6 +11,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'docker',
     'images',
     'checkpoints',
+    'disks',
     'sleep',
     'scale',
     'restart',
@@ -40,6 +41,7 @@ test('it expands a set and drops duplicates', () => {
   expect(parseArgs(['--only', 'fast,sleep']).suites).toEqual([
     'lifecycle',
     'checkpoints',
+    'disks',
     'sleep',
     'restart',
     'mcp',

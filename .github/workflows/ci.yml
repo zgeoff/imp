@@ -351,7 +351,7 @@ jobs:
   # The ZFS storage backend on real pools: scripts/test-zfs.sh runs its tests
   # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
   # ships; then scripts/zfs-host-test.sh runs real imps on a second such pool
-  # through the lifecycle, checkpoints and sleep suites and prints the ZFS
+  # through the lifecycle, checkpoints, disks and sleep suites and prints the ZFS
   # timings. Not a required check; the fake zfs in the unit tests runs in
   # `checks` either way.
   zfs:
@@ -367,7 +367,7 @@ jobs:
       IMP_KERNEL: .cache/ci/vmlinux
       IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
       IMP_HOST_IMAGE_READY: 1
-      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep,backups
+      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,disks,sleep,backups
       IMP_ZFS_TEST_UNIT: 0
     steps:
       - name: Checkout
