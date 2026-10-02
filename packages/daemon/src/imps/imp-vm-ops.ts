@@ -79,6 +79,9 @@ export interface ImpVmOps {
   // kills the VM without asking its agent, which may not answer, and boots
   // the disk cold; `reason` says why on the imp
   readonly startFreshImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
+
+  // runs a snapshot write in one of the host-wide sleep slots
+  readonly withSleepSlot: <T>(task: () => Promise<T>) => Promise<T>;
 }
 
 export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
@@ -596,6 +599,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     requireRunningImp,
     growGuestDisk,
     startFreshImpVm,
+    withSleepSlot: sleepSlots.run,
   };
 }
 

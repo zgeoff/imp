@@ -10,6 +10,9 @@ import { writeWatchdogSnapshot } from './write-watchdog-snapshot';
 // only busy
 const CONFIRM_MS = 5000;
 
+// the look again under the lock, which holds off every other operation
+const RECHECK_MS = 1000;
+
 // The watchdog over impd's own imps: its recovery takes the imp's lock the
 // way background sleeps do, and gives way to any operation holding it.
 export function createImpWatchdog(
@@ -26,12 +29,24 @@ export function createImpWatchdog(
       !(await context.vms.isAgentReady(context.findPaths(imp.id), CONFIRM_MS)),
     recover: async (imp, action) => {
       const result = await lock.tryWithImpId(imp.id, async (fresh) => {
-        if (fresh?.state !== 'running') {
-          return;
+        // a sleep and a wake during the confirming ping left another VM
+        if (fresh?.state !== 'running' || fresh.pid !== imp.pid) {
+          return false;
+        }
+
+        const paths = context.findPaths(fresh.id);
+
+        // the last look, under the lock: the agent may have come back
+        const answered = await context.vms.isAgentReady(paths, RECHECK_MS);
+
+        if (answered) {
+          context.log(`impd: ${fresh.name}: its agent answers again; the watchdog stands down`);
+
+          return false;
         }
 
         if (action === 'snapshot') {
-          await writeWatchdogSnapshot(context, fresh);
+          await writeWatchdogSnapshot(context, ops, fresh);
         }
 
         try {
@@ -46,9 +61,11 @@ export function createImpWatchdog(
             `impd: ${fresh.name}: the watchdog restart failed: ${readErrorMessage(error)}`,
           );
         }
+
+        return true;
       });
 
-      return result.ran;
+      return result.ran && result.value;
     },
   });
 }

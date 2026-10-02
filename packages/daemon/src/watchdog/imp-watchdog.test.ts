@@ -22,17 +22,21 @@ async function setupWatchdogTest(action: string) {
     throw new Error('no imp');
   }
 
-  // the idle loop's two looks, 11 s apart; the confirming ping fails too
-  const runSilence = async () => {
-    const imp = await findImpByName(ctx.db, 'dev');
+  // the idle loop's two looks, 11 s apart; the confirming ping fails, and so
+  // does the look under the lock unless `recheck` says it answers
+  const runSilence = async (recheck: 'fail' | 'ok' = 'fail', pid: number | null = null) => {
+    const found = await findImpByName(ctx.db, 'dev');
 
-    if (imp === undefined) {
+    if (found === undefined) {
       throw new Error('no imp');
     }
+
+    const imp = pid === null ? found : { ...found, pid };
 
     ctx.imps.watchdog.observe(imp, false);
     ctx.advance(11_000);
     ctx.fake.queue('agentReady', 'fail');
+    ctx.fake.queue('agentReady', recheck);
     ctx.imps.watchdog.observe(imp, false);
 
     await ctx.imps.watchdog.settle();
@@ -101,4 +105,28 @@ test('snapshot: without disk room the imp still boots cold, with no slot', async
   expect(existsSync(buildWatchdogSlot(ctx.paths.dir).snapshotDir)).toBeFalse();
   expect(imp.state).toBe('running');
   expect(ctx.fake.alive.has(ctx.created.pid ?? 0)).toBeFalse();
+});
+
+test('restart: an agent that answers again under the lock keeps its VM', async () => {
+  await using ctx = await setupWatchdogTest('restart');
+
+  await ctx.runSilence('ok');
+
+  const imp = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(ctx.fake.alive.has(ctx.created.pid ?? 0)).toBeTrue();
+  expect(imp.coldBootReason).toBeUndefined();
+  expect(ctx.logs.some((line) => line.includes('the watchdog stands down'))).toBeTrue();
+});
+
+test('restart: a VM that a sleep and a wake replaced during the ping is left alone', async () => {
+  await using ctx = await setupWatchdogTest('restart');
+
+  // the watchdog saw an older pid than the record holds now
+  await ctx.runSilence('fail', (ctx.created.pid ?? 0) + 1000);
+
+  const imp = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(ctx.fake.alive.has(ctx.created.pid ?? 0)).toBeTrue();
+  expect(imp.coldBootReason).toBeUndefined();
 });
