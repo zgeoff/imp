@@ -25,6 +25,7 @@ import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
+import { readIpv6DefaultRoute, readOrCreateUlaPrefix, resolveIpv6Plan } from './net/ipv6-plan';
 import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
@@ -141,6 +142,12 @@ async function main(): Promise<void> {
 
   const broker = await createBroker({ config, db, log: printLog });
 
+  const ipv6 = await resolveIpv6Plan(config.ipv6, {
+    readDefaultRoute: readIpv6DefaultRoute,
+    readUlaPrefix: () => readOrCreateUlaPrefix(join(config.dataDir, 'net', 'ipv6-ula')),
+    log: printLog,
+  });
+
   // the firewall and its resolver, before any VM is adopted, booted or woken
   const egress = createEgressService({
     config,
@@ -174,6 +181,7 @@ async function main(): Promise<void> {
     vms: createVmRunner(),
     storage,
     identity,
+    ipv6,
     log: printLog,
     readExecEnv: broker.readExecEnv,
     storageGate,

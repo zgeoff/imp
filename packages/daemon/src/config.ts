@@ -8,6 +8,8 @@ import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
 import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
+import { parseIpv6Setting } from './net/ipv6-plan';
+import type { Ipv6Setting } from './net/ipv6-plan';
 import type { StorageBackendKind } from './storage/storage-backend';
 import {
   TailnetNamesEnvSchema,
@@ -50,6 +52,7 @@ const EnvSchema = z.object({
   IMP_BUILD_CONTEXT_MAX_MIB: CountSchema.default(1024),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
+  IMP_SUBNET6: z.string().default('auto'),
   IMP_FIRECRACKER_BIN: z.string().default('firecracker'),
   IMP_KERNEL: z.string().optional(),
   IMP_SYSTEM_DRIVE: z.string().optional(),
@@ -121,6 +124,10 @@ export interface Config {
   readonly buildContextMaxBytes: number;
   readonly dns: readonly string[];
   readonly subnet: Subnet;
+
+  // IPv6 for imps (docs/architecture/networking.md#ipv6); impd resolves
+  // `auto` at start
+  readonly ipv6: Ipv6Setting;
   readonly firecrackerBin: string;
   readonly kernelPath: string;
 
@@ -251,6 +258,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     buildContextMaxBytes: parsed.IMP_BUILD_CONTEXT_MAX_MIB * 1024 ** 2,
     dns: parsed.IMP_DNS,
     subnet,
+    ipv6: parseIpv6Setting(parsed.IMP_SUBNET6),
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
     kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
     kernelSource: parsed.IMP_KERNEL ?? null,

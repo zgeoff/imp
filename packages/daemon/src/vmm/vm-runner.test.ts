@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
+import { parsePrefix64 } from '../net/addressing6';
 import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
 import { buildBootArgs, createVmRunner } from './vm-runner';
@@ -42,6 +43,18 @@ test('it builds the kernel cmdline with the slot addressing', () => {
 test('it asks for an identity reset only on the first boot of a template copy', () => {
   expect(buildBootArgs(buildPlan(false))).not.toContain('imp.reset_identity');
   expect(buildBootArgs(buildPlan(true))).toEndWith(' imp.reset_identity=1');
+});
+
+test('with IPv6, the cmdline names the /128 and the gateway fe80::1', () => {
+  const address = deriveSlotAddress(3, {
+    subnet: parseSubnet('10.66.0.0/16'),
+    portBase: 20_000,
+    prefix6: parsePrefix64('fd12:3456:789a::/64'),
+  });
+
+  const args = buildBootArgs({ ...buildPlan(false), address, dns: ['1.1.1.1'] });
+
+  expect(args).toContain('imp.ip6=fd12:3456:789a::a42:e/128 imp.gw6=fe80::1 imp.dns=1.1.1.1');
 });
 
 // A Firecracker stand-in: a process whose command line names the API socket,

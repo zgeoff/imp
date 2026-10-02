@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, rmSync } from 'node:fs';
 import { sendGrow, sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
+import { GATEWAY_IP6 } from '../net/addressing6';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
@@ -135,6 +136,9 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
     `imp.hostname=${plan.hostname}`,
     `imp.ip=${plan.address.guestIp}/${String(plan.address.prefixLength)}`,
     `imp.gw=${plan.address.hostIp}`,
+    ...(plan.address.guestIp6 === null
+      ? []
+      : [`imp.ip6=${plan.address.guestIp6}/128`, `imp.gw6=${GATEWAY_IP6}`]),
     `imp.dns=${plan.dns.join(',')}`,
     ...(plan.isIdentityReset ? ['imp.reset_identity=1'] : []),
   ].join(' ');

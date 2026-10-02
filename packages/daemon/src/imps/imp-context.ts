@@ -8,6 +8,7 @@ import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
 import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
+import type { Ipv6Plan } from '../net/ipv6-plan';
 import { readGuestNetBytes } from '../net/tap-bytes';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
@@ -61,6 +62,9 @@ export interface ImpServiceDeps {
 
   // what this host boots imps with, which a snapshot must match to load
   readonly identity: HostIdentity;
+
+  // the IPv6 impd resolved at start; null or left out, imps get none
+  readonly ipv6?: Ipv6Plan | null;
   readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib?: (pid: number, apiSocket: string) => number | null;
 
@@ -139,7 +143,11 @@ export interface ImpContext {
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
-  const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
+  const slotPlan = {
+    subnet: deps.config.subnet,
+    portBase: deps.config.portBase,
+    prefix6: deps.ipv6?.prefix ?? null,
+  };
   const log = deps.log ?? printLog;
   const cgroups = deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log });
   const readRam = deps.readRamMib;

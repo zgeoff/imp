@@ -1,3 +1,6 @@
+import { deriveGuestIp6 } from './addressing6';
+import type { Prefix64 } from './addressing6';
+
 // Routed, not bridged (docs/architecture/networking.md#addressing): slot n owns
 // the /30 at offset 4n of the subnet, with the host end at 4n+1 and the guest
 // at 4n+2.
@@ -19,6 +22,10 @@ export interface SlotAddress {
   readonly netmask: string;
   readonly guestMac: string;
 
+  // the imp's IPv6 /128, or null when imps get no IPv6
+  // (docs/architecture/networking.md#ipv6)
+  readonly guestIp6: string | null;
+
   // the imp's own port on the host (docs/architecture/networking.md#urls), for
   // the tailnet
   readonly tailnetPort: number;
@@ -27,6 +34,7 @@ export interface SlotAddress {
 export interface SlotPlan {
   readonly subnet: Subnet;
   readonly portBase: number;
+  readonly prefix6?: Prefix64 | null;
 }
 
 export function parseSubnet(cidr: string): Subnet {
@@ -96,6 +104,10 @@ export function deriveSlotAddress(slot: number, plan: SlotPlan): SlotAddress {
     // locally administered unicast, then the guest IP: unique per slot and
     // readable in a packet capture
     guestMac: ['06', '00', ...splitOctets(guest).map((octet) => toHexByte(octet))].join(':'),
+    guestIp6:
+      plan.prefix6 === undefined || plan.prefix6 === null
+        ? null
+        : deriveGuestIp6(plan.prefix6, guest),
     tailnetPort: plan.portBase + slot,
   };
 }
