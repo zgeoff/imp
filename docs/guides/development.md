@@ -113,6 +113,7 @@ Lefthook installs the hooks with `bun install`.
 | `cli`        | no       | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
 | `client`     | no       | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
 | `e2e`        | no       | The `fast` end-to-end set on real microVMs (below).                                   |
+| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file. |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 

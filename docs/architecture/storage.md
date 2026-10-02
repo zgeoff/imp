@@ -1,8 +1,17 @@
 # Storage and images
 
-imp keeps every disk as a copy-on-write clone on XFS. An image becomes an ext4 file once; each imp
-disk, checkpoint and fork is a reflink clone of another file, so it costs no copy and no time (a
-clone of a 32 GiB sparse rootfs takes about 3 ms).
+imp keeps every disk as a copy-on-write clone. An image becomes an ext4 file once; each imp disk,
+checkpoint and fork shares its blocks with the one it came from, so it costs no copy and almost no
+time. Two backends do this, behind one interface (`packages/daemon/src/storage/storage-backend.ts`):
+
+- **XFS with reflink** (the default): each disk, checkpoint and fork is a reflink clone of another
+  file (a clone of a 32 GiB sparse rootfs takes about 3 ms).
+- **ZFS**: each disk is a dataset, a checkpoint is a snapshot and a fork is a clone. ZFS can send a
+  disk and its checkpoints to another pool, which XFS cannot ([ZFS](#zfs)).
+
+`IMP_STORAGE_BACKEND` picks one ([configuration](../guides/configuration.md#impd)). impd writes the
+backend to `<data>/storage-backend` and refuses to start on a data dir another backend wrote:
+nothing moves imps between the two.
 
 ## XFS with reflink
 
@@ -14,6 +23,8 @@ clone of a 32 GiB sparse rootfs takes about 3 ms).
 - A clone fails instead of falling back to a full copy.
 
 ## The data directory
+
+On XFS:
 
 ```text
 /var/lib/imp/
@@ -29,7 +40,8 @@ clone of a 32 GiB sparse rootfs takes about 3 ms).
 ```
 
 `snapshot/` holds the memory of a sleeping imp, and `vm.json` what its VM booted with
-([sleep and wake](./sleep-and-wake.md#snapshot-identity)).
+([sleep and wake](./sleep-and-wake.md#snapshot-identity)). [ZFS](#datasets) keeps the disk and the
+memory snapshot in other places.
 
 ## System files
 
@@ -49,15 +61,103 @@ impd copies the guest kernel and the system drive into `system/` on start.
 
 ## Checkpoints, restores and forks
 
-- **Checkpoint.** The agent runs `sync` and `FIFREEZE` on `/`, impd takes a reflink clone of the imp
-  disk, and the agent thaws. The freeze carries a 10 s timeout, so the agent thaws by itself if impd
-  never sends thaw. A sleeping imp wakes first, because its memory holds page cache that is not on
-  the disk yet. A stopped imp needs no freeze.
-- **Restore.** impd stops the VM, clones the checkpoint to a new file, renames it over the disk,
-  drops any memory snapshot, and boots again if the imp was awake. Memory and disk always belong
-  together: a snapshot never wakes on a different disk.
+These are the same on both backends; only the clone differs.
+
+- **Checkpoint.** The agent runs `sync` and `FIFREEZE` on `/`, impd clones the imp disk (a reflink
+  clone, or a ZFS snapshot), and the agent thaws. The freeze carries a 10 s timeout, so the agent
+  thaws by itself if impd never sends thaw. A sleeping imp wakes first, because its memory holds
+  page cache that is not on the disk yet. A stopped imp needs no freeze.
+- **Restore.** impd clones the checkpoint, stops the VM, drops any memory snapshot, puts the clone
+  in place of the disk, and boots again if the imp was awake. A clone that fails leaves the imp as
+  it was. Memory and disk always belong together: a snapshot never wakes on a different disk.
 - **Fork.** impd clones a disk, or a checkpoint, into a new imp. A fork is disk only. A memory fork
   would duplicate entropy and IDs across the clones.
+
+## ZFS
+
+### Datasets
+
+`IMP_ZFS_ROOT` (for example `tank/imp`) is mounted on the data dir. Every dataset has
+`mountpoint=legacy`: the host never mounts them, and impd mounts each one inside the host container.
+On start, impd mounts them all again, before it re-adopts or wakes a VM. impd creates what is
+missing under the root:
+
+| Dataset                  | Mounted on         | Holds                                                            |
+| ------------------------ | ------------------ | ---------------------------------------------------------------- |
+| `<root>`                 | `/var/lib/imp`     | the database, system files, `vm.json`, run sockets               |
+| `<root>/mem`             | `/var/lib/imp/mem` | `mem/<id>/{vmstate,mem,meta.json}`: memory snapshots             |
+| `<root>/images/<digest>` | `images/<digest>`  | `rootfs.ext4`, `config.json`, and the snapshot `@base`           |
+| `<root>/disks/<id>`      | `imps/<id>/disk`   | `rootfs.ext4`: a clone of an image's `@base`, or of a checkpoint |
+| `<root>/retired/<uuid>`  | not mounted        | old disks and images that checkpoints or clones still need       |
+| `<root>/staging/…`       | while a build runs | an image being built, a restore between its clone and its swap   |
+| `<root>/reserve`         | not mounted        | nothing; `refreservation=1G` (see below)                         |
+
+- The disk file keeps the image's name, `rootfs.ext4`, since a disk is a clone of the image dataset.
+- `disks`, `images` and `staging` get `recordsize=16K`: the guest writes 4 KiB blocks, and a 128 KiB
+  record would make each write read and rewrite 128 KiB. The root has `compression=lz4`, `atime=off`
+  and `xattr=sa`.
+- Memory files live in their own dataset, so a checkpoint never holds a stale 500 MiB memory file.
+  `fallocate --dig-holes` works on ZFS too, and lz4 stores zero blocks as holes anyway.
+  `primarycache=metadata` on `<root>/mem` is worth measuring on a host; it is not set.
+- The host container needs `/dev/zfs`: load the module on the host before the container starts. The
+  container has its own zfs userland, and impd refuses to start when its major.minor differs from
+  the module's (`/sys/module/zfs/version`).
+- `<root>/reserve` holds 1 GiB back, so a destroy still runs on a full pool. To get out of a full
+  pool, run `zfs set refreservation=none <root>/reserve`, destroy imps or checkpoints, then set it
+  back.
+
+### Operations
+
+All dataset changes run one at a time inside impd.
+
+- **Checkpoint**: `zfs snapshot <root>/disks/<id>@<checkpoint id>`. Its size is the snapshot's
+  `written`: what changed since the previous snapshot. On XFS the size is the clone's allocated
+  bytes, which counts shared blocks. Checkpoint ids are global, so impd finds a checkpoint's
+  snapshot by its name after `@` wherever it is, and refuses an id that matches none or more than
+  one snapshot.
+- **Fork**: of a checkpoint, `zfs clone` of its snapshot; of a live disk, a `@fork-<uuid>` snapshot,
+  a clone, and `zfs destroy -d` of the snapshot. `-d` marks it: ZFS destroys it with its last clone.
+- **Restore**: `zfs clone` of the checkpoint to `<root>/staging/restore-<id>`, then, once the VM is
+  stopped: unmount the disk, rename it to `<root>/retired/<uuid>`, rename the clone to
+  `<root>/disks/<id>`, mount it. Nothing is rolled back, so every other checkpoint, older or newer,
+  stays. The old disk keeps them as snapshots until they go.
+- **Delete a checkpoint**: the row goes first, then `zfs destroy -d` of the snapshot.
+- **Destroy an imp**: `zfs destroy -d` of each of its checkpoints, then the disk is retired.
+- **Remove an image**: `zfs destroy -d` of `@base`, then the image is retired.
+
+### Reclaim
+
+A retired dataset stays while one of its snapshots is a live checkpoint. Once every snapshot on it
+is marked, impd promotes the clone of its newest snapshot. `zfs promote` hands that clone the
+retired dataset's snapshots, and the retired dataset is left as a clone with none, so it can be
+destroyed. Its last marked snapshot then goes with it. This is how a fork outlives its source, and
+how a removed image hands its blocks to the imps cloned from it. impd reclaims after every delete,
+destroy and restore, and on start.
+
+### Crash recovery
+
+On start, impd settles what a crash cut short, then drops what the database does not name:
+
+- A `staging/restore-<id>` with no `disks/<id>` came after the old disk was retired: impd renames it
+  into place, and the restore is done. With `disks/<id>` still there, impd destroys it, and the
+  restore never happened. The memory snapshot goes before the swap, so neither case pairs it with
+  the wrong disk.
+- A `staging/image-*` is a build that never finished: impd destroys it.
+- A disk or image with no row is retired; a `@cp-*` snapshot with no row and every `@fork-*`
+  snapshot is marked for destroy.
+
+### Send and receive (#12)
+
+Off-host backups ([#12](https://github.com/zgeoff/imp/issues/12)) build on this layout. A disk is a
+chain of clones: `disks/<id>` has an origin, which can be a retired dataset, which has an origin, up
+to an image's `@base`. A backup must:
+
+1. Walk the origin graph (`zfs get -H -o value origin`) from each disk up to its image.
+2. Send each image first: `zfs send <root>/images/<digest>@base`.
+3. Send each snapshot on the chain with `-i` from the one before it, or with `-i <origin>` for the
+   first snapshot of a clone, so the receiving side gets clones and not copies.
+4. Never use `zfs send -R`: it follows children, not origins, and would send the whole pool or miss
+   the chain.
 
 ## Images: any OCI image
 
