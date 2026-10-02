@@ -64,6 +64,14 @@ governor still holds the budget, and the second create moves on to the next host
 `--place` takes the saved hosts alone: `--host` with it is a usage error, and `IMP_URL`, `IMP_HOST`
 and `IMP_TOKEN` have no effect on it.
 
+### Placement limits
+
+- Names are unique per host, not across hosts. Placement refuses a name it sees elsewhere, but an
+  `imp new` with `--host`, or an imp on a host that did not answer, can make a second one.
+- Placement does not move an imp later. An imp stays on the host that created it until an
+  [`imp move`](#moves).
+- The dashboard and the API show one host each.
+
 ## One view
 
 ```sh
@@ -96,7 +104,7 @@ is:
 
 | Mark        | Where      | Until                                                      |
 | ----------- | ---------- | ---------------------------------------------------------- |
-| `sending`   | The source | The receipt, or an abort                                   |
+| `sending`   | The source | The receipt, an abort, or a failed send                    |
 | `moved`     | The source | The commit, when the source destroys its copy, or an abort |
 | `receiving` | The target | The commit, when the mark comes off, or an abort           |
 
@@ -252,11 +260,3 @@ Add the impd API port for imp hosts to reach each other:
 Guests never reach it: their egress refuses `100.64.0.0/10`. impd reports its peer URL from its
 tailnet IP and `IMP_API_PORT`; set `IMP_PEER_URL` when the source reaches it at another address
 ([configuration](./configuration.md#impd)).
-
-## Placement limits
-
-- Names are unique per host, not across hosts. Placement refuses a name it sees elsewhere, but an
-  `imp new` with `--host`, or an imp on a host that did not answer, can make a second one.
-- Placement does not move an imp later. An imp stays on the host that created it until an
-  [`imp move`](#moves).
-- The dashboard and the API show one host each.
