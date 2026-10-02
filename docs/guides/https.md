@@ -1,9 +1,10 @@
 # HTTPS on your own domain
 
 With `IMP_DOMAIN=imp.example.com`, every imp is at `https://<name>.imp.example.com`, and impd's own
-API is at `https://imp.example.com`. Both answer on the tailnet only. impd gets one wildcard
-certificate from Let's Encrypt with the ACME DNS-01 challenge, renews it, and keeps the DNS records
-pointed at the host's tailnet IP. Without `IMP_DOMAIN`, nothing changes: the
+API is at `https://imp.example.com`. Both answer on the tailnet only; public mode is
+[#52](https://github.com/zgeoff/imp/issues/52). impd gets one wildcard certificate from Let's
+Encrypt with the ACME DNS-01 challenge, renews it, and keeps the DNS records pointed at the host's
+tailnet IP. Without `IMP_DOMAIN`, nothing changes: the
 [per-port URLs](../architecture/networking.md#urls) stay the only tailnet URLs.
 
 ## Set it up
@@ -163,8 +164,8 @@ management API at `IMP_DNS_API_URL`.
 
 ## Not yet
 
-- Public mode (`imp url <name> --public`, with an optional token or basic auth) is a follow-up
-  issue. Every imp on the domain is tailnet-only.
+- Public mode (`imp url <name> --public`, with an optional token or basic auth) is
+  [#52](https://github.com/zgeoff/imp/issues/52). Every imp on the domain is tailnet-only.
 - Cloudflare is the only real DNS provider. Another provider implements `DnsProvider` in
   `packages/daemon/src/https/dns/`: add a TXT value, remove it by ID, wait for the nameservers, and
   set an A record.
