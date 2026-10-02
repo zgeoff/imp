@@ -9,17 +9,19 @@ export const SessionNameSchema = z
   );
 
 // how a session's process ended; code is null when a signal ended it
-export const SessionExitSchema = z.object({
-  code: z.int().nullable(),
-  signal: z.string().nullable(),
-});
+export const SessionExitSchema = z
+  .object({
+    code: z.int().nullable(),
+    signal: z.string().nullable(),
+  })
+  .readonly();
 
 // A program on a pty in an imp that outlives its connection: a console to
 // detach from and attach to again.
 export const SessionSchema = z.object({
   name: SessionNameSchema,
   pid: z.int().positive(),
-  argv: z.array(z.string()),
+  argv: z.array(z.string()).readonly(),
   state: z.enum(['running', 'exited']),
 
   // a client is attached now; always false for a sleeping imp

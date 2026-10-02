@@ -314,3 +314,175 @@ test('it pauses stdin while the socket buffer is high and resumes once it drains
 
   expect(exitCode).toBe(0);
 });
+
+const SESSION_BOX = {
+  host: null,
+  name: 'box',
+  argv: ['sh'],
+  tty: true,
+  session: { name: 'main', attachOnly: false, detachKey: 0x1d },
+} as const;
+
+// a stdin that claims to be a terminal and logs its raw mode
+function setupTerminal(impd: Pick<FakeImpd, 'token' | 'url'>, overrides: Partial<ExecIo> = {}) {
+  const raw: boolean[] = [];
+
+  const stdin = Object.assign(new PassThrough(), {
+    isTTY: true,
+    setRawMode: (mode: boolean) => {
+      raw.push(mode);
+    },
+  });
+
+  return { ...setupIo(impd, { stdin, reattachDelayMs: 5, ...overrides }), stdin, raw };
+}
+
+test('a session starts with its name, and a detach key detaches without a signal', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'start') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+    }
+  });
+
+  const ctx = setupTerminal(impd);
+  const code = runExec(SESSION_BOX, ctx.io);
+
+  await impd.waitFor((received) => received.length === 1);
+
+  ctx.stdin.write('ls\u001Dmore');
+
+  const exitCode = await code;
+
+  await impd.closed;
+
+  expect(exitCode).toBe(0);
+
+  expect(impd.received).toEqual([
+    { type: 'start', name: 'box', argv: ['sh'], tty: true, session: 'main' },
+    { stdin: 'ls' },
+  ]);
+
+  expect(ctx.raw).toEqual([true, false]);
+  expect(ctx.output.at(-1)).toStartWith('1:');
+  expect(ctx.output.at(-1)).toContain('\u001B[?2004l');
+  expect(ctx.readErrors()).toEqual(['imp: detached from session main (imp attach box main)']);
+});
+
+test('an attach sends attach, and clears the screen before the replay', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'attach') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: false });
+      peer.sendFrame(EXEC_CHANNELS.stdout, 'replay');
+      peer.send({ type: 'exit', code: 0, signal: null });
+    }
+  });
+
+  const ctx = setupTerminal(impd);
+
+  const exitCode = await runExec(
+    { ...SESSION_BOX, argv: [], session: { ...SESSION_BOX.session, attachOnly: true } },
+    ctx.io,
+  );
+
+  expect(exitCode).toBe(0);
+  expect(impd.received).toEqual([{ type: 'attach', name: 'box', session: 'main' }]);
+  expect(ctx.output.slice(0, 2)).toEqual(['1:\u001B[H\u001B[2J', '1:replay']);
+});
+
+test('a lost session or an impd restart attaches again by itself', async () => {
+  for (const drop of [
+    (peer: FakeImpdPeer) => {
+      peer.send({ type: 'detached', reason: 'lost' });
+    },
+    (peer: FakeImpdPeer) => {
+      peer.close(1012, 'impd is restarting');
+    },
+  ]) {
+    await using impd = startFakeImpd((peer, message) => {
+      if (message['type'] === 'start') {
+        peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+
+        drop(peer);
+      }
+
+      if (message['type'] === 'attach') {
+        peer.send({ type: 'started', pid: 7, session: 'main', created: false });
+        peer.send({ type: 'exit', code: 4, signal: null });
+      }
+    });
+
+    const ctx = setupTerminal(impd);
+
+    const exitCode = await runExec(SESSION_BOX, ctx.io);
+
+    expect(exitCode).toBe(4);
+    expect(impd.received.map((message) => message['type'])).toEqual(['start', 'attach']);
+    expect(ctx.output.join('')).toContain('lost the connection to session main; attaching again');
+  }
+});
+
+test('a takeover ends the CLI without attaching again', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'start') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+      peer.send({ type: 'detached', reason: 'taken_over' });
+    }
+  });
+
+  const ctx = setupTerminal(impd);
+
+  const exitCode = await runExec(SESSION_BOX, ctx.io);
+
+  expect(exitCode).toBe(0);
+  expect(impd.received.map((message) => message['type'])).toEqual(['start']);
+
+  expect(ctx.readErrors()).toEqual([
+    'imp: another client attached to session main (imp attach box main)',
+  ]);
+});
+
+test('a session that cannot be attached again within the window fails', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'start') {
+      peer.send({ type: 'started', pid: 7, session: 'main', created: true });
+      peer.send({ type: 'detached', reason: 'lost' });
+    }
+
+    // the imp does not come back
+    if (message['type'] === 'attach') {
+      peer.close(1011, 'no agent');
+    }
+  });
+
+  const ctx = setupTerminal(impd, { reattachWindowMs: 50 });
+
+  const exitCode = await runExec(SESSION_BOX, ctx.io);
+
+  expect(exitCode).toBe(255);
+  expect(impd.received.filter((message) => message['type'] === 'attach').length).toBeGreaterThan(1);
+  expect(ctx.readErrors().at(-1)).toBe('imp: exec connection closed (no agent)');
+});
+
+test('a plain exec has no detach key, and a lost connection is not attached again', async () => {
+  await using impd = startFakeImpd((peer, message) => {
+    if (message['type'] === 'start') {
+      peer.send({ type: 'started', pid: 7 });
+    }
+
+    if (message['stdin'] === '\u001D') {
+      peer.close(1012, 'impd is restarting');
+    }
+  });
+
+  const ctx = setupTerminal(impd);
+  const code = runExec({ ...BOX, tty: true }, ctx.io);
+
+  await impd.waitFor((received) => received.length === 1);
+
+  ctx.stdin.write('\u001D');
+
+  const exitCode = await code;
+
+  expect(exitCode).toBe(255);
+  expect(impd.received.map((message) => message['type'] ?? 'stdin')).toEqual(['start', 'stdin']);
+});

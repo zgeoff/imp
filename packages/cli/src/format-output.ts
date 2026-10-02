@@ -1,4 +1,4 @@
-import type { Checkpoint, Image, Imp } from '@imp/api';
+import type { Checkpoint, Image, Imp, Session } from '@imp/api';
 
 type Row = readonly string[];
 
@@ -19,7 +19,7 @@ export function formatTable(header: Row, rows: readonly Row[]): string {
 
 export function formatImps(imps: readonly Imp[]): string {
   return formatTable(
-    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'IP', 'URL', 'NOTE'],
+    ['NAME', 'STATE', 'IMAGE', 'VCPUS', 'MEMORY', 'RAM', 'SESSIONS', 'IP', 'URL', 'NOTE'],
     imps.map((imp) => [
       imp.name,
       imp.state,
@@ -27,6 +27,7 @@ export function formatImps(imps: readonly Imp[]): string {
       String(imp.vcpus),
       `${String(imp.memoryMib)} MiB`,
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
+      imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
       formatNote(imp),
@@ -74,6 +75,31 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
     ]),
   );
+}
+
+export function formatSessions(sessions: readonly Readonly<Session>[]): string {
+  return formatTable(
+    ['NAME', 'STATE', 'ATTACHED', 'PID', 'SIZE', 'STARTED', 'COMMAND'],
+    sessions.map((session) => [
+      session.name,
+      formatSessionState(session),
+      session.attached ? 'yes' : 'no',
+      String(session.pid),
+      `${String(session.cols)}x${String(session.rows)}`,
+      session.startedAt.toISOString(),
+      session.argv.join(' '),
+    ]),
+  );
+}
+
+function formatSessionState(session: Readonly<Session>): string {
+  if (session.exit === undefined) {
+    return session.state;
+  }
+
+  const how = session.exit.signal ?? `code ${String(session.exit.code)}`;
+
+  return `exited (${how})`;
 }
 
 export function formatImages(images: readonly Image[]): string {

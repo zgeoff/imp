@@ -2,7 +2,8 @@ import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
 import { imageCommand } from './image';
-import { newCommand } from './imps';
+import { consoleCommand, newCommand } from './imps';
+import { sessionsCommand } from './sessions';
 
 // These fail before any call to impd, so they need none: IMP_URL points
 // nowhere, and a call that slipped through would fail with another message.
@@ -65,5 +66,26 @@ test('an IMP_URL that is not an http URL is a usage error', async () => {
   await runCommand(newCommand, { rawArgs: ['box'] });
 
   expect(stderr).toHaveBeenCalledWith('imp: IMP_URL is not an http(s) URL: localhost:7070');
+  expect(process.exitCode).toBe(2);
+});
+
+test('sessions kill with too few arguments fails instead of listing', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(sessionsCommand, { rawArgs: ['kill', 'box'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: usage: imp sessions kill <name> <session>');
+  expect(process.exitCode).toBe(2);
+});
+
+test('a detach key that is not ctrl-<key> is a usage error', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(consoleCommand, { rawArgs: ['box', '--detach-key', 'esc'] });
+
+  expect(stderr).toHaveBeenCalledWith(
+    String.raw`imp: --detach-key takes ctrl-<key> (a-z, @, [, \, ], ^ or _) or none, got esc`,
+  );
+
   expect(process.exitCode).toBe(2);
 });

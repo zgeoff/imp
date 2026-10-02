@@ -6,11 +6,11 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { ExecClientMessage } from '@imp/api';
+import type { DetachReason, ExecClientMessage } from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkImpdAccess } from './check-impd-access';
 
-interface ExecStart {
+export interface ExecStart {
   readonly name: string;
   readonly argv: readonly string[];
   readonly tty: boolean;
@@ -18,6 +18,25 @@ interface ExecStart {
   readonly cwd?: string;
   readonly cols?: number;
   readonly rows?: number;
+
+  // starts this session, or attaches to it if it runs; needs a tty
+  readonly session?: string;
+}
+
+// attaches to a session that runs: its replay, then live output
+export interface ExecAttach {
+  readonly name: string;
+  readonly session: string;
+  readonly cols?: number;
+  readonly rows?: number;
+}
+
+// session is null for a plain exec; created is false for an attach to a
+// session that already ran
+export interface ExecStarted {
+  readonly pid: number;
+  readonly session: string | null;
+  readonly created: boolean;
 }
 
 // How a session ended. Only `exit` means the command ran to the end; its
@@ -37,6 +56,9 @@ export type ExecOutcome =
   | { readonly kind: 'unauthorized'; readonly ticketRefused?: boolean }
   | { readonly kind: 'unreachable'; readonly detail: string }
 
+  // impd ended a session socket; the session runs on (DetachReason)
+  | { readonly kind: 'detached'; readonly reason: DetachReason }
+
   // the connection dropped after the open, without an exit
   // closeCode 1012 (EXEC_CLOSE_RESTARTING) means impd is restarting
   | { readonly kind: 'closed'; readonly reason: string; readonly closeCode?: number }
@@ -51,8 +73,8 @@ export interface ExecSessionOptions {
 
   // from `exec.ticket`, for a socket that cannot send the bearer header
   readonly ticket?: string;
-  readonly start: ExecStart;
-  readonly onStarted: (pid: number) => void;
+  readonly start: ExecStart | ExecAttach;
+  readonly onStarted: (started: ExecStarted) => void;
   readonly onOutput: (channel: 'stdout' | 'stderr', data: Uint8Array) => void;
 
   // a browser WebSocket takes no headers (it uses an exec ticket), so the
@@ -188,12 +210,15 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
       state.started = true;
 
-      options.onStarted(message.pid);
+      options.onStarted({
+        pid: message.pid,
+        session: message.session ?? null,
+        created: message.created ?? false,
+      });
     } else if (message.type === 'exit') {
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
     } else if (message.type === 'detached') {
-      // only a session socket gets this; plain exec never asks for one
-      resolveOutcome({ kind: 'closed', reason: `detached (${message.reason})` });
+      resolveOutcome({ kind: 'detached', reason: message.reason });
     } else {
       resolveOutcome({
         kind: 'failed',
@@ -208,10 +233,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     state.opened = true;
 
     clearTimeout(openTimer);
-
-    const start = { type: 'start' as const, ...options.start, argv: [...options.start.argv] };
-
-    sendControl(JSON.stringify(start satisfies ExecClientMessage));
+    sendControl(JSON.stringify(buildOpenMessage(options.start)));
   });
 
   // a throw here would escape to the event loop and leave the session (and
@@ -301,4 +323,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       stopSocket();
     },
   };
+}
+
+function buildOpenMessage(start: Readonly<ExecStart | ExecAttach>): ExecClientMessage {
+  if ('argv' in start) {
+    return { type: 'start', ...start, argv: [...start.argv] };
+  }
+
+  return { type: 'attach', ...start };
 }

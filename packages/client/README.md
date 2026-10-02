@@ -102,6 +102,15 @@ for (let read = await reader.read(); !read.done; read = await reader.read()) {
 }
 ```
 
+With `session: 'main'`, `openConsole` and `openExec` start that session, or attach to it if it runs,
+and the shell outlives the handle: `close()` detaches.
+`imp.openAttach('dev', 'main', { cols, rows })` attaches to a running session; its `stdout` starts
+with a replay of the recent output. `sessions.list` names them without waking the imp. `started`
+resolves with `{ pid, session, created }`. When impd ends the socket while the session runs on,
+`exit` rejects with `DETACHED`, and its `data.reason` says why: `taken_over` (another client
+attached; one is attached at a time), `slow` (the client fell too far behind) or `lost` (impd lost
+the guest, as when the imp slept; attach again).
+
 With a tty, `sendSignal('SIGINT')` and `sendSignal('SIGQUIT')` send ^C and ^\ as keys, so they reach
 the foreground job; other signals, and every signal without a tty, go to the process. A write after
 the session ended rejects with `CLOSED`.
@@ -113,7 +122,8 @@ in a URL; a browser behind a proxy that adds the token works the same way.
 the command did not run to its exit, `exit` rejects with an `ExecError` whose `code` is impd's (as
 in the table below, plus `EXEC_FAILED` when the command cannot start) or one of `UNAUTHORIZED` (also
 for an exec ticket that expired or was used), `UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`,
-`BAD_MESSAGE`, `CLOSED`, `OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error data.
+`DETACHED`, `BAD_MESSAGE`, `CLOSED`, `OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error
+data.
 
 ## Errors
 
