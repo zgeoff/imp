@@ -67,6 +67,10 @@ To pick up the new agent or kernel in an outdated imp, run `imp stop <name>` and
 It loses its memory, not its disk. impd deletes the old drive on its next start, once no imp uses
 it.
 
+An imp still on an agent from before protocol `0.8.0` (release v0.7.0 or older) cannot kill the rest
+of a stopped command's process group. When `imp mcp` stops such a command on a timeout or a cancel,
+a child that ignores SIGTERM (a `nohup` job, say) keeps running until the imp restarts.
+
 An impd from before this scheme kept the drive at `/var/lib/imp/system/imp-system.squashfs`, and a
 VM it booted still runs from that file. impd leaves the file alone. Remove it once no such VM runs:
 `imp ls` shows none with `booted by an older impd`.

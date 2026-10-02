@@ -32,9 +32,6 @@ export interface CappedRunResult {
 
 type Stop = 'exited' | 'timeout' | 'cancel';
 
-// how long the exec that kills what is left of a group may take
-const SWEEP_TIMEOUT_MS = 5000;
-
 // Runs a command in an imp to its exit, its deadline or a cancel, which
 // throws once the command stopped. A closed socket only sends SIGHUP, which
 // nohup ignores, so a stop signals the process group; see stopCommand.
@@ -66,7 +63,7 @@ export async function runCapped(
   const stop = await waitForStop(handle, [options.signal, deadline]);
 
   if (stop !== 'exited') {
-    await stopCommand(openExec, name, handle, options.killGraceMs);
+    await stopCommand(handle, options.killGraceMs);
   }
 
   const exit = await readExit(handle, stop);
@@ -132,70 +129,23 @@ async function waitForStop(
   }
 }
 
-// SIGTERM to the process group, then SIGKILL to whatever is left after the
-// grace; the session carries both while the leader lives. After a leader
-// exits on SIGTERM, the agent kills the rest (or a second exec, if old).
-async function stopCommand(
-  openExec: ImpClient['openExec'],
-  name: string,
-  handle: Readonly<ExecHandle>,
-  graceMs: number,
-): Promise<void> {
-  const graceEnd = Date.now() + graceMs;
-
+// SIGTERM to the process group, then SIGKILL after the grace. After a leader
+// exits on SIGTERM, the agent kills the rest (docs/guides/mcp.md#exec).
+async function stopCommand(handle: Readonly<ExecHandle>, graceMs: number): Promise<void> {
   handle.sendSignal('SIGTERM');
 
   const exited = await waitForExit(handle, graceMs);
 
-  if (!exited) {
-    handle.sendSignal('SIGKILL');
-
-    const killed = await waitForExit(handle, graceMs);
-
-    if (!killed) {
-      handle.close();
-    }
-
+  if (exited) {
     return;
   }
 
-  const started = await handle.started;
+  handle.sendSignal('SIGKILL');
 
-  if (started.groupKill) {
-    return;
-  }
+  const killed = await waitForExit(handle, graceMs);
 
-  // the rest of the group got SIGTERM with the leader, and the same grace
-  await Bun.sleep(Math.max(0, graceEnd - Date.now()));
-
-  await stopGroup(openExec, name, started.pid);
-}
-
-// No `--`: dash refuses it after the signal. While any of the group is left,
-// -pid is that group: the kernel never reuses a live group's id. Once it is
-// empty, a reuse within the grace would need the guest's pids to wrap.
-async function stopGroup(
-  openExec: ImpClient['openExec'],
-  name: string,
-  pid: number,
-): Promise<void> {
-  try {
-    const sweep = await openExec(name, [
-      '/bin/sh',
-      '-c',
-      `kill -KILL -${String(pid)} 2>/dev/null; true`,
-    ]);
-
-    await sweep.closeStdin();
-
-    const done = await waitForExit(sweep, SWEEP_TIMEOUT_MS);
-
-    if (!done) {
-      sweep.close();
-    }
-  } catch {
-    // the command already got SIGTERM; a failed sweep leaves only what
-    // ignored it, and the call's result stands
+  if (!killed) {
+    handle.close();
   }
 }
 

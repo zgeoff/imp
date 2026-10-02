@@ -110,7 +110,9 @@ test('a timeout sends SIGTERM to the command and reports timedOut', async () => 
   expect(ctx.guest.requests[0]).toMatchObject({ killGraceMs: 50 });
 });
 
-test('on an old agent a second exec kills what is left of a stopped group', async () => {
+// before protocol 0.8.0 the rest of the group outlives the stop until the
+// imp restarts (docs/guides/operations.md#upgrade)
+test('on an agent from before the group kill, a stop opens no second exec', async () => {
   await using ctx = await setupMcpTest({ oldAgent: true });
 
   await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
@@ -122,13 +124,7 @@ test('on an old agent a second exec kills what is left of a stopped group', asyn
   });
 
   expect(result.structuredContent).toMatchObject({ timedOut: true, signal: 'SIGTERM' });
-
-  // the leader exited on SIGTERM, so a second exec kills what is left
-  expect(ctx.guest.requests[1]?.argv).toEqual([
-    '/bin/sh',
-    '-c',
-    'kill -KILL -42 2>/dev/null; true',
-  ]);
+  expect(ctx.guest.requests).toHaveLength(1);
 });
 
 test('a command that ignores SIGTERM gets SIGKILL after the grace', async () => {
