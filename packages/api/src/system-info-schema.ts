@@ -1,5 +1,12 @@
 import * as z from 'zod';
 
+const CountSchema = z.int().nonnegative();
+
+const BootStatusSchema = z.object({
+  coldBoots: CountSchema,
+  outdated: z.object({ firecracker: CountSchema, kernel: CountSchema, agent: CountSchema }),
+});
+
 export const SystemInfoSchema = z.object({
   version: z.string(),
   ramBudgetMib: z.int().nonnegative(),
@@ -17,6 +24,11 @@ export const SystemInfoSchema = z.object({
 
   // sessions across every imp, as last seen
   sessionCount: z.int().nonnegative(),
+
+  // what an upgrade left, over running and sleeping imps: how many boot cold
+  // on their next wake, and how many run each part older than the host's
+  // until their next cold boot
+  bootStatus: BootStatusSchema,
   firecrackerVersion: z.string().nullable(),
 
   // the guest kernel and system drive imps boot with; version is null when

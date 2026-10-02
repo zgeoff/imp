@@ -272,6 +272,7 @@ function buildSystemInfo(): SystemInfo {
     awakeCount: 1,
     impCount: 2,
     sessionCount: 0,
+    bootStatus: { coldBoots: 0, outdated: { firecracker: 0, kernel: 0, agent: 0 } },
     firecrackerVersion: 'v1.17.0',
     guestKernel: { version: null, sha256: '0' },
     systemDrive: { sha256: '0' },

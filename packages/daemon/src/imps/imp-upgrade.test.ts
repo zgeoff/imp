@@ -443,3 +443,60 @@ test('drives in use stay when the data dir moved, by their file name', async () 
 
   expect(upgraded.pruned).toEqual([]);
 });
+
+test('system.info counts the imps an agent upgrade left outdated or without a snapshot', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  for (const name of ['kept', 'lost', 'off']) {
+    await ctx.client.imps.create({ name });
+  }
+
+  await ctx.client.imps.stop({ name: 'off' });
+
+  const upgraded = await ctx.runUpgrade(NEW_DRIVE);
+
+  // a sleeping imp whose snapshot is gone has nothing to load
+  const lost = await ctx.findPaths('lost');
+
+  rmSync(lost.snapshotDir, { recursive: true });
+
+  const info = await upgraded.client.system.info();
+
+  expect(info.bootStatus).toEqual({
+    coldBoots: 1,
+    outdated: { firecracker: 0, kernel: 0, agent: 1 },
+  });
+
+  const wakesBefore = ctx.fake.wakes.length;
+
+  const woken = await upgraded.client.imps.wake({ name: 'lost' });
+
+  expect(woken.state).toBe('running');
+  expect(ctx.fake.wakes).toHaveLength(wakesBefore);
+});
+
+test('system.info counts a running imp on an older firecracker as a cold boot to come', async () => {
+  await using ctx = await setupUpgradeTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  // a new Firecracker re-adopts the VM the old one runs
+  const impd = ctx.restartImpd({ ...ctx.readIdentity(), firecrackerVersion: 'v1.18.0' });
+
+  await impd.imps.reconcileImps();
+
+  const client = buildTestApp(ctx, impd).client;
+
+  const info = await client.system.info();
+
+  await client.imps.sleep({ name: 'dev' });
+
+  const asleep = await client.imps.get({ name: 'dev' });
+
+  expect(info.bootStatus).toEqual({
+    coldBoots: 1,
+    outdated: { firecracker: 1, kernel: 0, agent: 0 },
+  });
+
+  expect(asleep.coldBootReason).toBe('firecrackerVersion changed (v1.17.0 → v1.18.0)');
+});
