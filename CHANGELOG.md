@@ -2,11 +2,12 @@
 
 ## [0.13.1](https://github.com/zgeoff/imp/compare/v0.13.0...v0.13.1) (2026-10-02)
 
-
 ### Bug Fixes
 
-* **daemon:** drop an invalid event from the stream, not every stream ([eb817fb](https://github.com/zgeoff/imp/commit/eb817fb5a5b240b02a3af9b78b5a1dcca5681557))
-* **daemon:** name a slept imp from the governor's pick ([f577f86](https://github.com/zgeoff/imp/commit/f577f86f9cea31845327a1e1ba4fb6510ceda073))
+- **daemon:** drop an invalid event from the stream, not every stream
+  ([eb817fb](https://github.com/zgeoff/imp/commit/eb817fb5a5b240b02a3af9b78b5a1dcca5681557))
+- **daemon:** name a slept imp from the governor's pick
+  ([f577f86](https://github.com/zgeoff/imp/commit/f577f86f9cea31845327a1e1ba4fb6510ceda073))
 
 ## [0.13.0](https://github.com/zgeoff/imp/compare/v0.12.0...v0.13.0) (2026-10-02)
 
