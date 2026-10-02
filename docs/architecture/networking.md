@@ -2,8 +2,9 @@
 
 Every imp gets its own tap device and its own /30, routed through the host container, and an IPv6
 /128 when the host has IPv6 ([IPv6](#ipv6)). No two imps share a layer-2 network, so they cannot see
-each other. The wake proxy gives each imp an HTTP URL on the host and on the tailnet, and an HTTPS
-URL on your own domain when one is set. The credential broker listens on every imp's gateway.
+each other, unless a [network](#networks) puts both on it. The wake proxy gives each imp an HTTP URL
+on the host and on the tailnet, and an HTTPS URL on your own domain when one is set. The credential
+broker listens on every imp's gateway.
 
 ## Addressing
 
@@ -24,7 +25,10 @@ URL on your own domain when one is set. The credential broker listens on every i
 container's own network namespace and never touch the host's.
 
 - `MASQUERADE` for the imp subnet out of the container's default route.
-- `FORWARD -i imp+ -o imp+ DROP`: no imp-to-imp traffic.
+- `FORWARD -i imp+ -o imp+ DROP`: no imp-to-imp traffic. Above it,
+  `FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -j ACCEPT` lets through what impd's
+  table marked as traffic between two imps on one [network](#networks). It carries the comment
+  `imp-network`; a start removes any other form of it.
 - `INPUT -i imp+` drops everything except replies to connections the container opened (the proxy
   dials into guests), and the credential broker's port, `IMP_BROKER_PORT`. That rule is inserted
   first, above the drop.
@@ -80,6 +84,8 @@ start and on every create, destroy and policy change; DNS answers and expiries c
 Its `forward` chain runs before iptables' FORWARD and only drops and rejects, so setup-net's rules
 still accept what it lets through.
 
+- Traffic between two imps on one [network](#networks) is accepted and marked first. Any other
+  packet from one tap to another is refused before a slot chain sees it, so no policy can accept it.
 - A verdict map sends each tap (`imp<slot>`) to its slot's chain. A tap with no entry is refused.
 - Each slot chain drops any source but the guest's own addresses, IPv4 and IPv6: rpfilter passes the
   other addresses of the guest's /30. An imp with no IPv6 address drops all IPv6.
@@ -96,11 +102,13 @@ still accept what it lets through.
 ### The resolver
 
 A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
-address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address. Only
-IPv4 is redirected (the `dns` chain matches `meta nfproto ipv4`): the guest's resolv.conf names IPv4
-servers, and port 53 over IPv6 meets the policy as any other port does. A none imp sends no DNS over
-IPv6, and a box imp sends it only to an address its list allows. The `ipv6` e2e suite checks both: a
-box imp's port 53 over IPv6 reaches an address its list allows, and fails to any other.
+address outside `IMP_SUBNET`, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the
+source address. Only IPv4 is redirected (the `dns` chain matches `meta nfproto ipv4`): the guest's
+resolv.conf names IPv4 servers, and port 53 over IPv6 meets the policy as any other port does. A
+none imp sends no DNS over IPv6, and a box imp sends it only to an address its list allows. The
+`ipv6` e2e suite checks both: a box imp's port 53 over IPv6 reaches an address its list allows, and
+fails to any other. An `open` imp on a network has its IPv4 queries to `IMP_DNS` redirected too, for
+its peers' names, and every name it asks is forwarded; it gets a higher rate limit.
 
 - A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
   leaves the host. A query with more than one question is refused. Each imp has a rate limit; a
@@ -216,6 +224,31 @@ Known limits:
   made again.
 - Behind NAT66, every imp shares the container's address to the outside.
 - There is no SLAAC or DHCPv6, and one address per imp.
+
+## Networks
+
+A [network](../guides/networks.md) lets its imps reach one another. The rows are `networks` and
+`network_members`; deleting an imp or a network deletes its memberships with it.
+
+- Each network is a set `net<n>` of `ifname . ipv4_addr` pairs: each member's tap and address. The
+  rule `iifname . ip saddr @net<n> oifname . ip daddr @net<n>` checks both ends, each against its
+  own tap, so a guest that sends from another address matches nothing. A match sets the mark
+  `0x01000000` with an OR, so a bit another program uses survives, and is accepted; iptables then
+  accepts the mark ahead of its imp-to-imp DROP.
+- The rules come before the egress policies, so a network reaches past `box` and `none`. Networks
+  are IPv4 only. `oifname "imp*" goto deny` follows them: no other packet between taps passes, IPv6
+  included.
+- A join, a leave and a network's delete go through the same lock as a policy change, then the table
+  is written whole. A table nft does not take puts the rows back. A pair of addresses that no longer
+  shares a network has its conntrack entries deleted in both directions; the next packet of a held
+  connection is refused with a reset in any case, since the rules do not look at `ct state`.
+- A destroyed imp leaves the sets with its slot, before its row goes.
+- impd answers `<imp>.<network>.internal`, a peer's bare name, and every reverse name inside
+  `IMP_SUBNET` itself, before the policy's verdict, so none is ever forwarded. A name of the zone
+  the asker shares no network with is NXDOMAIN. The answers never go into a box's set: the peer
+  rule, not the set, lets the traffic through.
+- With no nft (`NO FIREWALL`), nothing marks a packet, and iptables drops all imp-to-imp traffic:
+  networks fail closed.
 
 ## The wake proxy
 

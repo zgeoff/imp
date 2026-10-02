@@ -16,9 +16,9 @@ Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
 | Scope    | What it may do                                                                                                                                                                                                                                             |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                  |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                        |
 | `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp; kill a session; add, restart and remove a service, and `imp logs`. |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, backups, `imp gc`, and tokens.                    |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, networks, backups, `imp gc`, and tokens.          |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses
@@ -32,10 +32,12 @@ such as `dev-*`. Such a token:
 - touches only the imps its patterns match. A fork needs both the source and the new name to match,
   and so does a create from a [template](./templates.md): the template's source imp must match.
 - must name the imp it creates. impd never picks a name for it.
-- sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, and in both
-  audit logs. Rows of the API audit log that name no imp are hidden from it.
-- cannot make host-wide calls, whatever its scope: images, secrets and grants, backups and tokens. A
-  grant hands a host secret to an imp, so a `dev-*` token could otherwise grant itself any secret.
+- sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, in
+  `imp net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
+  it.
+- cannot make host-wide calls, whatever its scope: images, secrets and grants, networks, backups and
+  tokens. A grant hands a host secret to an imp, so a `dev-*` token could otherwise grant itself any
+  secret; a network reaches every imp on it. It cannot pass `--net` to `imp new` either.
 
 A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
 reserve, the count of imps, awake and in all, and the storage: used and free space, the reserve, and
