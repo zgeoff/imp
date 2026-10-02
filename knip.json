@@ -4,7 +4,7 @@
   "workspaces": {
     ".": {
       "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "test/integration/*.pebble.ts"],
-      "project": ["test/**/*.ts"]
+      "project": ["test/**/*.ts", "scripts/**/*.ts"]
     },
     "packages/*": {
       "project": ["src/**/*.ts"]
@@ -14,7 +14,9 @@
       "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"]
     },
     "packages/client": {
-      "project": ["src/**/*.ts"],
+      // the package smoke (scripts/check-client-runtimes.sh)
+      "entry": ["smoke/*.ts"],
+      "project": ["src/**/*.ts", "smoke/*.ts"],
       // the bundled @imp/api declarations import it
       "ignoreDependencies": ["zod"]
     }

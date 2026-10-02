@@ -4,6 +4,7 @@ import packageJson from '../package.json' with { type: 'json' };
 import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
 import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { tryExecSocket, tryTunnelSocket } from './test-sockets';
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });
@@ -425,37 +426,6 @@ test('impd stopping closes exec sessions with 1012', async () => {
   }
 });
 
-// opens /exec with `query` and reports whether the upgrade succeeded; a
-// session it opens sends `start` for `name` and reports the first message
-async function tryExecSocket(
-  port: string,
-  query: string,
-  name = 'dev',
-  headers: Readonly<Record<string, string>> = {},
-) {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`, { headers });
-
-  const outcome = Promise.withResolvers<string>();
-
-  socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'start', name, argv: ['true'], tty: false }));
-  });
-
-  socket.addEventListener('message', (event) => {
-    outcome.resolve(String(event.data));
-  });
-
-  socket.addEventListener('error', () => {
-    outcome.resolve('rejected');
-  });
-
-  try {
-    return await outcome.promise;
-  } finally {
-    socket.close();
-  }
-}
-
 test('an exec ticket opens one socket for its imp, once', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
@@ -504,7 +474,7 @@ test('an exec on a ticket the token asked for is audited as the token', async ()
     let execs: { readonly actor: string }[] = [];
 
     while (execs.length === 0 && Date.now() < deadline) {
-      const calls = await listApiCalls(ctx.db, 'dev', 10);
+      const calls = await listApiCalls(ctx.db, 'dev', 10, null);
 
       execs = calls.filter((call) => call.procedure === 'exec');
 
@@ -561,36 +531,6 @@ test('/exec rejects an expired ticket and the token in the query', async () => {
   }
 });
 
-// opens /tunnel and reports the first message for `open`, or 'rejected'
-async function tryTunnelSocket(
-  port: string,
-  query: string,
-  headers: Readonly<Record<string, string>>,
-  name = 'nope',
-): Promise<string> {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel?${query}`, { headers });
-
-  const outcome = Promise.withResolvers<string>();
-
-  socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'open', name, port: 5432 }));
-  });
-
-  socket.addEventListener('message', (event) => {
-    outcome.resolve(String(event.data));
-  });
-
-  socket.addEventListener('error', () => {
-    outcome.resolve('rejected');
-  });
-
-  try {
-    return await outcome.promise;
-  } finally {
-    socket.close();
-  }
-}
-
 test('/tunnel takes the bearer header only, not a ticket', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
@@ -635,7 +575,7 @@ test('a tunnel open is audited as the token, with the imp and the port', async (
     let tunnels: { readonly procedure: string; readonly actor: string }[] = [];
 
     while (tunnels.length === 0 && Date.now() < deadline) {
-      const calls = await listApiCalls(ctx.db, 'dev', 10);
+      const calls = await listApiCalls(ctx.db, 'dev', 10, null);
 
       tunnels = calls.filter((call) => call.procedure.startsWith('tunnel'));
 

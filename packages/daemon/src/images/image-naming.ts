@@ -38,7 +38,8 @@ export interface ImageRuntimeConfig {
   readonly user: string;
 }
 
-// `docker image inspect` .Config → /etc/imp/image.json (agent/PROTOCOL.md)
+// `docker image inspect` .Config → /etc/imp/image.json
+// (docs/architecture/protocol.md#exec)
 export function buildImageRuntimeConfig(ociConfig: unknown): ImageRuntimeConfig {
   const parsed = OciConfigSchema.parse(ociConfig);
 

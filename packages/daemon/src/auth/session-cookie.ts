@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// The dashboard's session (docs/architecture/daemon.md, Dashboard): an
-// expiry signed with the API token, so the browser never holds the token
+// The dashboard's session (docs/architecture/daemon.md#dashboard): the
+// token it was made with, by id, and an expiry, signed with a key derived
+// from the root token, so the browser never holds a token
 const SESSION_COOKIE = 'imp_session';
 
 // Over HTTPS. The browser takes a __Host- cookie only Secure, host-only and on
@@ -11,23 +12,33 @@ const SECURE_SESSION_COOKIE = '__Host-imp_session';
 const SESSION_COOKIES: ReadonlySet<string> = new Set([SESSION_COOKIE, SECURE_SESSION_COOKIE]);
 
 export const SESSION_MAX_AGE_S = 30 * 24 * 60 * 60;
-const VERSION = 'v1';
 
-export function buildSessionValue(token: string, expiresAtMs: number): string {
-  const expiry = String(expiresAtMs);
+// v1 sessions carried no token; they no longer log anyone in
+const VERSION = 'v2';
 
-  return `${VERSION}.${expiry}.${buildSignature(token, expiry)}`;
+export interface SessionClaim {
+  readonly tokenId: string;
+  readonly expiresAt: number;
 }
 
-export function isValidSession(value: string, token: string, nowMs: number): boolean {
-  return readSessionExpiry(value, token, nowMs) !== null;
+export function buildSessionValue(rootToken: string, claim: Readonly<SessionClaim>): string {
+  const expiry = String(claim.expiresAt);
+
+  return `${VERSION}.${claim.tokenId}.${expiry}.${buildSignature(rootToken, claim.tokenId, expiry)}`;
 }
 
-// when a valid session expires, in ms; null for a session that is not valid
-export function readSessionExpiry(value: string, token: string, nowMs: number): number | null {
-  const [version, expiry, signature, ...rest] = value.split('.');
+// the token and expiry of a valid session; null for one that is not valid.
+// Whether the token still exists is the caller's to check.
+export function readSession(value: string, rootToken: string, nowMs: number): SessionClaim | null {
+  const [version, tokenId, expiry, signature, ...rest] = value.split('.');
 
-  if (version !== VERSION || expiry === undefined || signature === undefined || rest.length > 0) {
+  if (
+    version !== VERSION ||
+    tokenId === undefined ||
+    expiry === undefined ||
+    signature === undefined ||
+    rest.length > 0
+  ) {
     return null;
   }
 
@@ -36,10 +47,10 @@ export function readSessionExpiry(value: string, token: string, nowMs: number): 
   }
 
   const given = Buffer.from(signature);
-  const expected = Buffer.from(buildSignature(token, expiry));
+  const expected = Buffer.from(buildSignature(rootToken, tokenId, expiry));
 
   return given.length === expected.length && timingSafeEqual(given, expected)
-    ? Number(expiry)
+    ? { tokenId, expiresAt: Number(expiry) }
     : null;
 }
 
@@ -100,14 +111,14 @@ function buildCookie(value: string, maxAgeS: number, secure: boolean): string {
   return attributes.join('; ');
 }
 
-function buildSignature(token: string, expiry: string): string {
-  return createHmac('sha256', buildSessionKey(token))
-    .update(`imp-session-${VERSION}.${expiry}`)
+function buildSignature(rootToken: string, tokenId: string, expiry: string): string {
+  return createHmac('sha256', buildSessionKey(rootToken))
+    .update(`imp-session-${VERSION}.${tokenId}.${expiry}`)
     .digest('base64url');
 }
 
-// a key of its own, derived from the token, so the MAC never keys on the
-// token itself
-function buildSessionKey(token: string): Buffer {
-  return createHmac('sha256', token).update('imp-session-key').digest();
+// a key of its own, derived from the root token, so the MAC never keys on
+// the token itself
+function buildSessionKey(rootToken: string): Buffer {
+  return createHmac('sha256', rootToken).update('imp-session-key').digest();
 }

@@ -23,9 +23,12 @@ test('it runs the acceptance set when no suite is named', () => {
     'ssh-agent',
     'proxy',
     'proxy-wake',
+    'cp',
     'connectors',
     'dashboard',
     'https',
+    'tokens',
+    'egress',
     'backups',
   ]);
 });
@@ -49,6 +52,7 @@ test('it expands a set and drops duplicates', () => {
     'ssh-agent',
     'proxy',
     'dashboard',
+    'tokens',
   ]);
 });
 

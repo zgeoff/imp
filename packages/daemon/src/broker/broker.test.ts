@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
+import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAuditEntries } from '../db/broker-audit';
 import { findImpByName } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
+import { readRejection } from '../read-rejection';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import type { Broker } from './broker-service';
 
@@ -140,11 +142,61 @@ async function setupBroker() {
     return { code, stdout, stderr };
   };
 
+  // a CONNECT from slot 0's guest that stays open: `established` once the
+  // broker answers 200, `closed` when either end ends it; with `holdHead`
+  // the head waits for sendHead
+  const startTunnel = (target: string, holdHead = false) => {
+    const established = Promise.withResolvers<void>();
+    const connected = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const state = { open: true };
+
+    const sendHead = (): void => {
+      socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+    };
+
+    const socket = createConnection({ host: '127.0.0.1', port, localAddress: '127.0.0.2' }, () => {
+      connected.resolve();
+
+      if (!holdHead) {
+        sendHead();
+      }
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      if (chunk.toString().startsWith('HTTP/1.1 200')) {
+        established.resolve();
+      } else {
+        established.reject(new Error(chunk.toString()));
+      }
+    });
+
+    socket.on('error', () => {});
+
+    socket.once('close', () => {
+      state.open = false;
+
+      closed.resolve();
+    });
+
+    return {
+      connected: connected.promise,
+      established: established.promise,
+      closed: closed.promise,
+      sendHead,
+      isOpen: () => state.open,
+      end: () => {
+        socket.destroy();
+      },
+    };
+  };
+
   return {
     ...ctx,
     seen,
     tunnelled,
     runCurl,
+    startTunnel,
     [Symbol.asyncDispose]: async () => {
       await upstream.stop(true);
       await realHost.stop(true);
@@ -177,7 +229,7 @@ test('a granted host gets the real credential in place of the placeholder', asyn
   ]);
 
   const imp = await findImpByName(ctx.db, 'dev');
-  const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10);
+  const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10, null);
 
   expect(audit).toMatchObject([{ imp: 'dev', secret: 'gh', path: '/user', status: 200 }]);
 });
@@ -197,7 +249,7 @@ test('a large upload streams through and is counted', async () => {
   expect(result.code).toBe(0);
   expect(ctx.seen[0]?.bodyBytes).toBe(size);
 
-  const audit = await listAuditEntries(ctx.db, null, 10);
+  const audit = await listAuditEntries(ctx.db, null, 10, null);
 
   expect(audit[0]?.requestBytes).toBe(size);
 });
@@ -241,19 +293,96 @@ test('a plain tunnel dials the checked address, and a closed egress policy refus
   try {
     await using ctx = await setupBroker();
 
-    const open = await ctx.runCurl(`http://plain.test:${String(port)}/`, ['--proxytunnel']);
+    const url = `http://plain.test:${String(port)}/`;
+
+    const open = await ctx.runCurl(url, ['--proxytunnel']);
 
     expect(open).toMatchObject({ code: 0, stdout: 'tunnel' });
 
-    await ctx.db.updateTable('imps').set({ egress_policy: 'none' }).execute();
+    // a box reaches the hosts its list names, and no other
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['plain.test'] });
 
-    const closed = await ctx.runCurl(`http://plain.test:${String(port)}/`, ['--proxytunnel']);
+    const boxed = await ctx.runCurl(url, ['--proxytunnel']);
+
+    expect(boxed).toMatchObject({ code: 0, stdout: 'tunnel' });
+
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['other.test'] });
+
+    const outside = await ctx.runCurl(url, ['--proxytunnel']);
+
+    expect(outside.code).not.toBe(0);
+    expect(outside.stderr).toContain('403');
+
+    await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+    const closed = await ctx.runCurl(url, ['--proxytunnel']);
 
     expect(closed.code).not.toBe(0);
     expect(closed.stderr).toContain('403');
   } finally {
     echo.close();
   }
+});
+
+test('a tighter policy ends the open tunnels it denies, and keeps the rest', async () => {
+  // a server that holds every connection open until the test ends
+  const held = new Set<Socket>();
+
+  const hold = createServer((socket) => {
+    held.add(socket);
+    socket.on('error', () => {});
+  });
+
+  const listening = Promise.withResolvers<void>();
+
+  hold.listen(0, '127.0.0.1', listening.resolve);
+
+  await listening.promise;
+
+  const address = hold.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+
+  try {
+    await using ctx = await setupBroker();
+
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test', 'drop.test'] });
+
+    const keep = ctx.startTunnel(`keep.test:${String(port)}`);
+    const drop = ctx.startTunnel(`drop.test:${String(port)}`);
+
+    await Promise.all([keep.established, drop.established]);
+    await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['keep.test'] });
+
+    await drop.closed;
+
+    expect(keep.isOpen()).toBeTrue();
+
+    keep.end();
+  } finally {
+    for (const socket of held) {
+      socket.destroy();
+    }
+
+    hold.close();
+  }
+});
+
+test('a connection opened under an open policy gets no tunnel once a tighter one is set', async () => {
+  await using ctx = await setupBroker();
+
+  const early = ctx.startTunnel('late.test:9', true);
+
+  await early.connected;
+
+  // the broker has accepted it and is waiting for the head
+  await Bun.sleep(100);
+  await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+  early.sendHead();
+
+  const refused = await readRejection(early.established);
+
+  expect(String(refused)).toContain('403 Forbidden');
 });
 
 test('a guest on another imp’s gateway, or a request that is not CONNECT, gets nothing', async () => {

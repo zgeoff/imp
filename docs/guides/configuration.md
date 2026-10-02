@@ -18,6 +18,7 @@ error.
 | `IMP_PORT_BASE`                 | `20000`                     | The first per-imp proxy port; slot `n` gets `IMP_PORT_BASE + n`.                                                                                    |
 | `IMP_SSH_PORT`                  | `22`                        | The [SSH gateway](./ssh.md), on IPv4 in the container's namespace. `0` turns it off.                                                                |
 | `IMP_BROKER_PORT`               | `7081`                      | The credential broker on every guest's gateway ([connectors](./connectors.md)). Only guests reach it.                                               |
+| `IMP_EGRESS_DNS_PORT`           | `7053`                      | The egress resolver on every guest's gateway ([egress](../architecture/networking.md#egress)). Only guests reach it.                                |
 | `IMP_BROKER_TEST_UPSTREAMS`     | none                        | Tests only: a file of fake upstreams for granted hosts ([development](./development.md#end-to-end-tests)). impd logs each load.                     |
 | `IMP_RAM_BUDGET_MIB`            | `16384`                     | The RAM budget for awake imps.                                                                                                                      |
 | `IMP_IDLE_TIMEOUT_S`            | `60`                        | Seconds with no activity before an imp sleeps.                                                                                                      |
@@ -32,7 +33,7 @@ error.
 | `IMP_DEFAULT_IMAGE`             | `base`                      | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                          |
 | `IMP_STORAGE_BACKEND`           | `xfs`                       | `xfs` or `zfs` ([storage](../architecture/storage.md)). impd refuses a data dir the other backend wrote.                                            |
 | `IMP_ZFS_ROOT`                  | none                        | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                                 |
-| `IMP_DNS`                       | `1.1.1.1,8.8.8.8`           | Guest DNS servers, comma-separated IPv4 addresses.                                                                                                  |
+| `IMP_DNS`                       | `1.1.1.1,8.8.8.8`           | Guest DNS servers, comma-separated IPv4 addresses; also the egress resolver's upstreams.                                                            |
 | `IMP_SUBNET`                    | `10.66.0.0/16`              | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535.                                   |
 | `IMP_FIRECRACKER_BIN`           | `firecracker`               | The Firecracker binary.                                                                                                                             |
 | `IMP_KERNEL`                    | none                        | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                     |
@@ -40,6 +41,7 @@ error.
 | `TAILSCALE_AUTHKEY`             | none                        | Set, or `IMP_TAILSCALE_NODE=1`, means the host is on the tailnet; impd then reports tailnet URLs.                                                   |
 | `IMP_TAILSCALE_NODE`            | none                        | `1` when the entrypoint started `tailscaled` from saved node state, with no key. The entrypoint sets it.                                            |
 | `IMP_TAILSCALE_HOSTNAME`        | `imp`                       | The tailnet hostname to ask for.                                                                                                                    |
+| `IMP_TAILNET_IDENTITIES`        | none                        | JSON rules that give tailnet members a scope without a token ([tokens](./tokens.md#tailnet-identity)). Unset, every caller needs a token.           |
 | `IMP_DASHBOARD_DIR`             | none                        | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                    |
 
 A host on Linux 6.7 or later does not set a restored TSC back, so it can set
@@ -130,22 +132,35 @@ not pass `IMP_DNS`, so the dev instance uses the defaults.
 | `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                               |
 | `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                        |
 
-`dev.sh` reads `TAILSCALE_AUTHKEY` and `IMP_DNS_API_TOKEN` from `.env` in the repo root and passes
-the file to Docker, so neither is ever printed. It sets `IMP_UPLINK_MTU` from this machine's default
-route.
+`dev.sh` passes `.env` in the repo root to Docker as an env file, so `IMP_DNS_API_TOKEN` and any
+other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first of:
+
+1. `TAILSCALE_AUTHKEY` in your environment.
+2. `op read "$IMP_TAILSCALE_AUTHKEY_REF"` when the 1Password CLI is on `PATH` and the read works.
+   The reference defaults to `op://cloud/imp-tailscale-authkey/credential`. The read gets 20
+   seconds, so a locked 1Password app cannot hang a run. A failed read stays quiet, falls through,
+   and sets `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e harness's later
+   steps) skips `op`.
+3. `TAILSCALE_AUTHKEY` in `.env`.
+
+With none of them, the dev instance stays off the tailnet. The key reaches Docker as
+`-e TAILSCALE_AUTHKEY` with no value, so it never shows in argv, and `bash -x` traces never show it.
+`load_tailscale_authkey` in `scripts/lib.sh` holds the order; the e2e harness uses it too.
+
+`dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route.
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*` variables, and the HTTPS
-settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`,
-`IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as
-a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker network.
-`IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so the keys in
-your own shell never reach the container. Other impd variables keep their defaults in the dev
-container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh` runs
-one on a throwaway pool.
+`IMP_TAILNET_IDENTITIES`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
+variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
+`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and
+`IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker
+network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
+the keys in your own shell never reach the container. Other impd variables keep their defaults in
+the dev container. A ZFS dev instance needs the zfs module on the machine;
+`scripts/zfs-host-test.sh` runs one on a throwaway pool.
 
 ## CLI
 

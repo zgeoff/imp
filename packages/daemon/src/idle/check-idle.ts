@@ -1,6 +1,6 @@
-// What keeps an imp awake (DESIGN 2.9). An open proxied connection also
-// shows in `tcpEstablished`; the proxy sends `Connection: close` upstream, so
-// a finished request leaves no keep-alive socket in the guest to count.
+// What keeps an imp awake (docs/architecture/sleep-and-wake.md#idle-detection). An open
+// proxied connection also shows in `tcpEstablished`; the proxy sends `Connection: close`
+// upstream, so a finished request leaves no keep-alive socket in the guest to count.
 export interface IdleSignals {
   readonly execSessions: number;
   readonly proxyConnections: number;

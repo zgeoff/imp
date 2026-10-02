@@ -2,12 +2,13 @@ import { CONSOLE_SHELL } from '@imp/api';
 import type { AcceptConnection, PseudoTtyInfo, ServerChannel, Session } from 'ssh2';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import type { AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
+import { SYSTEM_AGENT_PATH } from '../exec/exec-tools';
 import { findSignalName, findSignalNumber } from '../exec/signal-names';
 import { formatFailure, startChannelInput, writeToChannel } from './channel-io';
 import type { SshConnectionContext } from './ssh-connection-context';
 
 // `imp-agent sftp` from the system drive: SFTP for every image
-const SFTP_ARGV = ['/run/imp/sys/imp-agent', 'sftp'];
+const SFTP_ARGV = [SYSTEM_AGENT_PATH, 'sftp'];
 
 // the env a client may set with SendEnv/SetEnv; everything else is refused,
 // as OpenSSH's default AcceptEnv does
@@ -163,7 +164,12 @@ export function handleSession(session: Session, context: SshConnectionContext): 
 
       request = buildRequest(program, tty, agentSocket);
 
-      stream = await context.backend.openExec(context.impName, request, program.feature);
+      stream = await context.backend.openExec(
+        context.impName,
+        request,
+        program.feature,
+        context.keyName,
+      );
     } catch (error) {
       channel.stderr.write(`imp: ${formatFailure(error)}${newline}`);
       channel.exit(255);

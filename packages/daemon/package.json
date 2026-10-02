@@ -1,6 +1,6 @@
 {
   "name": "@imp/daemon",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "private": true,
   "description": "impd: the imp host daemon",
   "type": "module",
@@ -18,6 +18,7 @@
     "@orpc/server": "catalog:",
     "@peculiar/x509": "catalog:",
     "acme-client": "catalog:",
+    "dns-packet": "catalog:",
     "elysia": "catalog:",
     "kysely": "catalog:",
     "reflect-metadata": "catalog:",
@@ -27,6 +28,7 @@
   "devDependencies": {
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
+    "@types/dns-packet": "catalog:",
     "@types/ssh2": "catalog:",
     "fast-check": "catalog:"
   }

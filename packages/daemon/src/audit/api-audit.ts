@@ -1,29 +1,8 @@
-import type { ApiActor } from '@imp/api';
 import { ORPCError } from '@orpc/server';
+import type { AuditActor } from '../auth/caller';
 import { writeApiCall } from '../db/api-audit';
 import type { ImpDatabase } from '../db/open-database';
 import { readErrorMessage } from '../read-error-message';
-
-// calls that change nothing; every other procedure is audited, so a new
-// one is too until it is listed here
-const READ_PROCEDURES: ReadonlySet<string> = new Set([
-  'imps.list',
-  'imps.get',
-  'imps.url',
-  'checkpoints.list',
-  'backups.list',
-  'images.list',
-  'sessions.list',
-  'secrets.list',
-  'grants.list',
-  'audit.list',
-  'audit.calls',
-  'system.info',
-  'events.stream',
-
-  // the exec it is for is audited as the socket opens
-  'exec.ticket',
-]);
 
 // namespaces whose input `name` is an imp's; a secret's or an image's is not
 const IMP_NAMESPACES: ReadonlySet<string> = new Set([
@@ -36,7 +15,7 @@ const IMP_NAMESPACES: ReadonlySet<string> = new Set([
 
 export interface AuditedCall {
   readonly procedure: string;
-  readonly actor: ApiActor;
+  readonly actor: AuditActor;
   readonly impName: string | null;
   readonly startedAt: number;
 }
@@ -59,10 +38,6 @@ export function createApiAudit(deps: ApiAuditDeps): ApiAudit {
       void writeCall(deps, call, failure);
     },
   };
-}
-
-export function isAuditedProcedure(procedure: string): boolean {
-  return !READ_PROCEDURES.has(procedure);
 }
 
 // The imp a call named, from its input, else from its result (`imps.create`
@@ -120,7 +95,8 @@ async function writeCall(deps: ApiAuditDeps, call: AuditedCall, failure: unknown
     await writeApiCall(deps.db, {
       at: new Date(now),
       procedure: call.procedure,
-      actor: call.actor,
+      actor: call.actor.kind,
+      actorName: call.actor.name,
       impName: call.impName,
       outcome: readOutcome(failure),
       durationMs: Math.max(0, Math.round(now - call.startedAt)),

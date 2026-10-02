@@ -7,8 +7,9 @@ import { ImpPage } from './routes/imp-page';
 import { ImpsPage } from './routes/imps-page';
 import { LoginPage } from './routes/login-page';
 import { RamPage } from './routes/ram-page';
+import { TokensPage } from './routes/tokens-page';
 
-// Routes in code: seven of them need no generator. impd serves the app
+// Routes in code: eight of them need no generator. impd serves the app
 // under /ui/ (packages/daemon dashboard-files.ts).
 // xterm.js is most of the bundle; only the console needs it
 const ConsolePage = lazy(async () => {
@@ -61,9 +62,15 @@ const ramRoute = createRoute({
   component: RamPage,
 });
 
+const tokensRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/tokens',
+  component: TokensPage,
+});
+
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  appRoute.addChildren([impsRoute, impRoute, consoleRoute, imagesRoute, ramRoute]),
+  appRoute.addChildren([impsRoute, impRoute, consoleRoute, imagesRoute, ramRoute, tokensRoute]),
 ]);
 
 // keyed by name, so a page for another imp starts fresh

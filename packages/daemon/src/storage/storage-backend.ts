@@ -70,9 +70,9 @@ export interface DroppedStorage {
   readonly id: string;
 }
 
-// The disks, checkpoints and image rootfs files of imps (docs/architecture/
-// storage.md). XFS clones files with reflink; ZFS keeps each disk in a
-// dataset, a checkpoint as a snapshot and a fork as a clone.
+// The disks, checkpoints and image rootfs files of imps (docs/architecture/storage.md). XFS
+// clones files with reflink; ZFS keeps each disk in a dataset, a checkpoint as a snapshot and
+// a fork as a clone.
 export interface StorageBackend {
   readonly kind: StorageBackendKind;
 

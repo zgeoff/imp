@@ -229,6 +229,14 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
 
       return BackupManifestSchema.parse(JSON.parse(text));
     },
+
+    // the snapshot's manifest, edited in the fake repository
+    editManifest: (snapshotId: string, edit: (manifest: unknown) => unknown) => {
+      const path = join(repoDir, snapshotId, 'manifest.json');
+      const manifest: unknown = JSON.parse(readFileSync(path, 'utf8'));
+
+      writeFileSync(path, JSON.stringify(edit(manifest)));
+    },
     advance: (ms: number) => {
       clock.now = new Date(clock.now.getTime() + ms);
     },
@@ -665,7 +673,7 @@ test('no secret, key, password or token of the host reaches a backup', async () 
   expect(manifest.imps[0]?.grants).toEqual(['gh']);
 });
 
-test('a restore regrants by name, and an unknown egress policy comes back open', async () => {
+test('a restore regrants by name, and keeps the egress policy and its list', async () => {
   await using ctx = await setupTest();
 
   await ctx.createDevImp();
@@ -673,14 +681,11 @@ test('a restore regrants by name, and an unknown egress policy comes back open',
   await ctx.broker.addSecret({ name: 'npm-old', kind: 'npm', value: 'npm_value' });
   await ctx.broker.addGrant('dev', 'gh');
   await ctx.broker.addGrant('dev', 'npm-old');
-
-  // a policy from another impd version than this one knows
-  await ctx.db.updateTable('imps').set({ egress_policy: 'granted-only' }).execute();
+  await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com', '*.npmjs.org'] });
   await ctx.backups.runBackup();
   await ctx.broker.deleteSecret('npm-old');
 
   const result = await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
-  const back = await findImpByName(ctx.db, 'back');
   const grants = await ctx.broker.listGrants('back');
 
   expect(grants).toEqual(['gh']);
@@ -691,16 +696,34 @@ test('a restore regrants by name, and an unknown egress policy comes back open',
 
   expect(result.skippedGrants[0]?.reason).toContain('npm-old');
 
-  const row = await ctx.db
-    .selectFrom('imps')
-    .select('egress_policy')
-    .where('id', '=', back?.id ?? '')
-    .executeTakeFirst();
+  const policy = await ctx.egress.readPolicy('back');
 
-  expect(row?.egress_policy).toBe('open');
+  expect(policy).toEqual({ mode: 'box', allow: ['github.com', '*.npmjs.org'] });
+});
+
+test('an egress policy this impd cannot read comes back none, never more open', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+
+  const run = await ctx.backups.runBackup();
+
+  // a policy from a newer impd
+  ctx.editManifest(run.snapshotId, (manifest) => {
+    const parsed = BackupManifestSchema.parse(manifest);
+    const [imp] = parsed.imps;
+
+    return { ...parsed, imps: [{ ...imp, egressPolicy: 'granted-only' }] };
+  });
+
+  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const policy = await ctx.egress.readPolicy('back');
+
+  expect(policy).toEqual({ mode: 'none', allow: [] });
 
   expect(ctx.logs).toContain(
-    'impd: backup: back: unknown egress policy "granted-only"; restored as open',
+    'impd: backup: back: unknown egress policy "granted-only"; restored as none',
   );
 });
 

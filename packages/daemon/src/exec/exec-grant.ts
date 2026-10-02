@@ -1,41 +1,63 @@
-import type { ApiActor } from '@imp/api';
-import { ORPCError } from '@orpc/server';
+import { buildForbiddenError } from '../api-errors';
+import { formatCaller, isCallerAllowed } from '../auth/caller';
+import type { Caller } from '../auth/caller';
 import type { ExecBackend } from './exec-session';
 
-// What an `/exec` socket may start, recorded at the upgrade: any imp for the
-// bearer token, one imp for a ticket, with the caller that asked for it. A
-// socket with no grant starts nothing.
-export type ExecGrant =
-  | { readonly kind: 'any' }
-  | { readonly kind: 'imp'; readonly name: string; readonly actor: ApiActor };
+// What an `/exec` socket may start: its caller, and a ticket's one imp. Each
+// start checks the scope, so a client reads FORBIDDEN on the socket, not a
+// refused upgrade it cannot read. No grant starts nothing.
+export interface ExecGrant {
+  readonly caller: Caller;
 
-export const ANY_IMP_GRANT: ExecGrant = { kind: 'any' };
+  // the ticket's imp; null for a bearer token or a tailnet identity
+  readonly name: string | null;
+}
 
 export function buildGrantedBackend(
   backend: ExecBackend,
-  grant: ExecGrant | undefined,
+  grant: Readonly<ExecGrant> | undefined,
 ): ExecBackend {
-  if (grant?.kind === 'any') {
-    return backend;
-  }
-
-  const checkGrant = (name: string): ORPCError<'FORBIDDEN', unknown> | null => {
+  const checkGrant = (name: string): Error | null => {
     if (grant === undefined) {
-      return new ORPCError('FORBIDDEN', { message: 'the exec socket was not authorized' });
+      return buildForbiddenError('the exec socket was not authorized');
     }
 
-    if (name !== grant.name) {
-      return new ORPCError('FORBIDDEN', { message: `the exec ticket is for imp ${grant.name}` });
+    if (grant.name !== null && name !== grant.name) {
+      return buildForbiddenError(`the exec ticket is for imp ${grant.name}`);
+    }
+
+    if (!isCallerAllowed(grant.caller, 'exec', name)) {
+      return buildForbiddenError(`${formatCaller(grant.caller)} may not exec in imp ${name}`);
     }
 
     return null;
   };
 
   return {
-    openExec: (name, request) => {
+    // A tool runs as root, which `exec` scope must not reach (a forward runs
+    // as the image user), so it needs `manage`; a ticket never starts one
+    openExec: (name, request, feature) => {
       const refused = checkGrant(name);
 
-      return refused === null ? backend.openExec(name, request) : Promise.reject(refused);
+      if (refused !== null) {
+        return Promise.reject(refused);
+      }
+
+      if (feature === undefined) {
+        return backend.openExec(name, request);
+      }
+
+      if (grant?.name !== null) {
+        return Promise.reject(buildForbiddenError('an exec ticket cannot run a tool'));
+      }
+
+      if (!isCallerAllowed(grant.caller, 'manage', name)) {
+        return Promise.reject(
+          buildForbiddenError(`${formatCaller(grant.caller)} needs scope manage to copy as root`),
+        );
+      }
+
+      return backend.openExec(name, request, feature);
     },
     openAttach: (name, request) => {
       const refused = checkGrant(name);

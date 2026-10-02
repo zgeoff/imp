@@ -2,6 +2,7 @@ import { createConnection, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import { pipeline } from 'node:stream';
 import type { BrokerPeer } from '../db/secrets';
+import { isTunnelAllowed } from '../egress/egress-rules';
 import { findPeerSlot } from '../net/addressing';
 import type { Subnet } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
@@ -9,13 +10,9 @@ import { MAX_HEAD_BYTES, findHeadEnd, parseConnectHead } from './connect-head';
 import type { TerminatorKey } from './terminators';
 import { TunnelRefusedError } from './tunnel-target';
 
-// what the broker does with a CONNECT no grant covers; `open` tunnels it, and
-// #26 adds the policies that refuse it
-export const EGRESS_POLICIES = ['open'] as const;
-
 // The front port every guest reaches on its own gateway. A CONNECT to a
 // granted host goes to its TLS terminator; any other is a plain tunnel to a
-// checked public address, while the imp's egress policy is `open`.
+// checked public address, when the imp's egress policy allows the host.
 
 // the time a client has to send its CONNECT head
 const HEAD_TIMEOUT_MS = 10_000;
@@ -44,7 +41,76 @@ export interface BrokerFrontDeps {
 
 export interface BrokerFront {
   readonly server: Server;
+
+  // ends the imp's plain tunnels to hosts `keep` rejects, as a tighter
+  // egress policy needs: they are relays in impd, which conntrack never sees
+  readonly closeTunnels: (impId: string, keep: (host: string) => boolean) => void;
   readonly stop: () => Promise<void>;
+}
+
+// Each imp's connections from accept, with their CONNECT's host once it
+// comes. A policy change ends those with a host it denies, and leaves its
+// `keep` on the rest for their tunnel start to check.
+interface TunnelRegistry {
+  readonly add: (impId: string, socket: Socket) => void;
+  readonly setHost: (impId: string, socket: Socket, host: string) => void;
+
+  // a connection to a granted host, which every policy allows
+  readonly drop: (impId: string, socket: Socket) => void;
+
+  // false once a policy change denies the host, or the connection ended
+  readonly isKept: (impId: string, socket: Socket, host: string) => boolean;
+  readonly closeDenied: (impId: string, keep: (host: string) => boolean) => void;
+}
+
+interface TunnelEntry {
+  host: string | null;
+  keep: ((host: string) => boolean) | null;
+}
+
+function createTunnelRegistry(): TunnelRegistry {
+  const tunnels = new Map<string, Map<Socket, TunnelEntry>>();
+
+  return {
+    add: (impId, socket) => {
+      const own = tunnels.get(impId) ?? new Map<Socket, TunnelEntry>();
+
+      tunnels.set(impId, own);
+      own.set(socket, { host: null, keep: null });
+
+      socket.once('close', () => {
+        own.delete(socket);
+
+        if (own.size === 0 && tunnels.get(impId) === own) {
+          tunnels.delete(impId);
+        }
+      });
+    },
+    setHost: (impId, socket, host) => {
+      const entry = tunnels.get(impId)?.get(socket);
+
+      if (entry !== undefined) {
+        entry.host = host;
+      }
+    },
+    drop: (impId, socket) => {
+      tunnels.get(impId)?.delete(socket);
+    },
+    isKept: (impId, socket, host) => {
+      const entry = tunnels.get(impId)?.get(socket);
+
+      return !socket.destroyed && entry !== undefined && (entry.keep?.(host) ?? true);
+    },
+    closeDenied: (impId, keep) => {
+      for (const [socket, entry] of tunnels.get(impId) ?? []) {
+        entry.keep = keep;
+
+        if (entry.host !== null && !keep(entry.host)) {
+          socket.destroy();
+        }
+      }
+    },
+  };
 }
 
 // how many connections each imp holds open
@@ -83,6 +149,7 @@ function createConnectionCounts(): ConnectionCounts {
 
 export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<BrokerFront> {
   const open = createConnectionCounts();
+  const tunnels = createTunnelRegistry();
 
   const sockets = new Set<Socket>();
 
@@ -97,7 +164,7 @@ export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<B
     });
 
     socket.on('error', () => {});
-    void handleConnection(socket, deps, open);
+    void handleConnection(socket, deps, open, tunnels);
   });
 
   const ready = Promise.withResolvers<BrokerFront>();
@@ -107,6 +174,7 @@ export function startBrokerFront(port: number, deps: BrokerFrontDeps): Promise<B
   server.listen(port, '0.0.0.0', () => {
     ready.resolve({
       server,
+      closeTunnels: tunnels.closeDenied,
       stop: async () => {
         const closed = Promise.withResolvers<void>();
 
@@ -131,9 +199,10 @@ async function handleConnection(
   socket: Socket,
   deps: BrokerFrontDeps,
   open: ConnectionCounts,
+  tunnels: TunnelRegistry,
 ): Promise<void> {
   try {
-    await runConnection(socket, deps, open);
+    await runConnection(socket, deps, open, tunnels);
   } catch (error) {
     deps.log(`impd: broker: ${readErrorMessage(error)}`);
     socket.destroy();
@@ -144,6 +213,7 @@ async function runConnection(
   socket: Socket,
   deps: BrokerFrontDeps,
   open: ConnectionCounts,
+  tunnels: TunnelRegistry,
 ): Promise<void> {
   const slot = findPeerSlot(socket.remoteAddress ?? '', socket.localAddress ?? '', deps.subnet);
 
@@ -173,6 +243,7 @@ async function runConnection(
   });
 
   socket.setKeepAlive(true, KEEPALIVE_MS);
+  tunnels.add(peer.id, socket);
 
   const read = await readHead(socket, deps.headTimeoutMs ?? HEAD_TIMEOUT_MS);
 
@@ -193,6 +264,8 @@ async function runConnection(
   const granted = head.port === 443 ? await deps.isGranted(peer.id, head.host) : false;
 
   if (granted) {
+    tunnels.drop(peer.id, socket);
+
     const path = await deps.openTerminator({ impId: peer.id, host: head.host });
 
     startRelay(socket, createConnection({ path }), read.rest);
@@ -200,8 +273,19 @@ async function runConnection(
     return;
   }
 
-  if (peer.egressPolicy !== 'open') {
-    sendReply(socket, 403, `egress to ${head.host} is not allowed`);
+  tunnels.setHost(peer.id, socket, head.host);
+
+  // the policy as it is now: it may have changed while the head was coming
+  const current = await deps.findPeer(slot);
+
+  if (current?.id !== peer.id) {
+    socket.destroy();
+
+    return;
+  }
+
+  if (!isTunnelAllowed(current.egress, head.host)) {
+    sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
 
     return;
   }
@@ -214,6 +298,14 @@ async function runConnection(
     const status = error instanceof TunnelRefusedError ? 403 : 502;
 
     sendReply(socket, status, readErrorMessage(error));
+
+    return;
+  }
+
+  if (!tunnels.isKept(peer.id, socket, head.host)) {
+    if (!socket.destroyed) {
+      sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
+    }
 
     return;
   }

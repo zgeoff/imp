@@ -1,4 +1,4 @@
-import type { ImpChangeReason, ImpEventDetail, ImpState } from '@imp/api';
+import type { EgressPolicy, ImpChangeReason, ImpEventDetail, ImpState } from '@imp/api';
 import type { Selectable, Updateable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
@@ -40,6 +40,10 @@ export interface NewImp {
 
   // 32 GiB when left out
   readonly diskBytes?: number;
+
+  // open when left out; written in the insert, so the imp never exists
+  // without its policy
+  readonly egress?: EgressPolicy;
 }
 
 export interface ImpStateChange {
@@ -100,6 +104,10 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       ip: imp.ip,
       ...(imp.httpPort !== undefined && { http_port: imp.httpPort }),
       ...(imp.diskBytes !== undefined && { disk_bytes: imp.diskBytes }),
+      ...(imp.egress !== undefined && {
+        egress_policy: imp.egress.mode,
+        egress_allow: JSON.stringify(imp.egress.allow),
+      }),
       created_at: now,
       last_active_at: now,
     })
@@ -225,15 +233,6 @@ export async function updateImpStateIf(
     .executeTakeFirst();
 
   return row === undefined ? undefined : emitChange(db, toImpRecord(row), change);
-}
-
-// The API does not show the policy, so this write is no event.
-export async function updateImpEgressPolicy(
-  db: ImpDatabase,
-  id: string,
-  policy: string,
-): Promise<void> {
-  await db.updateTable('imps').set({ egress_policy: policy }).where('id', '=', id).execute();
 }
 
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {

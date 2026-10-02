@@ -1,4 +1,5 @@
-// The agent wire format (agent/PROTOCOL.md): `[u8 type][u32 BE length][payload]`.
+// The agent wire format (docs/architecture/protocol.md#frames):
+// `[u8 type][u32 BE length][payload]`.
 
 export const FRAME_TYPES = {
   request: 1,

@@ -236,8 +236,8 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       );
     }
 
-    // every command impd runs exists in 2.2 and later (docs/architecture/
-    // storage.md#versions), so a minor skew only warns
+    // every command impd runs exists in 2.2 and later
+    // (docs/architecture/storage.md#versions), so a minor skew only warns
     if (userRelease.minor !== kernelRelease.minor) {
       log(`impd: zfs: warning: the userland is ${userland} but the kernel module is ${kernel}`);
     }

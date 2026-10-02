@@ -8,18 +8,19 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { BackupRestore, BackupRun, BackupStatus, Imp, ImpState } from '@imp/api';
+import { EgressPolicySchema } from '@imp/api';
+import type { BackupRestore, BackupRun, BackupStatus, EgressPolicy, Imp, ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
-import { EGRESS_POLICIES } from '../broker/broker-front';
 import type { Broker } from '../broker/broker-service';
 import { FREEZE_TIMEOUT_MS, buildCheckpointId } from '../checkpoints/checkpoint-service';
 import type { DiskFreezer } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
+import { parseStoredPolicy } from '../db/egress';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { findImpByName, listImps, updateImpEgressPolicy } from '../db/imps';
+import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
@@ -242,7 +243,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           state: copies.get(imp.id)?.state ?? imp.state,
           synced: copies.get(imp.id)?.synced ?? false,
           dir: BACKUP_TREE.buildImpDir(imp.id),
-          egressPolicy: imp.egressPolicy,
+          egressPolicy: parseStoredPolicy(imp.egressPolicy, imp.egressAllow).mode,
+          egressAllow: parseStoredPolicy(imp.egressPolicy, imp.egressAllow).allow,
           grants: copy.grants
             .filter((grant) => grant.impId === imp.id)
             .map((grant) => grant.secretName),
@@ -557,12 +559,6 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       }
 
       await writeRestoredFile(imp.disk, disk, imp);
-
-      await updateImpEgressPolicy(
-        deps.db,
-        impId,
-        resolveEgressPolicy(target.name, imp.egressPolicy),
-      );
     };
 
     try {
@@ -572,6 +568,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
         httpPort: imp.httpPort,
+        policy: resolveEgressPolicy(target.name, imp),
         start: false,
         prepareDisk: writeRestoredDisk,
       });
@@ -598,16 +595,20 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     return skipped;
   };
 
-  // a policy this impd does not know would leave the broker guessing: an
-  // older or newer backup falls back to `open`, with a warning
-  const resolveEgressPolicy = (name: string, policy: string): string => {
-    if ((EGRESS_POLICIES as readonly string[]).includes(policy)) {
-      return policy;
+  // A policy this impd cannot read, from a newer backup, comes back as
+  // `none`, with a warning: never more open than it was.
+  const resolveEgressPolicy = (name: string, imp: ManifestImp): EgressPolicy => {
+    const parsed = EgressPolicySchema.safeParse({ mode: imp.egressPolicy, allow: imp.egressAllow });
+
+    if (parsed.success) {
+      return parsed.data;
     }
 
-    log(`impd: backup: ${name}: unknown egress policy ${JSON.stringify(policy)}; restored as open`);
+    log(
+      `impd: backup: ${name}: unknown egress policy ${JSON.stringify(imp.egressPolicy)}; restored as none`,
+    );
 
-    return 'open';
+    return { mode: 'none', allow: [] };
   };
 
   // only the imp this restore made: a name clash fails before any disk

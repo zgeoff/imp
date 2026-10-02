@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
 import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
+import { cpCommand } from './commands/cp';
 import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
 import { gcCommand } from './commands/gc';
@@ -14,6 +15,7 @@ import {
   holdCommand,
   lsCommand,
   newCommand,
+  policyCommand,
   rmCommand,
   sleepCommand,
   startCommand,
@@ -32,6 +34,7 @@ import {
   secretCommand,
 } from './commands/secrets';
 import { attachCommand, sessionsCommand } from './commands/sessions';
+import { tokenCommand } from './commands/tokens';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
 // it loads lazily: a static import would be a cycle.
@@ -59,6 +62,8 @@ export const mainCommand = defineCommand({
     hold: holdCommand,
     url: urlCommand,
     proxy: proxyCommand,
+    cp: cpCommand,
+    policy: policyCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
@@ -72,6 +77,7 @@ export const mainCommand = defineCommand({
     revoke: revokeCommand,
     grants: grantsCommand,
     audit: auditCommand,
+    token: tokenCommand,
     events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,

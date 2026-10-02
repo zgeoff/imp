@@ -31,7 +31,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
       xfsprogs e2fsprogs squashfs-tools \
-      iproute2 iptables procps util-linux kmod jq bzip2 \
+      iproute2 iptables nftables conntrack procps util-linux kmod jq bzip2 \
  && rm -rf /var/lib/apt/lists/*
 
 # The zfs userland, 2.4 from trixie-backports (contrib), to match the module

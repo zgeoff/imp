@@ -7,7 +7,7 @@ import { sendLogin } from '../lib/session';
 import styles from './login-page.module.css';
 
 const MESSAGES = {
-  'wrong-token': 'That is not impd’s token.',
+  'wrong-token': 'impd knows no such token.',
   failed: 'impd did not answer the login.',
 } as const;
 
@@ -46,8 +46,9 @@ export function LoginPage() {
           <input name="token" type="password" required autoComplete="current-password" />
         </label>
         <p className={styles['hint']}>
-          The token is in <code>/var/lib/imp/token</code> on the host, or{' '}
-          <code>scripts/dev.sh token</code> for a dev instance.
+          The root token is in <code>/var/lib/imp/token</code> on the host, or{' '}
+          <code>scripts/dev.sh token</code> for a dev instance. A token from{' '}
+          <code>imp token new</code> works too, with its scope.
         </p>
         {result !== undefined && result !== 'ok' && (
           <p className={styles['error']} role="alert">

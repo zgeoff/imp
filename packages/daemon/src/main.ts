@@ -2,25 +2,33 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
 import { createApiAudit } from './audit/api-audit';
+import { createKnownHosts } from './auth/ambient-request';
+import { createRevocations } from './auth/revocations';
+import { createTailnetIdentities, runWhois } from './auth/tailnet-identity';
+import { loadTokenStore } from './auth/token-store';
 import { createBackupService } from './backup/backup-service';
 import { createBroker } from './broker/broker-service';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
+import type { Config } from './config';
 import { subscribeImpWrites } from './db/imp-write-feed';
 import { countImpsByState } from './db/imps';
 import { isImpSetWrite } from './db/is-imp-set-write';
 import { openDatabase } from './db/open-database';
+import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
-import { readTailscaleStatus } from './net/tailscale-status';
+import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
+import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
+import { createForwardedPeers } from './proxy/forwarded-peers';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
@@ -67,6 +75,29 @@ async function runStopStep(
   }
 }
 
+// tailnet identity, when IMP_TAILNET_IDENTITIES has rules; both ask about
+// the node on every request, so they share one cached status
+function buildTailnetAccess(config: Config, readStatus: () => Promise<TailscaleStatus>) {
+  if (config.tailnetRules === null) {
+    return null;
+  }
+
+  const readTailscale = createStatusCache(readStatus, Date.now);
+
+  return {
+    identities: createTailnetIdentities({
+      rules: config.tailnetRules,
+      whois: runWhois,
+      readTailscale,
+      now: Date.now,
+    }),
+    knownHosts: createKnownHosts({
+      readTailscale,
+      domain: config.https?.domain ?? null,
+    }),
+  };
+}
+
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
@@ -102,6 +133,17 @@ async function main(): Promise<void> {
 
   const broker = await createBroker({ config, db, log: printLog });
 
+  // the firewall and its resolver, before any VM is adopted, booted or woken
+  const egress = createEgressService({
+    config,
+    db,
+    log: printLog,
+    isGranted: broker.isGranted,
+    closeTunnels: broker.closeTunnels,
+  });
+
+  await egress.start();
+
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
 
@@ -118,6 +160,7 @@ async function main(): Promise<void> {
     storageGate,
     diskBudget,
     readDiskUsage: diskUsage.read,
+    egress,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -184,17 +227,32 @@ async function main(): Promise<void> {
   const gc = createStorageGc({ db, storage, storageGate, log: printLog });
   const state = { ready: false };
   const audit = createApiAudit({ db, now: Date.now, log: printLog });
+  const revocations = createRevocations();
+
+  const tokens = await loadTokenStore({
+    db,
+    rootToken: token,
+    now: Date.now,
+    onRemove: revocations.revoke,
+  });
+
+  const peers = createForwardedPeers(Date.now);
 
   const api = buildApp({
     config,
     db,
-    token,
+    rootToken: token,
+    tokens,
+    revocations,
+    peers,
+    tailnet: buildTailnetAccess(config, readTailscale),
     imps,
     images,
     governor,
     checkpoints,
     backups,
     broker,
+    egress,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
@@ -210,7 +268,7 @@ async function main(): Promise<void> {
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
 
-  const proxy = startWakeProxy({ config, db, imps, log: printLog });
+  const proxy = startWakeProxy({ config, db, imps, log: printLog, peers });
 
   proxyHolder.proxy = proxy;
 
@@ -291,9 +349,9 @@ async function main(): Promise<void> {
 
   void setupDefaultImage();
 
-  // SIGTERM and SIGINT (container stop): every running imp goes to sleep, so
-  // a container restart keeps memory. SIGHUP (impd restart in place): VMs keep
-  // running and the next impd re-adopts them (DESIGN 2.8).
+  // SIGTERM and SIGINT (container stop): every running imp goes to sleep, so a container
+  // restart keeps memory. SIGHUP (impd restart in place): VMs keep running and the next impd
+  // re-adopts them (docs/architecture/sleep-and-wake.md#restarts).
   const stop = async (sleepImps: boolean) => {
     const started = performance.now();
     const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));
@@ -311,6 +369,8 @@ async function main(): Promise<void> {
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
     await runStopStep('broker', readStepMs(), () => broker.stop());
+
+    egress.stop();
 
     // before the sleep pass, as exec sessions are: a client sees its
     // connection end instead of hanging while its imp sleeps

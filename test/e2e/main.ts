@@ -29,6 +29,7 @@ import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
 import type { FixtureImage } from './lib/suites';
 import { SUITES, buildSuiteArgv } from './lib/suites';
+import { readTailscaleAuthKey } from './lib/tailscale-key';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
@@ -413,6 +414,13 @@ async function main(): Promise<number> {
   // scripts/dev.sh passes these to impd
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
+
+  // one 1Password read per run: dev.sh and the tailscale suite take it from the env
+  const authKey = await readTailscaleAuthKey();
+
+  if (authKey !== null) {
+    process.env['TAILSCALE_AUTHKEY'] = authKey;
+  }
 
   // stop the running suite, run no more, and clean up
   process.on('SIGINT', () => {

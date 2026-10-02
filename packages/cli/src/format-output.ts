@@ -4,12 +4,14 @@ import type {
   BackupRun,
   BackupStatus,
   Checkpoint,
+  Identity,
   Image,
   Imp,
   Secret,
   Session,
   StorageGc,
   SystemInfo,
+  Token,
 } from '@imp/api';
 
 type Row = readonly string[];
@@ -240,6 +242,24 @@ export function formatSecrets(secrets: readonly Secret[]): string {
   );
 }
 
+export function formatTokens(tokens: readonly Token[]): string {
+  return formatTable(
+    ['NAME', 'SCOPE', 'IMPS', 'CREATED'],
+    tokens.map((token) => [
+      token.name,
+      token.scope,
+      token.imps === null ? '*' : token.imps.join(','),
+      token.createdAt.toISOString(),
+    ]),
+  );
+}
+
+export function formatIdentity(identity: Identity): string {
+  const imps = identity.imps === null ? 'every imp' : identity.imps.join(',');
+
+  return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}`;
+}
+
 export function formatAudit(entries: readonly AuditEntry[]): string {
   return formatTable(
     ['TIME', 'IMP', 'SECRET', 'METHOD', 'HOST', 'PATH', 'STATUS', 'BYTES', 'MS'],
@@ -264,7 +284,7 @@ export function formatApiCalls(calls: readonly ApiCall[]): string {
       call.at.toISOString(),
       call.imp ?? '-',
       call.procedure,
-      call.actor,
+      call.actorName === undefined ? call.actor : `${call.actor} ${call.actorName}`,
       call.outcome,
       String(call.durationMs),
     ]),

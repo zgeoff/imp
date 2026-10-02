@@ -1,7 +1,8 @@
 // Package dial serves a dial request: it connects to an address inside the
 // guest and relays bytes both ways over the host connection. impd's SSH
-// gateway uses it for port forwarding, so a forward reaches a program that
-// listens on the guest's loopback, which the guest IP cannot.
+// gateway and `imp proxy` use it, so a forward reaches a program that listens
+// on the guest's loopback, which the guest IP cannot. A TCP dial runs as root;
+// a unix socket dial runs as the image's USER (unixdial.go).
 package dial
 
 import (
@@ -9,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -21,9 +20,8 @@ import (
 // holding the host's channel open.
 const dialTimeout = 5 * time.Second
 
-// impDir holds the agent's own sockets, such as forwarded ssh-agents. The
-// agent dials as root, so a dial there could reach another user's agent;
-// impd refuses the path, and this refuses a symlink that leads there. A
+// impDir holds the agent's own sockets, such as forwarded ssh-agents. impd
+// refuses the path, and connectUnix refuses a symlink that leads there. A
 // variable for tests.
 var impDir = "/run/imp"
 
@@ -39,8 +37,8 @@ type halfCloser interface {
 // Serve dials req's address and relays until both sides are done. r and w
 // are the host connection's frame streams; the caller closes it after Serve
 // returns, which also ends a relay the host gave up on.
-func Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
-	target, err := open(req)
+func (d *Dialer) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+	target, err := d.open(req)
 	if err != nil {
 		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: toProtoError(err)})
 	}
@@ -98,7 +96,7 @@ func Relay(target net.Conn, r *proto.Reader, w *proto.Writer) error {
 	}
 }
 
-func open(req proto.Request) (net.Conn, error) {
+func (d *Dialer) open(req proto.Request) (net.Conn, error) {
 	if req.Network != "tcp" && req.Network != "unix" {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("network must be tcp or unix, got %q", req.Network)}
 	}
@@ -106,26 +104,13 @@ func open(req proto.Request) (net.Conn, error) {
 		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "address is required"}
 	}
 	if req.Network == "unix" {
-		if err := checkSocketPath(req.Address); err != nil {
-			return nil, err
-		}
+		return d.openUnix(req.Address)
 	}
 	c, err := net.DialTimeout(req.Network, req.Address, dialTimeout)
 	if err != nil {
 		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
 	}
 	return c, nil
-}
-
-func checkSocketPath(address string) error {
-	path, err := filepath.EvalSymlinks(address)
-	if err != nil {
-		return &proto.Error{Code: proto.ErrDialFailed, Message: err.Error()}
-	}
-	if path == impDir || strings.HasPrefix(path, impDir+"/") {
-		return &proto.Error{Code: proto.ErrBadRequest, Message: address + " leads to the agent's own sockets"}
-	}
-	return nil
 }
 
 func pumpOut(target net.Conn, w *proto.Writer) error {

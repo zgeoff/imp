@@ -1,6 +1,14 @@
 import { expect, test } from 'bun:test';
-import { EXEC_CHANNELS, decodeExecFrame, encodeExecFrame } from '@imp/api';
+import {
+  EXEC_CHANNELS,
+  EXEC_MAX_STDIN_FRAME_BYTES,
+  EXEC_STDIN_WINDOW_BYTES,
+  EXEC_STDOUT_WINDOW_BYTES,
+  decodeExecFrame,
+  encodeExecFrame,
+} from '@imp/api';
 import { ORPCError } from '@orpc/server';
+import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
 import type {
   AgentAttachRequest,
@@ -381,4 +389,229 @@ test('an unknown detach reason from the agent reads as lost', async () => {
   await Bun.sleep(5);
 
   expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost' });
+});
+
+function encodeStdin(size: number): Uint8Array {
+  return encodeExecFrame(EXEC_CHANNELS.stdin, new Uint8Array(size));
+}
+
+test('a tool runs from the system drive as root, gated on its agent feature', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const opened: unknown[] = [];
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (name, request, feature) => {
+        opened.push({ name, request, feature });
+
+        return Promise.resolve(fake.stream);
+      },
+    }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['extract', '/srv/app'],
+    tty: false,
+  });
+
+  await Bun.sleep(5);
+
+  expect(opened).toEqual([
+    {
+      name: 'dev',
+      request: {
+        argv: ['/run/imp/sys/imp-agent', 'tar', 'extract', '/srv/app'],
+        tty: false,
+        user: 'root',
+      },
+      feature: 'cp',
+    },
+  ]);
+});
+
+test('a tool with a tty is a bad message', async () => {
+  const peer = buildFakePeer();
+  const session = createExecSession(peer.peer, buildBackend({}));
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['create', 'x'],
+    tty: true,
+  });
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
+  expect(peer.closes).toEqual([1011]);
+});
+
+test("a tool's stdin is acked once it is on its way to the guest", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const drained = { gate: Promise.withResolvers<void>() };
+  const stream: ExecStream = { ...fake.stream, stdinDrained: () => drained.gate.promise };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['extract', 'x'],
+    tty: false,
+  });
+
+  await Bun.sleep(5);
+
+  session.handleMessage(encodeStdin(3));
+  session.handleMessage(encodeStdin(2));
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
+
+  drained.gate.resolve();
+
+  await Bun.sleep(5);
+
+  const acked = peer.sent
+    .slice(1)
+    .map((message) => z.object({ bytes: z.number() }).parse(message).bytes)
+    .reduce((total, bytes) => total + bytes, 0);
+
+  expect(acked).toBe(5);
+});
+
+test('a tool client past the stdin window is cut off', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const stream: ExecStream = { ...fake.stream, stdinDrained: () => new Promise(() => {}) };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['extract', 'x'],
+    tty: false,
+  });
+
+  await Bun.sleep(5);
+
+  const frames =
+    (EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES) / EXEC_MAX_STDIN_FRAME_BYTES;
+
+  for (let index = 0; index < frames; index++) {
+    session.handleMessage(encodeStdin(EXEC_MAX_STDIN_FRAME_BYTES));
+  }
+
+  expect(peer.closes).toEqual([]);
+
+  session.handleMessage(encodeStdin(1));
+
+  expect(peer.sent.at(-1)).toMatchObject({ type: 'error', message: 'stdin past the window' });
+  expect(peer.closes).toEqual([1011]);
+  expect(fake.input.filter((entry) => entry.startsWith('stdin:'))).toHaveLength(frames);
+});
+
+test("a plain exec's stdin is not acked or windowed", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(5);
+
+  for (let index = 0; index < 40; index++) {
+    session.handleMessage(encodeStdin(EXEC_MAX_STDIN_FRAME_BYTES));
+  }
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
+  expect(peer.closes).toEqual([]);
+});
+
+test("a tool's stdout waits for the client's acks past the window", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['create', 'x'],
+    tty: false,
+  });
+
+  await Bun.sleep(5);
+
+  const chunk = 65_536;
+  const frames = EXEC_STDOUT_WINDOW_BYTES / chunk + 2;
+
+  for (let index = 0; index < frames; index++) {
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(chunk) });
+  }
+
+  await Bun.sleep(5);
+
+  const countStdout = (): number =>
+    peer.sent.filter((message) => Array.isArray(message) && message[0] === EXEC_CHANNELS.stdout)
+      .length;
+
+  expect(countStdout()).toBe(frames - 1);
+
+  session.handleMessage({ type: 'stdout_ack', bytes: chunk * 2 });
+
+  await Bun.sleep(5);
+
+  expect(countStdout()).toBe(frames);
+});
+
+test("a plain exec's stdout does not wait for acks", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(5);
+
+  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 4;
+
+  for (let index = 0; index < frames; index++) {
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(65_536) });
+  }
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toHaveLength(frames + 1);
 });

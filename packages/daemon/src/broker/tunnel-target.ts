@@ -6,10 +6,10 @@ import { parseIpv4 } from '../net/addressing';
 // `INPUT -i imp+ DROP` rule: unchecked, a guest could reach impd's API, the
 // wake proxy and other imps' ports.
 
-// [network, prefix length]: loopback, private, shared (CGNAT, which holds
-// the tailnet's 100.x), link-local, the documentation and benchmark ranges,
-// multicast and the reserved top
-const REFUSED_RANGES: readonly (readonly [string, number])[] = [
+// [network, prefix length]: loopback, private, shared (the tailnet's 100.x),
+// link-local, documentation, benchmark, multicast and the reserved top; the
+// egress firewall refuses them to a box imp too
+export const REFUSED_RANGES: readonly (readonly [string, number])[] = [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
   ['100.64.0.0', 10],

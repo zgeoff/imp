@@ -75,16 +75,19 @@ imp fork box box-2                # a second copy to try something else in
 | `sleep`, `wake`, `hold <name> <time>`  | sleep by hand; keep an imp awake for a while                       |
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                                      |
 | `url <name>`                           | print the imp's local and tailnet URLs                             |
+| `policy <name> [open\|box\|none]`      | show or set what the imp may reach (`--allow` for box)             |
 | `image build`, `add`, `ls`, `rm`       | manage images                                                      |
 | `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
 | `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |
 | `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio               |
+| `token new`, `ls`, `rm`, `whoami`      | scoped API tokens, limited to some imps if you like                |
 | `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)              |
 | `completion bash\|zsh\|fish`           | print the shell completion script                                  |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
-[Connectors](docs/guides/connectors.md) covers secrets and grants. Commands that print imps, images,
-checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+[Connectors](docs/guides/connectors.md) covers secrets and grants; [tokens](docs/guides/tokens.md)
+covers scopes and tailnet identity. Commands that print imps, images, checkpoints or `info` take
+`--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
@@ -134,6 +137,13 @@ connection wakes the imp and keeps it awake while it is open, and a server that 
 loopback only is reachable too. It needs no SSH key: it goes to impd with the CLI's token. Ctrl-C
 stops it. A busy local port fails at once and names the port. impd allows 256 open connections per
 imp; a forced sleep resets the open ones, and the next one wakes the imp.
+
+## Files
+
+`imp cp ./app box:/srv` copies a file or a directory into an imp, and `imp cp box:/var/log/x .`
+copies one out, with modes, times and symlinks. A copy into the imp can reach any path and belongs
+to the owner of the directory it lands in, or to `--owner`. [Copying files](./docs/guides/cp.md) has
+the details.
 
 ## Sleep and wake
 

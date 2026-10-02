@@ -68,7 +68,14 @@ export interface Broker {
   readonly addGrant: (impName: string, secretName: string) => Promise<void>;
   readonly removeGrant: (impName: string, secretName: string) => Promise<void>;
   readonly listGrants: (impName: string) => Promise<string[]>;
-  readonly listAudit: (impName: string | null, limit: number) => Promise<AuditEntry[]>;
+
+  // one imp's, or every imp's; only imps within the patterns when there
+  // are any
+  readonly listAudit: (
+    impName: string | null,
+    limit: number,
+    patterns: readonly string[] | null,
+  ) => Promise<AuditEntry[]>;
 
   // a fork gets its source's grants; a failure is logged, not thrown, as
   // the fork exists by then
@@ -81,6 +88,12 @@ export interface Broker {
   // drops terminators no grant covers and forgets destroyed imps; logs a
   // failure rather than throwing
   readonly applyGrants: () => Promise<void>;
+
+  // true when a grant of the imp covers the host
+  readonly isGranted: (impId: string, host: string) => Promise<boolean>;
+
+  // ends the imp's plain tunnels to hosts `keep` rejects
+  readonly closeTunnels: (impId: string, keep: (host: string) => boolean) => void;
 
   // opens the front port on every address; 0 picks a free port, which it
   // returns
@@ -347,10 +360,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return listGrantNames(db, imp.id);
     },
 
-    listAudit: async (impName, limit) => {
+    listAudit: async (impName, limit, patterns) => {
       const imp = impName === null ? null : await requireImp(impName);
 
-      return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000));
+      return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
     createForkGrants: async (fromImpName, toImpName) => {
@@ -391,6 +404,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     applyGrants,
+
+    closeTunnels: (impId, keep) => {
+      state.front?.closeTunnels(impId, keep);
+    },
+
+    isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
 
     listen: async (port) => {
       const front = await startBrokerFront(port, {

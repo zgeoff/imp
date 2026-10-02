@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
-import type { Imp } from '@imp/api';
+import type { EgressPolicy, Imp } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import {
@@ -28,6 +28,7 @@ interface CreateImpInput {
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
+  readonly policy?: EgressPolicy | undefined;
 
   // the disk's size: IMP_DEFAULT_DISK_GIB by default, the source's size for
   // a disk that prepareDisk makes
@@ -50,7 +51,8 @@ export interface ImpCommands {
   readonly destroyImp: (name: string) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
-  // snapshot memory to disk and stop Firecracker (DESIGN 2.8)
+  // snapshot memory to disk and stop Firecracker
+  // (docs/architecture/sleep-and-wake.md#sleep)
   readonly sleepImp: (name: string) => Promise<Imp>;
 
   // a sleeping imp resumes from its snapshot, a stopped one boots cold; an
@@ -82,6 +84,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
     createImp: async (input) => {
       const image = await context.images.resolveImage(input.image);
 
+      if (input.policy !== undefined) {
+        context.egress.requirePolicy(input.policy);
+      }
+
       const diskBytes = resolveDiskBytes(context, input, image.digest);
       const id = Bun.randomUUIDv7();
       const writeRecord = () => createImpRecord(context, id, { ...input, diskBytes }, image);
@@ -94,6 +100,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         const started = performance.now();
 
         try {
+          // the slot's firewall, fresh, before anything can bring its tap up
+          await context.egress.addSlot(imp.slot);
+
           mkdirSync(paths.runDir, { recursive: true });
 
           await (
@@ -197,6 +206,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         }
 
         await context.taps.removeTap(context.findAddress(imp.slot).tap);
+
+        // out of the firewall before another imp can take the slot
+        await context.egress.releaseSlot(imp.slot);
 
         const checkpoints = await listCheckpoints(context.db, imp.id);
 

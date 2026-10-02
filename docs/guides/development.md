@@ -11,6 +11,7 @@ bun run test:dashboard            # the dashboard's component tests, in their ow
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/, deploy/ and test/
+bun run lint:docs                 # every docs/ reference in code resolves
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/test-e2e.sh --clean       # end to end, from a clean state
 ```
@@ -35,7 +36,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
-| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                                                                |
+| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, and a rule gives a member the API without a token                |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                               |
 | `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                           |
 | `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
@@ -43,14 +44,17 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp              |
 | `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap |
 | `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                 |
+| `cp`          | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                      |
 | `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                           |
 | `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
+| `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
+| `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                     |
 | `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard, tokens
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -62,13 +66,14 @@ scripts/test-e2e.sh --clean                  # wipe the dev instance's data firs
 | `--reuse` | Keeps a running dev instance instead of restarting it with the run's settings.                      |
 | `--keep`  | Leaves the run's imps and fixture images in place for a look afterwards.                            |
 
-The `acceptance` set is the definition of done: the tailscale suite fails without a
-`TAILSCALE_AUTHKEY`, and the timing limits fail the run. Any other set skips tailscale without a key
-and only warns about a missed limit. The harness starts Pebble for the https suite, which needs no
-domain and reboots the instance with HTTPS on, then off again
-([HTTPS](./https.md#testing-with-pebble)). The `fast` set takes about 3.5 minutes, most of it idle
-timeouts in the sleep suite. The full set adds docker, images, scale and tailscale; at its defaults
-the scale suite alone took about 75 seconds in the last acceptance run.
+The `acceptance` set is the definition of done: the tailscale suite fails without a Tailscale key
+(from the env, 1Password or `.env`, as [configuration](./configuration.md#dev-instance) lists), and
+the timing limits fail the run. Any other set skips tailscale without a key and only warns about a
+missed limit. The harness starts Pebble for the https suite, which needs no domain and reboots the
+instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble)). The `fast` set
+takes about 3.5 minutes, most of it idle timeouts in the sleep suite. The full set adds docker,
+images, scale and tailscale; at its defaults the scale suite alone took about 75 seconds in the last
+acceptance run.
 
 `IMP_DEV_NAME`, `IMP_DEV_PORT_OFFSET` and `IMP_DEV_DATA` pick the dev instance, as for
 `scripts/dev.sh`. These variables tune a run:
@@ -158,9 +163,12 @@ Lefthook installs the hooks with `bun install`.
 | `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                           |
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                    |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                               |
+| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.         |
 | `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                      |
 | `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks and sleep suites. |
+
+The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
+heading that does not exist.
 
 `bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
 signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads

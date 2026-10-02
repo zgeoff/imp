@@ -9,8 +9,8 @@ interface GuestAgeWait {
   readonly isWanted: () => Promise<boolean>;
 }
 
-// Before Linux 6.7, KVM restores a TSC under one second old as about 0 and
-// the guest clock stalls until it catches up (sleep-and-wake.md#young-guests).
+// Before Linux 6.7, KVM restores a TSC under one second old as about 0 and the guest clock
+// stalls until it catches up (docs/architecture/sleep-and-wake.md#young-guests).
 // Resolves to the milliseconds waited, or null when the sleep gave way.
 export async function waitForGuestAge(wait: Readonly<GuestAgeWait>): Promise<number | null> {
   if (wait.minUptimeMs === 0) {

@@ -1,19 +1,20 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, readImpUrls, readInfo, requireImp, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { REPO_ROOT, runCommand, runInContainer } from '../lib/instance';
+import { runCommand, runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { readTailscaleAuthKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
 const prefix = setupSuite('tailscale');
 const TINY = resolveImageName('e2e-tiny');
 const name = `${prefix}a`;
-const NOT_READY = 'tailscale needs TAILSCALE_AUTHKEY (env or .env) and this machine on the tailnet';
+
+const NOT_READY =
+  'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet';
 
 const PeerSchema = z.object({
   DNSName: z.string().default(''),
@@ -26,18 +27,6 @@ const TailscaleStatusSchema = z.object({
   Peer: z.record(z.string(), PeerSchema).default({}),
 });
 
-// The key impd joins with comes from the env or .env, which scripts/dev.sh
-// hands to the container. Only its presence is checked, never its value.
-function checkAuthKey(): boolean {
-  if ((process.env['TAILSCALE_AUTHKEY'] ?? '') !== '') {
-    return true;
-  }
-
-  const envFile = join(REPO_ROOT, '.env');
-
-  return existsSync(envFile) && /^TAILSCALE_AUTHKEY=.+/m.test(readFileSync(envFile, 'utf8'));
-}
-
 async function readLocalStatus(): Promise<z.infer<typeof TailscaleStatusSchema> | null> {
   try {
     const result = await runCommand(['tailscale', 'status', '--json']);
@@ -49,6 +38,33 @@ async function readLocalStatus(): Promise<z.infer<typeof TailscaleStatusSchema> 
     // no tailscale CLI on this machine, or no JSON from it
     return null;
   }
+}
+
+// impd until its node is up again, as after a reboot
+async function waitForTailnetIp(): Promise<string> {
+  await waitFor(
+    'impd tailscale state Running',
+    async () => {
+      const info = await readInfo();
+
+      expect(info.tailscale.state).toBe('Running');
+    },
+    { timeoutMs: 120_000 },
+  );
+
+  const info = await readInfo();
+
+  return info.tailscale.ip ?? '';
+}
+
+// a call to impd's API over the tailnet, with no token
+function sendTailnetRpc(ip: string, path: string, input: unknown): Promise<Response> {
+  return fetch(`http://${ip}:7070/rpc/${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ json: input }),
+    signal: AbortSignal.timeout(30_000),
+  });
 }
 
 async function readTailnetBody(url: string, host?: string): Promise<string> {
@@ -65,8 +81,9 @@ async function readTailnetBody(url: string, host?: string): Promise<string> {
 }
 
 const localStatus = await readLocalStatus();
+const authKey = await readTailscaleAuthKey();
 
-const ready = checkAuthKey() && localStatus?.BackendState === 'Running';
+const ready = authKey !== null && localStatus?.BackendState === 'Running';
 
 if (!ready && !config.acceptance) {
   console.log(`    ${NOT_READY}; skipped`);
@@ -80,19 +97,8 @@ test.skipIf(!ready && !config.acceptance)(
       throw new Error(NOT_READY);
     }
 
-    await waitFor(
-      'impd tailscale state Running',
-      async () => {
-        const info = await readInfo();
-
-        expect(info.tailscale.state).toBe('Running');
-      },
-      { timeoutMs: 120_000 },
-    );
-
+    const ip = await waitForTailnetIp();
     const info = await readInfo();
-
-    const ip = info.tailscale.ip ?? '';
 
     expect(ip).toStartWith('100.');
 
@@ -159,5 +165,33 @@ test.skipIf(!ready && !config.acceptance)(
     const woken = await readTailnetBody(url);
 
     expect(woken).toBe('e2e-tiny-ok');
+  },
+);
+
+test.skipIf(!ready && !config.acceptance)(
+  'a tailnet member a rule names reaches the API without a token, with that scope only',
+  async () => {
+    if (!ready) {
+      throw new Error(NOT_READY);
+    }
+
+    // impd reads the rules at start; the reboot keeps its node and imps
+    process.env['IMP_TAILNET_IDENTITIES'] = JSON.stringify([{ match: '*', scope: 'read' }]);
+
+    try {
+      await runDevScript('reboot');
+
+      const ip = await waitForTailnetIp();
+      const whoami = await sendTailnetRpc(ip, 'tokens/whoami', {});
+      const stop = await sendTailnetRpc(ip, 'imps/stop', { name });
+      const identity: unknown = await whoami.json();
+
+      expect(identity).toMatchObject({ json: { kind: 'tailnet', scope: 'read', imps: null } });
+      expect(stop.status).toBe(403);
+    } finally {
+      delete process.env['IMP_TAILNET_IDENTITIES'];
+
+      await runDevScript('reboot');
+    }
   },
 );

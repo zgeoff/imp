@@ -1,5 +1,4 @@
 import * as z from 'zod';
-import { isAuthorized } from '../token';
 import { isSameOrigin } from './authenticate';
 import {
   SESSION_MAX_AGE_S,
@@ -7,20 +6,22 @@ import {
   buildSessionCookie,
   buildSessionValue,
 } from './session-cookie';
+import type { TokenStore } from './token-store';
 
 const LoginSchema = z.object({ token: z.string() });
 
 export interface SessionRouteDeps {
-  readonly token: string;
+  readonly tokens: TokenStore;
+  readonly rootToken: string;
   readonly now: () => number;
 
   // after a logout: the dashboard's event streams end
   readonly onLogout?: () => void;
 }
 
-// POST /auth/login with {"token": "…"} sets the session cookie; POST
-// /auth/logout clears it. Both only from impd's own origin, so another page
-// cannot log a browser in with a token of its choosing, or out.
+// POST /auth/login with {"token": "…"} sets a session cookie with that
+// token's scope; POST /auth/logout clears it. Both only from impd's own
+// origin, so no other page logs a browser in with its token, or out.
 export function createSessionRoutes(deps: Readonly<SessionRouteDeps>) {
   return {
     login: async (request: Request): Promise<Response> => {
@@ -31,12 +32,16 @@ export function createSessionRoutes(deps: Readonly<SessionRouteDeps>) {
       const json = await readJson(request);
 
       const body = LoginSchema.safeParse(json);
+      const caller = body.success ? deps.tokens.authenticate(body.data.token) : null;
 
-      if (!body.success || !isAuthorized(`Bearer ${body.data.token}`, deps.token)) {
+      if (caller?.tokenId === undefined || caller.tokenId === null) {
         return Response.json({ error: 'unauthorized' }, { status: 401 });
       }
 
-      const value = buildSessionValue(deps.token, deps.now() + SESSION_MAX_AGE_S * 1000);
+      const value = buildSessionValue(deps.rootToken, {
+        tokenId: caller.tokenId,
+        expiresAt: deps.now() + SESSION_MAX_AGE_S * 1000,
+      });
 
       return new Response(null, {
         status: 204,

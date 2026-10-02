@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { removeImp } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
+import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
 // free ports for the proxy and slot 0, the slot each test's imp takes
@@ -37,7 +38,13 @@ test('overlapping listener syncs end with the listeners the database holds', asy
 
   await using ctx = await setupImpTest({ env: ports });
 
-  const proxy = startWakeProxy({ config: ctx.config, db: ctx.db, imps: ctx.imps, log: () => {} });
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
 
   try {
     await ctx.createTestImage('ubuntu');
@@ -99,7 +106,13 @@ async function setupCookieTest() {
 
   const ctx = await setupImpTest({ env: ports });
 
-  const proxy = startWakeProxy({ config: ctx.config, db: ctx.db, imps: ctx.imps, log: () => {} });
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
 
   await ctx.createTestImage('ubuntu');
 
@@ -152,4 +165,67 @@ test('the proxy keeps the dashboard session cookie from an imp over a WebSocket'
 
   expect(opened).toBe('open');
   expect(ctx.cookies).toEqual(['a=1']);
+});
+
+test('the API route hands a peer handle only to the paths that resolve a caller', async () => {
+  const seen: (string | null)[] = [];
+
+  // impd's API, as far as the proxy can tell
+  const api = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: (request) => {
+      seen.push(request.headers.get(PEER_HEADER));
+
+      return new Response('ok');
+    },
+  });
+
+  const ports = pickPorts();
+
+  await using ctx = await setupImpTest({
+    env: { ...ports, IMP_API_PORT: String(api.port) },
+  });
+
+  const registered: string[] = [];
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: {
+      register: (address) => {
+        registered.push(address);
+
+        return 'handle';
+      },
+      take: () => null,
+    },
+  });
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  try {
+    const base = `http://127.0.0.1:${String(apex.port)}`;
+    const forged = { [PEER_HEADER]: 'forged' };
+
+    // a flood of page loads takes no handle, and a forged one never passes
+    for (const path of ['/ui/', '/ui/assets/app.js', '/health', '/rpcx']) {
+      await fetch(`${base}${path}`, { headers: forged });
+    }
+
+    await fetch(`${base}/rpc/system/info`, { method: 'POST', headers: forged });
+
+    expect(registered).toHaveLength(1);
+    expect(seen).toEqual([null, null, null, null, 'handle']);
+  } finally {
+    await apex.stop(true);
+    await proxy.stop();
+    await api.stop(true);
+  }
 });

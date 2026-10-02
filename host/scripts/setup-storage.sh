@@ -1,6 +1,6 @@
 #!/bin/bash
 # Make /var/lib/imp the storage impd expects, then create the layout from
-# docs/architecture/storage.md ("The data directory"). Idempotent.
+# docs/architecture/storage.md#the-data-directory. Idempotent.
 #
 # XFS (the default): an XFS filesystem with reflink. On bare metal, mount a
 # real XFS partition at /var/lib/imp first and this only creates the

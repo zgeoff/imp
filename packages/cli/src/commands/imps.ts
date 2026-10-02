@@ -4,6 +4,7 @@ import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
 import { formatImp, formatImps, formatOutput } from '../format-output';
 import { parseDuration } from '../parse-duration';
+import { formatPolicy, parsePolicy } from '../parse-policy';
 import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
@@ -21,10 +22,18 @@ export const newCommand = defineCommand({
     memory: { type: 'string', description: 'memory: MiB, or with a unit (512m, 2g)' },
     disk: { type: 'string', description: 'disk size, with a unit (64g); 32g by default' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
+    policy: { type: 'string', description: 'egress policy: open (default), box or none' },
+    allow: {
+      type: 'string',
+      description:
+        'what a box may reach: hosts, *.domains, IPv4 addresses or CIDRs, comma-separated',
+    },
     json: jsonArg,
   },
   run: (context) =>
     runAction(context.host, async (client) => {
+      const policy = parsePolicy(context.args.policy, context.args.allow);
+
       const imp = await client.imps.create({
         ...(context.args.name !== undefined && { name: context.args.name }),
         ...(context.args.image !== undefined && { image: context.args.image }),
@@ -34,6 +43,7 @@ export const newCommand = defineCommand({
         ...(context.args['http-port'] !== undefined && {
           httpPort: parseCount(context.args['http-port'], 'http-port'),
         }),
+        ...(policy !== undefined && { policy }),
       });
 
       console.log(formatOutput(imp, context.args.json, formatImp));
@@ -140,6 +150,34 @@ export const urlCommand = defineCommand({
       if (urls.tailnet !== null) {
         console.log(urls.tailnet);
       }
+    }),
+});
+
+export const policyCommand = defineCommand({
+  meta: {
+    name: 'policy',
+    description: "Show or set an imp's egress policy: open, box with --allow, or none",
+  },
+  args: {
+    name: nameArg,
+    mode: { type: 'positional', description: 'open, box or none', required: false },
+    allow: {
+      type: 'string',
+      description:
+        'what a box may reach: hosts, *.domains, IPv4 addresses or CIDRs, comma-separated',
+    },
+    json: jsonArg,
+  },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      const policy = parsePolicy(context.args.mode, context.args.allow);
+
+      const current =
+        policy === undefined
+          ? await client.imps.policy({ name: context.args.name })
+          : await client.imps.setPolicy({ name: context.args.name, policy });
+
+      console.log(formatOutput(current, context.args.json, formatPolicy));
     }),
 });
 

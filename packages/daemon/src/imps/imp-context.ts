@@ -1,3 +1,4 @@
+import type { EgressPolicy } from '@imp/api';
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -23,6 +24,22 @@ import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
 import { growFilesystem } from './imp-disk';
+
+// The egress firewall's part in an imp's life (egress/egress-service.ts)
+interface ImpEgress {
+  readonly requirePolicy: (policy: EgressPolicy) => void;
+  readonly requireImp: (impId: string) => Promise<void>;
+  readonly addSlot: (slot: number) => Promise<void>;
+  readonly releaseSlot: (slot: number) => Promise<void>;
+}
+
+// tests and a host without the firewall: nothing to program
+const NO_EGRESS: ImpEgress = {
+  requirePolicy: () => {},
+  requireImp: () => Promise.resolve(),
+  addSlot: () => Promise.resolve(),
+  releaseSlot: () => Promise.resolve(),
+};
 
 export interface ImpServiceDeps {
   readonly config: Config;
@@ -69,6 +86,7 @@ export interface ImpServiceDeps {
   // grows a disk's filesystem on the host while no VM has it open; false
   // leaves the grow to the guest's next boot (imp-disk.ts)
   readonly growFilesystem?: (disk: string) => Promise<boolean>;
+  readonly egress?: ImpEgress;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -96,6 +114,7 @@ export interface ImpContext {
   readonly sessions: SessionCache;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
+  readonly egress: ImpEgress;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
@@ -130,5 +149,6 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     sessions: createSessionCache(),
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
+    egress: deps.egress ?? NO_EGRESS,
   };
 }

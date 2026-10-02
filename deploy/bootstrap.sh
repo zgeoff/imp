@@ -1,6 +1,6 @@
 #!/bin/bash
 # Take a fresh Ubuntu 24.04 or 26.04, or Debian 13, server to a running imp host
-# (docs/guides/install.md, "Bootstrap a server"). Run as root:
+# (docs/guides/install.md#bootstrap-a-server). Run as root:
 #
 #   bootstrap.sh --yes --data-device /dev/nvme1n1
 #   bootstrap.sh --yes --loop-file /srv/imp.xfs                # sized from the free space

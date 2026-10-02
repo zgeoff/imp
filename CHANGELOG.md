@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.6.0](https://github.com/zgeoff/imp/compare/v0.5.0...v0.6.0) (2026-10-02)
+
+### Features
+
+- **dev:** read the tailscale key from 1password, with .env as fallback
+  ([1ded041](https://github.com/zgeoff/imp/commit/1ded041ac9d2e4baab17c579add161deff20bc64))
+
+### Bug Fixes
+
+- **dev:** keep the tailscale key out of traces and ask op once
+  ([bf64471](https://github.com/zgeoff/imp/commit/bf6447198c2eeae4a17569f0521b8bbbd2f7be59))
+
+## [0.5.0](https://github.com/zgeoff/imp/compare/v0.4.0...v0.5.0) (2026-10-02)
+
+### Features
+
+- **agent:** grow the root filesystem to fill its disk
+  ([22136ee](https://github.com/zgeoff/imp/commit/22136eebadfba55fae3a5b24263010c4f9a4cb9d))
+- **backup:** keep disk sizes in the manifest
+  ([0aafeda](https://github.com/zgeoff/imp/commit/0aafeda269929644945b6a7035c2a7869f454d12))
+- **backup:** record each disk's used bytes, and restore by them
+  ([db6fa76](https://github.com/zgeoff/imp/commit/db6fa7626748bc7cefaa36f174c1f57e48e3fab2))
+- disk budget and per-imp disk use
+  ([52658ee](https://github.com/zgeoff/imp/commit/52658ee7a5e2581782f0c1340f263ca939534c0e)), closes
+  [#21](https://github.com/zgeoff/imp/issues/21)
+- disk sizes on create, and a resize that only grows
+  ([dd4c7bd](https://github.com/zgeoff/imp/commit/dd4c7bd74c23e35bbf54df1358f2d334e0f79fb0))
+- **images:** size an image's ext4 to its tree
+  ([7df8bce](https://github.com/zgeoff/imp/commit/7df8bceedb42612ad4e230567945a7b562b1ca25))
+- **storage:** a disk budget with a reserve no write may take
+  ([acc3d61](https://github.com/zgeoff/imp/commit/acc3d61429e97c0809e33acc6de22fab91006d88))
+- **storage:** a gc behind a storage gate
+  ([a2de654](https://github.com/zgeoff/imp/commit/a2de6546d30fbc833689a42337a246e96c642ce3))
+- **storage:** grow a stopped disk's filesystem on the host
+  ([5fd883c](https://github.com/zgeoff/imp/commit/5fd883c078b170733731256b40c46de5a39253fd))
+- **storage:** measure each imp's exclusive and shared disk usage
+  ([4b8f49e](https://github.com/zgeoff/imp/commit/4b8f49e89b13fad31d20feb073bc63cddad085b8))
+- **storage:** one disk ledger, and a usage pass that resumes
+  ([0f2cbc0](https://github.com/zgeoff/imp/commit/0f2cbc00bf88b897738b9d5226ceaa99667f842e))
+
+### Bug Fixes
+
+- **agent:** dial unix sockets as the image user, protocol 0.6.0
+  ([#60](https://github.com/zgeoff/imp/issues/60))
+  ([dcccdee](https://github.com/zgeoff/imp/commit/dcccdeeb931c50fba3f1e5fcee28e9b8a4080c33))
+- **agent:** kill the dial helper by pidfd, its stdio on /dev/null
+  ([#60](https://github.com/zgeoff/imp/issues/60))
+  ([029e3d0](https://github.com/zgeoff/imp/commit/029e3d0c6a09ece8222e7ee6f895932ff34faa17))
+- an atomic fake size file, and wait for the e2e usage pass
+  ([d86bd6b](https://github.com/zgeoff/imp/commit/d86bd6b19f231bac98008cfb311c9bb7f4ff5419))
+- **backup:** a restored image joins the storage gate until its row
+  ([079dc9f](https://github.com/zgeoff/imp/commit/079dc9f217869f80456342dce00bbaf8e98f0204))
+- **daemon:** unix socket forwards need agent 0.6.0 ([#60](https://github.com/zgeoff/imp/issues/60))
+  ([7afc776](https://github.com/zgeoff/imp/commit/7afc77690ebe8c83c96d3aa55214a032b87f0093))
+- disk sizes reach the event stream; usage follows the write feed
+  ([047e2ac](https://github.com/zgeoff/imp/commit/047e2acd1c89fd938e2333580ac423b11857e62b))
+- unix socket forwards dial as the image user
+  ([99e01dd](https://github.com/zgeoff/imp/commit/99e01dde5482fa9d8e30aa429a49f35defdc87d7)), closes
+  [#60](https://github.com/zgeoff/imp/issues/60)
+- wakes pass the disk reserve; an old agent's grow is agent_outdated
+  ([f2f2836](https://github.com/zgeoff/imp/commit/f2f2836df1deb90e1161061816137e4fd4e829bc))
+
 ## [0.4.0](https://github.com/zgeoff/imp/compare/v0.3.0...v0.4.0) (2026-10-02)
 
 ### Features

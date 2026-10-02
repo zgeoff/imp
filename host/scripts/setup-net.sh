@@ -1,6 +1,7 @@
 #!/bin/bash
-# Host-side NAT and isolation for imp taps (docs/architecture/networking.md, "iptables"). Idempotent.
-# Runs inside the host container's own network namespace.
+# Host-side NAT and isolation for imp taps
+# (docs/architecture/networking.md#iptables). Idempotent. Runs inside the host
+# container's own network namespace.
 set -euo pipefail
 
 # Debian's iptables defaults to the nf_tables backend. Fall back to legacy
@@ -76,6 +77,41 @@ iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j AC
 rule raw PREROUTING ! -i imp+ -p tcp --dport "$broker_port" -m addrtype --dst-type LOCAL \
   "${broker_tag[@]}" -j DROP
 
+# Tailnet identity (docs/guides/tokens.md) names a peer by its source
+# address, so only tailscale0 may bring in Tailscale's ranges. tailscaled's
+# own ts-input chain drops the rest in INPUT; this does it in raw, before
+# any chain, for IPv4 and IPv6. Loopback stays: a connection to impd's own
+# tailnet address comes in on lo.
+rule raw PREROUTING -s 100.64.0.0/10 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
+if ip6tables -t raw -S PREROUTING >/dev/null 2>&1; then
+  ip6tables -t raw -C PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP 2>/dev/null \
+    || ip6tables -t raw -A PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
+fi
+
+# The egress resolver (docs/architecture/networking.md#the-resolver): box and
+# none guests reach it through impd's nat redirect of port 53, over UDP and
+# TCP. The same pattern as the broker: an ACCEPT first in INPUT for the taps,
+# and a raw drop of the port for anything else, both tagged, so a start with
+# another IMP_EGRESS_DNS_PORT removes the old ones. Keep the default in step
+# with packages/daemon/src/config.ts.
+dns_port=${IMP_EGRESS_DNS_PORT:-7053}
+dns_tag=(-m comment --comment imp-egress-dns)
+for where in "filter INPUT ACCEPT" "raw PREROUTING DROP"; do
+  read -r table chain target <<<"$where"
+  stale=$(iptables -t "$table" -S "$chain" | grep -- '--comment imp-egress-dns' \
+    | grep -v -- "--dport $dns_port .*-j $target\$" || true)
+  while read -r spec; do
+    # shellcheck disable=SC2086 # the saved rule is split back into its words
+    [ -z "$spec" ] || iptables -t "$table" ${spec/#-A/-D}
+  done <<<"$stale"
+done
+for proto in udp tcp; do
+  iptables -C INPUT -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT 2>/dev/null \
+    || iptables -I INPUT 1 -i imp+ -p "$proto" --dport "$dns_port" "${dns_tag[@]}" -j ACCEPT
+  rule raw PREROUTING ! -i imp+ -p "$proto" --dport "$dns_port" -m addrtype --dst-type LOCAL \
+    "${dns_tag[@]}" -j DROP
+done
+
 # Clamp the TCP MSS of guest connections to the real uplink MTU. Behind a
 # smaller-MTU uplink (WSL eth0 is 1360) frag-needed ICMP never reaches the
 # guests, so large TLS records stall. IMP_UPLINK_MTU is the MTU outside this
@@ -89,4 +125,4 @@ for dir in -i -o; do
   rule mangle FORWARD "$dir" imp+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS "${clamp[@]}"
 done
 
-echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]}, broker :$broker_port)"
+echo "setup-net: forwarding imp+ ($subnet) via $out (mss: ${clamp[*]}, broker :$broker_port, dns :$dns_port)"

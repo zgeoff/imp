@@ -3,6 +3,7 @@ import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-str
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 import type { ImpRecord } from '../db/imps';
 import { createActivityTracker } from '../imps/activity-tracker';
+import type { ImpRuntime } from '../imps/imp-runtime';
 import type { SshBackend } from './ssh-connection-context';
 
 export const FAKE_IMP: ImpRecord = {
@@ -133,7 +134,8 @@ export function createFakeSshBackend() {
     onExec: null,
   };
 
-  const openExec: SshBackend['openExec'] = (_name, request, feature) => {
+  // the runtime's shape, so the fake also stands in for impd's imps
+  const openExec: ImpRuntime['openExec'] = (_name, request, feature) => {
     if (fake.execError !== null) {
       return Promise.reject(fake.execError);
     }
@@ -269,7 +271,7 @@ export function createFakeSshBackend() {
     return Promise.resolve(stream);
   };
 
-  const backend: SshBackend = {
+  const backend: SshBackend & Pick<ImpRuntime, 'openExec'> = {
     findImp: (name) => {
       const found = name === FAKE_IMP.name ? FAKE_IMP : undefined;
 

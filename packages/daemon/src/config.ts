@@ -1,10 +1,12 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { TailnetRulesSchema } from './auth/tailnet-identity';
+import type { TailnetRule } from './auth/tailnet-identity';
 import { loadBackupConfig } from './backup/backup-config';
 import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
-import { countSlots, parseSubnet } from './net/addressing';
+import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import type { StorageBackendKind } from './storage/storage-backend';
 
@@ -22,6 +24,7 @@ const EnvSchema = z.object({
   IMP_SSH_PORT: z.coerce.number().pipe(z.int().min(0).max(65_535)).default(22),
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
+  IMP_EGRESS_DNS_PORT: PortSchema.default(7053),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
@@ -44,6 +47,7 @@ const EnvSchema = z.object({
   IMP_TAILSCALE_NODE: z.literal('1').optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
   IMP_DASHBOARD_DIR: z.string().optional(),
+  IMP_TAILNET_IDENTITIES: z.string().optional(),
   ...HttpsEnvSchema.shape,
 });
 
@@ -59,6 +63,10 @@ export interface Config {
   // the credential broker's port on every guest's gateway address
   readonly brokerPort: number;
 
+  // the egress resolver's port on every guest's gateway address; box and
+  // none imps reach it through a redirect of port 53
+  readonly egressDnsPort: number;
+
   // tests only: a file of fake upstreams for granted hosts
   // (broker/test-upstreams.ts)
   readonly brokerTestUpstreams: string | null;
@@ -69,7 +77,8 @@ export interface Config {
   readonly idleCpuPercent: number;
 
   // the RAM the governor reserves before a cold boot, as a percentage of the
-  // imp's memory, and the least it reserves before a wake (DESIGN 2.9)
+  // imp's memory, and the least it reserves before a wake
+  // (docs/architecture/sleep-and-wake.md#the-ram-governor)
   readonly bootReservePercent: number;
   readonly wakeReserveMib: number;
 
@@ -114,6 +123,10 @@ export interface Config {
   // got (http://<name>:<tailnetPort>), which differs while an older node holds it
   readonly tailscaleHostname: string;
 
+  // rules that give tailnet peers a scope (docs/guides/tokens.md); null
+  // when IMP_TAILNET_IDENTITIES is unset, and a peer then needs a token
+  readonly tailnetRules: readonly TailnetRule[] | null;
+
   // the web dashboard's built files (packages/dashboard/dist), served at /;
   // null serves a note that this impd has none
   readonly dashboardDir: string | null;
@@ -143,6 +156,10 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
+  if (isTailnetOverlap(subnet)) {
+    throw new Error(`IMP_SUBNET ${parsed.IMP_SUBNET} overlaps Tailscale's 100.64.0.0/10`);
+  }
+
   if (parsed.IMP_STORAGE_BACKEND === 'zfs' && parsed.IMP_ZFS_ROOT === undefined) {
     throw new Error(
       'IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT, the dataset mounted on IMP_DATA_DIR',
@@ -156,6 +173,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     portBase: parsed.IMP_PORT_BASE,
     sshPort: parsed.IMP_SSH_PORT === 0 ? null : parsed.IMP_SSH_PORT,
     brokerPort: parsed.IMP_BROKER_PORT,
+    egressDnsPort: parsed.IMP_EGRESS_DNS_PORT,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,
@@ -180,8 +198,33 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
     tailscaleEnabled: parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1',
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
+    tailnetRules: parseTailnetRules(parsed.IMP_TAILNET_IDENTITIES),
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
     backup: loadBackupConfig(present),
     https: parseHttpsConfig(parsed),
   };
+}
+
+// IMP_TAILNET_IDENTITIES is a JSON array of rules, such as
+// [{"match":"user:me@example.com","scope":"manage"}]
+function parseTailnetRules(text: string | undefined): readonly TailnetRule[] | null {
+  if (text === undefined) {
+    return null;
+  }
+
+  let json: unknown;
+
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error('IMP_TAILNET_IDENTITIES is not JSON');
+  }
+
+  const rules = TailnetRulesSchema.safeParse(json);
+
+  if (!rules.success) {
+    throw new Error(`IMP_TAILNET_IDENTITIES: ${z.prettifyError(rules.error)}`);
+  }
+
+  return rules.data;
 }

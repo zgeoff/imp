@@ -26,6 +26,17 @@
   margin-left: auto;
 }
 
+.session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.identity {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 .brand {
   font-family: var(--font-mono);
   font-weight: 700;

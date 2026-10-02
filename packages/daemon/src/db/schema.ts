@@ -1,4 +1,4 @@
-import type { ApiActor, ImpState } from '@imp/api';
+import type { ApiActor, ImpState, Scope } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -30,8 +30,8 @@ interface ImpsTable {
   firecracker_version: string | null;
   http_port: Generated<number>;
 
-  // what the broker does with a CONNECT to a host no grant covers: `open`
-  // tunnels it; #26 adds the policies that refuse it
+  // the egress mode, `open`, `box` or `none` (docs/architecture/networking.md),
+  // and a box's allow-list as a JSON array
   egress_policy: Generated<string>;
 
   // the disk file's size; 32 GiB for an imp from before sizes
@@ -40,6 +40,7 @@ interface ImpsTable {
   // 1 while a sleeping imp's guest has not grown into a resize yet: its
   // next wake grows it, a cold boot grows it anyway
   disk_grow_pending: Generated<number>;
+  egress_allow: Generated<string>;
 }
 
 interface CheckpointsTable {
@@ -88,10 +89,26 @@ export interface ApiAuditTable {
   procedure: string;
   actor: ApiActor;
 
+  // null on rows from before named tokens
+  actor_name: string | null;
+
   // the name, not a reference: a destroyed imp's rows stay
   imp_name: string | null;
   outcome: string;
   duration_ms: number;
+}
+
+export interface TokensTable {
+  id: string;
+  name: string;
+
+  // SHA-256 of the secret, in hex; the secret itself is never stored
+  secret_hash: string;
+  scope: Scope;
+
+  // a JSON array of imp patterns; null for every imp and the host
+  imps: string | null;
+  created_at: number;
 }
 
 export interface DatabaseSchema {
@@ -102,4 +119,5 @@ export interface DatabaseSchema {
   grants: GrantsTable;
   broker_audit: BrokerAuditTable;
   api_audit: ApiAuditTable;
+  tokens: TokensTable;
 }

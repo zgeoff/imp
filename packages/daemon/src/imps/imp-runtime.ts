@@ -231,7 +231,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       openStream(name, 'exec', (paths) => openAttachStream(paths.vsockSocket, request)),
     openDial: (name, target, kind) =>
       openStream(name, kind, (paths) => {
-        requireFeature(paths, 'ssh');
+        // an older agent dials a unix socket as root, past its mode
+        const feature = target.network === 'unix' ? 'unix-dial-as-user' : 'ssh';
+
+        requireFeature(paths, feature);
 
         return openDialStream(paths.vsockSocket, target);
       }),

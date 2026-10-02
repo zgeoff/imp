@@ -4,9 +4,9 @@ import { AgentSessionSchema } from '../agent-client/agent-requests';
 import type { ImpPaths } from '../storage/data-layout';
 import type { HostIdentity, VmIdentity } from './vm-identity';
 
-// What a memory snapshot is tied to: the identity of the VM that wrote it
-// (docs/architecture/sleep-and-wake.md, gotcha 6). The snapshot holds the guest
-// kernel in memory, and the page cache of the system drive it reopens by path.
+// What a memory snapshot is tied to: the identity of the VM that wrote it, since the snapshot
+// holds the guest kernel and the page cache of the system drive it reopens by path
+// (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 6).
 const SnapshotIdentitySchema = z.object({
   firecrackerVersion: z.string(),
   snapshotVersion: z.string(),

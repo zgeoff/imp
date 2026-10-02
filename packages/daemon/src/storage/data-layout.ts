@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type { FirecrackerPaths } from '../vmm/firecracker-process';
 
-// The /var/lib/imp layout (DESIGN 2.4).
+// The /var/lib/imp layout (docs/architecture/storage.md#the-data-directory).
 
 export interface ImpPaths extends FirecrackerPaths {
   readonly dir: string;

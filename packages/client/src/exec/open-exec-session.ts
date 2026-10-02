@@ -130,7 +130,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
   const ws = options.connect(url.href, headers);
   const outcome = Promise.withResolvers<ExecOutcome>();
-  const state = { opened: false, started: false, finished: false };
+  const state = { opened: false, started: false, finished: false, refused: false };
 
   ws.binaryType = 'arraybuffer';
 
@@ -219,6 +219,8 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
     } else if (message.type === 'detached') {
       resolveOutcome({ kind: 'detached', reason: message.reason });
+    } else if (message.type === 'stdin_ack') {
+      // only a tool exec gets acks, and this client starts none
     } else {
       resolveOutcome({
         kind: 'failed',
@@ -260,8 +262,15 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   });
 
   // Bun reports a refused upgrade (a 401 among others) as an error and a
-  // close with no HTTP status, so a close before `open` asks impd why
+  // close with no HTTP status, and Node's undici as an error alone, so the
+  // first of either before `open` asks impd why
   const resolveRefusal = async (reason: string): Promise<void> => {
+    if (state.refused) {
+      return;
+    }
+
+    state.refused = true;
+
     const access = await checkImpdAccess(options.baseUrl, options.token, options.fetch);
 
     if (access === 'unauthorized') {
@@ -274,6 +283,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       resolveOutcome({ kind: 'closed', reason });
     }
   };
+
+  ws.addEventListener('error', () => {
+    if (!state.opened && !state.finished) {
+      void resolveRefusal('the connection failed');
+    }
+  });
 
   ws.addEventListener('close', (event) => {
     if (state.finished) {

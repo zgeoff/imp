@@ -150,6 +150,33 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // named API tokens with scopes (#29), and who made each audited call
+  '006_add_tokens': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('tokens')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('name', 'text', (c) => c.notNull().unique())
+        .addColumn('secret_hash', 'text', (c) => c.notNull())
+        .addColumn('scope', 'text', (c) => c.notNull())
+        .addColumn('imps', 'text')
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema.alterTable('api_audit').addColumn('actor_name', 'text').execute();
+    },
+  },
+
+  // the allow-list of a `box` egress policy, as a JSON array
+  '007_add_egress_allow': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('egress_allow', 'text', (c) => c.notNull().defaultTo('[]'))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

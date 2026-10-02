@@ -16,8 +16,12 @@ export {
   DETACH_REASONS,
   EXEC_CHANNELS,
   EXEC_CLOSE_RESTARTING,
+  EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_PATH,
+  EXEC_STDIN_WINDOW_BYTES,
+  EXEC_STDOUT_WINDOW_BYTES,
   EXEC_TICKET_PARAM,
+  EXEC_TOOLS,
   ExecAttachMessageSchema,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
@@ -32,7 +36,11 @@ export type {
   ExecClientMessage,
   ExecFrame,
   ExecServerMessage,
+  ExecTool,
 } from './exec-protocol';
+
+export { EgressAllowEntrySchema, EgressModeSchema, EgressPolicySchema } from './egress-schema';
+export type { EgressMode, EgressPolicy } from './egress-schema';
 
 export {
   EVENT_VERSION,
@@ -83,4 +91,6 @@ export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';
+export { IdentitySchema, ImpPatternSchema, ScopeSchema, TokenSchema } from './token-schema';
+export type { Identity, Scope, Token } from './token-schema';
 export type { SystemInfo } from './system-info-schema';

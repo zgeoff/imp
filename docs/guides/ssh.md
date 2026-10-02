@@ -65,15 +65,17 @@ Host box.imp
 
 - The SSH user names the imp. Commands run as the image's user (its `USER`, else root), as with
   `imp exec`.
-- Every key in `authorized_keys` reaches every imp. imp has one owner.
+- Every key in `authorized_keys` gives `exec` and tunnels on every imp, whatever
+  [tokens](./tokens.md) exist: the file is the host owner's. The API audit log names the key by its
+  comment.
 - A line with options (`from=`, `command=`, `restrict`, ...) is skipped, and impd logs why. The
   gateway cannot enforce options, so it does not grant what they would limit. ed25519, ECDSA and RSA
   keys work. FIDO (`sk-`) and DSA keys do not.
 - An unknown imp and an unknown key get the same `Permission denied (publickey)`, so nobody can
   probe for imp names. A refused login wakes nothing.
-- Tailscale identity (logins checked with `tailscale whois`, as Tailscale SSH does) is not built
-  yet. It needs the peer's real address, which the gateway gets because it listens on the tailnet
-  directly, not behind `tailscale serve`.
+- Tailscale identity for SSH logins (checked with `tailscale whois`, as Tailscale SSH does), and
+  keys tied to scoped tokens, are not built yet. The API takes a
+  [tailnet identity](./tokens.md#tailnet-identity) already.
 
 ## What works
 
@@ -85,7 +87,7 @@ Host box.imp
 | signals                              | sent to the command's process group                                                                 |
 | SFTP, `scp`                          | the SFTP server on the system drive, so every image has it                                          |
 | local forward (`-L`, `-D`)           | to `localhost`, `127.0.0.1` or `::1` in the imp, including programs that listen on loopback only    |
-| unix socket forward (`-L` to a path) | to any socket path in the imp but impd's own under `/run/imp/`                                      |
+| unix socket forward (`-L` to a path) | an absolute socket path the image's USER can open, but not impd's own under `/run/imp/`             |
 | env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
 | credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
 | remote forward (`-R`)                | refused                                                                                             |
@@ -98,9 +100,13 @@ be a way into other imps, the host container or the network beyond.
 `scp` uses SFTP since OpenSSH 9.0. `scp -O` (the old protocol) and `rsync` run their own programs in
 the imp, so the image needs `scp` or `rsync` for them.
 
-The SFTP server and port forwarding need the agent from protocol `0.3.0`, and agent forwarding from
-`0.4.0`. An imp that still runs an older agent answers with `AGENT_OUTDATED`; stop and start it to
-update it ([operations](./operations.md#upgrade)).
+A unix socket forward connects as the image's USER, with its groups, as `ssh -L` to sshd does: a
+root-only socket, such as a `docker.sock` for root and the `docker` group, works only when the user
+is in that group. Abstract sockets are not supported.
+
+The SFTP server and TCP forwarding need the agent from protocol `0.3.0`, agent forwarding from
+`0.4.0`, and unix socket forwarding from `0.6.0`. An imp that still runs an older agent answers with
+`AGENT_OUTDATED`; stop and start it to update it ([operations](./operations.md#upgrade)).
 
 ## Agent forwarding
 

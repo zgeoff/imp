@@ -3,7 +3,13 @@
   "compilerOptions": {
     "types": ["bun", "@zgeoff/bun-test-extended"]
   },
-  "include": ["packages/*/src/**/*.ts", "test/**/*.ts", "deploy/**/*.ts"],
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/client/smoke/*.ts",
+    "test/**/*.ts",
+    "scripts/**/*.ts",
+    "deploy/**/*.ts"
+  ],
   // a browser app with its own tsconfig (DOM, JSX)
   "exclude": ["node_modules", "tmp", "packages/dashboard"]
 }

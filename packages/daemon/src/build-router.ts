@@ -2,9 +2,14 @@ import { EVENT_VERSION, impContract } from '@imp/api';
 import type { Image, ImpEvent, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
-import { isAuditedProcedure, readImpName } from './audit/api-audit';
+import { buildForbiddenError } from './api-errors';
+import { readImpName } from './audit/api-audit';
 import type { ApiAudit } from './audit/api-audit';
-import type { Caller } from './auth/authenticate';
+import { checkAccess, findAccess, isAuditedProcedure } from './auth/access-policy';
+import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
+import type { Caller } from './auth/caller';
+import { isImpAllowed } from './auth/imp-patterns';
+import type { TokenStore } from './auth/token-store';
 import { buildBackupsOffError } from './backup/backup-service';
 import type { BackupService } from './backup/backup-service';
 import type { Broker } from './broker/broker-service';
@@ -14,6 +19,7 @@ import { listApiCalls } from './db/api-audit';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { EgressService } from './egress/egress-service';
 import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
@@ -37,6 +43,7 @@ export interface RouterDeps {
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
   readonly broker: Broker;
+  readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy'>;
 
   // null when no repository is set
   readonly backups: BackupService | null;
@@ -49,23 +56,38 @@ export interface RouterDeps {
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly audit: ApiAudit;
+  readonly tokens: TokenStore;
 }
 
-// what each call gets from build-app: who made it, and for the dashboard a
-// signal that aborts at the next logout
+// what each call gets from build-app: who made it, and a signal that aborts
+// when what it authenticated with ends (a logout, a removed token); null
+// for nothing that can end
 export interface RpcContext {
   readonly caller: Caller;
-  readonly logout: AbortSignal | null;
+  readonly ends: AbortSignal | null;
 }
 
 export function buildRouter(deps: RouterDeps) {
-  // every call that changes something leaves an audit row, after its answer
+  // every call is checked against its access rule (auth/access-policy.ts);
+  // every call that changes something, refused or not, leaves an audit row
+  // after its answer
   const os = implement(impContract)
     .$context<RpcContext>()
     .use(async (options, input) => {
       const procedure = options.path.join('.');
+      const caller = options.context.caller;
+
+      const requireAccess = (): void => {
+        const refusal = checkAccess(findAccess(procedure), caller, input);
+
+        if (refusal !== null) {
+          throw buildForbiddenError(refusal);
+        }
+      };
 
       if (!isAuditedProcedure(procedure)) {
+        requireAccess();
+
         return options.next();
       }
 
@@ -73,12 +95,14 @@ export function buildRouter(deps: RouterDeps) {
 
       const buildCall = (output: unknown) => ({
         procedure,
-        actor: options.context.caller.actor,
+        actor: caller,
         impName: readImpName(procedure, input, output),
         startedAt,
       });
 
       try {
+        requireAccess();
+
         const result = await options.next();
 
         deps.audit.record(buildCall(result.output), null);
@@ -90,13 +114,19 @@ export function buildRouter(deps: RouterDeps) {
       }
     });
 
-  // every imp as the event stream opens
-  const readSnapshot = async (): Promise<ImpEvent[]> => {
-    const imps = await deps.imps.listImps();
+  // the caller's imps as its event stream opens
+  const readSnapshot = async (caller: Readonly<Caller>): Promise<ImpEvent[]> => {
+    const imps = await listCallerImps(caller);
 
     const at = new Date(deps.now());
 
     return imps.map((imp) => ({ v: EVENT_VERSION, at, ev: 'ImpAdded', reason: 'snapshot', imp }));
+  };
+
+  const listCallerImps = async (caller: Readonly<Caller>) => {
+    const imps = await deps.imps.listImps();
+
+    return imps.filter((imp) => isImpAllowed(caller.imps, imp.name));
   };
 
   const requireBackups = (): BackupService => {
@@ -110,7 +140,7 @@ export function buildRouter(deps: RouterDeps) {
   return os.router({
     imps: {
       create: os.imps.create.handler((context) => deps.imps.createImp(context.input)),
-      list: os.imps.list.handler(() => deps.imps.listImps()),
+      list: os.imps.list.handler((context) => listCallerImps(context.context.caller)),
       get: os.imps.get.handler((context) => deps.imps.getImp(context.input.name)),
       destroy: os.imps.destroy.handler(async (context) => {
         await deps.imps.destroyImp(context.input.name);
@@ -130,6 +160,10 @@ export function buildRouter(deps: RouterDeps) {
         deps.imps.resizeDisk(context.input.name, context.input.diskMib),
       ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
+      policy: os.imps.policy.handler((context) => deps.egress.readPolicy(context.input.name)),
+      setPolicy: os.imps.setPolicy.handler((context) =>
+        deps.egress.setPolicy(context.input.name, context.input.policy),
+      ),
 
       // a fork gets its source's grants, as it gets its disk
       fork: os.imps.fork.handler(async (context) => {
@@ -199,7 +233,7 @@ export function buildRouter(deps: RouterDeps) {
       ticket: os.exec.ticket.handler(async (context) => {
         await deps.imps.getImp(context.input.name);
 
-        return deps.execTickets.issue(context.input.name, context.context.caller.actor);
+        return deps.execTickets.issue(context.input.name, context.context.caller);
       }),
     },
     sessions: {
@@ -212,7 +246,21 @@ export function buildRouter(deps: RouterDeps) {
     },
     secrets: {
       add: os.secrets.add.handler((context) => deps.broker.addSecret(context.input)),
-      list: os.secrets.list.handler(() => deps.broker.listSecrets()),
+
+      // a caller limited to some imps sees the grants to those only
+      list: os.secrets.list.handler(async (context) => {
+        const patterns = context.context.caller.imps;
+
+        const secrets = await deps.broker.listSecrets();
+
+        return secrets.map((secret) => ({
+          name: secret.name,
+          kind: secret.kind,
+          rules: secret.rules,
+          imps: secret.imps.filter((name) => isImpAllowed(patterns, name)),
+          createdAt: secret.createdAt,
+        }));
+      }),
       delete: os.secrets.delete.handler(async (context) => {
         await deps.broker.deleteSecret(context.input.name);
 
@@ -233,34 +281,72 @@ export function buildRouter(deps: RouterDeps) {
       list: os.grants.list.handler((context) => deps.broker.listGrants(context.input.name)),
     },
     audit: {
-      list: os.audit.list.handler((context) =>
-        deps.broker.listAudit(context.input.name ?? null, context.input.limit ?? AUDIT_LIMIT),
-      ),
-      calls: os.audit.calls.handler((context) =>
-        listApiCalls(deps.db, context.input.name ?? null, context.input.limit ?? AUDIT_LIMIT),
-      ),
+      list: os.audit.list.handler((context) => {
+        const caller = context.context.caller;
+
+        requireNamedImp(caller, context.input.name);
+
+        return deps.broker.listAudit(
+          context.input.name ?? null,
+          context.input.limit ?? AUDIT_LIMIT,
+          caller.imps,
+        );
+      }),
+      calls: os.audit.calls.handler((context) => {
+        const caller = context.context.caller;
+
+        requireNamedImp(caller, context.input.name);
+
+        return listApiCalls(
+          deps.db,
+          context.input.name ?? null,
+          context.input.limit ?? AUDIT_LIMIT,
+          caller.imps,
+        );
+      }),
     },
     events: {
-      // a dashboard's stream ends when its session expires or at a logout
-      stream: os.events.stream.handler((options) =>
-        openEventStream({
+      // a dashboard's stream ends when its session expires or at a logout;
+      // any stream ends when its token is removed
+      stream: os.events.stream.handler((options) => {
+        const caller = options.context.caller;
+
+        return openEventStream({
           bus: deps.imps.events,
-          readSnapshot,
-          signal: mergeSignals(options.signal, options.context.logout),
-          endsAt: options.context.caller.expiresAt,
+          readSnapshot: () => readSnapshot(caller),
+          signal: mergeSignals(options.signal, options.context.ends),
+          endsAt: caller.expiresAt,
           now: deps.now,
-        }),
-      ),
+          accepts: (event) => isImpAllowed(caller.imps, readEventImpName(event)),
+        });
+      }),
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
       gc: os.system.gc.handler((context) => deps.gc.runGc(context.input.dryRun ?? false)),
     },
+    tokens: {
+      list: os.tokens.list.handler(() => deps.tokens.list()),
+      create: os.tokens.create.handler((context) =>
+        deps.tokens.create({
+          name: context.input.name,
+          scope: context.input.scope,
+          imps: context.input.imps ?? null,
+        }),
+      ),
+      delete: os.tokens.delete.handler(async (context) => {
+        await deps.tokens.remove(context.input.name);
+
+        return {};
+      }),
+      whoami: os.tokens.whoami.handler((context) => toIdentity(context.context.caller)),
+    },
   });
 }
 
-// RAM used is measured (what awake Firecrackers own); committed is the
-// memory the awake imps were given (DESIGN 2.9).
+// RAM used is measured (what awake Firecrackers own); committed is the memory
+// the awake imps were given
+// (docs/architecture/sleep-and-wake.md#the-ram-governor).
 async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
   const [imps, usage, tailscale, storage] = await Promise.all([
     listImps(deps.db),
@@ -291,7 +377,9 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     },
     tailscale: {
       enabled: deps.config.tailscaleEnabled,
-      ...tailscale,
+      state: tailscale.state,
+      hostname: tailscale.hostname,
+      ip: tailscale.ip,
     },
   };
 }
@@ -307,13 +395,24 @@ function toApiImage(image: ImageRecord): Image {
   };
 }
 
+// an audit list may name one imp, which must be the caller's
+function requireNamedImp(caller: Readonly<Caller>, name: string | undefined): void {
+  if (name !== undefined && !isCallerAllowed(caller, 'read', name)) {
+    throw buildForbiddenError(`${formatCaller(caller)} may not touch imp ${name}`);
+  }
+}
+
+function readEventImpName(event: ImpEvent): string {
+  return 'imp' in event ? event.imp.name : event.name;
+}
+
 function mergeSignals(
   request: AbortSignal | undefined,
-  logout: AbortSignal | null,
+  ends: AbortSignal | null,
 ): AbortSignal | undefined {
-  if (logout === null) {
+  if (ends === null) {
     return request;
   }
 
-  return request === undefined ? logout : AbortSignal.any([request, logout]);
+  return request === undefined ? ends : AbortSignal.any([request, ends]);
 }

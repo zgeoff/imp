@@ -8,6 +8,7 @@ import {
   BackupStatusSchema,
 } from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
+import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
@@ -25,6 +26,7 @@ import {
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
+import { IdentitySchema, ImpPatternSchema, ScopeSchema, TokenSchema } from './token-schema';
 
 const base = oc.errors(IMP_ERRORS);
 const NameInputSchema = z.object({ name: NameSchema });
@@ -48,6 +50,9 @@ export const impContract = {
 
           // the guest port the wake proxy forwards HTTP to (default 8080)
           httpPort: z.int().min(1).max(65_535).optional(),
+
+          // what the imp may reach directly (default open)
+          policy: EgressPolicySchema.optional(),
         }),
       )
       .output(ImpSchema),
@@ -87,7 +92,15 @@ export const impContract = {
       .input(NameInputSchema)
       .output(z.object({ local: z.url(), https: z.url().nullable(), tailnet: z.url().nullable() })),
 
-    // disk only: a memory fork would duplicate entropy and IDs across clones
+    // the egress policy; a change applies at once, whatever the imp's state
+    policy: base.input(NameInputSchema).output(EgressPolicySchema),
+
+    setPolicy: base
+      .input(z.object({ name: NameSchema, policy: EgressPolicySchema }))
+      .output(EgressPolicySchema),
+
+    // disk only, with the source's egress policy: a memory fork would
+    // duplicate entropy and IDs across clones
     fork: base
       .input(
         z.object({
@@ -253,6 +266,29 @@ export const impContract = {
     // removes the disks, checkpoints, images and snapshots no row names;
     // PRECONDITION_FAILED while storage operations keep it busy
     gc: base.input(z.object({ dryRun: z.boolean().optional() })).output(StorageGcSchema),
+  },
+
+  // named API tokens (docs/guides/tokens.md); the root token in
+  // <dataDir>/token is not one of them
+  tokens: {
+    list: base.output(z.array(TokenSchema)),
+
+    // the secret is in the answer once and never again
+    create: base
+      .input(
+        z.object({
+          name: NameSchema,
+          scope: ScopeSchema,
+          imps: z.array(ImpPatternSchema).min(1).max(32).optional(),
+        }),
+      )
+      .output(z.object({ token: TokenSchema, secret: z.string() })),
+
+    // ends its dashboard sessions, event streams and sockets too
+    delete: base.input(NameInputSchema).output(EmptySchema),
+
+    // who the caller is, and what it may do
+    whoami: base.output(IdentitySchema),
   },
 };
 

@@ -1,5 +1,6 @@
-// Routed, not bridged (DESIGN 2.6): slot n owns the /30 at offset 4n of the
-// subnet, with the host end at 4n+1 and the guest at 4n+2.
+// Routed, not bridged (docs/architecture/networking.md#addressing): slot n owns
+// the /30 at offset 4n of the subnet, with the host end at 4n+1 and the guest
+// at 4n+2.
 
 const SLOT_SIZE = 4;
 const SLOT_PREFIX_LENGTH = 30;
@@ -18,7 +19,8 @@ export interface SlotAddress {
   readonly netmask: string;
   readonly guestMac: string;
 
-  // the imp's own port on the host (DESIGN 2.11), for the tailnet
+  // the imp's own port on the host (docs/architecture/networking.md#urls), for
+  // the tailnet
   readonly tailnetPort: number;
 }
 
@@ -57,6 +59,18 @@ export function parseSubnet(cidr: string): Subnet {
   }
 
   return { network, prefixLength: prefix };
+}
+
+// Tailscale's 100.64.0.0/10: a guest with an address in it would look like
+// a tailnet peer to impd's tailnet identity
+const TAILNET_NETWORK = 100 * 2 ** 24 + 64 * 2 ** 16;
+const TAILNET_SIZE = 2 ** 22;
+
+export function isTailnetOverlap(subnet: Subnet): boolean {
+  const start = subnet.network;
+  const end = start + 2 ** (32 - subnet.prefixLength);
+
+  return start < TAILNET_NETWORK + TAILNET_SIZE && TAILNET_NETWORK < end;
 }
 
 export function countSlots(subnet: Subnet): number {
@@ -124,6 +138,23 @@ export function findPeerSlot(peer: string, local: string, subnet: Subnet): numbe
   }
 
   return localIp === peerIp - 1 ? (offset - 2) / SLOT_SIZE : null;
+}
+
+// The slot whose guest address this is; null for any other address, the
+// other addresses of a slot's /30 included.
+export function findGuestSlot(address: string, subnet: Subnet): number | null {
+  const ip = parseIpv4(address, true);
+  const offset = ip === null ? -1 : ip - subnet.network;
+
+  if (offset < 0 || offset >= 2 ** (32 - subnet.prefixLength) || offset % SLOT_SIZE !== 2) {
+    return null;
+  }
+
+  return (offset - 2) / SLOT_SIZE;
+}
+
+export function formatSubnet(subnet: Subnet): string {
+  return `${formatIpv4(subnet.network)}/${String(subnet.prefixLength)}`;
 }
 
 function isDecimal(text: string): boolean {

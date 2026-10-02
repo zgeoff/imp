@@ -56,6 +56,12 @@ impd reports the name the node got (the first label of its MagicDNS name) in `im
 in `imp url`, so the URLs follow a `-1` suffix. The orphan keeps the plain name: `imp` then resolves
 to a dead node. Find the node by its IP (`imp info`), not by `HostName`, which both nodes share.
 
+## Tailnet identity
+
+impd can give tailnet members access to its API without a token: `IMP_TAILNET_IDENTITIES` maps
+logins and tags to scopes, and impd checks each connection with `tailscale whois`.
+[Tokens and identities](./tokens.md#tailnet-identity) covers the rules and how impd keeps them safe.
+
 ## URL scheme
 
 | URL                                                  | Routes to                                    |
@@ -118,6 +124,8 @@ scripts/test-e2e.sh --only tailscale
 
 It waits for impd's node to come up, checks DNS inside the host container, then fetches an imp by
 the node's IP, MagicDNS name and short name, on the imp's own port and on the proxy port. Last, it
-sleeps the imp and checks that a tailnet request wakes it. Without `TAILSCALE_AUTHKEY` the suite
-skips, except in the `acceptance` set, where it fails. `scripts/test-e2e.sh --clean` logs the node
-out with `tailscale-down.sh` before it wipes the instance.
+sleeps the imp and checks that a tailnet request wakes it. The key comes from `TAILSCALE_AUTHKEY`,
+then 1Password (`op read` with a 20-second limit, reference in `IMP_TAILSCALE_AUTHKEY_REF`), then
+`.env`, as for `scripts/dev.sh`. Without one the suite skips, except in the `acceptance` set, where
+it fails. `scripts/test-e2e.sh --clean` logs the node out with `tailscale-down.sh` before it wipes
+the instance.
