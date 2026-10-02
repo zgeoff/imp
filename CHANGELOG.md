@@ -2,21 +2,27 @@
 
 ## [0.20.0](https://github.com/zgeoff/imp/compare/v0.19.0...v0.20.0) (2026-10-02)
 
-
 ### Features
 
-* **cli:** list the imps on every saved host with imp ls --all ([781b113](https://github.com/zgeoff/imp/commit/781b1134e2d9d292d3a3a2c950e86e572cf635b2))
-* **cli:** place a new imp on the saved host with the most free ram ([75b9a58](https://github.com/zgeoff/imp/commit/75b9a58f615db30da3a544810969a59c02b41560))
-* **cli:** show an imp's move mark in the note column ([b8030ae](https://github.com/zgeoff/imp/commit/b8030ae2dea3560a8898cf4237e70ec245844119))
-* **cli:** show the create defaults and egress enforcement in imp info ([2753080](https://github.com/zgeoff/imp/commit/2753080514fc68d11b2295e1dffbf6f3720b074d))
-* **cli:** show the sleeping imps' memory in imp info ([e116b2d](https://github.com/zgeoff/imp/commit/e116b2d5725be1a80c6d7eddd43c2d55c1fb7181))
-* **daemon:** report sleeping memory, defaults and egress in system.info ([b2b4bf5](https://github.com/zgeoff/imp/commit/b2b4bf5dc8910d6d594214df79d5b418c44a91f0))
-
+- **cli:** list the imps on every saved host with imp ls --all
+  ([781b113](https://github.com/zgeoff/imp/commit/781b1134e2d9d292d3a3a2c950e86e572cf635b2))
+- **cli:** place a new imp on the saved host with the most free ram
+  ([75b9a58](https://github.com/zgeoff/imp/commit/75b9a58f615db30da3a544810969a59c02b41560))
+- **cli:** show an imp's move mark in the note column
+  ([b8030ae](https://github.com/zgeoff/imp/commit/b8030ae2dea3560a8898cf4237e70ec245844119))
+- **cli:** show the create defaults and egress enforcement in imp info
+  ([2753080](https://github.com/zgeoff/imp/commit/2753080514fc68d11b2295e1dffbf6f3720b074d))
+- **cli:** show the sleeping imps' memory in imp info
+  ([e116b2d](https://github.com/zgeoff/imp/commit/e116b2d5725be1a80c6d7eddd43c2d55c1fb7181))
+- **daemon:** report sleeping memory, defaults and egress in system.info
+  ([b2b4bf5](https://github.com/zgeoff/imp/commit/b2b4bf5dc8910d6d594214df79d5b418c44a91f0))
 
 ### Bug Fixes
 
-* **cli:** abort a host's open requests when its call ends ([2129255](https://github.com/zgeoff/imp/commit/2129255e3b6855cdbce20dcc0951eb0c01e87324))
-* **cli:** name the host after a placed create fails; keep ls --all hosts ([0cd24d9](https://github.com/zgeoff/imp/commit/0cd24d96fa601c2db8b353be05d197f5a2c1a239))
+- **cli:** abort a host's open requests when its call ends
+  ([2129255](https://github.com/zgeoff/imp/commit/2129255e3b6855cdbce20dcc0951eb0c01e87324))
+- **cli:** name the host after a placed create fails; keep ls --all hosts
+  ([0cd24d9](https://github.com/zgeoff/imp/commit/0cd24d96fa601c2db8b353be05d197f5a2c1a239))
 
 ## [0.19.0](https://github.com/zgeoff/imp/compare/v0.18.0...v0.19.0) (2026-10-02)
 
