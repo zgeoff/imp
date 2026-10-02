@@ -8,6 +8,7 @@ How to check a change before you push it, and what CI and the branch rules do wi
 ```sh
 bun run typecheck && bun run lint && bun test
 bun run test:dashboard            # the dashboard's component tests, in their own run
+bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
 bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
@@ -117,7 +118,7 @@ Lefthook installs the hooks with `bun install`.
 | Job          | Required | What it runs                                                                                                                      |
 | ------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `gitleaks`   | yes      | A secret scan over the history.                                                                                                   |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, and the dashboard's tests and build.                |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
 | `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                    |
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                                                             |
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                         |

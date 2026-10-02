@@ -1,18 +1,10 @@
 import { expect, test } from 'bun:test';
 import { X509Certificate } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { createAcmeIssuer } from '../../../packages/daemon/src/https/acme/acme-issuer';
-import { createCertStore } from '../../../packages/daemon/src/https/acme/cert-store';
-import { createChalltestsrvProvider } from '../../../packages/daemon/src/https/dns/challtestsrv-provider';
-import { createCloudflareProvider } from '../../../packages/daemon/src/https/dns/cloudflare-provider';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { readImpdLoggedMs, runDevScript, runInContainer } from '../lib/instance';
-import { PEBBLE_DOMAIN, readPebbleEndpoints, writePebbleRoot } from '../lib/pebble';
-import { readRejection } from '../lib/read-rejection';
+import { PEBBLE_DOMAIN, writePebbleRoot } from '../lib/pebble';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -29,7 +21,12 @@ interface ContainerResponse {
   readonly status: number;
   readonly headers: string;
   readonly body: string;
+
+  // curl's time_total: connect, TLS, the wake, and the response
+  readonly totalMs: number;
 }
+
+const TIME_MARK = 'imp-e2e-time-total:';
 
 // A request from inside the host container, where the listeners answer on
 // loopback. The certificate must chain to Pebble's root and cover the URL's
@@ -53,6 +50,8 @@ async function readInContainer(url: string, hostHeader?: string): Promise<Contai
     '/dev/stderr',
     '-o',
     '/dev/stdout',
+    '-w',
+    `\n${TIME_MARK}%{time_total}`,
     ...(hostHeader === undefined ? [] : ['-H', `Host: ${hostHeader}`]),
     url,
   ]);
@@ -62,8 +61,14 @@ async function readInContainer(url: string, hostHeader?: string): Promise<Contai
   }
 
   const status = /^HTTP\/[\d.]+ (?<status>\d{3})/m.exec(result.stderr)?.groups?.['status'];
+  const [body = '', seconds = '0'] = result.stdout.split(`\n${TIME_MARK}`);
 
-  return { status: Number(status ?? 0), headers: result.stderr, body: result.stdout.trim() };
+  return {
+    status: Number(status ?? 0),
+    headers: result.stderr,
+    body: body.trim(),
+    totalMs: Math.round(Number(seconds) * 1000),
+  };
 }
 
 test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
@@ -127,19 +132,25 @@ test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
 
     expect(served.body).toBe('e2e-tiny-ok');
 
-    // a request over https wakes a sleeping imp
+    // A request over https wakes a sleeping imp. Each scheme wakes the same
+    // imp twice: at once after the sleep, and after the imp has sat asleep
+    // for a while, so the two schemes compare under the same conditions.
     await runImp('hold', name, '0');
-    await runImp('sleep', name);
-    await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'));
 
-    const woken = await readInContainer(`https://${host}/`);
+    const plainUrl = `http://${name}.imp.localhost:7080/`;
 
-    const wakeMs = /^x-imp-wake-ms: (?<ms>\d+)/im.exec(woken.headers)?.groups?.['ms'];
+    for (const settleMs of [0, 5000]) {
+      for (const [scheme, url] of [
+        ['https', `https://${host}/`],
+        ['http', plainUrl],
+      ] as const) {
+        const woken = await wakeBy(url, settleMs);
 
-    expect(woken.body).toBe('e2e-tiny-ok');
-    expect(wakeMs).toBeDefined();
+        const key = `${scheme}_wake${settleMs === 0 ? '' : '_settled'}`;
 
-    writeMetric('https_wake_ms', Number(wakeMs));
+        writeMetric(`${key}_ms`, woken);
+      }
+    }
 
     // only one label names an imp; the certificate does not cover a.<host>
     // either, so the Host header carries it
@@ -155,76 +166,20 @@ test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
   },
 );
 
-test.skipIf(process.env['IMP_DOMAIN'] !== PEBBLE_DOMAIN)(
-  'the issuer reports an untrusted CA and a bad DNS token in words, with no token',
-  async () => {
-    const endpoints = await readPebbleEndpoints();
+// Sleeps the imp, waits `settleMs`, then wakes it with a request: impd's own
+// wake time (x-imp-wake-ms) and the client's whole request time.
+async function wakeBy(url: string, settleMs: number) {
+  await runImp('sleep', name);
+  await waitFor(`${name} to sleep`, () => assertState(name, 'sleeping'));
 
-    const dir = mkdtempSync(join(tmpdir(), 'imp-e2e-acme-'));
-    const store = createCertStore(dir);
-    const logs: string[] = [];
+  await Bun.sleep(settleMs);
 
-    const writeLog = (message: string): void => {
-      logs.push(message);
-    };
+  const woken = await readInContainer(url);
 
-    // no CA: Pebble's TLS is not trusted
-    const untrusted = createAcmeIssuer({
-      directoryUrl: endpoints.directoryUrl,
-      email: null,
-      caPem: null,
-      store,
-      dns: createChalltestsrvProvider(endpoints.challtestsrvUrl),
-      log: writeLog,
-    });
+  const impd = /^x-imp-wake-ms: (?<ms>\d+)/im.exec(woken.headers)?.groups?.['ms'];
 
-    const tlsRejection = await readRejection(untrusted('other.test'));
+  expect(woken.body).toBe('e2e-tiny-ok');
+  expect(impd).toBeDefined();
 
-    const tlsError = readMessage(tlsRejection);
-
-    expect(tlsError).toContain(`cannot reach the ACME server at ${endpoints.directoryUrl}`);
-    expect(tlsError).not.toContain('response.config');
-
-    // a Cloudflare that refuses the token
-    const token = 'e2e-secret-token';
-
-    const cloudflare = Bun.serve({
-      port: 0,
-      fetch: () =>
-        Response.json(
-          { success: false, errors: [{ code: 9109, message: 'Invalid access token' }] },
-          { status: 403 },
-        ),
-    });
-
-    try {
-      const refused = createAcmeIssuer({
-        directoryUrl: endpoints.directoryUrl,
-        email: null,
-        caPem: endpoints.minicaPem,
-        store,
-        dns: createCloudflareProvider({
-          token,
-          apiUrl: `http://127.0.0.1:${String(cloudflare.port)}`,
-        }),
-        log: writeLog,
-      });
-
-      const dnsRejection = await readRejection(refused('other.test'));
-
-      const dnsError = readMessage(dnsRejection);
-
-      expect(dnsError).toContain('403 Invalid access token');
-      expect(dnsError).not.toContain(token);
-      expect(logs.join('\n')).not.toContain(token);
-    } finally {
-      await cloudflare.stop(true);
-
-      rmSync(dir, { recursive: true, force: true });
-    }
-  },
-);
-
-function readMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return { impd: Number(impd), client: woken.totalMs };
 }

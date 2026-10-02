@@ -13,29 +13,33 @@ const CHALLTESTSRV_IMAGE =
 // the domain impd gets in the https suite; challtestsrv answers for it
 export const PEBBLE_DOMAIN = 'imp.test';
 
-// Pebble's own TLS certificate chains to this CA, and is for `pebble` and
-// `localhost`: in the network the container is `pebble`, from here `localhost`
-const MINICA_FILE = join(REPO_ROOT, '.cache', 'e2e', 'pebble-minica.pem');
-
-const names = {
-  network: `${instance.container}-acme`,
-  pebble: `${instance.container}-pebble`,
-  challtestsrv: `${instance.container}-challtestsrv`,
-} as const;
-
 export interface PebbleEndpoints {
   // from this machine
   readonly directoryUrl: string;
   readonly rootUrl: string;
   readonly challtestsrvUrl: string;
+
+  // Pebble's own TLS certificate chains to this CA, and is for `pebble` and
+  // `localhost`: in the network the container is `pebble`, from here `localhost`
+  readonly minicaFile: string;
   readonly minicaPem: string;
 }
 
-// Starts Pebble and challtestsrv on a network of their own, and sets the env
-// that scripts/dev.sh hands impd, so the dev instance joins that network and
-// gets its certificate from Pebble.
-export async function startPebble(): Promise<void> {
-  await stopPebble();
+function buildNames(prefix: string) {
+  return {
+    network: `${prefix}-acme`,
+    pebble: `${prefix}-pebble`,
+    challtestsrv: `${prefix}-challtestsrv`,
+    minicaFile: join(REPO_ROOT, '.cache', 'e2e', `${prefix}-pebble-minica.pem`),
+  } as const;
+}
+
+// Starts Pebble and challtestsrv on a network of their own, named after the
+// prefix, with their ports published on loopback.
+export async function startPebbleStack(prefix: string): Promise<PebbleEndpoints> {
+  const names = buildNames(prefix);
+
+  await stopPebbleStack(prefix);
 
   // a dev instance that is still up keeps the network from an earlier run
   const network = await runCommand(['docker', 'network', 'inspect', names.network]);
@@ -92,16 +96,14 @@ export async function startPebble(): Promise<void> {
 
   mkdirSync(join(REPO_ROOT, '.cache', 'e2e'), { recursive: true });
 
-  await runChecked(['docker', 'cp', `${names.pebble}:/test/certs/pebble.minica.pem`, MINICA_FILE]);
+  await runChecked([
+    'docker',
+    'cp',
+    `${names.pebble}:/test/certs/pebble.minica.pem`,
+    names.minicaFile,
+  ]);
 
-  process.env['IMP_DEV_NETWORK'] = names.network;
-  process.env['IMP_DOMAIN'] = PEBBLE_DOMAIN;
-  process.env['IMP_DNS_PROVIDER'] = 'challtestsrv';
-  process.env['IMP_DNS_API_URL'] = 'http://challtestsrv:8055';
-  process.env['IMP_ACME_DIRECTORY'] = 'https://pebble:14000/dir';
-  process.env['IMP_ACME_CA_FILE'] = MINICA_FILE;
-
-  const endpoints = await readPebbleEndpoints();
+  const endpoints = await readPebbleEndpoints(prefix);
 
   await waitFor('Pebble to answer', async () => {
     const response = await fetch(endpoints.directoryUrl, { tls: { ca: endpoints.minicaPem } });
@@ -110,25 +112,50 @@ export async function startPebble(): Promise<void> {
       throw new Error(`HTTP ${String(response.status)}`);
     }
   });
+
+  return endpoints;
 }
 
-// The containers go, and the network unless the dev instance, which stays
-// up after a run, is still on it. Nothing fails when they are not there.
-export async function stopPebble(): Promise<void> {
+// The containers go, and the network unless a dev instance, which stays up
+// after a run, is still on it. Nothing fails when they are not there.
+export async function stopPebbleStack(prefix: string): Promise<void> {
+  const names = buildNames(prefix);
+
   await runCommand(['docker', 'rm', '-f', names.pebble, names.challtestsrv]);
   await runCommand(['docker', 'network', 'rm', names.network]);
 }
 
-export async function readPebbleEndpoints(): Promise<PebbleEndpoints> {
+// The harness's stack, and the env that scripts/dev.sh hands impd, so the
+// dev instance joins the stack's network and gets its certificate from Pebble.
+export async function startPebble(): Promise<void> {
+  const endpoints = await startPebbleStack(instance.container);
+
+  process.env['IMP_DEV_NETWORK'] = buildNames(instance.container).network;
+  process.env['IMP_E2E'] = '1';
+  process.env['IMP_DOMAIN'] = PEBBLE_DOMAIN;
+  process.env['IMP_DNS_PROVIDER'] = 'challtestsrv';
+  process.env['IMP_DNS_API_URL'] = 'http://challtestsrv:8055';
+  process.env['IMP_ACME_DIRECTORY'] = 'https://pebble:14000/dir';
+  process.env['IMP_ACME_CA_FILE'] = endpoints.minicaFile;
+}
+
+export function stopPebble(): Promise<void> {
+  return stopPebbleStack(instance.container);
+}
+
+async function readPebbleEndpoints(prefix: string): Promise<PebbleEndpoints> {
+  const names = buildNames(prefix);
+
   const directory = await readPublishedPort(names.pebble, 14_000);
   const management = await readPublishedPort(names.pebble, 15_000);
   const challtestsrv = await readPublishedPort(names.challtestsrv, 8055);
-  const minicaPem = await Bun.file(MINICA_FILE).text();
+  const minicaPem = await Bun.file(names.minicaFile).text();
 
   return {
     directoryUrl: `https://localhost:${directory}/dir`,
     rootUrl: `https://localhost:${management}/roots/0`,
     challtestsrvUrl: `http://127.0.0.1:${challtestsrv}`,
+    minicaFile: names.minicaFile,
     minicaPem,
   };
 }
@@ -137,7 +164,7 @@ export async function readPebbleEndpoints(): Promise<PebbleEndpoints> {
 // client must trust for impd's certificate. Written under .cache, which the
 // dev container mounts at /src/.cache.
 export async function writePebbleRoot(): Promise<string> {
-  const endpoints = await readPebbleEndpoints();
+  const endpoints = await readPebbleEndpoints(instance.container);
   const response = await fetch(endpoints.rootUrl, { tls: { ca: endpoints.minicaPem } });
   const pem = await response.text();
 

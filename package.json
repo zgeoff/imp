@@ -63,6 +63,7 @@
     "lint:fix": "oxlint --type-aware --type-check --report-unused-disable-directives-severity error --fix",
     "lint:shell": "./scripts/shellcheck.sh",
     "test": "bun test",
+    "test:pebble": "bun test ./test/integration/acme-issuer.pebble.ts",
     "test:dashboard": "bun run --cwd packages/dashboard test",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p packages/dashboard/tsconfig.json --noEmit",
     "format": "oxfmt . && format-codemod --quiet .",

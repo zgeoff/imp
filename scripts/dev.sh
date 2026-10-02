@@ -30,8 +30,8 @@
 #      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
 #      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
 #      repo. IMP_DNS_API_TOKEN, a secret, goes in .env like TAILSCALE_AUTHKEY.
-#      IMP_DEV_NETWORK puts the container on that Docker network (the e2e
-#      harness's Pebble).
+#      IMP_DEV_NETWORK puts the container on that Docker network, and IMP_E2E=1
+#      lets impd use the challtestsrv DNS provider (the e2e harness's Pebble).
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -46,7 +46,7 @@ tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT
   IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
   IMP_STORAGE_BACKEND IMP_ZFS_ROOT
   IMP_DOMAIN IMP_DNS_PROVIDER IMP_DNS_API_URL IMP_ACME_DIRECTORY IMP_ACME_EMAIL IMP_HTTPS_PORT
-  IMP_HTTP_PORT)
+  IMP_HTTP_PORT IMP_E2E)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {

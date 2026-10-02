@@ -109,6 +109,15 @@ DNS-only (`proxied: false`). It sets them at start and again whenever the tailne
 does change: Tailscale deletes an ephemeral node that stays offline, and the next start registers a
 new node with a new IP ([state and ephemeral keys](./tailscale.md#state-and-ephemeral-keys)).
 
+impd marks each record it writes with the comment `managed by impd`, and changes only those. A name
+that already has an A, AAAA or CNAME record without that comment stops impd with an error that names
+the record. impd never replaces a record it did not make. If it finds more than one record of its
+own on a name, it logs a warning and updates only the first.
+
+**CAUTION:** Give impd a name of its own, such as `imp.example.com`. Do not use a zone apex such as
+`example.com` that already serves a website. impd refuses to replace the website's record, so HTTPS
+never starts. If you delete that record so that impd can write its own, the website goes offline.
+
 ## Why the records point at the tailnet IP
 
 The domain is public, but its records point at a `100.64.0.0/10` address. That address routes only
@@ -156,11 +165,16 @@ The harness starts both containers on a Docker network of their own, then starts
 that network with `IMP_DOMAIN=imp.test`, `IMP_DNS_PROVIDER=challtestsrv`, the Pebble directory, and
 Pebble's TLS root in `IMP_ACME_CA_FILE`. The suite waits for the certificate, checks both names on
 it, fetches an imp over https from inside the host container, sleeps it and wakes it by https, and
-checks the 404 and the redirect. It also drives the issuer against Pebble with an untrusted CA and a
-Cloudflare that refuses the token, and checks that both errors are readable and hold no token.
+checks the 404 and the redirect. It wakes the imp by https and by plain HTTP under the same
+conditions, and records both times as the client sees them.
 
-`IMP_DNS_PROVIDER=challtestsrv` exists for this test. It writes records through challtestsrv's
-management API at `IMP_DNS_API_URL`.
+`IMP_DNS_PROVIDER=challtestsrv` exists for this test only. It writes records through challtestsrv's
+management API at `IMP_DNS_API_URL`. impd refuses it unless `IMP_E2E=1`, which only the harness
+sets.
+
+`bun run test:pebble` tests the issuer alone against its own Pebble. It runs in CI. It checks a
+first certificate, a renewal on the same account, an untrusted ACME server, and a Cloudflare that
+refuses the token. Both errors must be readable and must not contain the token.
 
 ## Not yet
 
