@@ -3,17 +3,20 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { config } from '../lib/config';
+import { resolveImageName } from '../lib/fixtures';
 import { assertState, readInfo, requireImp, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { REPO_ROOT, runCommand } from '../lib/instance';
+import { REPO_ROOT, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
 const prefix = setupSuite('tailscale');
+const TINY = resolveImageName('e2e-tiny');
 const name = `${prefix}a`;
 const NOT_READY = 'tailscale needs TAILSCALE_AUTHKEY (env or .env) and this machine on the tailnet';
 
 const PeerSchema = z.object({
+  DNSName: z.string().default(''),
   TailscaleIPs: z.array(z.string()).default([]),
   Online: z.boolean().default(false),
 });
@@ -48,8 +51,12 @@ async function readLocalStatus(): Promise<z.infer<typeof TailscaleStatusSchema> 
   }
 }
 
-async function readTailnetBody(url: string): Promise<string> {
-  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+async function readTailnetBody(url: string, host?: string): Promise<string> {
+  const response = await fetch(url, {
+    ...(host !== undefined && { headers: { host } }),
+    signal: AbortSignal.timeout(30_000),
+  });
+
   const body = await response.text();
 
   expect(response.ok).toBeTrue();
@@ -94,33 +101,56 @@ test.skipIf(!ready && !config.acceptance)(
     const status = await readLocalStatus();
 
     const peers = Object.values(status?.Peer ?? {});
+    const node = peers.find((peer) => peer.Online && peer.TailscaleIPs.includes(ip));
 
-    expect(peers.some((peer) => peer.Online && peer.TailscaleIPs.includes(ip))).toBeTrue();
+    expect(node).toBeDefined();
+
+    // the host container runs its own tailscaled and still needs public DNS
+    const dns = await runInContainer(['getent', 'hosts', 'pkgs.tailscale.com']);
+
+    expect(dns.exitCode).toBe(0);
 
     console.log(`    tailnet host ${String(info.tailscale.hostname)} at ${ip}`);
 
-    await createImp(name, '--image', 'e2e-tiny', '--memory', '512');
+    await createImp(name, '--image', TINY, '--memory', '512');
     await holdImp(name);
 
     const row = await requireImp(name);
     const urls = await runImp('url', name);
 
     const url = urls.split('\n')[1] ?? '';
-    const byIp = `http://${ip}:${String(row.port)}/`;
 
     expect(url).not.toBe('');
-
-    await waitFor(`${byIp} over the tailnet`, async () => {
-      const body = await readTailnetBody(byIp);
-
-      expect(body).toBe('e2e-tiny-ok');
-    });
 
     await waitFor(`${url} over the tailnet`, async () => {
       const body = await readTailnetBody(url);
 
       expect(body).toBe('e2e-tiny-ok');
     });
+
+    // every name a member can use for the node: IP, MagicDNS FQDN, short name;
+    // on the imp's own port and on the proxy port with the imp's Host header
+    const fqdn = (node?.DNSName ?? '').replace(/\.$/, '');
+    const short = fqdn.split('.')[0] ?? '';
+
+    expect(fqdn).not.toBe('');
+
+    for (const host of [ip, fqdn, short]) {
+      const byPort = `http://${host}:${String(row.port)}/`;
+      const byProxy = `http://${host}:7080/`;
+
+      await waitFor(`${byPort} over the tailnet`, async () => {
+        const body = await readTailnetBody(byPort);
+
+        expect(body).toBe('e2e-tiny-ok');
+      });
+
+      await waitFor(`${byProxy} over the tailnet`, async () => {
+        const body = await readTailnetBody(byProxy, `${name}.imp.localhost`);
+
+        expect(body).toBe('e2e-tiny-ok');
+      });
+    }
 
     await runImp('hold', name, '0');
     await runImp('sleep', name);

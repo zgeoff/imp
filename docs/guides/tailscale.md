@@ -107,15 +107,15 @@ case. `scripts/dev.sh` also starts the host container with `--dns 1.1.1.1 --dns 
 
 ## Verify reachability
 
-`scripts/smoke-tailscale.sh` starts a throwaway host container, joins as `imp-smoke`, serves ports
-7080 and 20000 with `python3 -m http.server`, and fetches both by IP, FQDN and short name from each
-member device it finds:
+The `tailscale` suite of the end-to-end harness checks the tailnet from this machine, which must be
+a member (`tailscale status` reports `Running`):
 
-- `local`: the `tailscale` CLI on this machine, if it is `Running` and untagged. On this WSL box the
-  WSL distro is its own member node (`home-wsl`), so plain `curl` to `100.x` goes over the tailnet.
-- `windows`: `/mnt/c/Program Files/Tailscale/tailscale.exe` plus `curl.exe` through WSL interop
-  (node `home`, a member).
+```sh
+scripts/test-e2e.sh --only tailscale
+```
 
-It then runs `tailscale-down.sh` and checks that the node is gone from the member's peer list. The
-key comes from `TAILSCALE_AUTHKEY` or `.env` and reaches the container only through
-`docker exec -e TAILSCALE_AUTHKEY` (no value in argv, not in `docker inspect`).
+It waits for impd's node to come up, checks DNS inside the host container, then fetches an imp by
+the node's IP, MagicDNS name and short name, on the imp's own port and on the proxy port. Last, it
+sleeps the imp and checks that a tailnet request wakes it. Without `TAILSCALE_AUTHKEY` the suite
+skips, except in the `acceptance` set, where it fails. `scripts/test-e2e.sh --clean` logs the node
+out with `tailscale-down.sh` before it wipes the instance.
