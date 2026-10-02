@@ -10,6 +10,7 @@
       "extra-files": [
         { "type": "json", "path": "packages/api/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/cli/package.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "packages/client/package.json", "jsonpath": "$.version" },
         { "type": "json", "path": "packages/daemon/package.json", "jsonpath": "$.version" }
       ]
     }
