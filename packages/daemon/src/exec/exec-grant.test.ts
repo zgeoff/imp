@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { buildRamBudgetError } from '../api-errors';
 import { buildTestCaller } from '../auth/test-callers';
 import { buildGrantedBackend } from './exec-grant';
 import type { ExecBackend } from './exec-session';
@@ -184,4 +185,39 @@ test('a tool needs manage: an exec token is refused, a manage token passes', asy
 
   expect(rejection).toMatchObject({ code: 'FORBIDDEN' });
   expect(ctx.opened).toEqual(['a', 'b']);
+});
+
+test('a refused boot over the socket names only the imps the caller may read', async () => {
+  const backend: ExecBackend = {
+    openExec: () =>
+      Promise.reject(
+        buildRamBudgetError({
+          budgetMib: 800,
+          usedMib: 600,
+          requestedMib: 300,
+          protected: [
+            { name: 'dev-b', ramMib: 300, leased: true, busy: false },
+            { name: 'prod', ramMib: 300, leased: false, busy: true },
+          ],
+        }),
+      ),
+    openAttach: () => Promise.reject(new Error('unused')),
+    recordActivity: () => Promise.resolve(),
+  };
+
+  const caller = buildTestCaller({ scope: 'exec', imps: ['dev-*'] });
+  const granted = buildGrantedBackend(backend, { caller, name: null });
+
+  const refusal = await granted
+    .openExec('dev-a', { argv: ['true'], tty: false })
+    .catch((error: unknown) => error);
+
+  expect(refusal).toMatchObject({
+    code: 'RAM_BUDGET_EXCEEDED',
+    data: {
+      neededMib: 100,
+      protected: [{ name: 'dev-b', ramMib: 300, leased: true, busy: false }],
+      protectedHidden: 1,
+    },
+  });
 });
