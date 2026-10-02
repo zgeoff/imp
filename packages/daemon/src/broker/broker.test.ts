@@ -49,14 +49,24 @@ async function setupBroker(options: { readonly tunnelTo?: string } = {}) {
     fetch: async (request) => {
       const body = await request.arrayBuffer();
 
+      const path = new URL(request.url).pathname;
+
       seen.push({
         method: request.method,
-        path: new URL(request.url).pathname,
+        path,
         authorization: request.headers.get('authorization'),
         bodyBytes: body.byteLength,
       });
 
-      return new Response('from upstream');
+      const statuses: Readonly<Record<string, ResponseInit>> = {
+        '/none': { status: 204 },
+        '/same': { status: 304 },
+        '/moved': { status: 302, headers: { location: 'https://objects.example.com/x' } },
+      };
+
+      const init = statuses[path];
+
+      return init === undefined ? new Response('from upstream') : new Response(null, init);
     },
   });
 
@@ -240,4 +250,30 @@ test('a revoke stops the credential at once', async () => {
 
   expect(after.code).not.toBe(0);
   expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
+});
+
+test('bodiless answers and redirects pass through as they are', async () => {
+  await using ctx = await setupBroker();
+
+  await createGithubGrant(ctx.broker);
+
+  for (const [path, code] of [
+    ['/none', '204'],
+    ['/same', '304'],
+    ['/moved', '302'],
+  ] as const) {
+    const result = await ctx.runCurl(`https://api.github.com${path}`, [
+      '-o',
+      '/dev/null',
+      '-w',
+      '%{http_code} %{redirect_url}',
+    ]);
+
+    const location = path === '/moved' ? 'https://objects.example.com/x' : '';
+
+    expect({ path, stdout: result.stdout.trim() }).toEqual({
+      path,
+      stdout: `${code} ${location}`.trim(),
+    });
+  }
 });
