@@ -58,6 +58,9 @@ export const SUITES: readonly Suite[] = [
   // reboots the instance with the jailer off, then on again
   { name: 'jail', prefix: 'e2e-jail-', images: ['e2e-bare'] },
 
+  // skips unless KSM runs on this host, as CI turns it on; reboots the instance
+  { name: 'ksm', prefix: 'e2e-ksm-', images: ['e2e-tiny'] },
+
   // last: it reboots the instance with backups on, then off again
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
@@ -88,6 +91,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'boot-templates',
     'inner',
     'jail',
+    'ksm',
   ],
 };
 

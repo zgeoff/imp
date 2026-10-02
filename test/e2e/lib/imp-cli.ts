@@ -50,6 +50,10 @@ const SystemInfoSchema = z.object({
   impCount: z.number(),
   storage: z.object({ backend: z.enum(['xfs', 'zfs']) }),
   cpu: z.object({ hostCpus: z.number(), limitsEnforced: z.boolean() }).optional(),
+  ksm: z
+    .object({ sharedMib: z.number(), headroomMib: z.number(), unmergeable: z.number() })
+    .nullable()
+    .optional(),
   tailscale: z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),
