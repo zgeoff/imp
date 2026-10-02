@@ -45,7 +45,7 @@ type Supervisor struct {
 	runner proc.Runner
 	// fsys holds services.d and the logs: the user's files
 	fsys   fsroot.FS
-	image  imagecfg.Config
+	image  *imagecfg.Live
 	dir    string
 	logDir string
 
@@ -85,7 +85,7 @@ type service struct {
 
 // New runs services through runner, reading their files and writing their
 // logs in fsys.
-func New(runner proc.Runner, fsys fsroot.FS, image imagecfg.Config) *Supervisor {
+func New(runner proc.Runner, fsys fsroot.FS, image *imagecfg.Live) *Supervisor {
 	return &Supervisor{runner: runner, fsys: fsys, image: image, dir: Dir, logDir: LogDir,
 		services: make(map[string]*service), quit: make(chan struct{}),
 		truncs: make(map[string]uint64)}
@@ -96,6 +96,36 @@ func New(runner proc.Runner, fsys fsroot.FS, image imagecfg.Config) *Supervisor 
 func (s *Supervisor) Load() error {
 	safe.Go("services: log rotator", func() { s.rotateLogs(s.quit) }, nil)
 	return s.startAll()
+}
+
+// suspendWait bounds Suspend's wait for one supervisor loop.
+const suspendWait = 5 * time.Second
+
+// Suspend ends every service's supervision without a signal, and waits for
+// the loops to finish: for a container that died, which took the services
+// with it. A loop left in its backoff would otherwise start its service in
+// the next container, beside the one Reload starts.
+func (s *Supervisor) Suspend() {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	svcs := s.services
+	s.services = make(map[string]*service)
+	for _, svc := range svcs {
+		if !isClosed(svc.stop) {
+			close(svc.stop)
+		}
+	}
+	s.mu.Unlock()
+	deadline := time.After(suspendWait)
+	for _, svc := range svcs {
+		select {
+		case <-svc.done:
+		case <-deadline:
+			log.Printf("services: %s: its supervisor did not stop in %s", svc.def.Name, suspendWait)
+			return
+		}
+	}
 }
 
 // Reload drops every service and starts the directory's again, as a boot
@@ -275,7 +305,7 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 	}
 	user := svc.def.User
 	if user == "" {
-		user = s.image.User
+		user = s.image.Get().User
 	}
 	cwd := svc.def.Cwd
 	if cwd == "" {
@@ -283,7 +313,7 @@ func (s *Supervisor) once(svc *service) (reaper.Status, error) {
 	}
 	p, err := s.runner.Start(proc.Spec{
 		Argv:    svc.def.Argv,
-		Env:     proc.Merge(s.image.Env, svc.def.Env),
+		Env:     proc.Merge(s.image.Get().Env, svc.def.Env),
 		Dir:     cwd,
 		User:    user,
 		SetHome: true,
@@ -352,14 +382,14 @@ func (s *Supervisor) List() []proto.ServiceStatus {
 
 // ImageUser is the user a service without one runs as.
 func (s *Supervisor) ImageUser() string {
-	return s.image.User
+	return s.image.Get().User
 }
 
 // runsAsRoot resolves the user a service runs as; one the guest cannot
 // resolve counts as root, so impd asks for the most it could be.
 func (s *Supervisor) runsAsRoot(user string) bool {
 	if user == "" {
-		user = s.image.User
+		user = s.image.Get().User
 	}
 	cred, _, err := proc.LookupUserIn(s.fsys, user)
 	return err != nil || cred == nil || cred.Uid == 0

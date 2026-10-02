@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -134,7 +135,7 @@ func TestAListenRunsAsTheUser(t *testing.T) {
 	if err := os.WriteFile(helper, binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, "dev")
+	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, imagecfg.NewLive(imagecfg.Config{User: "dev"}))
 	d.cred = &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{}}
 
 	b, err := d.Listen("unix", filepath.Join(open, "app.sock"))

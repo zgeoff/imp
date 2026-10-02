@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"sync/atomic"
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proc"
@@ -25,6 +26,19 @@ var defaultEnv = []string{
 	"HOME=/root",
 	"TERM=xterm-256color",
 }
+
+// Live is the config the agent last read, for readers on any goroutine. The
+// agent reads it again each time the inner container starts.
+type Live struct{ p atomic.Pointer[Config] }
+
+func NewLive(c Config) *Live {
+	l := &Live{}
+	l.Set(c)
+	return l
+}
+
+func (l *Live) Get() Config  { return *l.p.Load() }
+func (l *Live) Set(c Config) { l.p.Store(&c) }
 
 // Load reads Path in fsys, the user's root. A missing file gives the
 // defaults; image env entries override the defaults key by key.

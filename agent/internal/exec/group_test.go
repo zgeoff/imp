@@ -272,7 +272,7 @@ func TestCgroupSpawnFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), tree)
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), tree)
 	h := startExec(t, m, proto.Request{Argv: []string{"echo", "ran"}, KillGraceMs: 100})
 	h.started(t)
 	out, exit := h.wait(t, 5*time.Second)
@@ -296,7 +296,7 @@ func TestCgroupKillsEscapees(t *testing.T) {
 	t.Cleanup(func() { os.Remove("/sys/fs/cgroup/imp-exec-test") })
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	child := fmt.Sprintf(`trap "" TERM; echo $$ > %s; exec sleep 300`, pidFile)
-	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), tree)
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), tree)
 	h := startExec(t, m, proto.Request{
 		Argv:        []string{"sh", "-c", fmt.Sprintf("setsid sh -c '%s' >/dev/null 2>&1 & exec sleep 300", child)},
 		KillGraceMs: 300,

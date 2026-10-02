@@ -29,7 +29,7 @@ func TestMain(m *testing.M) {
 }
 
 func newTestManager(t *testing.T) *Manager {
-	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil))
+	m := NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil))
 	t.Cleanup(func() {
 		for _, s := range m.List() {
 			m.Kill(s.Name)

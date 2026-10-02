@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 }
 
 func newManager() *Manager {
-	return NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}, nil), nil)
+	return NewManager(launch.New(&proc.Direct{Reaper: testReaper}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil), nil)
 }
 
 // host is the host side of one exec connection.

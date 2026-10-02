@@ -24,7 +24,7 @@ func TestMain(m *testing.M) {
 }
 
 func newSupervisor(t *testing.T) *Supervisor {
-	s := New(&proc.Direct{Reaper: testReaper}, fsroot.Host, imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}})
+	s := New(&proc.Direct{Reaper: testReaper}, fsroot.Host, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}))
 	s.logDir = t.TempDir()
 	return s
 }

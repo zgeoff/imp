@@ -23,6 +23,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/fsroot"
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/inner"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -57,8 +58,8 @@ type Binder interface {
 type Manager struct {
 	agentRoot, forwardRoot string
 
-	// user owns the sockets: the image's user, as exec runs commands
-	user   string
+	// the image's user owns the sockets, as exec runs commands
+	image  *imagecfg.Live
 	binder Binder
 	// fsys is where the agent's own sockets go: the inner container's root
 	fsys fsroot.FS
@@ -67,11 +68,11 @@ type Manager struct {
 	listeners map[string]*listener
 }
 
-func NewManager(agentRoot, forwardRoot, user string, binder Binder, fsys fsroot.FS) *Manager {
+func NewManager(agentRoot, forwardRoot string, image *imagecfg.Live, binder Binder, fsys fsroot.FS) *Manager {
 	return &Manager{
 		agentRoot:   agentRoot,
 		forwardRoot: forwardRoot,
-		user:        user,
+		image:       image,
 		binder:      binder,
 		fsys:        fsys,
 		listeners:   map[string]*listener{},
@@ -204,7 +205,7 @@ func (m *Manager) Accept(req proto.Request, r *proto.Reader, w *proto.Writer) er
 }
 
 func (m *Manager) lookupUser() (uid, gid uint32, err error) {
-	cred, _, err := proc.LookupUserIn(m.fsys, m.user)
+	cred, _, err := proc.LookupUserIn(m.fsys, m.image.Get().User)
 	if err != nil {
 		return 0, 0, err
 	}

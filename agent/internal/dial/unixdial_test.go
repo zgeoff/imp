@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
@@ -67,7 +68,7 @@ func runTestHelper(address string) {
 // testDialer dials unix sockets as user; "" is root, which connects in the
 // agent itself
 func testDialer(user string) *Dialer {
-	return NewDialer(&proc.Direct{Reaper: testReaper, Agent: os.Args[0]}, user)
+	return NewDialer(&proc.Direct{Reaper: testReaper, Agent: os.Args[0]}, imagecfg.NewLive(imagecfg.Config{User: user}))
 }
 
 // listenUnix serves an echo on a socket in dir and returns its absolute
@@ -285,7 +286,7 @@ func TestAUnixDialRunsAsTheUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, "dev")
+	d := NewDialer(&proc.Direct{Reaper: testReaper, Agent: helper}, imagecfg.NewLive(imagecfg.Config{User: "dev"}))
 	d.cred = &syscall.Credential{Uid: uid, Gid: gid, Groups: []uint32{docker}}
 
 	for _, ok := range []*peerListener{own, group} {

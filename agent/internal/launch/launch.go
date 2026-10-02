@@ -22,14 +22,14 @@ const (
 
 type Launcher struct {
 	runner proc.Runner
-	image  imagecfg.Config
+	image  *imagecfg.Live
 	// ptys opens a pty in the world the runner starts processes in
 	ptys func() (master, slave *os.File, err error)
 }
 
 // New starts processes through runner, on ptys that openPTY makes; nil
 // opens them in this process's own /dev.
-func New(runner proc.Runner, image imagecfg.Config, openPTY func() (master, slave *os.File, err error)) *Launcher {
+func New(runner proc.Runner, image *imagecfg.Live, openPTY func() (master, slave *os.File, err error)) *Launcher {
 	if openPTY == nil {
 		openPTY = pty.Open
 	}
@@ -41,17 +41,18 @@ func (l *Launcher) Spec(req proto.Request) (proc.Spec, error) {
 	if len(req.Argv) == 0 {
 		return proc.Spec{}, errors.New("argv is empty")
 	}
+	image := l.image.Get()
 	user := req.User
 	if user == "" {
-		user = l.image.User
+		user = image.User
 	}
 	// HOME is the user's, and the cwd falls back to the image workdir and
 	// HOME, where the process starts.
 	return proc.Spec{
 		Argv:    req.Argv,
-		Env:     proc.Merge(l.image.Env, req.Env),
+		Env:     proc.Merge(image.Env, req.Env),
 		Dir:     req.Cwd,
-		Workdir: l.image.Workdir,
+		Workdir: image.Workdir,
 		User:    user,
 		SetHome: true,
 	}, nil
