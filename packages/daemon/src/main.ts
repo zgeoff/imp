@@ -18,6 +18,8 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
+import { createStorageBackend } from './storage/create-storage-backend';
+import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
@@ -60,7 +62,14 @@ async function main(): Promise<void> {
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
   const token = loadOrCreateToken(config.dataDir);
-  const images = createImageService({ config, db });
+  const storage = createStorageBackend(config);
+
+  // before any VM is re-adopted or woken: on ZFS the disks are mounted here
+  const live = await readLiveStorage(db);
+
+  await storage.start(live);
+
+  const images = createImageService({ config, db, storage });
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
 
@@ -70,6 +79,7 @@ async function main(): Promise<void> {
     images,
     taps: createTapDevices(),
     vms: createVmRunner(),
+    storage,
     identity: readHostIdentity(config.firecrackerBin, systemFiles),
     log: printLog,
     onImpsChanged: () => {
@@ -88,13 +98,18 @@ async function main(): Promise<void> {
   await imps.reconcileImps();
 
   // before anything can boot or sleep an imp, so the set of drives in use holds
-  const removed = await removeUnusedDrives(db, config.dataDir, systemFiles.systemDrivePath);
+  const removed = await removeUnusedDrives(
+    db,
+    config.dataDir,
+    storage.resolveImpPaths,
+    systemFiles.systemDrivePath,
+  );
 
   for (const name of removed) {
     printLog(`impd: removed system drive ${name}: no imp uses it`);
   }
 
-  const checkpoints = createCheckpointService({ config, db, imps });
+  const checkpoints = createCheckpointService({ config, db, imps, storage });
   const state = { ready: false };
 
   const api = buildApp({
@@ -107,6 +122,7 @@ async function main(): Promise<void> {
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
+    storage,
     readTailscale,
     isReady: () => state.ready,
     now: Date.now,
@@ -182,6 +198,9 @@ async function main(): Promise<void> {
 
       printLog(`impd: every imp asleep in ${String(sleptMs)}ms`);
     }
+
+    // a reclaim pass left running would race the next impd's start
+    await runStopStep('storage', readStepMs(), () => storage.stop());
 
     // a sleep still running writes its record later: closing the database
     // under it would fail that write. The next start finds its snapshot.

@@ -114,6 +114,7 @@ Lefthook installs the hooks with `bun install`.
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage. |
 | `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                |
 | `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                       |
+| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file.                     |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 

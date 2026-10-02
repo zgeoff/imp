@@ -61,6 +61,7 @@ async function setupUpgradeTest() {
     const pruned = await removeUnusedDrives(
       ctx.db,
       ctx.dataDir,
+      ctx.storage.resolveImpPaths,
       ctx.readIdentity().systemDrivePath,
     );
 

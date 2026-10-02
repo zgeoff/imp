@@ -24,6 +24,8 @@
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
 #      IMP_IDLE_CPU_PERCENT, IMP_RAM_BUDGET_MIB, IMP_BOOT_RESERVE_PERCENT,
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
+#      IMP_STORAGE_BACKEND=zfs with IMP_ZFS_ROOT runs on a ZFS dataset instead
+#      of the XFS file (scripts/zfs-host-test.sh; the host needs the module).
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -35,7 +37,8 @@ api=http://localhost:$((7070 + offset))
 
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
-  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME)
+  IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
+  IMP_STORAGE_BACKEND IMP_ZFS_ROOT)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {

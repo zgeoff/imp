@@ -30,6 +30,10 @@ export const infoCommand = defineCommand({
           `${info.guestKernel.version ?? 'unknown'} (sha256 ${info.guestKernel.sha256.slice(0, 12)})`,
         ],
         ['agent drive', `sha256 ${info.systemDrive.sha256.slice(0, 12)}`],
+        [
+          'storage',
+          `${info.storage.backend}, ${formatGib(info.storage.usedBytes)} used, ${formatGib(info.storage.availableBytes)} free`,
+        ],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
       ];
 
@@ -38,3 +42,7 @@ export const infoCommand = defineCommand({
       }
     }),
 });
+
+function formatGib(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}

@@ -12,6 +12,7 @@ import { listCheckpoints } from '../db/checkpoints';
 import { findImpByName } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { buildImpPaths } from '../storage/data-layout';
+import { CheckpointIdTakenError } from '../storage/storage-backend';
 import {
   buildCheckpointId,
   createCheckpointService,
@@ -41,8 +42,8 @@ async function setupTest() {
     config: harness.config,
     db: harness.db,
     imps: harness.imps,
+    storage: harness.storage,
     log: () => {},
-    cloneDisk: createClone,
     freezer: {
       freeze: () => {
         events.push('freeze');
@@ -351,4 +352,36 @@ test('a restore whose clone fails leaves a running imp running on its own disk',
   expect(record).toMatchObject({ state: 'running', pid: 1001 });
   expect(ctx.fake.stops).toEqual([]);
   expect(disk).toBe('changed');
+});
+
+test('it retries with a new id when storage holds the id already', async () => {
+  await using harness = await setupImpTest();
+
+  await harness.createTestImage('base');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const tried: string[] = [];
+
+  const checkpoints = createCheckpointService({
+    config: harness.config,
+    db: harness.db,
+    imps: harness.imps,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+    storage: {
+      ...harness.storage,
+      createCheckpoint: (impId, checkpointId) => {
+        tried.push(checkpointId);
+
+        return tried.length === 1
+          ? Promise.reject(new CheckpointIdTakenError(checkpointId))
+          : harness.storage.createCheckpoint(impId, checkpointId);
+      },
+    },
+  });
+
+  const checkpoint = await checkpoints.createCheckpoint('dev', undefined);
+
+  expect(tried).toHaveLength(2);
+  expect(checkpoint.id).toBe(tried[1] ?? '');
 });

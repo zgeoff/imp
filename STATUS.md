@@ -83,6 +83,9 @@ From the milestone work:
   boots every sleeping imp cold ([#10](https://github.com/zgeoff/imp/issues/10)).
 - A wake right after another wake or exec (under about 1 s apart) takes 650–850 ms instead of about
   80 ms. Normal idle timeouts never hit it ([#33](https://github.com/zgeoff/imp/issues/33)).
+- The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
+  fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
+  restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
