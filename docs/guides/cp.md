@@ -36,8 +36,10 @@ error.
 
 The guest side is `imp-agent tar` on the system drive, so every image has it. impd runs it as root
 (an exec `tool`, [daemon](../architecture/daemon.md#exec-the-exec-bridge)), so a copy reaches paths
-the image's USER cannot. It needs the agent from protocol `0.7.0`; an older imp answers with
-`AGENT_OUTDATED`: stop and start it to update it ([operations](./operations.md#upgrade)).
+the image's USER cannot. For that reason a copy, in either direction, needs a token with `manage`
+scope on the imp ([tokens](./tokens.md#scopes)); an `exec` token gets `FORBIDDEN`. It needs the
+agent from protocol `0.7.0`; an older imp answers with `AGENT_OUTDATED`: stop and start it to update
+it ([operations](./operations.md#upgrade)).
 
 The archive is a tar stream over the exec. Its first entry carries a PAX record, `IMP.total`, with
 the bytes of every file, so a copy out of the imp shows a percent. impd acks the upload's bytes once
