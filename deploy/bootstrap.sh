@@ -1469,9 +1469,12 @@ remove_host_network() {
   docker network rm "$HOST_NETWORK" >/dev/null
 }
 
+# reset-failed clears systemd's start-rate counter: one run restarts imp-host
+# twice, so two runs close together would hit the limit and fail the start.
 reload_unit() {
   systemctl daemon-reload
   systemctl enable -q "$1"
+  systemctl reset-failed "$1" 2>/dev/null || true
   systemctl restart "$1"
 }
 
