@@ -177,6 +177,18 @@ async function readSleeperPid(run: (script: string) => Promise<string>): Promise
   return pid.split('\n')[0] ?? '';
 }
 
+// the IPv4 addresses a box slot's set lets in, on A unless `target` says
+async function readAllowSet(slot: number, target?: DevInstance): Promise<string[]> {
+  const listed = await runInContainer(
+    ['nft', 'list', 'set', 'inet', 'imp_egress', `allow${String(slot)}`],
+    target,
+  );
+
+  const elements = /elements = \{(?<list>[^\}]*)\}/v.exec(listed.stdout)?.groups?.['list'] ?? '';
+
+  return [...elements.matchAll(/\d+\.\d+\.\d+\.\d+/gv)].map((match) => match[0]);
+}
+
 // sleeps the imp on A and moves it warm; the CLI's line names it
 async function runWarmMove(name: string): Promise<void> {
   await runImp('hold', name, '0');
@@ -206,7 +218,10 @@ test('two imps for the warm moves boot on A in slots of their own', async () => 
     '--policy',
     'box',
     '--allow',
-    'example.com,api.github.com,github.com',
+
+    // B resolves only the exact names at create: a wildcard's addresses on
+    // B can only have come from A's lookups
+    'example.com,api.github.com,github.com,*.wikipedia.org',
   );
 
   const slots = await Promise.all([requireImp(open), requireImp(box)]);
@@ -250,29 +265,17 @@ test('a sleeping box imp keeps its list, and the target’s broker answers right
 
   const pid = await readSleeperPid((script) => runImp('exec', box, '--', 'sh', '-c', script));
 
-  // a lookup on A, whose answer the move carries into B's set for the slot
-  await runImp(
-    'exec',
-    box,
-    '--',
-    'curl',
-    '-sS',
-    '-o',
-    '/dev/null',
-    '--max-time',
-    '10',
-    'http://example.com/',
-  );
+  // a lookup on A under the wildcard, whose answer only the move can carry
+  // into B's set for the slot
+  await runImp('exec', box, '--', 'getent', 'hosts', 'en.wikipedia.org');
+
+  const onA = await requireImp(box);
+  const before = await readAllowSet(onA.slot);
 
   await runWarmMove(box);
 
   // read before the guest can look anything up again on B
-  const moved = await requireImp(box, hosts.b);
-
-  const held = await runInContainer(
-    ['nft', 'list', 'set', 'inet', 'imp_egress', `allow${String(moved.slot)}`],
-    hosts.b,
-  );
+  const held = await readAllowSet(onA.slot, hosts.b);
 
   // the broker call first: the target installs its CA at the first wake
   const body = await runShellOnB(box, 'curl -sS --fail https://api.github.com/user');
@@ -289,7 +292,8 @@ test('a sleeping box imp keeps its list, and the target’s broker answers right
     'curl -s -o /dev/null -w "%{http_code}" --max-time 10 http://example.org/ || true',
   );
 
-  expect(held.stdout).toContain('elements = {');
+  expect(before.length).toBeGreaterThan(0);
+  expect(before.filter((address) => !held.includes(address))).toEqual([]);
   expect(JSON.parse(body)).toEqual({ authorized: true });
   expect(upstream.seen.at(-1)?.authorization).toBe(`Bearer ${tokens.b}`);
   expect(mark).toBe('warm-ok');
