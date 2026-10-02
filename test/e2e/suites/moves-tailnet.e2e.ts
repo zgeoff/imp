@@ -34,7 +34,7 @@ const NO_PEER_RULE =
   'add { "action": "accept", "src": ["tag:imp"], "dst": ["tag:imp:7070"] } to the tailnet policy';
 
 const NAMES_BLOCKED =
-  'the tailnet name handover needs the Tailscale Services OAuth client and this machine on the tailnet; set IMP_E2E_TAILNET_NAMES=1 once they exist';
+  'the tailnet name handover waits for the Tailscale Services OAuth client of #30 (op://cloud/imp-tailscale-oauth); set IMP_E2E_TAILNET_NAMES=1 once it exists';
 
 const InfoSchema = z.object({
   tailscale: z.object({ state: z.string().nullable(), ip: z.string().nullable() }),
