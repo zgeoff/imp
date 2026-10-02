@@ -334,7 +334,10 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
         memFile: join(snapshotDir, 'mem'),
       });
     } finally {
-      await deps.cgroups.remove(BUILD_JAIL_ID);
+      // logged, never thrown: the build's own error is the one that counts
+      await deps.cgroups.remove(BUILD_JAIL_ID).catch((error: unknown) => {
+        deps.log(`impd: cgroup ${BUILD_JAIL_ID}: ${readErrorMessage(error)}`);
+      });
     }
 
     // zero pages become holes, before any VM maps the file; never after
