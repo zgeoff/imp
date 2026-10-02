@@ -73,6 +73,8 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         ws.send(event.data);
       });
 
+      // no close can come earlier: Bun runs `open` inside server.upgrade,
+      // in the same task as the upstream's open event
       upstream.addEventListener('close', (event) => {
         ws.close(toSendableCode(event.code), event.reason);
       });
