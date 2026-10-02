@@ -1,5 +1,5 @@
+import { isImpAllowed } from '@imp/api';
 import type { ApiActor, Identity, Scope } from '@imp/api';
-import { isImpAllowed } from './imp-patterns';
 import { hasScope } from './scopes';
 
 // Who a request runs as (docs/guides/tokens.md): a token, the dashboard
