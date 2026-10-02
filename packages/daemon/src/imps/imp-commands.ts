@@ -45,10 +45,11 @@ interface CreateImpInput {
   readonly isIdentityResetPending?: boolean;
 
   // a move keeps the imp's id, and stages it marked `receiving`; a warm
-  // move keeps its slot too
+  // move keeps its slot too, and a grow its guest still owes
   readonly id?: string;
   readonly moveState?: 'receiving';
   readonly slot?: number;
+  readonly isDiskGrowPending?: boolean;
 }
 
 interface DestroyOptions {
@@ -142,6 +143,12 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           // the slot's firewall, fresh, before anything can bring its tap up
           await context.egress.addSlot(imp.slot);
 
+          // a warm move's guest knows its gateway by the slot's MAC: a tap a
+          // failed destroy left in the slot may have another, so it goes
+          if (input.slot !== undefined) {
+            await context.taps.removeTap(context.findAddress(imp.slot).tap);
+          }
+
           mkdirSync(paths.runDir, { recursive: true });
         } catch (error) {
           await ops.writeFailure(imp, error);
@@ -176,7 +183,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const sized = await updateImpDisk(context.db, imp.id, {
             diskBytes: sizedBytes,
-            isGrowPending: false,
+            isGrowPending: input.isDiskGrowPending === true,
           });
 
           timing.sizeMs = Math.round(performance.now() - sizeStarted);

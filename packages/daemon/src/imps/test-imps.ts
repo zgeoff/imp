@@ -143,6 +143,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const fake = buildFakeVmm();
   const taps: string[] = [];
+  const removedTaps: string[] = [];
   const logs: string[] = [];
 
   // disks whose filesystem the host grew; the test disks hold no ext4
@@ -271,7 +272,11 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
           return Promise.resolve();
         },
-        removeTap: () => Promise.resolve(),
+        removeTap: (tap) => {
+          removedTaps.push(tap);
+
+          return Promise.resolve();
+        },
       },
       log: printTestLog,
       storage,
@@ -317,6 +322,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     images,
     fake,
     taps,
+    removedTaps,
     logs,
     log: printTestLog,
     filesystemGrows,
@@ -392,7 +398,10 @@ export function buildTestApp(
 
   // a move test's fetch to the other host, and its hooks
   moveOptions: Partial<
-    Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost'>
+    Pick<
+      MoveServiceDeps,
+      'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost' | 'readTapMac'
+    >
   > = {},
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };

@@ -34,6 +34,10 @@ const ImpSchema = z
 
     // a template copy whose first boot has not reset its identity yet
     isIdentityResetPending: z.boolean(),
+
+    // a disk grown while the imp slept, whose guest grows at the next wake;
+    // left out by an older source
+    isDiskGrowPending: z.boolean().default(false),
   })
   .readonly();
 
@@ -56,12 +60,15 @@ const HeldAnswerSchema = z
   })
   .readonly();
 
+// a system drive's name: its sha256, which also names its path
+const DriveSchema = z.string().regex(/^[\da-f]{64}$/v);
+
 const WarmSchema = z
   .object({
     move: WarmMoveSchema,
 
     // the snapshot's record, which the target writes last, and vm.json
-    meta: SnapshotMetaSchema,
+    meta: SnapshotMetaSchema.extend({ systemDrive: DriveSchema }),
     vm: VmIdentitySchema.nullable(),
 
     // whether the system drive the snapshot reopens follows the disk
@@ -109,7 +116,7 @@ export type MoveHeader = z.infer<typeof MoveHeaderSchema>;
 // names the system drive its snapshot reopens
 export const MoveOfferSchema = z.object({
   imageDigest: z.string(),
-  systemDrive: z.string().optional(),
+  systemDrive: DriveSchema.optional(),
 });
 
 export const MoveOfferReplySchema = z.object({

@@ -1,18 +1,28 @@
 import { expect, test } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
-import { findImpByName } from '../db/imps';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
-import { MOVE_PATHS } from './move-header';
+import { VmIdentitySchema } from '../sleep/vm-identity';
+import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { FetchHook } from './test-moves';
 
+interface WarmTestOptions {
+  readonly isShared?: boolean;
+  readonly hook?: FetchHook;
+  readonly partBytes?: number;
+  readonly readTapMac?: (tap: string) => string | null;
+}
+
 // Two impds and a sleeping `dev` in slot 1 of the source. `isShared`: both
 // report the target's facts (setupMoveHosts).
-async function setupWarmTest(options: Readonly<{ isShared?: boolean; hook?: FetchHook }> = {}) {
+async function setupWarmTest(options: WarmTestOptions = {}) {
   const hosts = await setupMoveHosts({
     isShared: options.isShared !== false,
     ...(options.hook !== undefined && { hook: options.hook }),
+    ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
+    ...(options.readTapMac !== undefined && { readTapMac: options.readTapMac }),
   });
 
   await createUbuntuImage(hosts.source);
@@ -25,11 +35,30 @@ async function setupWarmTest(options: Readonly<{ isShared?: boolean; hook?: Fetc
 
   await hosts.sourceApp.client.imps.sleep({ name: 'dev' });
 
+  // whether the target would let a new warm move keep dev's slot
+  const isTargetSlotFree = () => isSlotFree(hosts.target.db, created.slot, hosts.target.now());
+
   return {
     ...hosts,
     impId: created.id,
     slot: created.slot,
     runMove: () => hosts.runMove('dev'),
+    isTargetSlotFree,
+  };
+}
+
+// the commit's request fails `count` times, as a network that drops it
+function buildCommitDrop(count: number): FetchHook {
+  const lost = { commits: count };
+
+  return (request, forward) => {
+    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
+      lost.commits -= 1;
+
+      return Promise.reject(new Error('the network dropped the commit'));
+    }
+
+    return forward();
   };
 }
 
@@ -173,17 +202,186 @@ test("the first wake after a warm move installs the target's broker CA once", as
   expect(after).toBe(0);
 });
 
-test('a system drive the target lacks goes along, and one off its own path is refused', async () => {
-  await using ctx = await setupWarmTest();
+test('a system drive the target lacks goes along, and one whose sum is not its name is refused', async () => {
+  await using ctx = await setupWarmTest({
+    // in one process both hosts open one drive file: the target says it lacks it
+    hook: async (request, forward) => {
+      const response = await forward();
 
-  // the target lacks the drive; in one process the source's path is not the target's
-  rmSync(ctx.target.readIdentity().systemDrivePath, { force: true });
+      if (!request.url.endsWith(MOVE_PATHS.offer)) {
+        return response;
+      }
 
+      const body: unknown = await response.json();
+
+      const offer = MoveOfferReplySchema.parse(body);
+
+      return Response.json({ ...offer, needsSystemDrive: true });
+    },
+  });
+
+  // the test drive's bytes are not the data its name hashes
   const status = await ctx.runMove();
   const staged = await findImpByName(ctx.target.db, 'dev');
   const kept = await findImpByName(ctx.source.db, 'dev');
+  const isFree = await ctx.isTargetSlotFree();
+
+  expect(status.error).toContain('the system drive does not match its sha256');
+  expect(staged).toBeUndefined();
+  expect(isFree).toBe(true);
+  expect(kept).toMatchObject({ state: 'sleeping', moveState: null });
+});
+
+test("a snapshot that opens a drive off the target's own path is refused", async () => {
+  await using ctx = await setupWarmTest();
+
+  const vmIdentity = ctx.source.storage.resolveImpPaths(ctx.impId).vmIdentity;
+  const vm = VmIdentitySchema.parse(JSON.parse(readFileSync(vmIdentity, 'utf8')));
+
+  writeFileSync(vmIdentity, JSON.stringify({ ...vm, systemDrivePath: '/etc/shadow' }));
+
+  const status = await ctx.runMove();
+  const staged = await findImpByName(ctx.target.db, 'dev');
+  const isFree = await ctx.isTargetSlotFree();
 
   expect(status.error).toContain("the snapshot's drive is not at");
   expect(staged).toBeUndefined();
-  expect(kept).toMatchObject({ state: 'sleeping', moveState: null });
+  expect(isFree).toBe(true);
+});
+
+test('a warm move whose commit was lost commits warm on resume, with a reissued ticket', async () => {
+  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
+
+  const lost = await ctx.runMove();
+  const ticket = await ctx.targetApp.client.moves.reissue({ name: 'dev' });
+
+  const resumed = await ctx.sourceApp.client.moves.resume({
+    name: 'dev',
+    ticket: ticket.ticket,
+  });
+
+  const moved = await findImpByName(ctx.target.db, 'dev');
+  const woken = await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  expect(lost.error).toContain('dropped the commit');
+  expect(resumed.isDone).toBe(true);
+  expect(moved).toMatchObject({ slot: ctx.slot, state: 'sleeping', moveState: null });
+  expect(woken.state).toBe('running');
+  expect(ctx.target.fake.wakes).toHaveLength(1);
+});
+
+test('a source restart with the warm move verified commits it warm', async () => {
+  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
+
+  await ctx.runMove();
+  await ctx.sourceApp.moves.recover();
+
+  for (let tries = 0; tries < 500; tries += 1) {
+    if ((await findImpByName(ctx.source.db, 'dev')) === undefined) {
+      break;
+    }
+
+    await Bun.sleep(10);
+  }
+
+  const gone = await findImpByName(ctx.source.db, 'dev');
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  expect(gone).toBeUndefined();
+  expect(moved).toMatchObject({ state: 'sleeping', moveState: null });
+});
+
+test('an abort after the receipt leaves the imp asleep on the source, and frees the slot', async () => {
+  await using ctx = await setupWarmTest({ hook: buildCommitDrop(1) });
+
+  await ctx.runMove();
+  await ctx.sourceApp.client.moves.abort({ name: 'dev' });
+
+  const staged = await findImpByName(ctx.target.db, 'dev');
+  const isFree = await ctx.isTargetSlotFree();
+
+  const memoryDir = ctx.target.storage.resolveImpPaths(ctx.impId).snapshotDir;
+
+  const woken = await ctx.sourceApp.client.imps.wake({ name: 'dev' });
+
+  expect(staged).toBeUndefined();
+  expect(isFree).toBe(true);
+  expect(existsSync(memoryDir)).toBe(false);
+  expect(woken.state).toBe('running');
+});
+
+test('a warm stream cut short, with no abort, removes the memory and frees the slot', async () => {
+  const clock: { advance: (ms: number) => void } = { advance: () => {} };
+
+  await using ctx = await setupWarmTest({
+    partBytes: 4096,
+    hook: (request, forward) => {
+      // the source goes quiet past the gap, and its abort never arrives
+      if (request.url.endsWith(MOVE_PATHS.abort)) {
+        return Promise.reject(new Error('the source is gone'));
+      }
+
+      if (request.headers.get(MOVE_PART_HEADER) === '1') {
+        clock.advance(61_000);
+      }
+
+      return forward();
+    },
+  });
+
+  clock.advance = ctx.target.advance;
+
+  writeFileSync(ctx.source.storage.resolveImpPaths(ctx.impId).disk, 'x'.repeat(64 * 1024));
+
+  const status = await ctx.runMove();
+  const staged = await findImpByName(ctx.target.db, 'dev');
+  const isFree = await ctx.isTargetSlotFree();
+
+  const memoryDir = ctx.target.storage.resolveImpPaths(ctx.impId).snapshotDir;
+
+  // the target ended the stream on its own; the source still owes the abort
+  expect(status.error).toContain('did not confirm the abort');
+  expect(staged).toBeUndefined();
+  expect(isFree).toBe(true);
+  expect(existsSync(memoryDir)).toBe(false);
+});
+
+test('a pending disk grow goes along, and the first wake on the target grows the guest', async () => {
+  await using ctx = await setupWarmTest();
+
+  const imp = await findImpByName(ctx.source.db, 'dev');
+
+  await updateImpDisk(ctx.source.db, ctx.impId, {
+    diskBytes: imp?.diskBytes ?? 0,
+    isGrowPending: true,
+  });
+
+  await ctx.runMove();
+
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  const grown = await findImpByName(ctx.target.db, 'dev');
+
+  expect(moved?.isDiskGrowPending).toBe(true);
+  expect(grown?.isDiskGrowPending).toBe(false);
+});
+
+test("a tap with a MAC from before slot MACs refuses a warm move, and the target's slot tap goes", async () => {
+  await using refused = await setupWarmTest({ readTapMac: () => '02:aa:bb:cc:dd:ee' });
+
+  const facts = await refused.targetApp.client.moves.facts();
+
+  const rejection = await readRejection(
+    refused.sourceApp.client.moves.prepare({ name: 'dev', target: facts }),
+  );
+
+  await using ctx = await setupWarmTest();
+
+  await ctx.runMove();
+
+  expect(rejection).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(String(rejection)).toContain('has a MAC from before slot MACs');
+  expect(ctx.target.removedTaps).toContain(`imp${String(ctx.slot)}`);
 });

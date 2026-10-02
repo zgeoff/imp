@@ -23,6 +23,15 @@ interface TapOwner {
 
 type RunCommand = (argv: readonly string[]) => Promise<CommandResult>;
 
+// the MAC a tap has now, or null when there is no such tap
+export function readTapMac(tap: string): string | null {
+  try {
+    return readFileSync(`/sys/class/net/${tap}/address`, 'utf8').trim();
+  } catch {
+    return null;
+  }
+}
+
 // a tap's owner and group from sysfs, -1 for none; null when it is not there
 type ReadOwner = (tap: string) => TapOwner | null;
 

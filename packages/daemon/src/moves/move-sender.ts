@@ -2,6 +2,7 @@ import type { MovePlan, MoveStatus, WarmHost, WarmMove } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
+import type { Config } from '../config';
 import { listCheckpoints } from '../db/checkpoints';
 import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
@@ -9,6 +10,8 @@ import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
+import { deriveSlotAddress } from '../net/addressing';
+import { readTapMac } from '../net/tap-devices';
 import type { StreamedCommand } from '../process/run-stream';
 import { readErrorMessage } from '../read-error-message';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
@@ -59,6 +62,7 @@ interface PrepareOptions {
 }
 
 export interface MoveSenderDeps {
+  readonly config: Pick<Config, 'subnet'>;
   readonly db: ImpDatabase;
   readonly dataDir: string;
   readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource' | 'resolveImpPaths'>;
@@ -69,6 +73,9 @@ export interface MoveSenderDeps {
 
   // this host's facts, as a target of a warm move would read them
   readonly readWarmHost: () => WarmHost;
+
+  // a tap's MAC now, or null for no tap; /sys by default
+  readonly readTapMac?: (tap: string) => string | null;
 
   // after the receipt: the tailnet-names pass, which drops this host's name
   readonly releaseName: () => Promise<void>;
@@ -439,6 +446,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         egress: { mode: egress.mode, allow: [...egress.allow] },
         grants,
         isIdentityResetPending: imp.isIdentityResetPending,
+        isDiskGrowPending: imp.isDiskGrowPending,
       },
       image: {
         name: image.name,
@@ -752,6 +760,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       target === null
         ? ['the target does not say what it can load']
         : findWarmMismatches(move, target);
+
+    // the guest knows its gateway by this tap's MAC; a tap made before taps
+    // took their slot's MAC has a random one, which no target tap has
+    const address = deriveSlotAddress(imp.slot, { subnet: deps.config.subnet, portBase: 0 });
+    const tapMac = (deps.readTapMac ?? readTapMac)(address.tap);
+
+    if (tapMac !== null && tapMac !== address.hostMac) {
+      mismatches.push(`its tap ${address.tap} has a MAC from before slot MACs (${tapMac})`);
+    }
 
     if (mismatches.length > 0) {
       throw new ORPCError('PRECONDITION_FAILED', {
