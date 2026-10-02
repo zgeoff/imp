@@ -130,6 +130,10 @@ export interface ImpRuntime {
   // imps stay asleep until something needs them
   readonly reconcileImps: () => Promise<void>;
   readonly isImpBusy: (id: string) => boolean;
+
+  // for the memory controller: runs `action` under the imp's lock when the
+  // lock is free and the imp still runs; false when it did not run
+  readonly tryWhileRunning: (id: string, action: () => Promise<void>) => Promise<boolean>;
   readonly tracker: ActivityTracker;
 
   // the boot templates cold boots restore; null when IMP_BOOT_TEMPLATES is off
@@ -525,6 +529,21 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     waitForLifecycle: () => lock.waitForAll(),
     isImpBusy: (id) => lock.isLocked(id),
+
+    tryWhileRunning: async (id, action) => {
+      const result = await lock.tryWithImpId(id, async (imp) => {
+        if (imp?.state !== 'running') {
+          return false;
+        }
+
+        await action();
+
+        return true;
+      });
+
+      return result.ran && result.value;
+    },
+
     tracker: context.tracker,
     bootTemplates: context.templates,
     readDiskFullError: () => lastDiskFull.error,

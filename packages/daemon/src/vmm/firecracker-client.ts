@@ -37,13 +37,32 @@ interface Vsock {
 }
 
 // docs/architecture/sleep-and-wake.md#sleep: free page reporting hands memory
-// the guest frees back to the host; deflate_on_oom keeps an inflated balloon
-// from killing guest processes
+// the guest frees back to the host. impd never inflates it, so
+// deflate_on_oom has nothing to give back (docs/architecture/memory.md).
 interface Balloon {
   readonly amountMib: number;
   readonly deflateOnOom: boolean;
   readonly statsPollingIntervalS: number;
   readonly freePageReporting: boolean;
+}
+
+// a virtio-mem region the guest can grow into (docs/architecture/memory.md)
+interface HotplugMemory {
+  readonly totalSizeMib: number;
+  readonly slotSizeMib: number;
+  readonly blockSizeMib: number;
+}
+
+export interface HotplugState {
+  // what the guest holds now, and what it was asked to hold; an unplug the
+  // guest cannot finish leaves plugged above requested
+  readonly pluggedMib: number;
+  readonly requestedMib: number;
+}
+
+interface BalloonStats {
+  readonly totalMib: number;
+  readonly availableMib: number;
 }
 
 interface SnapshotFiles {
@@ -76,6 +95,16 @@ export interface FirecrackerClient {
 
   // before InstanceStart only; a running or restored VM cannot add one
   readonly putBalloon: (balloon: Balloon) => Promise<void>;
+
+  // the guest's own view of its memory, every stats_polling_interval_s
+  readonly getBalloonStats: () => Promise<BalloonStats>;
+
+  // before InstanceStart only, as the balloon
+  readonly putHotplugMemory: (hotplug: HotplugMemory) => Promise<void>;
+  readonly getHotplugMemory: () => Promise<HotplugState>;
+
+  // the guest plugs or unplugs blocks toward `mib`, in its own time
+  readonly patchHotplugMemory: (requestedMib: number) => Promise<void>;
   readonly instanceStart: () => Promise<void>;
   readonly pause: () => Promise<void>;
   readonly resume: () => Promise<void>;
@@ -191,6 +220,35 @@ export function createFirecrackerClient(
         stats_polling_interval_s: balloon.statsPollingIntervalS,
         free_page_reporting: balloon.freePageReporting,
       }),
+    getBalloonStats: async () => {
+      const text = await sendRequest('GET', '/balloon/statistics');
+
+      const parsed = parseObject('GET /balloon/statistics', text);
+
+      return {
+        totalMib: readBytesAsMib(parsed, 'total_memory'),
+        availableMib: readBytesAsMib(parsed, 'available_memory'),
+      };
+    },
+    putHotplugMemory: (hotplug) =>
+      sendPut('/hotplug/memory', {
+        total_size_mib: hotplug.totalSizeMib,
+        slot_size_mib: hotplug.slotSizeMib,
+        block_size_mib: hotplug.blockSizeMib,
+      }),
+    getHotplugMemory: async () => {
+      const text = await sendRequest('GET', '/hotplug/memory');
+
+      const parsed = parseObject('GET /hotplug/memory', text);
+
+      return {
+        pluggedMib: readNumber(parsed, 'plugged_size_mib'),
+        requestedMib: readNumber(parsed, 'requested_size_mib'),
+      };
+    },
+    patchHotplugMemory: async (requestedMib) => {
+      await sendRequest('PATCH', '/hotplug/memory', { requested_size_mib: requestedMib });
+    },
     instanceStart: () => sendPut('/actions', { action_type: 'InstanceStart' }),
     pause: async () => {
       await sendRequest('PATCH', '/vm', { state: 'Paused' });
@@ -247,4 +305,29 @@ export function createFirecrackerClient(
       return InstanceInfoSchema.parse(JSON.parse(text)).state;
     },
   };
+}
+
+function parseObject(call: string, text: string): Readonly<Record<string, unknown>> {
+  const parsed: unknown = JSON.parse(text);
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error(`firecracker ${call}: unexpected body ${text}`);
+  }
+
+  return Object.fromEntries(Object.entries(parsed));
+}
+
+function readNumber(parsed: Readonly<Record<string, unknown>>, key: string): number {
+  const value = parsed[key];
+
+  if (typeof value !== 'number') {
+    throw new TypeError(`firecracker: no number ${key} in ${JSON.stringify(parsed)}`);
+  }
+
+  return value;
+}
+
+// the balloon's statistics are bytes
+function readBytesAsMib(parsed: Readonly<Record<string, unknown>>, key: string): number {
+  return Math.floor(readNumber(parsed, key) / 1_048_576);
 }

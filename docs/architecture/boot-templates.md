@@ -21,6 +21,9 @@ the sha256 of:
 - the devices: the two drives, the vsock CID, `eth0` and the balloon
 - the vCPUs and the memory size
 
+An elastic imp ([elastic memory](./memory.md#limits)) never restores a template: its guest needs a
+hot-plug region from the boot on, which a template does not have.
+
 The image is not in the key: the template never opens a user disk. Templates live in
 `<data>/templates/<key>/` with `vmstate`, `mem` and `meta.json`. At startup impd removes every
 template whose key the host no longer makes, and what a build cut short left, before the system

@@ -288,6 +288,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         image: source.imp.image,
         vcpus: source.imp.vcpus,
         memoryMib: source.imp.memoryMib,
+        maxMemoryMib: source.imp.maxMemoryMib,
         policy: source.policy,
         ...(source.imp.cpu !== undefined && {
           cpuLimit: source.imp.cpu.limit,

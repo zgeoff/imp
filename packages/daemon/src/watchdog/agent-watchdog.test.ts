@@ -13,6 +13,7 @@ function buildImp(): ImpRecord {
     state: 'running',
     vcpus: 1,
     memoryMib: 512,
+    maxMemoryMib: 512,
     slot: 0,
     ip: '10.66.0.2',
     createdAt: new Date(0),

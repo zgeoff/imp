@@ -67,6 +67,10 @@ export function createImpPresenter(
       lastActiveAt: imp.lastActiveAt,
     };
 
+    if (imp.maxMemoryMib > imp.memoryMib) {
+      api.maxMemoryMib = imp.maxMemoryMib;
+    }
+
     if (imp.sleptAt !== null) {
       api.sleptAt = imp.sleptAt;
     }
@@ -118,6 +122,12 @@ export function createImpPresenter(
 
       if (sample.ramMib !== null) {
         api.ramMib = sample.ramMib;
+      }
+
+      const pluggedMib = context.pluggedSizes.read(imp.id);
+
+      if (pluggedMib !== undefined) {
+        api.pluggedMib = pluggedMib;
       }
 
       if (sample.rssMib !== null) {

@@ -1,6 +1,7 @@
 import { lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { sendGrow, sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
+import { BLOCK_MIB, ONLINE_MOVABLE_ARG, SLOT_MIB, findRegionMib } from '../memory/elastic-memory';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
 import { runCommand } from '../process/run-command';
@@ -10,7 +11,7 @@ import { writeToDisk } from '../storage/write-file-durably';
 import { BASE_BOOT_ARGS, VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
-import type { InstanceState } from './firecracker-client';
+import type { HotplugState, InstanceState } from './firecracker-client';
 import type { FoundVm, VmOwner } from './firecracker-process';
 import {
   buildFirecrackerCommand,
@@ -34,6 +35,10 @@ const SHUTDOWN_TIMEOUT_MS = 10_000;
 const KILL_TIMEOUT_MS = 3000;
 const WAKE_AGENT_DEADLINE_MS = 10_000;
 
+// the memory controller asks every 500 ms: a VM that does not answer soon is
+// asked again on the next tick
+const GUEST_MEMORY_TIMEOUTS = { requestMs: 1000, snapshotMs: 1000 };
+
 // a sleep asks under the imp's lock: a wedged agent must not hold it long
 const UPTIME_PING_TIMEOUT_MS = 250;
 
@@ -47,6 +52,10 @@ export interface VmPlan {
   readonly hostname: string;
   readonly vcpus: number;
   readonly memoryMib: number;
+
+  // above memoryMib, the guest gets a virtio-mem region to grow into
+  // (docs/architecture/memory.md)
+  readonly maxMemoryMib: number;
   readonly dns: readonly string[];
 
   // the CPU limit's cgroup; null runs the VM unlimited
@@ -58,6 +67,13 @@ export interface VmPlan {
 
   // the imp's jail user; null runs Firecracker unjailed, as root
   readonly jail: JailUser | null;
+}
+
+// what an elastic guest holds and has free, as Firecracker reports it
+export interface GuestMemory extends HotplugState {
+  // the guest's own count: its base memory plus what is plugged
+  readonly totalMib: number;
+  readonly availableMib: number;
 }
 
 export interface StartedVm {
@@ -157,6 +173,13 @@ export interface VmRunner {
   // a start from a template, in place of startVm; throws, with the process
   // gone, when any step fails (docs/architecture/boot-templates.md#claim)
   readonly loadTemplateVm: (plan: TemplateRestorePlan) => Promise<StartedVm>;
+
+  // an elastic guest's memory (docs/architecture/memory.md); throws when the
+  // VM or its balloon statistics do not answer
+  readonly readGuestMemory: (paths: ImpPaths) => Promise<GuestMemory>;
+
+  // the guest plugs or unplugs blocks toward `mib` of its region
+  readonly requestPluggedMib: (paths: ImpPaths, mib: number) => Promise<void>;
 }
 
 // The kernel cmdline: the system drive (vdb) is the initial root and the agent
@@ -174,6 +197,7 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
       : [`imp.ip6=${plan.address.guestIp6}/128`, `imp.gw6=${GATEWAY_IP6}`]),
     `imp.dns=${plan.dns.join(',')}`,
     ...(plan.isIdentityReset ? ['imp.reset_identity=1'] : []),
+    ...(findRegionMib(plan.memoryMib, plan.maxMemoryMib) > 0 ? [ONLINE_MOVABLE_ARG] : []),
   ].join(' ');
 }
 
@@ -290,6 +314,16 @@ export function createVmRunner(jails: Jails, mergeWrapper: string | null = null)
           tap: plan.address.tap,
           guestMac: plan.address.guestMac,
         });
+
+        const regionMib = findRegionMib(plan.memoryMib, plan.maxMemoryMib);
+
+        if (regionMib > 0) {
+          await api.putHotplugMemory({
+            totalSizeMib: regionMib,
+            slotSizeMib: SLOT_MIB,
+            blockSizeMib: BLOCK_MIB,
+          });
+        }
 
         const firecrackerVersion = await versionPromise;
 
@@ -478,6 +512,16 @@ export function createVmRunner(jails: Jails, mergeWrapper: string | null = null)
       );
 
       await sendGrow(paths.vsockSocket, diskBytes);
+    },
+    readGuestMemory: async (paths) => {
+      const api = createFirecrackerClient(paths.apiSocket, GUEST_MEMORY_TIMEOUTS);
+
+      const [hotplug, stats] = await Promise.all([api.getHotplugMemory(), api.getBalloonStats()]);
+
+      return { ...hotplug, ...stats };
+    },
+    requestPluggedMib: async (paths, mib) => {
+      await createFirecrackerClient(paths.apiSocket, GUEST_MEMORY_TIMEOUTS).patchHotplugMemory(mib);
     },
     isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),
     isAgentReady: async (paths, deadlineMs = 2000) => {

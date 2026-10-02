@@ -110,6 +110,20 @@ test('the second boot of a shape builds its template; the next restores it', asy
   expect(broken).toEqual([]);
 });
 
+// a template has no hot-plug region, so it would restore a guest that cannot grow
+test('an elastic imp boots the kernel even when its memory has a template', async () => {
+  await using ctx = await setupRestoreTest();
+
+  await ctx.client.imps.create({ name: 'first' });
+  await ctx.waitForTemplate();
+  await ctx.client.imps.create({ name: 'elastic', maxMemoryMib: 1024 });
+  await ctx.client.imps.create({ name: 'plain' });
+
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first', 'elastic']);
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['plain']);
+  expect(ctx.fake.templateBuilds).toEqual([SHAPE]);
+});
+
 test('a restore that fails in the template removes it; the imp boots the kernel', async () => {
   await using ctx = await setupRestoreTest();
 

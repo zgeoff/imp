@@ -105,6 +105,31 @@ export function buildFakeVmm() {
     hasBootId: true,
   };
 
+  // elastic guests by imp dir: what each holds, and how far down it can
+  // unplug (in use memory it cannot migrate away)
+  const guestMemory = new Map<string, FakeGuestMemory>();
+
+  // a guest no test set up: 512 MiB, nothing plugged
+  const readFakeGuestMemory = (dir: string): FakeGuestMemory => {
+    const known = guestMemory.get(dir);
+
+    if (known !== undefined) {
+      return known;
+    }
+
+    const created = {
+      baseMib: 512,
+      pluggedMib: 0,
+      requestedMib: 0,
+      usedMib: 100,
+      unplugFloorMib: 0,
+    };
+
+    guestMemory.set(dir, created);
+
+    return created;
+  };
+
   const queues = new Map<VmStep, VmOutcome[]>();
   const holds = new Map<VmStep, { gate: PromiseWithResolvers<void>; reached: () => void }>();
 
@@ -399,6 +424,26 @@ export function buildFakeVmm() {
 
           return plan.claim.isIdentityReset ? { ...vm, identityReset: guest.identityReset } : vm;
         }),
+      readGuestMemory: (paths) =>
+        runInGeneration(() => {
+          const memory = readFakeGuestMemory(paths.dir);
+
+          return Promise.resolve({
+            pluggedMib: memory.pluggedMib,
+            requestedMib: memory.requestedMib,
+            totalMib: memory.baseMib + memory.pluggedMib,
+            availableMib: memory.baseMib + memory.pluggedMib - memory.usedMib,
+          });
+        }),
+      requestPluggedMib: (paths, mib) =>
+        runInGeneration(() => {
+          const memory = readFakeGuestMemory(paths.dir);
+
+          memory.requestedMib = mib;
+          memory.pluggedMib = Math.max(mib, Math.min(memory.pluggedMib, memory.unplugFloorMib));
+
+          return Promise.resolve();
+        }),
     };
   };
 
@@ -415,6 +460,10 @@ export function buildFakeVmm() {
     restorePlans,
     wakeJails,
     sweeps,
+
+    // elastic guests by imp dir; a test sets what one uses and how far down
+    // an unplug can go
+    guestMemory,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {
@@ -513,4 +562,14 @@ export function buildFakeVmm() {
     // what the VM `pid` does now, as GET / reports it
     readState: (pid: number): InstanceState | undefined => vms.get(pid)?.state,
   };
+}
+
+interface FakeGuestMemory {
+  baseMib: number;
+  pluggedMib: number;
+  requestedMib: number;
+  usedMib: number;
+
+  // an unplug stops here, as a guest stops at memory it cannot migrate
+  unplugFloorMib: number;
 }

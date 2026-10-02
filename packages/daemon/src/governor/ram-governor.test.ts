@@ -461,3 +461,179 @@ test('the KSM headroom counts against the budget, so a merged page that splits s
 
   expect(slept).toEqual(['a']);
 });
+
+// Three awake imps of 300 MiB each under a 1000 MiB budget; `ram` sets what
+// one measures, and `reclaim` what the step before any sleep gives back.
+function setupGrowTest(options: Readonly<{ busy?: readonly string[]; reclaimMib?: number }> = {}) {
+  const awake = new Map([
+    ['old', { pid: 1, lastActiveAt: 100 }],
+    ['grower', { pid: 2, lastActiveAt: 50 }],
+    ['new', { pid: 3, lastActiveAt: 300 }],
+  ]);
+
+  const ram = new Map<string, number>();
+
+  const slept: string[] = [];
+  const reclaims: (string | null)[] = [];
+  const events = createEventBus();
+  const decisions: unknown[] = [];
+
+  events.subscribe((event) => {
+    decisions.push(event);
+  });
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    events,
+    listAwake: () =>
+      Promise.resolve(
+        [...awake].map(([id, imp]) => ({
+          id,
+          name: id,
+          pid: imp.pid,
+          apiSocket: id,
+          lastActiveAt: imp.lastActiveAt,
+          holdUntil: null,
+        })),
+      ),
+    readRamMib: (_pid, id) => ram.get(id) ?? 300,
+    isBusy: (id) => options.busy?.includes(id) ?? false,
+    trySleepImp: buildFakeSleep((id) => {
+      slept.push(id);
+      awake.delete(id);
+
+      return Promise.resolve('slept');
+    }),
+    reclaim: (excludeId) => {
+      reclaims.push(excludeId);
+
+      const freed = options.reclaimMib ?? 0;
+
+      ram.set('new', 300 - freed);
+
+      return Promise.resolve(freed);
+    },
+    log: () => {
+      // quiet
+    },
+  });
+
+  return { governor, awake, ram, slept, reclaims, decisions };
+}
+
+test('a grow sleeps the least recently active idle imp, never the grower', async () => {
+  const ctx = setupGrowTest();
+
+  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  expect(admitted).toBe(true);
+  expect(ctx.reclaims).toEqual(['grower']);
+  expect(ctx.slept).toEqual(['old']);
+
+  // the grow counts until the grower's RSS shows it: 560 + 300
+  const usage = await ctx.governor.readUsage();
+
+  expect(usage).toEqual({ usedMib: 600, reservedMib: 260, headroomMib: 0 });
+});
+
+test('a grow is refused when only busy imps could make room', async () => {
+  const ctx = setupGrowTest({ busy: ['old', 'new'] });
+
+  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  expect(admitted).toBe(false);
+  expect(ctx.slept).toEqual([]);
+
+  // the two busy imps were in the way; the grower itself is not counted
+  expect(ctx.decisions).toEqual([
+    expect.objectContaining({
+      decision: 'refused',
+      name: 'grower',
+      trigger: 'grow',
+      neededMib: 160,
+      protectedCount: 2,
+    }),
+  ]);
+});
+
+test('a grow for an imp that is no longer awake makes no room and reserves nothing', async () => {
+  const ctx = setupGrowTest();
+
+  ctx.awake.delete('grower');
+
+  const admitted = await ctx.governor.admitGrow({ id: 'grower', name: 'grower', mib: 260 });
+
+  expect(admitted).toBe(false);
+  expect(ctx.reclaims).toEqual([]);
+  expect(ctx.slept).toEqual([]);
+
+  const usage = await ctx.governor.readUsage();
+
+  expect(usage).toEqual({ usedMib: 600, reservedMib: 0, headroomMib: 0 });
+});
+
+// with IMP_KSM a split of every merged page must still fit after the grow
+test('a grow counts the KSM headroom, as a boot or a wake does', async () => {
+  const awake = new Map([
+    ['old', { pid: 1, lastActiveAt: 100 }],
+    ['grower', { pid: 2, lastActiveAt: 200 }],
+  ]);
+
+  const slept: string[] = [];
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () =>
+      Promise.resolve(
+        [...awake].map(([id, imp]) => ({
+          id,
+          name: id,
+          pid: imp.pid,
+          apiSocket: '',
+          lastActiveAt: imp.lastActiveAt,
+          holdUntil: null,
+        })),
+      ),
+    readRamMib: () => 300,
+
+    // KSM saves 300 MiB while both run, nothing in one alone
+    readHeadroomMib: () => {
+      const headroomMib = awake.size > 1 ? 300 : 0;
+
+      return Promise.resolve(headroomMib);
+    },
+    isBusy: () => false,
+    trySleepImp: buildFakeSleep((id) => {
+      slept.push(id);
+      awake.delete(id);
+
+      return Promise.resolve('slept');
+    }),
+    log: () => {
+      // quiet
+    },
+  });
+
+  // 600 used and 300 headroom leave 100: a 200 MiB grow sleeps the other imp
+  const admitted = await governor.admitGrow({ id: 'grower', name: 'grower', mib: 200 });
+
+  expect(admitted).toBe(true);
+  expect(slept).toEqual(['old']);
+});
+
+test('idle guests unplug before any imp sleeps, for a boot and for enforcement', async () => {
+  const ctx = setupGrowTest({ reclaimMib: 200 });
+
+  await ctx.governor.admit({ id: 'x', name: 'x', reserveMib: 250, memoryMib: 512 });
+
+  expect(ctx.reclaims).toEqual(['x']);
+  expect(ctx.slept).toEqual([]);
+
+  ctx.ram.set('old', 900);
+
+  await ctx.governor.enforce();
+
+  // the reclaim gave back nothing more, so the least recently active sleeps
+  expect(ctx.reclaims).toEqual(['x', null]);
+  expect(ctx.slept).toEqual(['grower']);
+});

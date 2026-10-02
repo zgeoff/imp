@@ -25,6 +25,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   fence that keeps one host's copy live, and recovery.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
+- [Elastic memory](./architecture/memory.md): `--max-memory`, how a guest grows and shrinks with
+  virtio-mem, the governor's part, and what it costs a sleep.
 
 ## Guides
 

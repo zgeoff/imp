@@ -465,6 +465,9 @@ async function main(): Promise<void> {
     startTicker('governor', 5000, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
 
+    // elastic guests grow within a second of running low
+    startTicker('memory', 500, governed.memory.runTick, printLog),
+
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),
 

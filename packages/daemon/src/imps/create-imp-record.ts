@@ -15,6 +15,7 @@ interface NewImpInput {
   readonly name?: string | undefined;
   readonly vcpus?: number | undefined;
   readonly memoryMib?: number | undefined;
+  readonly maxMemoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
   readonly diskBytes?: number | undefined;
   readonly policy?: EgressPolicy | undefined;
@@ -49,6 +50,7 @@ export async function createImpRecord(
         imageId: image.id,
         vcpus: input.vcpus ?? context.config.defaultVcpus,
         memoryMib: input.memoryMib ?? context.config.defaultMemoryMib,
+        ...(input.maxMemoryMib !== undefined && { maxMemoryMib: input.maxMemoryMib }),
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
         ...(input.policy !== undefined && { egress: input.policy }),
         ...(input.networkIds !== undefined && { networkIds: input.networkIds }),

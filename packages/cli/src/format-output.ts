@@ -73,7 +73,7 @@ function toImpRow(imp: Imp): Row {
     imp.state,
     imp.image,
     String(imp.vcpus),
-    `${String(imp.memoryMib)} MiB`,
+    formatMemory(imp),
     imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
     formatDiskMib(imp.diskMib),
     ...formatDiskUsage(imp.diskUsage),
@@ -83,6 +83,17 @@ function toImpRow(imp: Imp): Row {
     imp.url,
     formatNote(imp),
   ];
+}
+
+// an elastic imp's size now and its max: `768/1024 MiB`
+function formatMemory(imp: Imp): string {
+  if (imp.maxMemoryMib === undefined) {
+    return `${String(imp.memoryMib)} MiB`;
+  }
+
+  const nowMib = imp.memoryMib + (imp.pluggedMib ?? 0);
+
+  return `${String(nowMib)}/${String(imp.maxMemoryMib)} MiB`;
 }
 
 // what a destroy frees, and what the imp shares; `<=` when a fork holds a

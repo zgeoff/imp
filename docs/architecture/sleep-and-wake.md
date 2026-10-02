@@ -10,7 +10,8 @@ design rests on.
 Every VM gets a balloon before `InstanceStart`:
 `{"amount_mib":0,"deflate_on_oom":true,"stats_polling_interval_s":1,"free_page_reporting":true}`.
 With free page reporting, memory the guest frees goes back to the host in about 15 s, and the next
-snapshot is smaller.
+snapshot is smaller. An elastic imp also unplugs what it can spare before the pause
+([elastic memory](./memory.md#sleep)).
 
 To sleep an imp, impd takes the imp's lock and first checks the disk can take the snapshot
 ([disk full](#disk-full)). For `imp sleep` and impd's stop, if the guest has been up for less than
@@ -224,6 +225,9 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   measurement passes it, for at most 20 s. With `IMP_KSM`, what it owned at sleep is its unshared
   size, and a share of what KSM saves stays free
   ([section 8](#8-ksm-sharing-identical-guest-pages)).
+- **Reclaim.** Before it sleeps any imp, impd unplugs idle elastic imps to their spare size, and
+  measures again ([elastic memory](./memory.md#shrinking)). A grow of an elastic imp is admitted
+  like a wake ([growing](./memory.md#growing)).
 - **Make room.** If the sum would pass the budget, impd sleeps the least recently active imps that
   are not held and not busy, until it fits. It sleeps one at a time, and measures and picks again
   after each. An imp whose lock is taken by the time its turn comes is skipped, not waited for
@@ -425,7 +429,8 @@ allocates a 700 MiB string and exits.
 - **Stats work**: `GET /balloon/statistics` gives `free_memory`, `available_memory`, `total_memory`,
   `disk_caches`, faults and swap. Polling interval 1 s. Stats keep working after a restore.
 - **Inflate works**: `PATCH /balloon {"amount_mib":1024}` reached `actual_mib: 1024` in under 3 s.
-  The governor can use it to squeeze a VM, with `deflate_on_oom: true` as the safety valve.
+  impd does not inflate it: elastic memory uses virtio-mem instead, which measured better
+  ([elastic memory](./memory.md#how-the-guest-grows)).
 - **Reporting makes snapshots small.** After reporting, the mem file still has 2.0 G on disk, but
   `fallocate --dig-holes` takes it to 79 MiB in 244 ms.
 

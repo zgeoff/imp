@@ -107,7 +107,7 @@ interface RamShortfall {
 // sleeping every other imp would not help: the guest can grow past the budget
 export function buildImpOverBudgetError(budgetMib: number, usedMib: number, memoryMib: number) {
   return buildRamError(
-    `the imp's memory (${String(memoryMib)} MiB) is larger than the whole RAM budget (${String(budgetMib)} MiB)`,
+    `the imp's memory, at its max (${String(memoryMib)} MiB), is larger than the whole RAM budget (${String(budgetMib)} MiB)`,
     { budgetMib, usedMib, requestedMib: memoryMib, protected: [] },
   );
 }

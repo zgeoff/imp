@@ -20,6 +20,7 @@ starts its timers:
 | idle          | 2 s                         | the [idle loop](#idle-the-idle-loop), which also feeds the watchdog                     |
 | governor      | 5 s                         | sleeps imps while the RAM in use is over the budget                                     |
 | resources     | 5 s                         | samples each running VM's CPU, network and RAM ([cgroups](#cgroups))                    |
+| memory        | 500 ms                      | grows and shrinks [elastic guests](./memory.md)                                         |
 | proxy         | 30 s                        | syncs the proxy listeners with the imps                                                 |
 | tailnet-names | 10 min                      | repairs [per-imp tailnet names](../guides/tailscale.md#per-imp-names), when they are on |
 | broker        | 60 s                        | stops terminators no grant covers and renews leaves                                     |
@@ -159,6 +160,13 @@ never leads to more sleeps than the new pick needs. Every 5 s it also sleeps imp
 use is over the budget, all it may sleep when they cannot bring it under.
 [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
+### memory: elastic guests
+
+The memory controller in `memory/` grows elastic imps (`--max-memory`) with virtio-mem when they run
+low and shrinks them when they have memory to spare. A grow goes through the governor's admission,
+and the governor's reclaim unplugs idle elastic imps before it sleeps any imp.
+[Elastic memory](./memory.md) has the rules and the numbers.
+
 ### events: the event stream
 
 `db/imps.ts` and `db/checkpoints.ts` emit a write after each commit, with the reason its caller
@@ -293,12 +301,12 @@ above the guest holds Firecracker and the page cache of its disk and snapshot I/
 reclaims at `memory.max` before it kills. A 1536 MiB guest with 1300 MiB in use slept, woke, rewrote
 all of it and moved 3 GiB through its disk without an OOM kill. `memory.high` stays `max`: at the
 guest plus 128 MiB its throttling made that disk I/O take 20.7 s instead of 9.4 s. `setGuestMib`
-moves the limit when the guest's plugged memory changes (memory hot-plug calls it); the size it sets
-lasts through a sleep and is forgotten at a stop. A sleep or a wake writes `cpu.max` as `max` while
-the snapshot is made or loaded. impd removes the cgroup when the VM exits, and its reconcile at
-start removes `imps/*` dirs that no imp owns. The resource sampler reads `cpu.stat`, the tap's byte
-counters and `smaps_rollup` once per imp every 5 s, and the presenter and the telemetry read that
-cache.
+moves the limit when an [elastic guest](./memory.md#the-host-limit) plugs or unplugs memory; the
+size it sets lasts through a sleep and is forgotten at a stop. A sleep or a wake writes `cpu.max` as
+`max` while the snapshot is made or loaded. impd removes the cgroup when the VM exits, and its
+reconcile at start removes `imps/*` dirs that no imp owns. The resource sampler reads `cpu.stat`,
+the tap's byte counters and `smaps_rollup` once per imp every 5 s, and the presenter and the
+telemetry read that cache.
 
 ### sleep: snapshot metadata
 

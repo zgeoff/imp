@@ -423,6 +423,14 @@ export const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // elastic memory (#35): the most an imp's guest may grow to; null is no
+  // growth, the guest stays at memory_mib
+  '019_add_imp_max_memory': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('imps').addColumn('max_memory_mib', 'integer').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

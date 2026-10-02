@@ -122,7 +122,7 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
         id: imp.id,
         name: imp.name,
         reserveMib: Math.max(meta?.ramMib ?? 0, context.config.wakeReserveMib),
-        memoryMib: imp.memoryMib,
+        memoryMib: imp.maxMemoryMib,
       });
 
       const woken = await context.vms.finishWake(paths);
