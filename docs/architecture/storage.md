@@ -260,7 +260,9 @@ reflinks hold blocks between backup runs. An extent that only one owner holds is
 that two hold is shared. It reads 1024 extents per call and yields between calls, so impd stays
 responsive. It never asks the kernel to flush first (`FIEMAP_FLAG_SYNC`), so blocks not yet written
 count as their owner's. FIEMAP takes the file's inode lock, so a VM's write to that file waits for
-the one call. A pass stops after 20 s, and `imp ls` marks a partial result with `?`.
+the one call. A pass reads the images and the backup tree first, then the imps, and stops after 20
+s. An imp it did not finish keeps its last count, and the next pass starts at that imp; `imp ls`
+marks a count from a cut-short pass with `?`, since an imp it never reached could share its blocks.
 
 ## Disk budget
 
@@ -273,20 +275,26 @@ One ledger in impd takes each write's estimate off the free space until the writ
 lock, so two writes never pass on the same reading. A write that would leave less than the reserve
 fails with `DISK_FULL` (HTTP 507), before it touches anything:
 
-| Write                                         | Estimate                                                        |
-| --------------------------------------------- | --------------------------------------------------------------- |
-| sleep                                         | the imp's memory: the file is full size until its holes are dug |
-| image build                                   | twice the Docker image: the tree, and the ext4 file from it     |
-| create, fork, restore from backup             | 0: a thin clone                                                 |
-| checkpoint, resize, start or wake, backup run | 0: refused only once the reserve is reached                     |
+| Write                                 | Estimate                                                                        |
+| ------------------------------------- | ------------------------------------------------------------------------------- |
+| sleep                                 | the imp's memory: the file is full size until its holes are dug                 |
+| image build                           | twice the Docker image: the tree, and the ext4 file from it                     |
+| restore from backup                   | each file's disk size while restic fetches and writes it; twice an image's size |
+| create, fork                          | 0: a thin clone                                                                 |
+| checkpoint, resize, start, backup run | 0: refused only once the reserve is reached                                     |
 
-A sleep that is refused leaves its imp running, as any failed sleep does; the governor turns to
-another imp. A wake that is refused leaves the imp asleep with its memory. Below twice the reserve,
-impd logs a warning once and `imp info` marks the storage LOW.
+A wake is never refused: its disk and memory exist already, and a full disk must not strand an imp's
+work. A sleep that is refused leaves its imp running, as any failed sleep does; the governor turns
+to another imp. Below twice the reserve, impd logs a warning and `imp info` marks the storage LOW;
+the warning comes once per episode, which ends when free space is a GiB clear of the line.
 
-On ZFS, `available` lags a destroy: the pool frees blocks in the background, so space a removal
-gives back shows up over the next seconds. The ledger reads it at each check and never counts space
-before ZFS reports it.
+On ZFS, `available` lags: a write's blocks count only once its transaction group commits, about 5 s
+later, and a destroy frees blocks in the background. So the ledger keeps each write's hold for 20 s
+after the write ends, and never counts freed space before ZFS reports it.
+
+On XFS in a loop-mounted file, the filesystem inside can report room that the sparse file's host
+directory no longer has. Free space is then the smaller of the two, read from the loop device's
+backing file.
 
 Both backends hold 1 GiB back besides, so a destroy still runs on a full disk: ZFS's
 `<root>/reserve` (above), and on XFS the file `<data>/reserve`, which start allocates with

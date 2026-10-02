@@ -289,3 +289,59 @@ test.skipIf(!hasFiemap)('usage counts the blocks of each imp and its checkpoints
 
   expect(report.imps.get('b')?.exclusiveBytes).toBe(4096);
 });
+
+test('a pass cut short leaves out the imp it stopped at, and the next starts there', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+  const read: string[] = [];
+  const state = { cutAt: 'b' as string | null };
+
+  const backend = createXfsBackend({
+    dataDir,
+    cloneFile: (source, target) => {
+      copyFileSync(source, target);
+
+      return Promise.resolve();
+    },
+    readFileExtents: (path) => {
+      const owner = path.includes('/imps/')
+        ? (path.split('/imps/')[1]?.split('/')[0] ?? '')
+        : 'image';
+
+      read.push(owner);
+
+      const isCut = owner === state.cutAt;
+      const extent = { logical: 0, physical: read.length * 4096, length: 4096, flags: 1 };
+
+      return Promise.resolve({ extents: [extent], isComplete: !isCut });
+    },
+  });
+
+  try {
+    mkdirSync(join(dataDir, 'images', 'abc'), { recursive: true });
+
+    await backend.createImage('sha256:abc', writeImage);
+
+    for (const impId of ['a', 'b', 'c']) {
+      await backend.createImpDisk(impId, { kind: 'image', digest: 'sha256:abc' });
+    }
+
+    const imps = ['a', 'b', 'c'].map((impId) => ({ impId, checkpointIds: [] }));
+
+    const first = await backend.measureUsage(imps);
+
+    expect(read).toEqual(['image', 'a', 'b']);
+    expect(first.isPartial).toBeTrue();
+    expect([...first.imps.keys()]).toEqual(['a']);
+
+    read.length = 0;
+    state.cutAt = null;
+
+    const second = await backend.measureUsage(imps);
+
+    expect(read).toEqual(['image', 'b', 'c', 'a']);
+    expect(second.isPartial).toBeFalse();
+    expect([...second.imps.keys()]).toEqual(['b', 'c', 'a']);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

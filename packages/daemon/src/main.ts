@@ -88,10 +88,12 @@ async function main(): Promise<void> {
 
   // every operation that makes storage before its row joins it; the GC waits
   const storageGate = createStorageGate();
+  const zfsCommitDelayMs = config.storageBackend === 'zfs' ? 20_000 : 0;
 
   const diskBudget = createDiskBudget({
     storage,
     reserveBytes: config.diskReserveBytes,
+    releaseDelayMs: zfsCommitDelayMs,
     log: printLog,
   });
 

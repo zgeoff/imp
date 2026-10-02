@@ -36,6 +36,10 @@ interface DiskBudgetDeps {
 
   // null: the default reserve
   readonly reserveBytes: number | null;
+
+  // how long a write's hold outlives it: ZFS reports a write's blocks in
+  // `available` only once its transaction group commits, about 5 s later
+  readonly releaseDelayMs?: number;
   readonly log: (message: string) => void;
 }
 
@@ -64,7 +68,11 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
     const free = usage.availableBytes - ledger.pendingBytes;
     const isLow = free < 2 * reserveBytes;
 
-    if (isLow !== ledger.wasLow) {
+    // once per episode: it ends a GiB clear of the line, so free space that
+    // hovers at it logs nothing more
+    const isEpisodeOver = free >= 2 * reserveBytes + GIB;
+
+    if (isLow ? !ledger.wasLow : ledger.wasLow && isEpisodeOver) {
       ledger.wasLow = isLow;
 
       const message = isLow
@@ -92,13 +100,29 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
       ledger.pendingBytes += bytes;
     });
 
+  const removeHold = (bytes: number) => {
+    const delayMs = deps.releaseDelayMs ?? 0;
+
+    if (delayMs === 0 || bytes === 0) {
+      ledger.pendingBytes -= bytes;
+
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      ledger.pendingBytes -= bytes;
+    }, delayMs);
+
+    timer.unref();
+  };
+
   const withRoom = async <T>(bytes: number, task: () => Promise<T>): Promise<T> => {
     await holdRoom(bytes);
 
     try {
       return await task();
     } finally {
-      ledger.pendingBytes -= bytes;
+      removeHold(bytes);
     }
   };
 

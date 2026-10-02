@@ -18,6 +18,7 @@ import { countOwnerBytes } from './count-owner-bytes';
 import type { OwnedFile } from './count-owner-bytes';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { readExtents } from './fiemap';
+import { readLoopHostFreeBytes } from './loop-backing-file';
 import { createReflinkClone } from './reflink';
 import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from './storage-backend';
 
@@ -48,6 +49,9 @@ interface XfsBackendDeps {
   // full filesystem; removing the file frees it. None by default.
   readonly reserveFileBytes?: number;
   readonly log?: (message: string) => void;
+
+  // FIEMAP by default; tests cut a pass short with their own
+  readonly readFileExtents?: typeof readExtents;
 }
 
 // Every disk, checkpoint and fork is a reflink clone of another file
@@ -55,6 +59,7 @@ interface XfsBackendDeps {
 export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
   const cloneFile = deps.cloneFile ?? createReflinkClone;
   const log = deps.log ?? printLog;
+  const readFileExtents = deps.readFileExtents ?? readExtents;
   const resolveImpPaths = (impId: string) => buildImpPaths(deps.dataDir, impId);
 
   const buildCheckpointDisk = (impId: string, checkpointId: string): string =>
@@ -158,36 +163,35 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
   // Every file that holds disk blocks, with whoever removing it frees them.
   // The backup tree's reflinks hold blocks between runs, so it is an owner.
-  const listOwnedFiles = (impIds: readonly string[]) => {
-    const files: { owner: string; path: string }[] = [];
+  const listImpFiles = (impId: string) => {
+    const paths = resolveImpPaths(impId);
 
-    for (const impId of impIds) {
-      const paths = resolveImpPaths(impId);
+    const checkpoints = listEntries(paths.checkpointsDir).map((id) =>
+      buildCheckpointDisk(impId, id),
+    );
 
-      const checkpoints = listEntries(paths.checkpointsDir).map((id) =>
-        buildCheckpointDisk(impId, id),
-      );
-
-      for (const path of [paths.disk, ...checkpoints, paths.memFile, paths.vmstate]) {
-        files.push({ owner: `imp:${impId}`, path });
-      }
-    }
-
-    for (const name of listEntries(join(deps.dataDir, 'images'))) {
-      if (!name.startsWith('.')) {
-        files.push({
-          owner: `image:${name}`,
-          path: join(deps.dataDir, 'images', name, 'rootfs.ext4'),
-        });
-      }
-    }
-
-    for (const path of listFilesUnder(backup.tree)) {
-      files.push({ owner: 'backup', path });
-    }
-
-    return files.filter((file) => existsSync(file.path));
+    return [paths.disk, ...checkpoints, paths.memFile, paths.vmstate]
+      .filter((path) => existsSync(path))
+      .map((path) => ({ owner: `imp:${impId}`, path }));
   };
+
+  // the owners besides imps; the backup tree's reflinks hold blocks between
+  // runs, so it is one
+  const listOtherFiles = () => {
+    const images = listEntries(join(deps.dataDir, 'images'))
+      .filter((name) => !name.startsWith('.'))
+      .map((name) => ({
+        owner: `image:${name}`,
+        path: join(deps.dataDir, 'images', name, 'rootfs.ext4'),
+      }));
+
+    const tree = listFilesUnder(backup.tree).map((path) => ({ owner: 'backup', path }));
+
+    return [...images, ...tree].filter((file) => existsSync(file.path));
+  };
+
+  // the imp a pass cut short stopped at; the next pass starts there
+  const usageState = { resumeImpId: null as string | null };
 
   // made once, and again at a start after someone removed it to free space,
   // when twice its size is free
@@ -440,38 +444,53 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
     stop: () => Promise.resolve(),
 
+    // The images and the backup tree first, since every imp's shared bytes
+    // need them; then the imps, from where the last pass stopped. An imp
+    // the pass did not finish is left out, and the cache keeps its last count.
     measureUsage: async (imps) => {
       const deadline = Date.now() + USAGE_DEADLINE_MS;
       const owned: OwnedFile[] = [];
-      let isPartial = false;
+      const ids = imps.map((imp) => imp.impId);
+      const start = Math.max(0, ids.indexOf(usageState.resumeImpId ?? ''));
+      const ordered = [...ids.slice(start), ...ids.slice(0, start)];
 
-      for (const file of listOwnedFiles(imps.map((imp) => imp.impId))) {
-        // a file removed since the listing holds nothing
-        const read = await readExtents(file.path, deadline).catch((error: unknown) => {
-          if (existsSync(file.path)) {
-            throw error;
-          }
+      const readAll = async (files: readonly OwnedPath[]) => {
+        for (const file of files) {
+          const read = await readOwnedExtents(readFileExtents, file.path, deadline);
 
-          return null;
-        });
-
-        if (read !== null) {
           owned.push({ owner: file.owner, extents: read.extents });
+
+          if (!read.isComplete) {
+            return false;
+          }
         }
 
-        if (read !== null && !read.isComplete) {
-          isPartial = true;
+        return true;
+      };
+
+      const finished: string[] = [];
+
+      const isOthersRead = await readAll(listOtherFiles());
+
+      for (const impId of isOthersRead ? ordered : []) {
+        if (!(await readAll(listImpFiles(impId)))) {
           break;
         }
+
+        finished.push(impId);
       }
+
+      const isPartial = finished.length < ordered.length;
+
+      usageState.resumeImpId = isPartial ? (ordered[finished.length] ?? null) : null;
 
       const totals = countOwnerBytes(owned);
 
       const report = new Map(
-        imps.map((imp) => {
-          const total = totals.get(`imp:${imp.impId}`) ?? { exclusiveBytes: 0, sharedBytes: 0 };
+        finished.map((impId) => {
+          const total = totals.get(`imp:${impId}`) ?? { exclusiveBytes: 0, sharedBytes: 0 };
 
-          return [imp.impId, { ...total, isUpperBound: false }];
+          return [impId, { ...total, isUpperBound: false }];
         }),
       );
 
@@ -480,13 +499,39 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
     readUsage: () => {
       const stats = statfsSync(deps.dataDir);
+      const available = stats.bavail * stats.bsize;
+
+      // a loop-mounted XFS file can grow only as far as its host directory lets it
+      const hostFree = readLoopHostFreeBytes(deps.dataDir) ?? available;
 
       return Promise.resolve({
         usedBytes: (stats.blocks - stats.bfree) * stats.bsize,
-        availableBytes: stats.bavail * stats.bsize,
+        availableBytes: Math.min(available, hostFree),
       });
     },
   };
+}
+
+interface OwnedPath {
+  readonly owner: string;
+  readonly path: string;
+}
+
+// a file removed since the listing holds nothing
+async function readOwnedExtents(
+  readFileExtents: typeof readExtents,
+  path: string,
+  deadline: number,
+) {
+  try {
+    return await readFileExtents(path, deadline);
+  } catch (error) {
+    if (existsSync(path)) {
+      throw error;
+    }
+
+    return { extents: [], isComplete: true };
+  }
 }
 
 function listFilesUnder(dir: string): string[] {

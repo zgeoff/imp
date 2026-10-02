@@ -93,3 +93,24 @@ test('passes run one at a time, and a failed one keeps the last result', async (
   expect(ctx.cache.read(ctx.imp.id)?.isPartial).toBeFalse();
   expect(ctx.logs).toEqual(['impd: disk usage: pool gone']);
 });
+
+test('an imp a cut-short pass did not reach keeps its last count', async () => {
+  const state = { calls: 0 };
+
+  await using ctx = await setupCache((imps) => {
+    state.calls += 1;
+
+    const report = buildReport(imps[0]?.impId ?? '', state.calls > 1);
+
+    // the second pass reached no imp
+    const cut = { imps: new Map(), isPartial: true };
+    const answer = state.calls === 1 ? report : cut;
+
+    return Promise.resolve(answer);
+  });
+
+  await ctx.cache.runPass();
+  await ctx.cache.runPass();
+
+  expect(ctx.cache.read(ctx.imp.id)).toMatchObject({ exclusiveBytes: 10, isPartial: false });
+});

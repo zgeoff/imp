@@ -55,12 +55,19 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
 
       const measuredAt = now();
 
-      state.usage = new Map(
-        [...report.imps].map(([impId, usage]) => [
-          impId,
-          { ...usage, measuredAt, isPartial: report.isPartial },
-        ]),
-      );
+      // an imp a cut-short pass did not reach keeps its last count and time
+      const kept = listed.flatMap((imp) => {
+        const usage = report.imps.get(imp.impId);
+        const last = state.usage.get(imp.impId);
+
+        if (usage !== undefined) {
+          return [[imp.impId, { ...usage, measuredAt, isPartial: report.isPartial }] as const];
+        }
+
+        return last === undefined ? [] : [[imp.impId, last] as const];
+      });
+
+      state.usage = new Map(kept);
     } catch (error) {
       deps.log(`impd: disk usage: ${readErrorMessage(error)}`);
     }
