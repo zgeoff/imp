@@ -45,9 +45,10 @@ A token with patterns still sees host-wide totals. `system.info` shows the RAM b
 reserve, the RAM that sleeping imps hold (`ramSleepingMib`), the count of imps, awake and in all,
 and the storage: used and free space, the reserve, and the sum of every imp's disk size. It also
 shows the host's defaults, the default image among them (`defaults.image`), and whether nft enforces
-egress policies (`egress.isEnforced`). A `GovernorDecision` event for one of its imps shows the
-host's RAM use and budget. Neither names an imp it cannot see. This is accepted: the totals tell it
-why a wake waits.
+egress policies (`egress.isEnforced`). With `IMP_KSM`, it shows what KSM shares and keeps free
+(`ksm`), and how many awake imps it cannot merge. A `GovernorDecision` event for one of its imps
+shows the host's RAM use and budget. Neither names an imp it cannot see. This is accepted: the
+totals tell it why a wake waits.
 
 ## Manage tokens
 
