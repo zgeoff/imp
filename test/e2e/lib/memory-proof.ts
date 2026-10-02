@@ -4,9 +4,9 @@ import { getThroughProxy } from './http';
 import { runShellInImp } from './imp-cli';
 import { waitFor } from './wait-for';
 
-// Only guest memory holds it: a token on a fresh tmpfs served by a background
-// httpd, that process's pid and start time, and the boot id. A cold boot loses
-// it all; sleep and wake keep it all (docs/sleep-findings.md section 1).
+// Only guest memory holds it: a token on a tmpfs served by a background httpd,
+// its pid and start time, and the boot id. A cold boot loses it all; sleep and
+// wake keep it all (docs/architecture/sleep-and-wake.md, finding 1).
 export interface MemoryProof {
   readonly name: string;
   readonly token: string;

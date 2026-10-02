@@ -76,9 +76,11 @@ type ErrorResponse struct {
 }
 
 type Ping struct {
-	OK       bool   `json:"ok"`
-	Version  string `json:"version"`
-	UptimeMs int64  `json:"uptime_ms"`
+	OK      bool   `json:"ok"`
+	Version string `json:"version"`
+	// nil when the guest clock cannot be read: impd then skips its
+	// young-guest wait before a sleep
+	UptimeMs *int64 `json:"uptime_ms,omitempty"`
 }
 
 type OK struct {

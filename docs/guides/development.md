@@ -98,6 +98,22 @@ A run writes `.cache/e2e/results.json`: each suite's verdict and time, and the t
 measure. A suite file also runs on its own against a running instance:
 `bun test ./test/e2e/suites/sleep.e2e.ts`.
 
+### Wake bench
+
+`scripts/bench-wake.sh` is a manual check, not part of the harness or CI. It times wakes of an imp
+put to sleep right after a cold boot, which a host kernel before Linux 6.7 makes slow
+([young guests](../architecture/sleep-and-wake.md#young-guests)). It drives impd through the CLI
+only, so it runs against any host, and it fails when the median wake passes `--limit-ms` (default
+500):
+
+```sh
+scripts/bench-wake.sh --cycles 3       # IMP_URL and IMP_TOKEN, or the saved login
+```
+
+On the WSL2 dev box (host kernel 6.6.87), the median wake was 793 ms with impd's wait off
+(`IMP_SLEEP_MIN_GUEST_UPTIME_MS=0`) and 142 ms with the default. On a host kernel with the fix, both
+should be fast; record the host's `uname -r` with the result.
+
 ## Daemon tests
 
 The daemon's tests need no VM. `packages/daemon/src/imps/test-imps.ts` runs the governed imp service

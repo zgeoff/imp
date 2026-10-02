@@ -27,6 +27,7 @@ const EnvSchema = z.object({
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
   IMP_BOOT_RESERVE_PERCENT: CountSchema.pipe(z.int().max(100)).default(50),
   IMP_WAKE_RESERVE_MIB: CountSchema.default(256),
+  IMP_SLEEP_MIN_GUEST_UPTIME_MS: z.coerce.number().pipe(z.int().nonnegative()).default(1500),
   IMP_DEFAULT_VCPUS: CountSchema.default(2),
   IMP_DEFAULT_MEMORY_MIB: CountSchema.default(2048),
   IMP_DNS: z.string().default('1.1.1.1,8.8.8.8').transform(splitList).pipe(DnsServersSchema),
@@ -68,6 +69,11 @@ export interface Config {
   // imp's memory, and the least it reserves before a wake (DESIGN 2.9)
   readonly bootReservePercent: number;
   readonly wakeReserveMib: number;
+
+  // a sleep waits until the guest has been up this long, so the next wake
+  // gets its clock back (docs/architecture/sleep-and-wake.md#young-guests);
+  // 0 turns the wait off
+  readonly sleepMinGuestUptimeMs: number;
   readonly defaultVcpus: number;
   readonly defaultMemoryMib: number;
   readonly dns: readonly string[];
@@ -143,6 +149,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     idleCpuPercent: parsed.IMP_IDLE_CPU_PERCENT,
     bootReservePercent: parsed.IMP_BOOT_RESERVE_PERCENT,
     wakeReserveMib: parsed.IMP_WAKE_RESERVE_MIB,
+    sleepMinGuestUptimeMs: parsed.IMP_SLEEP_MIN_GUEST_UPTIME_MS,
     defaultVcpus: parsed.IMP_DEFAULT_VCPUS,
     defaultMemoryMib: parsed.IMP_DEFAULT_MEMORY_MIB,
     dns: parsed.IMP_DNS,

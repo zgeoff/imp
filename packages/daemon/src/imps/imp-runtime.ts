@@ -6,7 +6,7 @@ import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
-import { findImpByName, listImps, updateImpActivity } from '../db/imps';
+import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
@@ -15,7 +15,7 @@ import type { ImpPaths } from '../storage/data-layout';
 import type { ActivityTracker } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
-import type { ImpVmOps } from './imp-vm-ops';
+import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
 import type { ShutdownGate } from './shutdown-gate';
@@ -151,19 +151,37 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     return policy.by === 'governor' || imp.lastActiveAt.getTime() <= policy.seenActiveAt;
   };
 
+  // The governor sleeps at once: it holds admission, and the boot waiting on
+  // it matters more than a slow wake later. Other sleeps wait for a young
+  // guest, and give way if the imp turns busy or is held meanwhile.
+  const buildYoungGuestWait = (id: string, policy: SleepPolicy): YoungGuestWait => {
+    if (policy.by === 'governor') {
+      return { wait: false };
+    }
+
+    const isWanted = async (): Promise<boolean> => {
+      const fresh = await findImpById(context.db, id);
+
+      return fresh !== undefined && isSleepAllowed(fresh, policy);
+    };
+
+    return { wait: true, isWanted };
+  };
+
   // the caller holds the lock; a failure leaves the imp as sleepImpVm left it
   const sleepIfRunning = async (
     imp: LockedImp | undefined,
     reason: string,
+    youngGuest?: YoungGuestWait,
   ): Promise<SleepOutcome> => {
     if (imp?.state !== 'running') {
       return 'skipped';
     }
 
     try {
-      await ops.sleepImpVm(imp, reason);
+      const after = await ops.sleepImpVm(imp, reason, youngGuest);
 
-      return 'slept';
+      return after.state === 'sleeping' ? 'slept' : 'skipped';
     } catch (error) {
       context.log(`impd: ${imp.name}: could not sleep: ${readErrorMessage(error)}`);
 
@@ -227,7 +245,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       lock.tryWithImpId,
       (imp, reason, policy) =>
         imp !== undefined && isSleepAllowed(imp, policy)
-          ? sleepIfRunning(imp, reason)
+          ? sleepIfRunning(imp, reason, buildYoungGuestWait(imp.id, policy))
           : Promise.resolve<SleepOutcome>('skipped'),
     ),
 

@@ -9,7 +9,7 @@ export interface ImpPaths extends FirecrackerPaths {
   readonly disk: string;
   readonly snapshotDir: string;
 
-  // the memory snapshot of a sleeping imp (docs/sleep-findings.md)
+  // the memory snapshot of a sleeping imp (docs/architecture/sleep-and-wake.md)
   readonly vmstate: string;
   readonly memFile: string;
   readonly snapshotMeta: string;

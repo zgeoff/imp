@@ -4,6 +4,7 @@ import type { AgentSession } from '../agent-client/agent-requests';
 import { updateImpActivity, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
+import { waitForGuestAge } from '../sleep/guest-age';
 import {
   buildSnapshotIdentity,
   findColdBootReason,
@@ -22,8 +23,16 @@ import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
 // snapshot writes put the whole mem file through the page cache
-// (docs/sleep-findings.md gotcha 8): a few at a time
+// (docs/architecture/sleep-and-wake.md gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
+
+// How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
+// for it, and give way once `isWanted` turns false, or sleep it at once.
+export type YoungGuestWait =
+  | { readonly wait: false }
+  | { readonly wait: true; readonly isWanted: () => Promise<boolean> };
+
+const ALWAYS_WAIT: YoungGuestWait = { wait: true, isWanted: () => Promise.resolve(true) };
 
 // The VM side of the lifecycle. Every operation takes a LockedImp: the caller
 // holds the imp's lock, and the record it passes is fresh.
@@ -40,9 +49,14 @@ export interface ImpVmOps {
   // agent shutdown, then the memory goes too: a stopped imp boots cold
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
-  // snapshots the VM and stops it (DESIGN 2.8). A failed snapshot leaves the
-  // VM running; a failure after the kill stops the imp.
-  readonly sleepImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
+  // snapshots the VM and stops it (DESIGN 2.8); a failed snapshot leaves it
+  // running, a failure after the kill stops the imp. A sleep that gives way
+  // to a busy imp returns it still running.
+  readonly sleepImpVm: (
+    imp: LockedImp,
+    reason: string,
+    youngGuest?: YoungGuestWait,
+  ) => Promise<LockedImp>;
 
   // the running imp, woken or booted first
   readonly requireRunningImp: (imp: LockedImp) => Promise<LockedImp>;
@@ -182,7 +196,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return seen.map((session) => setDetached(session));
   };
 
-  const sleepImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
+  const sleepImpVm = async (
+    imp: LockedImp,
+    reason: string,
+    youngGuest: YoungGuestWait = ALWAYS_WAIT,
+  ): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
     const paths = context.findPaths(imp.id);
@@ -190,6 +208,20 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     if (pid === null) {
       throw new Error(`${imp.name} is running without a firecracker pid`);
+    }
+
+    const waitedMs = youngGuest.wait
+      ? await waitForGuestAge({
+          readUptimeMs: () => context.vms.readGuestUptimeMs(paths),
+          minUptimeMs: context.config.sleepMinGuestUptimeMs,
+          isWanted: youngGuest.isWanted,
+        })
+      : 0;
+
+    if (waitedMs === null) {
+      context.log(`impd: ${imp.name}: sleep (${reason}) gave way: the imp turned busy`);
+
+      return imp;
     }
 
     const ramMib = context.readRamMib(pid, paths.apiSocket) ?? 0;
@@ -217,9 +249,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       }
 
       const sleepMs = Math.round(performance.now() - started);
+      const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
 
       context.log(
-        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason}), ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
+        `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
       );
     } catch (error) {
       if (context.vms.isVmAlive(pid, paths)) {
