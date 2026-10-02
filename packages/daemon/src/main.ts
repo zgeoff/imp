@@ -39,6 +39,7 @@ import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { createNetworkService } from './networks/network-service';
 import { printLog } from './process/print-log';
+import { runCommand } from './process/run-command';
 import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
 import { createForwardedPeers } from './proxy/forwarded-peers';
@@ -62,6 +63,7 @@ import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
 import { createCpuCgroups } from './vmm/cpu-cgroups';
+import { createJails } from './vmm/jail';
 import { createVmRunner } from './vmm/vm-runner';
 
 // the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
@@ -178,11 +180,26 @@ async function main(): Promise<void> {
   const cgroups = createCpuCgroups({ root: '/sys/fs/cgroup', log: printLog });
 
   if (!cgroups.isEnforced) {
-    printLog('impd: no cpu controller under /sys/fs/cgroup/imps; CPU limits are kept, not applied');
+    const effect =
+      config.jailerBin === null
+        ? 'CPU limits are kept, not applied'
+        : 'no jailed VM can start (IMP_JAILER=false runs them unjailed, with no limits)';
+
+    printLog(`impd: no cpu controller under /sys/fs/cgroup/imps; ${effect}`);
   }
 
   // spawns Firecracker once per version flag; system.info reuses it
   const identity = readHostIdentity(config.firecrackerBin, systemFiles, ipv6?.prefix.text ?? null);
+
+  // even with the jailer off, impd cleans up after jailed VMs it adopted
+  const jails = createJails({
+    jailerBin: config.jailerBin ?? 'jailer',
+    firecrackerBin: Bun.which(config.firecrackerBin) ?? config.firecrackerBin,
+    chrootBase: config.jailDir,
+    run: runCommand,
+    log: printLog,
+    killCgroup: cgroups.kill,
+  });
 
   const governed = createGovernedImps({
     cgroups,
@@ -190,7 +207,7 @@ async function main(): Promise<void> {
     db,
     images,
     taps: createTapDevices(),
-    vms: createVmRunner(),
+    vms: createVmRunner(jails),
     storage,
     identity,
     ipv6,

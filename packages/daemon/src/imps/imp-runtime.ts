@@ -20,6 +20,7 @@ import { toSeenSessions } from '../sessions/session-cache';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import type { BootTemplates } from '../templates/boot-templates';
+import { isJailedFirecracker } from '../vmm/firecracker-process';
 import type { ActivityTracker, ConnectionKind } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
@@ -429,8 +430,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       const imps = await listImps(context.db);
 
       // cgroups of imps destroyed while impd was down, or whose remove failed
-      for (const impId of context.cgroups.removeOrphans(new Set(imps.map((imp) => imp.id)))) {
+      const impIds = new Set(imps.map((imp) => imp.id));
+
+      for (const impId of context.cgroups.removeOrphans(impIds)) {
         context.log(`impd: removed the cgroup of imp ${impId}: no imp has that id`);
+      }
+
+      for (const impId of await context.vms.removeOrphanJails(impIds)) {
+        context.log(`impd: removed the jail of imp ${impId}: no imp has that id`);
       }
 
       await Promise.all(
@@ -449,13 +456,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               const ready = await context.vms.isAgentReady(paths);
 
               const note = ready ? '' : ' (the agent does not answer yet)';
+              const jailed = imp.pid !== null && isJailedFirecracker(imp.pid) ? 'jailed ' : '';
 
               context.log(
-                `impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`,
+                `impd: ${imp.name}: re-adopted ${jailed}firecracker pid ${String(imp.pid)}${note}`,
               );
 
               if (imp.pid !== null) {
-                context.cgroups.adopt(imp.id, imp.pid, imp.cpu);
+                context.cgroups.adopt(imp.id, imp.pid, imp.cpu, imp.memoryMib);
 
                 startCounting(context, imp, imp.pid);
               }

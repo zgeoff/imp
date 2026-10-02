@@ -26,6 +26,7 @@ import { createBootTemplates } from '../templates/boot-templates';
 import type { BootTemplates } from '../templates/boot-templates';
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
+import type { JailUser } from '../vmm/jail';
 import type { VmRunner } from '../vmm/vm-runner';
 import { readCpuTicks, readOwnedRamMib, readRssMib, readVmMemory } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
@@ -140,6 +141,9 @@ export interface ImpContext {
   readonly sessions: SessionCache;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
+
+  // who the imp's Firecracker runs as; null runs it unjailed (IMP_JAILER)
+  readonly findJailUser: (imp: Readonly<ImpRecord>) => JailUser | null;
   readonly egress: ImpEgress;
   readonly cgroups: CpuCgroups;
   readonly hostCpus: number;
@@ -202,6 +206,10 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     sessions: createSessionCache(),
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
+    findJailUser: (imp) =>
+      deps.config.jailerBin === null || imp.jailUid === null
+        ? null
+        : { uid: imp.jailUid, gid: imp.jailUid },
     egress: deps.egress ?? NO_EGRESS,
     cgroups,
     hostCpus: deps.hostCpus ?? availableParallelism(),

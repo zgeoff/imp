@@ -2,12 +2,16 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { buildAgentOutdatedError } from '../agent-client/agent-outdated';
 import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
-import type { FirecrackerPaths } from '../vmm/firecracker-process';
+import type { FirecrackerPaths, VmOwner } from '../vmm/firecracker-process';
 import { TemplateRestoreError } from '../vmm/template-vm';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
 export const FAKE_AGENT_VERSION = '0.1.0';
+
+// whom every VM runs as unless a test says otherwise: impd's own uid, as an
+// unjailed Firecracker does
+const IMPD_OWNER: VmOwner = { uid: process.getuid?.() ?? 0, cgroup: null };
 
 export type VmStep =
   | 'boot'
@@ -52,7 +56,7 @@ export function buildFakeVmm() {
 
   // what each VM serves and does, and the pid files starts wrote; only a pid
   // in `alive` counts
-  const vms = new Map<number, { apiSocket: string; state: InstanceState }>();
+  const vms = new Map<number, { apiSocket: string; state: InstanceState; owner: VmOwner }>();
   const pidFiles = new Map<string, number>();
 
   const wakes: number[] = [];
@@ -121,9 +125,14 @@ export function buildFakeVmm() {
     return counter.nextPid;
   };
 
-  const setVm = (pid: number, paths: Readonly<FirecrackerPaths>, state: InstanceState): void => {
+  const setVm = (
+    pid: number,
+    paths: Readonly<FirecrackerPaths>,
+    state: InstanceState,
+    owner: VmOwner = IMPD_OWNER,
+  ): void => {
     alive.add(pid);
-    vms.set(pid, { apiSocket: paths.apiSocket, state });
+    vms.set(pid, { apiSocket: paths.apiSocket, state, owner });
   };
 
   // the newest live VM on the socket: the one its API answers from
@@ -235,6 +244,9 @@ export function buildFakeVmm() {
 
           return {};
         }),
+      releaseVm: () => Promise.resolve(),
+      removeJail: () => Promise.resolve(),
+      removeOrphanJails: () => Promise.resolve([]),
       stopVm: (pid, _paths, graceful) =>
         runInGeneration(async () => {
           // fail and die: the VM survived SIGKILL
@@ -285,7 +297,7 @@ export function buildFakeVmm() {
 
           return outcome === 'ok' ? (findServing(paths)?.state ?? null) : null;
         }),
-      resumeVm: (paths) =>
+      resumeVm: (_pid, paths) =>
         runInGeneration(() => {
           const vm = findServing(paths);
 
@@ -299,7 +311,8 @@ export function buildFakeVmm() {
       listVms: () =>
         [...vms]
           .filter(([pid]) => alive.has(pid))
-          .map(([pid, vm]) => ({ pid, apiSocket: vm.apiSocket })),
+          .map(([pid, vm]) => ({ pid, apiSocket: vm.apiSocket, owner: vm.owner })),
+      readVmOwner: (pid) => vms.get(pid)?.owner ?? IMPD_OWNER,
       finishWake: (paths) =>
         runInGeneration(async () => {
           const outcome = await pickOutcome('agentReady');
@@ -433,13 +446,14 @@ export function buildFakeVmm() {
     },
 
     // a Firecracker that is running without any impd knowing it yet; given
-    // the imp's paths, it serves its socket in `state`, with a pid file
-    // unless the start died before it wrote one
+    // the imp's paths, it serves its socket in `state`, as `owner`, with a
+    // pid file unless the start died before it wrote one
     spawnOrphan: (
       orphan: {
         readonly paths: Readonly<ImpPaths>;
         readonly state?: InstanceState;
         readonly pidFile?: boolean;
+        readonly owner?: VmOwner;
       } | null = null,
     ): number => {
       const pid = startPid();
@@ -447,7 +461,7 @@ export function buildFakeVmm() {
       alive.add(pid);
 
       if (orphan !== null) {
-        setVm(pid, orphan.paths, orphan.state ?? 'Running');
+        setVm(pid, orphan.paths, orphan.state ?? 'Running', orphan.owner);
 
         if (orphan.pidFile ?? true) {
           pidFiles.set(orphan.paths.pidFile, pid);
@@ -455,6 +469,15 @@ export function buildFakeVmm() {
       }
 
       return pid;
+    },
+
+    // whom the VM `pid` runs as from now on, as a recycled pid would
+    setOwner: (pid: number, owner: VmOwner) => {
+      const vm = vms.get(pid);
+
+      if (vm !== undefined) {
+        vm.owner = owner;
+      }
     },
 
     // what the VM `pid` does now, as GET / reports it

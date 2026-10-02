@@ -4,9 +4,11 @@ import type { ImageRecord } from '../db/images';
 import { createImpInFreeSlot, findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { countSlots } from '../net/addressing';
+import { readErrorMessage } from '../read-error-message';
 import { resolveCpuSettings } from './cpu-limit';
 import type { ImpContext } from './imp-context';
 
+const CREATE_TRIES = 3;
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 
 interface NewImpInput {
@@ -35,8 +37,8 @@ export async function createImpRecord(
 
   const name = await resolveImpName(context, input.name);
 
-  try {
-    return await createImpInFreeSlot(
+  const createRecord = () =>
+    createImpInFreeSlot(
       context.db,
       {
         id,
@@ -57,13 +59,23 @@ export async function createImpRecord(
         findIp: (slot) => context.findAddress(slot).guestIp,
       },
     );
-  } catch (error) {
-    // slot and ip come from the same transaction: only the name can clash
-    if (isUniqueViolation(error)) {
-      throw buildConflictError('imp', name);
-    }
 
-    throw error;
+  // slot, ip and jail uid come from one transaction, so only the name should
+  // clash; a jail uid clash is a race to retry, not the caller's mistake
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await createRecord();
+    } catch (error) {
+      if (isJailUidClash(error) && attempt < CREATE_TRIES) {
+        continue;
+      }
+
+      if (isUniqueViolation(error) && !isJailUidClash(error)) {
+        throw buildConflictError('imp', name);
+      }
+
+      throw error;
+    }
   }
 }
 
@@ -84,6 +96,10 @@ async function resolveImpName(context: ImpContext, requested: string | undefined
       return name;
     }
   }
+}
+
+function isJailUidClash(error: unknown): boolean {
+  return isUniqueViolation(error) && readErrorMessage(error).includes('jail_uid');
 }
 
 function isUniqueViolation(error: unknown): boolean {

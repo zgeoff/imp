@@ -8,7 +8,13 @@ import { writeToDisk } from '../storage/write-file-durably';
 import { VM_DEVICES, createMarks, setupVm } from './configure-vm';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
-import { readLogTail, startFirecracker, stopProcess, waitForExit } from './firecracker-process';
+import {
+  buildFirecrackerCommand,
+  readLogTail,
+  startFirecracker,
+  stopProcess,
+  waitForExit,
+} from './firecracker-process';
 import type { FirecrackerPaths } from './firecracker-process';
 import type { StartedVm } from './vm-runner';
 
@@ -71,7 +77,10 @@ export interface TemplateRestorePlan {
 // enough, then pauses it and writes a full snapshot. The VM is gone after,
 // whatever happens.
 export async function buildTemplateVm(plan: Readonly<TemplateBuildPlan>): Promise<void> {
-  const pid = await startFirecracker(plan.firecrackerBin, plan.paths);
+  const pid = await startFirecracker(
+    buildFirecrackerCommand(plan.firecrackerBin, plan.paths.apiSocket),
+    plan.paths,
+  );
 
   try {
     const api = createFirecrackerClient(plan.paths.apiSocket);
@@ -147,7 +156,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
   // startFirecracker puts the process in the cgroup before the load
   const pid = await startFirecracker(
-    plan.firecrackerBin,
+    buildFirecrackerCommand(plan.firecrackerBin, plan.paths.apiSocket),
     plan.paths,
     plan.cgroup?.procsPath ?? null,
   );

@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isFirecrackerAlive, listFirecrackers, readPidFile } from './firecracker-process';
+import { readProcessCgroup } from './process-owner';
 
 // A stand-in whose command line reads `firecracker ... --api-sock <socket>`,
 // as /proc shows a real one
@@ -46,7 +47,12 @@ test('/proc shows every live firecracker with the socket it serves', async () =>
   try {
     const found = listFirecrackers();
 
-    expect(found).toContainEqual({ pid: child.pid, apiSocket });
+    // whom it runs as, which a jailed process cannot forge as its argv
+    expect(found).toContainEqual({
+      pid: child.pid,
+      apiSocket,
+      owner: { uid: process.getuid?.() ?? 0, cgroup: readProcessCgroup(child.pid) },
+    });
   } finally {
     child.kill('SIGKILL');
 

@@ -24,6 +24,13 @@ A fork copies the source's limit and weight. A change to a sleeping imp applies 
 sleep or a wake lifts the limit while Firecracker writes or loads the memory snapshot, so a low
 limit never slows those steps.
 
+## The memory limit
+
+Each VM's cgroup also caps its memory a little over the guest's: 256 MiB more than `--memory`, or an
+eighth more above 2 GiB, with no swap. A guest never reaches it on its own; a VM that leaks host
+memory does. The kernel then kills the whole VM, and `imp ls --json` shows the stopped imp with the
+error `its memory limit killed firecracker`. See [cgroups](../architecture/daemon.md#cgroups).
+
 **NOTE:** impd enforces limits only when the host container runs in a private cgroup v2 namespace
 (`--cgroupns=private`, which `scripts/dev.sh`, `deploy/imp-host.service` and `deploy/compose.yaml`
 pass). Without it, impd logs `CPU limits are kept, not applied`, stores the settings, and

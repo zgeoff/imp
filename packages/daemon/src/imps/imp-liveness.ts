@@ -2,7 +2,9 @@ import { findImpById, updateImpStateIf } from '../db/imps';
 import type { ImpRecord, ImpStateChange } from '../db/imps';
 import { hasSnapshot, readLoadingMeta, readSnapshotMeta } from '../sleep/snapshot-meta';
 import type { ImpPaths } from '../storage/data-layout';
+import { isImpVm } from '../vmm/firecracker-process';
 import type { ImpContext } from './imp-context';
+import { OOM_KILL_TRIGGER } from './oom-kill';
 
 // A dead VM or a lost snapshot means stopped; a VM that died after its sleep
 // wrote the snapshot means sleeping. An unlocked caller passes `canRepair`
@@ -18,14 +20,21 @@ export async function checkLiveness(
   const lostSnapshot =
     imp.state === 'sleeping' && !hasSnapshot(paths) && readLoadingMeta(paths) === null;
 
+  // a recycled pid whose argv a jail forged is alive, but not this imp's
   const lostVm =
-    imp.state === 'running' && (imp.pid === null || !context.vms.isVmAlive(imp.pid, paths));
+    imp.state === 'running' &&
+    (imp.pid === null ||
+      !context.vms.isVmAlive(imp.pid, paths) ||
+      !isImpVm(context.vms.readVmOwner(imp.pid), imp.id, imp.jailUid));
 
   if ((!lostSnapshot && !lostVm) || !canRepair) {
     return imp;
   }
 
   const change = lostVm ? findSleptChange(imp, paths) : null;
+
+  // read before the cgroup goes: whether its memory limit killed this VM
+  const trigger = lostVm && context.cgroups.hasOomKillSinceStart(imp.id) ? OOM_KILL_TRIGGER : null;
 
   const repaired = await updateImpStateIf(
     context.db,
@@ -39,6 +48,7 @@ export async function checkLiveness(
 
       // a VM gone while it ran is a recovery; a lost snapshot fails the wake
       nextBootCause: lostVm ? 'recovery' : 'wake_fallback',
+      ...(trigger !== null && { detail: { trigger }, error: trigger }),
     },
   );
 
@@ -48,9 +58,14 @@ export async function checkLiveness(
     return current ?? imp;
   }
 
-  const what = lostSnapshot ? 'the snapshot is gone' : 'firecracker is gone';
+  const what = lostSnapshot ? 'the snapshot is gone' : (trigger ?? 'firecracker is gone');
 
   context.log(`impd: ${imp.name}: ${what}; marked it ${repaired.state}`);
+
+  // the VM is gone; the jail's mounts of it can go
+  if (lostVm) {
+    await context.vms.releaseVm(paths);
+  }
 
   // a stopped imp needs no cgroup; a sleeping one wakes into it
   if (repaired.state === 'stopped') {

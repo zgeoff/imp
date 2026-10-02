@@ -335,3 +335,151 @@ test('a wake cut during its load whose VM runs on is adopted, and its record goe
   expect(readLoadingMeta(paths)).toBeNull();
   expect(readSnapshotMeta(paths)).toBeNull();
 });
+
+// A process in imp `attacker`'s jail that execs `firecracker --api-sock` with
+// another imp's socket: its argv says the victim, its uid and cgroup do not.
+function buildForgedOwner(attacker: Readonly<{ id: string; jailUid: number | null }>) {
+  return { uid: attacker.jailUid ?? 900_000, cgroup: `/imps/${attacker.id}` };
+}
+
+test('a VM forged on a sleeping imp socket from another jail is ignored, and the snapshot stays', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'evil' });
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const evil = await findImpByName(ctx.db, 'evil');
+  const paths = await ctx.findPaths('dev');
+
+  if (evil === undefined) {
+    throw new Error('no evil imp');
+  }
+
+  // with no VM behind dev's socket, an adopt would find no state and drop the
+  // snapshot; with the pid file pointing at it too
+  const forged = ctx.fake.spawnOrphan({ paths, owner: buildForgedOwner(evil) });
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(imp?.state).toBe('sleeping');
+  expect(readSnapshotMeta(paths)).not.toBeNull();
+  expect(ctx.fake.alive.has(forged)).toBeTrue();
+  expect(ctx.fake.stops.map((stop) => stop.pid)).not.toContain(forged);
+});
+
+test('a VM forged on a running imp socket from another jail is not killed as its orphan', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'evil' });
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const evil = await findImpByName(ctx.db, 'evil');
+  const running = await findImpByName(ctx.db, 'dev');
+  const paths = await ctx.findPaths('dev');
+
+  if (evil === undefined || running?.pid === undefined || running.pid === null) {
+    throw new Error('no imps');
+  }
+
+  const forged = ctx.fake.spawnOrphan({ paths, owner: buildForgedOwner(evil) });
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(imp).toMatchObject({ state: 'running', pid: running.pid });
+  expect(ctx.fake.alive.has(running.pid)).toBeTrue();
+  expect(ctx.fake.stops).toEqual([]);
+  expect(ctx.fake.alive.has(forged)).toBeTrue();
+});
+
+test('a jailed VM a cut wake left is adopted by its own uid, or by its own cgroup', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.create({ name: 'box' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'box' });
+
+  const dev = await findImpByName(ctx.db, 'dev');
+  const box = await findImpByName(ctx.db, 'box');
+
+  if (dev === undefined || box === undefined) {
+    throw new Error('no imps');
+  }
+
+  const devPaths = await ctx.findPaths('dev');
+  const boxPaths = await ctx.findPaths('box');
+
+  const byUid = ctx.fake.spawnOrphan({
+    paths: devPaths,
+    owner: { uid: dev.jailUid, cgroup: '/init' },
+  });
+
+  const byCgroup = ctx.fake.spawnOrphan({
+    paths: boxPaths,
+    owner: { uid: null, cgroup: `/imps/${box.id}` },
+  });
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const adoptedDev = await findImpByName(ctx.db, 'dev');
+  const adoptedBox = await findImpByName(ctx.db, 'box');
+
+  expect(adoptedDev).toMatchObject({ state: 'running', pid: byUid });
+  expect(adoptedBox).toMatchObject({ state: 'running', pid: byCgroup });
+});
+
+test('a VM forged on the socket of an imp with no record is not killed; one in its cgroup is', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'evil' });
+
+  const evil = await findImpByName(ctx.db, 'evil');
+
+  if (evil === undefined) {
+    throw new Error('no evil imp');
+  }
+
+  const paths = buildImpPaths(ctx.dataDir, 'gone');
+  const forged = ctx.fake.spawnOrphan({ paths, owner: buildForgedOwner(evil) });
+  const jailed = ctx.fake.spawnOrphan({ paths, owner: { uid: 900_123, cgroup: '/imps/gone' } });
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  expect(ctx.fake.alive.has(forged)).toBeTrue();
+  expect(ctx.fake.alive.has(jailed)).toBeFalse();
+});
+
+test('a recycled pid whose argv another jail forged is a lost VM, never re-adopted into the cgroup', async () => {
+  await using ctx = await setupCrashTest();
+
+  await ctx.client.imps.create({ name: 'evil' });
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const evil = await findImpByName(ctx.db, 'evil');
+  const running = await findImpByName(ctx.db, 'dev');
+
+  if (evil === undefined || running?.pid === undefined || running.pid === null) {
+    throw new Error('no imps');
+  }
+
+  // dev's VM died while impd was down, and evil's jail got its pid
+  ctx.fake.setOwner(running.pid, buildForgedOwner(evil));
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  expect(imp).toMatchObject({ state: 'stopped', pid: null });
+});

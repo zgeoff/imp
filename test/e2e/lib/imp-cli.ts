@@ -29,6 +29,7 @@ const ImpRowSchema = z.object({
   url: z.string(),
   lastActiveAt: z.string(),
   ramMib: z.number().optional(),
+  error: z.string().optional(),
   sessions: z.number().optional(),
   diskUsage: z
     .object({ exclusiveBytes: z.number(), sharedBytes: z.number(), isPartial: z.boolean() })

@@ -33,6 +33,7 @@ export const FAKE_IMP: ImpRecord = {
   isIdentityResetPending: false,
   publicAuth: null,
   moveState: null,
+  jailUid: 900_000,
 };
 
 // events a fake stream yields, in order; null ends the stream

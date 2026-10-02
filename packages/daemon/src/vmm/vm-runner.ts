@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, rmSync } from 'node:fs';
+import { lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { sendGrow, sendPing, sendResumed, sendShutdown } from '../agent-client/agent-requests';
 import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
@@ -11,17 +11,23 @@ import { BASE_BOOT_ARGS, VM_DEVICES, createMarks, setupVm } from './configure-vm
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import type { InstanceState } from './firecracker-client';
+import type { FoundVm, VmOwner } from './firecracker-process';
 import {
+  buildFirecrackerCommand,
   isFirecrackerAlive,
   listFirecrackers,
   readLogTail,
   readPidFile,
+  readVmOwner,
   startFirecracker,
   stopProcess,
   waitForExit,
 } from './firecracker-process';
+import { setupSnapshotFile } from './jail';
+import type { JailUser, Jails } from './jail';
 import { buildTemplateVm, loadTemplateVm } from './template-vm';
 import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
+import { createOwnedFile } from './vm-files';
 
 const AGENT_DEADLINE_MS = 15_000;
 const SHUTDOWN_TIMEOUT_MS = 10_000;
@@ -49,6 +55,9 @@ export interface VmPlan {
   // the first boot of an imp from a template: the agent gives it a new
   // machine-id and ssh host keys (docs/guides/templates.md#identity)
   readonly isIdentityReset: boolean;
+
+  // the imp's jail user; null runs Firecracker unjailed, as root
+  readonly jail: JailUser | null;
 }
 
 export interface StartedVm {
@@ -72,12 +81,10 @@ interface WakePlan {
   readonly firecrackerBin: string;
   readonly paths: ImpPaths;
   readonly cgroup: ImpCgroup | null;
-}
+  readonly jail: JailUser | null;
 
-// a live Firecracker, by the API socket it serves
-interface FoundVm {
-  readonly pid: number;
-  readonly apiSocket: string;
+  // the files the snapshot's VM reads: the system drive
+  readonly readOnlyFiles: readonly string[];
 }
 
 // what the rest of a wake learned about the VM
@@ -104,8 +111,19 @@ export interface VmRunner {
   // the process gone, when the load or the agent fails
   readonly wakeVm: (plan: WakePlan) => Promise<StartedVm>;
 
-  // agent shutdown first when `graceful`, SIGKILL after the timeout
+  // agent shutdown first when `graceful`, SIGKILL after the timeout; its
+  // jail's mounts go once it has exited
   readonly stopVm: (pid: number, paths: ImpPaths, graceful: boolean) => Promise<void>;
+
+  // the jail's mounts of a VM that exited by itself
+  readonly releaseVm: (paths: ImpPaths) => Promise<void>;
+
+  // a destroyed imp's jail, mounts and directory
+  readonly removeJail: (paths: ImpPaths) => Promise<void>;
+
+  // the jails of imps not in `impIds`, as after destroys while impd was
+  // down; returns their ids
+  readonly removeOrphanJails: (impIds: ReadonlySet<string>) => Promise<string[]>;
   readonly isVmAlive: (pid: number, paths: ImpPaths) => boolean;
   readonly isAgentReady: (paths: ImpPaths, deadlineMs?: number) => Promise<boolean>;
 
@@ -119,12 +137,14 @@ export interface VmRunner {
 
   // what the VM behind the API socket does; null when nothing answers
   readonly readVmState: (paths: ImpPaths) => Promise<InstanceState | null>;
-  readonly resumeVm: (paths: ImpPaths) => Promise<void>;
+  readonly resumeVm: (pid: number, paths: ImpPaths) => Promise<void>;
 
   // the pid file a start writes, and every live Firecracker: a start cut
-  // short may have left a VM without the file
+  // short may have left a VM without the file. Either can name a process a
+  // jailed VM forged: its owner says whose it is.
   readonly readPid: (paths: ImpPaths) => number | null;
   readonly listVms: () => readonly FoundVm[];
+  readonly readVmOwner: (pid: number) => VmOwner;
 
   // the rest of a wake, for a VM that loaded its snapshot under an impd that
   // died: the agent's ping, then the guest clock
@@ -157,9 +177,62 @@ export function buildBootArgs(plan: Readonly<VmPlan>): string {
   ].join(' ');
 }
 
-export function createVmRunner(): VmRunner {
+// `jails` releases a jail whatever started the VM: an impd with the jailer
+// off still stops a jailed VM it adopted
+export function createVmRunner(jails: Jails): VmRunner {
+  const removeVmMounts = (paths: ImpPaths): Promise<void> => jails.release(paths.impId);
+
+  // the jailer's command in a prepared chroot, or Firecracker's own beside
+  // a swept run/
+  const buildCommand = async (
+    bin: string,
+    paths: ImpPaths,
+    jail: JailUser | null,
+    readOnlyFiles: readonly string[],
+  ): Promise<readonly string[]> => {
+    if (jail !== null) {
+      return jails.prepare({ impId: paths.impId, user: jail, paths, readOnlyFiles });
+    }
+
+    await jails.sweepRunDir(paths);
+
+    return buildFirecrackerCommand(bin, paths.apiSocket);
+  };
+
+  // a prepare or spawn that fails leaves no jail mounts behind
+  const startVmProcess = async (
+    command: () => Promise<readonly string[]>,
+    paths: ImpPaths,
+    cgroup: ImpCgroup | null,
+  ): Promise<number> => {
+    try {
+      const argv = await command();
+
+      return await startFirecracker(argv, paths, cgroup?.procsPath ?? null);
+    } catch (error) {
+      await removeVmMounts(paths);
+
+      throw error;
+    }
+  };
+
+  // the VM is gone: its jail's mounts can go
+  const stopVmNow = async (pid: number, paths: ImpPaths): Promise<boolean> => {
+    stopProcess(pid, 'SIGKILL');
+
+    const exited = await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS);
+
+    if (exited) {
+      await removeVmMounts(paths);
+    }
+
+    return exited;
+  };
+
   const stopVm = async (pid: number, paths: ImpPaths, graceful: boolean): Promise<void> => {
     if (!isFirecrackerAlive(pid, paths.apiSocket)) {
+      await removeVmMounts(paths);
+
       return;
     }
 
@@ -170,6 +243,8 @@ export function createVmRunner(): VmRunner {
         const exited = await waitForExit(pid, paths.apiSocket, SHUTDOWN_TIMEOUT_MS);
 
         if (exited) {
+          await removeVmMounts(paths);
+
           return;
         }
       } catch {
@@ -177,9 +252,7 @@ export function createVmRunner(): VmRunner {
       }
     }
 
-    stopProcess(pid, 'SIGKILL');
-
-    const killed = await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS);
+    const killed = await stopVmNow(pid, paths);
 
     if (!killed) {
       throw new Error(`firecracker ${String(pid)} survived SIGKILL`);
@@ -191,11 +264,13 @@ export function createVmRunner(): VmRunner {
       const timer = createMarks();
       const setMark = timer.setMark;
 
-      const pid = await startFirecracker(
-        plan.firecrackerBin,
-        plan.paths,
-        plan.cgroup?.procsPath ?? null,
-      );
+      const buildArgv = () =>
+        buildCommand(plan.firecrackerBin, plan.paths, plan.jail, [
+          plan.kernelPath,
+          plan.systemDrivePath,
+        ]);
+
+      const pid = await startVmProcess(buildArgv, plan.paths, plan.cgroup);
 
       setMark('spawn');
 
@@ -219,6 +294,8 @@ export function createVmRunner(): VmRunner {
 
         setMark('configure');
 
+        jails.seal(plan.paths, pid);
+
         await api.instanceStart();
 
         setMark('instanceStart');
@@ -236,7 +313,7 @@ export function createVmRunner(): VmRunner {
           bootId: ping.boot_id,
         };
       } catch (error) {
-        stopProcess(pid, 'SIGKILL');
+        await stopVmNow(pid, plan.paths);
 
         // the disk stays open until the process is gone: a retry must not
         // put a second VM on it
@@ -255,9 +332,12 @@ export function createVmRunner(): VmRunner {
       const api = createFirecrackerClient(paths.apiSocket);
       const files = { snapshotPath: `${target.vmstate}.new`, memFilePath: `${target.memFile}.new` };
 
+      // the VM writes into files impd made, owned like its disk
+      const owner = lstatSync(paths.disk);
+
       mkdirSync(target.snapshotDir, { recursive: true });
-      rmSync(files.snapshotPath, { force: true });
-      rmSync(files.memFilePath, { force: true });
+      createOwnedFile(files.snapshotPath, owner);
+      createOwnedFile(files.memFilePath, owner);
       cgroup?.liftLimit();
 
       // a pause that times out may still land: resume or kill either way
@@ -278,9 +358,7 @@ export function createVmRunner(): VmRunner {
         } catch {
           // paused for good: kill it, the caller sees it gone and boots the
           // disk cold next time
-          stopProcess(pid, 'SIGKILL');
-
-          await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS);
+          await stopVmNow(pid, paths);
         }
 
         throw error;
@@ -289,13 +367,16 @@ export function createVmRunner(): VmRunner {
       setMark('snapshot');
 
       // the VM is paused and its snapshot is on disk: nothing to shut down
-      stopProcess(pid, 'SIGKILL');
-
-      if (!(await waitForExit(pid, paths.apiSocket, KILL_TIMEOUT_MS))) {
+      if (!(await stopVmNow(pid, paths))) {
         throw new Error(`firecracker ${String(pid)} survived SIGKILL`);
       }
 
       setMark('kill');
+
+      // nothing of the VM runs now: its files go back to impd before any load
+      for (const file of [files.snapshotPath, files.memFilePath]) {
+        setupSnapshotFile(file, owner.gid);
+      }
 
       // never write into the old mem file: a restored VM mapped it MAP_PRIVATE
       renameSync(files.snapshotPath, target.vmstate);
@@ -325,10 +406,14 @@ export function createVmRunner(): VmRunner {
       plan.cgroup?.liftLimit();
 
       // startFirecracker removes the stale vsock socket, which would end the load
-      const pid = await startFirecracker(
-        plan.firecrackerBin,
-        plan.paths,
-        plan.cgroup?.procsPath ?? null,
+      const buildArgv = () =>
+        buildCommand(plan.firecrackerBin, plan.paths, plan.jail, plan.readOnlyFiles);
+
+      const pid = await startVmProcess(buildArgv, plan.paths, plan.cgroup).catch(
+        (error: unknown) => {
+          plan.cgroup?.applyLimit();
+          throw error;
+        },
       );
 
       setMark('spawn');
@@ -336,10 +421,15 @@ export function createVmRunner(): VmRunner {
       try {
         const api = createFirecrackerClient(plan.paths.apiSocket);
 
+        // the load binds the vsock socket; the seal comes before the guest runs
         await api.loadSnapshot(
           { snapshotPath: plan.paths.vmstate, memFilePath: plan.paths.memFile },
-          { resumeVm: true },
+          { resumeVm: false },
         );
+
+        jails.seal(plan.paths, pid);
+
+        await api.resume();
 
         plan.cgroup?.applyLimit();
         setMark('load');
@@ -366,10 +456,9 @@ export function createVmRunner(): VmRunner {
           bootId: ping.boot_id,
         };
       } catch (error) {
-        stopProcess(pid, 'SIGKILL');
+        await stopVmNow(pid, plan.paths);
 
-        await waitForExit(pid, plan.paths.apiSocket, KILL_TIMEOUT_MS);
-
+        plan.cgroup?.applyLimit();
         const reason = readErrorMessage(error);
 
         throw new Error(`wake failed: ${reason}\n${readLogTail(plan.paths.logFile, 5)}`, {
@@ -378,6 +467,9 @@ export function createVmRunner(): VmRunner {
       }
     },
     stopVm,
+    releaseVm: removeVmMounts,
+    removeJail: (paths) => jails.remove(paths.impId),
+    removeOrphanJails: jails.removeOrphans,
     growDrive: async (paths, diskBytes) => {
       await createFirecrackerClient(paths.apiSocket).patchDrive(
         VM_DEVICES.drives.rootfs,
@@ -412,9 +504,22 @@ export function createVmRunner(): VmRunner {
         return null;
       }
     },
-    resumeVm: (paths) => createFirecrackerClient(paths.apiSocket).resume(),
+    resumeVm: async (pid, paths) => {
+      // a wake cut short between the load and its seal: seal before the guest
+      // runs, and kill a VM that left anything in run/
+      try {
+        jails.seal(paths, pid);
+      } catch (error) {
+        await stopVmNow(pid, paths);
+
+        throw error;
+      }
+
+      await createFirecrackerClient(paths.apiSocket).resume();
+    },
     readPid: (paths) => readPidFile(paths.pidFile),
     listVms: listFirecrackers,
+    readVmOwner,
     finishWake: async (paths) => {
       const ping = await waitForAgent(paths.vsockSocket, {
         deadlineMs: WAKE_AGENT_DEADLINE_MS,

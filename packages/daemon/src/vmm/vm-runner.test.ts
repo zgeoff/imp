@@ -1,14 +1,26 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, encodeJsonFrame } from '../agent-client/frame-codec';
 import { deriveSlotAddress, parseSubnet } from '../net/addressing';
 import { parsePrefix64 } from '../net/addressing6';
+import { readErrorMessage } from '../read-error-message';
 import { buildImpPaths } from '../storage/data-layout';
 import { isFirecrackerAlive } from './firecracker-process';
+import type { Jails } from './jail';
 import { buildBootArgs, createVmRunner } from './vm-runner';
+
+// a VM these tests start runs unjailed
+const NO_JAILS: Jails = {
+  prepare: () => Promise.reject(new Error('no jails here')),
+  release: () => Promise.resolve(),
+  sweepRunDir: () => Promise.resolve(),
+  remove: () => Promise.resolve(),
+  removeOrphans: () => Promise.resolve([]),
+  seal: () => {},
+};
 
 function buildPlan(isIdentityReset: boolean) {
   const address = deriveSlotAddress(3, { subnet: parseSubnet('10.66.0.0/16'), portBase: 20_000 });
@@ -26,6 +38,7 @@ function buildPlan(isIdentityReset: boolean) {
     dns: ['1.1.1.1', '8.8.8.8'],
     cgroup: null,
     isIdentityReset,
+    jail: null,
   };
 }
 
@@ -64,6 +77,7 @@ async function setupFailingPause(resumeStatus: number) {
   const paths = buildImpPaths(dir, 'vm');
 
   mkdirSync(paths.runDir, { recursive: true });
+  writeFileSync(paths.disk, '');
 
   const calls: string[] = [];
 
@@ -123,7 +137,7 @@ test('a sleep whose pause fails resumes the VM and leaves it running, its limit 
     },
   };
 
-  const rejection = await createVmRunner()
+  const rejection = await createVmRunner(NO_JAILS)
     .sleepVm(vm.child.pid, vm.paths, cgroup, vm.paths)
     .catch((error: unknown) => error);
 
@@ -136,7 +150,7 @@ test('a sleep whose pause fails resumes the VM and leaves it running, its limit 
 test('a sleep whose pause and resume both fail kills the VM', async () => {
   await using vm = await setupFailingPause(500);
 
-  const rejection = await createVmRunner()
+  const rejection = await createVmRunner(NO_JAILS)
     .sleepVm(vm.child.pid, vm.paths, null, vm.paths)
     .catch((error: unknown) => error);
 
@@ -156,7 +170,7 @@ test('a wedged agent gives no guest uptime within a short timeout', async () => 
   try {
     const started = performance.now();
 
-    const uptime = await createVmRunner().readGuestUptimeMs(paths);
+    const uptime = await createVmRunner(NO_JAILS).readGuestUptimeMs(paths);
 
     expect(uptime).toBeNull();
     expect(performance.now() - started).toBeLessThan(1000);
@@ -178,7 +192,7 @@ test('an agent that cannot read its clock gives no guest uptime', async () => {
   });
 
   try {
-    const uptime = await createVmRunner().readGuestUptimeMs(paths);
+    const uptime = await createVmRunner(NO_JAILS).readGuestUptimeMs(paths);
 
     expect(uptime).toBeNull();
   } finally {
@@ -209,11 +223,11 @@ test('the VM state comes from GET /, and a resume patches the VM', async () => {
   });
 
   try {
-    const runner = createVmRunner();
+    const runner = createVmRunner(NO_JAILS);
 
     const state = await runner.readVmState(paths);
 
-    await runner.resumeVm(paths);
+    await runner.resumeVm(process.pid, paths);
     await server.stop(true);
 
     const gone = await runner.readVmState(paths);
@@ -225,4 +239,70 @@ test('the VM state comes from GET /, and a resume patches the VM', async () => {
 
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a resume whose seal finds anything planted in run/ kills the VM, never resumes it', async () => {
+  await using vm = await setupFailingPause(204);
+
+  const released: string[] = [];
+
+  const jails: Jails = {
+    ...NO_JAILS,
+    seal: () => {
+      throw new Error(
+        'jail vm: the VM left planted in run/; a VM that writes there is compromised',
+      );
+    },
+    release: (impId) => {
+      released.push(impId);
+
+      return Promise.resolve();
+    },
+  };
+
+  const rejection = await createVmRunner(jails)
+    .resumeVm(vm.child.pid, vm.paths)
+    .catch((error: unknown) => error);
+
+  expect(readErrorMessage(rejection)).toContain('compromised');
+  expect(vm.calls).toEqual([]);
+  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBeFalse();
+  expect(released).toEqual(['vm']);
+});
+
+test('a jail prepare that fails partway releases its mounts and restores the limit', async () => {
+  const calls: string[] = [];
+
+  const jails: Jails = {
+    ...NO_JAILS,
+    prepare: () => Promise.reject(new Error('mount --rbind: no space')),
+    release: (impId) => {
+      calls.push(`release ${impId}`);
+
+      return Promise.resolve();
+    },
+  };
+
+  const cgroup = {
+    procsPath: '/nonexistent',
+    liftLimit: () => {
+      calls.push('lifted');
+    },
+    applyLimit: () => {
+      calls.push('applied');
+    },
+  };
+
+  const rejection = await createVmRunner(jails)
+    .wakeVm({
+      firecrackerBin: 'firecracker',
+      paths: buildImpPaths('/nonexistent', 'vm'),
+      cgroup,
+      jail: { uid: 900_000, gid: 900_000 },
+      readOnlyFiles: [],
+    })
+    .catch((error: unknown) => error);
+
+  expect(rejection).toBeInstanceOf(Error);
+  expect(calls).toEqual(['lifted', 'release vm', 'applied']);
 });

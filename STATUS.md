@@ -117,8 +117,10 @@ From the milestone work:
   real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider. Public imps
   ([#52](https://github.com/zgeoff/imp/issues/52)) are tested the same way, with no public IP, and
   have no AAAA records.
-- No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
-  [#28](https://github.com/zgeoff/imp/issues/28)).
+- The jailer ([#27](https://github.com/zgeoff/imp/issues/27)) runs each VM, boot template VMs too,
+  in a chroot as its own uid, with seccomp and a memory limit; the `jail` e2e suite checks it, the
+  OOM report, a restart and a rollback to `IMP_JAILER=false`. The host container is still privileged
+  ([#75](https://github.com/zgeoff/imp/issues/75)).
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
   its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).

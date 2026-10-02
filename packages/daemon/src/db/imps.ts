@@ -41,6 +41,10 @@ export interface ImpRecord {
   readonly cpu: CpuSettings;
   readonly wakeCount: number;
 
+  // its jailed Firecracker's uid and gid (JAIL_UIDS); null only for a row
+  // the migration could not number
+  readonly jailUid: number | null;
+
   // awake time up to awakeSince; while the imp runs, add the time since
   readonly awakeMs: number;
   readonly awakeSince: Date | null;
@@ -109,6 +113,36 @@ export interface ImpStateChange {
   readonly nextBootCause?: Extract<ColdBootCause, 'recovery' | 'wake_fallback'>;
 }
 
+// The uids jailed Firecrackers run as, one per imp, gid the same: far above
+// any account in the host image, and kept for the imp's life
+export const JAIL_UIDS = { first: 900_000, count: 65_536 } as const;
+
+// the lowest free uid of JAIL_UIDS; a destroyed imp's uid goes back
+async function allocateJailUid(db: ImpDatabase): Promise<number> {
+  const rows = await db
+    .selectFrom('imps')
+    .select('jail_uid')
+    .where('jail_uid', 'is not', null)
+    .orderBy('jail_uid')
+    .execute();
+
+  let uid = JAIL_UIDS.first;
+
+  for (const row of rows) {
+    if (row.jail_uid !== uid) {
+      break;
+    }
+
+    uid += 1;
+  }
+
+  if (uid >= JAIL_UIDS.first + JAIL_UIDS.count) {
+    throw new Error(`every one of the ${String(JAIL_UIDS.count)} jail uids is taken`);
+  }
+
+  return uid;
+}
+
 // The lowest slot no imp holds. Run it in the same transaction as the insert
 // that takes the slot; the unique index on `slot` backs that up.
 export async function allocateSlot(db: ImpDatabase, slotCount: number): Promise<number> {
@@ -143,6 +177,8 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
 async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
   const now = Date.now();
 
+  const jailUid = await allocateJailUid(db);
+
   const row = await db
     .insertInto('imps')
     .values({
@@ -165,6 +201,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       ...(imp.moveState !== undefined && { move_state: imp.moveState }),
       created_at: now,
       last_active_at: now,
+      jail_uid: jailUid,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -274,6 +311,10 @@ export async function updateImpStateIf(
   change: Readonly<ImpStateChange>,
 ): Promise<ImpRecord | undefined> {
   const values: Updateable<DatabaseSchema['imps']> = { state: change.state };
+
+  if (change.error !== undefined) {
+    values.error = change.error;
+  }
 
   if (change.pid !== undefined) {
     values.pid = change.pid;
@@ -567,6 +608,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     isIdentityResetPending: row.identity_reset_pending === 1,
     publicAuth: readPublicAuth(row),
     moveState: row.move_state,
+    jailUid: row.jail_uid,
   };
 }
 

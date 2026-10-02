@@ -32,6 +32,8 @@ test('it fills every setting from its default when the env is empty', () => {
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },
     ipv6: { kind: 'auto' },
     firecrackerBin: 'firecracker',
+    jailerBin: 'jailer',
+    jailDir: '/var/lib/imp/jail',
     kernelPath: '/var/lib/imp/system/vmlinux',
     kernelSource: null,
     systemDriveSource: '/var/lib/imp/system/imp-system.squashfs',
@@ -94,6 +96,12 @@ test('it rejects invalid values', () => {
   expect(() => loadConfig({ IMP_API_PORT: 'http' })).toThrow();
   expect(() => loadConfig({ IMP_DNS: 'one.one.one.one' })).toThrow();
   expect(() => loadConfig({ IMP_SUBNET: '10.66.0.0' })).toThrow();
+});
+
+test('IMP_JAILER=false runs Firecracker without the jailer', () => {
+  expect(loadConfig({ IMP_JAILER: 'false' }).jailerBin).toBeNull();
+  expect(loadConfig({ IMP_JAILER_BIN: '/opt/jailer' }).jailerBin).toBe('/opt/jailer');
+  expect(() => loadConfig({ IMP_JAILER: 'no' })).toThrow();
 });
 
 test('IMP_SSH_PORT=0 turns the SSH gateway off', () => {

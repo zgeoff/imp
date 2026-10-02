@@ -50,6 +50,9 @@ export const SUITES: readonly Suite[] = [
   // kills impd, Firecracker and the container; reboots the instance
   { name: 'chaos', prefix: 'e2e-chaos-', images: ['e2e-bare'] },
 
+  // reboots the instance with the jailer off, then on again
+  { name: 'jail', prefix: 'e2e-jail-', images: ['e2e-bare'] },
+
   // last: it reboots the instance with backups on, then off again
   { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
@@ -79,6 +82,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'templates',
     'boot-templates',
     'inner',
+    'jail',
   ],
 };
 

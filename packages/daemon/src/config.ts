@@ -57,6 +57,10 @@ const EnvSchema = z.object({
   IMP_SUBNET: z.cidrv4().default('10.66.0.0/16'),
   IMP_SUBNET6: z.string().default('auto'),
   IMP_FIRECRACKER_BIN: z.string().default('firecracker'),
+
+  // false runs Firecracker without the jailer, as root in the host container
+  IMP_JAILER: z.enum(['true', 'false']).default('true'),
+  IMP_JAILER_BIN: z.string().default('jailer'),
   IMP_KERNEL: z.string().optional(),
   IMP_SYSTEM_DRIVE: z.string().optional(),
   IMP_DEFAULT_IMAGE: z.string().default('base'),
@@ -141,6 +145,14 @@ export interface Config {
   // `auto` at start
   readonly ipv6: Ipv6Setting;
   readonly firecrackerBin: string;
+
+  // the jailer (docs/architecture/daemon.md#the-jailer); null with
+  // IMP_JAILER=false
+  readonly jailerBin: string | null;
+
+  // <dataDir>/jail, where the jailer makes firecracker/<id>/root; impd
+  // cleans it up after a jailed VM even with the jailer off
+  readonly jailDir: string;
   readonly kernelPath: string;
 
   // where impd copies the kernel and the system drive from on start, so a
@@ -283,6 +295,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     subnet,
     ipv6: parseIpv6Setting(parsed.IMP_SUBNET6),
     firecrackerBin: parsed.IMP_FIRECRACKER_BIN,
+    jailerBin: parsed.IMP_JAILER === 'true' ? parsed.IMP_JAILER_BIN : null,
+    jailDir: join(parsed.IMP_DATA_DIR, 'jail'),
     kernelPath: join(parsed.IMP_DATA_DIR, 'system', 'vmlinux'),
     kernelSource: parsed.IMP_KERNEL ?? null,
     systemDriveSource:
