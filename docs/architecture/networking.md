@@ -134,7 +134,8 @@ next request.
 - **Host routing.** On `IMP_PROXY_PORT` (default 7080), the first label of the Host header names the
   imp: `<name>.imp.localhost:7080`, or any `<name>.<domain>`.
 - **One port per imp.** On `IMP_PORT_BASE + slot` (default base 20000), every request goes to that
-  imp. The tailnet uses these ports.
+  imp. The tailnet uses these ports. impd refuses to start when `IMP_API_PORT` or `IMP_PROXY_PORT`
+  falls in that range, or when the range runs past port 65535.
 - A request wakes a sleeping imp or boots a stopped one, then goes through. A response that needed a
   wake carries an `x-imp-wake-ms` header.
 - WebSockets are relayed message by message.

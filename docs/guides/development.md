@@ -26,38 +26,40 @@ harness against a real instance when a change touches the lifecycle, the agent o
 `test/e2e/suites/` as its own `bun test` process. Every case drives impd through the `imp` CLI, the
 way a user would; the dashboard suite drives it through a browser. The suites run in this order:
 
-| Suite         | What it proves                                                                                                               |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                             |
-| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                            |
-| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                              |
-| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                                                           |
-| `disks`       | a disk past its image, grown while running, asleep and stopped; fsck after                                                   |
-| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
-| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
-| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
-| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names     |
-| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                               |
-| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                           |
-| `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
-| `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                            |
-| `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp              |
-| `reverse`     | `imp proxy --reverse` and `ssh -R`: a socket and a port on this machine from the imp, refusals, sleep and wake, keep-awake   |
-| `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap |
-| `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                 |
-| `cp`          | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                      |
-| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                           |
-| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
-| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
-| `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
-| `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                     |
-| `templates`   | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm         |
-| `chaos`       | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                        |
-| `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
+| Suite         | What it proves                                                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle`   | new, exec (stdin, stderr, exit codes, `-t`), console, egress, stop and start, rm                                                              |
+| `docker`      | Docker in an `images/base` imp: run, build, a published port, egress, a cold boot                                                             |
+| `images`      | `imp image build`, the image's files, ENV and WORKDIR, image rm                                                                               |
+| `checkpoints` | checkpoint, restore (running and stopped), forks, labels, deletion                                                                            |
+| `disks`       | a disk past its image, grown while running, asleep and stopped; fsck after                                                                    |
+| `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                                 |
+| `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                                          |
+| `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                                         |
+| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                      |
+| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                |
+| `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                            |
+| `services`    | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove        |
+| `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                                   |
+| `ssh-wake`    | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                                             |
+| `ssh-agent`   | `ssh -A`: `ssh-add -l` and a signed `git push` from the imp, the socket's owner and lifetime, no key in the imp                               |
+| `reverse`     | `imp proxy --reverse` and `ssh -R`: a socket and a port on this machine from the imp, refusals, sleep and wake, keep-awake                    |
+| `proxy`       | `imp proxy`: a busy port, a missing imp, both loopbacks, a guest-loopback server, a half-close, an old agent, the tunnel cap                  |
+| `proxy-wake`  | a proxy connection keeps the imp awake and wakes it; a forced sleep resets it and the next one wakes the imp                                  |
+| `cp`          | `imp cp` on a non-root image: owner, modes, symlinks, a 48 MiB round trip, a symlink trap, an old agent                                       |
+| `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                                            |
+| `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                                                |
+| `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                                               |
+| `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token                     |
+| `egress`      | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                                      |
+| `cpu`         | CPU limits: half a core holds a busy guest, again after a sleep and a wake, `imp set` at once, `imp top`, `docker exec` after the cgroup move |
+| `templates`   | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm                          |
+| `chaos`       | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                                         |
+| `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                               |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, templates
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, cpu, templates
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
@@ -166,16 +168,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                                             |
-| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                                          |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build.        |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                           |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                    |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                |
-| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.         |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                      |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks and sleep suites. |
+| Job          | Required | What it runs                                                                                                                                                      |
+| ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                                                   |
+| `checks`     | yes      | `bun run audit`, the Bun pin check, `deadcode`, `format:check`, `lint`, `lint:docs`, `typecheck`, `bun test`, `test:pebble`, and the dashboard's tests and build. |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                                                    |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                                                             |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
+| `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                                               |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                 |
 
 The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
 heading that does not exist.
@@ -210,8 +212,8 @@ seconds with the reason. The job then:
    key in CI, and a missed timing limit only warns.
 
 The `zfs` job builds the same inputs, reading the caches only, caps the ZFS ARC at 1 GiB, and runs
-the lifecycle, checkpoints, disks and sleep suites on a pool in a sparse file. The job summary shows
-the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
+the lifecycle, checkpoints, disks, sleep and backups suites on a pool in a sparse file. The job
+summary shows the ZFS timings, and the `zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
 `results.json`, `metrics.jsonl`, `impd.log` (the dev container's whole log) and the dashboard
@@ -225,7 +227,9 @@ If GitHub-hosted runners lose KVM, move the job to an ephemeral, dedicated self-
 run it only on push to `main`, never on pull requests. Never use the deploy box. The repo is public,
 so a pull request from a fork would get a privileged container with `/dev/kvm` on that runner.
 
-A new push to a pull request cancels its older run. Runs on `main` always finish.
+A new push to a pull request cancels its older run. On `main`, a run that has started finishes, but
+a run still waiting behind it is cancelled when a newer push comes, so only the newest push runs
+next.
 
 `.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
 or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It

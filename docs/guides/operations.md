@@ -70,7 +70,9 @@ it.
 
 An imp still on an agent from before protocol `0.8.0` (release v0.7.0 or older) cannot kill the rest
 of a stopped command's process group. When `imp mcp` stops such a command on a timeout or a cancel,
-a child that ignores SIGTERM (a `nohup` job, say) keeps running until the imp restarts.
+a child that ignores SIGTERM (a `nohup` job, say) keeps running until the imp restarts. An agent
+from before `0.11.0` kills only the process group, so a child that left it with `setsid` lives on
+([MCP](./mcp.md)).
 
 An impd from before this scheme kept the drive at `/var/lib/imp/system/imp-system.squashfs`, and a
 VM it booted still runs from that file. impd leaves the file alone. Remove it once no such VM runs:
@@ -129,15 +131,15 @@ With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository
   breakdown per step.
 - Each imp's serial console and Firecracker log go to `/var/lib/imp/imps/<id>/run/firecracker.log`
   in the container (`scripts/dev.sh shell`).
-- A service's output goes to `/var/log/imp/<name>.log` inside the imp.
+- A service's output goes to `/var/log/imp/<name>.log` inside the imp. `imp logs <imp> <service>`
+  prints it, and `-f` follows it ([services](./services.md)).
 
 ## Checks
 
-`scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each:
-lifecycle, Docker, bring-your-own images, checkpoints and forks, sleep and wake (with the WebSocket
-relay), the scale test, restart survival, Tailscale and the backup restore drill.
-[STATUS.md](../../STATUS.md) has the latest results. The [development guide](./development.md) lists
-the other checks.
+`scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each: the
+[development guide](./development.md#end-to-end-tests) lists them, from the lifecycle and the scale
+test to the chaos suite and the backup restore drill. [STATUS.md](../../STATUS.md) has the latest
+results. The development guide lists the other checks.
 
 ## Troubleshooting
 

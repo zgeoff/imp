@@ -50,7 +50,9 @@ checkpoints oldest first with labels and times, and each image's name, ref, dige
 (`oci`, or `imp` for a [template](../guides/templates.md)). Each disk and checkpoint has its size
 (`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which a restore holds twice in
 the [disk budget](./storage.md#disk-budget); a manifest from before `usedBytes` falls back to the
-size. It holds no tokens or secret values, and no slots or addresses: a restore takes new ones.
+size. It holds no tokens or secret values, and no slots or addresses: a restore takes new ones. It
+holds no [CPU limit or weight](../guides/cpu-limits.md) either, so a restored imp has the defaults:
+no limit and a weight of 100.
 
 The database itself stays on the host. Each run starts with `VACUUM INTO <data>/backup/db.sqlite`,
 one consistent read of the database, and backs up only what that copy names. The copy stays out of

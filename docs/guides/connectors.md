@@ -127,11 +127,11 @@ Values are not encrypted at rest: the key would sit on the same disk. The audit 
 - Only an exec started after the grant gets the variables. impd adds them when it starts an exec, so
   these processes run without the broker:
 
-  | What                                              | How to get the variables                                                                                                                                     |
-  | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | Services in `/etc/imp/services.d`                 | The agent starts them, not impd. Put the variables in the service's `env` ([images](./images.md#services)); `imp exec box -- env` prints the values to copy. |
-  | A session started before `imp grant`              | `imp attach` joins the process as it started. Start a new session, or exit the shell and open `imp console` again.                                           |
-  | An exec or SSH command started before `imp grant` | The same: start it again.                                                                                                                                    |
+  | What                                              | How to get the variables                                                                                                                                                         |
+  | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | Services in `/etc/imp/services.d`                 | The agent starts them, not impd. Put the variables in the service's `env` (`imp service add --env`, [services](./services.md)); `imp exec box -- env` prints the values to copy. |
+  | A session started before `imp grant`              | `imp attach` joins the process as it started. Start a new session, or exit the shell and open `imp console` again.                                                               |
+  | An exec or SSH command started before `imp grant` | The same: start it again.                                                                                                                                                        |
 
 - The terminator serves HTTP/1.1 only, so clients fall back from HTTP/2. WebSocket upgrades to a
   granted host are not supported.

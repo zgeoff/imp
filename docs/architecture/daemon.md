@@ -9,12 +9,26 @@ starts and stops Firecracker, and keeps the RAM of awake imps under the budget. 
 
 On start, impd reads its [configuration](../guides/configuration.md), copies the guest kernel and
 the system drive into `system/`, opens the database and runs the migrations, loads or makes the API
-token, and re-adopts any Firecracker processes that are still alive. It then deletes the system
-drives that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves
-the API, opens the proxy listeners and the credential broker and the
-[SSH gateway](#ssh-the-gateway), and starts four timers: the idle loop every 2 s, the governor every
-5 s, a proxy listener sync every 30 s, and a broker sync every 60 s. It adds a default image in the
-background; `/health` reports `ready: true` once that finishes, whether it worked or not.
+token, and settles every Firecracker process that is still alive: it adopts the VMs its records own
+and kills the rest ([restarts](./sleep-and-wake.md#restarts)). It then deletes the system drives
+that no snapshot and no live VM uses ([storage](./storage.md#system-files)). Then it serves the API,
+opens the proxy listeners and the credential broker and the [SSH gateway](#ssh-the-gateway), and
+starts its timers:
+
+| Timer         | Every                       | What it does                                                                            |
+| ------------- | --------------------------- | --------------------------------------------------------------------------------------- |
+| idle          | 2 s                         | the [idle loop](#idle-the-idle-loop), which also feeds the watchdog                     |
+| governor      | 5 s                         | sleeps imps while the RAM in use is over the budget                                     |
+| resources     | 5 s                         | samples each running VM's CPU, network and RAM ([cgroups](#cgroups))                    |
+| proxy         | 30 s                        | syncs the proxy listeners with the imps                                                 |
+| tailnet-names | 10 min                      | repairs [per-imp tailnet names](../guides/tailscale.md#per-imp-names), when they are on |
+| broker        | 60 s                        | stops terminators no grant covers and renews leaves                                     |
+| gc            | 1 h                         | the storage sweep ([cleanup](./storage.md#cleanup))                                     |
+| disk-usage    | 5 min                       | measures each imp's disk use ([disk usage](./storage.md#disk-usage))                    |
+| backup        | the interval, at most 5 min | starts a backup run once one is due, when backups are on                                |
+
+It adds a default image in the background; `/health` reports `ready: true` once that finishes,
+whether it worked or not.
 
 Signals decide what happens to the VMs:
 
@@ -39,10 +53,12 @@ single-use ticket for one existing imp, valid for 30 s; `/tunnel` takes no ticke
 CLI opens it. The token itself is never accepted in a URL, where logs and browser history would keep
 it. impd keeps at most 32 live tickets per caller, and 1024 in all. The router maps each procedure
 of the contract in `packages/api` to a service call. Errors come from the contract: `NOT_FOUND`,
-`CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd stops,
-`FORBIDDEN` for a call outside the caller's scope or imps, and `AGENT_OUTDATED` for a session
-request to an agent from before sessions. `/rpc` takes POST only: a GET is what a link or an image
-on any page can make a browser send.
+`CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
+[disk reserve](./storage.md#disk-budget), `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
+call outside the caller's scope or imps, `PRECONDITION_FAILED` when the host is not set up for the
+call (backups with no repository, say), and `AGENT_OUTDATED` for a request the imp's agent is too
+old for. `/rpc` takes POST only: a GET is what a link or an image on any page can make a browser
+send.
 
 `/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
 tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes
@@ -308,10 +324,17 @@ more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from 
 has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
 copies.
 
-`services.list` reads the guest's services the same way: it never wakes or boots. The sleep asks the
-agent for its services list (1 s at most) next to the sessions and writes it to the same
-`snapshot/meta.json`. A list answers `{services, recorded}`: a sleeping imp's is that copy, or no
-services with `recorded: false` when the sleep has none. A stopped imp is `INVALID_STATE`.
+### services: guest services
+
+The services API (`services/service-api.ts`) adds, removes, restarts and lists the guest's services
+and streams their logs, through the agent ([services](../guides/services.md)). A change wakes or
+boots the imp and counts as an exec; a list and a log follow never wake or boot it. It needs agent
+protocol `0.10.0`; an older agent answers `AGENT_OUTDATED`.
+
+`services.list` reads the guest's services the same way as `sessions.list`: it never wakes or boots.
+The sleep asks the agent for its services list (1 s at most) next to the sessions and writes it to
+the same `snapshot/meta.json`. A list answers `{services, recorded}`: a sleeping imp's is that copy,
+or no services with `recorded: false` when the sleep has none. A stopped imp is `INVALID_STATE`.
 
 ### ssh: the gateway
 
@@ -403,11 +426,17 @@ image the host Docker has, and pulls it when it is missing. Then it exports the 
 writes the image config for the agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
+The template service (`images/template-service.ts`) makes an image from an imp's disk instead, for
+`images.add` with an imp as the source: it clones the disk under the imp's lock, frozen as for a
+checkpoint, into `images/imp-<uuidv7>` ([templates](../guides/templates.md)).
+
 ### storage: the data layout
 
 The storage module knows where every file under `/var/lib/imp` lives, makes reflink clones (it fails
 instead of a full copy), and copies the kernel and system drive into place on start
-([system files](./storage.md#system-files)).
+([system files](./storage.md#system-files)). It also holds the XFS and ZFS backends, the
+[disk budget](./storage.md#disk-budget) that every large write takes room from, the
+[disk usage](./storage.md#disk-usage) cache, and the [GC](./storage.md#cleanup) with its gate.
 
 ### net: taps and the tailnet
 
@@ -417,10 +446,39 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 ### db: SQLite
 
-The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code. Its
-tables are `images`, `imps`, `checkpoints`, the broker's `secrets`, `grants` and `broker_audit`, and
-`api_audit`. SQLite has one connection, so a promise-chain mutex gives it to one caller at a time.
-Timestamps are integer milliseconds since the epoch.
+The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code
+(`db/run-migrations.ts`). Its tables are `images`, `imps`, `checkpoints`, the broker's `secrets`,
+`grants` and `broker_audit`, `api_audit`, `tokens` and `token_ssh_keys`. SQLite has one connection,
+so a promise-chain mutex gives it to one caller at a time. Timestamps are integer milliseconds since
+the epoch.
+
+The migrations, in order:
+
+| Migration                   | What it adds                                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                          |
+| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                              |
+| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                           |
+| `004_add_api_audit`         | `api_audit`                                                                                                 |
+| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB              |
+| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                        |
+| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                |
+| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                              |
+| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                    |
+| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies |
+| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps         |
+
+### Other modules
+
+- `egress/`: the nftables table and the DNS resolver for `box` and `none` imps
+  ([egress](./networking.md#egress)).
+- `https/`: the ACME certificate for `IMP_DOMAIN`, its renewal, and the TLS listeners
+  ([HTTPS](../guides/https.md#how-it-works)).
+- `tailnet-names/`: opt-in per-imp tailnet names as Tailscale Services
+  ([per-imp names](../guides/tailscale.md#per-imp-names)).
+- `backup/`: restic runs on the schedule, restores and checks ([backups](./backups.md)).
+- `telemetry/`: OpenTelemetry metrics and spans, loaded only when an OTLP endpoint is set
+  ([telemetry](../guides/events.md#telemetry)).
 
 ### process: helpers
 

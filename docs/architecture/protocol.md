@@ -10,9 +10,10 @@ live.
 Version `0.12.0`, which reports a template copy's identity reset in `ping` (`0.11.0` kills a stopped
 exec's whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards,
 `0.8.0` kills what is left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs
-`imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added
-`grow`). The Go side is `agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+`imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`,
+`0.4.0` `agent.listen` and `agent.accept`, `0.3.0` `dial` and `imp-agent sftp`, `0.2.0` sessions;
+`0.1.0` was the first). The Go side is `agent/internal/proto`; the host side is the agent client in
+impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -101,7 +102,7 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 
 ```json
 → {"op":"ping"}
-← {"ok":true,"version":"0.1.0","uptime_ms":265}
+← {"ok":true,"version":"0.12.0","uptime_ms":265}
 ```
 
 `uptime_ms` is `CLOCK_BOOTTIME`. The host uses `ping` as the boot-readiness probe. On a boot with
@@ -293,10 +294,10 @@ Details:
   logs it). Only then does it drain the output and send EXIT, so EXIT means the command is gone.
   Since `0.11.0` the non-tty command starts in a cgroup of its own, and the kill is `cgroup.kill`:
   it also reaches a member that left the group with `setsid` or a double fork. Such a member gets no
-  SIGTERM, only the kill at the deadline. Without a cgroup (one cannot be made), or before `0.11.0`,
-  the kill is SIGKILL to the process group, and a member that left it lives on. Without a stop
-  signal, a background child outlives its command as before. An agent from before `0.8.0` ignores
-  the field and leaves STARTED without it.
+  SIGTERM, only the kill at the deadline. Without a cgroup (one cannot be made), when the write to
+  `cgroup.kill` fails, or before `0.11.0`, the kill is SIGKILL to the process group, and a member
+  that left it lives on. Without a stop signal, a background child outlives its command as before.
+  An agent from before `0.8.0` ignores the field and leaves STARTED without it.
 - **stdin.** Without `tty`, STDIN_EOF closes the stdin pipe. With `tty`, STDIN_EOF is ignored; send
   `\x04` as STDIN for an EOF at the terminal.
 - **Output after exit.** Output is forwarded until both streams reach EOF, or for at most 500 ms

@@ -15,7 +15,7 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 | GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
 | GitHub release `vX.Y.Z`: `SHA256SUMS`          | The sha256 of every asset above, with a provenance attestation per asset.             |
 | npm: `@zgeoff/imp-client@X.Y.Z`                | The client library, with npm provenance.                                              |
-| Tap: `Formula/imp.rb`                          | The Homebrew formula, once the [tap](#homebrew-tap) is turned on.                     |
+| Tap: `Formula/imp.rb`                          | The Homebrew formula, in the [tap](#homebrew-tap).                                    |
 
 The image, `impd --version`, `imp --version` and every `package.json` carry the same version: the
 tag without the `v`. The host image, the kernel and the drive are x86_64 only, because Firecracker
@@ -49,7 +49,7 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
-     `SHA256SUMS` and pushes it to the tap. Skipped until the [tap](#homebrew-tap) is turned on.
+     `SHA256SUMS` and pushes it to the tap. Skipped when the [tap](#homebrew-tap) is not set up.
    - **npm-pack** and **npm-publish:** after publish, npm-pack packs `@zgeoff/imp-client`, checks
      the tarball and uploads it; npm-publish, the only job with the OIDC token, publishes it. npm's
      `latest` moves only when `vX.Y.Z` is the newest release; an older one goes out under
@@ -90,7 +90,7 @@ prints the formula, with each platform's binary from `releases/download/vX.Y.Z/`
 tap with contents write, and rebases onto the tap's main before the push, so other formulas in the
 tap can land in between.
 
-Until the owner does these steps, `brew install zgeoff/tap/imp` finds no formula:
+The tap needs these steps, which are done for `zgeoff/imp`:
 
 1. Set up the release App first ([Tokens](#tokens)); the `tap` job needs `RELEASE_APP_ID` and
    `RELEASE_APP_PRIVATE_KEY` too.

@@ -87,6 +87,9 @@ From the milestone work:
 | Guest kernel build                   | 8m35s first, ~32 s again  | `kernel/build.sh`                                     |
 | `ssh` to a sleeping imp, to output   | 185–194 ms                | wake about 104 ms; e2e-tiny and a 512 MiB ubuntu imp  |
 | `scp` 200 MB up / down               | 1.7 s / 1.1 s             | to a 512 MiB ubuntu imp, through the SSH gateway      |
+| Host-side disk grow, 4 → 100 GiB     | about 80 ms               | a new 100 GiB imp allocates 89 MiB on the host        |
+| CPU limit 0.5 on a busy guest        | 0.49–0.50 of a core       | from the cgroup's `cpu.stat`, the `cpu` suite         |
+| `chaos` suite, 8 rounds              | 163 s                     | kills impd, a Firecracker or the container mid-step   |
 
 ## Known gaps
 
@@ -100,8 +103,10 @@ From the milestone work:
   [#33](https://github.com/zgeoff/imp/issues/33)). `scripts/bench-wake.sh` has not run on a host
   with the fix yet.
 - The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
-  fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
-  restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
+  fake zfs and a CI job against a pool on a file. On a real host it ran once, through the server
+  bootstrap ([#9](https://github.com/zgeoff/imp/issues/9)) with one test imp. Its checkpoint,
+  restore, fork and sleep times on a real host are not measured; `scripts/zfs-host-test.sh` measures
+  them.
 - Backups ([#12](https://github.com/zgeoff/imp/issues/12)): a known cost, kept for now: restic reads
   every hole of a 32 GiB sparse disk, about 10 s of CPU for each disk it has to read in a run. The
   restore drill passed on XFS on the dev box; on ZFS it runs in the zfs CI job only. MinIO for the
@@ -122,8 +127,17 @@ From the milestone work:
   tailnet identity case passed once on the dev box (suite 31.4 s with it), with a rule for any
   member. SSH keys bind to tokens ([#63](https://github.com/zgeoff/imp/issues/63)); keys left in
   `authorized_keys` still have `exec` on every imp until `IMP_SSH_AUTHORIZED_KEYS=false`.
-- The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
-  already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
+- A stop kills an exec's whole cgroup ([#69](https://github.com/zgeoff/imp/issues/69)), but a
+  process that moves itself to another cgroup, and the containers of a dockerd started from an exec,
+  live on. A tty exec has no cgroup of its own
+  ([exec cgroups](docs/architecture/agent.md#exec-cgroups)).
+- If impd dies after a wake sets the snapshot record aside and before Firecracker starts, the next
+  start drops a good snapshot: the imp boots cold and loses its memory, and its disk is safe
+  ([#39](https://github.com/zgeoff/imp/issues/39)).
+- Per-imp tailnet names ([#30](https://github.com/zgeoff/imp/issues/30)) are on main, off by default
+  (`IMP_TAILNET_NAMES=1`), and not tested against a real tailnet: that needs a Tailscale OAuth
+  client and tailnet policy entries.
+- The disk usage pass ([#21](https://github.com/zgeoff/imp/issues/21)) is not timed on a large host.
 
 ## Notes
 

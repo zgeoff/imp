@@ -11,9 +11,10 @@ This page gives the shape and the main decisions. The other architecture pages g
 - [Daemon](./daemon.md): the modules inside impd.
 - [Guest agent and kernel](./agent.md): how a guest boots, and the custom kernel.
 - [Agent protocol](./protocol.md): the host ↔ guest wire format.
-- [Storage and images](./storage.md): XFS reflinks, the data layout, OCI images to ext4.
+- [Storage and images](./storage.md): XFS reflinks or ZFS, the data layout, OCI images to ext4.
 - [Networking](./networking.md): taps, /30s, iptables, the wake proxy and the URLs.
 - [Sleep and wake](./sleep-and-wake.md): memory snapshots, idle detection and the RAM governor.
+- [Backups](./backups.md): restic backups of disks, checkpoints and images, off the host.
 
 ## Shape
 
@@ -33,7 +34,7 @@ This page gives the shape and the main decisions. The other architecture pages g
  │   ├─ vmm        Firecracker API client (HTTP over unix socket)     │
  │   ├─ agent      host side of the vsock agent protocol              │
  │   ├─ images     OCI image → ext4 builder                           │
- │   ├─ storage    XFS reflink clones, the data layout                │
+ │   ├─ storage    XFS reflink clones or ZFS clones, the data layout  │
  │   ├─ net        tap devices, routes, iptables                      │
  │   └─ db         Kysely + bun:sqlite                                │
  │                                                                    │
@@ -78,9 +79,11 @@ This page gives the shape and the main decisions. The other architecture pages g
   `packages/cli` (the `imp` CLI) and `packages/client` (`@zgeoff/imp-client`, the typed client on
   npm for browsers, Bun and Node).
 - Control calls are oRPC procedures over HTTP at `/rpc`. Exec and console use a WebSocket at
-  `/exec`, because they need two-way streams. `/health` answers without auth.
+  `/exec`, because they need two-way streams. The dashboard is at `/ui/` and the MCP endpoint at
+  `/mcp`. `/health` answers without auth.
 - Auth: impd makes a bearer token on first start and stores it in `/var/lib/imp/token`. A browser
-  opens `/exec` with a single-use ticket from `exec.ticket` instead of the token. The proxy is open
+  opens `/exec` with a single-use ticket from `exec.ticket` instead of the token. Scoped tokens and
+  tailnet identities give less than full access ([tokens](../guides/tokens.md)). The proxy is open
   to anything that can reach it; the tailnet ACL is the boundary.
 - State is in SQLite through Kysely on `bun:sqlite`. Migrations live in code.
 
@@ -92,11 +95,14 @@ packages/api      oRPC contract and shared types
 packages/daemon   impd
 packages/cli      imp CLI
 packages/client   @zgeoff/imp-client, the typed client published to npm
+packages/dashboard web dashboard, served at /ui/
+packages/mcp      MCP server, behind imp mcp and /mcp
 images/base       thin base image
 images/dev        example dev image
 host/             host container Dockerfile (dev and release), entrypoint, storage, network
                   and tailnet setup
-deploy/           compose file, systemd unit and env file for the release image
+deploy/           compose file, systemd unit and env file for the release image, the server
+                  bootstrap and the upgrade script
 kernel/           guest kernel config and build
 scripts/          dev helpers and test-e2e.sh, the end-to-end harness's entry point
 test/e2e/         end-to-end suites, their helpers and fixture images
@@ -106,4 +112,4 @@ docs/             this documentation
 ## Not yet
 
 The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what is left: the jailer, an inner
-container, memory forks, more than one host, off-host backups and more.
+container, memory forks, more than one host and more.

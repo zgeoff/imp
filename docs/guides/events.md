@@ -54,6 +54,7 @@ reader skips a kind or a field it does not know.
 | `adopted`  | impd started and found the imp's VM still running.                                       |
 | `held`     | A hold was set or cleared.                                                               |
 | `restored` | A checkpoint restore finished.                                                           |
+| `resized`  | `imp disk resize` changed the imp's disk size.                                           |
 | `updated`  | `imp set` changed the imp's CPU limit, weight, vCPUs or HTTP port.                       |
 | `exposed`  | The imp became public or tailnet-only, or got a new credential.                          |
 

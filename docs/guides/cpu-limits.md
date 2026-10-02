@@ -36,17 +36,17 @@ is one (`45% / 1.5`). `imp top` refreshes a table of every imp, busiest first, a
 arrive and every 2 s; `imp top --once` prints it once, `--json` prints the imps with their
 `resources`.
 
-| Column      | Meaning                                                                 |
-| ----------- | ----------------------------------------------------------------------- |
-| `CPU`       | Use over the last 5 s sample, in percent of one core, over the limit.   |
-| `WEIGHT`    | The CPU weight.                                                         |
-| `THROTTLED` | Time the limit held the VM back since the last boot, wake or adopt.     |
-| `RAM`       | Memory the VM owns, as the RAM governor counts it.                      |
-| `DISK`      | What a destroy frees over the disk size, from impd's disk-usage pass.   |
-| `NET IN`    | Bytes the guest received since the last boot, wake or adopt.            |
-| `NET OUT`   | Bytes the guest sent since the last boot, wake or adopt.                |
-| `WAKES`     | Wakes from a memory snapshot since the imp was created; not cold boots. |
-| `AWAKE`     | Total time the imp ran. A crash closes the span at impd's next repair.  |
+| Column      | Meaning                                                                        |
+| ----------- | ------------------------------------------------------------------------------ |
+| `CPU`       | Use over the last 5 s sample, in percent of one core, over the limit.          |
+| `WEIGHT`    | The CPU weight.                                                                |
+| `THROTTLED` | Time the limit held the VM back since the last boot, wake or adopt.            |
+| `RAM`       | Memory the VM owns, as the RAM governor counts it.                             |
+| `DISK`      | What a destroy frees over the disk size, from impd's disk-usage pass.          |
+| `NET IN`    | Bytes the guest received since the last boot, wake or adopt.                   |
+| `NET OUT`   | Bytes the guest sent since the last boot, wake or adopt.                       |
+| `WAKES`     | Wakes since the imp was created, a cold boot that stood in for a wake too.     |
+| `AWAKE`     | Total time the imp ran. A crash ends the span when impd last saw the VM alive. |
 
 `THROTTLED`, `NET IN` and `NET OUT` count from `since` in `imp ls --json`: the end of the last boot
 or wake, or the moment impd adopted a running VM after a restart. impd takes a baseline then,

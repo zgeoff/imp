@@ -16,7 +16,7 @@ Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
 | Scope    | What it may do                                                                                                                                                                                                                                             |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), the audit logs, the event stream, `imp info`.                                                                                        |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                  |
 | `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp; kill a session; add, restart and remove a service, and `imp logs`. |
 | `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root. Host-wide: images, secrets and grants, backups, `imp gc`, and tokens.                    |
 

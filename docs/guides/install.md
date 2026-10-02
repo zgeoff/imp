@@ -260,10 +260,6 @@ Nothing has run on a real OVH or Vultr server yet.
 The `imp` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
 release attaches it to the GitHub release.
 
-**NOTE:** imp has no release yet. Until the first one, run the CLI from a checkout (`scripts/imp`,
-which needs Bun). `install.sh` works from the first release. `brew install` works once the owner has
-also set up the tap ([RELEASING.md](../../RELEASING.md#homebrew-tap)).
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
 brew install zgeoff/tap/imp                                                  # with completions
@@ -347,7 +343,8 @@ hand.
 
    The release image refuses to start when `/var/lib/imp` is not an XFS mount with reflink. It never
    falls back to a loop file inside the container, which would go away with the container and take
-   every imp with it.
+   every imp with it. For ZFS in place of XFS, set `IMP_STORAGE_BACKEND=zfs` and `IMP_ZFS_ROOT`
+   ([ZFS](#zfs)).
 
 2. Write the settings, from [`deploy/imp-host.env.example`](../../deploy/imp-host.env.example):
 
@@ -363,8 +360,9 @@ hand.
 
 ### Start it
 
-Use one of the two, not both. Both run the container with `--init --privileged --device /dev/kvm`,
-the host's Docker socket and `/var/lib/imp`, and give impd 120 seconds to sleep every imp on stop.
+Use one of the two, not both. Both run the container with `--init --privileged --device /dev/kvm` in
+a private cgroup namespace (for [CPU limits](./cpu-limits.md)), the host's Docker socket and
+`/var/lib/imp`, and give impd 120 seconds to sleep every imp on stop.
 
 - **systemd:** [`deploy/imp-host.service`](../../deploy/imp-host.service) runs `docker run` in the
   foreground, so systemd supervises it.

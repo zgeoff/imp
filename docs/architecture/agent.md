@@ -22,7 +22,8 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 **Stage 1** runs from the system drive:
 
 1. Mount `/proc`, `/sys` and `/dev`.
-2. Mount `vda` on `/newroot`.
+2. Mount `vda` on `/newroot`, and grow its filesystem to fill the disk, which the host may have
+   grown since the last boot. A failed grow is logged, and the boot goes on.
 3. Mount a fresh tmpfs on `/newroot/run`, and bind the system drive to `/newroot/run/imp/sys`.
 4. Move `/dev`, `/proc` and `/sys` into the new root, `switch_root` to it, and re-exec
    `/run/imp/sys/imp-agent stage2`. PID 1 stays the agent.
@@ -33,7 +34,7 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 2. Set the hostname, bring up loopback and `eth0` through netlink, and write `/etc/resolv.conf`.
 3. With `imp.reset_identity=1`, write a new machine-id and new ssh host keys.
 4. Start the services in `/etc/imp/services.d` ([images guide](../guides/images.md#services)).
-5. Listen on vsock port 1024.
+5. Make the [exec cgroup](#exec-cgroups) parent, and listen on vsock port 1024.
 
 `/run` is a tmpfs every boot, so stale pid files and sockets from the last boot never reach a new
 one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly, with no wrapper.
@@ -60,7 +61,8 @@ Each non-tty exec starts in a cgroup v2 leaf of its own, `/sys/fs/cgroup/imp-exe
 with `cgroup.kill` ([protocol](./protocol.md#exec)). The parent holds no process and enables no
 controller. A leaf goes when its exec ends, or later, once a child it left behind (a `nohup` job)
 exits: the next exec sweeps only the leaves of ended execs. When the leaf or the spawn into it
-fails, the agent logs it once and the exec runs without one, as before.
+fails, the agent logs it once and the exec runs without one, as before. When the write to
+`cgroup.kill` fails, the stop sends SIGKILL to the process group instead.
 
 A command runs as root unless the image says otherwise, so it can move itself out of its leaf, and a
 `dockerd` started from an exec puts its containers in cgroups of its own; a stop does not reach
@@ -103,8 +105,9 @@ serves a reverse forward the same way, at a path or port the host names, bound b
 
 ## Shutdown
 
-On `shutdown` the agent stops the services, signals every other process, syncs, remounts `/`
-read-only and reboots. With `reboot=k` on the command line, that makes Firecracker exit.
+On `shutdown` the agent thaws a frozen root, stops the services, signals every other process, syncs,
+remounts `/` read-only and reboots. With `reboot=k` on the command line, that makes Firecracker
+exit.
 
 ## Guest kernel
 

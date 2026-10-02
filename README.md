@@ -36,9 +36,13 @@ TAILSCALE_AUTHKEY=tskey-auth-…
 ```
 
 On a laptop that talks to an impd elsewhere, only the CLI is needed, with
-`imp login https://imp.example.ts.net` to point it there. There is no release yet, so for now link
-`scripts/imp` from a checkout onto your `PATH`. From the first release, `install.sh` installs the
-binary, and once the Homebrew tap is set up, so does `brew install zgeoff/tap/imp`.
+`imp login https://imp.example.ts.net` to point it there. Install the binary from the latest
+release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
+brew install zgeoff/tap/imp                                                  # with completions
+```
 
 The [install guide](./docs/guides/install.md) has the details.
 
@@ -68,20 +72,26 @@ imp fork box box-2                # a second copy to try something else in
 | `exec <name> -- cmd`                     | run a command (`-t` for a terminal)                                    |
 | `console <name>`                         | open a shell in a session that outlives the terminal                   |
 | `sessions <name>`, `attach <name>`       | list sessions; attach to one from any machine                          |
+| `service add`, `ls`, `restart`, `rm`     | manage the processes an imp keeps running                              |
+| `logs <name> [service]`                  | print a service's log (`-f` to follow)                                 |
 | `checkpoint`, `checkpoints`, `restore`   | save, list and roll back disk states                                   |
 | `fork <source> <name>`                   | copy an imp's disk, or a checkpoint (`--from`)                         |
 | `disk resize <name> <size>`              | grow an imp's disk; the guest grows into it                            |
 | `gc [--dry-run]`                         | remove storage no imp, checkpoint or image names                       |
+| `backup run`, `ls`, `restore`, `check`   | back imps up off the host and restore them                             |
 | `sleep`, `wake`, `hold <name> <time>`    | sleep by hand; keep an imp awake for a while                           |
 | `start`, `stop`, `rm`                    | boot cold, shut down, destroy                                          |
 | `set <name>`, `top`                      | change CPU limit, weight, vCPUs; watch resource use                    |
 | `url <name>`                             | print the imp's local and tailnet URLs, and its own tailnet name       |
+| `proxy <name> <port>...`                 | reach ports in the imp from this machine (`--reverse` the other way)   |
+| `cp <src> <dest>`                        | copy files and directories into or out of an imp                       |
 | `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
 | `expose <name>`, `unexpose <name>`       | serve the imp to the internet on your domain (`--auth token\|basic`)   |
 | `image build`, `add`, `ls`, `rm`         | manage images                                                          |
 | `template create`, `ls`, `rm`            | make an image from an imp's disk, to create imps from                  |
 | `secret add`, `ls`, `rm`                 | store API tokens in impd, never in a guest                             |
 | `grant`, `revoke`, `grants`, `audit`     | let an imp use a token through the host-side broker                    |
+| `events [name]`                          | follow impd's events as JSON lines                                     |
 | `mcp --prefix <p>`                       | serve imps to a coding agent as MCP tools over stdio                   |
 | `token new`, `ls`, `rm`, `key`, `whoami` | scoped API tokens and their SSH keys, limited to some imps if you like |
 | `login <url>`, `host ls`, `use`, `rm`    | save impd hosts and their tokens; pick one (`--host`)                  |
@@ -217,7 +227,7 @@ and sleep and wake.
 
 ```sh
 bun run typecheck && bun run lint && bun test
-bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
+bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, test/ and deploy/
 (cd agent && go test -race ./...)
 scripts/test-e2e.sh --clean       # end to end, from a clean state (--only fast for the CI subset)
 ```

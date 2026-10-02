@@ -6,9 +6,10 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
 ## What it shows
 
 - **Imps**: every imp with its state, RAM, CPU, disk use, last activity and URL, and notes: why it
-  failed, why its next wake boots cold, which parts it runs outdated, and a hold that keeps it
-  awake. Each row has the buttons that fit its state (sleep, wake, start, stop, restart), the
-  console and destroy.
+  failed, why its next wake boots cold, which parts it runs outdated, a hold that keeps it awake,
+  and an agent that stopped answering
+  ([the watchdog](../architecture/sleep-and-wake.md#the-watchdog)). Each row has the buttons that
+  fit its state (sleep, wake, start, stop, restart), the console and destroy.
 - **One imp**: its details with disk use, both URLs, CPU use with a form for the limit and the
   weight, the checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
 - **Console**: a login shell in the browser (xterm.js), as `imp console` opens. It wakes a sleeping
@@ -73,6 +74,5 @@ first.
 
 - HTTPS on `https://imp.<tailnet>.ts.net` through `tailscale serve`. The session and its origin
   check already work behind such a front.
-- Detachable sessions in the console ([#13](https://github.com/zgeoff/imp/issues/13)). The console
-  view takes a terminal source, so attaching to a session is a second source next to the login
-  shell.
+- Detachable sessions in the console. `imp console` and `imp attach` have them; the console view
+  takes a terminal source, so attaching to a session is a second source next to the login shell.
