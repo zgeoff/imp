@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
+import { CLIENT_VERSION } from './check-server';
 import { createImpClient } from './create-imp-client';
 
 type App = ReturnType<typeof buildTestApp>['app'];
@@ -180,5 +181,9 @@ test('checkServer compares the versions', async () => {
 
   const check = await ctx.client.checkServer();
 
-  expect(check).toEqual({ clientVersion: '0.0.0', serverVersion: '0.0.0', compatible: true });
+  expect(check).toEqual({
+    clientVersion: CLIENT_VERSION,
+    serverVersion: CLIENT_VERSION,
+    compatible: true,
+  });
 });

@@ -2,7 +2,7 @@ import type { Checkpoint, Image, Imp, SystemInfo } from '@imp/api';
 import { impContract } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
-import { createImpClient } from '@zgeoff/imp-client';
+import { CLIENT_VERSION, createImpClient } from '@zgeoff/imp-client';
 import { createImpd } from '../lib/impd';
 import type { Impd } from '../lib/impd';
 
@@ -248,7 +248,7 @@ export function buildImage(overrides: Partial<Image> & { readonly name: string }
 
 function buildSystemInfo(): SystemInfo {
   return {
-    version: '0.0.0',
+    version: CLIENT_VERSION,
     ramBudgetMib: 4096,
     ramUsedMib: 1024,
     ramReservedMib: 512,
