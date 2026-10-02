@@ -162,7 +162,8 @@ retired dataset's snapshots, and the retired dataset is left as a clone with non
 destroyed. Its last marked snapshot then goes with it. This is how a fork outlives its source, and
 how a removed image hands its blocks to the imps cloned from it. impd reclaims in the background
 after every delete, destroy and restore, one promote or destroy at a time, and before anything else
-on start.
+on start. It never promotes a clone in `staging/`: a restore or a backup run destroys it soon, and a
+promote would take the retired dataset's snapshots with it.
 
 ### Crash recovery
 
@@ -175,21 +176,15 @@ On start, impd settles what a crash cut short, then drops what the database does
 - A `staging/image-*` is a build that never finished: impd destroys it and its mount dir.
 - A restore whose swap fails while impd runs is repaired the same way at once: the old disk goes
   back when it is still in place, else the clone takes its name.
-- A disk or image with no row is retired; a `@cp-*` snapshot with no row and every `@fork-*`
-  snapshot is marked for destroy.
+- A disk or image with no row is retired; a `@cp-*` snapshot with no row and every `@fork-*` and
+  `@bk-*` snapshot is marked for destroy.
+- A `staging/bk*` clone is a backup run's: impd unmounts it from the backup tree and destroys it.
 
-### Send and receive (#12)
+### Backups
 
-Off-host backups ([#12](https://github.com/zgeoff/imp/issues/12)) build on this layout. A disk is a
-chain of clones: `disks/<id>` has an origin, which can be a retired dataset, which has an origin, up
-to an image's `@base`. A backup must:
-
-1. Walk the origin graph (`zfs get -H -o value origin`) from each disk up to its image.
-2. Send each image first: `zfs send <root>/images/<digest>@base`.
-3. Send each snapshot on the chain with `-i` from the one before it, or with `-i <origin>` for the
-   first snapshot of a clone, so the receiving side gets clones and not copies.
-4. Never use `zfs send -R`: it follows children, not origins, and would send the whole pool or miss
-   the chain.
+Off-host backups use restic, not `zfs send` ([backups](./backups.md#why-restic-not-zfs-send)). A run
+snapshots each disk as `@bk-<run>-<imp>` and mounts read-only clones of it, of each checkpoint and
+of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)).
 
 ## Images: any OCI image
 

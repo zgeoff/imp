@@ -1,4 +1,13 @@
-import type { AuditEntry, Checkpoint, Image, Imp, Secret, Session } from '@imp/api';
+import type {
+  AuditEntry,
+  BackupRun,
+  BackupStatus,
+  Checkpoint,
+  Image,
+  Imp,
+  Secret,
+  Session,
+} from '@imp/api';
 
 type Row = readonly string[];
 
@@ -75,6 +84,39 @@ export function formatCheckpoints(checkpoints: readonly Checkpoint[]): string {
         : `${String(Math.round(checkpoint.sizeBytes / 1_048_576))} MiB`,
     ]),
   );
+}
+
+export function formatBackupStatus(status: Readonly<BackupStatus>): string {
+  const table = formatTable(
+    ['ID', 'TIME (UTC)', 'IMPS'],
+    status.points.map((point) => [
+      point.id.slice(0, 8),
+      point.time.toISOString(),
+      point.imps.join(' '),
+    ]),
+  );
+
+  const check =
+    status.lastCheck === null
+      ? 'never'
+      : `${status.lastCheck.at.toISOString()} ${status.lastCheck.error === undefined ? 'ok' : `FAILED: ${status.lastCheck.error}`}`;
+
+  return [
+    table,
+    '',
+    `last run:   ${status.lastRunAt?.toISOString() ?? 'never'}`,
+    `last prune: ${status.lastPruneAt?.toISOString() ?? 'never'}`,
+    `last check: ${check}`,
+  ].join('\n');
+}
+
+export function formatBackupRun(run: Readonly<BackupRun>): string {
+  const lines = [
+    `backup ${run.snapshotId.slice(0, 8)}: ${String(run.imps.length)} imps, ${String(Math.round(run.dataAddedBytes / 1_048_576))} MiB added in ${String(Math.round(run.durationMs / 1000))}s`,
+    ...run.skipped.map((skip) => `left out ${skip.name}: ${skip.reason}`),
+  ];
+
+  return lines.join('\n');
 }
 
 export function formatSessions(sessions: readonly Readonly<Session>[]): string {

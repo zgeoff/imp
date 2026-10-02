@@ -22,6 +22,10 @@ ARG FIRECRACKER_VERSION=v1.17.0
 # sha256 of firecracker-${FIRECRACKER_VERSION}-x86_64.tgz, as in the release's .sha256.txt
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
+# off-host backups (docs/architecture/backups.md); sha256 of
+# restic_${RESTIC_VERSION}_linux_amd64.bz2, as in the release's SHA256SUMS
+ARG RESTIC_VERSION=0.19.1
+ARG RESTIC_SHA256=f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
 
 # zfsutils-linux is in contrib. Only the userland: the module comes from the
 # host kernel through /dev/zfs, and impd refuses a different major version.
@@ -30,7 +34,7 @@ RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.lis
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
       xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
-      iproute2 iptables procps util-linux kmod jq \
+      iproute2 iptables procps util-linux kmod jq bzip2 \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI and Tailscale from their upstream apt repos.
@@ -50,6 +54,12 @@ RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/f
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker \
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/jailer \
  && rm -rf /tmp/release-* /tmp/firecracker.tgz
+
+RUN curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
+ && echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c - \
+ && bunzip2 -c /tmp/restic.bz2 >/usr/local/bin/restic \
+ && chmod 0755 /usr/local/bin/restic \
+ && rm /tmp/restic.bz2
 
 COPY host/scripts/ /usr/local/lib/imp/
 COPY host/entrypoint /usr/local/bin/imp-entrypoint

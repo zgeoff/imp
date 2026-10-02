@@ -4,10 +4,23 @@ export interface CommandResult {
   readonly stderr: string;
 }
 
+interface CommandOptions {
+  // the whole environment of the child; impd's own by default
+  readonly env?: Readonly<Record<string, string>>;
+}
+
 // Runs argv to completion and captures its output; never throws on a
 // non-zero exit.
-export async function runCommand(argv: readonly string[]): Promise<CommandResult> {
-  const child = Bun.spawn([...argv], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
+export async function runCommand(
+  argv: readonly string[],
+  options: CommandOptions = {},
+): Promise<CommandResult> {
+  const child = Bun.spawn([...argv], {
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    ...(options.env !== undefined && { env: { ...options.env } }),
+  });
 
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),

@@ -146,6 +146,22 @@ export function createFakeImpd(): FakeImpd {
         return {};
       }),
     },
+
+    // the dashboard has no backup views yet
+    backups: {
+      run: os.backups.run.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      list: os.backups.list.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      restore: os.backups.restore.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      check: os.backups.check.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+    },
     images: {
       list: os.images.list.handler(() => fake.images),
       add: os.images.add.handler((context) => {

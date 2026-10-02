@@ -3,6 +3,7 @@ import type { CommandResult } from '../../process/run-command';
 interface FakeDataset {
   origin: string | null;
   readonly txg: number;
+  readonly properties?: Readonly<Record<string, string>>;
 }
 
 interface FakeSnapshot {
@@ -115,7 +116,11 @@ export function createFakeZfs(options: FakeZfsOptions) {
     return buildSuccess();
   };
 
-  const createClone = (origin: string, target: string): CommandResult => {
+  const createClone = (
+    origin: string,
+    target: string,
+    properties: Readonly<Record<string, string>>,
+  ): CommandResult => {
     if (!snapshots.has(origin)) {
       return buildFailure(`cannot open '${origin}': dataset does not exist`);
     }
@@ -128,7 +133,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return buildFailure(`cannot create '${target}': parent does not exist`);
     }
 
-    datasets.set(target, { origin, txg: state.txg++ });
+    datasets.set(target, { origin, txg: state.txg++, properties });
 
     return buildSuccess();
   };
@@ -326,8 +331,19 @@ export function createFakeZfs(options: FakeZfsOptions) {
       return createSnapshot(last);
     }
 
+    // zfs clone [-o key=value]… <snapshot> <target>
     if (verb === 'clone') {
-      return createClone(rest[0] ?? '', last);
+      const properties: Record<string, string> = {};
+
+      for (const [index, arg] of rest.entries()) {
+        const [key = '', value = ''] = arg.split('=');
+
+        if (rest[index - 1] === '-o') {
+          properties[key] = value;
+        }
+      }
+
+      return createClone(argv.at(-2) ?? '', last, properties);
     }
 
     if (verb === 'rename') {
@@ -420,6 +436,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
     listDatasets: () => [...datasets.keys()].toSorted(),
     listSnapshots: () => [...snapshots.keys()].toSorted(),
     readOrigin: (name: string) => datasets.get(name)?.origin ?? null,
+    readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,
   };

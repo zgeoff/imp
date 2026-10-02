@@ -80,6 +80,18 @@ measured use, the committed memory of awake imps, and the imp counts.
 
 To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` releases it.
 
+## Backups
+
+With `IMP_BACKUP_REPOSITORY` set, impd backs up every imp to a restic repository on a schedule
+([backups](../architecture/backups.md), [settings](./configuration.md#backups)).
+
+- `imp backup ls` shows the restore points and the last prune and check.
+- `impd: backup: CHECK FAILED` in the log, or `FAILED` in `imp backup ls`, means the repository may
+  be damaged: run `imp backup check --subset 100%`, then repair it with `restic repair`
+  ([restic docs](https://restic.readthedocs.io/en/stable/077_troubleshooting.html)) from a machine
+  with the password.
+- `imp backup restore <name> --as <new>` restores next to the original; restored imps are stopped.
+
 ## Logs
 
 - `scripts/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
@@ -92,8 +104,9 @@ To keep an imp awake on purpose, hold it: `imp hold box 2h`. `imp hold box 0` re
 
 `scripts/test-e2e.sh --clean` drives a real instance through every feature, one suite each:
 lifecycle, Docker, bring-your-own images, checkpoints and forks, sleep and wake (with the WebSocket
-relay), the scale test, restart survival and Tailscale. [STATUS.md](../../STATUS.md) has the latest
-results. The [development guide](./development.md) lists the other checks.
+relay), the scale test, restart survival, Tailscale and the backup restore drill.
+[STATUS.md](../../STATUS.md) has the latest results. The [development guide](./development.md) lists
+the other checks.
 
 ## Troubleshooting
 

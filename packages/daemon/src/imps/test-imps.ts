@@ -241,6 +241,7 @@ export function buildTestApp(
     images: ctx.images,
     governor: impd.governor,
     checkpoints,
+    backups: null,
     broker: ctx.broker,
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,

@@ -22,11 +22,13 @@ EnvironmentFile=/etc/imp/imp-host.env
 ExecStartPre=-/usr/bin/docker rm -f imp-host
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
-ExecStart=/usr/bin/docker run --rm --name imp-host \
+# --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm \
   --env-file /etc/imp/imp-host.env \
   -v /var/lib/imp:/var/lib/imp \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   ${IMP_HOST_IMAGE}
 # SIGTERM makes impd sleep every awake imp, so memory survives; it gets up

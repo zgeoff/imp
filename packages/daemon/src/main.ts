@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
+import { createBackupService } from './backup/backup-service';
 import { createBroker } from './broker/broker-service';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
@@ -117,6 +118,19 @@ async function main(): Promise<void> {
   }
 
   const checkpoints = createCheckpointService({ config, db, imps, storage });
+
+  const backups =
+    config.backup === null
+      ? null
+      : createBackupService({
+          dataDir: config.dataDir,
+          backup: config.backup,
+          db,
+          imps,
+          storage,
+          grants: broker,
+        });
+
   const state = { ready: false };
 
   const api = buildApp({
@@ -127,6 +141,7 @@ async function main(): Promise<void> {
     images,
     governor,
     checkpoints,
+    backups,
     broker,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
@@ -174,6 +189,19 @@ async function main(): Promise<void> {
 
     // terminators follow grants; this also renews leaves near their end
     startTicker('broker', 60_000, broker.applyGrants, printLog),
+    ...(backups === null
+      ? []
+      : [
+          startTicker(
+            'backup',
+
+            // a run is due by the time since the last one, so a restart
+            // never puts it off by a whole interval
+            Math.min(config.backup?.intervalS ?? 0, 300) * 1000,
+            backups.runScheduled,
+            printLog,
+          ),
+        ]),
   ];
 
   // ready either way: a failed seed leaves `imp image add` to the user

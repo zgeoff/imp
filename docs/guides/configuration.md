@@ -40,6 +40,23 @@ error.
 [Sleep and wake](../architecture/sleep-and-wake.md#the-ram-governor) explains the RAM and idle
 settings.
 
+### Backups
+
+impd backs up to a restic repository when `IMP_BACKUP_REPOSITORY` is set
+([backups](../architecture/backups.md)). restic reads the repository's keys from the environment as
+well: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3, `B2_*` for B2. impd passes restic
+those, never the rest of its environment.
+
+| Variable                   | Default                      | Meaning                                                                                                        |
+| -------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `IMP_BACKUP_REPOSITORY`    | none                         | A restic repository, such as `s3:https://s3.example.com/bucket/imp`; the bucket must exist. Unset: no backups. |
+| `IMP_BACKUP_PASSWORD_FILE` | none                         | The file that holds the repository password. Needed with a repository. Mode 0600; keep a copy off the host.    |
+| `IMP_BACKUP_INTERVAL_S`    | `21600`                      | Seconds between scheduled runs.                                                                                |
+| `IMP_BACKUP_KEEP`          | `hourly=24,daily=7,weekly=4` | What `forget` keeps; a bucket left out keeps none.                                                             |
+| `IMP_BACKUP_FORGET`        | `true`                       | `false` leaves `forget` and `prune` to one other machine, for a bucket that denies impd's key deletes.         |
+| `IMP_BACKUP_CPUS`          | `2`                          | restic's `GOMAXPROCS`.                                                                                         |
+| `IMP_BACKUP_MEMORY_MIB`    | `512`                        | restic's `GOMEMLIMIT`, a soft limit.                                                                           |
+
 ### HTTPS
 
 With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the tailnet
@@ -100,12 +117,14 @@ route.
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_DEFAULT_VCPUS`, `IMP_DEFAULT_MEMORY_MIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, and the HTTPS settings except the token:
-`IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`,
-`IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path under the repo.
-`IMP_DEV_NETWORK` puts the container on that Docker network. Other impd variables keep their
-defaults in the dev container. A ZFS dev instance needs the zfs module on the machine;
-`scripts/zfs-host-test.sh` runs one on a throwaway pool.
+`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*` variables, and the HTTPS
+settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`,
+`IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as
+a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker network.
+`IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so the keys in
+your own shell never reach the container. Other impd variables keep their defaults in the dev
+container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh` runs
+one on a throwaway pool.
 
 ## CLI
 

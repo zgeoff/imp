@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { loadBackupConfig } from './backup/backup-config';
+import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
 import { countSlots, parseSubnet } from './net/addressing';
@@ -91,6 +93,9 @@ export interface Config {
   // null serves a note that this impd has none
   readonly dashboardDir: string | null;
 
+  // off-host backups with restic; null when IMP_BACKUP_REPOSITORY is unset
+  readonly backup: BackupConfig | null;
+
   // imps at https://<name>.<domain> (docs/guides/https.md); null without
   // IMP_DOMAIN
   readonly https: HttpsConfig | null;
@@ -146,6 +151,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
+    backup: loadBackupConfig(present),
     https: parseHttpsConfig(parsed),
   };
 }

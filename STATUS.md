@@ -60,6 +60,15 @@ From the two acceptance runs:
 The long wake tail in the scale test comes from waking 30 imps one after another while the governor
 sleeps others to make room, on a nested-virtualization host.
 
+Backups, from the `backups` e2e suite on the dev box (MinIO in the dev instance's network):
+
+| What                                     | Value               |
+| ---------------------------------------- | ------------------- |
+| First run: 2 imps, 1 checkpoint, 1 image | 31–45 s             |
+| Next run: 1 imp running, 1 stopped       | 10–14 s             |
+| Data added, first and next run           | 150–178 / 15–19 MiB |
+| Restore of an imp with one checkpoint    | 3.9–4.1 s           |
+
 From the milestone work:
 
 | What                                 | Value                     | Notes                                                 |
@@ -86,6 +95,11 @@ From the milestone work:
 - The ZFS storage backend ([#11](https://github.com/zgeoff/imp/issues/11)) has unit tests against a
   fake zfs and a CI job against a pool on a file, but no run on a real host yet. Its checkpoint,
   restore, fork and sleep times are not measured; `scripts/zfs-host-test.sh` measures them.
+- Backups ([#12](https://github.com/zgeoff/imp/issues/12)): a known cost, kept for now: restic reads
+  every hole of a 32 GiB sparse disk, about 10 s of CPU for each disk it has to read in a run. The
+  restore drill passed on XFS on the dev box; on ZFS it runs in the zfs CI job only. MinIO for the
+  drill comes from Chainguard's free `:latest`, pinned by digest, which Chainguard may stop serving.
+  Memory snapshots are not backed up: a sleeping imp comes back stopped.
 - HTTPS on a domain ([#16](https://github.com/zgeoff/imp/issues/16)) is tested against Pebble only
   (the `https` suite: certificate in about 100 ms, an imp over https, a wake over https), not with a
   real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider, and public

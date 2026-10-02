@@ -30,6 +30,7 @@ test('it fills every setting from its default when the env is empty', () => {
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
     dashboardDir: null,
+    backup: null,
     https: null,
   });
 });

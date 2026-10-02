@@ -79,6 +79,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
   const namespaces = {
     imps: rpc.imps,
     checkpoints: rpc.checkpoints,
+    backups: rpc.backups,
     images: rpc.images,
     exec: rpc.exec,
     sessions: rpc.sessions,

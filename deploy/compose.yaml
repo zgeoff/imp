@@ -14,6 +14,9 @@ services:
   imp-host:
     image: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:latest}
     container_name: imp-host
+    # restic's backup locks name the host: a fixed one lets impd drop a lock
+    # its own crashed run left (docs/architecture/backups.md)
+    hostname: imp-host
     init: true
     privileged: true
     devices:
@@ -25,6 +28,8 @@ services:
       - ${IMP_HOST_DATA:-/var/lib/imp}:/var/lib/imp
       # impd pulls and builds imp images with the host's docker
       - /var/run/docker.sock:/var/run/docker.sock
+      # the restic password file for backups (docs/architecture/backups.md)
+      - /etc/imp:/etc/imp:ro
     # Local only: the tailnet reaches impd and every imp through the
     # container's own tailscaled, so nothing else is published.
     ports:

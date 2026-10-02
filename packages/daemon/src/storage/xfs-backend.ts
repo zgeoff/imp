@@ -1,16 +1,30 @@
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
   statfsSync,
+  writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { buildImagePaths, buildImpPaths } from './data-layout';
+import { basename, dirname, join } from 'node:path';
+import * as z from 'zod';
+import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { createReflinkClone } from './reflink';
 import type { DiskSource, StorageBackend } from './storage-backend';
+
+// The source disk of each copy in the backup tree. A sleeping or stopped
+// imp's disk with the same inode and ctime is unchanged since, so the copy
+// stays, and restic sees the file it read last run.
+const CopiesSchema = z.record(
+  z.string(),
+  z.object({ ino: z.string(), ctimeNs: z.string(), size: z.string() }),
+);
+
+type Copies = z.infer<typeof CopiesSchema>;
 
 // an image directory being written, renamed into place once complete
 const STAGING_PREFIX = '.new-';
@@ -40,7 +54,47 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       return resolveImpPaths(source.impId).disk;
     }
 
-    return buildCheckpointDisk(source.impId, source.checkpointId);
+    if (source.kind === 'checkpoint') {
+      return buildCheckpointDisk(source.impId, source.checkpointId);
+    }
+
+    throw new Error('xfs: an empty disk has no source file');
+  };
+
+  const backup = buildBackupPaths(deps.dataDir);
+
+  // this run's copies of running disks: new every run, so none outlives it
+  const freshCopies = new Set<string>();
+
+  const readCopies = (): Copies => {
+    try {
+      return CopiesSchema.parse(JSON.parse(readFileSync(backup.copies, 'utf8')));
+    } catch {
+      return {};
+    }
+  };
+
+  const writeCopies = (copies: Readonly<Copies>): void => {
+    mkdirSync(backup.dir, { recursive: true });
+    writeFileSync(`${backup.copies}.new`, JSON.stringify(copies));
+    renameSync(`${backup.copies}.new`, backup.copies);
+  };
+
+  // a clone made once: checkpoints and images never change
+  const createTreeClone = async (source: string, target: string): Promise<boolean> => {
+    if (!existsSync(source)) {
+      return false;
+    }
+
+    if (!existsSync(target)) {
+      mkdirSync(dirname(target), { recursive: true });
+
+      await cloneFile(source, `${target}.new`);
+
+      renameSync(`${target}.new`, target);
+    }
+
+    return true;
   };
 
   return {
@@ -90,6 +144,12 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       const disk = resolveImpPaths(impId).disk;
 
       mkdirSync(dirname(disk), { recursive: true });
+
+      if (source.kind === 'empty') {
+        writeFileSync(disk, '');
+
+        return;
+      }
 
       await cloneFile(findSourceFile(source), disk);
     },
@@ -146,6 +206,109 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       }
     },
 
+    createBackupCopy: async (impId, _runId, options) => {
+      const source = resolveImpPaths(impId).disk;
+      const target = join(backup.tree, BACKUP_TREE.buildDisk(impId));
+      const stats = statSync(source, { bigint: true });
+
+      const record = {
+        ino: String(stats.ino),
+        ctimeNs: String(stats.ctimeNs),
+        size: String(stats.size),
+      };
+
+      const copies = readCopies();
+      const last = copies[impId];
+
+      const isUnchanged =
+        last?.ino === record.ino && last.ctimeNs === record.ctimeNs && last.size === record.size;
+
+      if (options.isReusable && isUnchanged && existsSync(target)) {
+        return;
+      }
+
+      mkdirSync(dirname(target), { recursive: true });
+      rmSync(`${target}.new`, { force: true });
+
+      await cloneFile(source, `${target}.new`);
+
+      renameSync(`${target}.new`, target);
+
+      if (options.isReusable) {
+        writeCopies({ ...copies, [impId]: record });
+      } else {
+        freshCopies.add(impId);
+      }
+    },
+
+    // the tree stays between runs, so restic finds each file it read before
+    openBackupTree: async (request) => {
+      const impIds = new Set<string>();
+      const checkpointIds = new Set<string>();
+      const imageDigests = new Set<string>();
+
+      for (const imp of request.imps) {
+        if (!existsSync(join(backup.tree, BACKUP_TREE.buildDisk(imp.impId)))) {
+          continue;
+        }
+
+        impIds.add(imp.impId);
+
+        for (const checkpointId of imp.checkpointIds) {
+          const isCopied = await createTreeClone(
+            buildCheckpointDisk(imp.impId, checkpointId),
+            join(backup.tree, BACKUP_TREE.buildCheckpointDisk(imp.impId, checkpointId)),
+          );
+
+          if (isCopied) {
+            checkpointIds.add(checkpointId);
+          }
+        }
+
+        removeUnlisted(
+          join(backup.tree, BACKUP_TREE.buildImpDir(imp.impId), 'checkpoints'),
+          new Set(imp.checkpointIds.filter((id) => checkpointIds.has(id))),
+        );
+      }
+
+      for (const digest of request.imageDigests) {
+        const source = buildImagePaths(deps.dataDir, digest);
+        const dir = join(backup.tree, BACKUP_TREE.buildImageDir(digest));
+
+        const isCopied = await createTreeClone(source.rootfs, join(dir, 'rootfs.ext4'));
+
+        if (isCopied) {
+          copyFileSync(source.config, join(dir, 'config.json'));
+
+          imageDigests.add(digest);
+        }
+      }
+
+      removeUnlisted(join(backup.tree, 'imps'), impIds);
+
+      removeUnlisted(
+        join(backup.tree, 'images'),
+        new Set([...imageDigests].map((digest) => basename(BACKUP_TREE.buildImageDir(digest)))),
+      );
+
+      const copies = readCopies();
+
+      writeCopies(Object.fromEntries(Object.entries(copies).filter(([id]) => impIds.has(id))));
+
+      // a running disk's copy would pin the blocks it shares until next run
+      const removeFreshCopies = () => {
+        for (const impId of freshCopies) {
+          rmSync(join(backup.tree, BACKUP_TREE.buildDisk(impId)), { force: true });
+        }
+
+        freshCopies.clear();
+
+        return Promise.resolve();
+      };
+
+      return { impIds, checkpointIds, imageDigests, close: removeFreshCopies };
+    },
+
     stop: () => Promise.resolve(),
 
     readUsage: () => {
@@ -157,4 +320,13 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
       });
     },
   };
+}
+
+// drops each entry of `dir` that `keep` does not name
+function removeUnlisted(dir: string, keep: ReadonlySet<string>): void {
+  const names = existsSync(dir) ? readdirSync(dir) : [];
+
+  for (const name of names.filter((entry) => !keep.has(entry))) {
+    rmSync(join(dir, name), { recursive: true, force: true });
+  }
 }

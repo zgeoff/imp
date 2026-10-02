@@ -44,6 +44,20 @@ export async function findImageByName(
   return row === undefined ? undefined : toImageRecord(row);
 }
 
+export async function findImageByDigest(
+  db: ImpDatabase,
+  digest: string,
+): Promise<ImageRecord | undefined> {
+  const row = await db
+    .selectFrom('images')
+    .selectAll()
+    .where('digest', '=', digest)
+    .orderBy('created_at')
+    .executeTakeFirst();
+
+  return row === undefined ? undefined : toImageRecord(row);
+}
+
 export async function findImageById(db: ImpDatabase, id: string): Promise<ImageRecord | undefined> {
   const row = await db.selectFrom('images').selectAll().where('id', '=', id).executeTakeFirst();
 

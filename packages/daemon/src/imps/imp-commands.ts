@@ -2,7 +2,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import type { Imp } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
-import { listImps, removeImp, updateImpActivity, updateImpHold } from '../db/imps';
+import { listImps, removeImp, updateImpActivity, updateImpHold, updateImpState } from '../db/imps';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
 import { checkLiveness } from './imp-liveness';
@@ -21,6 +21,9 @@ interface CreateImpInput {
 
   // creates the new imp's disk; a clone of the image rootfs by default
   readonly prepareDisk?: (impId: string) => Promise<void>;
+
+  // false leaves the new imp stopped, as a restore from backup does
+  readonly start?: boolean;
 }
 
 // The imp API's commands. Each takes the imp's lock for its whole run.
@@ -92,6 +95,15 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         const cloneMs = Math.round(performance.now() - started);
 
         context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
+
+        // past the lifecycle table: no stop ever leaves `creating` otherwise
+        if (input.start === false) {
+          const stopped = await updateImpState(context.db, imp.id, { state: 'stopped' });
+
+          context.emitChanged();
+
+          return presenter.toApi(stopped);
+        }
 
         try {
           const running = await ops.startImpVm(imp);

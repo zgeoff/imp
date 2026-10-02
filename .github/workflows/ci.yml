@@ -367,7 +367,7 @@ jobs:
       IMP_KERNEL: .cache/ci/vmlinux
       IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
       IMP_HOST_IMAGE_READY: 1
-      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep
+      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep,backups
       IMP_ZFS_TEST_UNIT: 0
     steps:
       - name: Checkout

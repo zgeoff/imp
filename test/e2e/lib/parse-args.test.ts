@@ -20,6 +20,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'connectors',
     'dashboard',
     'https',
+    'backups',
   ]);
 });
 
