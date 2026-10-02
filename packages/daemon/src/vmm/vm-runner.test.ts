@@ -272,6 +272,26 @@ test('a resume whose seal finds anything planted in run/ kills the VM, never res
   expect(released).toEqual(['vm']);
 });
 
+test('a hard stop, as a checkpoint restore asks, still releases the jail', async () => {
+  await using vm = await setupFailingPause(204);
+
+  const released: string[] = [];
+
+  const jails: Jails = {
+    ...NO_JAILS,
+    release: (impId) => {
+      released.push(impId);
+
+      return Promise.resolve();
+    },
+  };
+
+  await createVmRunner(jails).stopVm(vm.child.pid, vm.paths, false);
+
+  expect(isFirecrackerAlive(vm.child.pid, vm.paths.apiSocket)).toBeFalse();
+  expect(released).toEqual(['vm']);
+});
+
 test('a jail prepare that fails partway releases its mounts and restores the limit', async () => {
   const calls: string[] = [];
 

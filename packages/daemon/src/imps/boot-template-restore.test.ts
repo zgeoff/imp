@@ -3,6 +3,7 @@ import { copyFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { findImpByName } from '../db/imps';
 import { buildTemplateKey } from '../templates/boot-templates';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 // Cold boots with IMP_BOOT_TEMPLATES on, over the fake VMM: the first boot
@@ -11,12 +12,39 @@ import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 const SHAPE = { vcpus: 1, memoryMib: 256 };
 
-// `cloneFails` turns every disk clone away until a test sets it back
-async function setupRestoreTest() {
+// a cgroup for every VM, as a jailed start needs
+const JAIL_CGROUPS: CpuCgroups = {
+  isEnforced: true,
+  isMemoryEnforced: true,
+  readOomKills: () => null,
+  hasOomKillSinceStart: () => false,
+  setup: (impId) => ({
+    procsPath: `/cg/${impId}/cgroup.procs`,
+    liftLimit: () => {},
+    applyLimit: () => {},
+  }),
+  apply: () => {},
+  adopt: () => {},
+  remove: () => Promise.resolve(),
+  setGuestMib: () => {},
+  kill: () => {},
+  removeOrphans: () => [],
+  readCpuStat: () => null,
+};
+
+// `cloneFails` turns every disk clone away until a test sets it back; with
+// `isJailed`, every VM runs under the jailer
+async function setupRestoreTest(isJailed = false) {
   const cloneFails = { isOn: false };
 
   const harness = await setupImpTest({
-    env: { IMP_BOOT_TEMPLATES: 'true', IMP_DEFAULT_MEMORY_MIB: '256', IMP_DEFAULT_VCPUS: '1' },
+    ...(isJailed && { cgroups: JAIL_CGROUPS }),
+    env: {
+      IMP_BOOT_TEMPLATES: 'true',
+      IMP_DEFAULT_MEMORY_MIB: '256',
+      IMP_DEFAULT_VCPUS: '1',
+      IMP_JAILER: String(isJailed),
+    },
     cloneDisk: (source, target) => {
       if (cloneFails.isOn) {
         return Promise.reject(new Error('clone failed: no space'));
@@ -181,4 +209,32 @@ test('a shape with no template yet never waits for its build', async () => {
   held.release();
 
   await ctx.waitForTemplate();
+});
+
+test('a jailed restore runs as the imp, with the template and its drive bound in', async () => {
+  await using ctx = await setupRestoreTest(true);
+
+  await ctx.client.imps.create({ name: 'once' });
+  await ctx.client.imps.create({ name: 'first' });
+  await ctx.imps.bootTemplates?.stop();
+  await ctx.client.imps.create({ name: 'second' });
+
+  const key = buildTemplateKey(ctx.readIdentity(), SHAPE);
+
+  const second = await findImpByName(ctx.db, 'second');
+
+  const dir = join(ctx.dataDir, 'templates');
+
+  // a restore that fell back to the kernel would be a boot here
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['once', 'first']);
+
+  const [plan] = ctx.fake.restorePlans;
+
+  expect(ctx.fake.restorePlans).toHaveLength(1);
+  expect(plan?.jail).toEqual({ uid: second?.jailUid ?? -1, gid: second?.jailUid ?? -1 });
+  expect(plan?.vmstate).toBe(join(dir, key, 'vmstate'));
+  expect(plan?.memFile).toBe(join(dir, key, 'mem'));
+  expect(plan?.systemDrivePath).toBe(ctx.readIdentity().systemDrivePath);
+  expect(plan?.placeholderPath).toBe(join(dir, 'placeholder.ext4'));
+  expect(plan?.cgroup?.procsPath).toBe(`/cg/${second?.id ?? ''}/cgroup.procs`);
 });

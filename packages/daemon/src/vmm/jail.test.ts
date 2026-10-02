@@ -10,6 +10,7 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -469,6 +470,7 @@ test('a template build binds its work dir and gets a placeholder of its own in t
   mkdirSync(runDir, { recursive: true });
   writeFileSync(kernel, '');
   writeFileSync(placeholder, 'shared');
+  truncateSync(placeholder, 1024 * 1024);
 
   const command = await jail.jails.prepareBuild({
     id: 'tpl-build',
@@ -495,7 +497,8 @@ test('a template build binds its work dir and gets a placeholder of its own in t
 
   // the build's placeholder is in the chroot only: the shared one is untouched
   expect(lstatSync(join(buildRoot, placeholder)).size).toBe(1024 * 1024);
-  expect(readFileSync(placeholder, 'utf8')).toBe('shared');
+  expect(readFileSync(placeholder, 'utf8')).toStartWith('shared');
+  expect(readFileSync(join(buildRoot, placeholder), 'utf8')).not.toStartWith('shared');
   expect(jail.calls.some((call) => call.includes('placeholder'))).toBeFalse();
 });
 

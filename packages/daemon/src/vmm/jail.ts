@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   truncateSync,
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -36,7 +37,8 @@ interface JailPlan {
   // files the VM only reads, such as the kernel and the system drive
   readonly readOnlyFiles: readonly string[];
 
-  // the template's placeholder disk on a restore (scratchFiles)
+  // files the VM opens read-write, each a copy of its size of its own in the
+  // chroot: the template's placeholder disk on a restore
   readonly scratchFiles?: readonly string[];
 
   // a restore starts before its disk is cloned: setupDiskOwner later
@@ -58,9 +60,6 @@ interface BuildJailPlan {
 export interface RunPaths extends FirecrackerPaths {
   readonly runDir: string;
 }
-
-// a placeholder disk's size: what the template's snapshot recorded
-const SCRATCH_BYTES = 1024 * 1024;
 
 export interface Jails {
   // a clean chroot with its binds; the command that starts Firecracker in it
@@ -217,15 +216,6 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
     await runMount(['mount', '-o', 'remount,bind,ro,nosuid,nodev', target]);
   };
 
-  // A file of the jail uid's own inside the chroot only, never on the host
-  // path: a placeholder disk the VM opens read-write.
-  const setupScratchFile = (target: string, user: Readonly<JailUser>): void => {
-    mkdirSync(dirname(target), { recursive: true });
-    closeSync(openSync(target, 'wx', 0o600));
-    truncateSync(target, SCRATCH_BYTES);
-    lchownSync(target, user.uid, user.gid);
-  };
-
   // No process of the uid, no mount left, then a new chroot with its binds.
   // `setupFiles` runs between: root works on the VM's files then.
   const setupChroot = async (chroot: Readonly<ChrootPlan>): Promise<readonly string[]> => {
@@ -263,7 +253,7 @@ export function createJails(deps: Readonly<JailDeps>): Jails {
         throw new Error(`jail ${chroot.id}: ${file} is inside a bound directory`);
       }
 
-      setupScratchFile(join(root, file), chroot.user);
+      setupScratchFile(file, join(root, file), chroot.user);
     }
 
     await runMount(['mount', '--make-rprivate', root]);
@@ -436,6 +426,16 @@ function setupOwnership(
       setupSnapshotFile(file, user.gid);
     }
   }
+}
+
+// A file of the jail uid's own inside the chroot only, never on the host
+// path: a placeholder disk the VM opens read-write, as large as the host's
+// one, which the snapshot recorded.
+function setupScratchFile(source: string, target: string, user: Readonly<JailUser>): void {
+  mkdirSync(dirname(target), { recursive: true });
+  closeSync(openSync(target, 'wx', 0o600));
+  truncateSync(target, statSync(source).size);
+  lchownSync(target, user.uid, user.gid);
 }
 
 function requireRegularFile(file: string): void {

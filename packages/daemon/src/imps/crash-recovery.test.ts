@@ -8,6 +8,7 @@ import {
   writeSnapshotMeta,
 } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
+import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 // impd killed at the points a sleep, a wake or a start can be cut, and the
@@ -482,4 +483,37 @@ test('a recycled pid whose argv another jail forged is a lost VM, never re-adopt
   const imp = await findImpByName(ctx.db, 'dev');
 
   expect(imp).toMatchObject({ state: 'stopped', pid: null });
+});
+
+test('the orphan jails go before the orphan cgroups, so a cut-short build leaves its cgroup empty', async () => {
+  const holder: { sweeps: string[] } = { sweeps: [] };
+
+  const cgroups: CpuCgroups = {
+    isEnforced: true,
+    isMemoryEnforced: false,
+    readOomKills: () => null,
+    hasOomKillSinceStart: () => false,
+    setup: () => null,
+    apply: () => {},
+    adopt: () => {},
+    remove: () => Promise.resolve(),
+    setGuestMib: () => {},
+    kill: () => {},
+    removeOrphans: () => {
+      holder.sweeps.push('cgroups');
+
+      return [];
+    },
+    readCpuStat: () => null,
+  };
+
+  await using ctx = await setupImpTest({ cgroups });
+
+  holder.sweeps = ctx.fake.sweeps;
+
+  const impd = ctx.restartImpd();
+
+  await impd.imps.reconcileImps();
+
+  expect(ctx.fake.sweeps).toEqual(['jails', 'cgroups']);
 });

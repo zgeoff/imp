@@ -4,6 +4,7 @@ import type { ImpPaths } from '../storage/data-layout';
 import type { InstanceState } from '../vmm/firecracker-client';
 import type { FirecrackerPaths, VmOwner } from '../vmm/firecracker-process';
 import { TemplateRestoreError } from '../vmm/template-vm';
+import type { TemplateRestorePlan } from '../vmm/template-vm';
 import type { VmRunner } from '../vmm/vm-runner';
 
 // what every fake agent's ping reports
@@ -73,6 +74,12 @@ export function buildFakeVmm() {
   // each template build's shape, and each restore's claim
   const templateBuilds: { vcpus: number; memoryMib: number }[] = [];
   const restores: { hostname: string; isIdentityReset: boolean; memFile: string }[] = [];
+
+  // the startup sweeps of orphans in their order; a test's cgroups add theirs
+  const sweeps: string[] = [];
+
+  // every restore's whole plan: what its jail binds and who it runs as
+  const restorePlans: TemplateRestorePlan[] = [];
 
   // snapshot dirs a wake loaded: the guest ran on them, so they no longer
   // match the disk, even when the wake then failed
@@ -246,7 +253,11 @@ export function buildFakeVmm() {
         }),
       releaseVm: () => Promise.resolve(),
       removeJail: () => Promise.resolve(),
-      removeOrphanJails: () => Promise.resolve([]),
+      removeOrphanJails: () => {
+        sweeps.push('jails');
+
+        return Promise.resolve([]);
+      },
       stopVm: (pid, _paths, graceful) =>
         runInGeneration(async () => {
           // fail and die: the VM survived SIGKILL
@@ -348,6 +359,8 @@ export function buildFakeVmm() {
       // fail is a failure once the imp's disk and values are in play
       loadTemplateVm: (plan) =>
         runInGeneration(async () => {
+          restorePlans.push(plan);
+
           const vm = await startFakeVm('restore', plan.paths).catch((error: unknown) => {
             throw new TemplateRestoreError('restore failed', true, error);
           });
@@ -385,6 +398,8 @@ export function buildFakeVmm() {
     boots,
     templateBuilds,
     restores,
+    restorePlans,
+    sweeps,
 
     // the runner for a new impd; the one before it goes quiet
     startGeneration: (): VmRunner => {
