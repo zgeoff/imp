@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.10.0](https://github.com/zgeoff/imp/compare/v0.9.0...v0.10.0) (2026-10-02)
+
+### Features
+
+- **cli:** imp set, imp top, and cpu flags on imp new
+  ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([326196e](https://github.com/zgeoff/imp/commit/326196ec81a63a6b4f07ec986636fbc99f7d91aa))
+- **daemon:** a cpu limit and weight per imp in a cgroup
+  ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([aa30993](https://github.com/zgeoff/imp/commit/aa309934a8fa1c5c46add0c6d918a6af5c1deb58))
+- **daemon:** an imp.disk.used gauge from the disk usage cache
+  ([a354387](https://github.com/zgeoff/imp/commit/a354387001aa279e9e09d67a2d21cbeb7b9a3fde)), closes
+  [#37](https://github.com/zgeoff/imp/issues/37)
+- **daemon:** sample each running imp's cpu, network and memory
+  ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([9f80607](https://github.com/zgeoff/imp/commit/9f806077ee2cc15bc25d5a13eee0e367c9e7be46))
+- **dashboard:** cpu column and a cpu panel with limit form
+  ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([6e6df94](https://github.com/zgeoff/imp/commit/6e6df94ef59d4569688f21e14a89dfe4deacee9d))
+- disk use in imp top and the dashboard ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([fb5e019](https://github.com/zgeoff/imp/commit/fb5e0192be7c1a132363bad09af479198725487e))
+- **host:** give imps a cgroup tree in a private cgroup namespace
+  ([#37](https://github.com/zgeoff/imp/issues/37))
+  ([1f96894](https://github.com/zgeoff/imp/commit/1f96894f111dad537a31820858ea61c7aff3c09e))
+
 ## [0.9.0](https://github.com/zgeoff/imp/compare/v0.8.0...v0.9.0) (2026-10-02)
 
 ### Features
