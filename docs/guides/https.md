@@ -92,7 +92,8 @@ changes. A failed check keeps them where they are, so it never cuts open connect
   [wake proxy](../architecture/networking.md#the-wake-proxy). The Host header must be exactly
   `<name>.<domain>` for an imp, or exactly `<domain>` for the API. Anything else, such as
   `a.b.<domain>`, gets a 404. The bare domain therefore never reaches an imp named after its first
-  label. The upstream request carries `x-forwarded-proto: https`.
+  label. The upstream request carries `x-forwarded-proto: https`. The dashboard's session cookie
+  goes to the API on the bare domain, and never to an imp.
 - **80** answers `308` with the same path on `https://`, for hosts under the domain only. It never
   wakes an imp.
 - One wildcard certificate covers every name, so SNI needs no choice.
