@@ -117,3 +117,29 @@ func TestKillReachesOnlyTheChildAndGroupAliveSeesTheGroup(t *testing.T) {
 		t.Fatal("the group outlived its SIGKILL")
 	}
 }
+
+// TestRequireCgroupRefusesTheFallback: a leaf that is not a cgroup (here a
+// plain directory) fails a spawn that requires it, where the default runs
+// the child without one.
+func TestRequireCgroupRefusesTheFallback(t *testing.T) {
+	d := &Direct{Reaper: testReaper}
+	dir, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	spec := Spec{Argv: []string{"true"}, Env: []string{"PATH=/usr/bin:/bin"}, Cgroup: dir}
+
+	p, err := d.Start(spec)
+	if err != nil {
+		t.Fatalf("fallback: %v", err)
+	}
+	<-p.Done
+	if p.InCgroup {
+		t.Fatal("InCgroup for a plain directory")
+	}
+	spec.RequireCgroup = true
+	if _, err := d.Start(spec); err == nil {
+		t.Fatal("a required cgroup that is not one did not fail the spawn")
+	}
+}

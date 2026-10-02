@@ -45,6 +45,9 @@ type Spec struct {
 	// Cgroup, if set, is the directory of the cgroup v2 leaf the child is
 	// born in (clone3 with CLONE_INTO_CGROUP).
 	Cgroup *os.File
+	// RequireCgroup fails a spawn into Cgroup that fails, where the
+	// default runs the child without one.
+	RequireCgroup bool
 }
 
 // Process is a started child.
@@ -52,7 +55,8 @@ type Process struct {
 	Pid  int
 	Done <-chan reaper.Status
 	// InCgroup reports whether the child started in Spec.Cgroup. A spawn
-	// into the cgroup that fails is retried without it.
+	// into the cgroup that fails is retried without it, unless the spec
+	// requires the cgroup.
 	InCgroup bool
 	ctl      control
 }
@@ -176,7 +180,7 @@ func (d *Direct) Start(s Spec) (*Process, error) {
 	inCgroup := s.Cgroup != nil
 	pid, done, err := d.Reaper.Start(func() (int, error) {
 		pid, err := syscall.ForkExec(path, s.Argv, attr)
-		if err == nil || !inCgroup {
+		if err == nil || !inCgroup || s.RequireCgroup {
 			return pid, err
 		}
 		// No clone3, or a cgroup gone from under us: the command still runs,

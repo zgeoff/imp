@@ -57,13 +57,22 @@ type Manager struct {
 	// cgroups gives each non-tty exec a leaf; nil runs them without one,
 	// and a stop then reaches only the process group.
 	cgroups *cgroup.Tree
-	active  atomic.Int64
+	// strict gives every exec, a tty one too, a leaf, and refuses the exec
+	// that cannot have one
+	strict bool
+	active atomic.Int64
 
 	leafFailed sync.Once
 }
 
 func NewManager(l *launch.Launcher, cgroups *cgroup.Tree) *Manager {
 	return &Manager{launcher: l, cgroups: cgroups}
+}
+
+// NewStrictManager is NewManager for execs that must stay inside the limits
+// of cgroups: each one, tty or not, starts in a leaf of it or not at all.
+func NewStrictManager(l *launch.Launcher, cgroups *cgroup.Tree) *Manager {
+	return &Manager{launcher: l, cgroups: cgroups, strict: true}
 }
 
 // Active returns the number of running exec sessions.
@@ -170,8 +179,8 @@ type output struct {
 
 type session struct {
 	proc *proc.Process
-	// group is the exec's cgroup leaf; nil with a tty, or when the exec
-	// runs without one
+	// group is the exec's cgroup leaf; nil when the exec runs without one,
+	// as a tty exec does unless its manager is strict
 	group   *cgroup.Group
 	tty     *os.File // pty master, nil without a tty
 	stdin   *os.File // write end of the stdin pipe, nil with a tty
@@ -197,11 +206,22 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 		stop:   stopTimer{grace: killGrace(req)},
 	}
 	if req.TTY {
-		p, master, err := m.launcher.StartPTY(req)
+		group, err := m.ttyGroup()
 		if err != nil {
 			return nil, err
 		}
-		s.proc, s.tty = p, master
+		var dir *os.File
+		if group != nil {
+			dir = group.Dir()
+		}
+		p, master, err := m.launcher.StartPTY(req, dir)
+		if err != nil {
+			if group != nil {
+				m.cgroups.Release(group)
+			}
+			return nil, err
+		}
+		s.proc, s.tty, s.group = p, master, group
 		s.outputs = []output{{master, proto.TypeStdout}}
 		return s, nil
 	}
@@ -222,7 +242,11 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 	s.stdin = pipes[0][1]
 	s.outputs = []output{{pipes[1][0], proto.TypeStdout}, {pipes[2][0], proto.TypeStderr}}
 	spec.Files = []*os.File{pipes[0][0], pipes[1][1], pipes[2][1]}
-	group := m.newGroup()
+	group, err := m.newGroup()
+	if err != nil {
+		closeAll(pipes[:])
+		return nil, err
+	}
 	if group != nil {
 		spec.Cgroup = group.Dir()
 	}
@@ -247,19 +271,35 @@ func (m *Manager) start(req proto.Request) (*session, error) {
 }
 
 // newGroup makes a leaf for a new exec, or returns nil when there is no tree
-// or the leaf cannot be made (logged once).
-func (m *Manager) newGroup() *cgroup.Group {
+// or the leaf cannot be made (logged once). A strict manager returns the
+// error instead.
+func (m *Manager) newGroup() (*cgroup.Group, error) {
 	if m.cgroups == nil {
-		return nil
+		if m.strict {
+			return nil, errors.New("no cgroup to run in")
+		}
+		return nil, nil
 	}
 	g, err := m.cgroups.New()
 	if err != nil {
+		if m.strict {
+			return nil, fmt.Errorf("cgroup: %w", err)
+		}
 		m.leafFailed.Do(func() {
 			log.Printf("exec: no cgroup for execs (%v); a stop reaches only the process group", err)
 		})
-		return nil
+		return nil, nil
 	}
-	return g
+	return g, nil
+}
+
+// ttyGroup is newGroup for a tty exec, which only a strict manager gives a
+// leaf: its process group belongs to the terminal, so no stop sweeps it.
+func (m *Manager) ttyGroup() (*cgroup.Group, error) {
+	if !m.strict {
+		return nil, nil
+	}
+	return m.newGroup()
 }
 
 // input applies host frames until the connection ends. If the host goes away

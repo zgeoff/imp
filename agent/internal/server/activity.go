@@ -22,7 +22,7 @@ func (s *Server) activity() (proto.Activity, error) {
 	}
 	return proto.Activity{
 		TCPEstablished: n,
-		ExecSessions:   s.Exec.Active() + s.Sessions.Attached(),
+		ExecSessions:   s.Exec.Active() + s.Outer.Active() + s.Sessions.Attached(),
 		Load1:          load1(),
 		Sessions:       s.Sessions.List(),
 	}, nil

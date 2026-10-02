@@ -64,8 +64,9 @@ func (l *Launcher) Start(spec proc.Spec) (*proc.Process, error) {
 }
 
 // StartPTY starts req on a new pty, sized from req, and returns the process
-// and the pty master. The child's end of the pty is closed here.
-func (l *Launcher) StartPTY(req proto.Request) (*proc.Process, *os.File, error) {
+// and the pty master. The child's end of the pty is closed here. A non-nil
+// cgroup is the leaf the child is born in, as Spec.Cgroup.
+func (l *Launcher) StartPTY(req proto.Request, cgroup *os.File) (*proc.Process, *os.File, error) {
 	spec, err := l.Spec(req)
 	if err != nil {
 		return nil, nil, err
@@ -82,6 +83,7 @@ func (l *Launcher) StartPTY(req proto.Request) (*proc.Process, *os.File, error) 
 		log.Printf("launch: winsize: %v", err)
 	}
 	spec.TTY = true
+	spec.Cgroup = cgroup
 	spec.Files = []*os.File{slave, slave, slave}
 	p, err := l.Start(spec)
 	slave.Close()

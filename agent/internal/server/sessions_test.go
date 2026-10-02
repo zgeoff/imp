@@ -38,7 +38,7 @@ func request(t *testing.T, s *Server, req proto.Request) (proto.Frame, net.Conn)
 // the session manager, and activity lists the sessions.
 func TestSessionRequests(t *testing.T) {
 	l := launch.New(&proc.Direct{Reaper: reaper.New()}, imagecfg.NewLive(imagecfg.Config{Env: []string{"PATH=/usr/bin:/bin"}}), nil)
-	s := &Server{Exec: exec.NewManager(l, nil), Sessions: session.NewManager(l, "")}
+	s := &Server{Exec: exec.NewManager(l, nil), Outer: exec.NewStrictManager(l, nil), Sessions: session.NewManager(l, "")}
 
 	f, _ := request(t, s, proto.Request{Op: proto.OpSessionKill, Session: "main"})
 	var resp proto.ErrorResponse

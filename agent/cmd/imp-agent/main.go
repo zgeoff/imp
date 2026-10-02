@@ -5,8 +5,8 @@
 // "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
 // for the agent's dial op, "imp-agent listen-as-user" binds a reverse
-// forward's socket as that user, and "imp-agent tar" is the guest end of
-// `imp cp`.
+// forward's socket as that user, "imp-agent tar" is the guest end of
+// `imp cp`, and "imp-agent outer" starts an outer exec's command.
 package main
 
 import (
@@ -20,6 +20,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/boot"
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/inner"
+	"github.com/zgeoff/imp/agent/internal/outer"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/sftpserver"
 	"github.com/zgeoff/imp/agent/internal/tartool"
@@ -61,6 +62,12 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	case len(os.Args) > 3 && os.Args[1] == outer.Command:
+		// not PID 1: the agent starts it for an outer exec, and on success
+		// it becomes the command
+		err := outer.RunHelper(os.Args[2:])
+		fmt.Fprintf(os.Stderr, "imp-agent outer: %v\n", err)
+		os.Exit(127)
 	case len(os.Args) == 2 && os.Args[1] == inner.Command:
 		// PID 1 of the container's namespaces, never of the guest: on failure
 		// it exits, and the agent starts the container again

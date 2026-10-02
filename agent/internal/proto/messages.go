@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.15.0"
+const Version = "0.16.0"
 
 // Op names.
 const (
@@ -38,6 +38,10 @@ const (
 	// reverse forwards: listen serves a unix socket or a loopback port, as
 	// agent.listen does; agent.accept relays its clients too
 	OpListen = "listen"
+
+	// exec.outer runs an exec in the agent's own world, outside the inner
+	// container, as root; an older agent answers UNKNOWN_OP
+	OpExecOuter = "exec.outer"
 
 	// claim gives a guest restored from a boot template its own identity;
 	// only an agent parked in a boot template answers it
@@ -252,7 +256,8 @@ type Connection struct {
 
 type Activity struct {
 	TCPEstablished int `json:"tcp_established"`
-	// ExecSessions counts open exec and session.attach connections.
+	// ExecSessions counts open exec, exec.outer and session.attach
+	// connections.
 	ExecSessions int           `json:"exec_sessions"`
 	Load1        float64       `json:"load1"`
 	Sessions     []SessionInfo `json:"sessions"`

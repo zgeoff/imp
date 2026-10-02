@@ -29,7 +29,9 @@ const Port = 1024
 const requestTimeout = 10 * time.Second
 
 type Server struct {
-	Exec     *exec.Manager
+	Exec *exec.Manager
+	// Outer runs exec.outer: an exec in the agent's own world, as root
+	Outer    *exec.Manager
 	Sessions *session.Manager
 	Services *services.Supervisor
 	Listen   *listen.Manager
@@ -125,6 +127,12 @@ func (s *Server) handle(c net.Conn) {
 	if req.Op == proto.OpExec {
 		if err := s.Exec.Serve(req, r, w); err != nil {
 			log.Printf("exec: %v", err)
+		}
+		return
+	}
+	if req.Op == proto.OpExecOuter {
+		if err := s.serveOuter(req, r, w); err != nil {
+			log.Printf("exec.outer: %v", err)
 		}
 		return
 	}
@@ -227,6 +235,22 @@ func (s *Server) unary(req proto.Request) (any, error) {
 	default:
 		return nil, &proto.Error{Code: proto.ErrUnknownOp, Message: "unknown op " + req.Op}
 	}
+}
+
+// serveOuter runs an outer exec. It runs as root, and has no session: the
+// agent's world has no accounts, and a session would outlive the caller.
+func (s *Server) serveOuter(req proto.Request, r *proto.Reader, w *proto.Writer) error {
+	if req.Session != "" {
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+			Error: &proto.Error{Code: proto.ErrBadRequest, Message: "an outer exec takes no session"},
+		})
+	}
+	if req.User != "" && req.User != "root" && req.User != "0" {
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{
+			Error: &proto.Error{Code: proto.ErrBadRequest, Message: "an outer exec runs as root"},
+		})
+	}
+	return s.Outer.Serve(req, r, w)
 }
 
 // serveLogs streams a service's log until it ends or the host closes the

@@ -197,7 +197,7 @@ func (m *Manager) find(req proto.Request) (*session, bool, *proto.Error) {
 	if !ok && count >= MaxSessions {
 		return nil, false, &proto.Error{Code: proto.ErrSessionCap, Message: fmt.Sprintf("this imp already has %d sessions", MaxSessions)}
 	}
-	p, master, err := m.launcher.StartPTY(req)
+	p, master, err := m.launcher.StartPTY(req, nil)
 	if err != nil {
 		return nil, false, proto.StartError(err, errors.Is(err, proc.ErrDown))
 	}
