@@ -26,6 +26,9 @@
 #      IMP_WAKE_RESERVE_MIB, IMP_DEFAULT_VCPUS, IMP_DEFAULT_MEMORY_MIB, IMP_TAILSCALE_HOSTNAME.
 #      IMP_STORAGE_BACKEND=zfs with IMP_ZFS_ROOT runs on a ZFS dataset instead
 #      of the XFS file (scripts/zfs-host-test.sh; the host needs the module).
+#      IMP_BACKUP_* pass through too (docs/architecture/backups.md), and
+#      IMP_DEV_BACKUP_ENV_FILE is a docker --env-file with the repository's
+#      AWS_* keys, so this shell's own AWS_* never reach the container.
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -38,7 +41,8 @@ api=http://localhost:$((7070 + offset))
 # an allowlist: IMP_URL, IMP_TOKEN and IMP_DEV_* belong to this machine
 tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT_RESERVE_PERCENT
   IMP_WAKE_RESERVE_MIB IMP_DEFAULT_VCPUS IMP_DEFAULT_MEMORY_MIB IMP_TAILSCALE_HOSTNAME
-  IMP_STORAGE_BACKEND IMP_ZFS_ROOT)
+  IMP_STORAGE_BACKEND IMP_ZFS_ROOT IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
+  IMP_BACKUP_INTERVAL_S IMP_BACKUP_KEEP IMP_BACKUP_FORGET IMP_BACKUP_CPUS IMP_BACKUP_MEMORY_MIB)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -114,6 +118,7 @@ up() {
     # .env holds TAILSCALE_AUTHKEY; docker reads it, so it is never echoed
     local env_file=() tuning=() var
     [ -f "$IMP_ROOT/.env" ] && env_file=(--env-file "$IMP_ROOT/.env")
+    [ -n "${IMP_DEV_BACKUP_ENV_FILE:-}" ] && env_file+=(--env-file "$IMP_DEV_BACKUP_ENV_FILE")
     for var in "${tuning_vars[@]}"; do
       [ -n "${!var:-}" ] && tuning+=(-e "$var=${!var}")
     done
@@ -121,7 +126,9 @@ up() {
     # paths the CLI resolves on this machine exist in the container.
     # Own resolvers: the WSL host's 100.100.100.100 stops answering once the
     # container's own tailscaled starts.
-    docker run -d --name "$name" --init --privileged --device /dev/kvm \
+    # a fixed hostname: restic counts a lock stale at once only when it
+    # holds this host's name and a dead pid
+    docker run -d --name "$name" --hostname "$name" --init --privileged --device /dev/kvm \
       --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
       -v /var/run/docker.sock:/var/run/docker.sock \
