@@ -69,7 +69,9 @@ export const impContract = {
 
           // what the imp may reach directly (default open)
           policy: EgressPolicySchema.optional(),
-          cpuLimit: CpuLimitSchema.optional(),
+
+          // null, the default, is no limit
+          cpuLimit: CpuLimitSchema.nullable().optional(),
           cpuWeight: CpuWeightSchema.optional(),
         }),
       )

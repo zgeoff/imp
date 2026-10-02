@@ -44,6 +44,7 @@ export function formatImps(imps: readonly Imp[]): string {
       'DISK',
       'USED',
       'SHARED',
+      'CPU',
       'SESSIONS',
       'IP',
       'URL',
@@ -58,6 +59,7 @@ export function formatImps(imps: readonly Imp[]): string {
       imp.ramMib === undefined ? '-' : `${String(imp.ramMib)} MiB`,
       formatDiskMib(imp.diskMib),
       ...formatDiskUsage(imp.diskUsage),
+      formatCpuUse(imp),
       imp.sessions === undefined ? '-' : String(imp.sessions),
       imp.ip,
       imp.url,
@@ -89,6 +91,16 @@ function formatBytesMib(bytes: number): string {
 // GiB when whole, as sizes are given
 function formatDiskMib(mib: number): string {
   return mib % 1024 === 0 ? `${String(mib / 1024)} GiB` : `${String(mib)} MiB`;
+}
+
+// the last sample's CPU, in percent of one core, over the limit when there is
+// one: `45% / 1.5`
+export function formatCpuUse(imp: Imp): string {
+  const percent = imp.resources?.sample?.cpuPercent;
+  const used = percent === undefined ? '-' : `${percent.toFixed(0)}%`;
+  const limit = imp.cpu?.limit ?? null;
+
+  return limit === null ? used : `${used} / ${String(limit)}`;
 }
 
 // what an upgrade means for the imp (docs/guides/operations.md#upgrade)
