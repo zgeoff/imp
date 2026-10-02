@@ -142,6 +142,32 @@ export {
 
 export type { Service, ServiceDef, ServiceList, ServiceLog } from './service-schema';
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
+
+export {
+  COLD_BOOT_CAUSES,
+  ColdBootCauseSchema,
+  ColdBootSchema,
+  ColdBootsSchema,
+  ExecutionGenerationSchema,
+  InvalidResumeDataSchema,
+  NoSessionDataSchema,
+  PreviousGenerationSchema,
+  ResumeFromSchema,
+  ResumeResultSchema,
+  SessionOutputSchema,
+} from './session-output-schema';
+
+export type {
+  ColdBoot,
+  ColdBootCause,
+  InvalidResumeData,
+  NoSessionData,
+  PreviousGeneration,
+  ResumeFrom,
+  ResumeResult,
+  SessionOutput,
+} from './session-output-schema';
+
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';
 

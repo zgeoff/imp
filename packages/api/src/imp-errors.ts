@@ -3,6 +3,7 @@ import { defineErrors } from './define-errors';
 import { ImpStateSchema } from './imp-schema';
 import { LeaseSummarySchema } from './lease-schema';
 import { NameSchema } from './name-schema';
+import { ColdBootsSchema, InvalidResumeDataSchema } from './session-output-schema';
 
 const ResourceKindSchema = z.enum([
   'imp',
@@ -68,7 +69,19 @@ export const IMP_ERRORS = defineErrors({
     data: z.object({
       state: ImpStateSchema,
       allowed: z.array(ImpStateSchema),
+
+      // an attach with wake: false to an imp that is not running: its cold
+      // boots, absent while it is creating
+      coldBoots: ColdBootsSchema.optional(),
     }),
+  },
+
+  // a session resume named an offset past the end of its generation, which
+  // never rewinds: a client bug, not a state to clamp
+  INVALID_RESUME: {
+    message: 'The resume offset is past the end of the output',
+    status: 409,
+    data: InvalidResumeDataSchema,
   },
 
   // the data filesystem or pool would drop below its reserve (IMP_DISK_RESERVE_GIB)
