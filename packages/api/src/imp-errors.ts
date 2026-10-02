@@ -1,6 +1,8 @@
 import * as z from 'zod';
 import { defineErrors } from './define-errors';
 import { ImpStateSchema } from './imp-schema';
+import { LeaseSummarySchema } from './lease-schema';
+import { NameSchema } from './name-schema';
 
 const ResourceKindSchema = z.enum([
   'imp',
@@ -21,6 +23,15 @@ const ResourceDataSchema = z.object({
   name: z.string(),
 });
 
+// an awake imp the governor could not sleep: leased (a lease of any kind)
+// or busy (in use, under an operation, or its sleep failed)
+const ProtectedImpSchema = z.object({
+  name: NameSchema,
+  ramMib: z.int().nonnegative(),
+  leased: z.boolean(),
+  busy: z.boolean(),
+});
+
 // Every control procedure can raise any of these, so the contract attaches
 // them once at its base rather than per procedure.
 export const IMP_ERRORS = defineErrors({
@@ -39,6 +50,13 @@ export const IMP_ERRORS = defineErrors({
       budgetMib: z.int().nonnegative(),
       usedMib: z.int().nonnegative(),
       requestedMib: z.int().nonnegative(),
+
+      // left out by an impd from before leases: the RAM still missing, the
+      // awake imps the governor could not sleep that the caller may read,
+      // and how many others there were
+      neededMib: z.int().nonnegative().optional(),
+      protected: z.array(ProtectedImpSchema).readonly().optional(),
+      protectedHidden: z.int().nonnegative().optional(),
     }),
   },
 
@@ -63,6 +81,16 @@ export const IMP_ERRORS = defineErrors({
       requestedBytes: z.int().nonnegative(),
     }),
   },
+
+  // a sleep or stop without force on an imp with a lease from `leases.*`
+  LEASED: {
+    message: 'The imp is leased',
+    status: 409,
+    data: LeaseSummarySchema,
+  },
+
+  // a renew of a lease the caller does not hold, or that ended
+  LEASE_NOT_HELD: { message: 'The caller holds no such lease', status: 409 },
 
   // the imp's agent is from before the feature; a stop and start updates it
   AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },

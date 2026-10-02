@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { PublicAuthSchema } from './exposure-schema';
+import { LeaseSummarySchema } from './lease-schema';
 import { NameSchema } from './name-schema';
 
 export const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stopped', 'error']);
@@ -83,7 +84,13 @@ export const ImpSchema = z.object({
   // file included; more than ramMib after a wake, until the host drops them
   rssMib: z.int().nonnegative().optional(),
   sleptAt: z.date().optional(),
+
+  // the latest end of the imp's leases, while one is live
   holdUntil: z.date().optional(),
+
+  // its live leases, as the caller may see them; left out by an impd from
+  // before leases
+  leases: LeaseSummarySchema.optional(),
   error: z.string().optional(),
 
   // sessions in the imp, as last seen; left out while impd has not seen

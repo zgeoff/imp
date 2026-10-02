@@ -12,6 +12,16 @@ export type { BackupPoint, BackupRestore, BackupRun, BackupStatus } from './back
 export { CheckpointSchema } from './checkpoint-schema';
 
 export {
+  LeaseLabelSchema,
+  LeaseOwnerSchema,
+  LeaseSchema,
+  LeaseSummarySchema,
+  LeaseTtlSchema,
+} from './lease-schema';
+
+export type { Lease, LeaseSummary } from './lease-schema';
+
+export {
   DockerfilePathSchema,
   IMAGE_BUILD_PATH,
   ImageBuildErrorSchema,

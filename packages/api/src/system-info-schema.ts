@@ -99,6 +99,11 @@ export const SystemInfoSchema = z.object({
   // point at, and how many there are; null without IMP_PUBLIC_IP. Optional
   // for an impd from before them.
   public: PublicInfoSchema.nullable().optional(),
+
+  // what this impd can do; an impd without it has none of them.
+  // `sessionOffsets` says only that impd can carry offsets: each session's
+  // continuity decides, as an imp runs its old agent until a cold boot.
+  features: z.object({ sessionOffsets: z.boolean(), leases: z.boolean() }).optional(),
 });
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;

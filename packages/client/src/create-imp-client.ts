@@ -92,6 +92,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
   // `satisfies` fails the build when the contract grows a namespace
   const namespaces = {
     imps: rpc.imps,
+    leases: rpc.leases,
     checkpoints: rpc.checkpoints,
     backups: rpc.backups,
     images: rpc.images,

@@ -207,6 +207,18 @@ export function createFakeImpd(): FakeImpd {
       }),
     },
 
+    // the dashboard has no lease views
+    leases: {
+      acquire: os.leases.acquire.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      renew: os.leases.renew.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      release: os.leases.release.handler(() => ({ released: false })),
+      list: os.leases.list.handler(() => []),
+    },
+
     // the dashboard has no backup views yet
     backups: {
       run: os.backups.run.handler(() => {
