@@ -60,6 +60,14 @@ interface ImpsTable {
   // 1 until the first cold boot of an imp from a template gives it its own
   // machine-id and ssh host keys
   identity_reset_pending: Generated<number>;
+
+  // `tailnet` or `public` (docs/guides/https.md#public-imps); a public imp's
+  // auth (`none`, `token`, `basic`), basic's user, and the sha256 of the
+  // token or password, base64url
+  exposure: Generated<string>;
+  public_auth: string | null;
+  public_user: string | null;
+  public_hash: string | null;
 }
 
 interface CheckpointsTable {

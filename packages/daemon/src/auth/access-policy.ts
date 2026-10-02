@@ -64,6 +64,11 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'imps.policy': readImp,
   'imps.setPolicy': manageImp,
 
+  // who reaches an imp from the internet is the host's call, either way: a
+  // token for one imp must not publish it, nor change what another set up
+  'imps.expose': manageHost,
+  'imps.unexpose': manageHost,
+
   // a bigger disk spends the host's disk budget, as a create does
   'imps.resizeDisk': manageImp,
 

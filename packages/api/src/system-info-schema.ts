@@ -15,6 +15,21 @@ const BootStatusSchema = z.object({
   outdated: z.object({ firecracker: CountSchema, kernel: CountSchema, agent: CountSchema }),
 });
 
+// the last pass over the public imps' DNS records
+const RecordsStatusSchema = z.object({
+  isOk: z.boolean(),
+  error: z.string().nullable(),
+  at: z.date(),
+});
+
+const PublicInfoSchema = z.object({
+  ip: z.ipv4(),
+  imps: CountSchema,
+
+  // null before the first pass
+  records: RecordsStatusSchema.nullable(),
+});
+
 export const SystemInfoSchema = z.object({
   version: z.string(),
   ramBudgetMib: z.int().nonnegative(),
@@ -72,6 +87,11 @@ export const SystemInfoSchema = z.object({
   // the host's cores, the most a CPU limit may be; whether limits hold
   // (false outside a private cgroup v2 namespace: they are kept, not applied)
   cpu: z.object({ hostCpus: z.int().positive(), limitsEnforced: z.boolean() }).optional(),
+
+  // public imps (docs/guides/https.md#public-imps): the IP their records
+  // point at, and how many there are; null without IMP_PUBLIC_IP. Optional
+  // for an impd from before them.
+  public: PublicInfoSchema.nullable().optional(),
 });
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;

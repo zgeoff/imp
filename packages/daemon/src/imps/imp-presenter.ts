@@ -13,6 +13,9 @@ export interface ImpUrls {
   // https://<name>.<domain> when IMP_DOMAIN is set
   readonly https: string | null;
 
+  // the same name from the internet, while the imp is public
+  readonly public: string | null;
+
   // https://<service>.<tailnet> once impd serves the imp's own name
   readonly service: string | null;
   readonly tailnet: string | null;
@@ -54,6 +57,10 @@ export function createImpPresenter(
 
     if (imp.sleptAt !== null) {
       api.sleptAt = imp.sleptAt;
+    }
+
+    if (imp.publicAuth !== null) {
+      api.public = { auth: imp.publicAuth };
     }
 
     if (imp.holdUntil !== null) {
@@ -140,9 +147,10 @@ export function createImpPresenter(
       const local = buildLocalUrl(imp.name);
       const https = buildHttpsUrl(imp.name, context.config.https);
       const service = context.readServiceUrl(imp.name);
+      const publicUrl = buildPublicUrl(imp, context.config.https);
 
       if (!context.config.tailscaleEnabled) {
-        return { local, https, service, tailnet: null };
+        return { local, https, public: publicUrl, service, tailnet: null };
       }
 
       const live =
@@ -151,7 +159,13 @@ export function createImpPresenter(
       const host = live ?? context.config.tailscaleHostname;
       const port = context.findAddress(imp.slot).tailnetPort;
 
-      return { local, https, service, tailnet: `http://${host}:${String(port)}` };
+      return {
+        local,
+        https,
+        public: publicUrl,
+        service,
+        tailnet: `http://${host}:${String(port)}`,
+      };
     },
   };
 }
@@ -164,4 +178,13 @@ function buildHttpsUrl(name: string, https: HttpsConfig | null): string | null {
   const port = https.httpsPort === 443 ? '' : `:${String(https.httpsPort)}`;
 
   return `https://${name}.${https.domain}${port}`;
+}
+
+// Docker publishes the public listener as 443, so the URL has no port
+function buildPublicUrl(imp: ImpRecord, https: HttpsConfig | null): string | null {
+  if (imp.publicAuth === null || https === null || https.public === null) {
+    return null;
+  }
+
+  return `https://${imp.name}.${https.domain}`;
 }

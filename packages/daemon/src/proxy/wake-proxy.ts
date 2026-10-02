@@ -46,11 +46,23 @@ interface WakeProxyDeps {
   readonly peers: ForwardedPeers;
 }
 
-// Where a request goes: an imp, which it wakes, impd's own API, or nowhere
+// Where a request goes: an imp, which it wakes, impd's own API, nowhere,
+// back with a 401 that asks for a public imp's credential, or back with a
+// 429 when a public imp is over a limit.
 export type ProxyRoute =
-  | { readonly kind: 'imp'; readonly name: string }
+  | { readonly kind: 'imp'; readonly name: string; readonly public?: PublicRequest }
   | { readonly kind: 'api' }
-  | { readonly kind: 'none'; readonly hint: string };
+  | { readonly kind: 'none'; readonly hint: string }
+  | { readonly kind: 'unauthorized'; readonly challenge: string }
+  | { readonly kind: 'limited'; readonly detail: string; readonly retryAfterS: number };
+
+// A request on the public listeners (docs/guides/https.md#public-imps): no
+// detail in its errors, a fresh X-Forwarded-For, no checked credential
+// upstream. `release` runs when the request or its WebSocket ends.
+interface PublicRequest {
+  readonly dropAuthorization: boolean;
+  readonly release: () => void;
+}
 
 export interface ProxyListenOptions {
   readonly port: number;
@@ -59,7 +71,7 @@ export interface ProxyListenOptions {
 
   // lets a listener with a new certificate bind next to the old one
   readonly reusePort?: boolean;
-  readonly route: (request: Request) => ProxyRoute;
+  readonly route: (request: Request) => ProxyRoute | Promise<ProxyRoute>;
 }
 
 type ProxyServer = Server<SocketData>;
@@ -74,6 +86,7 @@ interface UpstreamOptions {
   // impd's own API needs the dashboard's session, and the client's address
   // for its tailnet identity; an imp must never get either
   readonly toApi: boolean;
+  readonly public: PublicRequest | null;
 }
 
 export interface WakeProxy {
@@ -135,6 +148,22 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       return buildErrorPage(404, route.hint);
     }
 
+    if (route.kind === 'unauthorized') {
+      const page = buildErrorPage(401, 'This imp asks for a token or a password.');
+
+      page.headers.set('www-authenticate', route.challenge);
+
+      return page;
+    }
+
+    if (route.kind === 'limited') {
+      const page = buildErrorPage(429, route.detail);
+
+      page.headers.set('retry-after', String(route.retryAfterS));
+
+      return page;
+    }
+
     if (route.kind === 'api') {
       return sendUpstream(request, server, `127.0.0.1:${String(deps.config.apiPort)}`, {
         release: () => {
@@ -143,27 +172,34 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         wokeMs: null,
         formatFailure: (reason) => `impd's API did not answer (${reason}).`,
         toApi: true,
+        public: null,
       });
     }
 
     const name = route.name;
+    const publicRequest = route.public ?? null;
+    const releaseRoute = publicRequest?.release ?? (() => {});
 
-    const opened: { release: () => void } = {
-      release: () => {
-        // nothing counted yet
-      },
-    };
-
+    // nothing counted in the tracker yet, only the route's own count
+    const opened: { release: () => void } = { release: releaseRoute };
     let running: { readonly imp: ImpRecord; readonly wokeMs: number | null };
 
     try {
       running = await deps.imps.requireRunning(name, (imp) => {
-        opened.release = deps.imps.tracker.open(imp.id, 'proxy');
+        const releaseTracker = deps.imps.tracker.open(imp.id, 'proxy');
+
+        opened.release = () => {
+          releaseTracker();
+          releaseRoute();
+        };
       });
     } catch (error) {
       opened.release();
 
-      return buildWakeErrorPage(name, error);
+      // the internet learns nothing about the imp or the host
+      return publicRequest === null
+        ? buildWakeErrorPage(name, error)
+        : buildErrorPage(503, 'This site is not available right now.');
     }
 
     const imp = running.imp;
@@ -185,8 +221,11 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       release: opened.release,
       wokeMs,
       formatFailure: (reason) =>
-        `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
+        publicRequest === null
+          ? `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`
+          : 'This site did not answer.',
       toApi: false,
+      public: publicRequest,
     });
   };
 
@@ -204,10 +243,27 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const target = `${address}${url.pathname}${url.search}`;
     const upstreamHeaders = buildUpstreamHeaders(request, server, options.toApi);
 
-    // no client names its own address to the API, nor learns a handle
-    upstreamHeaders.delete(PEER_HEADER);
+    if (options.public?.dropAuthorization === true) {
+      upstreamHeaders.delete('authorization');
+    }
 
     const client = server.requestIP(request)?.address;
+
+    // A public client's forwarding headers are whatever it chose to send:
+    // X-Forwarded-For comes from the socket alone, and X-Forwarded-Host and
+    // -Proto are impd's own, set above from the Host it routed by and its TLS.
+    if (options.public !== null) {
+      upstreamHeaders.delete('forwarded');
+      upstreamHeaders.delete('x-real-ip');
+      upstreamHeaders.delete('x-forwarded-for');
+
+      if (client !== undefined) {
+        upstreamHeaders.set('x-forwarded-for', client);
+      }
+    }
+
+    // no client names its own address to the API, nor learns a handle
+    upstreamHeaders.delete(PEER_HEADER);
 
     if (options.toApi && client !== undefined && isCallerPath(url.pathname)) {
       upstreamHeaders.set(PEER_HEADER, deps.peers.register(client));
@@ -312,7 +368,11 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       ...(options.tls !== undefined && { tls: options.tls }),
       ...(options.reusePort === true && { reusePort: true }),
       idleTimeout: 0,
-      fetch: (request, server) => handleRequest(request, server, options.route(request)),
+      fetch: async (request, server) => {
+        const route = await options.route(request);
+
+        return handleRequest(request, server, route);
+      },
       websocket,
     });
 

@@ -151,6 +151,7 @@ export function createFakeImpd(): FakeImpd {
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
         https: null,
+        public: null,
         service: null,
         tailnet: null,
       })),
@@ -160,6 +161,10 @@ export function createFakeImpd(): FakeImpd {
 
         return context.input.policy;
       }),
+      expose: os.imps.expose.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+      unexpose: os.imps.unexpose.handler((context) => findImp(context.input.name)),
       fork: os.imps.fork.handler((context) => {
         registerCall('imps.fork', context.input);
 

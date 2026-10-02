@@ -1,7 +1,9 @@
 // Plain HTML answers for requests the proxy cannot forward.
 
 const STATUS_TITLES: Readonly<Record<number, string>> = {
+  401: 'Sign in to this imp',
   404: 'No such imp',
+  429: 'Too many requests',
   502: 'Nothing answers in the imp',
   503: 'The imp could not wake',
 };

@@ -92,6 +92,15 @@ With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the
 | `IMP_HTTPS_PORT`     | `443`          | The HTTPS port on the tailnet IP and loopback.                                               |
 | `IMP_HTTP_PORT`      | `80`           | The port that redirects to HTTPS.                                                            |
 
+[Public imps](./https.md#public-imps) need `IMP_DOMAIN` too. Without `IMP_PUBLIC_IP`, every imp is
+tailnet-only and `imp expose` fails.
+
+| Variable                | Default | Meaning                                                                                 |
+| ----------------------- | ------- | --------------------------------------------------------------------------------------- |
+| `IMP_PUBLIC_IP`         | none    | The host's public IPv4. Each public imp's A record points at it.                        |
+| `IMP_PUBLIC_HTTPS_PORT` | `7443`  | The public TLS listener's port in the host container, on every address; publish as 443. |
+| `IMP_PUBLIC_HTTP_PORT`  | `7480`  | The public redirect listener's port in the host container; publish as 80.               |
+
 ### Telemetry
 
 impd exports [metrics and spans](./events.md#telemetry) only when `OTEL_EXPORTER_OTLP_ENDPOINT` is
@@ -169,12 +178,13 @@ impd tuning passes through an allowlist. When set on your machine, `dev.sh` pass
 `IMP_WATCHDOG_ACTION`, `IMP_TAILSCALE_HOSTNAME`, `IMP_TAILNET_IDENTITIES`,
 `IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
 variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
-`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and
-`IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker
-network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
-the keys in your own shell never reach the container. Other impd variables keep their defaults in
-the dev container. A ZFS dev instance needs the zfs module on the machine;
-`scripts/zfs-host-test.sh` runs one on a throwaway pool.
+`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`,
+`IMP_PUBLIC_IP`, `IMP_PUBLIC_HTTPS_PORT`, `IMP_PUBLIC_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path
+under the repo. `IMP_DEV_NETWORK` puts the container on that Docker network.
+`IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so the keys in
+your own shell never reach the container. Other impd variables keep their defaults in the dev
+container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh` runs
+one on a throwaway pool.
 
 ## CLI
 

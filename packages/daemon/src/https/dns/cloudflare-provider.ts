@@ -8,13 +8,21 @@ const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
 // short, so a stale challenge value is gone soon after a failed attempt
 const TXT_TTL_S = 60;
 const A_TTL_S = 300;
+
+// a page of listed records; the list asks for pages until one is short
+const PAGE_SIZE = 500;
 const ApiErrorSchema = z.object({ code: z.number().optional(), message: z.string() });
 
 const EnvelopeSchema = z.object({
   success: z.boolean(),
   errors: z.array(ApiErrorSchema).default([]),
   result: z.unknown().optional(),
+
+  // on a list: which page this is, of how many
+  result_info: z.object({ page: z.number(), total_pages: z.number() }).optional(),
 });
+
+type Envelope = z.infer<typeof EnvelopeSchema>;
 
 const ZoneSchema = z.object({
   id: z.string(),
@@ -24,6 +32,7 @@ const ZoneSchema = z.object({
 
 const RecordSchema = z.object({
   id: z.string(),
+  name: z.string().optional(),
   type: z.string().optional(),
   content: z.string(),
   proxied: z.boolean().optional(),
@@ -59,7 +68,7 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
   // by the name asked for, so each name walks the labels once
   const zones = new Map<string, Zone>();
 
-  const sendRequest = async (method: string, path: string, body?: unknown): Promise<unknown> => {
+  const sendEnvelope = async (method: string, path: string, body?: unknown): Promise<Envelope> => {
     const response = await fetch(`${base}${path}`, {
       method,
       headers: {
@@ -85,7 +94,13 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
       );
     }
 
-    return parsed.data.result;
+    return parsed.data;
+  };
+
+  const sendRequest = async (method: string, path: string, body?: unknown): Promise<unknown> => {
+    const envelope = await sendEnvelope(method, path, body);
+
+    return envelope.result;
   };
 
   // The zone that holds the name: walk up its labels until one is a zone
@@ -120,6 +135,15 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
     throw new Error(`Cloudflare: no zone this token can see holds ${fqdn}`);
   };
 
+  // the A records named exactly `fqdn` that carry this owner's comment
+  const findOwnA = async (zoneId: string, fqdn: string, owner: string) => {
+    const query = `type=A&name=${encodeURIComponent(fqdn)}`;
+
+    const result = await sendRequest('GET', `/zones/${zoneId}/dns_records?${query}`);
+
+    return RecordListSchema.parse(result).filter((item) => item.comment === owner);
+  };
+
   return {
     addTxt: async (fqdn, value) => {
       const zone = await findZone(fqdn);
@@ -143,7 +167,7 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
 
       await waitForTxt(zone.name_servers, fqdn, values, options.propagation);
     },
-    setA: async (fqdn, ip) => {
+    setA: async (fqdn, ip, owner = MANAGED_COMMENT) => {
       const zone = await findZone(fqdn);
 
       const query = `name=${encodeURIComponent(fqdn)}`;
@@ -154,7 +178,7 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
         ADDRESS_TYPES.has(item.type ?? ''),
       );
 
-      const foreign = existing.find((item) => item.comment !== MANAGED_COMMENT);
+      const foreign = existing.find((item) => item.comment !== owner);
 
       if (foreign !== undefined) {
         throw new Error(
@@ -174,7 +198,7 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
         content: ip,
         ttl: A_TTL_S,
         proxied: false,
-        comment: MANAGED_COMMENT,
+        comment: owner,
       };
 
       const [current] = existing;
@@ -183,6 +207,47 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
         await sendRequest('POST', `/zones/${zone.id}/dns_records`, record);
       } else if (current.content !== ip || current.proxied === true) {
         await sendRequest('PUT', `/zones/${zone.id}/dns_records/${current.id}`, record);
+      }
+    },
+    listA: async (domain, owner) => {
+      const zone = await findZone(domain);
+
+      const found = new Map<string, string>();
+
+      // `name.endswith` and `per_page` up to 5,000,000 are in Cloudflare's
+      // list-records docs. Every page: by result_info when it comes, else
+      // until a page is short, in case a page holds fewer than asked for.
+      for (let page = 1; ; page += 1) {
+        const query = `type=A&name.endswith=${encodeURIComponent(`.${domain}`)}&per_page=${String(PAGE_SIZE)}&page=${String(page)}`;
+
+        const envelope = await sendEnvelope('GET', `/zones/${zone.id}/dns_records?${query}`);
+
+        const records = RecordListSchema.parse(envelope.result);
+
+        // the filter is the API's; checked again, since a record found by
+        // mistake would be removed
+        for (const record of records) {
+          const name = record.name ?? '';
+
+          if (record.comment === owner && name.endsWith(`.${domain}`)) {
+            found.set(name, record.content);
+          }
+        }
+
+        const pages = envelope.result_info?.total_pages;
+        const isLast = pages === undefined ? records.length < PAGE_SIZE : page >= pages;
+
+        if (records.length === 0 || isLast) {
+          return found;
+        }
+      }
+    },
+    removeA: async (fqdn, owner) => {
+      const zone = await findZone(fqdn);
+      const records = await findOwnA(zone.id, fqdn, owner);
+
+      for (const record of records) {
+        await sendRequest('DELETE', `/zones/${zone.id}/dns_records/${record.id}`);
       }
     },
   };

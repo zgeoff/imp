@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { X509Certificate } from 'node:crypto';
+import * as z from 'zod';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, runImp } from '../lib/imp-cli';
-import { createImp, holdImp } from '../lib/imps';
-import { readImpdLoggedMs, runDevScript, runInContainer } from '../lib/instance';
-import { PEBBLE_DOMAIN, buildPebbleEnv, isPebbleRunning, writePebbleRoot } from '../lib/pebble';
+import { createImp, holdImp, removeImps } from '../lib/imps';
+import { readImpdLogTail, readImpdLoggedMs, runDevScript, runInContainer } from '../lib/instance';
+import {
+  PEBBLE_DOMAIN,
+  PUBLIC_HTTPS_PORT,
+  buildPebbleEnv,
+  isPebbleRunning,
+  writePebbleRoot,
+} from '../lib/pebble';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 import { writeMetric } from '../lib/write-metric';
@@ -27,6 +34,9 @@ interface ContainerResponse {
 }
 
 const TIME_MARK = 'imp-e2e-time-total:';
+
+// what `imp expose --json` prints, as far as the suite reads it
+const ExposedSchema = z.object({ url: z.string(), auth: z.string(), credential: z.string() });
 
 // the harness starts Pebble only for a run that includes this suite
 const pebbleUp = isPebbleRunning();
@@ -61,10 +71,19 @@ afterAll(async () => {
   await runDevScript('reboot');
 }, 600_000);
 
+interface RequestOptions {
+  // another Host on the same connection
+  readonly host?: string;
+  readonly authorization?: string;
+}
+
 // A request from inside the host container, where the listeners answer on
 // loopback. The certificate must chain to Pebble's root and cover the URL's
-// name; `hostHeader` can send another Host on that connection.
-async function readInContainer(url: string, hostHeader?: string): Promise<ContainerResponse> {
+// name.
+async function readInContainer(
+  url: string,
+  options: RequestOptions = {},
+): Promise<ContainerResponse> {
   const target = new URL(url);
 
   const defaultPort = target.protocol === 'https:' ? '443' : '80';
@@ -85,7 +104,10 @@ async function readInContainer(url: string, hostHeader?: string): Promise<Contai
     '/dev/stdout',
     '-w',
     `\n${TIME_MARK}%{time_total}`,
-    ...(hostHeader === undefined ? [] : ['-H', `Host: ${hostHeader}`]),
+    ...(options.host === undefined ? [] : ['-H', `Host: ${options.host}`]),
+    ...(options.authorization === undefined
+      ? []
+      : ['-H', `Authorization: ${options.authorization}`]),
     url,
   ]);
 
@@ -181,7 +203,7 @@ test.skipIf(!pebbleUp)(
 
     // only one label names an imp; the certificate does not cover a.<host>
     // either, so the Host header carries it
-    const nested = await readInContainer(`https://${host}/`, `a.${host}`);
+    const nested = await readInContainer(`https://${host}/`, { host: `a.${host}` });
 
     expect(nested.status).toBe(404);
 
@@ -190,6 +212,81 @@ test.skipIf(!pebbleUp)(
 
     expect(redirect.status).toBe(308);
     expect(redirect.headers.toLowerCase()).toContain(`location: https://${host}/path?q=1`);
+  },
+);
+
+test.skipIf(!pebbleUp)(
+  'a public imp answers on the public listener behind its token, and no other imp does',
+  async () => {
+    const publicName = `${prefix}p`;
+    const publicUrl = `https://${publicName}.${PEBBLE_DOMAIN}:${String(PUBLIC_HTTPS_PORT)}/`;
+
+    await writePebbleRoot();
+
+    await waitFor(
+      'the certificate',
+      async () => {
+        const response = await readInContainer(`https://${PEBBLE_DOMAIN}/health`);
+
+        expect(response.status).toBe(200);
+      },
+      { timeoutMs: 120_000, intervalMs: 1000 },
+    );
+
+    await createImp(publicName, '--image', TINY, '--memory', '512');
+
+    // tailnet-only: a 404 on the public listener, with a Host that names it,
+    // and the bare domain's API is not there either
+    const hidden = await readInContainer(publicUrl);
+    const apex = await readInContainer(publicUrl, { host: PEBBLE_DOMAIN });
+
+    expect([hidden.status, apex.status]).toEqual([404, 404]);
+
+    const exposedJson = await runImp('expose', publicName, '--auth', 'token', '--json');
+
+    const exposed = ExposedSchema.parse(JSON.parse(exposedJson));
+    const credential = exposed.credential;
+
+    expect(exposed).toMatchObject({ url: `https://${publicName}.${PEBBLE_DOMAIN}`, auth: 'token' });
+
+    // the imp's own record, at the public IP, through challtestsrv
+    await waitFor('the public record', async () => {
+      const log = await readImpdLogTail(200);
+
+      expect(log).toContain(`${publicName}.${PEBBLE_DOMAIN} points at 203.0.113.7 (public)`);
+    });
+
+    // asleep, a request without the token must not wake it
+    await runImp('sleep', publicName);
+    await waitFor(`${publicName} to sleep`, () => assertState(publicName, 'sleeping'));
+
+    const refused = await readInContainer(publicUrl);
+
+    expect(refused.status).toBe(401);
+
+    await assertState(publicName, 'sleeping');
+
+    const served = await readInContainer(publicUrl, { authorization: `Bearer ${credential}` });
+
+    expect(served).toMatchObject({ status: 200, body: 'e2e-tiny-ok' });
+
+    const ls = await runImp('ls');
+
+    expect(ls).toContain('public (token)');
+
+    await runImp('unexpose', publicName);
+
+    const after = await readInContainer(publicUrl, { authorization: `Bearer ${credential}` });
+
+    expect(after.status).toBe(404);
+
+    await waitFor('the public record to go', async () => {
+      const log = await readImpdLogTail(200);
+
+      expect(log).toContain(`removed ${publicName}.${PEBBLE_DOMAIN} (no longer public)`);
+    });
+
+    await removeImps(publicName);
   },
 );
 

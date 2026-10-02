@@ -207,6 +207,23 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
   }
 
   const isTailnetNode = parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1';
+  const https = parseHttpsConfig(parsed);
+
+  if (https !== null && https.public !== null) {
+    checkPublicPorts(
+      https.public,
+      [
+        ['IMP_API_PORT', parsed.IMP_API_PORT],
+        ['IMP_PROXY_PORT', parsed.IMP_PROXY_PORT],
+        ['IMP_BROKER_PORT', parsed.IMP_BROKER_PORT],
+        ['IMP_EGRESS_DNS_PORT', parsed.IMP_EGRESS_DNS_PORT],
+        ['IMP_SSH_PORT', parsed.IMP_SSH_PORT],
+        ['IMP_HTTPS_PORT', https.httpsPort],
+        ['IMP_HTTP_PORT', https.httpPort],
+      ],
+      [parsed.IMP_PORT_BASE, lastPort],
+    );
+  }
 
   return {
     dataDir: parsed.IMP_DATA_DIR,
@@ -247,9 +264,42 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     tailnetRules: parseTailnetRules(parsed.IMP_TAILNET_IDENTITIES),
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
     backup: loadBackupConfig(present),
-    https: parseHttpsConfig(parsed),
+    https,
     tailnetNames: parseTailnetNamesConfig(parsed, parsed.IMP_DATA_DIR, isTailnetNode),
   };
+}
+
+// The public listeners bind every address in the host container, so a port
+// any other listener holds would make one of them fail at start.
+function checkPublicPorts(
+  ports: Readonly<{ httpsPort: number; httpPort: number }>,
+  others: readonly (readonly [string, number])[],
+  slotPorts: readonly [number, number],
+): void {
+  const [first, last] = slotPorts;
+
+  const publics = [
+    ['IMP_PUBLIC_HTTPS_PORT', ports.httpsPort],
+    ['IMP_PUBLIC_HTTP_PORT', ports.httpPort],
+  ] as const;
+
+  if (ports.httpsPort === ports.httpPort) {
+    throw new Error('IMP_PUBLIC_HTTPS_PORT and IMP_PUBLIC_HTTP_PORT must differ');
+  }
+
+  for (const [name, port] of publics) {
+    const clash = others.find(([, other]) => other === port);
+
+    if (clash !== undefined) {
+      throw new Error(`${name} ${String(port)} is also ${clash[0]}; give it a port of its own`);
+    }
+
+    if (port >= first && port <= last) {
+      throw new Error(
+        `${name} ${String(port)} is one of the imps' ports, ${String(first)} to ${String(last)}`,
+      );
+    }
+  }
 }
 
 // IMP_TAILNET_IDENTITIES is a JSON array of rules, such as

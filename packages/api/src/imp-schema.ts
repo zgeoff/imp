@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { PublicAuthSchema } from './exposure-schema';
 import { NameSchema } from './name-schema';
 
 export const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stopped', 'error']);
@@ -68,6 +69,10 @@ export const ImpSchema = z.object({
   port: z.int().positive(),
   httpPort: z.int().positive(),
   url: z.url(),
+
+  // set while the internet reaches https://<name>.<domain>, with what the
+  // imp asks for before the wake; left out for a tailnet-only imp
+  public: z.object({ auth: PublicAuthSchema }).optional(),
   createdAt: z.date(),
   lastActiveAt: z.date(),
 

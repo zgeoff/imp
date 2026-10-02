@@ -126,7 +126,36 @@ test('it reads the HTTPS settings when IMP_DOMAIN is set', () => {
     acmeDirectory: 'https://acme-v02.api.letsencrypt.org/directory',
     acmeEmail: 'ops@example.com',
     acmeCaFile: null,
+    public: null,
   });
+});
+
+test('IMP_PUBLIC_IP turns on the public listeners, on ports of their own', () => {
+  const env = {
+    IMP_DOMAIN: 'imp.example.com',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN: 'cf-token',
+    IMP_PUBLIC_IP: '203.0.113.7',
+  };
+
+  expect(loadConfig(env).https?.public).toEqual({
+    ip: '203.0.113.7',
+    httpsPort: 7443,
+    httpPort: 7480,
+  });
+
+  expect(() => loadConfig({ ...env, IMP_PUBLIC_HTTPS_PORT: '443' })).toThrow(
+    'IMP_PUBLIC_HTTPS_PORT 443 is also IMP_HTTPS_PORT',
+  );
+
+  expect(() => loadConfig({ ...env, IMP_PUBLIC_HTTP_PORT: '7070' })).toThrow('IMP_API_PORT');
+  expect(() => loadConfig({ ...env, IMP_PUBLIC_HTTPS_PORT: '20005' })).toThrow("imps' ports");
+
+  expect(() => loadConfig({ IMP_PUBLIC_IP: '203.0.113.7' })).toThrow(
+    'IMP_PUBLIC_IP needs IMP_DOMAIN',
+  );
+
+  expect(() => loadConfig({ ...env, IMP_PUBLIC_IP: 'example.com' })).toThrow();
 });
 
 test('it leaves HTTPS off without IMP_DOMAIN, whatever else is set', () => {

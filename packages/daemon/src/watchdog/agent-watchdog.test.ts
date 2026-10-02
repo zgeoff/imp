@@ -25,6 +25,7 @@ function buildImp(): ImpRecord {
     httpPort: 8080,
     diskBytes: 1024 ** 3,
     isDiskGrowPending: false,
+    publicAuth: null,
     cpu: { limit: null, weight: 100 },
     wakeCount: 0,
     awakeMs: 0,

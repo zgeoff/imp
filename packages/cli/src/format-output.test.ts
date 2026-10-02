@@ -4,6 +4,7 @@ import {
   formatApiCalls,
   formatBootStatus,
   formatCheckpoints,
+  formatExposeResult,
   formatGc,
   formatIdentity,
   formatImps,
@@ -70,6 +71,8 @@ test('it notes why an imp boots cold and what it predates', () => {
     { ...imp, name: 'db', outdated: ['kernel', 'agent'] },
     { ...imp, name: 'old', state: 'running', outdated: ['impd'] },
     { ...imp, name: 'deaf', state: 'running', agentSilentSince: new Date(60_000) },
+    { ...imp, name: 'pub', public: { auth: 'token' } },
+    { ...imp, name: 'open', public: { auth: 'none' } },
   ]).split('\n');
 
   const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
@@ -81,7 +84,30 @@ test('it notes why an imp boots cold and what it predates', () => {
     'outdated: kernel, agent',
     'booted by an older impd; its next wake boots cold',
     'agent silent since 1970-01-01T00:01:00.000Z',
+    'public (token)',
+    'public',
   ]);
+});
+
+test('an expose prints the URL and the credential it made', () => {
+  const url = 'https://web.imp.example.com';
+
+  expect(formatExposeResult({ url, auth: 'none', user: null, credential: null })).toBe(
+    `${url} is public`,
+  );
+
+  expect(
+    formatExposeResult({ url, auth: 'none', user: null, credential: null, warning: 'no record' }),
+  ).toBe(`${url} is public\nwarning: no record`);
+
+  expect(formatExposeResult({ url, auth: 'basic', user: 'imp', credential: 'pw' })).toBe(
+    [
+      `${url} is public`,
+      'user: imp',
+      'password: pw',
+      'impd keeps only a hash; expose the imp again for a new one.',
+    ].join('\n'),
+  );
 });
 
 test('it lists sessions with their state, size and command', () => {

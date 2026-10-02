@@ -35,6 +35,7 @@ test('it serves system.info from config and the database', async () => {
     ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
     cpu: { hostCpus: 8, limitsEnforced: false },
+    public: null,
   });
 });
 
@@ -112,6 +113,7 @@ test('it reports the https URL when impd has a domain', async () => {
   expect(plainUrls).toEqual({
     local: 'http://box.imp.localhost:7080',
     https: null,
+    public: null,
     service: null,
     tailnet: null,
   });
@@ -128,6 +130,91 @@ test('it reports the https URL when impd has a domain', async () => {
   const urls = await ctx.client.imps.url({ name: 'box' });
 
   expect(urls.https).toBe('https://box.imp.example.com');
+});
+
+const PUBLIC_ENV = {
+  IMP_DOMAIN: 'imp.example.com',
+  IMP_DNS_PROVIDER: 'cloudflare',
+  IMP_DNS_API_TOKEN: 'unused',
+  IMP_PUBLIC_IP: '203.0.113.7',
+};
+
+test('expose makes an imp public with a credential shown once, and unexpose ends it', async () => {
+  await using ctx = await setupTest(TEST_TOKEN, PUBLIC_ENV);
+
+  await ctx.createTestImage('ubuntu');
+  await ctx.client.imps.create({ name: 'web' });
+
+  const exposed = await ctx.client.imps.expose({ name: 'web', auth: 'basic' });
+
+  expect(exposed).toMatchObject({
+    url: 'https://web.imp.example.com',
+    auth: 'basic',
+    user: 'imp',
+  });
+
+  expect(exposed.credential).toMatch(/^[\w-]{43}$/);
+
+  const imp = await ctx.client.imps.get({ name: 'web' });
+  const urls = await ctx.client.imps.url({ name: 'web' });
+  const info = await ctx.client.system.info();
+
+  expect(imp.public).toEqual({ auth: 'basic' });
+  expect(urls.public).toBe('https://web.imp.example.com');
+  expect(info.public).toEqual({ ip: '203.0.113.7', imps: 1, records: null });
+
+  // only a hash is kept
+  const row = await ctx.db
+    .selectFrom('imps')
+    .select(['public_hash', 'public_user'])
+    .executeTakeFirstOrThrow();
+
+  expect(row.public_user).toBe('imp');
+  expect(row.public_hash).not.toContain(exposed.credential ?? '');
+
+  // a second expose gives a new credential
+  const again = await ctx.client.imps.expose({ name: 'web', auth: 'token' });
+
+  expect(again).toMatchObject({ auth: 'token', user: null });
+  expect(again.credential).not.toBe(exposed.credential);
+
+  const unexposed = await ctx.client.imps.unexpose({ name: 'web' });
+
+  expect(unexposed.public).toBeUndefined();
+
+  const after = await ctx.client.imps.url({ name: 'web' });
+
+  expect(after.public).toBeNull();
+});
+
+test('expose needs public mode, a known imp, and a user only with basic auth', async () => {
+  await using plain = await setupTest(TEST_TOKEN);
+
+  await plain.createTestImage('ubuntu');
+  await plain.client.imps.create({ name: 'web' });
+
+  const off = await plain.client.imps
+    .expose({ name: 'web', auth: 'none' })
+    .catch((error: unknown) => error);
+
+  expect(off).toMatchObject({ code: 'PRECONDITION_FAILED' });
+
+  const plainInfo = await plain.client.system.info();
+
+  expect(plainInfo.public).toBeNull();
+
+  await using ctx = await setupTest(TEST_TOKEN, PUBLIC_ENV);
+
+  const unknown = await ctx.client.imps
+    .expose({ name: 'nope', auth: 'none' })
+    .catch((error: unknown) => error);
+
+  const stray = await ctx.client.imps
+    .expose({ name: 'nope', auth: 'token', user: 'ann' })
+    .catch((error: unknown) => error);
+
+  expect(unknown).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'imp', name: 'nope' } });
+  expect(stray).toMatchObject({ code: 'BAD_REQUEST' });
 });
 
 test('it prefers the configured default image and falls back to ubuntu', async () => {

@@ -8,6 +8,7 @@ import { readRejection } from '../read-rejection';
 import type { Certificate } from './acme/cert-store';
 import { createCertStore } from './acme/cert-store';
 import { createCloudflareProvider } from './dns/cloudflare-provider';
+import { buildPublicOwner } from './dns/dns-provider';
 import type { DnsProvider } from './dns/dns-provider';
 import type { HttpsConfig } from './https-config';
 import { createHttpsService } from './https-service';
@@ -28,10 +29,14 @@ interface ServiceTestOptions {
 
   // tailscale serve holds the HTTPS port
   readonly serveHoldsHttps?: boolean;
+
+  // public mode at this IP, and the public imps
+  readonly publicIp?: string;
+  readonly publicImps?: readonly string[];
 }
 
-function buildConfig(): HttpsConfig {
-  const ports = findFreePorts(2);
+function buildConfig(publicIp?: string): HttpsConfig {
+  const ports = findFreePorts(4);
 
   return {
     domain: DOMAIN,
@@ -41,6 +46,10 @@ function buildConfig(): HttpsConfig {
     acmeDirectory: 'https://acme.invalid/directory',
     acmeEmail: null,
     acmeCaFile: null,
+    public:
+      publicIp === undefined
+        ? null
+        : { ip: publicIp, httpsPort: ports.take(), httpPort: ports.take() },
   };
 }
 
@@ -57,31 +66,56 @@ function startPlainListener(options: ProxyListenOptions) {
 }
 
 // a DNS provider that keeps the A records it is given
+// the owner of imp.test's public records
+const PUBLIC_OWNER = buildPublicOwner(DOMAIN);
+
+// a DNS provider that keeps the A records it is given, and their owners;
+// a record seeded without an owner is the tailnet's
 function createRecordingDns(): {
   readonly dns: DnsProvider;
   readonly records: Map<string, string>;
+  readonly owners: Map<string, string>;
 } {
   const records = new Map<string, string>();
+  const owners = new Map<string, string>();
+
+  const readOwner = (fqdn: string) => owners.get(fqdn) ?? 'managed by impd';
 
   const dns: DnsProvider = {
     addTxt: (fqdn, value) => Promise.resolve({ fqdn, value, id: value }),
     removeTxt: () => Promise.resolve(),
     waitForTxt: () => Promise.resolve(),
-    setA: (fqdn, ip) => {
+    setA: (fqdn, ip, owner = 'managed by impd') => {
       records.set(fqdn, ip);
+      owners.set(fqdn, owner);
+
+      return Promise.resolve();
+    },
+    listA: (domain, owner) => {
+      const found = [...records].filter(
+        ([fqdn]) => fqdn.endsWith(`.${domain}`) && readOwner(fqdn) === owner,
+      );
+
+      return Promise.resolve(new Map(found));
+    },
+    removeA: (fqdn, owner) => {
+      if (readOwner(fqdn) === owner) {
+        records.delete(fqdn);
+      }
 
       return Promise.resolve();
     },
   };
 
-  return { dns, records };
+  return { dns, records, owners };
 }
 
 function setup(options: ServiceTestOptions) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-https-'));
-  const config = buildConfig();
+  const config = buildConfig(options.publicIp);
   const store = createCertStore(dir);
   const logs: string[] = [];
+  const publicImps = [...(options.publicImps ?? [])];
   const recording = createRecordingDns();
   const tailnetIp = options.tailnetIp;
   const servePorts = options.serveHoldsHttps === true ? [config.httpsPort] : [];
@@ -108,6 +142,19 @@ function setup(options: ServiceTestOptions) {
     log: (message) => {
       logs.push(message);
     },
+    listPublicImps: () => Promise.resolve([...publicImps]),
+    findPublicImp: (name) => {
+      const found = publicImps.includes(name)
+        ? {
+            id: name,
+            state: 'running' as const,
+            stored: { auth: 'none' as const, user: null, hash: null },
+          }
+        : undefined;
+
+      return Promise.resolve(found);
+    },
+    publicAddress: '127.0.0.1',
   });
 
   return {
@@ -115,6 +162,8 @@ function setup(options: ServiceTestOptions) {
     store,
     logs,
     records: recording.records,
+    owners: recording.owners,
+    publicImps,
     service,
     [Symbol.asyncDispose]: async () => {
       await service.stop();
@@ -270,6 +319,96 @@ test('the domain points at the tailnet IP, and the listeners bind it', async () 
   expect(body).toBe(`served on ${TAILNET_IP}`);
 });
 
+test('a public imp gets a record at the public IP, and loses it once it is not public', async () => {
+  const fresh = await createTestCertificate({ names: NAMES });
+
+  const publicIp = '203.0.113.7';
+
+  await using ctx = setup({
+    issue: () => Promise.resolve(fresh),
+    tailnetIp: TAILNET_IP,
+    publicIp,
+    publicImps: ['web'],
+  });
+
+  // one left by an imp that is gone, a deeper name impd never clears, and
+  // the bare domain of an impd on dev.imp.test, which is not this impd's
+  ctx.records.set('old.imp.test', publicIp);
+  ctx.owners.set('old.imp.test', PUBLIC_OWNER);
+  ctx.records.set('a.b.imp.test', '198.51.100.1');
+  ctx.owners.set('a.b.imp.test', PUBLIC_OWNER);
+  ctx.records.set('dev.imp.test', '100.64.0.9');
+  ctx.store.writeCertificate(fresh);
+  ctx.service.start();
+
+  await waitFor(() => ctx.records.has('web.imp.test') && !ctx.records.has('old.imp.test'));
+
+  expect(Object.fromEntries(ctx.records)).toEqual({
+    'imp.test': TAILNET_IP,
+    '*.imp.test': TAILNET_IP,
+    'web.imp.test': publicIp,
+    'a.b.imp.test': '198.51.100.1',
+    'dev.imp.test': '100.64.0.9',
+  });
+
+  expect(ctx.owners.get('web.imp.test')).toBe('impd public imps of imp.test');
+
+  // the public listener answers on its own port
+  const body = await readBody('127.0.0.1', ctx.config.public?.httpsPort ?? 0);
+
+  expect(body).toBe('served on 127.0.0.1');
+
+  ctx.publicImps.splice(0);
+
+  await ctx.service.updatePublicRecords();
+
+  expect(ctx.records.has('web.imp.test')).toBe(false);
+  expect(ctx.logs).toContain('impd: https: removed web.imp.test (no longer public)');
+});
+
+test('with public mode off, the public records impd left go', async () => {
+  const fresh = await createTestCertificate({ names: NAMES });
+
+  await using ctx = setup({ issue: () => Promise.resolve(fresh), publicImps: ['web'] });
+
+  ctx.records.set('web.imp.test', '203.0.113.7');
+  ctx.owners.set('web.imp.test', PUBLIC_OWNER);
+  ctx.service.start();
+
+  await waitFor(() => !ctx.records.has('web.imp.test'));
+});
+
+test('a DNS failure on the public records is logged, and the next pass tries again', async () => {
+  const fresh = await createTestCertificate({ names: NAMES });
+
+  const recording = createRecordingDns();
+  let isDown = true;
+
+  await using ctx = setup({
+    issue: () => Promise.resolve(fresh),
+    dns: {
+      ...recording.dns,
+      listA: (domain, owner) =>
+        isDown ? Promise.reject(new Error('DNS API down')) : recording.dns.listA(domain, owner),
+    },
+    publicIp: '203.0.113.7',
+    publicImps: ['web'],
+  });
+
+  ctx.service.start();
+
+  await waitFor(() => ctx.logs.some((line) => line.includes('public records: DNS API down')));
+
+  expect(ctx.service.readRecordsStatus()).toMatchObject({ isOk: false, error: 'DNS API down' });
+
+  isDown = false;
+
+  const status = await ctx.service.updatePublicRecords();
+
+  expect(status).toMatchObject({ isOk: true, error: null });
+  expect(recording.records.get('web.imp.test')).toBe('203.0.113.7');
+});
+
 test('a tailscale serve on the HTTPS port is a warning', async () => {
   const fresh = await createTestCertificate({ names: NAMES });
 
@@ -325,6 +464,8 @@ test('a failed tailscale status keeps the tailnet listener and its connections',
     now: Date.now,
     log: () => {},
     addressIntervalMs: 5,
+    listPublicImps: () => Promise.resolve([]),
+    findPublicImp: () => Promise.resolve(undefined),
   });
 
   try {

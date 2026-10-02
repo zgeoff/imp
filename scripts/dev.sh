@@ -33,8 +33,9 @@
 #      upstreams the connectors suite puts in for granted hosts.
 #      HTTPS (docs/guides/https.md) passes through the same way: IMP_DOMAIN,
 #      IMP_DNS_PROVIDER, IMP_DNS_API_URL, IMP_ACME_DIRECTORY, IMP_ACME_EMAIL,
-#      IMP_HTTPS_PORT, IMP_HTTP_PORT, and IMP_ACME_CA_FILE as a path under the
-#      repo. IMP_DNS_API_TOKEN, a secret, goes in .env.
+#      IMP_HTTPS_PORT, IMP_HTTP_PORT, the IMP_PUBLIC_* settings of public imps,
+#      and IMP_ACME_CA_FILE as a path under the repo. IMP_DNS_API_TOKEN, a
+#      secret, goes in .env. The public listeners are not published.
 #      IMP_TAILNET_NAMES=1 turns on per-imp tailnet names, with
 #      IMP_TAILNET_NAME_PREFIX; the OAuth client comes from 1Password
 #      (write_tailnet_oauth_file in scripts/lib.sh) into <IMP_DEV_DATA>.
@@ -63,7 +64,8 @@ tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT
   IMP_WATCHDOG_TIMEOUT_S IMP_WATCHDOG_ACTION
   IMP_SSH_AUTHORIZED_KEYS IMP_STORAGE_BACKEND IMP_ZFS_ROOT
   IMP_DOMAIN IMP_DNS_PROVIDER IMP_DNS_API_URL IMP_ACME_DIRECTORY IMP_ACME_EMAIL IMP_HTTPS_PORT
-  IMP_HTTP_PORT IMP_E2E IMP_BROKER_PORT IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
+  IMP_HTTP_PORT IMP_PUBLIC_IP IMP_PUBLIC_HTTPS_PORT IMP_PUBLIC_HTTP_PORT IMP_E2E IMP_BROKER_PORT
+  IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
   IMP_BACKUP_INTERVAL_S IMP_BACKUP_KEEP IMP_BACKUP_FORGET IMP_BACKUP_CPUS IMP_BACKUP_MEMORY_MIB)
 
 # in_container PATH maps a path under the repo to its /src path.

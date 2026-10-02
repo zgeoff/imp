@@ -315,6 +315,8 @@ ExecStartPre=-/usr/bin/docker rm -f imp-host
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+# $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
+# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps)
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \
@@ -322,6 +324,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
+  $IMP_PUBLIC_PORTS \
   ${IMP_HOST_IMAGE}
 # SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
 # to 120 s, and systemd waits a little longer before it kills anything.
@@ -361,6 +364,14 @@ IMP_DOMAIN=
 IMP_DNS_PROVIDER=cloudflare
 IMP_DNS_API_TOKEN=
 IMP_ACME_EMAIL=
+
+# Public imps (docs/guides/https.md#public-imps): `imp expose <name>` serves
+# an imp to the internet. IMP_PUBLIC_IP is the host's public IPv4, which
+# their records point at. With the systemd unit, IMP_PUBLIC_PORTS publishes
+# the public listeners: -p 443:7443 -p 80:7480. With compose, uncomment the
+# two ports in deploy/compose.yaml instead.
+IMP_PUBLIC_IP=
+IMP_PUBLIC_PORTS=
 
 # The RAM awake imps may use, in MiB. Leave room for the host itself.
 IMP_RAM_BUDGET_MIB=16384

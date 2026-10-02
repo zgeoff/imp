@@ -1,14 +1,19 @@
+import type { PublicImp } from '../db/exposure';
+import { createSemaphore } from '../imps/semaphore';
 import type { TailscaleStatus } from '../net/tailscale-status';
 import type { Ticker } from '../process/ticker';
 import { startTicker } from '../process/ticker';
 import { readErrorMessage } from '../read-error-message';
 import type { IssueCertificate } from './acme/acme-issuer';
 import { createCertManager } from './acme/cert-manager';
-import type { CertStore } from './acme/cert-store';
+import type { CertStore, Certificate } from './acme/cert-store';
+import { buildPublicOwner } from './dns/dns-provider';
 import type { DnsProvider } from './dns/dns-provider';
 import type { HttpsConfig } from './https-config';
 import { createHttpsListeners } from './https-listeners';
-import type { ProxyListen } from './https-listeners';
+import type { HttpsListeners, ProxyListen } from './https-listeners';
+import { createPublicScope } from './public-auth';
+import { createPublicLimits } from './public-limits';
 
 const RENEW_INTERVAL_MS = 10 * 60_000;
 
@@ -16,10 +21,25 @@ const RENEW_INTERVAL_MS = 10 * 60_000;
 // within half a minute
 const ADDRESS_INTERVAL_MS = 30_000;
 
+// how the last pass over the public records went
+export interface RecordsStatus {
+  readonly isOk: boolean;
+  readonly error: string | null;
+  readonly at: number;
+}
+
 export interface HttpsService {
   // returns at once: issuance runs in the background, so a CA or DNS
   // outage never holds up impd
   readonly start: () => void;
+
+  // brings the public A records in line with the public imps; after an
+  // expose, an unexpose or a destroy. Never throws: a DNS failure is logged
+  // and the next pass tries again.
+  readonly updatePublicRecords: () => Promise<RecordsStatus>;
+
+  // the last pass, or null before the first
+  readonly readRecordsStatus: () => RecordsStatus | null;
   readonly stop: () => Promise<void>;
 }
 
@@ -37,8 +57,15 @@ interface HttpsServiceDeps {
   readonly now: () => number;
   readonly log: (message: string) => void;
 
+  // the public imps, for their A records and the public listeners
+  readonly listPublicImps: () => Promise<readonly string[]>;
+  readonly findPublicImp: (name: string) => Promise<PublicImp | undefined>;
+
   // how often the tailnet IP is read; 30 s unless a test is in a hurry
   readonly addressIntervalMs?: number;
+
+  // where the public listeners bind; every address unless a test says
+  readonly publicAddress?: string;
 }
 
 // HTTPS on the domain (docs/guides/https.md): the certificate, its renewal,
@@ -63,7 +90,29 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
     httpsPort: config.httpsPort,
     httpPort: config.httpPort,
     log,
+    scope: { kind: 'tailnet' },
   });
+
+  // every address, on ports of their own that Docker publishes as 443 and
+  // 80: which listener a request came in on decides what it may reach
+  const publicConfig = config.public;
+
+  const publicListeners: HttpsListeners | null =
+    publicConfig === null
+      ? null
+      : createHttpsListeners({
+          proxy: deps.proxy,
+          domain,
+          httpsPort: publicConfig.httpsPort,
+          httpPort: publicConfig.httpPort,
+          log,
+          scope: createPublicScope(deps.findPublicImp, createPublicLimits(deps.now)),
+        });
+
+  const setCertificate = (certificate: Certificate): void => {
+    listeners.setCertificate(certificate);
+    publicListeners?.setCertificate(certificate);
+  };
 
   // the last tailnet IP tailscaled reported, the IP the A records were last
   // set to, the one checked for a conflicting `tailscale serve`, and whether
@@ -81,7 +130,7 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
     const certificate = await certs.renew();
 
     if (certificate !== null && !state.stopped) {
-      listeners.setCertificate(certificate);
+      setCertificate(certificate);
     }
   };
 
@@ -144,13 +193,73 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
     }
   };
 
+  // One `<name>.<domain>` record per public imp, at the public IP; it wins
+  // over the tailnet wildcard. The other public records of this domain go,
+  // all of them when public mode is off.
+  const publicOwner = buildPublicOwner(domain);
+
+  const applyPublicRecords = async (): Promise<void> => {
+    const ip = publicConfig?.ip ?? null;
+    const wanted = ip === null ? [] : await deps.listPublicImps();
+
+    const present = await deps.dns.listA(domain, publicOwner);
+
+    for (const name of wanted) {
+      const fqdn = `${name}.${domain}`;
+
+      if (ip !== null && present.get(fqdn) !== ip) {
+        await deps.dns.setA(fqdn, ip, publicOwner);
+
+        log(`impd: https: ${fqdn} points at ${ip} (public)`);
+      }
+    }
+
+    for (const fqdn of present.keys()) {
+      const label = fqdn.slice(0, -(domain.length + 1));
+
+      // a deeper name is no imp's, whatever its comment says
+      if (label.includes('.') || wanted.includes(label)) {
+        continue;
+      }
+
+      await deps.dns.removeA(fqdn, publicOwner);
+
+      log(`impd: https: removed ${fqdn} (no longer public)`);
+    }
+  };
+
+  // one pass at a time, so two never race on a record
+  const recordsGate = createSemaphore(1);
+  let recordsStatus: RecordsStatus | null = null;
+
+  const updatePublicRecords = (): Promise<RecordsStatus> =>
+    recordsGate.run(async () => {
+      try {
+        await applyPublicRecords();
+
+        recordsStatus = { isOk: true, error: null, at: deps.now() };
+      } catch (error) {
+        const message = readErrorMessage(error);
+
+        log(`impd: https: public records: ${message}`);
+
+        recordsStatus = { isOk: false, error: message, at: deps.now() };
+      }
+
+      return recordsStatus;
+    });
+
   return {
+    updatePublicRecords,
+    readRecordsStatus: () => recordsStatus,
     start: () => {
       const certificate = certs.load();
 
       if (certificate !== null) {
-        listeners.setCertificate(certificate);
+        setCertificate(certificate);
       }
+
+      publicListeners?.setAddresses([deps.publicAddress ?? '0.0.0.0']);
 
       if (deps.readTailscale === null) {
         log(
@@ -161,9 +270,20 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
       // the first pass now, not a tick from now
       void runLogged('addresses', updateAddresses, log);
       void runLogged('renewal', runRenewal, log);
+      void updatePublicRecords();
 
       tickers.push(
         startTicker('https renewal', RENEW_INTERVAL_MS, runRenewal, log),
+
+        // as often as renewal: a record changed by hand comes back in time
+        startTicker(
+          'https public records',
+          RENEW_INTERVAL_MS,
+          async () => {
+            await updatePublicRecords();
+          },
+          log,
+        ),
         startTicker(
           'https addresses',
           deps.addressIntervalMs ?? ADDRESS_INTERVAL_MS,
@@ -177,6 +297,7 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
 
       await Promise.all(tickers.map((ticker) => ticker.stop()));
       await listeners.stop();
+      await publicListeners?.stop();
     },
   };
 }

@@ -37,6 +37,11 @@ services:
     ports:
       - 127.0.0.1:7070:7070
       - 127.0.0.1:7080:7080
+      # Public imps (docs/guides/https.md#public-imps), with IMP_PUBLIC_IP
+      # set: uncomment both to publish impd's public listeners as the host's
+      # 443 and 80. They serve public imps only.
+      # - 443:7443
+      # - 80:7480
     # SIGTERM makes impd sleep every awake imp, so memory survives; give it
     # the time (docs/guides/operations.md).
     stop_grace_period: 120s

@@ -1,11 +1,16 @@
 import { expect, test } from 'bun:test';
 import { connect } from 'node:tls';
+import { findPublicImp } from '../db/exposure';
+import { findImpByName, updateImpExposure } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
 import { createHttpsListeners } from './https-listeners';
+import type { ListenerScope } from './https-listeners';
+import { buildCredentialHash, createPublicScope } from './public-auth';
+import { createPublicLimits } from './public-limits';
 import { createTestCertificate } from './test-certificates';
 
 const DOMAIN = 'imp.test';
@@ -51,6 +56,11 @@ function startFakeApi(port: number) {
         // the dashboard's same-origin check compares the Origin with this
         host: new URL(request.url).host,
         cookie: request.headers.get('cookie'),
+        authorization: request.headers.get('authorization'),
+        forwardedFor: request.headers.get('x-forwarded-for'),
+        forwarded: request.headers.get('forwarded'),
+        realIp: request.headers.get('x-real-ip'),
+        forwardedHost: request.headers.get('x-forwarded-host'),
       });
     },
     websocket: {
@@ -61,7 +71,7 @@ function startFakeApi(port: number) {
   });
 }
 
-async function setup() {
+async function setup(scopeKind: ListenerScope['kind'] = 'tailnet') {
   const ports = pickPorts();
 
   const ctx = await setupImpTest({
@@ -85,6 +95,14 @@ async function setup() {
 
   const logs: string[] = [];
 
+  // the public limits, so a test can see what a request took
+  const limits = createPublicLimits();
+
+  const scope: ListenerScope =
+    scopeKind === 'tailnet'
+      ? { kind: 'tailnet' }
+      : createPublicScope((name) => findPublicImp(ctx.db, name), limits);
+
   const listeners = createHttpsListeners({
     proxy,
     domain: DOMAIN,
@@ -93,6 +111,7 @@ async function setup() {
     log: (message) => {
       logs.push(message);
     },
+    scope,
   });
 
   // an imp whose address is the fake API's, so a request to it shows what
@@ -103,10 +122,34 @@ async function setup() {
 
   await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
 
+  // public with this auth, its credential `secret-credential`
+  const updateWebExposure = async (auth: 'none' | 'token' | 'basic') => {
+    await updateImpExposure(ctx.db, imp.id, {
+      auth,
+      user: auth === 'basic' ? 'ann' : null,
+      hash: auth === 'none' ? null : buildCredentialHash('secret-credential'),
+    });
+  };
+
+  const readWebState = async () => {
+    const web = await findImpByName(ctx.db, 'web');
+
+    return web?.state;
+  };
+
   return {
     ports,
     listeners,
     logs,
+    updateWebExposure,
+    readWebState,
+    limits,
+    readWebId: () => imp.id,
+    sleepWeb: () => ctx.imps.sleepImp('web'),
+
+    // the imp's HTTP port to one nothing listens on
+    breakWeb: () =>
+      ctx.db.updateTable('imps').set({ http_port: 1 }).where('id', '=', imp.id).execute(),
     [Symbol.asyncDispose]: async () => {
       await listeners.stop();
       await proxy.stop();
@@ -162,7 +205,17 @@ test('the bare domain reaches the API over https, and only one label names an im
   const apex = await readTls(ctx.ports.https, DOMAIN, '/health');
   const apexBody: unknown = await apex.json();
 
-  expect(apexBody).toEqual({ path: '/health', proto: 'https', host: DOMAIN, cookie: null });
+  expect(apexBody).toEqual({
+    path: '/health',
+    proto: 'https',
+    host: DOMAIN,
+    cookie: null,
+    authorization: null,
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: DOMAIN,
+  });
 
   // `imp.imp.test` is the imp named imp, which does not exist
   const imp = await readTls(ctx.ports.https, `imp.${DOMAIN}`);
@@ -322,6 +375,225 @@ test('an address it cannot bind is logged once and tried again', async () => {
 
   expect(failures).toHaveLength(1);
   expect(failures[0]).toContain('cannot listen');
+});
+
+// the public listeners, serving with a certificate on loopback
+async function setupPublic() {
+  const ctx = await setup('public');
+
+  ctx.listeners.setAddresses(['127.0.0.1']);
+
+  const certificate = await createTestCertificate({ names: NAMES });
+
+  ctx.listeners.setCertificate(certificate);
+
+  return ctx;
+}
+
+test('a tailnet-only imp is a 404 on the public listener, whatever the Host says', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.sleepWeb();
+
+  for (const host of [`web.${DOMAIN}`, `WEB.${DOMAIN}.`, `web.${DOMAIN}:443`, DOMAIN]) {
+    const response = await readTls(ctx.ports.https, host);
+    const body = await response.text();
+
+    expect({ host, status: response.status }).toEqual({ host, status: 404 });
+    expect(body).toContain('No public imp here.');
+  }
+
+  const unknown = await readTls(ctx.ports.https, `nope.${DOMAIN}`);
+  const unknownBody = await unknown.text();
+
+  // the same page as for an imp that does not exist: nothing tells them apart
+  expect(unknown.status).toBe(404);
+  expect(unknownBody).toContain('No public imp here.');
+
+  const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/`, {
+    headers: { host: `web.${DOMAIN}` },
+    redirect: 'manual',
+  });
+
+  expect(redirect.status).toBe(404);
+
+  const state = await ctx.readWebState();
+
+  expect(state).toBe('sleeping');
+});
+
+test('a public imp without auth is served, and plain http redirects to port 443', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('none');
+
+  const response = await readTls(ctx.ports.https, `web.${DOMAIN}`, '/x');
+  const body: unknown = await response.json();
+
+  expect(body).toMatchObject({ path: '/x', proto: 'https', host: `web.${DOMAIN}` });
+
+  const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/a?b=c`, {
+    headers: { host: `web.${DOMAIN}` },
+    redirect: 'manual',
+  });
+
+  expect(redirect.status).toBe(308);
+  expect(redirect.headers.get('location')).toBe(`https://web.${DOMAIN}/a?b=c`);
+
+  // the bare domain is impd's API on the tailnet, never on the internet
+  const apex = await readTls(ctx.ports.https, DOMAIN);
+
+  expect(apex.status).toBe(404);
+});
+
+test('a token imp asks for its token before the wake, and never forwards it', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('token');
+  await ctx.sleepWeb();
+
+  for (const authorization of [null, 'Bearer wrong', 'Basic c2VjcmV0LWNyZWRlbnRpYWw=']) {
+    const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+      headers: {
+        host: `web.${DOMAIN}`,
+        ...(authorization !== null && { authorization }),
+      },
+      tls: { rejectUnauthorized: false },
+    });
+
+    expect({ authorization, status: response.status }).toEqual({ authorization, status: 401 });
+    expect(response.headers.get('www-authenticate')).toBe('Bearer realm="web", charset="UTF-8"');
+  }
+
+  const state = await ctx.readWebState();
+
+  expect(state).toBe('sleeping');
+
+  const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+    headers: { host: `web.${DOMAIN}`, authorization: 'Bearer secret-credential' },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(body).toMatchObject({ host: `web.${DOMAIN}`, authorization: null });
+});
+
+test('a basic auth imp takes its user and password, and nothing else', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('basic');
+
+  const send = (credentials: string) =>
+    fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+      headers: {
+        host: `web.${DOMAIN}`,
+        authorization: `Basic ${Buffer.from(credentials).toString('base64')}`,
+      },
+      tls: { rejectUnauthorized: false },
+    });
+
+  const wrongUser = await send('bob:secret-credential');
+  const wrongPassword = await send('ann:secret');
+
+  expect([wrongUser.status, wrongPassword.status]).toEqual([401, 401]);
+  expect(wrongUser.headers.get('www-authenticate')).toBe('Basic realm="web", charset="UTF-8"');
+
+  const right = await send('ann:secret-credential');
+  const body: unknown = await right.json();
+
+  expect(body).toMatchObject({ authorization: null });
+});
+
+test('plain http on the public listener takes no slot and no wake', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('none');
+  await ctx.sleepWeb();
+
+  // more than the 64 slots and the 10 wakes
+  for (let index = 0; index < 100; index += 1) {
+    const redirect = await fetch(`http://127.0.0.1:${String(ctx.ports.http)}/`, {
+      headers: { host: `web.${DOMAIN}` },
+      redirect: 'manual',
+    });
+
+    expect(redirect.status).toBe(308);
+  }
+
+  const id = ctx.readWebId();
+  const releases = Array.from({ length: 64 }, () => ctx.limits.tryOpen(id));
+  const wakes = Array.from({ length: 10 }, () => ctx.limits.tryWake(id));
+
+  expect(releases.every((release) => release !== null)).toBe(true);
+  expect(wakes.every(Boolean)).toBe(true);
+
+  for (const release of releases) {
+    release?.();
+  }
+});
+
+test('a WebSocket upgrade without the token gets a 401 and wakes nothing', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('token');
+  await ctx.sleepWeb();
+
+  const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+    headers: {
+      host: `web.${DOMAIN}`,
+      connection: 'Upgrade',
+      upgrade: 'websocket',
+      'sec-websocket-version': '13',
+
+      // any 16 bytes, base64
+      'sec-websocket-key': Buffer.from('imp-test-socket!').toString('base64'),
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const state = await ctx.readWebState();
+
+  expect(response.status).toBe(401);
+  expect(state).toBe('sleeping');
+});
+
+test('the public listener names nothing in its errors, and resets X-Forwarded-For', async () => {
+  await using ctx = await setupPublic();
+
+  await ctx.updateWebExposure('none');
+
+  const forwarded = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+    headers: {
+      host: `web.${DOMAIN}`,
+      'x-forwarded-for': '198.51.100.9',
+      forwarded: 'for=198.51.100.9;proto=http',
+      'x-real-ip': '198.51.100.9',
+      'x-forwarded-host': 'evil.example',
+      'x-forwarded-proto': 'http',
+    },
+    tls: { rejectUnauthorized: false },
+  });
+
+  const body: unknown = await forwarded.json();
+
+  expect(body).toMatchObject({
+    forwardedFor: '127.0.0.1',
+    forwarded: null,
+    realIp: null,
+    forwardedHost: `web.${DOMAIN}`,
+    proto: 'https',
+  });
+
+  await ctx.breakWeb();
+
+  const broken = await readTls(ctx.ports.https, `web.${DOMAIN}`);
+  const page = await broken.text();
+
+  expect(broken.status).toBe(502);
+  expect(page).toContain('This site did not answer.');
+  expect(page).not.toContain('port 1');
 });
 
 async function waitUntil(check: () => boolean): Promise<void> {

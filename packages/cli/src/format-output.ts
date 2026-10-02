@@ -4,6 +4,7 @@ import type {
   BackupRun,
   BackupStatus,
   Checkpoint,
+  ExposeResult,
   Identity,
   Image,
   Imp,
@@ -121,6 +122,12 @@ function formatNote(imp: Imp): string {
     notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
   }
 
+  if (imp.public !== undefined) {
+    const auth = imp.public.auth === 'none' ? '' : ` (${imp.public.auth})`;
+
+    notes.push(`public${auth}`);
+  }
+
   if (imp.coldBootReason !== undefined) {
     const when = imp.state === 'sleeping' ? 'boots cold' : 'booted cold';
 
@@ -139,6 +146,29 @@ function formatNote(imp: Imp): string {
   }
 
   return notes.join('; ');
+}
+
+// What an expose made, the credential included: impd shows it this once
+export function formatExposeResult(result: ExposeResult): string {
+  const lines = [`${result.url} is public`];
+
+  if (result.auth === 'token') {
+    lines.push(`token: ${result.credential ?? ''}`);
+  }
+
+  if (result.auth === 'basic') {
+    lines.push(`user: ${result.user ?? ''}`, `password: ${result.credential ?? ''}`);
+  }
+
+  if (result.credential !== null) {
+    lines.push('impd keeps only a hash; expose the imp again for a new one.');
+  }
+
+  if (result.warning !== undefined) {
+    lines.push(`warning: ${result.warning}`);
+  }
+
+  return lines.join('\n');
 }
 
 export function formatImp(imp: Imp): string {

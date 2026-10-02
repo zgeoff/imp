@@ -173,11 +173,14 @@ guest through the agent, on its `127.0.0.1` only. The [SSH guide](../guides/ssh.
 | Tailnet                | `http://<tailnet-host>:<20000 + slot>` |
 | Tailnet, with a domain | `https://<name>.<domain>`              |
 | Tailnet, per-imp names | `https://<name>.<tailnet>.ts.net`      |
+| Internet, public imps  | `https://<name>.<domain>`              |
 
 MagicDNS does not support wildcard names, so on the tailnet each imp has a port, not a hostname. A
 domain of your own fills that gap: its wildcard record points at the host's tailnet IP
 ([why](../guides/https.md#why-the-records-point-at-the-tailnet-ip)). It is the recommended way.
 Per-imp names, opt-in, make each imp a Tailscale Service instead
 ([per-imp names](../guides/tailscale.md#per-imp-names)). `imp url <name>` prints the domain's https
-URL first, when there is one, then the imp's own tailnet name, then the others. The
+URL first, when there is one, then the imp's own tailnet name, then the others. An imp made
+[public](../guides/https.md#public-imps) keeps its name, but its own record points at the host's
+public IP, where a second listener serves public imps only. The
 [Tailscale guide](../guides/tailscale.md) covers the tailnet node, the ACL and HTTPS.

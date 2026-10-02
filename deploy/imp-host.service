@@ -25,6 +25,8 @@ ExecStartPre=-/usr/bin/docker rm -f imp-host
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
+# $IMP_PUBLIC_PORTS, unbraced, is zero or more words from the env file: for
+# public imps, `-p 443:7443 -p 80:7480` (docs/guides/https.md#public-imps)
 ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --init --privileged --device /dev/kvm --cgroupns=private \
   --env-file /etc/imp/imp-host.env \
@@ -32,6 +34,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
+  $IMP_PUBLIC_PORTS \
   ${IMP_HOST_IMAGE}
 # SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
 # to 120 s, and systemd waits a little longer before it kills anything.

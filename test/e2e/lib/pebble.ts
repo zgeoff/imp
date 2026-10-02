@@ -143,6 +143,11 @@ export function isPebbleRunning(): boolean {
 // The env that scripts/dev.sh hands impd, so the dev instance joins the
 // stack's network and gets its certificate from Pebble. Only the https suite
 // sets it, and removes it when it ends.
+const PUBLIC_IP = '203.0.113.7';
+
+// the public listener's port inside the host container (IMP_PUBLIC_HTTPS_PORT)
+export const PUBLIC_HTTPS_PORT = 7443;
+
 export function buildPebbleEnv(): Readonly<Record<string, string>> {
   const names = buildNames(instance.container);
 
@@ -154,6 +159,10 @@ export function buildPebbleEnv(): Readonly<Record<string, string>> {
     IMP_DNS_API_URL: 'http://challtestsrv:8055',
     IMP_ACME_DIRECTORY: 'https://pebble:14000/dir',
     IMP_ACME_CA_FILE: names.minicaFile,
+
+    // public imps on TEST-NET-3: only the record points there, and the
+    // suite reaches the public listener on loopback in the container
+    IMP_PUBLIC_IP: PUBLIC_IP,
   };
 }
 

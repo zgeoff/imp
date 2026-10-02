@@ -27,6 +27,9 @@ export const ImpChangeReasonSchema = z.enum([
 
   // its CPU limit, weight or vCPU count changed
   'updated',
+
+  // made public or tailnet-only, or given a new credential
+  'exposed',
 ]);
 
 export type ImpChangeReason = z.infer<typeof ImpChangeReasonSchema>;

@@ -19,6 +19,7 @@ import { openDatabase } from './db/open-database';
 import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
+import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
@@ -152,6 +153,7 @@ async function main(): Promise<void> {
   await egress.start();
 
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
+  const publicRecords = createPublicRecordsLink();
   const namesHolder: { names: TailnetNames | null } = { names: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
   const cgroups = createCpuCgroups({ root: '/sys/fs/cgroup', log: printLog });
@@ -306,6 +308,7 @@ async function main(): Promise<void> {
     gc,
     readTailscale,
     readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
+    publicRecords,
     isReady: () => state.ready,
     now: Date.now,
     audit,
@@ -333,12 +336,16 @@ async function main(): Promise<void> {
       : buildHttpsService({
           config: config.https,
           dataDir: config.dataDir,
+          db,
           proxy,
           readTailscale: config.tailscaleEnabled ? readTailscale : null,
           log: printLog,
         });
 
-  https?.start();
+  if (https !== null) {
+    publicRecords.attach(https);
+    https.start();
+  }
 
   // in the background: an API or tailscaled outage never holds up impd
   void tailnetNames?.runSync();

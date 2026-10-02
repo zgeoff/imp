@@ -109,8 +109,9 @@ From the milestone work:
   Memory snapshots are not backed up: a sleeping imp comes back stopped.
 - HTTPS on a domain ([#16](https://github.com/zgeoff/imp/issues/16)) is tested against Pebble only
   (the `https` suite: certificate in about 100 ms, an imp over https, a wake over https), not with a
-  real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider, and public
-  exposure (`imp url --public`) is not built ([#52](https://github.com/zgeoff/imp/issues/52)).
+  real domain, Let's Encrypt or Cloudflare. Cloudflare is the only real DNS provider. Public imps
+  ([#52](https://github.com/zgeoff/imp/issues/52)) are tested the same way, with no public IP, and
+  have no AAAA records.
 - No jailer and no inner container in the guest yet ([#27](https://github.com/zgeoff/imp/issues/27),
   [#28](https://github.com/zgeoff/imp/issues/28)).
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services

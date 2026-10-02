@@ -33,6 +33,12 @@ export const HttpsEnvSchema = z.object({
   IMP_ACME_EMAIL: z.email().optional(),
   IMP_ACME_CA_FILE: z.string().optional(),
 
+  // public imps (#52): the host's public IPv4, and the ports inside the
+  // host container that Docker publishes as 443 and 80
+  IMP_PUBLIC_IP: z.ipv4().optional(),
+  IMP_PUBLIC_HTTPS_PORT: PortSchema.default(7443),
+  IMP_PUBLIC_HTTP_PORT: PortSchema.default(7480),
+
   // set by the end-to-end harness only; unlocks the challtestsrv provider
   IMP_E2E: z.literal('1').optional(),
 });
@@ -47,6 +53,14 @@ export interface DnsConfig {
   readonly apiUrl: string | null;
 }
 
+// The public listeners (docs/guides/https.md#public-imps)
+interface PublicConfig {
+  // what a public imp's A record points at
+  readonly ip: string;
+  readonly httpsPort: number;
+  readonly httpPort: number;
+}
+
 export interface HttpsConfig {
   readonly domain: string;
   readonly httpsPort: number;
@@ -58,12 +72,19 @@ export interface HttpsConfig {
   // a PEM bundle the ACME server's own TLS certificate chains to, for a
   // test CA such as Pebble; null trusts the system roots only
   readonly acmeCaFile: string | null;
+
+  // null without IMP_PUBLIC_IP: every imp is tailnet-only
+  readonly public: PublicConfig | null;
 }
 
 // null when IMP_DOMAIN is unset: no HTTPS, and the per-port URLs are the only
 // tailnet URLs
 export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConfig | null {
   if (env.IMP_DOMAIN === undefined) {
+    if (env.IMP_PUBLIC_IP !== undefined) {
+      throw new Error('IMP_PUBLIC_IP needs IMP_DOMAIN: public imps are served on it');
+    }
+
     return null;
   }
 
@@ -106,6 +127,14 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
     acmeDirectory: env.IMP_ACME_DIRECTORY,
     acmeEmail: env.IMP_ACME_EMAIL ?? null,
     acmeCaFile: env.IMP_ACME_CA_FILE ?? null,
+    public:
+      env.IMP_PUBLIC_IP === undefined
+        ? null
+        : {
+            ip: env.IMP_PUBLIC_IP,
+            httpsPort: env.IMP_PUBLIC_HTTPS_PORT,
+            httpPort: env.IMP_PUBLIC_HTTP_PORT,
+          },
   };
 }
 

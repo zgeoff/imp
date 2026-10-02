@@ -19,11 +19,15 @@ import type { Config } from './config';
 import { listApiCalls } from './db/api-audit';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
+import type { ImpRecord } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
 import type { EgressService } from './egress/egress-service';
 import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
+import { createExposureService } from './https/exposure-service';
+import type { RecordsStatus } from './https/https-service';
+import type { PublicRecordsLink } from './https/public-records-link';
 import type { ImageService } from './images/image-service';
 import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
@@ -60,6 +64,9 @@ export interface RouterDeps {
 
   // per-imp names on the tailnet; null when IMP_TAILNET_NAMES is off
   readonly readTailnetNames: (() => TailnetNamesStatus) | null;
+
+  // the HTTPS service's public records, once it runs
+  readonly publicRecords: PublicRecordsLink;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
   readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
@@ -78,6 +85,12 @@ export interface RpcContext {
 }
 
 export function buildRouter(deps: RouterDeps) {
+  const exposure = createExposureService({
+    db: deps.db,
+    https: deps.config.https,
+    updateRecords: deps.publicRecords.update,
+  });
+
   // every call is checked against its access rule (auth/access-policy.ts);
   // every call that changes something, refused or not, leaves an audit row
   // after its answer
@@ -193,6 +206,13 @@ export function buildRouter(deps: RouterDeps) {
       setPolicy: os.imps.setPolicy.handler((context) =>
         deps.egress.setPolicy(context.input.name, context.input.policy),
       ),
+
+      expose: os.imps.expose.handler((context) => exposure.expose(context.input)),
+      unexpose: os.imps.unexpose.handler(async (context) => {
+        await exposure.unexpose(context.input.name);
+
+        return deps.imps.getImp(context.input.name);
+      }),
 
       // a fork gets its source's grants, as it gets its disk
       fork: os.imps.fork.handler(async (context) => {
@@ -460,6 +480,28 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       names: deps.readTailnetNames?.() ?? null,
     },
     cpu: deps.imps.readCpuHost(),
+    public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
+  };
+}
+
+function readPublicInfo(
+  config: Config,
+  imps: readonly ImpRecord[],
+  records: RecordsStatus | null,
+): SystemInfo['public'] {
+  const ip = config.https?.public?.ip;
+
+  if (ip === undefined) {
+    return null;
+  }
+
+  return {
+    ip,
+    imps: imps.filter((imp) => imp.publicAuth !== null).length,
+    records:
+      records === null
+        ? null
+        : { isOk: records.isOk, error: records.error, at: new Date(records.at) },
   };
 }
 

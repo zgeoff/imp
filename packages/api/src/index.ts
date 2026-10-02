@@ -49,6 +49,15 @@ export type {
   ExecTool,
 } from './exec-protocol';
 
+export {
+  BasicUserSchema,
+  ExposeInputSchema,
+  ExposeResultSchema,
+  ExposureSchema,
+  PublicAuthSchema,
+} from './exposure-schema';
+
+export type { ExposeResult, Exposure, PublicAuth } from './exposure-schema';
 export { EgressAllowEntrySchema, EgressModeSchema, EgressPolicySchema } from './egress-schema';
 export type { EgressMode, EgressPolicy } from './egress-schema';
 

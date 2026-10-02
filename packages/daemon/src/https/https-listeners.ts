@@ -31,7 +31,25 @@ interface HttpsListenersOptions {
   readonly httpsPort: number;
   readonly httpPort: number;
   readonly log: (message: string) => void;
+
+  // the public listeners serve public imps only: no API on the bare
+  // domain, and a tailnet-only imp is a 404 like an unknown one
+  readonly scope: ListenerScope;
 }
+
+export type ListenerScope =
+  | { readonly kind: 'tailnet' }
+  | {
+      readonly kind: 'public';
+
+      // the imp's route, or null while it is not public; it takes a slot
+      // and maybe a wake, which the request gives back as it ends
+      readonly routeImp: (name: string, request: Request) => Promise<ProxyRoute | null>;
+
+      // whether the name is a public imp, and nothing else: the redirect
+      // only answers, so it takes no slot and no wake
+      readonly isPublic: (name: string) => Promise<boolean>;
+    };
 
 interface AddressListeners {
   tls: Listener | null;
@@ -52,16 +70,40 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
   const failed = new Set<string>();
 
   let certificate: Certificate | null = null;
-  const hint = `Use https://<imp>.${domain}/.`;
+  const scope = options.scope;
 
-  const resolveRoute = (request: Request): ProxyRoute => {
+  // Docker publishes the public listener as 443, whatever its port inside
+  const redirectPort = scope.kind === 'public' ? 443 : httpsPort;
+
+  // the public 404 names no imp and no use of the domain
+  const hint = scope.kind === 'public' ? 'No public imp here.' : `Use https://<imp>.${domain}/.`;
+
+  const resolveRoute = async (request: Request): Promise<ProxyRoute> => {
     const parsed = parseDomainHost(request.headers.get('host'), domain);
 
     if (parsed === null) {
       return { kind: 'none', hint };
     }
 
-    return parsed.kind === 'apex' ? { kind: 'api' } : parsed;
+    if (scope.kind === 'tailnet') {
+      return parsed.kind === 'apex' ? { kind: 'api' } : parsed;
+    }
+
+    const route = parsed.kind === 'imp' ? await scope.routeImp(parsed.name, request) : null;
+
+    return route ?? { kind: 'none', hint };
+  };
+
+  // a redirect that answered for a tailnet-only imp would tell the internet
+  // the name exists
+  const checkRedirect = (request: Request): Promise<boolean> => {
+    const parsed = parseDomainHost(request.headers.get('host'), domain);
+
+    if (parsed === null || scope.kind === 'tailnet') {
+      return Promise.resolve(parsed !== null);
+    }
+
+    return parsed.kind === 'imp' ? scope.isPublic(parsed.name) : Promise.resolve(false);
   };
 
   const tryBind = <T>(address: string, port: number, start: () => T): T | null => {
@@ -102,7 +144,13 @@ export function createHttpsListeners(options: HttpsListenersOptions): HttpsListe
       Bun.serve({
         hostname: address,
         port: options.httpPort,
-        fetch: (request) => buildRedirect(request, domain, httpsPort, hint),
+        fetch: async (request) => {
+          const isRedirected = await checkRedirect(request);
+
+          return isRedirected
+            ? buildRedirect(request, domain, redirectPort, hint)
+            : buildErrorPage(404, hint);
+        },
       }),
     );
 

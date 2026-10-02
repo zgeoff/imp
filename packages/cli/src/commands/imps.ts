@@ -2,13 +2,22 @@ import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
-import { formatImp, formatImps, formatOutput } from '../format-output';
+import {
+  formatExposeResult,
+  formatImp,
+  formatImps,
+  formatJson,
+  formatOutput,
+} from '../format-output';
 import { parseDuration } from '../parse-duration';
 import { formatPolicy, parsePolicy } from '../parse-policy';
+import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { runAction } from '../run-action';
+import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
+import { authArgs } from './expose';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -31,11 +40,33 @@ export const newCommand = defineCommand({
     },
     'cpu-limit': cpuLimitArg,
     'cpu-weight': cpuWeightArg,
+    public: { type: 'boolean', description: 'serve it to the internet too, as imp expose does' },
+    ...authArgs,
     json: jsonArg,
   },
   run: (context) =>
     runAction(context.host, async (client) => {
       const policy = parsePolicy(context.args.policy, context.args.allow);
+      const isPublic = context.args.public === true;
+
+      if (!isPublic && (context.args.auth !== undefined || context.args.user !== undefined)) {
+        throw new UsageError('--auth and --user need --public');
+      }
+
+      // checked before the create, so a bad flag leaves no imp behind
+      const auth = isPublic ? parsePublicAuth(context.args.auth, context.args.user) : null;
+
+      // expose needs manage on the host; impd checks it again on the call
+      if (auth !== null) {
+        const identity = await client.tokens.whoami();
+
+        if (identity.scope !== 'manage' || identity.imps !== null) {
+          // a refusal, as impd's own would be: exit 1, not a usage error
+          throw new Error(
+            '--public needs a token with manage scope on the host; this one is limited',
+          );
+        }
+      }
 
       const imp = await client.imps.create({
         ...(context.args.name !== undefined && { name: context.args.name }),
@@ -50,7 +81,21 @@ export const newCommand = defineCommand({
         ...readCpuArgs(context.args),
       });
 
-      console.log(formatOutput(imp, context.args.json, formatImp));
+      if (auth === null) {
+        console.log(formatOutput(imp, context.args.json, formatImp));
+
+        return;
+      }
+
+      // a failure here leaves the imp tailnet-only; `imp expose` tries again
+      const exposed = await client.imps.expose({ name: imp.name, ...auth });
+
+      const output =
+        context.args.json === true
+          ? formatJson({ imp, public: exposed })
+          : `${formatImp(imp)}\n${formatExposeResult(exposed)}`;
+
+      console.log(output);
     }),
 });
 
@@ -148,6 +193,11 @@ export const urlCommand = defineCommand({
 
       if (urls.https !== null) {
         console.log(urls.https);
+      }
+
+      // the same name on the internet, which differs only by port
+      if (urls.public !== null && urls.public !== urls.https) {
+        console.log(urls.public);
       }
 
       if (urls.service !== null) {

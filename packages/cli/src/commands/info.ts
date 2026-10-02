@@ -42,6 +42,7 @@ export const infoCommand = defineCommand({
         ],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
+        ['public', formatPublic(info.public)],
       ];
 
       for (const [label = '', value = ''] of lines) {
@@ -49,6 +50,29 @@ export const infoCommand = defineCommand({
       }
     }),
 });
+
+// public imps, or why there are none; undefined from an impd before them
+function formatPublic(info: SystemInfo['public']): string {
+  if (info === undefined) {
+    return 'unknown';
+  }
+
+  if (info === null) {
+    return 'off (IMP_PUBLIC_IP unset)';
+  }
+
+  const records = info.records;
+  const at = records?.at.toISOString() ?? '';
+  let state = 'records not written yet';
+
+  if (records !== null) {
+    state = records.isOk
+      ? `records ok at ${at}`
+      : `records failing at ${at}: ${records.error ?? ''}`;
+  }
+
+  return `${String(info.imps)} imps at ${info.ip}, ${state}`;
+}
 
 function formatGib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;

@@ -10,6 +10,7 @@ import {
 import { CheckpointSchema } from './checkpoint-schema';
 import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
+import { ExposeInputSchema, ExposeResultSchema } from './exposure-schema';
 import { DockerfilePathSchema } from './image-build-protocol';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
@@ -125,6 +126,9 @@ export const impContract = {
         local: z.url(),
         https: z.url().nullable(),
 
+        // https://<name>.<domain> from the internet, while the imp is public
+        public: z.url().nullable(),
+
         // the imp's own name on the tailnet, once impd serves it
         service: z.url().nullable(),
         tailnet: z.url().nullable(),
@@ -137,6 +141,14 @@ export const impContract = {
     setPolicy: base
       .input(z.object({ name: NameSchema, policy: EgressPolicySchema }))
       .output(EgressPolicySchema),
+
+    // serves the imp to the internet at https://<name>.<domain>; an imp
+    // already public gets a new credential. PRECONDITION_FAILED without
+    // IMP_PUBLIC_IP.
+    expose: base.input(ExposeInputSchema).output(ExposeResultSchema),
+
+    // back to the tailnet only, at once
+    unexpose: base.input(NameInputSchema).output(ImpSchema),
 
     // disk only, with the source's egress policy: a memory fork would
     // duplicate entropy and IDs across clones

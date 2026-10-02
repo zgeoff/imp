@@ -4,6 +4,11 @@ import type { DnsProvider } from './dns-provider';
 // (docs/guides/https.md#testing-with-pebble). Its management API sets the
 // records; there is nothing to wait for, since it is the only nameserver.
 export function createChalltestsrvProvider(apiUrl: string): DnsProvider {
+  // It has no list call, so the provider remembers what this impd wrote:
+  // fqdn to owner and address. A restarted impd forgets, and the records it
+  // wrote before stay until challtestsrv restarts.
+  const records = new Map<string, { readonly owner: string; readonly ip: string }>();
+
   const sendCommand = async (path: string, body: unknown): Promise<void> => {
     const response = await fetch(new URL(path, apiUrl), {
       method: 'POST',
@@ -31,8 +36,26 @@ export function createChalltestsrvProvider(apiUrl: string): DnsProvider {
 
     // set as soon as the API answers
     waitForTxt: () => Promise.resolve(),
-    setA: async (fqdn, ip) => {
+    setA: async (fqdn, ip, owner = 'managed by impd') => {
       await sendCommand('/add-a', { host: `${fqdn}.`, addresses: [ip] });
+
+      records.set(fqdn, { owner, ip });
+    },
+    listA: (domain, owner) => {
+      const found = [...records]
+        .filter(([fqdn, record]) => fqdn.endsWith(`.${domain}`) && record.owner === owner)
+        .map(([fqdn, record]) => [fqdn, record.ip] as const);
+
+      return Promise.resolve(new Map(found));
+    },
+    removeA: async (fqdn, owner) => {
+      if (records.get(fqdn)?.owner !== owner) {
+        return;
+      }
+
+      await sendCommand('/clear-a', { host: `${fqdn}.` });
+
+      records.delete(fqdn);
     },
   };
 }

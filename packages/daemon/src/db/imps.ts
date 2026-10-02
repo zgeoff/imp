@@ -1,4 +1,5 @@
-import type { EgressPolicy, ImpChangeReason, ImpEventDetail, ImpState } from '@imp/api';
+import { PublicAuthSchema } from '@imp/api';
+import type { EgressPolicy, ImpChangeReason, ImpEventDetail, ImpState, PublicAuth } from '@imp/api';
 import { sql } from 'kysely';
 import type { Selectable, Updateable } from 'kysely';
 import { emitImpWrite } from './imp-write-feed';
@@ -26,6 +27,9 @@ export interface ImpRecord {
   readonly httpPort: number;
   readonly diskBytes: number;
   readonly isDiskGrowPending: boolean;
+
+  // what a public imp asks for; null while it is tailnet-only
+  readonly publicAuth: PublicAuth | null;
   readonly cpu: CpuSettings;
   readonly wakeCount: number;
 
@@ -369,6 +373,39 @@ export async function updateImpHold(
   return held;
 }
 
+// A public imp's auth as stored: the hash of the token or password, never
+// the credential itself
+export interface StoredPublicAuth {
+  readonly auth: PublicAuth;
+  readonly user: string | null;
+  readonly hash: string | null;
+}
+
+// public with this auth, or tailnet-only for null
+export async function updateImpExposure(
+  db: ImpDatabase,
+  id: string,
+  exposure: StoredPublicAuth | null,
+): Promise<ImpRecord> {
+  const row = await db
+    .updateTable('imps')
+    .set({
+      exposure: exposure === null ? 'tailnet' : 'public',
+      public_auth: exposure?.auth ?? null,
+      public_user: exposure?.user ?? null,
+      public_hash: exposure?.hash ?? null,
+    })
+    .where('id', '=', id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  const changed = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp: changed, reason: 'exposed' });
+
+  return changed;
+}
+
 // cascades to the imp's checkpoints
 export async function removeImp(db: ImpDatabase, id: string): Promise<boolean> {
   const row = await db.deleteFrom('imps').where('id', '=', id).returningAll().executeTakeFirst();
@@ -434,7 +471,15 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     awakeMs: row.awake_ms,
     awakeSince: toDate(row.awake_since),
     isIdentityResetPending: row.identity_reset_pending === 1,
+    publicAuth: readPublicAuth(row),
   };
+}
+
+// a value impd did not write reads as tailnet-only: closed, never open
+function readPublicAuth(row: Readonly<ImpRow>): PublicAuth | null {
+  const auth = PublicAuthSchema.safeParse(row.public_auth);
+
+  return row.exposure === 'public' && auth.success ? auth.data : null;
 }
 
 function toDate(ms: number | null): Date | null {

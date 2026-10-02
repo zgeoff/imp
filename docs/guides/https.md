@@ -1,11 +1,11 @@
 # HTTPS on your own domain
 
 With `IMP_DOMAIN=imp.example.com`, every imp is at `https://<name>.imp.example.com`, and impd's own
-API is at `https://imp.example.com`. Both answer on the tailnet only; public mode is
-[#52](https://github.com/zgeoff/imp/issues/52). impd gets one wildcard certificate from Let's
-Encrypt with the ACME DNS-01 challenge, renews it, and keeps the DNS records pointed at the host's
-tailnet IP. Without `IMP_DOMAIN`, nothing changes: the
-[per-port URLs](../architecture/networking.md#urls) stay the only tailnet URLs.
+API is at `https://imp.example.com`. Both answer on the tailnet only, except the imps you make
+[public](#public-imps). impd gets one wildcard certificate from Let's Encrypt with the ACME DNS-01
+challenge, renews it, and keeps the DNS records pointed at the host's tailnet IP. Without
+`IMP_DOMAIN`, nothing changes: the [per-port URLs](../architecture/networking.md#urls) stay the only
+tailnet URLs.
 
 This is the recommended way to give imps names. Tailscale Services can give each imp a name instead
 ([per-imp names](./tailscale.md#per-imp-names)), but that needs an API credential that reaches every
@@ -123,6 +123,97 @@ own on a name, it logs a warning and updates only the first.
 `example.com` that already serves a website. impd refuses to replace the website's record, so HTTPS
 never starts. If you delete that record so that impd can write its own, the website goes offline.
 
+## Public imps
+
+`imp expose <name>` serves one imp to the internet at `https://<name>.imp.example.com`. Every other
+imp stays tailnet-only, and impd's API never answers on the internet.
+
+```sh
+imp expose web                  # a bearer token, the default
+imp expose web --auth basic     # basic auth, user imp; --user picks another
+imp expose web --auth none      # no auth: anyone with the URL
+imp new web --public
+imp unexpose web                # tailnet-only again, at once
+```
+
+impd makes the token or the password and prints it once. It keeps only a sha256 hash, so a lost
+credential cannot be shown again. Running `imp expose` again on a public imp makes a new credential,
+and the old one stops working at once; that is also how you change the auth. Rotating a credential
+is an expose, so it needs a token with `manage` on the whole host too. A request without the right
+credential gets a `401` before the imp wakes, so a stranger never boots it. The credential goes no
+further than impd: the imp never sees the `Authorization` header, which also means an app behind
+auth cannot use that header for itself. Use `--auth none` for an app that does its own auth.
+
+`imp expose`, `imp unexpose` and `imp new --public` need a token with `manage` scope on the whole
+host: a token limited to some imps cannot change which of them are on the internet.
+
+`imp ls` notes `public (token)`, `public (basic)` or `public`, `imp url` prints the public URL, and
+`imp info` shows the public IP, how many imps are public, and how the last pass over their DNS
+records went. When an expose cannot write the imp's record, it prints a warning; the imp is public
+anyway, and impd tries the record again every 10 minutes. A fork, a checkpoint restore and a backup
+restore are tailnet-only until you expose them.
+
+### Set it up
+
+1. Add the host's public IPv4 to the env file:
+
+   ```sh
+   IMP_PUBLIC_IP=203.0.113.7
+   ```
+
+2. Publish the public listeners as the host's ports 443 and 80. With the systemd unit, set
+   `IMP_PUBLIC_PORTS=-p 443:7443 -p 80:7480` in the same env file. With compose, uncomment the two
+   ports in `deploy/compose.yaml`.
+3. Open 443 and 80 in the host's firewall, then restart the host container.
+
+**WARNING:** A public imp is on the internet. Anyone who finds its name can reach it when it has no
+auth, and the name is in DNS. Expose only what you would put on the internet yourself.
+
+### How it works
+
+- **Listeners.** impd runs a second pair of listeners, TLS on `IMP_PUBLIC_HTTPS_PORT` (7443) and a
+  redirect on `IMP_PUBLIC_HTTP_PORT` (7480), on every address in the host container. Docker
+  publishes them as 443 and 80. The listener a request comes in on decides what it may reach, never
+  the client's address: Docker's userland proxy can make a public client look like the bridge.
+- **Routing.** The public listeners serve public imps only. A tailnet-only imp, a name that is no
+  imp, and the bare domain all get the same `404`, whatever the Host header says, so the internet
+  cannot tell which names exist. The redirect on 80 answers only for public imps too.
+- **Limits.** Each public imp takes at most 64 requests and WebSockets open at once, 10 wakes in a
+  burst and then one every 6 seconds, and 20 wrong credentials in a burst and then one every 3
+  seconds. Over a limit, the answer is `429` with `Retry-After`. A request with no credential always
+  gets the `401` challenge and counts against nothing, so a stranger cannot block a browser's
+  password prompt; the right credential always passes too, so guessing cannot lock the owner out.
+  The redirect on port 80 only checks that the name is a public imp: it takes no slot and no wake.
+  The limits count per imp, not per client: behind Docker's userland proxy every client can share
+  one source address.
+- **Privacy.** A `502` or `503` on the public listener says only that the site did not answer or is
+  not available, never why. The client's own `Forwarded`, `X-Real-IP` and `X-Forwarded-For` are
+  dropped, and `X-Forwarded-For` holds only the address of the socket, or is left out when impd
+  cannot read it. `X-Forwarded-Host` and `X-Forwarded-Proto` are impd's own: the Host it routed by,
+  and `https`.
+- **HTTP/1.1 only.** The listeners do not offer HTTP/2: `curl --http2` gets HTTP/1.1, because the
+  server agrees on no ALPN protocol.
+- **Records.** Each public imp gets its own A record, `<name>.imp.example.com`, at `IMP_PUBLIC_IP`,
+  with the comment `impd public imps of imp.example.com`. A name of its own wins over the tailnet
+  wildcard, so everyone resolves it to the public IP: tailnet members then reach the imp through the
+  public listener, with the same auth. impd sets the record on an expose, removes it on an unexpose
+  or a destroy, and checks every record with that comment one label under the domain at start and
+  every 10 minutes. It removes the ones that are not public, and all of them when `IMP_PUBLIC_IP` is
+  unset but `IMP_DOMAIN` is still set, so turning public mode off takes the records down too. It
+  never touches a record with another comment: not the bare domain or the wildcard
+  (`managed by impd`), not a record you made, and not the records of another impd on a name such as
+  `dev.imp.example.com`, whose comment names its own domain. A domain too long for Cloudflare's
+  100-character comment gets a hash of the domain in place of its name.
+- **Certificate.** The wildcard certificate covers every public name, so a public imp needs no
+  certificate of its own, and Certificate Transparency logs still show no imp names. DNS does.
+
+### Limits of public mode
+
+- The tailnet listeners still serve a public imp without its credential, to a client that reaches
+  the tailnet IP directly (with `--resolve`, say): tailnet members are trusted, as they are for
+  every other imp.
+- Out of scope: IPv6 (no AAAA records), and detecting the public IP, which you set by hand.
+
 ## Why the records point at the tailnet IP
 
 The domain is public, but its records point at a `100.64.0.0/10` address. That address routes only
@@ -174,7 +265,10 @@ names on it, fetches an imp over https from inside the host container, sleeps it
 https, and checks the 404 and the redirect. It wakes the imp by https and by plain HTTP under the
 same conditions, and records both times as the client sees them.
 
-`IMP_DNS_PROVIDER=challtestsrv` exists for this test only. It writes records through challtestsrv's
+`IMP_DNS_PROVIDER=challtestsrv` exists for this test only. challtestsrv cannot list records, so its
+provider remembers the A records this impd wrote, with their comments, and lists those. A restarted
+impd forgets them; a public record it wrote before the restart stays in challtestsrv until the
+harness removes challtestsrv at the end of the run. It writes records through challtestsrv's
 management API at `IMP_DNS_API_URL`. impd refuses it unless `IMP_E2E=1`, which only the harness
 sets.
 
@@ -184,8 +278,7 @@ refuses the token. Both errors must be readable and must not contain the token.
 
 ## Not yet
 
-- Public mode (`imp url <name> --public`, with an optional token or basic auth) is
-  [#52](https://github.com/zgeoff/imp/issues/52). Every imp on the domain is tailnet-only.
 - Cloudflare is the only real DNS provider. Another provider implements `DnsProvider` in
   `packages/daemon/src/https/dns/`: add a TXT value, remove it by ID, wait for the nameservers, and
-  set an A record.
+  set, list and remove A records.
+- Public imps have no AAAA records, and the public IP is set by hand.

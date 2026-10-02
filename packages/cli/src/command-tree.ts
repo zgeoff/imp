@@ -6,6 +6,7 @@ import { cpCommand } from './commands/cp';
 import { setCommand, topCommand } from './commands/cpu';
 import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
+import { exposeCommand, unexposeCommand } from './commands/expose';
 import { gcCommand } from './commands/gc';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
 import { imageCommand, templateCommand } from './commands/image';
@@ -70,6 +71,8 @@ export const mainCommand = defineCommand({
     proxy: proxyCommand,
     cp: cpCommand,
     policy: policyCommand,
+    expose: exposeCommand,
+    unexpose: unexposeCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,

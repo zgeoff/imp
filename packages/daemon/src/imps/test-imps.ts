@@ -23,6 +23,7 @@ import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
 import { createEgressService } from '../egress/egress-service';
 import { createGovernedImps } from '../governor/create-governed-imps';
+import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
@@ -404,6 +405,7 @@ export function buildTestApp(
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     readTailnetNames: null,
+    publicRecords: createPublicRecordsLink(),
     isReady: () => true,
     now: ctx.now,
     audit,

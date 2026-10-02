@@ -3,6 +3,7 @@ import * as z from 'zod';
 import { readErrorMessage } from '../../read-error-message';
 import { readRejection } from '../../read-rejection';
 import { createCloudflareProvider } from './cloudflare-provider';
+import { buildPublicOwner } from './dns-provider';
 
 const TOKEN = 'cf-test-token-secret';
 
@@ -16,8 +17,11 @@ const RecordBodySchema = z.object({
 
 type FakeRecord = z.infer<typeof RecordBodySchema> & { id: string };
 
-function buildReply(result: unknown, status = 200): Response {
-  return Response.json({ success: status < 400, errors: [], messages: [], result }, { status });
+function buildReply(result: unknown, status = 200, resultInfo?: unknown): Response {
+  return Response.json(
+    { success: status < 400, errors: [], messages: [], result, result_info: resultInfo },
+    { status },
+  );
 }
 
 // Just enough of Cloudflare's v4 API: zones by name and DNS records.
@@ -26,6 +30,10 @@ function startFakeCloudflare() {
   const records: FakeRecord[] = [];
   const calls: string[] = [];
   let nextId = 1;
+
+  // how the list pages: a cap below what was asked, and whether
+  // result_info comes with it
+  const paging = { cap: 100, hasResultInfo: true };
 
   const server = Bun.serve({
     port: 0,
@@ -51,12 +59,22 @@ function startFakeCloudflare() {
       if (request.method === 'GET') {
         const type = url.searchParams.get('type');
         const name = url.searchParams.get('name');
+        const suffix = url.searchParams.get('name.endswith');
+        const perPage = Math.min(paging.cap, Number(url.searchParams.get('per_page') ?? 100));
+        const page = Number(url.searchParams.get('page') ?? 1);
 
-        return buildReply(
-          records.filter(
-            (record) => (type === null || record.type === type) && record.name === name,
-          ),
+        const found = records.filter(
+          (record) =>
+            (type === null || record.type === type) &&
+            (name === null || record.name === name) &&
+            (suffix === null || record.name.endsWith(suffix)),
         );
+
+        const resultInfo = paging.hasResultInfo
+          ? { page, total_pages: Math.ceil(found.length / perPage) }
+          : undefined;
+
+        return buildReply(found.slice((page - 1) * perPage, page * perPage), 200, resultInfo);
       }
 
       if (request.method === 'POST') {
@@ -94,7 +112,7 @@ function startFakeCloudflare() {
     },
   });
 
-  return { server, records, calls, url: `http://127.0.0.1:${String(server.port)}` };
+  return { server, records, calls, paging, url: `http://127.0.0.1:${String(server.port)}` };
 }
 
 const fake = startFakeCloudflare();
@@ -215,6 +233,66 @@ test('it warns when it finds more than one record of its own', async () => {
 
   expect(logs).toEqual([
     'impd: https: warning: two.example.com has 2 A records impd made; it updates only the first',
+  ]);
+});
+
+test('it lists and removes only its owner’s A records under the domain, page by page', async () => {
+  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const owner = buildPublicOwner('pub.example.com');
+  const own = { type: 'A', comment: owner };
+
+  fake.records.push(
+    { id: 'p1', name: 'web.pub.example.com', content: '203.0.113.7', ...own },
+    { id: 'p2', name: 'web.pub.example.com', content: '203.0.113.8', type: 'A' },
+    { id: 'p3', name: 'pub.example.com', content: '100.64.0.7', ...own },
+    { id: 'p4', name: 'other.example.com', content: '203.0.113.9', ...own },
+
+    // the bare domain of an impd on dev.pub.example.com
+    {
+      id: 'p5',
+      name: 'dev.pub.example.com',
+      content: '100.64.0.8',
+      type: 'A',
+      comment: 'managed by impd',
+    },
+  );
+
+  // more than a page of them
+  for (let index = 0; index < 501; index += 1) {
+    fake.records.push({
+      id: `many${String(index)}`,
+      name: `imp${String(index)}.pub.example.com`,
+      content: '203.0.113.7',
+      ...own,
+    });
+  }
+
+  // pages of at most 100, counted by result_info
+  const listed = await provider.listA('pub.example.com', owner);
+
+  // pages as asked for, without result_info: it stops at the short page
+  fake.paging.cap = Number.MAX_SAFE_INTEGER;
+  fake.paging.hasResultInfo = false;
+
+  const unpaged = await provider.listA('pub.example.com', owner);
+
+  fake.paging.cap = 100;
+  fake.paging.hasResultInfo = true;
+
+  expect(unpaged).toEqual(listed);
+  expect(listed.size).toBe(502);
+  expect(listed.get('web.pub.example.com')).toBe('203.0.113.7');
+  expect(listed.has('pub.example.com')).toBe(false);
+  expect(listed.has('dev.pub.example.com')).toBe(false);
+
+  await provider.removeA('web.pub.example.com', owner);
+  await provider.removeA('dev.pub.example.com', owner);
+
+  expect(fake.records.some((record) => record.id === 'p5')).toBe(true);
+
+  // the record someone else made stays
+  expect(fake.records.filter((record) => record.name === 'web.pub.example.com')).toEqual([
+    { id: 'p2', name: 'web.pub.example.com', content: '203.0.113.8', type: 'A' },
   ]);
 });
 

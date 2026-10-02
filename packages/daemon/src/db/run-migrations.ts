@@ -241,6 +241,21 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // public imps (#52): who reaches https://<name>.<domain>, and the hash of
+  // the token or password a public imp asks for
+  '011_add_public_exposure': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('exposure', 'text', (c) => c.notNull().defaultTo('tailnet'))
+        .execute();
+
+      await db.schema.alterTable('imps').addColumn('public_auth', 'text').execute();
+      await db.schema.alterTable('imps').addColumn('public_user', 'text').execute();
+      await db.schema.alterTable('imps').addColumn('public_hash', 'text').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

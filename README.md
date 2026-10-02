@@ -77,6 +77,7 @@ imp fork box box-2                # a second copy to try something else in
 | `set <name>`, `top`                      | change CPU limit, weight, vCPUs; watch resource use                    |
 | `url <name>`                             | print the imp's local and tailnet URLs, and its own tailnet name       |
 | `policy <name> [open\|box\|none]`        | show or set what the imp may reach (`--allow` for box)                 |
+| `expose <name>`, `unexpose <name>`       | serve the imp to the internet on your domain (`--auth token\|basic`)   |
 | `image build`, `add`, `ls`, `rm`         | manage images                                                          |
 | `template create`, `ls`, `rm`            | make an image from an imp's disk, to create imps from                  |
 | `secret add`, `ls`, `rm`                 | store API tokens in impd, never in a guest                             |
