@@ -1,0 +1,44 @@
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bar {
+  display: flex;
+  height: 0.75rem;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.used {
+  background: var(--accent);
+}
+
+.reserved {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--accent),
+    var(--accent) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-6);
+  margin: 0;
+}
+
+.figures dt {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.figures dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}

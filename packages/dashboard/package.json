@@ -1,0 +1,38 @@
+{
+  "name": "@imp/dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The imp web dashboard, served by impd at /ui/",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite dev",
+    "e2e": "playwright test",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@ark-ui/react": "catalog:",
+    "@orpc/client": "catalog:",
+    "@orpc/tanstack-query": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@xterm/addon-fit": "catalog:",
+    "@xterm/xterm": "catalog:",
+    "@zgeoff/imp-client": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "catalog:",
+    "@imp/api": "workspace:*",
+    "@orpc/server": "catalog:",
+    "@playwright/test": "catalog:",
+    "@testing-library/jest-dom": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@testing-library/user-event": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "vite": "catalog:"
+  }
+}
