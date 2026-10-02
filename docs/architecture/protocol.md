@@ -7,15 +7,16 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.14.0`, which runs user code in the inner container, reports it in `ping` and adds
-`INNER_DOWN` (`0.13.0` adds `claim` and the `stage` of a parked boot template's `ping`, `0.12.0`
-reports a template copy's identity reset in `ping`, `0.11.0` kills a stopped exec's whole cgroup,
-`0.10.0` adds the services ops, `0.9.0` adds `listen` for reverse forwards, `0.8.0` kills what is
-left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`,
-`0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`, `0.4.0` `agent.listen` and
-`agent.accept`, `0.3.0` `dial` and `imp-agent sftp`, `0.2.0` sessions; `0.1.0` was the first). The
-Go side is `agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.15.0` adds session output offsets: a generation per session process, `resume_from`,
+`output` in STARTED, `boot_id` in `ping` and `activity`, and error `data` (`0.14.0` runs user code
+in the inner container, reports it in `ping` and adds `INNER_DOWN`, `0.13.0` adds `claim` and the
+`stage` of a parked boot template's `ping`, `0.12.0` reports a template copy's identity reset in
+`ping`, `0.11.0` kills a stopped exec's whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds
+`listen` for reverse forwards, `0.8.0` kills what is left of a stopped exec's process group,
+`kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`, `0.6.0` dials a unix socket as the
+image's USER, `0.5.0` added `grow`, `0.4.0` `agent.listen` and `agent.accept`, `0.3.0` `dial` and
+`imp-agent sftp`, `0.2.0` sessions; `0.1.0` was the first). The Go side is `agent/internal/proto`;
+the host side is the agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -78,6 +79,10 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 { "error": { "code": "EXEC_FAILED", "message": "start foo: no such file or directory" } }
 ```
 
+Since `0.15.0` an error may carry `data`, the code's detail: `NO_SESSION` has
+`{"boot_id":s,"previous":{…}}` and `INVALID_RESUME` has `{"end":n,"buffer_start":n}`
+([sessions](#sessions)).
+
 | Code             | Meaning                                                                                     |
 | ---------------- | ------------------------------------------------------------------------------------------- |
 | `BAD_REQUEST`    | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid.    |
@@ -85,6 +90,7 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 | `EXEC_FAILED`    | `exec` could not start the process (bad argv, cwd, or user).                                |
 | `INNER_DOWN`     | `exec` or a session found the inner container down: it starts again, or gave up. `0.14.0`.  |
 | `NO_SESSION`     | `session.attach` or `session.kill` named no session.                                        |
+| `INVALID_RESUME` | A `resume_from` offset is past the end of the generation it names. `0.15.0`.                |
 | `SESSION_LIMIT`  | A new session would be the 17th.                                                            |
 | `DIAL_FAILED`    | `dial` could not connect (refused, timed out, no such socket).                              |
 | `NO_CONNECTION`  | `agent.accept` named no waiting client: it closed, timed out, or never was.                 |
@@ -105,7 +111,8 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 
 ```json
 → {"op":"ping"}
-← {"ok":true,"version":"0.14.0","uptime_ms":265,"inner":{"up":true,"restarts":0}}
+← {"ok":true,"version":"0.15.0","uptime_ms":265,"inner":{"up":true,"restarts":0},
+   "boot_id":"4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11"}
 ```
 
 `uptime_ms` is `CLOCK_BOOTTIME`. The host uses `ping` as the boot-readiness probe. On a boot with
@@ -113,7 +120,10 @@ The host sends REQUEST; the guest sends one RESPONSE and closes.
 a boot answers `ok` ([templates](../guides/templates.md#identity)). `inner` is the
 [inner container](./agent.md#the-inner-container): whether it runs, how often it started again after
 its init died, and `last_error`, why the last start failed. Since `0.14.0`: an older agent leaves it
-out.
+out. `boot_id` is the guest kernel's `/proc/sys/kernel/random/boot_id`, or a random UUID drawn after
+the claim in a guest restored from a boot template, whose kernel boot_id is the template's: a wake
+from memory keeps it, every cold boot changes it, and impd records each cold boot under it. Since
+`0.15.0`.
 
 A guest parked in a [boot template](./boot-templates.md#make) answers with `"stage":"template"`;
 once it boots on, it leaves the field out.
@@ -155,7 +165,8 @@ freeze's auto-thaw as it was. Once `shutdown` (or a signal) starts a poweroff, t
 → {"op":"activity"}
 ← {"tcp_established":1,"exec_sessions":0,"load1":0.08,"sessions":[
     {"name":"main","pid":301,"argv":["bash","-l"],"state":"running","attached":false,
-     "cols":120,"rows":40,"started_unix_ms":1790000000000}]}
+     "cols":120,"rows":40,"started_unix_ms":1790000000000,
+     "execution_generation":"9f1c…","boot_id":"4f3c…","end":48213}]}
 ```
 
 - `tcp_established`: ESTABLISHED sockets in `/proc/net/tcp` and `/proc/net/tcp6`, without loopback
@@ -166,8 +177,9 @@ freeze's auto-thaw as it was. Once `shutdown` (or a signal) starts a poweroff, t
 - `load1`: the 1-minute load average.
 - `sessions`: every [session](#sessions), sorted by name. `state` is `running` or `exited`; an
   exited session also has `exit` (an EXIT object) until a viewer gets it. `started_unix_ms` is the
-  guest wall clock at the start. The host polls `activity` every 2 s, so it doubles as the session
-  list.
+  guest wall clock at the start. `execution_generation`, `boot_id` and `end` (the offset after the
+  last output byte) are since `0.15.0`. The host polls `activity` every 2 s, so it doubles as the
+  session list.
 
 ### `resumed`
 
@@ -359,18 +371,65 @@ session of that name:
 
 ```json
 → REQUEST {"op":"session.attach","session":"main","cols":120,"rows":40}
-← STARTED {"pid":301,"session":"main"}
+← STARTED {"pid":301,"session":"main","output":{…}}
 ```
+
+### Output offsets
+
+Since `0.15.0` each start of a session's process is a new generation, named by 16 random bytes as 32
+lowercase hex characters, and offsets count its pty output bytes from 0. The agent keeps exactly the
+last 262144 bytes of each generation in a raw ring, apart from the replay history. STARTED on a
+session connection has `output`:
+
+```json
+{
+  "boot_id": "4f3c…",
+  "execution_generation": "9f1c…",
+  "buffer_start": 786432,
+  "end": 1048576,
+  "offset": 786432,
+  "prelude": 0,
+  "previous": { "execution_generation": "2b7e…", "end": 512, "exit": { "code": 0, "signal": 0 } },
+  "resume": { "kind": "gap", "from": 0, "to": 786432 }
+}
+```
+
+- `buffer_start` is the oldest byte the ring holds and `end` the offset after the last byte written.
+- `offset` is the offset of the first data byte the connection sends; `prelude` counts the mode
+  bytes a replay sends before it, which have no offset. A fresh attach replays the screen history,
+  which can start before the ring, so its `offset` can sit below `buffer_start`; a resume from that
+  offset can still be a `gap`.
+- `previous` is the last generation under the name that ended and left it in this boot (killed,
+  replaced, or exited and delivered). The agent writes it once the process has ended, so its `end`
+  and `exit` are final, and a killed process that outlives its replacement does not overwrite a
+  later run. It keeps at most 16 names.
+
+An `exec` with a session or a `session.attach` may carry `resume_from`:
+
+```json
+→ REQUEST {"op":"session.attach","session":"main",
+           "resume_from":{"execution_generation":"9f1c…","offset":0}}
+```
+
+`resume` in the output says how it was met: `exact` (the data starts at the offset), `gap` (the
+bytes `[from, to)` are gone and the data starts at `to`, the ring's start) or `generation_changed`
+(the named generation is not the one running; the data is this one's from `first_offset`, its
+`buffer_start`). Each kind carries only its own fields: `from` and `to` for `gap`,
+`execution_generation` and `first_offset` for `generation_changed`. A resume reads the raw ring and
+sends no prelude, so after a gap the data can start inside an escape sequence. An offset past `end`
+fails with `INVALID_RESUME` before STARTED. An `exec` whose `resume_from` names an exited generation
+whose EXIT no viewer got attaches to it instead of replacing it: the tail, then EXIT.
 
 ### The viewer
 
 A session has at most one connection, its viewer. After STARTED the viewer gets:
 
-1. A replay: one or more STDOUT frames with the recent output, about the last 256–512 KiB. It starts
-   with the terminal modes in effect where the kept output starts (alternate screen, mouse modes,
-   bracketed paste, application cursor keys, a hidden cursor, focus events and the kitty keyboard
-   flags, kept per screen as kitty does), so the viewer's terminal ends in the modes the program set
-   last. The kept output starts between escape sequences and characters, never inside one.
+1. Without `resume_from`, a replay: one STDOUT frame with the recent output, about the last 256–512
+   KiB. With it, the raw output from the place `resume` names. The replay starts with the terminal
+   modes in effect where the kept output starts (alternate screen, mouse modes, bracketed paste,
+   application cursor keys, a hidden cursor, focus events and the kitty keyboard flags, kept per
+   screen as kitty does), so the viewer's terminal ends in the modes the program set last. The kept
+   output starts between escape sequences and characters, never inside one.
 2. Live output as STDOUT frames.
 3. EXIT when the process exits, or DETACHED when the agent drops the viewer.
 
@@ -378,8 +437,9 @@ The host sends STDIN, RESIZE and SIGNAL as for `exec`. STDIN_EOF is ignored, as 
 
 The replay is the raw output, written for the terminal size of its time. To redraw a full-screen
 program, an attach to a running session resizes the pty to the viewer's `cols` and `rows`. If the
-size is the same, the agent first sets one row less, so the program always gets SIGWINCH. A program
-that does not redraw on SIGWINCH shows the replay only.
+size is the same, the agent first sets one row less, so the program always gets SIGWINCH. A resume
+forces no redraw: it applies the viewer's size only when it differs. A program that does not redraw
+on SIGWINCH shows the replay only.
 
 ### Detach
 
@@ -408,7 +468,8 @@ as `exited`; the next attach gets the replay and EXIT, and the session is gone a
 ```
 
 The name is free at once. The process group gets SIGHUP, and SIGKILL 2 s later if the process is
-still running. An attached viewer gets the EXIT. `NO_SESSION` if there is no session of that name.
+still running. An attached viewer gets the EXIT. `NO_SESSION` if there is no session of that name;
+since `0.15.0` its `data` names the boot and the name's `previous` generation.
 
 ## `dial`
 

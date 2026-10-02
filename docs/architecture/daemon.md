@@ -57,8 +57,9 @@ of the contract in `packages/api` to a service call. Errors come from the contra
 [disk reserve](./storage.md#disk-budget), `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
 call outside the caller's scope or imps, `PRECONDITION_FAILED` when the host is not set up for the
 call (backups with no repository, say), `AGENT_OUTDATED` for a request the imp's agent is too old
-for, `LEASED` for a sleep or stop without `force` of a leased imp, and `LEASE_NOT_HELD` for a renew
-of a lease the caller does not hold ([leases](../guides/leases.md)). `LEASED` and
+for, `LEASED` for a sleep or stop without `force` of a leased imp, `LEASE_NOT_HELD` for a renew of a
+lease the caller does not hold ([leases](../guides/leases.md)), and `INVALID_RESUME` for a session
+resume past the end of its output ([output offsets](#output-offsets)). `LEASED` and
 `RAM_BUDGET_EXCEEDED` show only what the caller may see. `/rpc` takes POST only: a GET is what a
 link or an image on any page can make a browser send.
 
@@ -226,7 +227,9 @@ exec that the agent does not start within 10 s fails and closes its connection.
 Each `/exec` WebSocket becomes one exec session. The session opens an agent exec stream, forwards
 stdin, resizes and signals to the guest, and sends output and the exit back. When too many bytes
 wait for the client, output stops; the agent connection then stops reading, so a slow client slows
-the guest process instead of growing impd's memory. Bun pings an idle exec socket and closes it
+the guest process instead of growing impd's memory. If the socket still drops a message (Bun's
+backpressure limit), impd closes it with 1011 rather than skip bytes: a session client resumes from
+the offset it has ([output offsets](#output-offsets)). Bun pings an idle exec socket and closes it
 after 30 s without an answer, so a client that vanished without a close lets go of its session.
 
 A `start` with a `tool` runs a program of the system drive as root instead of `argv`: `tar` runs
@@ -299,8 +302,9 @@ and closes of a tunnel.
 A session is a program on a pty in the guest that outlives its WebSocket
 ([protocol](./protocol.md#sessions)). On `/exec`, a `start` with a `session` name starts the
 session, or attaches to it if it runs; `attach` attaches to one that exists. The socket gets
-`started` (with `session` and `created`), the replay of recent output, then live output. Closing the
-socket detaches: the program keeps running.
+`started` (with `session`, `created` and `output`), the replay of recent output, then live output.
+Closing the socket detaches: the program keeps running. A client that reconnects can resume from the
+byte it last saw instead of a replay ([output offsets](#output-offsets)).
 
 One client is attached at a time. A new attach takes the session over, and the client attached
 before gets `detached` with `taken_over`; a client too far behind gets `slow`. When impd loses the
@@ -325,6 +329,96 @@ that copy. Just before a sleep pauses the VM, under the imp's lock, impd reads t
 more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from there. A stopped imp
 has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
 copies.
+
+### Output offsets
+
+A session client that reconnects resumes from the exact byte it last saw, and learns what it missed:
+a gap, a new process, or no process, with the cold boot that ended the old one. There is no matching
+by content and no exactly-once promise.
+
+**Identities.**
+
+- `executionGeneration`: 32 lowercase hex characters, new each time the agent starts a session's
+  process. A sleep and a memory wake keep it; every cold boot ends it, a wake that falls back to a
+  cold boot included.
+- `bootId`: the guest's `/proc/sys/kernel/random/boot_id`, or, for a guest restored from a
+  [boot template](./boot-templates.md), a random UUID the agent draws after its claim, since every
+  copy of a template shares the kernel's. A memory wake keeps it; every cold boot changes it.
+- `coldBoots`: impd keeps each imp's last 4 cold boots, newest first, as `{ bootId, cause, at }` in
+  the `imp_cold_boots` table. A client finds the first boot after its own `bootId`, so a later boot
+  (an attach that started a stopped imp) never hides the cause that ended its generation.
+- `previous`: per session name, the agent keeps the last generation that ended and left the name in
+  this boot, as `{ executionGeneration, end, exitCode }` (at most 16 names). The agent writes it
+  once the process has ended, not at a kill, so `end` and `exitCode` are final. A new generation
+  under the same name and the same `bootId` was a replacement.
+- Offsets count a generation's pty output bytes from 0.
+
+**Cold-boot causes.**
+
+| Cause           | The boot                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------- |
+| `start`         | A create, a start, or a start after an error state.                                               |
+| `wake_fallback` | A wake whose snapshot could not be used, or the next boot after impd found it gone.               |
+| `watchdog`      | The [watchdog](#watchdog-silent-agents) restarted a hung guest.                                   |
+| `restore`       | A checkpoint restore: the boot of a running imp, or a stopped imp's next boot.                    |
+| `recovery`      | The next boot after impd found a running imp's VM gone (a crash or a guest reboot).               |
+| `unknown`       | A boot impd has no record of: a VM it adopts, or wakes from memory, that booted before the table. |
+
+impd learns `recovery`, `wake_fallback` and `restore` before the boot that records them, so it keeps
+them in `imps.next_boot_cause`; whichever path boots the imp next (an attach, `imps.start`) records
+that cause instead of `start`. Every successful cold boot spends the pending cause, even one whose
+agent reports no `bootId`. impd lists the boots in the order it recorded them, and `at` is the time
+of that record.
+
+**Retention.** The agent keeps exactly the last 262144 bytes of each generation in a raw ring, so
+`bufferStart = end - kept` is exact. A resume reads the ring. A fresh attach, without `resumeFrom`,
+replays as before: the history skips to the parser's next ground state and sends a mode prelude;
+`started.output.offset` is the first byte it sends after `prelude` mode bytes. The history can start
+before the ring, so that `offset` can sit below `bufferStart`. Nothing goes to disk, and nothing
+outlives the process.
+
+**Resume.** `start` with a `session`, and `attach`, take
+`resumeFrom: { executionGeneration, offset }`; `started.output.resume` says how it was met:
+
+- `exact`: the data starts at `resumeFrom.offset`, with no prelude.
+- `gap`: the bytes `[from, to)` are gone; the data starts at `to = bufferStart`, with no prelude, so
+  it can start inside an escape sequence. A terminal client should attach fresh after a gap; a log
+  client keeps the raw bytes.
+- `generation_changed`: the named generation is not the one running. The data is the current
+  generation from its `bufferStart`, which `firstOffset` equals; `previous` says whether the named
+  one was replaced in this boot. A `start` for a name with no process starts one and answers this
+  with `firstOffset: 0`.
+
+A resume that names a generation that exited, whose exit no client got yet, attaches to it: the tail
+from `resumeFrom.offset`, then `exit`. An offset past `end` fails with `INVALID_RESUME`, data
+`{ end, bufferStart }`: a generation never rewinds, so that is a client bug. A resume does not force
+a redraw. Each connection is contiguous after `offset`; `exit` and `detached` carry `offset`, the
+offset after the last byte the socket sent.
+
+**No process.** `NO_SESSION` keeps its code and gains data `{ bootId, coldBoots, previous? }`. An
+attach with `wake: false` to an imp that is not running fails with `INVALID_STATE`, data
+`{ state, allowed, coldBoots? }` (no `coldBoots` while it is `creating`), and impd boots nothing.
+Without it, an attach to a stopped imp boots it as before, then answers `NO_SESSION` with that boot
+first in `coldBoots`; a governor refusal answers `RAM_BUDGET_EXCEEDED`.
+
+**Session list.** `sessions.list` entries gain `continuity`, `executionGeneration`, `bootId`, `end`
+and `endObservedAt`. `end` is what impd last saw (the idle loop's copy, or the snapshot meta of a
+sleeping imp), so it is a lower bound as of `endObservedAt`.
+
+**Guarantees and limits.** Delivery is at least once across connections: a resume can repeat bytes
+the client has, and the client drops bytes below its high-water mark. For one generation, the bytes
+at an offset never differ. A disconnected client cannot recover:
+
+- bytes below `bufferStart`;
+- any byte of a generation that a cold boot ended;
+- the output of an exec without `session`.
+
+A client that needs these keeps what it received.
+
+**Compatibility.** `system.info.features.sessionOffsets` says impd carries offsets; each session's
+`continuity` decides for that session, because an imp runs an old agent until its next cold boot. An
+agent from before `0.15.0` gives `{ continuity: 'none' }`, today's replay, and ignores `resumeFrom`.
+An impd from before offsets sends no `output`, which the client reads as `none`.
 
 ### services: guest services
 
@@ -450,9 +544,9 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code
 (`db/run-migrations.ts`). Its tables are `images`, `imps`, `checkpoints`, the broker's `secrets`,
-`grants` and `broker_audit`, `api_audit`, `tokens` and `token_ssh_keys`. SQLite has one connection,
-so a promise-chain mutex gives it to one caller at a time. Timestamps are integer milliseconds since
-the epoch.
+`grants` and `broker_audit`, `api_audit`, `tokens`, `token_ssh_keys` and `imp_cold_boots`. SQLite
+has one connection, so a promise-chain mutex gives it to one caller at a time. Timestamps are
+integer milliseconds since the epoch.
 
 The migrations, in order:
 
@@ -472,6 +566,7 @@ The migrations, in order:
 | `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                     |
 | `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy` |
 | `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                     |
+| `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))       |
 
 ### Other modules
 

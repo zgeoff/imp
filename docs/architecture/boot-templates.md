@@ -140,7 +140,9 @@ Measured on WSL2 with the `e2e-ws` image at 288 MiB, right after `imp new`:
 
 Every imp restored from one template shares what the kernel made before the snapshot:
 
-- **`boot_id`** (`/proc/sys/kernel/random/boot_id`) is the template's.
+- **`boot_id`** (`/proc/sys/kernel/random/boot_id`) is the template's. The agent does not report it:
+  it names a claimed boot with a random UUID drawn after the claim, so impd records each cold boot
+  ([output offsets](./daemon.md#output-offsets)).
 - **The slab freelist seeds** (`CONFIG_SLAB_FREELIST_RANDOM`) are the template's. An attacker who
   learns them in one imp knows them for every imp of that template on the host.
 - **KASLR** changes nothing: the guest logs `KASLR disabled` on every boot, since Firecracker loads
