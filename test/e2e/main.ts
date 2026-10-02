@@ -28,6 +28,7 @@ import { removeMoveLeftovers } from './lib/move-hosts';
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import { startPebble, stopPebble } from './lib/pebble';
+import { checkPrivileges } from './lib/privileges';
 import type { FixtureImage } from './lib/suites';
 import { SUITES, buildSuiteArgv } from './lib/suites';
 import { readTailscaleAuthKey } from './lib/tailscale-key';
@@ -215,6 +216,7 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
   }
 
   await runDevScript('up');
+  await checkPrivileges(instance.container);
 
   process.env['IMP_TOKEN'] = await readToken();
 

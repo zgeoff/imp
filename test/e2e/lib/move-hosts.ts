@@ -11,6 +11,7 @@ import {
   runCommand,
   runDevScript,
 } from './instance';
+import { checkPrivileges } from './privileges';
 
 // The moves suites' hosts: the run's own instance as A, and B beside it on
 // a Docker network, reached at its address there. B's data dir stays
@@ -196,6 +197,7 @@ export async function startMoveHosts(
   const b = buildHostB(options);
 
   await runDevScript('up', b);
+  await checkPrivileges(b.container);
 
   rmSync(names.cliDir, { recursive: true, force: true });
   mkdirSync(names.cliDir, { recursive: true });
