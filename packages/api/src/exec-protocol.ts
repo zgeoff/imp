@@ -71,7 +71,8 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
 
 export type ExecServerMessage = z.infer<typeof ExecServerMessageSchema>;
 
-export function encodeExecFrame(channel: ExecChannel, data: Uint8Array): Uint8Array {
+// backed by an ArrayBuffer, which the DOM's WebSocket.send asks for
+export function encodeExecFrame(channel: ExecChannel, data: Uint8Array): Uint8Array<ArrayBuffer> {
   const frame = new Uint8Array(data.byteLength + 1);
 
   frame[0] = channel;
