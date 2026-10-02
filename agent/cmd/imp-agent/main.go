@@ -1,7 +1,9 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
 // from the system drive (stage 1); it switches root to the user disk and
 // re-execs itself as "imp-agent stage2". See docs/architecture/agent.md ("Boot").
-// "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway.
+// "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway, and
+// "imp-agent dial-unix <path>" connects to a unix socket as the image USER
+// for the agent's dial op.
 package main
 
 import (
@@ -13,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/zgeoff/imp/agent/internal/boot"
+	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/sftpserver"
 )
@@ -31,6 +34,12 @@ func main() {
 		// reboot below, which a root user could run.
 		if err := sftpserver.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "imp-agent sftp: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) == 3 && os.Args[1] == dial.HelperCommand:
+		// not PID 1 either: the agent starts it as the image USER
+		if err := dial.RunHelper(os.Args[2]); err != nil {
 			os.Exit(1)
 		}
 		return
