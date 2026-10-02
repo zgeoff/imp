@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { BLOCKED_RANGES6, createRangeChecker6 } from '../net/ranges6';
 import { TunnelRefusedError, isRefusedAddress, resolveTunnelTarget } from './tunnel-target';
 
 const HOST_ADDRESSES = new Set(['203.0.114.7', '10.66.0.1']);
@@ -21,7 +22,7 @@ test('it refuses every address class a tunnel must not reach', () => {
     ipv6: '2606:4700::1111',
     'ipv6 loopback': '::1',
     'v4-mapped ipv6': '::ffff:127.0.0.1',
-    'v4-mapped public': '::ffff:140.82.112.3',
+    'v4-mapped metadata': '::ffff:169.254.169.254',
   };
 
   for (const [what, address] of Object.entries(refused)) {
@@ -35,6 +36,7 @@ test('it refuses every address class a tunnel must not reach', () => {
 test('it lets public IPv4 through, the edges of the ranges included', () => {
   for (const address of [
     '140.82.112.3',
+    '::ffff:140.82.112.3',
     '1.1.1.1',
     '100.63.255.255',
     '100.128.0.0',
@@ -82,4 +84,43 @@ test('IP literals and the host itself are checked without DNS', async () => {
   const literal = await resolveTunnelTarget('140.82.112.3', deps);
 
   expect(literal).toBe('140.82.112.3');
+});
+
+const isBlocked6 = createRangeChecker6([...BLOCKED_RANGES6, 'fd12:3456:789a::/64']);
+
+test('with IPv6, a public IPv6 address passes and the blocked ranges and host do not', () => {
+  const hosts = new Set([...HOST_ADDRESSES, '2001:db8:a::2']);
+
+  for (const [address, refused] of [
+    ['2606:4700::1111', false],
+    ['fd12:3456:789a::a42:6', true],
+    ['fd00:ec2::254', true],
+    ['64:ff9b::a9fe:a9fe', true],
+    ['2001:db8:a::2', true],
+  ] as const) {
+    expect({ address, refused: isRefusedAddress(address, hosts, isBlocked6) }).toEqual({
+      address,
+      refused,
+    });
+  }
+});
+
+test('a name dials IPv4 first, and a mapped answer as the IPv4 address it holds', async () => {
+  const answers: Record<string, readonly string[]> = {
+    'dual.test': ['2606:4700::1111', '140.82.112.3'],
+    'six.test': ['2606:4700::1111'],
+    'mapped.test': ['::ffff:140.82.112.3'],
+  };
+
+  const deps = {
+    resolve: (host: string) => Promise.resolve(answers[host] ?? []),
+    readHostAddresses: () => HOST_ADDRESSES,
+    isBlocked6,
+  };
+
+  const dual = await resolveTunnelTarget('dual.test', deps);
+  const six = await resolveTunnelTarget('six.test', deps);
+  const mapped = await resolveTunnelTarget('mapped.test', deps);
+
+  expect([dual, six, mapped]).toEqual(['140.82.112.3', '2606:4700::1111', '140.82.112.3']);
 });

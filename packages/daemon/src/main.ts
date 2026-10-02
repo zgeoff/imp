@@ -140,13 +140,13 @@ async function main(): Promise<void> {
   const images = createImageService({ config, db, storage, storageGate, diskBudget });
   const diskUsage = createDiskUsageCache({ db, storage, log: printLog });
 
-  const broker = await createBroker({ config, db, log: printLog });
-
   const ipv6 = await resolveIpv6Plan(config.ipv6, {
     readDefaultRoute: readIpv6DefaultRoute,
     readUlaPrefix: () => readOrCreateUlaPrefix(join(config.dataDir, 'net', 'ipv6-ula')),
     log: printLog,
   });
+
+  const broker = await createBroker({ config, db, log: printLog, ipv6 });
 
   // the firewall and its resolver, before any VM is adopted, booted or woken
   const egress = createEgressService({

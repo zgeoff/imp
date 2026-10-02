@@ -1,6 +1,8 @@
 import { lookup } from 'node:dns/promises';
 import { networkInterfaces } from 'node:os';
 import { parseIpv4 } from '../net/addressing';
+import { parseIpv6 } from '../net/addressing6';
+import { readMappedIpv4 } from '../net/ranges6';
 
 // Where a plain tunnel may go. It starts in the host container, past the
 // `INPUT -i imp+ DROP` rule: unchecked, a guest could reach impd's API, the
@@ -40,16 +42,29 @@ export class TunnelRefusedError extends Error {
   override name = 'TunnelRefusedError';
 }
 
-// True for every address a tunnel must not reach: anything not IPv4 (IPv6,
-// v4-mapped IPv6 included), the ranges above, and the host's own addresses.
-export function isRefusedAddress(address: string, hostAddresses: ReadonlySet<string>): boolean {
-  const ip = parseIpv4(address);
-
-  if (ip === null || hostAddresses.has(address)) {
+// True for every address a tunnel must not reach: the ranges above, the
+// host's own addresses, and the IPv6 `isBlocked6` blocks (all of it without
+// one). A mapped address is checked as the IPv4 address it holds.
+export function isRefusedAddress(
+  address: string,
+  hostAddresses: ReadonlySet<string>,
+  isBlocked6: ((address: string) => boolean) | null = null,
+): boolean {
+  if (hostAddresses.has(address)) {
     return true;
   }
 
-  return PARSED_RANGES.some((range) => ip >= range.network && ip < range.network + range.size);
+  const mapped = readMappedIpv4(address);
+  const ip = parseIpv4(mapped ?? address);
+
+  if (ip === null) {
+    return isBlocked6 === null || parseIpv6(address) === null || isBlocked6(address);
+  }
+
+  return (
+    (mapped !== null && hostAddresses.has(mapped)) ||
+    PARSED_RANGES.some((range) => ip >= range.network && ip < range.network + range.size)
+  );
 }
 
 // every address on the host's interfaces, read at call time: tailscaled can
@@ -65,27 +80,37 @@ function readHostAddresses(): ReadonlySet<string> {
 export interface TunnelTargetDeps {
   readonly resolve?: (host: string) => Promise<readonly string[]>;
   readonly readHostAddresses?: () => ReadonlySet<string>;
+
+  // with IPv6, which IPv6 addresses no tunnel reaches; without it, every
+  // IPv6 address is refused and names resolve to IPv4 only
+  readonly isBlocked6?: ((address: string) => boolean) | null;
 }
 
-// The IPv4 address to dial for `host`: resolved once and dialled as
-// checked, so a DNS rebind cannot swap it. Every answer must pass; a name
-// that also points inside is refused outright.
+// The address to dial for `host`, resolved once and dialled as checked, so a
+// DNS rebind cannot swap it. Every answer must pass; IPv4 goes first, and a
+// mapped answer is dialled as the IPv4 address it holds.
 export async function resolveTunnelTarget(
   host: string,
   deps: TunnelTargetDeps = {},
 ): Promise<string> {
-  const resolve = deps.resolve ?? resolveIpv4;
+  const isBlocked6 = deps.isBlocked6 ?? null;
+  const resolve = deps.resolve ?? ((name: string) => resolveAddresses(name, isBlocked6 !== null));
   const hostAddresses = (deps.readHostAddresses ?? readHostAddresses)();
 
-  const addresses = await resolve(host);
+  const answers = await resolve(host);
 
-  const [first] = addresses;
+  const addresses = answers.map((address) => readMappedIpv4(address) ?? address);
+
+  const [first] = [
+    ...addresses.filter((address) => parseIpv4(address) !== null),
+    ...addresses.filter((address) => parseIpv4(address) === null),
+  ];
 
   if (first === undefined) {
-    throw new TunnelRefusedError(`${host} has no IPv4 address`);
+    throw new TunnelRefusedError(`${host} has no address a tunnel may dial`);
   }
 
-  const refused = addresses.find((address) => isRefusedAddress(address, hostAddresses));
+  const refused = addresses.find((address) => isRefusedAddress(address, hostAddresses, isBlocked6));
 
   if (refused !== undefined) {
     throw new TunnelRefusedError(`${host} resolves to ${refused}, which a tunnel may not reach`);
@@ -94,13 +119,13 @@ export async function resolveTunnelTarget(
   return first;
 }
 
-async function resolveIpv4(host: string): Promise<readonly string[]> {
-  // an IPv4 literal is its own answer; an IPv6 one is refused by the check
+async function resolveAddresses(host: string, ipv6: boolean): Promise<readonly string[]> {
+  // a literal is its own answer, and the check refuses what it must
   if (parseIpv4(host) !== null || host.includes(':')) {
     return [host];
   }
 
-  const answers = await lookup(host, { all: true, family: 4 });
+  const answers = await lookup(host, { all: true, family: ipv6 ? 0 : 4 });
 
   return answers.map((answer) => answer.address);
 }

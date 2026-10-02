@@ -24,6 +24,9 @@ import {
 } from '../db/secrets';
 import type { GrantedRule, SecretRecord } from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
+import { readConnectedPrefixes6 } from '../net/ipv6-plan';
+import type { Ipv6Plan } from '../net/ipv6-plan';
+import { BLOCKED_RANGES6, createRangeChecker6 } from '../net/ranges6';
 import { readErrorMessage } from '../read-error-message';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import { startBrokerFront } from './broker-front';
@@ -111,7 +114,13 @@ export interface BrokerDeps {
   readonly fetch?: UpstreamFetch;
   readonly resolveTunnelTarget?: (host: string) => Promise<string>;
   readonly dialTunnel?: (address: string, port: number) => Socket;
+
+  // the IPv6 impd resolved at start; without it, tunnels dial IPv4 only
+  readonly ipv6?: Ipv6Plan | null;
 }
+
+// how long the container's own IPv6 prefixes stay read
+const CONNECTED_CACHE_MS = 30_000;
 
 export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const config = deps.config;
@@ -120,6 +129,36 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const brokerDir = join(config.dataDir, 'broker');
 
   const ca = await loadOrCreateBrokerCa(join(brokerDir, 'ca'));
+
+  const blocked6: { check: ((address: string) => boolean) | null; readAt: number } = {
+    check: null,
+    readAt: 0,
+  };
+
+  // with IPv6, what no tunnel dials: the fixed ranges, the imps' /64, and
+  // the container's own links, read again every CONNECTED_CACHE_MS
+  const readBlocked6 = async (): Promise<((address: string) => boolean) | null> => {
+    const ipv6 = deps.ipv6 ?? null;
+
+    if (ipv6 === null) {
+      return null;
+    }
+
+    if (blocked6.check === null || Date.now() - blocked6.readAt > CONNECTED_CACHE_MS) {
+      const connected = await readConnectedPrefixes6();
+
+      blocked6.check = createRangeChecker6([...BLOCKED_RANGES6, ipv6.prefix.text, ...connected]);
+      blocked6.readAt = Date.now();
+    }
+
+    return blocked6.check;
+  };
+
+  const resolveTarget = async (host: string): Promise<string> => {
+    const isBlocked6 = await readBlocked6();
+
+    return resolveTunnelTarget(host, { isBlocked6 });
+  };
 
   const files = createSecretFiles(config.dataDir);
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
@@ -417,7 +456,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         findPeer: (slot) => findBrokerPeer(db, slot),
         isGranted: async (impId, host) => (await findRule(impId, host)) !== undefined,
         openTerminator: terminators.open,
-        resolveTunnelTarget: deps.resolveTunnelTarget ?? ((host) => resolveTunnelTarget(host)),
+        resolveTunnelTarget: deps.resolveTunnelTarget ?? resolveTarget,
         ...(deps.dialTunnel !== undefined && { dialTunnel: deps.dialTunnel }),
         log,
       });
