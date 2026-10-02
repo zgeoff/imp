@@ -21,6 +21,7 @@
       "@zgeoff/oxlint-config": "0.1.0",
       "citty": "0.2.2",
       "elysia": "1.4.29",
+      "fast-check": "4.10.2",
       "knip": "6.24.0",
       "kysely": "0.29.5",
       "lefthook": "2.1.10",

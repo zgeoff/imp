@@ -149,3 +149,31 @@ test('it picks again without a victim that was skipped, and fails once none is l
 
   expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 });
+
+test('a reservation counts until its 20 s run out, and not a moment longer', async () => {
+  const clock = { now: 1000 };
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () => Promise.resolve([]),
+    readRamMib: () => null,
+    isBusy: () => false,
+    trySleepImp: buildFakeSleep(() => Promise.resolve('skipped')),
+    log: () => {
+      // quiet
+    },
+    now: () => clock.now,
+  });
+
+  await governor.admit({ id: 'x', name: 'x', reserveMib: 400, memoryMib: 800 });
+
+  clock.now += 20_000;
+
+  const atDeadline = await governor.readUsage();
+
+  clock.now += 1;
+
+  const after = await governor.readUsage();
+
+  expect([atDeadline.reservedMib, after.reservedMib]).toEqual([400, 0]);
+});
