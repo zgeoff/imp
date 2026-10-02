@@ -51,6 +51,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `dashboard`      | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                                                |
 | `https`          | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                                               |
 | `tokens`         | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token                     |
+| `leases`         | two owners on one imp, `LEASED` and a forced sleep, expiry then an idle sleep, a hold; with a budget up to 2048 MiB, a refusal's names        |
 | `egress`         | open, box and none policies: an allow-list, a refused name, the source check, a cut flow                                                      |
 | `networks`       | two imps on a network across open and box, names, a peer DNS port, a reset on leave                                                           |
 | `ipv6`           | a /128 per imp, NAT66 and a routed /64, policies over IPv6, packet-too-big, a guest's router advertisement                                    |
@@ -62,7 +63,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, cpu, templates, boot-templates
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
