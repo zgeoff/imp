@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/zgeoff/imp/compare/v0.1.1...v0.2.0) (2026-10-02)
+
+### Features
+
+- **cli:** show boot status in imp info and after an upgrade
+  ([1fb9131](https://github.com/zgeoff/imp/commit/1fb9131ae0a67f34cd770d0cfadbe64c0cb47781))
+- **daemon:** count cold boots and outdated imps in system.info
+  ([b0515fc](https://github.com/zgeoff/imp/commit/b0515fc47173ceaf126ecfd1651c2457d4047a28))
+- show boot status after an upgrade in imp info
+  ([54ab78f](https://github.com/zgeoff/imp/commit/54ab78f07b7bfa9ae46d2e2e4ac560ec664a94b2)), closes
+  [#49](https://github.com/zgeoff/imp/issues/49)
+
+### Bug Fixes
+
+- **cli:** show boot status as unknown for an older impd
+  ([1d3665d](https://github.com/zgeoff/imp/commit/1d3665dd729f60cafdd5d6d032bf1ea2f53c4f10))
+
 ## [0.1.1](https://github.com/zgeoff/imp/compare/v0.1.0...v0.1.1) (2026-10-02)
 
 ### Bug Fixes
