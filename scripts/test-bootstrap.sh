@@ -357,6 +357,12 @@ run_device() {
     || fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
   expect_exit 0 --check
 
+  log "[$distro] --storage zfs refuses an XFS host whose mount is down"
+  in_container umount /var/lib/imp
+  storage_args=(--storage zfs --data-device "$ext4")
+  expect_exit 1 --check
+  grep -q "/etc/fstab has an entry for /var/lib/imp" <<<"$LAST_OUTPUT" || fail "[$distro] no fstab refusal"
+
   health=$saved_health
   teardown
   log "[$distro] --data-device passed"

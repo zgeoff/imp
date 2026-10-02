@@ -530,6 +530,10 @@ resolve_storage() {
   if mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is a mount on the host; with ZFS the container mounts $zfs_root there itself"
   fi
+  # An XFS host whose nofail mount is down still has its imps on that disk.
+  if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
+    die "/etc/fstab has an entry for $DATA_DIR (XFS imps); ZFS would leave them behind"
+  fi
 }
 
 ensure_packages() {
