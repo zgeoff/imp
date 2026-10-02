@@ -18,6 +18,7 @@ import {
   wakeCommand,
 } from './commands/imps';
 import { infoCommand } from './commands/info';
+import { mcpCommand } from './commands/mcp';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
 // it loads lazily: a static import would be a cycle.
@@ -48,6 +49,7 @@ export const mainCommand = defineCommand({
     fork: forkCommand,
     image: imageCommand,
     info: infoCommand,
+    mcp: mcpCommand,
     login: loginCommand,
     host: hostCommand,
     hosts: hostsCommand,

@@ -73,6 +73,7 @@ imp fork box box-2                # a second copy to try something else in
 | `start`, `stop`, `rm`                  | boot cold, shut down, destroy                            |
 | `url <name>`                           | print the imp's local and tailnet URLs                   |
 | `image build`, `add`, `ls`, `rm`       | manage images                                            |
+| `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio     |
 | `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)    |
 | `completion bash\|zsh\|fish`           | print the shell completion script                        |
 

@@ -33,10 +33,11 @@ way a user would. The suites run in this order:
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                |
 | `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                        |
+| `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill       |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, sleep, restart, mcp
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```
