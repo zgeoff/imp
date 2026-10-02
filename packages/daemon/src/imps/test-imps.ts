@@ -1,4 +1,4 @@
-import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
@@ -9,9 +9,14 @@ import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
 import { createImage } from '../db/images';
 import type { ImageRecord } from '../db/images';
+import { listImps } from '../db/imps';
 import { openDatabase } from '../db/open-database';
+import type { ImpDatabase } from '../db/open-database';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createImageService } from '../images/image-service';
+import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
+import { buildImpPaths } from '../storage/data-layout';
+import type { ImpPaths } from '../storage/data-layout';
 import { buildFakeVmm } from './fake-vmm';
 
 export const TEST_TOKEN = 'test-token';
@@ -160,6 +165,82 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
   return { app: built.app, closeExecSessions: built.closeExecSessions, client };
+}
+
+// a memory snapshot as a sleep at `createdAt` under `firecrackerVersion`
+// leaves it
+export function writeTestSnapshot(
+  paths: Readonly<ImpPaths>,
+  createdAt: number,
+  firecrackerVersion = TEST_IDENTITY.firecrackerVersion,
+): void {
+  mkdirSync(paths.snapshotDir, { recursive: true });
+  writeFileSync(paths.vmstate, 'vmstate');
+  writeFileSync(paths.memFile, 'mem');
+
+  writeSnapshotMeta(paths, {
+    ...TEST_IDENTITY,
+    firecrackerVersion,
+    createdAt,
+    memoryMib: 2048,
+    ramMib: FAKE_VM_RAM_MIB,
+  });
+}
+
+interface InvariantParts {
+  readonly db: ImpDatabase;
+  readonly dataDir: string;
+  readonly fake: { readonly alive: ReadonlySet<number> };
+}
+
+// What is wrong with the records once all work stopped, read raw: a service
+// read repairs a dead VM or a lost snapshot and would hide the bug. Until
+// `livenessRan`, a running record may still name a VM that died.
+export async function findBrokenInvariants(
+  ctx: Readonly<InvariantParts>,
+  livenessRan: boolean,
+): Promise<string[]> {
+  const imps = await listImps(ctx.db);
+
+  const broken: string[] = [];
+
+  const owned = new Set<number>();
+
+  for (const imp of imps) {
+    const where = `${imp.name} (${imp.state})`;
+
+    if (imp.state === 'creating') {
+      broken.push(`${where}: still creating`);
+    }
+
+    if (imp.state !== 'running' && imp.pid !== null) {
+      broken.push(`${where}: keeps pid ${String(imp.pid)}`);
+    }
+
+    if (imp.state === 'sleeping' && !hasSnapshot(buildImpPaths(ctx.dataDir, imp.id))) {
+      broken.push(`${where}: no snapshot to wake from`);
+    }
+
+    if (imp.state === 'running') {
+      if (imp.pid === null) {
+        broken.push(`${where}: no pid`);
+      } else if (livenessRan && !ctx.fake.alive.has(imp.pid)) {
+        broken.push(`${where}: its VM is dead`);
+      } else if (owned.has(imp.pid)) {
+        broken.push(`${where}: shares pid ${String(imp.pid)}`);
+      } else {
+        owned.add(imp.pid);
+      }
+    }
+  }
+
+  for (const pid of ctx.fake.alive) {
+    if (!owned.has(pid)) {
+      broken.push(`VM ${String(pid)} runs for no running imp`);
+    }
+  }
+
+  return broken;
 }
 
 // 'done' or 'failed' once the promise settles, 'hung' after `ms`
