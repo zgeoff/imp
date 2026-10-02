@@ -135,12 +135,37 @@ ARG DEBIAN_SNAPSHOT=20261001T000000Z
 ARG DEBIAN_FRONTEND=noninteractive
 # mksquashfs from a dated snapshot: the drive's bytes depend on its version.
 # check-valid-until=no: a snapshot's Release file expires after a week.
+# musl-tools and bzip2 from there too: they build busybox, with the
+# image's gcc, pinned by its digest.
 RUN rm -f /etc/apt/sources.list.d/debian.sources \
  && echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} trixie main" \
       > /etc/apt/sources.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends squashfs-tools \
+ && apt-get install -y --no-install-recommends squashfs-tools musl-tools bzip2 \
  && rm -rf /var/lib/apt/lists/*
+
+# busybox, static on musl, for `imp exec --agent` (host/busybox.config). musl
+# has no kernel headers of its own, so it borrows the system's. A fixed
+# SOURCE_DATE_EPOCH and no config timestamp keep the build date out of the
+# binary. Before the agent's sources, so a change to them never rebuilds it;
+# a new Go image does, with its gcc, and changes the binary's bytes.
+ARG BUSYBOX_VERSION=1.37.0
+ARG BUSYBOX_SHA256=3311dff32e746499f4df0d5df04d7eb396382d7e108bb9250e7b519b837043a4
+COPY host/busybox.config /tmp/busybox.config
+ARG JOBS=
+RUN m=/usr/include/x86_64-linux-musl \
+ && ln -s /usr/include/linux /usr/include/asm-generic /usr/include/mtd "$m/" \
+ && ln -s /usr/include/x86_64-linux-gnu/asm "$m/asm" \
+ && curl -fsSL --retry 3 -o /tmp/busybox.tar.bz2 "https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2" \
+ && echo "${BUSYBOX_SHA256}  /tmp/busybox.tar.bz2" | sha256sum -c - \
+ && tar -xjf /tmp/busybox.tar.bz2 -C /tmp \
+ && cd "/tmp/busybox-${BUSYBOX_VERSION}" \
+ && cp /tmp/busybox.config .config \
+ && SOURCE_DATE_EPOCH=0 KCONFIG_NOTIMESTAMP=1 make CC=musl-gcc -j"${JOBS:-$(nproc)}" busybox \
+ && mkdir -p /out/busybox \
+ && install -m 0755 busybox /out/busybox/busybox \
+ && ./busybox --list >/out/busybox/applets \
+ && cd / && rm -rf /tmp/busybox*
 
 WORKDIR /src/agent
 COPY agent/go.mod agent/go.sum ./
@@ -153,12 +178,16 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     done
 
 # The drive is mounted read-only as the root of the agent's world, so its
-# mountpoints must exist in it: /user takes the user disk. Fixed times and one processor make the drive
+# mountpoints must exist in it: /user takes the user disk. /bin holds
+# busybox and a link per applet. Fixed times and one processor make the drive
 # the same bytes for the same agent, so an upgrade that leaves the agent
 # alone keeps every snapshot valid.
 RUN d=$(mktemp -d) && chmod 755 "$d" \
- && mkdir -p "$d/dev" "$d/proc" "$d/sys" "$d/run" "$d/user" \
+ && mkdir -p "$d/dev" "$d/proc" "$d/sys" "$d/run" "$d/user" "$d/bin" \
  && cp /out/imp-agent "$d/imp-agent" \
+ && cp /out/busybox/busybox "$d/bin/busybox" \
+ && while read -r applet; do [ "$applet" = busybox ] || ln -s busybox "$d/bin/$applet"; done </out/busybox/applets \
+ && rm -rf /out/busybox \
  && mksquashfs "$d" /out/imp-system.squashfs -all-root -noappend -quiet -no-progress -comp zstd \
       -no-xattrs -mkfs-time 0 -all-time 0 -processors 1 \
  && rm -rf "$d"
