@@ -30,7 +30,9 @@ You need a domain in a Cloudflare zone and an API token for it.
    ```
 
 4. From a tailnet member, `imp url <name>` prints the https URL first.
-   `imp login https://imp.example.com` reaches the API.
+   `imp login https://imp.example.com` reaches the API, and `https://imp.example.com` opens the
+   [dashboard](./dashboard.md). Over HTTPS its session cookie is `__Host-imp_session`, which no imp
+   under the domain can set ([daemon](../architecture/daemon.md#dashboard)).
 
 The host must be on a tailnet (`TAILSCALE_AUTHKEY`). Without one, impd still gets the certificate,
 but the HTTPS listeners answer only on loopback inside the host container.

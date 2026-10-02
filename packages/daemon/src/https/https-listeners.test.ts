@@ -30,7 +30,9 @@ function startFakeApi(port: number) {
       return Response.json({
         path: new URL(request.url).pathname,
         proto: request.headers.get('x-forwarded-proto'),
-        host: request.headers.get('x-forwarded-host'),
+
+        // the dashboard's same-origin check compares the Origin with this
+        host: new URL(request.url).host,
       });
     },
     websocket: {
