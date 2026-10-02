@@ -1,6 +1,9 @@
 import {
   DETACH_REASONS,
   EXEC_CHANNELS,
+  EXEC_MAX_STDIN_FRAME_BYTES,
+  EXEC_STDIN_WINDOW_BYTES,
+  EXEC_STDOUT_WINDOW_BYTES,
   ExecClientMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
@@ -8,6 +11,7 @@ import {
 import type { DetachReason, ExecServerMessage } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
+import type { AgentFeature } from '../agent-client/agent-outdated';
 import type {
   AgentAttachRequest,
   AgentExecRequest,
@@ -15,6 +19,7 @@ import type {
   ExecStream,
 } from '../agent-client/exec-stream';
 import { readErrorMessage } from '../read-error-message';
+import { TOOL_FEATURES, buildToolRequest } from './exec-tools';
 import { findSignalName, findSignalNumber } from './signal-names';
 
 // The two ends the session bridges: a WebSocket peer and the imp service.
@@ -29,7 +34,11 @@ export interface ExecPeer {
 }
 
 export interface ExecBackend {
-  readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
+  readonly openExec: (
+    name: string,
+    request: AgentExecRequest,
+    feature?: AgentFeature,
+  ) => Promise<ExecStream>;
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 }
@@ -59,7 +68,25 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     closed: boolean;
     name: string;
     pending: unknown[];
-  } = { stream: null, starting: false, closed: false, name: '', pending: [] };
+
+    // a tool's stdin written to the agent and not acked yet
+    tool: boolean;
+    unacked: number;
+    acking: boolean;
+
+    // a tool's stdout sent to the client and not acked yet
+    outUnacked: number;
+  } = {
+    stream: null,
+    starting: false,
+    closed: false,
+    name: '',
+    pending: [],
+    tool: false,
+    unacked: 0,
+    acking: false,
+    outUnacked: 0,
+  };
 
   const send = (message: ExecServerMessage): void => {
     peer.sendText(JSON.stringify(message));
@@ -113,6 +140,20 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     }
   };
 
+  const ackWaiter: { wake: (() => void) | null } = { wake: null };
+
+  // a tool's output waits for the client's acks, as other output waits for
+  // the socket to drain
+  const waitForStdoutAcks = async (): Promise<void> => {
+    while (!state.closed && state.outUnacked > EXEC_STDOUT_WINDOW_BYTES) {
+      await new Promise<void>((resolve) => {
+        ackWaiter.wake = resolve;
+      });
+
+      ackWaiter.wake = null;
+    }
+  };
+
   const drainOutput = async (stream: ExecStream): Promise<void> => {
     try {
       let ended: 'exited' | 'detached' | null = null;
@@ -122,6 +163,12 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
         if (event.type === 'exit' || event.type === 'detached') {
           ended = event.type === 'exit' ? 'exited' : 'detached';
+        }
+
+        if (state.tool && event.type === 'stdout') {
+          state.outUnacked += event.data.byteLength;
+
+          await waitForStdoutAcks();
         }
 
         await waitForPeerDrain();
@@ -180,6 +227,59 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     await drainOutput(stream);
   };
 
+  // a tool's stdin is acked once it is on its way to the guest; a client
+  // past the window would grow impd's memory, so it is cut off
+  const sendStdinAcks = async (stream: ExecStream): Promise<void> => {
+    state.acking = true;
+
+    while (state.unacked > 0 && !state.closed) {
+      const bytes = state.unacked;
+
+      await stream.stdinDrained();
+
+      state.unacked -= bytes;
+
+      if (!state.closed) {
+        send({ type: 'stdin_ack', bytes });
+      }
+    }
+
+    state.acking = false;
+  };
+
+  const writeStdin = (data: Uint8Array): void => {
+    const stream = state.stream;
+
+    if (stream === null) {
+      return;
+    }
+
+    if (!state.tool) {
+      stream.writeStdin(data);
+
+      return;
+    }
+
+    state.unacked += data.byteLength;
+
+    if (
+      data.byteLength > EXEC_MAX_STDIN_FRAME_BYTES ||
+      state.unacked > EXEC_STDIN_WINDOW_BYTES + EXEC_MAX_STDIN_FRAME_BYTES
+    ) {
+      sendFailure(new Error('stdin past the window'));
+
+      stream.close();
+
+      return;
+    }
+
+    stream.writeStdin(data);
+
+    if (!state.acking) {
+      void sendStdinAcks(stream);
+    }
+  };
+
   const handleControl = (message: unknown): void => {
     const parsed = ExecClientMessageSchema.safeParse(message);
 
@@ -214,6 +314,16 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         return;
       }
 
+      if (control.tool !== undefined) {
+        const request = buildToolRequest(control.tool, control.argv);
+        const feature = TOOL_FEATURES[control.tool];
+
+        state.tool = true;
+        void runStream(() => backend.openExec(control.name, request, feature));
+
+        return;
+      }
+
       const request: AgentExecRequest = {
         argv: control.argv,
         tty: control.tty,
@@ -238,7 +348,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       return;
     }
 
-    if (control.type === 'stdin_eof') {
+    if (control.type === 'stdout_ack') {
+      state.outUnacked = Math.max(0, state.outUnacked - control.bytes);
+      ackWaiter.wake?.();
+    } else if (control.type === 'stdin_eof') {
       stream.closeStdin();
     } else if (control.type === 'resize') {
       stream.resize(control.cols, control.rows);
@@ -270,7 +383,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       }
 
       if (frame.channel === EXEC_CHANNELS.stdin) {
-        state.stream?.writeStdin(frame.data);
+        writeStdin(frame.data);
       }
 
       return;
@@ -284,6 +397,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     handleClose: () => {
       state.closed = true;
       state.stream?.close();
+      ackWaiter.wake?.();
     },
     handleDrain: () => {
       drainWaiter.wake?.();

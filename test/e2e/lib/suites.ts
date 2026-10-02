@@ -30,6 +30,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'ssh-agent', prefix: 'e2e-ssha-', images: ['e2e-git'] },
   { name: 'proxy', prefix: 'e2e-px-', images: ['e2e-tiny'] },
   { name: 'proxy-wake', prefix: 'e2e-pxw-', images: ['e2e-tiny'] },
+  { name: 'cp', prefix: 'e2e-copy-', images: ['e2e-git'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },

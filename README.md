@@ -137,6 +137,13 @@ loopback only is reachable too. It needs no SSH key: it goes to impd with the CL
 stops it. A busy local port fails at once and names the port. impd allows 256 open connections per
 imp; a forced sleep resets the open ones, and the next one wakes the imp.
 
+## Files
+
+`imp cp ./app box:/srv` copies a file or a directory into an imp, and `imp cp box:/var/log/x .`
+copies one out, with modes, times and symlinks. A copy into the imp can reach any path and belongs
+to the owner of the directory it lands in, or to `--owner`. [Copying files](./docs/guides/cp.md) has
+the details.
+
 ## Sleep and wake
 
 An imp counts as busy while it has an open shell or command, an SSH or `imp proxy` connection, a

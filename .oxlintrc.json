@@ -50,6 +50,8 @@
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
           // the Kysely handle above under its schema-bound alias
           { "from": "file", "name": "ImpDatabase" },
+          // tar-stream's live pack and extract streams, which `imp cp` drives
+          { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
           // a live socket or listener; reading and writing it is the point
           { "from": "package", "name": ["Socket", "Server"], "package": "node:net" },
           // the SSH gateway's live connections, channels and login requests,

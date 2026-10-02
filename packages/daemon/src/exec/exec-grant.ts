@@ -34,10 +34,30 @@ export function buildGrantedBackend(
   };
 
   return {
-    openExec: (name, request) => {
+    // A tool runs as root, which `exec` scope must not reach (a forward runs
+    // as the image user), so it needs `manage`; a ticket never starts one
+    openExec: (name, request, feature) => {
       const refused = checkGrant(name);
 
-      return refused === null ? backend.openExec(name, request) : Promise.reject(refused);
+      if (refused !== null) {
+        return Promise.reject(refused);
+      }
+
+      if (feature === undefined) {
+        return backend.openExec(name, request);
+      }
+
+      if (grant?.name !== null) {
+        return Promise.reject(buildForbiddenError('an exec ticket cannot run a tool'));
+      }
+
+      if (!isCallerAllowed(grant.caller, 'manage', name)) {
+        return Promise.reject(
+          buildForbiddenError(`${formatCaller(grant.caller)} needs scope manage to copy as root`),
+        );
+      }
+
+      return backend.openExec(name, request, feature);
     },
     openAttach: (name, request) => {
       const refused = checkGrant(name);

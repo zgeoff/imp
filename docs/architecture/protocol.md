@@ -6,9 +6,9 @@ connection carries one request. The first frame is a JSON request; exec connecti
 binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
 both ways. An `agent.listen` connection stays open for the life of an SSH connection.
 
-Version `0.6.0`, which dials a unix socket as the image's USER (`0.5.0` added `grow`). The Go side
-is `agent/internal/proto`; the host side is the agent client in impd
-([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.7.0`, which runs `imp-agent tar` for `imp cp` (`0.6.0` dials a unix socket as the image's
+USER, `0.5.0` added `grow`). The Go side is `agent/internal/proto`; the host side is the agent
+client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 

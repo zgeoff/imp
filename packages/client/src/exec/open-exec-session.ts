@@ -219,6 +219,8 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       resolveOutcome({ kind: 'exit', code: message.code, signal: message.signal });
     } else if (message.type === 'detached') {
       resolveOutcome({ kind: 'detached', reason: message.reason });
+    } else if (message.type === 'stdin_ack') {
+      // only a tool exec gets acks, and this client starts none
     } else {
       resolveOutcome({
         kind: 'failed',
