@@ -23,7 +23,7 @@ import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
 // snapshot writes put the whole mem file through the page cache
-// (docs/sleep-findings.md gotcha 8): a few at a time
+// (docs/architecture/sleep-and-wake.md gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
 
 // The VM side of the lifecycle. Every operation takes a LockedImp: the caller

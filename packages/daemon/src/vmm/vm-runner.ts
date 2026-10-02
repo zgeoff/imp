@@ -53,7 +53,7 @@ export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
 
   // pause, snapshot to new files, kill, rename them into place
-  // (docs/sleep-findings.md 8); the VM keeps running when the snapshot fails
+  // (docs/architecture/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
   readonly sleepVm: (pid: number, paths: ImpPaths) => Promise<Readonly<Record<string, number>>>;
 
   // a new Firecracker that loads the snapshot as its first call; throws, with
