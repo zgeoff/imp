@@ -5,6 +5,7 @@ import { printLog } from '../../process/print-log';
 import { runCommand } from '../../process/run-command';
 import { readErrorMessage } from '../../read-error-message';
 import { buildImagePaths, buildImpPaths, buildSnapshotPaths } from '../data-layout';
+import { CheckpointIdTakenError } from '../storage-backend';
 import type { DiskSource, LiveStorage, StorageBackend } from '../storage-backend';
 import { createZfsCommands, parseZfsMounts, parseZfsRelease } from './zfs-commands';
 import type { CommandRunner, ZfsEntry } from './zfs-commands';
@@ -41,16 +42,24 @@ interface ZfsBackendDeps {
 
 // Each imp disk is a dataset holding one file, a checkpoint is a snapshot of
 // it and a fork is a clone (docs/architecture/storage.md#zfs).
-export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
+export interface ZfsBackend extends StorageBackend {
+  // resolves once the reclaim that changes start in the background is done
+  readonly waitForReclaim: () => Promise<void>;
+}
+
+export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
   const zfs = createZfsCommands(deps.run ?? runCommand);
   const log = deps.log ?? printLog;
   const readMounts = deps.readMounts ?? (() => readFileSync('/proc/self/mounts', 'utf8'));
   const readModuleVersion = deps.readModuleVersion ?? readZfsModuleVersion;
 
-  // every dataset change runs alone: a reclaim must never see a restore half
-  // done, and a checkpoint id must be unique when its snapshot is taken
+  // Dataset changes run one at a time: a reclaim must never see a restore
+  // half done. Snapshots of a frozen guest have a lane of their own and never
+  // wait for one; they touch no dataset a reclaim or restore moves.
   const mutex = createKeyedMutex();
   const runSerial = <T>(task: () => Promise<T>) => mutex.runExclusive('zfs', task);
+  const runSnapshot = <T>(task: () => Promise<T>) => mutex.runExclusive('snapshot', task);
+  const reclaim = { running: null as Promise<void> | null, isWanted: false };
 
   const datasets = {
     mem: `${deps.root}/mem`,
@@ -110,18 +119,30 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
     log(`impd: zfs: retired ${name} as ${retired}`);
   };
 
-  const runReclaim = async (): Promise<void> => {
+  // one promote or destroy; true when nothing is left to reclaim
+  const runReclaimStep = async (): Promise<boolean> => {
+    const entries = await listAll();
+
+    const next = planReclaimStep(entries, datasets.retired);
+
+    if (next === null) {
+      return true;
+    }
+
+    await (next.kind === 'promote' ? zfs.promote(next.name) : zfs.destroy(next.name));
+
+    return false;
+  };
+
+  // `runStep` queues each step on its own, so other changes go between them
+  const runReclaim = async (runStep: () => Promise<boolean>): Promise<void> => {
     try {
       for (let step = 0; step < MAX_RECLAIM_STEPS; step += 1) {
-        const entries = await listAll();
+        const isDone = await runStep();
 
-        const next = planReclaimStep(entries, datasets.retired);
-
-        if (next === null) {
+        if (isDone) {
           return;
         }
-
-        await (next.kind === 'promote' ? zfs.promote(next.name) : zfs.destroy(next.name));
       }
 
       log(`impd: zfs: reclaim stopped after ${String(MAX_RECLAIM_STEPS)} steps`);
@@ -131,22 +152,39 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
     }
   };
 
-  const findOrigin = async (source: DiskSource) => {
+  // after a change that may free a retired dataset; never awaited by it
+  const startReclaim = (): void => {
+    reclaim.isWanted = true;
+
+    if (reclaim.running !== null) {
+      return;
+    }
+
+    const runPasses = async () => {
+      while (reclaim.isWanted) {
+        reclaim.isWanted = false;
+
+        await runReclaim(() => runSerial(runReclaimStep));
+      }
+
+      reclaim.running = null;
+    };
+
+    reclaim.running = runPasses();
+  };
+
+  const findOrigin = async (source: DiskSource): Promise<string> => {
     if (source.kind === 'image') {
       return `${buildImageName(source.digest)}@base`;
     }
 
-    if (source.kind === 'checkpoint') {
-      const entries = await listAll();
-
-      return findCheckpointSnapshot(entries, source.checkpointId);
+    if (source.kind === 'imp') {
+      throw new Error('zfs: a fork of a live disk takes its own snapshot');
     }
 
-    const snapshot = `${buildDiskName(source.impId)}@fork-${Bun.randomUUIDv7()}`;
+    const entries = await listAll();
 
-    await zfs.snapshot(snapshot);
-
-    return snapshot;
+    return findCheckpointSnapshot(entries, source.checkpointId);
   };
 
   const checkVersions = async (): Promise<void> => {
@@ -217,6 +255,8 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
       await removeMount(buildStagingDir(staged.name));
 
       await zfs.destroy(staged.name);
+
+      removeMountDir(buildStagingDir(staged.name));
     }
   };
 
@@ -276,6 +316,28 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
     }
   };
 
+  // A swap that failed halfway leaves the imp a disk: the old one when it is
+  // still in place, else the staged clone, as the next start would.
+  const resolveFailedSwap = async (impId: string): Promise<void> => {
+    try {
+      const entries = await listAll();
+
+      const names = new Set(entries.map((entry) => entry.name));
+
+      if (!names.has(buildDiskName(impId))) {
+        await zfs.rename(buildRestoreName(impId), buildDiskName(impId));
+      } else if (names.has(buildRestoreName(impId))) {
+        await zfs.destroy(buildRestoreName(impId));
+      }
+
+      await setupMount(buildDiskName(impId), buildDiskDir(impId));
+    } catch (error) {
+      log(
+        `impd: zfs: ${impId}: the disk swap failed and so did its repair: ${readErrorMessage(error)}`,
+      );
+    }
+  };
+
   return {
     kind: 'zfs',
 
@@ -293,7 +355,7 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
         await setupMount(datasets.mem, join(deps.dataDir, 'mem'));
         await resolveStaging();
         await removeLeftovers(live);
-        await runReclaim();
+        await runReclaim(runReclaimStep);
         await setupMounts();
       }),
 
@@ -336,8 +398,8 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
       });
     },
 
-    removeImage: (digest) =>
-      runSerial(async () => {
+    removeImage: async (digest) => {
+      await runSerial(async () => {
         const name = buildImageName(digest);
 
         const entries = await listAll();
@@ -355,29 +417,48 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
         }
 
         await removeDataset(name);
-        await runReclaim();
-      }),
+      });
 
-    createImpDisk: (impId, source) =>
-      runSerial(async () => {
-        const target = buildDiskName(impId);
+      startReclaim();
+    },
 
+    createImpDisk: async (impId, source) => {
+      const target = buildDiskName(impId);
+
+      // The caller has a live source frozen, so its fork takes the snapshot
+      // lane and never waits for a reclaim. Its new clone is not retired, and
+      // nothing else names it yet.
+      if (source.kind === 'imp') {
+        const snapshot = `${buildDiskName(source.impId)}@fork-${Bun.randomUUIDv7()}`;
+
+        await runSnapshot(async () => {
+          await zfs.snapshot(snapshot);
+
+          try {
+            await zfs.clone(snapshot, target);
+          } finally {
+            // ZFS keeps a fork snapshot while the clone needs it
+            await zfs.destroyDeferred(snapshot);
+          }
+
+          await setupMount(target, buildDiskDir(impId));
+        });
+
+        return;
+      }
+
+      // a promote can move a checkpoint's snapshot, so the lookup is serial
+      await runSerial(async () => {
         const origin = await findOrigin(source);
 
-        try {
-          await zfs.clone(origin, target);
-        } finally {
-          // ZFS keeps a fork snapshot while the clone needs it
-          if (source.kind === 'imp') {
-            await zfs.destroyDeferred(origin);
-          }
-        }
+        await zfs.clone(origin, target);
 
         await setupMount(target, buildDiskDir(impId));
-      }),
+      });
+    },
 
-    removeImpDisk: (impId, checkpointIds) =>
-      runSerial(async () => {
+    removeImpDisk: async (impId, checkpointIds) => {
+      await runSerial(async () => {
         const entries = await listAll();
 
         const names = new Set(entries.map((entry) => entry.name));
@@ -399,16 +480,18 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
         if (names.has(buildDiskName(impId))) {
           await removeDataset(buildDiskName(impId));
         }
+      });
 
-        await runReclaim();
-      }),
+      startReclaim();
+    },
 
     createCheckpoint: (impId, checkpointId) =>
-      runSerial(async () => {
+      runSnapshot(async () => {
         const entries = await listAll();
 
+        // a deleted checkpoint's snapshot stays while a fork needs it
         if (listCheckpointSnapshots(entries, checkpointId).length > 0) {
-          throw new Error(`zfs: a snapshot named ${checkpointId} exists already`);
+          throw new CheckpointIdTakenError(checkpointId);
         }
 
         const snapshot = `${buildDiskName(impId)}@${checkpointId}`;
@@ -424,8 +507,8 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
         }
       }),
 
-    removeCheckpoint: (_impId, checkpointId) =>
-      runSerial(async () => {
+    removeCheckpoint: async (_impId, checkpointId) => {
+      await runSerial(async () => {
         const entries = await listAll();
 
         const snapshots = listCheckpointSnapshots(entries, checkpointId);
@@ -438,10 +521,11 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
 
         if (snapshot !== undefined && !snapshot.deferDestroy) {
           await zfs.destroyDeferred(snapshot.name);
-
-          await runReclaim();
         }
-      }),
+      });
+
+      startReclaim();
+    },
 
     restoreCheckpoint: async (impId, checkpointId, halt) => {
       const staged = buildRestoreName(impId);
@@ -459,22 +543,39 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
       });
 
       const halted = await halt().catch(async (error: unknown) => {
-        await runSerial(() => zfs.destroy(staged));
+        try {
+          await runSerial(() => zfs.destroy(staged));
+        } catch (destroyError) {
+          // the next start destroys it: the disk is still in place
+          log(`impd: zfs: could not drop ${staged}: ${readErrorMessage(destroyError)}`);
+        }
 
         throw error;
       });
 
       await runSerial(async () => {
         await removeMount(buildDiskDir(impId));
-        await removeDataset(buildDiskName(impId));
 
-        await zfs.rename(staged, buildDiskName(impId));
+        try {
+          await removeDataset(buildDiskName(impId));
+
+          await zfs.rename(staged, buildDiskName(impId));
+        } catch (error) {
+          await resolveFailedSwap(impId);
+
+          throw error;
+        }
 
         await setupMount(buildDiskName(impId), buildDiskDir(impId));
-        await runReclaim();
       });
 
+      startReclaim();
+
       return halted;
+    },
+
+    waitForReclaim: async () => {
+      await reclaim.running;
     },
 
     readUsage: async () => {

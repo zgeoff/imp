@@ -128,13 +128,16 @@ A new feature (block cloning, say, from 2.2) needs a check of the module's versi
 
 ### Operations
 
-All dataset changes run one at a time inside impd.
+Dataset changes run one at a time inside impd. A checkpoint and a fork of a live disk have a lane of
+their own: the guest is frozen while they run, so they never wait behind a reclaim or another imp's
+restore.
 
 - **Checkpoint**: `zfs snapshot <root>/disks/<id>@<checkpoint id>`. Its size is the snapshot's
   `written`: what changed since the previous snapshot. On XFS the size is the clone's allocated
   bytes, which counts shared blocks. Checkpoint ids are global, so impd finds a checkpoint's
   snapshot by its name after `@` wherever it is, and refuses an id that matches none or more than
-  one snapshot.
+  one snapshot. An id that a deleted checkpoint's snapshot still holds, because a fork needs it, is
+  taken: impd picks another.
 - **Fork**: of a checkpoint, `zfs clone` of its snapshot; of a live disk, a `@fork-<uuid>` snapshot,
   a clone, and `zfs destroy -d` of the snapshot. `-d` marks it: ZFS destroys it with its last clone.
 - **Restore**: `zfs clone` of the checkpoint to `<root>/staging/restore-<id>`, then, once the VM is
@@ -151,8 +154,9 @@ A retired dataset stays while one of its snapshots is a live checkpoint. Once ev
 is marked, impd promotes the clone of its newest snapshot. `zfs promote` hands that clone the
 retired dataset's snapshots, and the retired dataset is left as a clone with none, so it can be
 destroyed. Its last marked snapshot then goes with it. This is how a fork outlives its source, and
-how a removed image hands its blocks to the imps cloned from it. impd reclaims after every delete,
-destroy and restore, and on start.
+how a removed image hands its blocks to the imps cloned from it. impd reclaims in the background
+after every delete, destroy and restore, one promote or destroy at a time, and before anything else
+on start.
 
 ### Crash recovery
 
@@ -162,7 +166,9 @@ On start, impd settles what a crash cut short, then drops what the database does
   into place, and the restore is done. With `disks/<id>` still there, impd destroys it, and the
   restore never happened. The memory snapshot goes before the swap, so neither case pairs it with
   the wrong disk.
-- A `staging/image-*` is a build that never finished: impd destroys it.
+- A `staging/image-*` is a build that never finished: impd destroys it and its mount dir.
+- A restore whose swap fails while impd runs is repaired the same way at once: the old disk goes
+  back when it is still in place, else the clone takes its name.
 - A disk or image with no row is retired; a `@cp-*` snapshot with no row and every `@fork-*`
   snapshot is marked for destroy.
 

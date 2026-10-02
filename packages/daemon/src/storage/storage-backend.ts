@@ -60,3 +60,13 @@ export interface StorageBackend {
 
   readonly readUsage: () => Promise<StorageUsage>;
 }
+
+// The id is in use already: on ZFS, a deleted checkpoint's snapshot stays
+// while a fork needs it. The caller picks another id.
+export class CheckpointIdTakenError extends Error {
+  override name = 'CheckpointIdTakenError';
+
+  constructor(checkpointId: string) {
+    super(`a snapshot named ${checkpointId} exists already`);
+  }
+}

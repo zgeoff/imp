@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { waitWithin } from '../../process/wait-within';
+import { CheckpointIdTakenError } from '../storage-backend';
 import type { LiveStorage } from '../storage-backend';
 import { FakeZfsCrashError, createFakeZfs } from './fake-zfs';
 import { createZfsBackend } from './zfs-backend';
@@ -258,6 +260,7 @@ test('a restore keeps every other checkpoint, older and newer', async () => {
 
   // the newer checkpoint, now on the retired dataset, still restores
   await ctx.backend.restoreCheckpoint('a', 'cp-new', () => Promise.resolve());
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.fake.readOrigin(`${ROOT}/disks/a`)).toBe(`${retired ?? ''}@cp-new`);
 });
@@ -285,12 +288,15 @@ test('deleting checkpoints frees the disk a restore retired', async () => {
   await ctx.createCheckpoint('a', 'cp-old');
   await ctx.createCheckpoint('a', 'cp-new');
   await ctx.backend.restoreCheckpoint('a', 'cp-old', () => Promise.resolve());
+  await ctx.backend.waitForReclaim();
   await ctx.backend.removeCheckpoint('a', 'cp-new');
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.listRetired()).toHaveLength(1);
 
   // the restored disk is a clone of cp-old: the promote hands it over
   await ctx.backend.removeCheckpoint('a', 'cp-old');
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.listRetired()).toEqual([]);
   expect(ctx.fake.listSnapshots()).toEqual([`${IMAGE}@base`]);
@@ -314,12 +320,15 @@ test('a fork from the live disk outlives its source', async () => {
 
   // destroy a: its rows are gone, so its checkpoint goes with it
   await ctx.backend.removeImpDisk('a', ['cp-one']);
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.listRetired()).toEqual([]);
   expect(ctx.fake.listDatasets()).toContain(`${ROOT}/disks/b`);
   expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBeNull();
 
   await ctx.backend.removeImpDisk('b', []);
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.fake.listDatasets().filter((name) => name.startsWith(`${ROOT}/disks/`))).toEqual([]);
   expect(ctx.fake.listSnapshots()).toEqual([`${IMAGE}@base`]);
@@ -335,10 +344,14 @@ test('a fork from a checkpoint holds the snapshot until it is destroyed', async 
   expect(ctx.fake.readOrigin(`${ROOT}/disks/b`)).toBe(`${ROOT}/disks/a@cp-one`);
 
   await ctx.backend.removeCheckpoint('a', 'cp-one');
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.fake.isDeferred(`${ROOT}/disks/a@cp-one`)).toBe(true);
 
   await ctx.backend.removeImpDisk('b', []);
+  await ctx.backend.waitForReclaim();
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.fake.listSnapshots()).toEqual([`${IMAGE}@base`]);
 });
@@ -349,6 +362,7 @@ test('a removed image hands its blocks to the imps cloned from it', async () => 
   await ctx.createImp('a');
   await ctx.createImp('b');
   await ctx.backend.removeImage(DIGEST);
+  await ctx.backend.waitForReclaim();
 
   // the first clone is promoted and owns the image's blocks; b clones its @base
   expect(ctx.listRetired()).toEqual([]);
@@ -360,7 +374,9 @@ test('a removed image hands its blocks to the imps cloned from it', async () => 
 
   // a goes first, while b still needs its @base
   await ctx.backend.removeImpDisk('a', []);
+  await ctx.backend.waitForReclaim();
   await ctx.backend.removeImpDisk('b', []);
+  await ctx.backend.waitForReclaim();
 
   expect(ctx.fake.listDatasets().filter((name) => name.startsWith(`${ROOT}/disks/`))).toEqual([]);
   expect(ctx.listRetired()).toEqual([]);
@@ -492,4 +508,123 @@ test('it reads the pool usage of the root dataset', async () => {
     usedBytes: 1_073_741_824,
     availableBytes: 9_663_676_416,
   });
+});
+
+test('a checkpoint and a live fork never wait for a reclaim', async () => {
+  using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.backend.createImpDisk('b', { kind: 'imp', impId: 'a' });
+
+  // retiring a needs a promote of b; it hangs until released
+  const release = ctx.fake.blockBefore((command) => command.startsWith('zfs promote'));
+
+  await ctx.backend.removeImpDisk('a', []);
+
+  const frozenWork = Promise.all([
+    ctx.createCheckpoint('b', 'cp-frozen'),
+    ctx.backend.createImpDisk('c', { kind: 'imp', impId: 'b' }),
+  ]);
+
+  // well inside the agent's 10 s freeze
+  const isDone = await waitWithin(frozenWork, 1000);
+
+  expect(isDone).toBeTrue();
+  expect(ctx.fake.commands.some((command) => command.startsWith('zfs promote'))).toBeFalse();
+
+  release();
+
+  await ctx.backend.waitForReclaim();
+
+  expect(ctx.listRetired()).toEqual([]);
+  expect(ctx.fake.readMountedAt(ctx.diskDir('c'))).toBe(`${ROOT}/disks/c`);
+});
+
+test('a swap whose retire fails remounts the old disk', async () => {
+  using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  ctx.fake.failOnce((command) => command.startsWith(`zfs rename ${ROOT}/disks/a `));
+
+  const failure = await readFailure(
+    ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve()),
+  );
+
+  expect(String(failure)).toContain(`zfs rename ${ROOT}/disks/a`);
+  expect(ctx.fake.readOrigin(`${ROOT}/disks/a`)).toBe(`${IMAGE}@base`);
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.listDatasets()).not.toContain(`${ROOT}/staging/restore-a`);
+});
+
+test('a swap whose last rename fails finishes it', async () => {
+  using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  ctx.fake.failOnce((command) => command.startsWith(`zfs rename ${ROOT}/staging/restore-a`));
+
+  const failure = await readFailure(
+    ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.resolve()),
+  );
+
+  expect(String(failure)).toContain(`zfs rename ${ROOT}/staging/restore-a`);
+  expect(ctx.fake.readOrigin(`${ROOT}/disks/a`)?.endsWith('@cp-one')).toBeTrue();
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+});
+
+test('a failed halt is what a restore throws, even when its cleanup fails', async () => {
+  using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+
+  ctx.fake.failOnce((command) => command === `zfs destroy ${ROOT}/staging/restore-a`);
+
+  const failure = await readFailure(
+    ctx.backend.restoreCheckpoint('a', 'cp-one', () => Promise.reject(new Error('stop failed'))),
+  );
+
+  expect(String(failure)).toBe('Error: stop failed');
+
+  expect(ctx.logs.some((line) => line.includes(`could not drop ${ROOT}/staging/restore-a`))).toBe(
+    true,
+  );
+
+  // the next start drops it: the disk is still there
+  await ctx.restartImpd(true);
+
+  expect(ctx.fake.listDatasets()).not.toContain(`${ROOT}/staging/restore-a`);
+});
+
+test('a checkpoint id held by a deleted checkpoint a fork needs is taken', async () => {
+  using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-one');
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-one' });
+  await ctx.backend.removeCheckpoint('a', 'cp-one');
+
+  const failure = await readFailure(ctx.backend.createCheckpoint('a', 'cp-one'));
+
+  expect(failure).toBeInstanceOf(CheckpointIdTakenError);
+});
+
+test('start drops an image build a crash cut short, with its mount dir', async () => {
+  using ctx = await setupStarted();
+
+  const staged = `${ROOT}/staging/image-crashed`;
+  const dir = join(ctx.dataDir, 'staging', 'image-crashed');
+
+  await ctx.fake.run(['zfs', 'create', staged]);
+
+  mkdirSync(dir, { recursive: true });
+
+  await ctx.fake.run(['mount', '-t', 'zfs', staged, dir]);
+  await ctx.restartImpd(true);
+
+  expect(ctx.fake.listDatasets()).not.toContain(staged);
+  expect(existsSync(dir)).toBeFalse();
 });

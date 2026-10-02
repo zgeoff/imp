@@ -44,6 +44,8 @@ export function createFakeZfs(options: FakeZfsOptions) {
   const mounts = new Map<string, string>();
 
   const commands: string[] = [];
+  const gates: { match: (command: string) => boolean; opened: Promise<void> }[] = [];
+  const failures: ((command: string) => boolean)[] = [];
   const state = { txg: 1, crashAt: null as ((command: string) => boolean) | null, crashed: false };
 
   datasets.set(options.root, { origin: null, txg: 0 });
@@ -346,18 +348,45 @@ export function createFakeZfs(options: FakeZfsOptions) {
   return {
     commands,
 
-    run: (argv: readonly string[]): Promise<CommandResult> => {
+    run: async (argv: readonly string[]): Promise<CommandResult> => {
       const command = argv.join(' ');
 
       if (state.crashed || state.crashAt?.(command) === true) {
         state.crashed = true;
+        throw new FakeZfsCrashError(`crashed before ${command}`);
+      }
 
-        return Promise.reject(new FakeZfsCrashError(`crashed before ${command}`));
+      for (const gate of gates.filter((candidate) => candidate.match(command))) {
+        await gate.opened;
+      }
+
+      const failure = failures.findIndex((match) => match(command));
+
+      if (failure !== -1) {
+        failures.splice(failure, 1);
+
+        return buildFailure(`fake zfs: ${command} failed`);
       }
 
       commands.push(command);
 
-      return Promise.resolve(handleCommand(argv));
+      return handleCommand(argv);
+    },
+
+    // matching commands wait until the returned function runs
+    blockBefore: (match: (command: string) => boolean) => {
+      const gate = Promise.withResolvers<void>();
+
+      gates.push({ match, opened: gate.promise });
+
+      return () => {
+        gate.resolve();
+      };
+    },
+
+    // the next matching command exits 1 and changes nothing
+    failOnce: (match: (command: string) => boolean) => {
+      failures.push(match);
     },
 
     readMounts: () =>

@@ -112,6 +112,7 @@ test.skipIf(!isReal)('checkpoints, restores and forks keep their bytes', async (
 
   await backend.removeImpDisk('b', []);
   await backend.removeImpDisk('c', []);
+  await backend.waitForReclaim();
 
   const left = await runChecked(['zfs', 'list', '-H', '-r', '-t', 'all', '-o', 'name', pool.root]);
 
@@ -160,6 +161,8 @@ test.skipIf(!isReal)('a restore cut short is finished by the next start', async 
   // a container restart drops every mount but the root
   await runChecked(['umount', join(pool.dataDir, 'mem')]);
   await runChecked(['umount', join(pool.dataDir, 'images', 'real')]);
+
+  await dying.waitForReclaim();
 
   const restarted = await pool.startBackend();
 

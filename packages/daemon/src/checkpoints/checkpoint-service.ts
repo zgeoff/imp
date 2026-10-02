@@ -18,6 +18,7 @@ import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
+import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 
 // How long the guest stays frozen at most if impd never sends thaw.
@@ -27,6 +28,7 @@ const FREEZE_TIMEOUT_MS = 10_000;
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
 const CHECKPOINT_ID_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 const CHECKPOINT_ID_PREFIX = 'cp-';
+const ID_ATTEMPTS = 3;
 
 interface ForkInput {
   readonly source: string;
@@ -134,6 +136,24 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     }
   };
 
+  // On ZFS an id can still be taken by the snapshot of a deleted checkpoint
+  // that a fork needs; the database alone cannot tell.
+  const createWithFreshId = async (impId: string) => {
+    for (let attempt = 1; ; attempt += 1) {
+      const id = buildCheckpointId();
+
+      try {
+        const sizeBytes = await storage.createCheckpoint(impId, id);
+
+        return { id, sizeBytes };
+      } catch (error) {
+        if (!(error instanceof CheckpointIdTakenError) || attempt >= ID_ATTEMPTS) {
+          throw error;
+        }
+      }
+    }
+  };
+
   return {
     createCheckpoint: (name, label) =>
       deps.imps.lockImp(name, async (imp) => {
@@ -151,19 +171,20 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           }
         }
 
-        const id = buildCheckpointId();
         const started = performance.now();
 
-        const sizeBytes = await withConsistentDisk(imp, 'checkpoint', () =>
-          storage.createCheckpoint(imp.id, id),
+        const created = await withConsistentDisk(imp, 'checkpoint', () =>
+          createWithFreshId(imp.id),
         );
+
+        const id = created.id;
 
         try {
           const checkpoint = await createCheckpoint(deps.db, {
             id,
             impId: imp.id,
             label: label ?? null,
-            sizeBytes,
+            sizeBytes: created.sizeBytes,
           });
 
           const ms = Math.round(performance.now() - started);
