@@ -8,7 +8,7 @@ How to check a change before you push it, and what CI and the branch rules do wi
 ```sh
 bun run typecheck && bun run lint && bun test
 bun run format:check && bun run deadcode
-bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
+bun run lint:shell                # shellcheck over scripts/, host/, kernel/, deploy/ and test/
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/acceptance.sh --clean     # end to end, from a clean state
 ```
@@ -57,6 +57,10 @@ binary. It is not a required check. On `main`, the `release-please` job makes re
 ([RELEASING.md](../../RELEASING.md)).
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
+
+`.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub` when a pull request or a
+push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It is not
+a required check.
 
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:
