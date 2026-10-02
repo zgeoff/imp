@@ -351,3 +351,27 @@ test('without a kill grace the request carries none', async () => {
 
   stream.close();
 });
+
+test('an outer exec is the exec.outer op, which an older agent refuses as AGENT_OUTDATED', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'UNKNOWN_OP', message: 'unknown op exec.outer' },
+      }),
+    );
+  });
+
+  const rejection = await openExecStream(vsock.path, {
+    argv: ['ls', '/user'],
+    tty: false,
+    outer: true,
+  }).catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED' });
+
+  expect(decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() })).toEqual({
+    op: 'exec.outer',
+    argv: ['ls', '/user'],
+    tty: false,
+  });
+});

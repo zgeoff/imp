@@ -63,6 +63,17 @@ test('imp_exec needs exactly one of command and argv', async () => {
   expect(both.content[0].text).toContain('give either command or argv');
 });
 
+test('imp_exec has no exec in the agent: an outer field is refused, and nothing runs', async () => {
+  await using ctx = await setupMcpTest();
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const result = await ctx.runTool('imp_exec', { name: 'dev', argv: ['ls'], outer: true });
+
+  expect(result.isError).toBe(true);
+  expect(ctx.guest.requests).toEqual([]);
+});
+
 test('imp_exec keeps the head and the tail of a large output and counts what it dropped', async () => {
   await using ctx = await setupMcpTest();
 

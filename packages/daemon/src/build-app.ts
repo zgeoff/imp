@@ -139,7 +139,13 @@ export function buildApp(deps: AppDeps) {
   const buildExecBackend = (grant: ExecGrant | undefined) => {
     const actor = grant?.caller ?? { kind: 'token', name: 'unknown' };
 
-    return buildAuditedBackend(buildGrantedBackend(deps.imps, grant), deps.audit, actor, deps.now);
+    return buildAuditedBackend(
+      buildGrantedBackend(deps.imps, grant),
+      deps.audit,
+      actor,
+      deps.imps.events,
+      deps.now,
+    );
   };
 
   // what ends when the caller's dashboard logs out or its token goes

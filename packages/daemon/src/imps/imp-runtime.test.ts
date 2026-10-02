@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test';
+import { rmSync } from 'node:fs';
+import { startFakeAgent } from '../agent-client/fake-agent';
+import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { writeLease } from '../db/leases';
 import type { ImpDatabase } from '../db/open-database';
@@ -401,4 +404,56 @@ test('a unix socket dial on an agent from before 0.6.0 fails as AGENT_OUTDATED, 
 
   expect(unixDial).toMatchObject({ code: 'AGENT_OUTDATED' });
   expect(tcpDial).not.toMatchObject({ code: 'AGENT_OUTDATED' });
+});
+
+test('an outer exec to an older agent is refused before it is sent', async () => {
+  await using ctx = await setupRunningImp();
+
+  const paths = buildImpPaths(ctx.dataDir, ctx.impId);
+  const identity = readVmIdentity(paths);
+
+  if (identity === null) {
+    throw new Error('no vm identity');
+  }
+
+  const agent = await startFakeAgent(paths.vsockSocket, (socket) => {
+    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+  });
+
+  const openOuter = () =>
+    ctx.imps.openExec('dev', { argv: ['sh'], tty: true, outer: true }, 'outer-exec');
+
+  // an imp booted before impd recorded versions has no identity file
+  rmSync(paths.vmIdentity);
+
+  const missing = await openOuter().catch((error: unknown) => error);
+
+  writeVmIdentity(paths, { ...identity, agentVersion: 'dev' });
+
+  const unparsed = await openOuter().catch((error: unknown) => error);
+
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.15.0' });
+
+  const older = await openOuter().catch((error: unknown) => error);
+
+  expect(String(missing)).toContain('no record of the imp');
+
+  expect([missing, unparsed, older]).toEqual([
+    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
+    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
+    expect.objectContaining({ code: 'AGENT_OUTDATED' }),
+  ]);
+
+  expect(agent.received).toEqual([]);
+
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.16.0' });
+
+  const stream = await openOuter();
+
+  stream.close();
+  agent.close();
+
+  expect(agent.received.map((frame) => decodeJsonPayload(frame))).toEqual([
+    { op: 'exec.outer', argv: ['sh'], tty: true },
+  ]);
 });

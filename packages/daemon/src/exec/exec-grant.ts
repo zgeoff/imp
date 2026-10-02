@@ -2,6 +2,7 @@ import { buildForbiddenError } from '../api-errors';
 import { formatCaller, isCallerAllowed } from '../auth/caller';
 import type { Caller } from '../auth/caller';
 import { toCallerError } from '../auth/caller-view';
+import { hasScope } from '../auth/scopes';
 import type { ExecBackend } from './exec-session';
 
 // What an `/exec` socket may start: its caller, and a ticket's one imp. Each
@@ -34,6 +35,20 @@ export function buildGrantedBackend(
     return null;
   };
 
+  const checkOuter = (): Error | null => {
+    if (grant === undefined || grant.name !== null) {
+      return buildForbiddenError('an exec ticket cannot run an exec in the agent');
+    }
+
+    if (grant.caller.imps !== null || !hasScope(grant.caller.scope, 'manage')) {
+      return buildForbiddenError(
+        `${formatCaller(grant.caller)} needs host-wide scope manage to exec in the agent`,
+      );
+    }
+
+    return null;
+  };
+
   // a refusal to boot names only the imps the caller may read
   const openAsCaller = async <T>(opening: Promise<T>): Promise<T> => {
     try {
@@ -45,16 +60,17 @@ export function buildGrantedBackend(
 
   return {
     // A tool runs as root, which `exec` scope must not reach (a forward runs
-    // as the image user), so it needs `manage`; a ticket never starts one
+    // as the image user), so it needs `manage`; a ticket never starts one.
+    // An outer exec, whatever its feature, needs host-wide `manage`.
     openExec: (name, request, feature) => {
-      const refused = checkGrant(name);
+      const refused = checkGrant(name) ?? (request.outer === true ? checkOuter() : null);
 
       if (refused !== null) {
         return Promise.reject(refused);
       }
 
-      if (feature === undefined) {
-        return openAsCaller(backend.openExec(name, request));
+      if (feature === undefined || request.outer === true) {
+        return openAsCaller(backend.openExec(name, request, feature));
       }
 
       if (grant?.name !== null) {

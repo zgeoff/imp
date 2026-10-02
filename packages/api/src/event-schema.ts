@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { ApiActorSchema } from './api-call-schema';
 import { CheckpointSchema } from './checkpoint-schema';
 import { ImpSchema } from './imp-schema';
 import { NameSchema } from './name-schema';
@@ -104,6 +105,19 @@ export const ImpEventSchema = z.discriminatedUnion('ev', [
     // not sleep; never their names, which not every reader may see
     neededMib: z.int().nonnegative().optional(),
     protectedCount: z.int().nonnegative().optional(),
+  }),
+
+  // the agent took a command to run in its own world, outside the imp's
+  // container (`imp exec --agent`): who ran it, and the program, never
+  // its arguments
+  z.object({
+    ...envelope,
+    ev: z.literal('AgentExec'),
+    name: NameSchema,
+    actor: ApiActorSchema,
+    actorName: z.string(),
+    tty: z.boolean(),
+    command: z.string(),
   }),
 ]);
 

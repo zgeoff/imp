@@ -3,6 +3,7 @@ import {
   EXEC_CHANNELS,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
+  ExecStartMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
 } from './exec-protocol';
@@ -96,6 +97,17 @@ test('it parses the session server messages', () => {
   }
 
   expect(ExecServerMessageSchema.safeParse({ type: 'detached', reason: 'bored' }).success).toBe(
+    false,
+  );
+});
+
+test('an outer exec takes no tool or session', () => {
+  const start = { type: 'start', name: 'dev', argv: ['sh'], tty: true, outer: true } as const;
+
+  expect(ExecStartMessageSchema.safeParse(start).success).toBe(true);
+  expect(ExecStartMessageSchema.safeParse({ ...start, session: 'main' }).success).toBe(false);
+
+  expect(ExecStartMessageSchema.safeParse({ ...start, tty: false, tool: 'tar' }).success).toBe(
     false,
   );
 });

@@ -221,3 +221,35 @@ test('a refused boot over the socket names only the imps the caller may read', a
     },
   });
 });
+
+test('an outer exec needs host-wide manage, and no ticket starts one', async () => {
+  const outer = { argv: ['sh'], tty: true, outer: true };
+
+  const open = async (grant: Parameters<typeof buildGrantedBackend>[1]) => {
+    const ctx = buildBackend();
+
+    const result = await buildGrantedBackend(ctx.backend, grant)
+      .openExec('dev', outer, 'outer-exec')
+      .catch((error: unknown) => error);
+
+    return { result, opened: ctx.opened };
+  };
+
+  const refusals = [
+    { caller: buildTestCaller({ scope: 'exec' }), name: null },
+    { caller: buildTestCaller({ scope: 'manage', imps: ['dev'] }), name: null },
+    { caller: buildTestCaller({ kind: 'dashboard', scope: 'manage' }), name: 'dev' },
+    undefined,
+  ];
+
+  for (const grant of refusals) {
+    const refused = await open(grant);
+
+    expect(refused.result).toMatchObject({ code: 'FORBIDDEN' });
+    expect(refused.opened).toEqual([]);
+  }
+
+  const allowed = await open({ caller: buildTestCaller({ scope: 'manage' }), name: null });
+
+  expect(allowed.opened).toEqual(['dev']);
+});
