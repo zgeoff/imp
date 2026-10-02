@@ -165,6 +165,7 @@ interface EnvInput {
   readonly hostFirewall?: string;
   readonly ipv6?: string;
   readonly subnet6?: string;
+  readonly ksm?: boolean;
 }
 
 function renderEnv(input: EnvInput): string {
@@ -179,6 +180,7 @@ function renderEnv(input: EnvInput): string {
     input.hostFirewall ?? 'own',
     input.ipv6 ?? 'off',
     input.subnet6 ?? '',
+    input.ksm === true ? '1' : '',
   ];
 
   return runFunction('render_env', args, { env: { BOOTSTRAP_AUTHKEY: input.key ?? '' } });
@@ -240,6 +242,46 @@ test('none replaces own, and stays on the next render', () => {
 
   expect(getEnvValues(env, 'IMP_HOST_FIREWALL')).toEqual(['none']);
   expect(renderEnv({ existing: env, hostFirewall: 'none' })).toBe(env);
+});
+
+test('--ksm sets IMP_KSM=1; without it the operator’s IMP_KSM stays', () => {
+  const env = renderEnv({ existing: template, ksm: true });
+
+  expect(getEnvValues(env, 'IMP_KSM')).toEqual(['1']);
+  expect(renderEnv({ existing: env, ksm: true })).toBe(env);
+  expect(renderEnv({ existing: env })).toBe(env);
+  expect(getEnvValues(renderEnv({ existing: template }), 'IMP_KSM')).toEqual(['']);
+});
+
+test('--ksm needs Linux 6.10 and starts ksmd with zero-page merging at boot', () => {
+  const checkSupport = (release: string): boolean => {
+    try {
+      runFunction('kernel_supports_ksm', [release]);
+
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  expect(
+    ['6.10.0-1-amd64', '6.17.0-1022-azure', '7.0.0'].map((release) => checkSupport(release)),
+  ).toEqual([true, true, true]);
+
+  expect(
+    ['6.9.12', '6.6.87.2-microsoft-standard-WSL2', '5.15.0'].map((release) =>
+      checkSupport(release),
+    ),
+  ).toEqual([false, false, false]);
+
+  expect(runFunction('ksm_tmpfiles')).toBe(
+    [
+      '# Written by deploy/bootstrap.sh --ksm.',
+      'w /sys/kernel/mm/ksm/use_zero_pages - - - - 1',
+      'w /sys/kernel/mm/ksm/run - - - - 1',
+      '',
+    ].join('\n'),
+  );
 });
 
 test('missing keys are appended once, and rendering twice changes nothing', () => {

@@ -64,6 +64,10 @@ Options:
   --ra-handled                the client that takes the host's router adverts
                               (networkd, NetworkManager, dhcpcd) keeps them
                               with forwarding on; see docs/guides/install.md#ipv6
+  --ksm                       let KSM merge identical guest pages: ksmd runs
+                              at boot and IMP_KSM=1. Bare metal with Linux 6.10
+                              or later only. Off by default: merged pages let
+                              guests time each other (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
   --skip-health               skip the closing health check
 EOF
 }
@@ -114,6 +118,7 @@ ipv6_auto=
 ipv6_subnet=
 ra_handled=
 skip_health=
+ksm=
 changes=0
 in_container=
 
@@ -172,6 +177,20 @@ write_file() {
 # version_ge A B: A >= B for dotted versions.
 version_ge() {
   [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$2" ]
+}
+
+# kernel_supports_ksm RELEASE: Linux 6.10 or later, the first that keeps
+# the merge flag across exec and has ksmd scan the exec'd process.
+kernel_supports_ksm() {
+  version_ge "$(echo "$1" | grep -oE '^[0-9]+\.[0-9]+')" 6.10
+}
+
+# ksm_tmpfiles: the rule that starts ksmd at boot. Zero pages merge into the
+# kernel's zero page; the scan rate stays the kernel's default.
+ksm_tmpfiles() {
+  printf '%s\n' '# Written by deploy/bootstrap.sh --ksm.' \
+    'w /sys/kernel/mm/ksm/use_zero_pages - - - - 1' \
+    'w /sys/kernel/mm/ksm/run - - - - 1'
 }
 
 # ram_budget_mib MEMTOTAL_KIB [ARC_MIB]: the RAM awake imps may use. The
@@ -424,19 +443,20 @@ EOF
 }
 
 # render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT
-# HOST_FIREWALL IPV6 SUBNET6: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
+# HOST_FIREWALL IPV6 SUBNET6 [KSM]: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
 # file) wins over TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE
 # is set when IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB
 # when it is empty or still the template's, IMP_STORAGE_BACKEND,
 # IMP_HOST_FIREWALL, IMP_HOST_IPV6 and IMP_HOST_NETWORK (from IPV6) always,
-# and IMP_ZFS_ROOT and IMP_HOST_SUBNET6 when theirs is non-empty. TAILSCALE_AUTHKEY comes from the
+# IMP_ZFS_ROOT and IMP_HOST_SUBNET6 when theirs is non-empty, and IMP_KSM=1
+# when KSM is non-empty (an existing IMP_KSM stays otherwise). TAILSCALE_AUTHKEY comes from the
 # environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
 # non-empty.
 render_env() {
   local base=$1 template=$2 budget=$3 img=$4 img_set=$5
   [ -z "$base" ] && base=$template && img_set=1
   BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
-    STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 IPV6=$9 SUBNET6=${10} \
+    STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 IPV6=$9 SUBNET6=${10} KSM=${11:-} \
     NETWORK=$([ "$9" != on ] || echo "--network $HOST_NETWORK") \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
@@ -447,6 +467,7 @@ render_env() {
       /^IMP_HOST_IPV6=/ { set("IMP_HOST_IPV6", ENVIRON["IPV6"]); next }
       /^IMP_HOST_NETWORK=/ { set("IMP_HOST_NETWORK", ENVIRON["NETWORK"]); next }
       /^IMP_HOST_SUBNET6=/ && ENVIRON["SUBNET6"] != "" { set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"]); next }
+      /^IMP_KSM=/ && ENVIRON["KSM"] != "" { set("IMP_KSM", "1"); next }
       /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
         set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
       }
@@ -466,6 +487,7 @@ render_env() {
         if (!done["IMP_HOST_IPV6"]) set("IMP_HOST_IPV6", ENVIRON["IPV6"])
         if (!done["IMP_HOST_NETWORK"]) set("IMP_HOST_NETWORK", ENVIRON["NETWORK"])
         if (!done["IMP_HOST_SUBNET6"] && ENVIRON["SUBNET6"] != "") set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"])
+        if (!done["IMP_KSM"] && ENVIRON["KSM"] != "") set("IMP_KSM", "1")
       }
     ' <<<"$base"
 }
@@ -597,6 +619,14 @@ IMP_HOST_IPV6=
 IMP_HOST_SUBNET6=
 IMP_HOST_NETWORK=
 
+# KSM merges identical guest pages
+# (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+# Off by default: merged pages let guests time each other. bootstrap.sh --ksm
+# sets IMP_KSM=1 on a bare-metal host with Linux 6.10 or later. The governor
+# keeps this share of KSM's saving free, for pages that writes split again.
+IMP_KSM=
+IMP_KSM_HEADROOM_PERCENT=100
+
 # Off-host backups with restic (docs/architecture/backups.md): unset
 # IMP_BACKUP_REPOSITORY means none. The container sees /etc/imp read-only;
 # keep the password there, mode 0600, and a copy off the host.
@@ -671,6 +701,7 @@ parse_args() {
       --ipv6) ipv6=${2:?--ipv6 needs auto, on or off} ipv6_set=1 && shift ;;
       --ra-handled) ra_handled=1 ;;
       --skip-health) skip_health=1 ;;
+      --ksm) ksm=1 ;;
       -h | --help) usage && exit 0 ;;
       *) usage >&2 && die "unknown argument: $1" ;;
     esac
@@ -1134,6 +1165,21 @@ module_present() {
 
 write_param() { echo "$2" >"$1"; }
 
+# ensure_ksm: with --ksm, ksmd runs now and at boot. KSM is global to the
+# kernel, so a container refuses it, and so does a kernel older than 6.10.
+ensure_ksm() {
+  [ -n "$ksm" ] || return 0
+  phase ksm
+  [ -z "$in_container" ] || die "--ksm needs a bare-metal host: KSM is global to the kernel"
+  kernel_supports_ksm "$(uname -r)" || die "--ksm needs Linux 6.10 or later; this host runs $(uname -r)"
+  [ -d /sys/kernel/mm/ksm ] || die "--ksm needs a kernel built with CONFIG_KSM"
+  put_file /etc/tmpfiles.d/imp-ksm.conf 644 "$(ksm_tmpfiles)" || true
+  local key
+  for key in use_zero_pages run; do
+    [ "$(cat "/sys/kernel/mm/ksm/$key")" = 1 ] || change "set KSM $key=1" write_param "/sys/kernel/mm/ksm/$key" 1
+  done
+}
+
 memtotal_kib() { awk '/^MemTotal:/ { print $2 }' /proc/meminfo; }
 
 ensure_firewall() {
@@ -1497,7 +1543,7 @@ ensure_imp() {
 
   local env changed=
   env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
-    "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet")
+    "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet" "$ksm")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
   if [ "$(sed -n 's/^IMP_RAM_BUDGET_MIB=//p' <<<"$env" | tail -n 1)" = "$budget" ] \
@@ -1659,6 +1705,7 @@ main() {
   ensure_packages
   ensure_storage
   ensure_kernel
+  ensure_ksm
   ensure_firewall
   ensure_ipv6
   ensure_imp
