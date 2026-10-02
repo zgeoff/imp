@@ -74,8 +74,8 @@ lifecycle asks it for room. It reserves RAM, sleeps the least recently active im
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
 a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
 an imp's lock: a victim locked by the time its turn comes is skipped. Every 5 s it also sleeps imps
-while the measured use is over the budget. [Sleep and wake](./sleep-and-wake.md#the-ram-governor)
-has the rules and the numbers.
+while the measured use is over the budget, all it may sleep when they cannot bring it under.
+[Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
 ### idle: the idle loop
 

@@ -190,16 +190,14 @@ function setupModel(start: readonly { readonly id: string; readonly rssMib: numb
     return asleep.reservedMib - measured.reservedMib;
   };
 
-  // measured usage over the budget that the eligible imps could have freed
-  const findRoomLeft = (): { readonly overMib: number; readonly freeableMib: number } => {
+  // measured usage over the budget, and how many imps the governor may still
+  // sleep
+  const findRoomLeft = (): { readonly overMib: number; readonly eligibleAwake: number } => {
     const awake = [...imps.values()].filter((imp) => imp.awake);
     const usedMib = awake.reduce((sum, imp) => sum + imp.rssMib, 0);
+    const eligibleAwake = awake.filter((imp) => !imp.held && !imp.busy).length;
 
-    const freeableMib = awake
-      .filter((imp) => !imp.held && !imp.busy)
-      .reduce((sum, imp) => sum + imp.rssMib, 0);
-
-    return { overMib: usedMib - BUDGET_MIB, freeableMib };
+    return { overMib: usedMib - BUDGET_MIB, eligibleAwake };
   };
 
   const applyMutation = (op: MutationOp): void => {
@@ -300,11 +298,10 @@ test(
           } else if (op.kind === 'enforce') {
             await model.governor.enforce();
 
-            // over budget only when sleeping every eligible imp would not do;
-            // #46 makes enforce sleep what it can, which tightens this
+            // under the budget, or every imp it may sleep is asleep
             const room = model.findRoomLeft();
 
-            expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
+            expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
           } else {
             model.applyMutation(op);
           }
@@ -316,6 +313,42 @@ test(
           expect(calls.filter((call) => !call.eligible)).toEqual([]);
           expect(calls.length).toBeLessThanOrEqual(awakeBefore);
         }
+      }),
+      { numRuns: 300 },
+    );
+  },
+  SLOW_TEST_TIMEOUT_MS,
+);
+
+// A host where imps up to the whole budget may be held or busy: often the
+// imps enforce may sleep cannot free enough between them.
+const crowdedHostArb = fc.uniqueArray(
+  fc.record({
+    id: idArb,
+    rssMib: fc.integer({ min: 0, max: BUDGET_MIB }),
+    held: fc.boolean(),
+    busy: fc.boolean(),
+  }),
+  { selector: (imp) => imp.id, minLength: 1, maxLength: IMP_IDS.length },
+);
+
+test(
+  'enforce on a crowded host gets under the budget or sleeps every imp it may',
+  async () => {
+    await fc.assert(
+      fc.asyncProperty(crowdedHostArb, async (host) => {
+        const model = setupModel(host);
+
+        for (const imp of host) {
+          Object.assign(model.findImp(imp.id), { held: imp.held, busy: imp.busy });
+        }
+
+        await model.governor.enforce();
+
+        const room = model.findRoomLeft();
+
+        expect(model.sleepCalls.filter((call) => !call.eligible)).toEqual([]);
+        expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
       }),
       { numRuns: 300 },
     );
@@ -374,10 +407,10 @@ test(
 
           await model.governor.enforce();
 
-          // as above; #46 tightens it
+          // as above
           const room = model.findRoomLeft();
 
-          expect(room.overMib <= 0 || room.freeableMib < room.overMib).toBeTrue();
+          expect(room.overMib <= 0 || room.eligibleAwake === 0).toBeTrue();
         },
       ),
       { numRuns: 200 },

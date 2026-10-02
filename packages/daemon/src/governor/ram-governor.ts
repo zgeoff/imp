@@ -31,6 +31,19 @@ interface UsageTotals {
   readonly effectiveMib: number;
 }
 
+// When the imps makeRoom may sleep cannot free enough: admission sleeps none
+// for a request that cannot fit; enforcement sleeps them all, since the
+// budget protects the host
+type WhenShort = 'giveUp' | 'sleepAll';
+
+interface RoomOutcome {
+  readonly fits: boolean;
+  readonly slept: number;
+
+  // what was still missing at the last measurement
+  readonly missingMib: number;
+}
+
 interface RamUsage {
   // measured: what awake Firecrackers own now
   readonly usedMib: number;
@@ -52,7 +65,9 @@ export interface RamAdmission {
 export interface RamGovernor extends RamAdmission {
   readonly readUsage: () => Promise<RamUsage>;
 
-  // sleeps LRU imps while measured usage is over the budget
+  // sleeps LRU imps while measured usage is over the budget; when the imps it
+  // may sleep cannot free enough, it sleeps all of them to get as close as it
+  // can
   readonly enforce: () => Promise<void>;
 }
 
@@ -79,6 +94,9 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   const reservations = new Map<string, { readonly mib: number; readonly until: number }>();
 
   const now = deps.now ?? Date.now;
+
+  // enforce logs that it cannot reach the budget once, not every tick
+  let stuckOver = false;
 
   const readReservation = (id: string): number => {
     const reservation = reservations.get(id);
@@ -127,23 +145,26 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
     return { awake, byImp, usedMib, effectiveMib };
   };
 
-  // sleeps LRU imps until `findMissing` reports nothing missing; false when
-  // no imp is left to sleep. An imp that was skipped or failed is not picked
-  // again in this call, so the loop ends.
+  // sleeps LRU imps until `findMissing` reports nothing missing; it gives up
+  // when no eligible imp is left awake, or as `whenShort` says. An imp that
+  // was skipped or failed is not picked again in this call, so the loop ends.
   const makeRoom = async (
     excludeId: string | null,
     reason: string,
+    whenShort: WhenShort,
     findMissing: (usage: UsageTotals) => number,
-  ): Promise<boolean> => {
+  ): Promise<RoomOutcome> => {
     const passed = new Set<string>();
+
+    let slept = 0;
 
     for (;;) {
       const usage = await readEffectiveUsage(excludeId);
 
-      const missing = findMissing(usage);
+      const missingMib = findMissing(usage);
 
-      if (missing <= 0) {
-        return true;
+      if (missingMib <= 0) {
+        return { fits: true, slept, missingMib };
       }
 
       const time = now();
@@ -156,17 +177,19 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         busy: deps.isBusy(imp.id) || passed.has(imp.id),
       }));
 
-      const victims = pickSleepVictims(candidates, missing);
+      const picked = pickSleepVictims(candidates, missingMib);
 
-      if (victims === null || victims.length === 0) {
-        return false;
+      if (picked.victims.length === 0 || (!picked.enough && whenShort === 'giveUp')) {
+        return { fits: false, slept, missingMib };
       }
 
-      for (const id of victims) {
+      for (const id of picked.victims) {
         const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
 
         if (outcome === 'slept') {
           reservations.delete(id);
+
+          slept += 1;
         } else {
           passed.add(id);
         }
@@ -183,13 +206,14 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
           throw buildImpOverBudgetError(deps.budgetMib, usage.effectiveMib, request.memoryMib);
         }
 
-        const fits = await makeRoom(
+        const room = await makeRoom(
           request.id,
           `to make room for ${request.name}`,
+          'giveUp',
           (usage) => usage.effectiveMib + request.reserveMib - deps.budgetMib,
         );
 
-        if (!fits) {
+        if (!room.fits) {
           const usage = await readEffectiveUsage(request.id);
 
           throw buildRamBudgetError(deps.budgetMib, usage.effectiveMib, request.reserveMib);
@@ -216,14 +240,25 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
 
     enforce: () =>
       admission.run(async () => {
-        const fits = await makeRoom(
+        const room = await makeRoom(
           null,
           'RAM over budget',
+          'sleepAll',
           (usage) => usage.usedMib - deps.budgetMib,
         );
 
-        if (!fits) {
-          deps.log('impd: governor: RAM over budget and no idle imp left to sleep');
+        const over = `over budget by ${String(room.missingMib)} MiB`;
+
+        if (room.fits) {
+          stuckOver = false;
+        } else if (room.slept > 0) {
+          deps.log(`impd: governor: slept ${String(room.slept)}, RAM still ${over}`);
+
+          stuckOver = true;
+        } else if (!stuckOver) {
+          deps.log(`impd: governor: RAM ${over} and no idle imp left to sleep`);
+
+          stuckOver = true;
         }
       }),
   };
