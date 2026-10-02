@@ -15,6 +15,16 @@
 # packageManager in package.json.
 FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS bun
 
+# --- ksm-exec: starts Firecracker so KSM may merge its guest memory, when
+# IMP_KSM is on (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages) ---
+FROM golang:1.26.8-trixie@sha256:eae2aaa6add2936cbf350dd0d2628b363461542f0c4b3c0b558957e0f2997379 AS ksm-exec
+WORKDIR /src/agent
+COPY agent/go.mod agent/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY agent/cmd/ksm-exec/ ./cmd/ksm-exec/
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags='-s -w' -o /out/ksm-exec ./cmd/ksm-exec
+
 # --- runtime: what every host container needs, dev or release ---
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 
@@ -65,6 +75,8 @@ RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/f
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/firecracker \
  && install -m 0755 "/tmp/release-${FIRECRACKER_VERSION}-x86_64/jailer-${FIRECRACKER_VERSION}-x86_64" /usr/local/bin/jailer \
  && rm -rf /tmp/release-* /tmp/firecracker.tgz
+
+COPY --from=ksm-exec /out/ksm-exec /usr/local/bin/ksm-exec
 
 RUN curl -fsSL -o /tmp/restic.bz2 "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2" \
  && echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c - \
