@@ -311,6 +311,11 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         }
       }
 
+      // a build cut short after its `@base`, before its rename
+      for (const snapshot of entries.filter((entry) => entry.name.startsWith(`${staged.name}@`))) {
+        await zfs.destroy(snapshot.name);
+      }
+
       await zfs.destroy(staged.name);
 
       log(`impd: zfs: destroyed ${staged.name}, a clone or build a crash cut short`);
@@ -572,8 +577,9 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
 
       removeMountDir(dir);
 
+      // the snapshot moves with the rename, so no image is ever without one
+      await zfs.snapshot(`${staged}@base`);
       await zfs.rename(staged, name);
-      await zfs.snapshot(`${name}@base`);
 
       await setupMount(name, buildImageDir(digest));
     });

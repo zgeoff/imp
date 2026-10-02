@@ -186,7 +186,9 @@ On start, impd settles what a crash cut short, then runs the [cleanup](#cleanup)
   into place, and the restore is done. With `disks/<id>` still there, impd destroys it, and the
   restore never happened. The memory snapshot goes before the swap, so neither case pairs it with
   the wrong disk.
-- A `staging/image-*` is a build that never finished: impd destroys it and its mount dir.
+- A `staging/image-*` is a build that never finished: impd destroys it, its `@base` if it has one,
+  and its mount dir. A build takes `@base` in staging, before the rename, so every dataset under
+  `images/` has one.
 - A restore whose swap fails while impd runs is repaired the same way at once: the old disk goes
   back when it is still in place, else the clone takes its name.
 - A `@cp-*` snapshot with no row and every `@fork-*` and `@bk-*` snapshot is marked for destroy,

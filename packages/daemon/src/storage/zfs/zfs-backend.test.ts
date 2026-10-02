@@ -166,7 +166,7 @@ test('start makes the datasets it needs, once, and mounts the memory dataset', a
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe(`${ROOT}/mem`);
 });
 
-test('an image is built in staging, then renamed, snapshotted and mounted', async () => {
+test('an image is built and snapshotted in staging, then renamed and mounted', async () => {
   await using ctx = setupTest();
 
   await ctx.backend.start(ctx.live);
@@ -190,8 +190,8 @@ test('an image is built in staging, then renamed, snapshotted and mounted', asyn
     `zfs create ${staged}`,
     `mount -t zfs ${staged} ${dirs[0] ?? ''}`,
     `umount ${dirs[0] ?? ''}`,
+    `zfs snapshot ${staged}@base`,
     `zfs rename ${staged} ${IMAGE}`,
-    `zfs snapshot ${IMAGE}@base`,
     `mount -t zfs ${IMAGE} ${join(ctx.dataDir, 'images', '9f2c')}`,
   ]);
 });
@@ -929,6 +929,43 @@ test('a checkpoint id held by a deleted checkpoint a fork needs is taken', async
 
   expect(failure).toBeInstanceOf(CheckpointIdTakenError);
 });
+
+// each step of an image build after its write: snapshot, rename, mount
+const IMAGE_BUILD_STEPS = [
+  { step: 'snapshot', before: (command: string) => /^zfs snapshot .+@base$/.test(command) },
+  {
+    step: 'rename',
+    before: (command: string) => command.startsWith(`zfs rename ${ROOT}/staging/`),
+  },
+  { step: 'mount', before: (command: string) => command.startsWith(`mount -t zfs ${IMAGE} `) },
+];
+
+for (const build of IMAGE_BUILD_STEPS) {
+  test(`an image build cut short before its ${build.step} leaves no image a clone fails on`, async () => {
+    await using ctx = setupTest();
+
+    await ctx.backend.start(ctx.live);
+
+    ctx.fake.crashBefore(build.before);
+
+    const failure = await readFailure(ctx.backend.createImage(DIGEST, () => Promise.resolve()));
+
+    expect(failure).toBeInstanceOf(FakeZfsCrashError);
+
+    await ctx.restartImpd(true);
+
+    expect(ctx.fake.listDatasets().filter((name) => name.includes('/staging/'))).toEqual([]);
+
+    // a re-pull reuses an image in place; with none, it builds one again
+    if (!ctx.fake.listDatasets().includes(IMAGE)) {
+      await ctx.backend.createImage(DIGEST, () => Promise.resolve());
+    }
+
+    await ctx.createImp('a');
+
+    expect(ctx.fake.readOrigin(`${ROOT}/disks/a`)).toBe(`${IMAGE}@base`);
+  });
+}
 
 test('start drops an image build a crash cut short, with its mount dir', async () => {
   await using ctx = await setupStarted();
