@@ -218,6 +218,9 @@ async function main(): Promise<void> {
 
   const governed = createGovernedImps({
     cgroups,
+
+    // each VM's memory.max follows what its elastic guest holds
+    memoryLimit: cgroups,
     config,
     db,
     images,

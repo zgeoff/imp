@@ -116,7 +116,9 @@ snapshot took 2.3 s and 4.3 GiB of page cache; after an unplug, it took 720 ms.
   past the budget would make enforcement sleep every other imp on the host. The check runs at each
   boot and wake rather than at create, so that a smaller budget set later holds too. A create boots
   the imp, so it gets the same refusal.
-- **Max is fixed.** It is set at create, and a fork, a backup restore and a move keep it.
+- **Max is fixed.** It is set at create, and a fork, a backup restore and a move keep it. The source
+  refuses to move an elastic imp to a target whose impd predates elastic memory: its offer reply has
+  no `keepsMaxMemory`, and it would land the imp at a fixed size.
 - **Templates.** An elastic imp always boots the kernel, never a
   [boot template](./boot-templates.md). A template's snapshot has no hot-plug region and no
   `memhp_default_state` argument, and a restore cannot add them, so the guest could never grow. Its
@@ -141,4 +143,5 @@ order that never cuts a guest short:
 3. a grow raises it before the plug;
 4. a shrink lowers it only once the guest holds no more than the target and its RSS is under the new
    limit;
-5. the first tick after an impd restart sets it from the plugged size it reads back.
+5. an impd restart's adopt sets it from what the guest holds or was asked to hold, or from the max
+   when the guest does not answer, before a sleep or a snapshot can set up the cgroup again.

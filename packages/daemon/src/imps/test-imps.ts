@@ -302,9 +302,12 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       },
       egress,
       ipv6: options.ipv6 ?? null,
+
+      // recorded, then written as main.ts does when a test passes cgroups
       memoryLimit: {
         setGuestMib: (impId, guestMib) => {
           memoryLimits.push({ impId, guestMib });
+          options.cgroups?.setGuestMib(impId, guestMib);
         },
       },
       ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
