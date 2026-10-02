@@ -24,6 +24,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -341,7 +342,9 @@ func (s *Supervisor) logPath(svc *service) string {
 }
 
 // openLog rotates the service's log if it is too big, then opens it for
-// appending.
+// appending. O_NONBLOCK and the check keep a FIFO the user put there from
+// blocking the service's loop; the flag is cleared again before the service
+// gets the file.
 func (s *Supervisor) openLog(svc *service) (*os.File, error) {
 	if err := s.fsys.MkdirAll(s.logDir, 0o755); err != nil {
 		return nil, err
@@ -352,7 +355,19 @@ func (s *Supervisor) openLog(svc *service) (*os.File, error) {
 	if err := rotateLog(s.fsys, path); err != nil {
 		log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
 	}
-	return s.fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	f, err := s.fsys.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND|unix.O_NONBLOCK, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := fsroot.CheckRegular(f, path); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := unix.SetNonblock(int(f.Fd()), false); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 func (s *Supervisor) setState(svc *service, state string) {
