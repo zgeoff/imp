@@ -3,9 +3,9 @@ import { useNavigate } from '@tanstack/react-router';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
-import { isUnauthorized } from '../../lib/build-query-client';
 import { Button } from '../button';
 import styles from './console-view.module.css';
+import { pickFailureOutcome } from './pick-failure-outcome';
 import { setupTerminalBridge } from './setup-terminal-bridge';
 import type { TerminalEnd, TerminalSource } from './terminal-source';
 
@@ -74,17 +74,12 @@ export function ConsoleView(props: ConsoleViewProps) {
           setStatus({ kind: 'ended', end });
         }
       } catch (error) {
-        // the session ended: the ticket call got impd's 401
-        if (isUnauthorized(error)) {
+        const outcome = pickFailureOutcome(error, abort.signal.aborted);
+
+        if (outcome.kind === 'login') {
           await navigate({ to: '/login' });
-
-          return;
-        }
-
-        if (!abort.signal.aborted) {
-          const message = error instanceof Error ? error.message : String(error);
-
-          setStatus({ kind: 'ended', end: { kind: 'error', message } });
+        } else if (outcome.kind === 'show') {
+          setStatus({ kind: 'ended', end: { kind: 'error', message: outcome.message } });
         }
       }
     };
