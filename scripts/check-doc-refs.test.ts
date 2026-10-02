@@ -49,7 +49,6 @@ test('readAnchors numbers repeats and skips fenced code', () => {
 test('code references to existing pages and anchors pass', () => {
   const text = [
     `// see ${SLEEP}#the-ram-governor and ${SLEEP}#4-gotchas, gotcha 8`,
-    '// and sleep-and-wake.md#sleep-1, a bare page name',
     '// README.md and CHANGELOG.md are no docs pages',
   ].join('\n');
 
@@ -65,9 +64,16 @@ test('a missing page or anchor fails with its line', () => {
   ]);
 });
 
-test('a bare page name resolves against the docs tree', () => {
-  expect(readMessages('a.ts', '// sleep-and-wake.md#nope')).toEqual([
-    `${SLEEP} has no heading #nope`,
+test('a docs page named without its path fails, with or without an anchor', () => {
+  const message = 'names sleep-and-wake.md without its path; use docs/<area>/sleep-and-wake.md';
+
+  expect(readMessages('a.ts', '// sleep-and-wake.md#sleep')).toEqual([message]);
+  expect(readMessages('a.ts', '// (sleep-and-wake.md)')).toEqual([message]);
+});
+
+test('a docs path split after its folder fails', () => {
+  expect(readMessages('a.ts', '// the layout (docs/architecture/\n// storage.md)')).toEqual([
+    'splits a docs path across lines; use docs/<page>.md#<anchor>',
   ]);
 });
 
