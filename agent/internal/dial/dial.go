@@ -40,14 +40,21 @@ func Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
 	if err := w.WriteJSON(proto.TypeResponse, proto.OK{OK: true}); err != nil {
 		return err
 	}
+	return Relay(target, r, w)
+}
 
+// Relay copies bytes between target and the host connection until both
+// sides are done: the target's output ran out and the host half-closed. The
+// caller has already sent the RESPONSE, and closes target afterwards. The
+// agent's ssh-agent forwarding relays its clients here too.
+func Relay(target net.Conn, r *proto.Reader, w *proto.Writer) error {
 	// target → host. STDOUT_EOF tells the host the target closed its side;
 	// a read error ends the relay without it, so the host sees a reset.
 	outbound := make(chan error, 1)
-	safe.Go("dial output", func() {
+	safe.Go("relay output", func() {
 		outbound <- pumpOut(target, w)
 	}, func() {
-		outbound <- errors.New("dial output panicked")
+		outbound <- errors.New("relay output panicked")
 	})
 
 	// host → target. It reads until the host closes the connection, past
@@ -55,10 +62,10 @@ func Serve(req proto.Request, r *proto.Reader, w *proto.Writer) error {
 	// quiet.
 	halfClosed := make(chan struct{})
 	inbound := make(chan error, 1)
-	safe.Go("dial input", func() {
+	safe.Go("relay input", func() {
 		inbound <- pumpIn(r, target, halfClosed)
 	}, func() {
-		inbound <- errors.New("dial input panicked")
+		inbound <- errors.New("relay input panicked")
 	})
 
 	// Done once the target's output ran out and the host half-closed. A

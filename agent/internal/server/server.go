@@ -18,6 +18,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
+	"github.com/zgeoff/imp/agent/internal/sshagent"
 )
 
 // Port is the vsock port the agent listens on.
@@ -31,6 +32,7 @@ type Server struct {
 	Exec     *exec.Manager
 	Sessions *session.Manager
 	Services *services.Supervisor
+	Agents   *sshagent.Manager
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
 
@@ -122,6 +124,20 @@ func (s *Server) handle(c net.Conn) {
 	if req.Op == proto.OpDial {
 		if err := dial.Serve(req, r, w); err != nil {
 			log.Printf("dial %s %s: %v", req.Network, req.Address, err)
+		}
+		return
+	}
+	// agent.listen is long-lived but runs nothing, so it is not an exec in
+	// the activity report
+	if req.Op == proto.OpAgentListen {
+		if err := s.Agents.Listen(r, w); err != nil {
+			log.Printf("agent.listen: %v", err)
+		}
+		return
+	}
+	if req.Op == proto.OpAgentAccept {
+		if err := s.Agents.Accept(req, r, w); err != nil {
+			log.Printf("agent.accept: %v", err)
 		}
 		return
 	}
