@@ -116,8 +116,13 @@ if [ $want_up = 1 ]; then
     chmod 0600 "$auth"
     printf '%s' "$TAILSCALE_AUTHKEY" >"$auth"
   fi
-  ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
-    --advertise-tags=tag:imp --accept-dns=false --timeout=60s
+  if ! ts up --reset --auth-key="file:$auth" --hostname="$hostname" \
+    --advertise-tags=tag:imp --accept-dns=false --timeout=60s; then
+    [ -n "$key_file" ] || rm -f "$auth"
+    echo "tailscale-up: tailscale up failed with the key. A single-use key that was used already, an" \
+      "expired or revoked key, or no route to the control plane; give a new key to join" >&2
+    exit 1
+  fi
   [ -n "$key_file" ] || rm -f "$auth"
 fi
 
