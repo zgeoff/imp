@@ -110,16 +110,16 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                                                       |
-| ------------ | -------- | ------------------------------------------------------------------------------------------------------------------ |
-| `gitleaks`   | yes      | A secret scan over the history.                                                                                    |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, and the dashboard's tests and build. |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                     |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                                                              |
-| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.          |
-| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                         |
-| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                |
-| `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file.                              |
+| Job          | Required | What it runs                                                                                                                      |
+| ------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                                                                   |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`, and the dashboard's tests and build.                |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                                                                    |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                                                             |
+| `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                         |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.                                                        |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                               |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints and sleep suites. |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 
@@ -135,10 +135,15 @@ seconds with the reason. The job then:
    GB quota). A cold kernel build takes about 10 minutes, so the job's timeout is 25.
 2. builds the dev host image with a cache of its own (scope `imp-dev`) and sets
    `IMP_HOST_IMAGE_READY=1`, so `scripts/dev.sh` uses it instead of building it again. Only runs on
-   `main` write these caches; pull requests only read them.
+   `main` write these caches; pull requests only read them. Steps 1 and 2 are the composite action
+   `.github/actions/e2e-build`, which the `zfs` job uses too.
 3. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
    key in CI, and a missed timing limit only warns.
+
+The `zfs` job builds the same inputs, caps the ZFS ARC at 1 GiB, and runs the lifecycle, checkpoints
+and sleep suites on a pool in a sparse file. The job summary shows the ZFS timings, and the
+`zfs-e2e-results` artifact holds the logs.
 
 After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
 `results.json`, `metrics.jsonl` and `impd.log`, the dev container's whole log. A failed suite also

@@ -292,36 +292,10 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
-      - name: Setup Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      # type=gha cache needs the runtime token and URL in the environment,
-      # which only actions get by default
-      - name: Expose GitHub runtime
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
-
-      # The release's cache scope: the kernel layer rebuilds only when
-      # kernel/version or the config files change.
-      - name: Build kernel and system drive
-        run: |
-          cache_to=()
-          if [ "$WRITE_CACHE" = true ]; then
-            cache_to=(--cache-to "type=gha,scope=system-files,mode=max")
-          fi
-          docker buildx build -f host/Dockerfile --target system-files --platform linux/amd64 \
-            --output type=local,dest=.cache/ci \
-            --cache-from type=gha,scope=system-files "${cache_to[@]}" .
-
-      # --load puts it in the image store; IMP_HOST_IMAGE_READY below stops
-      # scripts/dev.sh from building it again without the GitHub cache
-      - name: Build host image
-        run: |
-          cache_to=()
-          if [ "$WRITE_CACHE" = true ]; then
-            cache_to=(--cache-to "type=gha,scope=imp-dev,mode=max")
-          fi
-          docker buildx build -f host/Dockerfile --target dev -t "${IMP_HOST_IMAGE:-imp-host:dev}" --load \
-            --cache-from type=gha,scope=imp-dev "${cache_to[@]}" .
+      - name: Build kernel, system drive and host image
+        uses: ./.github/actions/e2e-build
+        with:
+          write-cache: ${{ env.WRITE_CACHE }}
 
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
@@ -352,20 +326,49 @@ jobs:
         if: always()
         run: docker rm -f imp-dev || true
 
-  # The ZFS storage backend against a real pool: scripts/test-zfs.sh puts a
-  # throwaway pool on a sparse file, with the zfs module Ubuntu's kernel
-  # ships. Not a required check until it has proven stable on GitHub's
-  # runners; the fake zfs in the unit tests runs in `checks` either way.
+  # The ZFS storage backend on real pools: scripts/test-zfs.sh runs its tests
+  # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
+  # ships; then scripts/zfs-host-test.sh runs real imps on a second such pool
+  # through the lifecycle, checkpoints and sleep suites and prints the ZFS
+  # timings. Not a required check; the fake zfs in the unit tests runs in
+  # `checks` either way.
   zfs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    timeout-minutes: 10
+    # a cache miss rebuilds the guest kernel, about 10 minutes on 4 cores
+    timeout-minutes: 30
+    env:
+      # as the e2e job: reduced sizes for a 4-core, 16 GB runner
+      E2E_RAM_BUDGET_MIB: 4096
+      IMP_DEFAULT_MEMORY_MIB: 1024
+      IMP_KERNEL: .cache/ci/vmlinux
+      IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
+      IMP_HOST_IMAGE_READY: 1
+      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,sleep
+      IMP_ZFS_TEST_UNIT: 0
+      WRITE_CACHE: ${{ github.event_name == 'push' }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Check KVM
+        run: scripts/check-kvm.sh
+
+      # the pool files go on /mnt, the runner's larger temp disk, when it has one
+      - name: Pick the work dir
+        run: |
+          df -h / /mnt || true
+          if mountpoint -q /mnt; then
+            work=/mnt/imp-zfs
+          else
+            work=$RUNNER_TEMP/imp-zfs
+          fi
+          sudo mkdir -p "$work"
+          sudo chown "$(id -u):$(id -g)" "$work"
+          echo "IMP_ZFS_TEST_DIR=$work" >> "$GITHUB_ENV"
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -383,6 +386,8 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      # ARC defaults to half of RAM; capped, as deploy/bootstrap.sh does, so
+      # the guests keep theirs
       - name: Install ZFS
         run: |
           sudo apt-get update
@@ -390,11 +395,41 @@ jobs:
           # zfs.ko sits in linux-modules-extra on some runner kernels
           modinfo zfs >/dev/null 2>&1 \
             || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
-          sudo modprobe zfs
+          sudo modprobe zfs zfs_arc_max=1073741824
+          echo 1073741824 | sudo tee /sys/module/zfs/parameters/zfs_arc_max >/dev/null
           zfs version
 
+      # the unit part runs here, in its own temp dir, so a failure names it
       - name: ZFS backend tests
-        run: sudo env "PATH=$PATH" scripts/test-zfs.sh
+        run: sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR= scripts/test-zfs.sh
+
+      - name: Build kernel, system drive and host image
+        uses: ./.github/actions/e2e-build
+        with:
+          write-cache: ${{ env.WRITE_CACHE }}
+
+      - name: Imps on ZFS
+        run: |
+          scripts/zfs-host-test.sh
+          cat "$IMP_ZFS_TEST_DIR/summary.txt" >> "$GITHUB_STEP_SUMMARY"
+
+      # also after a failure or a timeout, so none of these may fail the job
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p .cache/e2e
+          cp "$IMP_ZFS_TEST_DIR"/{impd.log,e2e.log,summary.txt} .cache/e2e/ 2>/dev/null || true
+          docker logs imp-zfs >>.cache/e2e/impd.log 2>&1 || true
+          df -h / /mnt || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zfs-e2e-results
+          path: .cache/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
 
   # Main-only jobs go below with `if: github.event_name == 'push'` and
   # `needs:` on the gates above.
