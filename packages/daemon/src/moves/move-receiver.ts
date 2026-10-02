@@ -592,6 +592,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           image: image.name,
           vcpus: header.imp.vcpus,
           memoryMib: header.imp.memoryMib,
+          maxMemoryMib: header.imp.maxMemoryMib,
           httpPort: header.imp.httpPort,
           diskMib: Math.ceil(header.imp.diskBytes / (1024 * 1024)),
           policy: resolvePolicy(header, deps.log),
@@ -762,6 +763,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       needsImage: existing === undefined,
       needsSystemDrive,
       storage: deps.storage.kind,
+      keepsMaxMemory: true,
     });
   };
 

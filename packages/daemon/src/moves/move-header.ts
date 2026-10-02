@@ -29,6 +29,10 @@ const ImpSchema = z
     name: z.string(),
     vcpus: z.int().positive(),
     memoryMib: z.int().positive(),
+
+    // an elastic imp's max (docs/architecture/memory.md); a source from
+    // before elastic memory leaves it out
+    maxMemoryMib: z.int().positive().optional(),
     httpPort: z.int().positive(),
     diskBytes: z.int().positive(),
     cpu: CpuSchema,
@@ -133,6 +137,10 @@ export const MoveOfferReplySchema = z.object({
   needsImage: z.boolean(),
   needsSystemDrive: z.boolean().default(false),
   storage: z.enum(['xfs', 'zfs']),
+
+  // the target keeps an elastic imp's max memory; a target from before
+  // elastic memory leaves it out, and would land the imp at a fixed size
+  keepsMaxMemory: z.boolean().default(false),
 });
 
 // `/move/commit` and `/move/abort`: whether the target's copy is live

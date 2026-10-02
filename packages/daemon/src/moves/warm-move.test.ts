@@ -4,7 +4,7 @@ import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { JAIL_UIDS, findImpByName, isSlotFree, updateImpDisk } from '../db/imps';
 import { writeMember, writeNetwork } from '../db/networks';
 import { readRejection } from '../read-rejection';
-import { readSnapshotMeta } from '../sleep/snapshot-meta';
+import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
@@ -115,6 +115,36 @@ test('a sleeping imp moves with its memory into its slot, and wakes from it ther
   expect(left).toBeUndefined();
   expect(woken.state).toBe('running');
   expect(ctx.target.fake.wakes).toHaveLength(1);
+});
+
+test('an elastic imp moves warm with its max and its plugged memory, which the wake allows', async () => {
+  await using ctx = await setupWarmTest();
+
+  const sourcePaths = ctx.source.storage.resolveImpPaths(ctx.impId);
+  const slept = readSnapshotMeta(sourcePaths);
+
+  await ctx.source.db
+    .updateTable('imps')
+    .set({ memory_mib: 256, max_memory_mib: 1024 })
+    .where('id', '=', ctx.impId)
+    .execute();
+
+  if (slept !== null) {
+    writeSnapshotMeta(sourcePaths, { ...slept, memoryMib: 256, pluggedMib: 512 });
+  }
+
+  const status = await ctx.runMove();
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  await ctx.targetApp.client.imps.wake({ name: 'dev' });
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(moved).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
+
+  expect(ctx.target.memoryLimits.findLast((limit) => limit.impId === ctx.impId)).toEqual({
+    impId: ctx.impId,
+    guestMib: 768,
+  });
 });
 
 // The target's Firecracker runs as the uid the target gives the imp, never
