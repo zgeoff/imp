@@ -4,6 +4,7 @@ import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
 import type { Broker } from '../broker/broker-service';
 import type { Config } from '../config';
 import { listCheckpoints } from '../db/checkpoints';
+import { listColdBoots } from '../db/cold-boots';
 import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -448,6 +449,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         grants,
         isIdentityResetPending: imp.isIdentityResetPending,
         isDiskGrowPending: imp.isDiskGrowPending,
+        coldBoots: await listColdBoots(deps.db, imp.id),
       },
       image: {
         name: image.name,
