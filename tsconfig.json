@@ -3,7 +3,7 @@
   "compilerOptions": {
     "types": ["bun", "@zgeoff/bun-test-extended"]
   },
-  "include": ["packages/*/src/**/*.ts", "test/**/*.ts"],
+  "include": ["packages/*/src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"],
   // a browser app with its own tsconfig (DOM, JSX)
   "exclude": ["node_modules", "tmp", "packages/dashboard"]
 }

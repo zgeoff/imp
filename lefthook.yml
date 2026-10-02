@@ -33,6 +33,8 @@ pre-push:
       run: bun run format:check
     - name: lint
       run: bun run lint
+    - name: lint:docs
+      run: bun run lint:docs
     # needs shellcheck on PATH, the version CI pins (0.11.0)
     - name: lint:shell
       run: bun run lint:shell
