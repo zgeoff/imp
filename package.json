@@ -55,7 +55,7 @@
   },
   "type": "module",
   "scripts": {
-    "audit": "bun audit",
+    "audit": "bun audit --ignore=GHSA-86w9-cpqp-85rv",
     "build:cli": "./scripts/build-cli.sh",
     "build:dashboard": "bun run --cwd packages/dashboard build",
     "deadcode": "knip",

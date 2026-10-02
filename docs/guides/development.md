@@ -126,6 +126,12 @@ Lefthook installs the hooks with `bun install`.
 | `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                               |
 | `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints and sleep suites. |
 
+`bun run audit` ignores one advisory by its ID. GHSA-86w9-cpqp-85rv is a flaw in node-forge's RSA
+signature verification, and no fixed node-forge exists (all versions up to 1.4.0). acme-client loads
+node-forge, but impd uses only `acme.crypto`, which runs on Node's own crypto and never calls
+node-forge to verify a signature. Drop the ignore when a fixed node-forge or an acme-client without
+it ships.
+
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 
 ### The e2e job
