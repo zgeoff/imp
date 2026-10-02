@@ -12,6 +12,8 @@
 # 4. Lists the imps: a NOTE says which boot cold on their next wake, and why
 #    (docs/guides/operations.md#upgrade).
 #
+# Needs docker, curl and jq on the host.
+#
 # Env: IMP_HOST_IMAGE (default: from IMP_HOST_ENV_FILE, else
 #      ghcr.io/zgeoff/imp-host:latest) must be the image the unit or the
 #      compose file runs. IMP_HOST_ENV_FILE defaults to /etc/imp/imp-host.env.
@@ -51,9 +53,10 @@ imp() {
   docker exec "$container" imp "$@"
 }
 
-# the imps impd lists as running, from the NAME and STATE columns
 list_awake() {
-  imp ls | awk 'NR > 1 && $2 == "running" { print $1 }'
+  local imps
+  imps=$(imp ls --json) || return 1
+  jq -r '.[] | select(.state == "running") | .name' <<<"$imps"
 }
 
 restart_host() {
@@ -75,6 +78,15 @@ wait_ready() {
   done
 }
 
+for tool in docker curl jq; do
+  command -v "$tool" >/dev/null || { echo "upgrade: $tool is not installed" >&2; exit 1; }
+done
+
+if ! docker inspect "$container" >/dev/null 2>&1; then
+  echo "upgrade: no $container container; start the host first (docs/guides/install.md)" >&2
+  exit 1
+fi
+
 image=$(read_image)
 
 echo "upgrade: pulling $image"
@@ -90,7 +102,10 @@ fi
 
 echo "upgrade: $old -> $new"
 
-for name in $(list_awake); do
+# its own line: a failed `imp ls` stops the script before anything restarts
+awake=$(list_awake)
+
+for name in $awake; do
   if ! imp sleep "$name" >/dev/null; then
     echo "upgrade: $name did not sleep; the host still runs $old" >&2
     exit 1
