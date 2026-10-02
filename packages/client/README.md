@@ -1,7 +1,7 @@
 # @zgeoff/imp-client
 
 A typed client for [impd](https://github.com/zgeoff/imp), the imp host daemon. It runs in Bun, in
-binaries that `bun build --compile` makes, in Node 22 or later, and in browsers with
+binaries that `bun build --compile` makes, in Node 22.6 or later, and in browsers with
 `Promise.withResolvers`: Chrome 119, Firefox 121 and Safari 17.4 or later. CI checks each release
 under Node, Bun and a compiled Bun binary.
 
@@ -124,7 +124,8 @@ the command did not run to its exit, `exit` rejects with an `ExecError` whose `c
 in the table below, plus `EXEC_FAILED` when the command cannot start) or one of `UNAUTHORIZED` (also
 for an exec ticket that expired or was used), `UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`,
 `DETACHED`, `BAD_MESSAGE`, `CLOSED`, `OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error
-data.
+data. An abort before the command starts, during the ticket call or the connect, rejects with the
+abort's reason instead, an `AbortError` by default; after the start it ends the session as `CLOSED`.
 
 ## Errors
 

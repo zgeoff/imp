@@ -367,6 +367,8 @@ test('close and an abort end the session and the streams', async () => {
 
   const aborted = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
 
+  await aborted.started;
+
   abort.abort();
 
   const closedExit = await closed.exit.catch((error: unknown) => error);
@@ -376,6 +378,35 @@ test('close and an abort end the session and the streams', async () => {
   expect(closedExit).toMatchObject({ code: 'CLOSED' });
   expect(abortedExit).toMatchObject({ code: 'CLOSED' });
   expect(rest.done).toBeTrue();
+});
+
+test('an abort during the connect rejects with an AbortError, as one during the ticket call does', async () => {
+  await using ctx = await setupExecTest();
+
+  const abort = new AbortController();
+
+  const handle = await ctx.client.openExec('dev', ['wait'], { signal: abort.signal });
+
+  abort.abort();
+
+  const startError = await handle.started.catch((error: unknown) => error);
+  const exitError = await handle.exit.catch((error: unknown) => error);
+  const rest = await handle.stdout.getReader().read();
+
+  expect(startError).toMatchObject({ name: 'AbortError' });
+  expect(exitError).toBe(startError);
+  expect(rest.done).toBeTrue();
+
+  const reason = new Error('gave up');
+  const custom = new AbortController();
+
+  const second = await ctx.client.openExec('dev', ['wait'], { signal: custom.signal });
+
+  custom.abort(reason);
+
+  const secondError = await second.exit.catch((error: unknown) => error);
+
+  expect(secondError).toBe(reason);
 });
 
 test('a stream nobody reads ends the session past maxUnreadBytes', async () => {
