@@ -181,6 +181,7 @@ export function createFakeSshBackend() {
       session: null,
       created: false,
       groupKill: false,
+      output: null,
       writeStdin: (data) => {
         stdin.push(decoder.decode(data));
       },

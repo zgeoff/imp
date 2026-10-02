@@ -69,6 +69,8 @@ export interface ImpCheckpointHooks {
     action: (imp: LockedImp | undefined) => Promise<T>,
   ) => Promise<T>;
   readonly haltImp: (imp: LockedImp) => Promise<LockedImp>;
+
+  // boots a restored imp's disk; the boot records the cause `restore`
   readonly bootImp: (imp: LockedImp) => Promise<LockedImp>;
 
   // wakes a sleeping imp or boots a stopped one
@@ -127,7 +129,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     lockImp: lock.withImp,
     lockImpId: lock.withImpId,
     haltImp: ops.stopImpVm,
-    bootImp: ops.startImpVm,
+    bootImp: (imp) => ops.startImpVm(imp, 'restore'),
     requireRunningImp: ops.requireRunningImp,
     toApi: presenter.toApi,
     events,

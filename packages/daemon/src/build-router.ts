@@ -656,6 +656,10 @@ export function buildRouter(deps: RouterDeps) {
   });
 }
 
+// what this impd can do; each session's `continuity` still decides whether
+// its imp's agent counts output
+const SYSTEM_FEATURES = { sessionOffsets: true, leases: true } as const;
+
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given
 // (docs/architecture/sleep-and-wake.md#the-ram-governor).
@@ -696,7 +700,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     },
     cpu: deps.imps.readCpuHost(),
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
-    features: { sessionOffsets: false, leases: true },
+    features: SYSTEM_FEATURES,
   };
 }
 

@@ -361,6 +361,26 @@ const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // the last cold boots of each imp, which end its sessions' output
+  // generations, and the cause its next one has when impd knows it early
+  '015_add_cold_boots': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('imp_cold_boots')
+
+        // the order impd recorded them in: `at` can tie within a millisecond
+        .addColumn('seq', 'integer', (c) => c.primaryKey().autoIncrement())
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addColumn('boot_id', 'text', (c) => c.notNull())
+        .addColumn('cause', 'text', (c) => c.notNull())
+        .addColumn('at', 'integer', (c) => c.notNull())
+        .addUniqueConstraint('imp_cold_boots_imp_boot', ['imp_id', 'boot_id'])
+        .execute();
+
+      await db.schema.alterTable('imps').addColumn('next_boot_cause', 'text').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

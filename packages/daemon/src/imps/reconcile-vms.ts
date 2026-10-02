@@ -1,5 +1,6 @@
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeUnknownBoot } from '../db/cold-boots';
 import { updateImpActivity } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import {
@@ -127,6 +128,10 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
 
       await updateImpActivity(context.db, imp.id, new Date());
 
+      if (woken.bootId !== undefined) {
+        await writeUnknownBoot(context.db, imp.id, woken.bootId, new Date());
+      }
+
       const running = await ops.updateState(imp, {
         reason: 'adopted',
         state: 'running',
@@ -158,7 +163,12 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
         });
       }
 
-      return ops.updateState(imp, { reason: 'repaired', state: 'stopped', pid: null });
+      return ops.updateState(imp, {
+        reason: 'repaired',
+        state: 'stopped',
+        pid: null,
+        nextBootCause: 'wake_fallback',
+      });
     }
   };
 
@@ -201,7 +211,12 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
       if (imp.state === 'sleeping' && orphans.length > 1) {
         removeSnapshot(paths);
 
-        return ops.updateState(imp, { reason: 'repaired', state: 'stopped', pid: null });
+        return ops.updateState(imp, {
+          reason: 'repaired',
+          state: 'stopped',
+          pid: null,
+          nextBootCause: 'wake_fallback',
+        });
       }
 
       // a load ran and its VM is gone: the guest may have written its disk
@@ -210,7 +225,12 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
 
         removeSnapshot(paths);
 
-        return ops.updateState(imp, { reason: 'repaired', state: 'stopped', pid: null });
+        return ops.updateState(imp, {
+          reason: 'repaired',
+          state: 'stopped',
+          pid: null,
+          nextBootCause: 'wake_fallback',
+        });
       }
 
       if (imp.state === 'running') {

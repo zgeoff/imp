@@ -63,6 +63,9 @@ export interface StartedVm {
 
   // what a boot with isIdentityReset reported; absent for any other start
   readonly identityReset?: 'ok' | 'failed' | undefined;
+
+  // the guest's boot_id; absent from an agent from before output offsets
+  readonly bootId?: string | undefined;
 }
 
 interface WakePlan {
@@ -81,6 +84,7 @@ interface FoundVm {
 interface FinishedWake {
   readonly agentVersion: string;
   readonly firecrackerVersion: string;
+  readonly bootId?: string | undefined;
 }
 
 // Firecracker, behind an interface so the lifecycle can run against a fake.
@@ -229,6 +233,7 @@ export function createVmRunner(): VmRunner {
           agentVersion: ping.version,
           timings: timer.marks,
           identityReset: ping.identity_reset,
+          bootId: ping.boot_id,
         };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
@@ -353,7 +358,13 @@ export function createVmRunner(): VmRunner {
 
         setMark('resumed');
 
-        return { pid, firecrackerVersion, agentVersion: ping.version, timings: timer.marks };
+        return {
+          pid,
+          firecrackerVersion,
+          agentVersion: ping.version,
+          timings: timer.marks,
+          bootId: ping.boot_id,
+        };
       } catch (error) {
         stopProcess(pid, 'SIGKILL');
 
@@ -414,7 +425,7 @@ export function createVmRunner(): VmRunner {
 
       const firecrackerVersion = await createFirecrackerClient(paths.apiSocket).getVersion();
 
-      return { agentVersion: ping.version, firecrackerVersion };
+      return { agentVersion: ping.version, firecrackerVersion, bootId: ping.boot_id };
     },
     buildTemplateVm,
     loadTemplateVm,

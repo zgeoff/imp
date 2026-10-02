@@ -56,6 +56,10 @@ export function buildFakeVmm() {
   const pidFiles = new Map<string, number>();
 
   const wakes: number[] = [];
+
+  // the boot_id each API socket's guest booted with; a wake keeps it
+  const bootIds = new Map<string, string>();
+
   const stops: { pid: number; graceful: boolean }[] = [];
   const grows: { disk: string; diskBytes: number }[] = [];
 
@@ -73,7 +77,12 @@ export function buildFakeVmm() {
   const counter = { nextPid: 1000, generation: 0 };
 
   // what every fake agent reports as its uptime: old enough to sleep at once
-  const guest = { uptimeMs: 60_000, identityReset: 'ok' as 'ok' | 'failed' | undefined };
+  // hasBootId false: a guest whose agent could not read its boot_id
+  const guest = {
+    uptimeMs: 60_000,
+    identityReset: 'ok' as 'ok' | 'failed' | undefined,
+    hasBootId: true,
+  };
 
   const queues = new Map<VmStep, VmOutcome[]>();
   const holds = new Map<VmStep, { gate: PromiseWithResolvers<void>; reached: () => void }>();
@@ -165,7 +174,15 @@ export function buildFakeVmm() {
         runInGeneration(async () => {
           boots.push({ hostname: plan.hostname, isIdentityReset: plan.isIdentityReset });
 
-          const vm = await startFakeVm('boot', plan.paths);
+          const started = await startFakeVm('boot', plan.paths);
+
+          // each cold boot is a new guest kernel, with its own boot_id
+          const bootId = guest.hasBootId ? `boot-${String(started.pid)}` : undefined;
+          const vm = { ...started, bootId };
+
+          if (bootId !== undefined) {
+            bootIds.set(plan.paths.apiSocket, bootId);
+          }
 
           return plan.isIdentityReset ? { ...vm, identityReset: guest.identityReset } : vm;
         }),
@@ -176,7 +193,7 @@ export function buildFakeVmm() {
 
             wakes.push(vm.pid);
 
-            return vm;
+            return { ...vm, bootId: bootIds.get(plan.paths.apiSocket) };
           } finally {
             usedSnapshots.add(plan.paths.snapshotDir);
           }
@@ -283,7 +300,7 @@ export function buildFakeVmm() {
         [...vms]
           .filter(([pid]) => alive.has(pid))
           .map(([pid, vm]) => ({ pid, apiSocket: vm.apiSocket })),
-      finishWake: () =>
+      finishWake: (paths) =>
         runInGeneration(async () => {
           const outcome = await pickOutcome('agentReady');
 
@@ -291,7 +308,11 @@ export function buildFakeVmm() {
             throw new FakeVmError('the agent did not answer after the load');
           }
 
-          return { agentVersion: agent.version, firecrackerVersion: 'v1.17.0' };
+          return {
+            agentVersion: agent.version,
+            firecrackerVersion: 'v1.17.0',
+            bootId: bootIds.get(paths.apiSocket),
+          };
         }),
 
       // fail and die: no snapshot
@@ -394,6 +415,11 @@ export function buildFakeVmm() {
     // the uptime every agent reports from now on
     setGuestUptime: (uptimeMs: number) => {
       guest.uptimeMs = uptimeMs;
+    },
+
+    // whether the guests booted from now on report a boot_id
+    setGuestBootId: (hasBootId: boolean) => {
+      guest.hasBootId = hasBootId;
     },
 
     // what every later boot that asks for an identity reset reports;

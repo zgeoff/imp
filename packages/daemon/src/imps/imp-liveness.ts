@@ -36,6 +36,9 @@ export async function checkLiveness(
       state: 'stopped',
       pid: null,
       awakeUntil: findLastSeenAlive(context, imp),
+
+      // a VM gone while it ran is a recovery; a lost snapshot fails the wake
+      nextBootCause: lostVm ? 'recovery' : 'wake_fallback',
     },
   );
 

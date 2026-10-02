@@ -343,9 +343,9 @@ export function buildApp(deps: AppDeps) {
             sendText: (text) => {
               ws.raw.send(text);
             },
-            sendBinary: (data) => {
-              ws.raw.send(data);
-            },
+
+            // Bun answers 0 for a message it dropped
+            sendBinary: (data) => ws.raw.send(data) !== 0,
             close: (code, reason) => {
               ws.raw.close(code, reason);
             },

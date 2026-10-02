@@ -8,7 +8,7 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { DetachReason, ExecServerMessage } from '@imp/api';
+import type { DetachReason, ExecChannel, ExecServerMessage, SessionOutput } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { AgentFeature } from '../agent-client/agent-outdated';
@@ -26,7 +26,9 @@ import { findSignalName, findSignalNumber } from './signal-names';
 
 export interface ExecPeer {
   readonly sendText: (text: string) => void;
-  readonly sendBinary: (data: Uint8Array) => void;
+
+  // false when the socket dropped the message rather than queue it
+  readonly sendBinary: (data: Uint8Array) => boolean;
   readonly close: (code?: number, reason?: string) => void;
 
   // bytes queued for the client and not yet sent
@@ -80,6 +82,11 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     // the start asked for a kill grace, so `started` says whether the
     // agent kills the group itself
     killGrace: boolean;
+
+    // a session with offsets: where its data started, and the bytes sent
+    // since, the prelude's included
+    output: Extract<SessionOutput, { continuity: 'offsets' }> | null;
+    sentBytes: number;
   } = {
     stream: null,
     starting: false,
@@ -91,6 +98,8 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     acking: false,
     outUnacked: 0,
     killGrace: false,
+    output: null,
+    sentBytes: 0,
   };
 
   const send = (message: ExecServerMessage): void => {
@@ -103,9 +112,36 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     peer.close(1011, 'exec failed');
   };
 
+  // the offset after the last byte this socket sent; the prelude has none
+  const readOffset = (): { offset?: number } => {
+    const output = state.output;
+
+    return output === null
+      ? {}
+      : { offset: output.offset + Math.max(0, state.sentBytes - output.prelude) };
+  };
+
+  const sendDetached = (reason: DetachReason): void => {
+    send({ type: 'detached', reason, ...readOffset() });
+  };
+
+  // A dropped message would leave a hole in the output, so the socket closes
+  // instead: a client resumes from the offset it has.
+  const sendOutput = (channel: ExecChannel, data: Uint8Array): void => {
+    if (peer.sendBinary(encodeExecFrame(channel, data))) {
+      state.sentBytes += data.byteLength;
+
+      return;
+    }
+
+    state.closed = true;
+    state.stream?.close();
+    peer.close(1011, 'output dropped');
+  };
+
   const sendEvent = (event: ExecEvent): void => {
     if (event.type === 'detached') {
-      send({ type: 'detached', reason: readDetachReason(event.reason) });
+      sendDetached(readDetachReason(event.reason));
 
       return;
     }
@@ -117,6 +153,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         type: 'exit',
         code: signalled ? null : event.code,
         signal: signalled ? findSignalName(event.signal) : null,
+        ...readOffset(),
       });
 
       return;
@@ -124,7 +161,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
     const channel = event.type === 'stdout' ? EXEC_CHANNELS.stdout : EXEC_CHANNELS.stderr;
 
-    peer.sendBinary(encodeExecFrame(channel, event.data));
+    sendOutput(channel, event.data);
   };
 
   const drainWaiter: { wake: (() => void) | null } = { wake: null };
@@ -164,6 +201,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       let ended: 'exited' | 'detached' | null = null;
 
       for await (const event of stream.events()) {
+        if (state.closed) {
+          break;
+        }
+
         sendEvent(event);
 
         if (event.type === 'exit' || event.type === 'detached') {
@@ -180,14 +221,18 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       }
 
       // A stream that ends without an exit or detached frame lost the agent
-      // connection. A session runs on; its client may attach again. A plain
-      // exec got SIGHUP from the agent, so it failed.
+      // connection: a session runs on, a plain exec got SIGHUP. A socket
+      // that closed first, the client's or a dropped send's, takes nothing.
+      if (state.closed) {
+        return;
+      }
+
       if (ended !== null) {
         peer.close(1000, ended);
       } else if (stream.session === null) {
         sendFailure(new Error('the agent connection closed before the process exited'));
       } else {
-        send({ type: 'detached', reason: 'lost' });
+        sendDetached('lost');
 
         peer.close(1000, 'detached');
       }
@@ -219,11 +264,17 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
     state.stream = stream;
 
+    // a session from an agent without offsets replays as before
+    const output = stream.session === null ? null : (stream.output ?? { continuity: 'none' });
+
+    state.output = output?.continuity === 'offsets' ? output : null;
+
     send({
       type: 'started',
       pid: stream.pid,
       ...(stream.session !== null && { session: stream.session, created: stream.created }),
       ...(state.killGrace && { groupKill: stream.groupKill }),
+      ...(output !== null && { output }),
     });
 
     for (const message of state.pending.splice(0)) {
@@ -313,7 +364,12 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       };
 
       if (control.type === 'attach') {
-        const request: AgentAttachRequest = { session: control.session, ...size };
+        const request: AgentAttachRequest = {
+          session: control.session,
+          ...size,
+          ...(control.resumeFrom !== undefined && { resumeFrom: control.resumeFrom }),
+          ...(control.wake !== undefined && { wake: control.wake }),
+        };
 
         void runStream(() => backend.openAttach(control.name, request));
 
@@ -341,6 +397,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         ...(control.cwd !== undefined && { cwd: control.cwd }),
         ...(control.session !== undefined && { session: control.session }),
         ...(control.killGraceMs !== undefined && { killGraceMs: control.killGraceMs }),
+        ...(control.resumeFrom !== undefined && { resumeFrom: control.resumeFrom }),
         ...size,
       };
 
@@ -440,8 +497,16 @@ function buildErrorMessage(error: unknown): ExecServerMessage {
     };
   }
 
+  // NO_SESSION and INVALID_RESUME carry data in the API's shape
   if (error instanceof AgentError) {
-    return { type: 'error', code: error.code, message: error.detail };
+    const data: unknown = error.data;
+
+    return {
+      type: 'error',
+      code: error.code,
+      message: error.detail,
+      ...(data !== undefined && { data }),
+    };
   }
 
   return { type: 'error', message: readErrorMessage(error) };

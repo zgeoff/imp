@@ -221,6 +221,7 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
       agentVersion: ping.version,
       timings: marks.marks,
       identityReset: ping.identity_reset,
+      bootId: ping.boot_id,
     };
   } catch (error) {
     stopProcess(pid, 'SIGKILL');

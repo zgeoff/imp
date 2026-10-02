@@ -1,6 +1,8 @@
+import { ORPCError } from '@orpc/server';
+import { AgentError } from '../agent-client/agent-connection';
 import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
-import { sendActivity } from '../agent-client/agent-requests';
+import { sendActivity, sendPing } from '../agent-client/agent-requests';
 import type { AgentActivity } from '../agent-client/agent-requests';
 import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
@@ -8,11 +10,13 @@ import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
-import { isDiskFullError } from '../api-errors';
+import { buildInvalidStateError, isDiskFullError } from '../api-errors';
+import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
+import { toSeenSessions } from '../sessions/session-cache';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
 import type { BootTemplates } from '../templates/boot-templates';
@@ -39,7 +43,8 @@ export interface ImpRuntime {
     feature?: AgentFeature,
   ) => Promise<ExecStream>;
 
-  // as openExec, for a session that exists
+  // as openExec, for a session that exists; with `wake: false`, an imp that
+  // is not running fails with INVALID_STATE and nothing boots
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
 
   // as openExec, for a connection to an address inside the guest; `kind` is
@@ -165,6 +170,28 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     });
   };
 
+  // as requireRunning, for a caller that must not boot or wake the imp: one
+  // that is not running fails with INVALID_STATE and its cold boots
+  const requireAwake: ImpRuntime['requireRunning'] = async (name, onFound) => {
+    const found = await lock.findImp(name);
+
+    if (found.state === 'running' && !lock.isLocked(found.id)) {
+      onFound?.(found);
+
+      return { imp: found, wokeMs: null };
+    }
+
+    return lock.withImp(name, async (imp) => {
+      if (imp.state !== 'running') {
+        throw await buildNotAwakeError(context, imp);
+      }
+
+      onFound?.(imp);
+
+      return { imp, wokeMs: null };
+    });
+  };
+
   // A sleeping imp wakes and a stopped one boots, as for an HTTP request.
   // The stream counts from the moment the imp is found, before any wake, so
   // no background sleep slips in between the wake and the open.
@@ -172,11 +199,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     name: string,
     kind: ConnectionKind | null,
     open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
+    wake = true,
   ): Promise<T> => {
     const opened = { release: () => {} };
 
     try {
-      const running = await requireRunning(name, (found) => {
+      const findRunning = wake ? requireRunning : requireAwake;
+
+      const running = await findRunning(name, (found) => {
         if (kind !== null) {
           opened.release = context.tracker.open(found.id, kind);
         }
@@ -274,13 +304,20 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
         const env = mergeEnv(base, request.env ?? []);
 
-        return openExecStream(paths.vsockSocket, {
+        const opening = openExecStream(paths.vsockSocket, {
           ...request,
           ...(env.length > 0 && { env }),
         });
+
+        return request.session === undefined ? opening : withColdBoots(context, imp, opening);
       }),
     openAttach: (name, request) =>
-      openStream(name, 'exec', (paths) => openAttachStream(paths.vsockSocket, request)),
+      openStream(
+        name,
+        'exec',
+        (paths, imp) => withColdBoots(context, imp, openAttachStream(paths.vsockSocket, request)),
+        request.wake ?? true,
+      ),
     openDial: (name, target, kind) =>
       openStream(name, kind, (paths) => {
         // an older agent dials a unix socket as root, past its mode
@@ -305,7 +342,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       try {
         const activity = await sendActivity(context.findPaths(imp.id).vsockSocket);
 
-        context.sessions.record(imp.id, activity.sessions);
+        context.sessions.record(imp.id, toSeenSessions(activity.sessions, new Date()));
 
         return activity;
       } catch {
@@ -423,6 +460,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
                 startCounting(context, imp, imp.pid);
               }
 
+              if (ready) {
+                await writeAdoptedBoot(context, imp);
+              }
+
               // the record does not change; the event stream still hears of it
               await ops.updateState(imp, { reason: 'adopted', state: 'running' });
 
@@ -463,6 +504,77 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     bootTemplates: context.templates,
     readDiskFullError: () => lastDiskFull.error,
   };
+}
+
+// A session's output, and NO_SESSION, name the imp's cold boots, read after
+// any boot the open caused, so that boot comes first
+async function withColdBoots(
+  context: ImpContext,
+  imp: ImpRecord,
+  opening: Promise<ExecStream>,
+): Promise<ExecStream> {
+  let stream: ExecStream;
+
+  try {
+    stream = await opening;
+  } catch (error) {
+    if (error instanceof AgentError && error.code === 'NO_SESSION' && isRecord(error.data)) {
+      const coldBoots = await listColdBoots(context.db, imp.id);
+
+      throw new AgentError(error.code, error.detail, { ...error.data, coldBoots });
+    }
+
+    throw error;
+  }
+
+  const output = stream.output;
+
+  if (output?.continuity !== 'offsets') {
+    return stream;
+  }
+
+  const coldBoots = await listColdBoots(context.db, imp.id).catch((error: unknown) => {
+    stream.close();
+    throw error;
+  });
+
+  return { ...stream, output: { ...output, coldBoots } };
+}
+
+// INVALID_STATE for an attach that must not wake the imp; an imp still
+// being created has no boots to name
+async function buildNotAwakeError(context: ImpContext, imp: ImpRecord): Promise<Error> {
+  const error = buildInvalidStateError(imp.state, ['running'], 'attach without a wake to');
+
+  if (imp.state === 'creating') {
+    return error;
+  }
+
+  const coldBoots = await listColdBoots(context.db, imp.id);
+
+  return new ORPCError('INVALID_STATE', {
+    status: error.status,
+    message: error.message,
+    data: { ...error.data, coldBoots },
+  });
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
+}
+
+// A VM booted before impd kept cold boots has none on record: its boot is
+// `unknown`, so a client still learns that it ended earlier generations.
+async function writeAdoptedBoot(context: ImpContext, imp: ImpRecord): Promise<void> {
+  try {
+    const ping = await sendPing(context.findPaths(imp.id).vsockSocket);
+
+    if (ping.boot_id !== undefined) {
+      await writeUnknownBoot(context.db, imp.id, ping.boot_id, new Date());
+    }
+  } catch (error) {
+    context.log(`impd: ${imp.name}: could not read its boot id: ${readErrorMessage(error)}`);
+  }
 }
 
 // fails before an old agent gets a request it cannot serve; an imp booted

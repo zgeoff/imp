@@ -7,6 +7,7 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
+import type { SessionOutput } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
@@ -74,6 +75,7 @@ function buildFakeStream() {
     session: null,
     created: false,
     groupKill: false,
+    output: null,
     writeStdin: (data) => {
       input.push(`stdin:${new TextDecoder().decode(data)}`);
     },
@@ -106,9 +108,12 @@ function buildBackend(backend: Partial<ExecBackend>): ExecBackend {
   };
 }
 
-function buildFakePeer() {
+// `drops` binary messages after the first `keeps`, as a socket over its
+// backpressure limit does
+function buildFakePeer(keeps = Infinity) {
   const sent: unknown[] = [];
   const closes: number[] = [];
+  const binary = { count: 0 };
 
   return {
     sent,
@@ -118,9 +123,17 @@ function buildFakePeer() {
         sent.push(JSON.parse(text));
       },
       sendBinary: (data: Uint8Array) => {
+        binary.count += 1;
+
+        if (binary.count > keeps) {
+          return false;
+        }
+
         const frame = decodeExecFrame(data);
 
         sent.push([frame.channel, new TextDecoder().decode(frame.data)]);
+
+        return true;
       },
       close: (code = 1000) => {
         closes.push(code);
@@ -302,7 +315,7 @@ test('it attaches to a session and ends with detached when taken over', async ()
   expect(requests).toEqual([{ session: 'main', cols: 100, rows: 30 }]);
 
   expect(peer.sent).toEqual([
-    { type: 'started', pid: 7, session: 'main', created: false },
+    { type: 'started', pid: 7, session: 'main', created: false, output: { continuity: 'none' } },
     [EXEC_CHANNELS.stdout, 'replay'],
     { type: 'detached', reason: 'taken_over' },
   ]);
@@ -332,7 +345,10 @@ test('it starts a named session', async () => {
   await Bun.sleep(5);
 
   expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main' }]);
-  expect(peer.sent).toEqual([{ type: 'started', pid: 7, session: 'main', created: true }]);
+
+  expect(peer.sent).toEqual([
+    { type: 'started', pid: 7, session: 'main', created: true, output: { continuity: 'none' } },
+  ]);
 });
 
 test('a kill grace goes to the agent, and started says whether it kills the group', async () => {
@@ -667,4 +683,166 @@ test("a plain exec's stdout does not wait for acks", async () => {
   await Bun.sleep(5);
 
   expect(peer.sent).toHaveLength(frames + 1);
+});
+
+const GENERATION = 'a'.repeat(32);
+
+// a session whose agent counts output: a fresh attach with a 3-byte prelude
+const OFFSETS_OUTPUT: SessionOutput = {
+  continuity: 'offsets',
+  bootId: 'boot-1',
+  executionGeneration: GENERATION,
+  bufferStart: 0,
+  end: 100,
+  offset: 90,
+  prelude: 3,
+  coldBoots: [{ bootId: 'boot-1', cause: 'start', at: '2026-10-03T00:00:00.000Z' }],
+};
+
+test('a session with offsets: started places the data, and exit gives the offset after it', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const stream: ExecStream = { ...fake.stream, session: 'main', output: OFFSETS_OUTPUT };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+  await Bun.sleep(5);
+
+  // the prelude, then the 10 kept bytes, then 5 live ones
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('\u001B[?0123456789') });
+  fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode('abcde') });
+  fake.emitEvent({ type: 'exit', code: 0, signal: 0 });
+
+  await Bun.sleep(5);
+
+  expect(peer.sent[0]).toEqual({
+    type: 'started',
+    pid: 7,
+    session: 'main',
+    created: false,
+    output: OFFSETS_OUTPUT,
+  });
+
+  expect(peer.sent.at(-1)).toEqual({ type: 'exit', code: 0, signal: null, offset: 105 });
+});
+
+test('a session that loses the agent ends with detached at its offset', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const stream: ExecStream = {
+    ...fake.stream,
+    session: 'main',
+    output: { ...OFFSETS_OUTPUT, offset: 40, prelude: 0 },
+    events: readWithoutExit,
+  };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+  await Bun.sleep(10);
+
+  expect(peer.sent.at(-1)).toEqual({ type: 'detached', reason: 'lost', offset: 47 });
+  expect(peer.closes).toEqual([1000]);
+});
+
+// a dropped message would skip bytes: the socket closes, and no later byte
+// goes out
+test('it closes the socket when the peer drops output', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer(1);
+  const stream: ExecStream = { ...fake.stream, session: 'main', output: OFFSETS_OUTPUT };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openAttach: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+  await Bun.sleep(5);
+
+  for (const chunk of ['one', 'two', 'three']) {
+    fake.emitEvent({ type: 'stdout', data: new TextEncoder().encode(chunk) });
+  }
+
+  await Bun.sleep(5);
+
+  expect(peer.sent.slice(1)).toEqual([[EXEC_CHANNELS.stdout, 'one']]);
+  expect(peer.closes).toEqual([1011]);
+  expect(fake.input).toContain('close');
+});
+
+test('an attach passes resumeFrom and wake to the backend', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const requests: AgentAttachRequest[] = [];
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openAttach: (_name, request) => {
+        requests.push(request);
+
+        return Promise.resolve({ ...fake.stream, session: 'main' });
+      },
+    }),
+  );
+
+  const resumeFrom = { executionGeneration: GENERATION, offset: 12 };
+
+  session.handleMessage({ type: 'attach', name: 'dev', session: 'main', resumeFrom, wake: false });
+
+  await Bun.sleep(5);
+
+  expect(requests).toEqual([{ session: 'main', resumeFrom, wake: false }]);
+});
+
+test('NO_SESSION and INVALID_RESUME keep their data', async () => {
+  const errors = [
+    ['NO_SESSION', 'no session "main"', { bootId: 'boot-1', coldBoots: [] }],
+    ['INVALID_RESUME', 'offset 9 is past the end', { end: 4, bufferStart: 0 }],
+  ] as const;
+
+  for (const [code, message, data] of errors) {
+    const peer = buildFakePeer();
+
+    const session = createExecSession(
+      peer.peer,
+      buildBackend({ openAttach: () => Promise.reject(new AgentError(code, message, data)) }),
+    );
+
+    session.handleMessage({ type: 'attach', name: 'dev', session: 'main' });
+
+    await Bun.sleep(5);
+
+    expect(peer.sent).toEqual([{ type: 'error', code, message, data }]);
+  }
+});
+
+test('a plain exec whose output was dropped sends no failure after the close', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer(0);
+  const stream: ExecStream = { ...fake.stream, events: readWithoutExit };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(stream) }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(10);
+
+  expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
+  expect(peer.closes).toEqual([1011]);
 });

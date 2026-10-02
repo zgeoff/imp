@@ -1,5 +1,6 @@
 import { PublicAuthSchema } from '@imp/api';
 import type {
+  ColdBootCause,
   EgressPolicy,
   ImpChangeReason,
   ImpEventDetail,
@@ -102,6 +103,10 @@ export interface ImpStateChange {
   // when a running imp's awake span ends; now by default. A repair passes
   // the last time anything saw the VM alive.
   readonly awakeUntil?: Date;
+
+  // the cause the next cold boot records, whichever path boots it: a repair
+  // knows it before that boot (docs/architecture/daemon.md#output-offsets)
+  readonly nextBootCause?: Extract<ColdBootCause, 'recovery' | 'wake_fallback'>;
 }
 
 // The lowest slot no imp holds. Run it in the same transaction as the insert
@@ -252,7 +257,7 @@ export async function updateImpState(
 
   const row = await db
     .updateTable('imps')
-    .set({ ...values, ...buildAwakeValues(change) })
+    .set({ ...values, ...buildAwakeValues(change), ...buildBootCauseValues(change) })
     .where('id', '=', id)
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -282,7 +287,7 @@ export async function updateImpStateIf(
 
   const row = await db
     .updateTable('imps')
-    .set({ ...values, ...buildAwakeValues(change) })
+    .set({ ...values, ...buildAwakeValues(change), ...buildBootCauseValues(change) })
     .where('id', '=', id)
     .where('state', '=', expected.state)
     .where('pid', pidOperator, expected.pid)
@@ -314,6 +319,10 @@ function buildAwakeValues(change: Readonly<ImpStateChange>) {
     awake_ms: sql<number>`awake_ms + coalesce(max(0, ${until} - awake_since), 0)`,
     awake_since: null,
   };
+}
+
+function buildBootCauseValues(change: Readonly<ImpStateChange>) {
+  return change.nextBootCause === undefined ? {} : { next_boot_cause: change.nextBootCause };
 }
 
 // what imps.update changes; the caller applies a new CPU limit or weight

@@ -8,6 +8,7 @@ import type { ImpContext } from '../imps/imp-context';
 import type { ImpLock } from '../imps/imp-lock';
 import type { ImpRuntime } from '../imps/imp-runtime';
 import { readSeenSessions } from './count-sessions';
+import { toSeenSessions } from './session-cache';
 import { toApiSession } from './to-api-session';
 
 // The `sessions` API (docs/architecture/protocol.md#sessions). The sessions
@@ -34,9 +35,11 @@ export function createSessionService(parts: SessionServiceParts): SessionService
       try {
         const activity = await sendActivity(context.findPaths(imp.id).vsockSocket);
 
-        context.sessions.record(imp.id, activity.sessions);
+        const seen = toSeenSessions(activity.sessions, new Date());
 
-        return activity.sessions;
+        context.sessions.record(imp.id, seen);
+
+        return seen;
       } catch {
         // the agent is busy or wedged
       }

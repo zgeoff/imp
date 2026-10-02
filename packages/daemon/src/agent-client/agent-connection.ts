@@ -34,12 +34,17 @@ export class AgentError extends Error {
   // on its own
   readonly detail: string;
 
-  constructor(code: string, detail: string) {
+  // the code's detail, as the agent sent it (NO_SESSION, INVALID_RESUME), or
+  // in the API's shape once impd converted it
+  readonly data: unknown;
+
+  constructor(code: string, detail: string, data?: unknown) {
     super(`${code}: ${detail}`);
 
     this.name = 'AgentError';
     this.code = code;
     this.detail = detail;
+    this.data = data;
   }
 }
 
