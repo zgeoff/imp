@@ -29,6 +29,7 @@ const SystemInfoSchema = z.object({
   ramReservedMib: z.number(),
   awakeCount: z.number(),
   impCount: z.number(),
+  storage: z.object({ backend: z.enum(['xfs', 'zfs']) }),
   tailscale: z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),

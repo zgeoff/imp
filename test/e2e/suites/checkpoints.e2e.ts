@@ -2,7 +2,15 @@ import { expect, test } from 'bun:test';
 import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { listCheckpoints, readState, requireImp, runImp, runInImp, tryImp } from '../lib/imp-cli';
+import {
+  listCheckpoints,
+  readInfo,
+  readState,
+  requireImp,
+  runImp,
+  runInImp,
+  tryImp,
+} from '../lib/imp-cli';
 import {
   createImp,
   holdImp,
@@ -43,6 +51,24 @@ async function checkInContainer(...argv: readonly string[]): Promise<boolean> {
   return result.exitCode === 0;
 }
 
+// A reflink file on XFS; on ZFS a snapshot not yet marked for destroy (one a
+// fork still needs stays, marked, until the fork goes).
+async function hasCheckpointStorage(impId: string, checkpointId: string): Promise<boolean> {
+  const info = await readInfo();
+
+  if (info.storage.backend === 'xfs') {
+    return checkInContainer('test', '-e', `${IMP_DIR}/${impId}/checkpoints/${checkpointId}`);
+  }
+
+  return checkInContainer(
+    'sh',
+    '-c',
+    `zfs list -H -t snapshot -o name,defer_destroy | awk -F '\t' -v id="@$1" 'substr($1, length($1) - length(id) + 1) == id && $2 == "off" { found = 1 } END { exit !found }'`,
+    'sh',
+    checkpointId,
+  );
+}
+
 test('a checkpoint of a running imp restores its disk', async () => {
   await createImp(source, '--image', TINY, '--memory', '512');
   await holdImp(source);
@@ -70,12 +96,7 @@ test('a checkpoint of a running imp restores its disk', async () => {
   checkLimit('checkpoint (impd)', impdMs, config.maxCheckpointMs);
 
   const row = await requireImp(source);
-
-  const hasDisk = await checkInContainer(
-    'test',
-    '-f',
-    `${IMP_DIR}/${row.id}/checkpoints/${cp1}/disk.ext4`,
-  );
+  const hasDisk = await hasCheckpointStorage(row.id, cp1);
 
   expect(hasDisk).toBeTrue();
 
@@ -185,11 +206,11 @@ test('checkpoints list newest first, take unique labels and can be deleted', asy
   await runImp('checkpoint', 'rm', source, 'cp1');
 
   const remaining = await listCheckpoints(source);
-  const hasDir = await checkInContainer('test', '-e', `${IMP_DIR}/${row.id}/checkpoints/${cp1}`);
+  const hasDisk = await hasCheckpointStorage(row.id, cp1);
   const restore = await tryImp(['restore', source, 'cp1']);
 
   expect(remaining).toHaveLength(1);
-  expect(hasDir).toBeFalse();
+  expect(hasDisk).toBeFalse();
   expect(restore.exitCode).not.toBe(0);
 });
 
