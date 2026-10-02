@@ -64,6 +64,9 @@ export interface ImageService {
   // the named image, else the configured default, else `ubuntu`
   readonly resolveImage: (name?: string) => Promise<ImageRecord>;
 
+  // what resolveImage picks for a create that names no image, if anything
+  readonly findDefaultImage: () => Promise<ImageRecord | undefined>;
+
   // adds ubuntu:24.04 as `ubuntu` when there are no images at all
   readonly seedDefaultImage: () => Promise<void>;
 }
@@ -252,19 +255,27 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     );
   };
 
-  const resolveImage = async (name?: string): Promise<ImageRecord> => {
-    const candidates =
-      name === undefined ? [deps.config.defaultImage, FALLBACK_DEFAULT_IMAGE] : [name];
-
-    for (const candidate of candidates) {
-      const image = await findImageByName(deps.db, candidate);
+  const findDefaultImage = async (): Promise<ImageRecord | undefined> => {
+    for (const name of [deps.config.defaultImage, FALLBACK_DEFAULT_IMAGE]) {
+      const image = await findImageByName(deps.db, name);
 
       if (image !== undefined) {
         return image;
       }
     }
 
-    throw buildNotFoundError('image', name ?? deps.config.defaultImage);
+    return undefined;
+  };
+
+  const resolveImage = async (name?: string): Promise<ImageRecord> => {
+    const image =
+      name === undefined ? await findDefaultImage() : await findImageByName(deps.db, name);
+
+    if (image === undefined) {
+      throw buildNotFoundError('image', name ?? deps.config.defaultImage);
+    }
+
+    return image;
   };
 
   return {
@@ -349,6 +360,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       });
     },
     resolveImage,
+    findDefaultImage,
     seedDefaultImage: async () => {
       const images = await listImages(deps.db);
 

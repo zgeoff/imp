@@ -75,6 +75,7 @@ export interface EgressService {
 
   // PRECONDITION_FAILED for a box or none policy when nft cannot enforce it
   readonly requirePolicy: (policy: EgressPolicy) => void;
+  readonly isEnforced: () => boolean;
   readonly requireImp: (impId: string) => Promise<void>;
 
   // a new imp's slot, fresh, after its insert and before its tap
@@ -434,6 +435,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
     },
 
     requirePolicy,
+    isEnforced: () => state.unenforced === null,
 
     requireImp: async (impId) => {
       const policy = await readEgressPolicy(deps.db, impId);
