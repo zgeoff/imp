@@ -36,45 +36,44 @@ export function createAcmeIssuer(options: AcmeIssuerOptions): IssueCertificate {
     acme.axios.defaults.httpsAgent = new Agent({ ca: options.caPem });
   }
 
-  const readAccountKey = async (): Promise<string> => {
-    const stored = options.store.readAccountKey();
+  // The stored account, or a new one with a new key. A key that has an
+  // account but lost its URL is never asked to register again: acme-client
+  // then sends an account update that strict CAs such as Pebble refuse.
+  const openClient = async (): Promise<acme.Client> => {
+    const stored = options.store.readAccount(options.directoryUrl);
 
     if (stored !== null) {
-      return stored;
+      return new acme.Client({
+        directoryUrl: options.directoryUrl,
+        accountKey: stored.keyPem,
+        accountUrl: stored.url,
+      });
     }
 
-    const created = await acme.crypto.createPrivateEcdsaKey();
+    const key = await acme.crypto.createPrivateEcdsaKey();
 
-    const pem = created.toString();
+    const keyPem = key.toString();
 
-    options.store.writeAccountKey(pem);
+    const client = new acme.Client({ directoryUrl: options.directoryUrl, accountKey: keyPem });
 
-    return pem;
+    await client.createAccount({
+      termsOfServiceAgreed: true,
+      ...(options.email !== null && { contact: [`mailto:${options.email}`] }),
+    });
+
+    options.store.writeAccount({
+      directoryUrl: options.directoryUrl,
+      url: client.getAccountUrl(),
+      keyPem,
+    });
+
+    return client;
   };
 
   const runOrder = async (domain: string): Promise<Certificate> => {
     await checkDirectory(options.directoryUrl, options.caPem);
 
-    const accountKey = await readAccountKey();
-
-    const accountUrl = options.store.readAccountUrl(options.directoryUrl);
-
-    const client = new acme.Client({
-      directoryUrl: options.directoryUrl,
-      accountKey,
-      ...(accountUrl !== null && { accountUrl }),
-    });
-
-    // An account the key already has goes by its URL. Asking to create it
-    // again makes acme-client send an update that strict servers refuse.
-    if (accountUrl === null) {
-      await client.createAccount({
-        termsOfServiceAgreed: true,
-        ...(options.email !== null && { contact: [`mailto:${options.email}`] }),
-      });
-
-      options.store.writeAccountUrl(options.directoryUrl, client.getAccountUrl());
-    }
+    const client = await openClient();
 
     const names = listCertificateNames(domain);
 

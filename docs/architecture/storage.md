@@ -38,7 +38,7 @@ On XFS:
   imps/<id>/snapshot/{vmstate,mem,meta.json}
   imps/<id>/checkpoints/<cid>/disk.ext4
   tailscale/
-  tls/{account.key,account.json,certificate.pem,attempts.json}
+  tls/{account.json,certificate.pem,attempts.json}
 ```
 
 `tls/` holds the ACME account and the certificate for `IMP_DOMAIN`

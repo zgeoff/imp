@@ -73,12 +73,11 @@ sidecar and no extra binary in the image.
 
 `<IMP_DATA_DIR>/tls/` is mode 0700, every file in it 0600:
 
-| File              | Holds                                                                     |
-| ----------------- | ------------------------------------------------------------------------- |
-| `account.key`     | The ACME account key. Made once and kept.                                 |
-| `account.json`    | The account's URL at the ACME directory, so a renewal reuses the account. |
-| `certificate.pem` | The certificate key, then the chain. One file, replaced by a rename.      |
-| `attempts.json`   | Failed attempts in a row, the time of the last one, and its error text.   |
+| File              | Holds                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `account.json`    | The ACME account: its key, and its URL at the ACME directory. Made once and reused. |
+| `certificate.pem` | The certificate key, then the chain. One file, replaced by a rename.                |
+| `attempts.json`   | Failed attempts in a row, the time of the last one, and its error text.             |
 
 To force a new certificate, stop the container, delete `certificate.pem` and `attempts.json`, and
 start it again.

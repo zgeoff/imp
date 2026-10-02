@@ -53,20 +53,17 @@ test('a chain keeps every certificate in order', async () => {
   );
 });
 
-test('the account key and the attempts persist; a damaged attempts file reads as none', () => {
+test('the attempts persist; a damaged attempts file reads as none', () => {
   using temp = useTempDir();
 
   const store = createCertStore(temp.dir);
 
-  expect(store.readAccountKey()).toBeNull();
   expect(store.readAttempts()).toEqual({ failures: 0, lastAttemptAt: null, lastError: null });
 
-  store.writeAccountKey('-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n');
   store.writeAttempts({ failures: 2, lastAttemptAt: 1000, lastError: 'boom' });
 
   const reopened = createCertStore(temp.dir);
 
-  expect(reopened.readAccountKey()).toContain('BEGIN PRIVATE KEY');
   expect(reopened.readAttempts()).toEqual({ failures: 2, lastAttemptAt: 1000, lastError: 'boom' });
 
   writeFileSync(join(temp.dir, 'tls', 'attempts.json'), '{not json');
@@ -74,15 +71,22 @@ test('the account key and the attempts persist; a damaged attempts file reads as
   expect(reopened.readAttempts().failures).toBe(0);
 });
 
-test('the account URL is kept per ACME directory', () => {
+test('the account, key and URL together, is kept per ACME directory', () => {
   using temp = useTempDir();
 
   const store = createCertStore(temp.dir);
 
-  expect(store.readAccountUrl('https://ca.test/dir')).toBeNull();
+  const account = {
+    directoryUrl: 'https://ca.test/dir',
+    url: 'https://ca.test/acct/1',
+    keyPem: '-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n',
+  };
 
-  store.writeAccountUrl('https://ca.test/dir', 'https://ca.test/acct/1');
+  expect(store.readAccount(account.directoryUrl)).toBeNull();
 
-  expect(store.readAccountUrl('https://ca.test/dir')).toBe('https://ca.test/acct/1');
-  expect(store.readAccountUrl('https://other.test/dir')).toBeNull();
+  store.writeAccount(account);
+
+  expect(createCertStore(temp.dir).readAccount(account.directoryUrl)).toEqual(account);
+  expect(store.readAccount('https://other.test/dir')).toBeNull();
+  expect(statSync(join(temp.dir, 'tls', 'account.json')).mode & 0o777).toBe(0o600);
 });

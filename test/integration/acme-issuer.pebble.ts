@@ -90,6 +90,25 @@ test(
   ISSUE_TIMEOUT_MS,
 );
 
+test(
+  'a lost account file means a new account, and still a certificate',
+  async () => {
+    const first = createAcmeIssuer(buildOptions({}));
+
+    await first('imp.test');
+
+    // what the https e2e suite does between runs, when Pebble starts afresh
+    rmSync(join(dir, 'tls', 'account.json'), { force: true });
+
+    const second = createAcmeIssuer(buildOptions({}));
+
+    const certificate = await second('imp.test');
+
+    expect(certificate.chainPem).toContain('BEGIN CERTIFICATE');
+  },
+  ISSUE_TIMEOUT_MS,
+);
+
 test('an untrusted ACME server fails in words, not as an axios crash', async () => {
   const issue = createAcmeIssuer(buildOptions({ caPem: null }));
 
@@ -122,7 +141,9 @@ test('a DNS provider that refuses the token fails with its reason, and no token'
 
     const issue = createAcmeIssuer(buildOptions({ dns }));
 
-    const error = await readRejection(issue('imp.test'));
+    // a domain of its own: Pebble may reuse the account's valid imp.test
+    // authorizations, and then never asks for a TXT record
+    const error = await readRejection(issue('refused.test'));
 
     const message = readMessage(error);
 
