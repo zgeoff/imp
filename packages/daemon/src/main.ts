@@ -21,6 +21,7 @@ import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
+import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
@@ -178,6 +179,8 @@ async function main(): Promise<void> {
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
 
+  const ssh = await startSsh({ config, db, imps, log: printLog });
+
   const idle = createIdleLoop({ config, db, imps, log: printLog });
 
   const tickers = [
@@ -243,6 +246,10 @@ async function main(): Promise<void> {
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
     await runStopStep('broker', readStepMs(), () => broker.stop());
+
+    // before the sleep pass, as exec sessions are: a client sees its
+    // connection end instead of hanging while its imp sleeps
+    await runStopStep('ssh', readStepMs(), () => ssh?.stop() ?? Promise.resolve());
 
     api.closeExecSessions();
 

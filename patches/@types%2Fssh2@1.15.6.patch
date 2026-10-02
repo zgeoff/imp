@@ -1,0 +1,14 @@
+diff --git a/index.d.ts b/index.d.ts
+index 097ac283ef6fe07f4c9e8472f63d186c41ee38af..75be46fe234d2a041eacd787e6fde339568d9d85 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -319,7 +319,8 @@ export interface ServerChannel extends Channel {
+ 
+ export type AcceptConnection<T extends Channel = Channel> = () => T;
+ export type AcceptSftpConnection = () => SFTPWrapper;
+-export type RejectConnection = () => void;
++// patched with ssh2: an optional CHANNEL_OPEN_FAILURE reason code
++export type RejectConnection = (reasonCode?: number) => void;
+ 
+ export class Client extends EventEmitter {
+     // Client-events

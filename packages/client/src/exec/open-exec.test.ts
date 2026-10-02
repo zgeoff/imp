@@ -165,6 +165,7 @@ function buildScriptedStream(command: string, record: (entry: string) => void): 
         emitEvent({ type: 'detached', reason: 'taken_over' });
       }
     },
+    stdinDrained: () => Promise.resolve(),
     closeStdin: () => {
       record('eof');
 

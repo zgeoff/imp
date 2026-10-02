@@ -17,6 +17,9 @@ const EnvSchema = z.object({
   IMP_API_PORT: PortSchema.default(7070),
   IMP_PROXY_PORT: PortSchema.default(7080),
   IMP_PORT_BASE: PortSchema.default(20_000),
+
+  // 0 turns the SSH gateway off
+  IMP_SSH_PORT: z.coerce.number().pipe(z.int().min(0).max(65_535)).default(22),
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
@@ -45,6 +48,9 @@ export interface Config {
   readonly apiPort: number;
   readonly proxyPort: number;
   readonly portBase: number;
+
+  // the SSH gateway's port, or null when it is off
+  readonly sshPort: number | null;
 
   // the credential broker's port on every guest's gateway address
   readonly brokerPort: number;
@@ -129,6 +135,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     apiPort: parsed.IMP_API_PORT,
     proxyPort: parsed.IMP_PROXY_PORT,
     portBase: parsed.IMP_PORT_BASE,
+    sshPort: parsed.IMP_SSH_PORT === 0 ? null : parsed.IMP_SSH_PORT,
     brokerPort: parsed.IMP_BROKER_PORT,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,

@@ -15,11 +15,13 @@
     "elysia": "catalog:",
     "kysely": "catalog:",
     "reflect-metadata": "catalog:",
+    "ssh2": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@orpc/client": "catalog:",
     "@orpc/contract": "catalog:",
+    "@types/ssh2": "catalog:",
     "fast-check": "catalog:"
   }
 }

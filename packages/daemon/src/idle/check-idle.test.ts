@@ -5,6 +5,7 @@ import type { IdleSignals } from './check-idle';
 const QUIET: IdleSignals = {
   execSessions: 0,
   proxyConnections: 0,
+  sshConnections: 0,
   tcpEstablished: 0,
   cpuPercent: 1,
   holdUntil: null,
@@ -27,6 +28,7 @@ test('it keeps an imp awake for each kind of activity', () => {
     [{ holdUntil: 60_001 }, 'hold'],
     [{ execSessions: 1 }, 'exec'],
     [{ proxyConnections: 2 }, 'proxy'],
+    [{ sshConnections: 1 }, 'ssh'],
     [{ tcpEstablished: 1 }, 'tcp'],
     [{ cpuPercent: 25 }, 'cpu'],
   ];

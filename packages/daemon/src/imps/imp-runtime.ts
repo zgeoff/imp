@@ -1,6 +1,9 @@
-import { buildAgentOutdatedError, hasSessions } from '../agent-client/agent-outdated';
+import { buildAgentOutdatedError, hasFeature } from '../agent-client/agent-outdated';
+import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentActivity } from '../agent-client/agent-requests';
+import { openDialStream } from '../agent-client/dial-stream';
+import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { findImpByName, listImps, updateImpActivity } from '../db/imps';
@@ -22,11 +25,19 @@ import type { ShutdownGate } from './shutdown-gate';
 // connections that keep them awake.
 export interface ImpRuntime {
   // the imp must be running; exec runs outside the lifecycle lock, so a
-  // long console session never blocks stop or destroy
-  readonly openExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
+  // long console session never blocks stop or destroy. `feature` fails the
+  // exec with AGENT_OUTDATED when the imp's agent is older than it.
+  readonly openExec: (
+    name: string,
+    request: AgentExecRequest,
+    feature?: AgentFeature,
+  ) => Promise<ExecStream>;
 
   // as openExec, for a session that exists
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
+
+  // as openExec, for a connection to an address inside the guest
+  readonly openDial: (name: string, target: DialTarget) => Promise<DialStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
   // for the idle loop: the agent's activity, its sessions recorded on the
@@ -98,10 +109,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // A sleeping imp wakes and a stopped one boots, as for an HTTP request.
   // The stream counts from the moment the imp is found, before any wake, so
   // no background sleep slips in between the wake and the open.
-  const openStream = async (
+  const openStream = async <T extends { readonly close: () => void }>(
     name: string,
-    open: (paths: ImpPaths, imp: ImpRecord) => Promise<ExecStream>,
-  ): Promise<ExecStream> => {
+    open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
+  ): Promise<T> => {
     const opened = { release: () => {} };
 
     try {
@@ -161,17 +172,15 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   };
 
   return {
-    openExec: (name, request) =>
+    openExec: (name, request, feature) =>
       openStream(name, async (paths, imp) => {
-        // fail before an old agent runs the command as a plain exec
-        const agentVersion = readVmIdentity(paths)?.agentVersion;
+        // an old agent would run a session's command as a plain exec
+        if (request.session !== undefined) {
+          requireFeature(paths, 'sessions');
+        }
 
-        if (
-          request.session !== undefined &&
-          agentVersion !== undefined &&
-          !hasSessions(agentVersion)
-        ) {
-          throw buildAgentOutdatedError();
+        if (feature !== undefined) {
+          requireFeature(paths, feature);
         }
 
         const base = await context.readExecEnv(imp, paths.vsockSocket);
@@ -185,6 +194,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       }),
     openAttach: (name, request) =>
       openStream(name, (paths) => openAttachStream(paths.vsockSocket, request)),
+    openDial: (name, target) =>
+      openStream(name, (paths) => {
+        requireFeature(paths, 'ssh');
+
+        return openDialStream(paths.vsockSocket, target);
+      }),
 
     readActivity: async (imp) => {
       try {
@@ -287,4 +302,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     isImpBusy: (id) => lock.isLocked(id),
     tracker: context.tracker,
   };
+}
+
+// fails before an old agent gets a request it cannot serve; an imp booted
+// before impd recorded agent versions has none, and its answer decides
+function requireFeature(paths: ImpPaths, feature: AgentFeature): void {
+  const agentVersion = readVmIdentity(paths)?.agentVersion;
+
+  if (agentVersion !== undefined && !hasFeature(agentVersion, feature)) {
+    throw buildAgentOutdatedError(feature);
+  }
 }

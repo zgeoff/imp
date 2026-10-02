@@ -164,6 +164,8 @@ COPY --from=agent /out/imp-system.squashfs /
 FROM bun AS compile
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml ./
+# patchedDependencies: bun install applies these
+COPY patches/ patches/
 COPY packages/ packages/
 # --ignore-scripts: the root prepare script installs git hooks. No
 # --production: the CLI builds @zgeoff/imp-client from source, and the client
@@ -182,6 +184,7 @@ RUN bun build --compile packages/daemon/src/main.ts --outfile /out/impd \
 FROM bun AS dashboard
 WORKDIR /src
 COPY package.json bun.lock bunfig.toml tsconfig.base.json ./
+COPY patches/ patches/
 COPY packages/ packages/
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     bun install --frozen-lockfile --ignore-scripts
