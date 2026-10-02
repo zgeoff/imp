@@ -1,0 +1,218 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runChecked } from './instance';
+
+// A fake github.com and api.github.com on this machine: git smart HTTP
+// behind Basic auth, and a check of the bearer token. It never echoes the
+// token, which would put it in the guest's memory.
+
+interface SeenRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly authorization: string | null;
+}
+
+export interface FakeUpstream extends AsyncDisposable {
+  // https://<address>:<port>, for the broker's test-upstreams file
+  readonly origin: string;
+  readonly caPem: string;
+  readonly seen: readonly SeenRequest[];
+
+  // a bare repo at <owner>/<repo>.git that accepts pushes
+  readonly createRepo: (path: string) => Promise<string>;
+}
+
+const CGI_HEADER_END = /\r?\n\r?\n/;
+
+export async function startFakeUpstream(address: string, token: string): Promise<FakeUpstream> {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-e2e-upstream-'));
+  const repos = join(dir, 'repos');
+  const expected = `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
+  const bearer = `Bearer ${token}`;
+  const seen: SeenRequest[] = [];
+
+  mkdirSync(repos);
+
+  await createCertificates(dir, address);
+
+  const handleGit = async (request: Request, path: string, query: string): Promise<Response> => {
+    if (request.headers.get('authorization') !== expected) {
+      return new Response('auth needed\n', {
+        status: 401,
+        headers: { 'www-authenticate': 'Basic realm="fake"' },
+      });
+    }
+
+    const received = await request.arrayBuffer();
+
+    const body = new Uint8Array(received);
+
+    const child = Bun.spawn(['git', 'http-backend'], {
+      stdin: body,
+      stdout: 'pipe',
+      env: {
+        ...process.env,
+        GIT_PROJECT_ROOT: repos,
+        GIT_HTTP_EXPORT_ALL: '1',
+        REMOTE_USER: 'x-access-token',
+        REQUEST_METHOD: request.method,
+        PATH_INFO: path,
+        QUERY_STRING: query,
+        CONTENT_TYPE: request.headers.get('content-type') ?? '',
+        HTTP_CONTENT_ENCODING: request.headers.get('content-encoding') ?? '',
+      },
+    });
+
+    const output = await new Response(child.stdout).arrayBuffer();
+
+    await child.exited;
+
+    return parseCgiOutput(new Uint8Array(output));
+  };
+
+  const server = Bun.serve({
+    hostname: '0.0.0.0',
+    port: 0,
+    tls: { cert: readFileSync(join(dir, 'leaf.pem')), key: readFileSync(join(dir, 'leaf.key')) },
+    maxRequestBodySize: 256 * 1024 ** 2,
+    idleTimeout: 60,
+    fetch: (request) => {
+      const url = new URL(request.url);
+
+      seen.push({
+        method: request.method,
+        path: url.pathname,
+        authorization: request.headers.get('authorization'),
+      });
+
+      if (url.pathname.includes('.git/')) {
+        return handleGit(request, url.pathname, url.search.slice(1));
+      }
+
+      return Response.json({ authorized: request.headers.get('authorization') === bearer });
+    },
+  });
+
+  return {
+    origin: `https://${address}:${String(server.port)}`,
+    caPem: readFileSync(join(dir, 'ca.pem'), 'utf8'),
+    seen,
+    createRepo: async (path) => {
+      const repo = join(repos, path);
+
+      await runChecked(['git', 'init', '-q', '--bare', '-b', 'main', repo]);
+      await runChecked(['git', '-C', repo, 'config', 'http.receivepack', 'true']);
+
+      return repo;
+    },
+    [Symbol.asyncDispose]: async () => {
+      await server.stop(true);
+
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+// a CA and a leaf for the address, by openssl on this machine
+async function createCertificates(dir: string, address: string): Promise<void> {
+  const ca = join(dir, 'ca');
+  const leaf = join(dir, 'leaf');
+  const ext = join(dir, 'leaf.ext');
+
+  writeFileSync(
+    ext,
+    [
+      'basicConstraints=critical,CA:FALSE',
+      'keyUsage=critical,digitalSignature',
+      'extendedKeyUsage=serverAuth',
+      `subjectAltName=IP:${address}`,
+      'authorityKeyIdentifier=keyid',
+    ].join('\n'),
+  );
+
+  await runOpenssl([
+    'req',
+    '-x509',
+    '-newkey',
+    'ec',
+    '-pkeyopt',
+    'ec_paramgen_curve:P-256',
+    '-nodes',
+    '-keyout',
+    `${ca}.key`,
+    '-out',
+    `${ca}.pem`,
+    '-days',
+    '2',
+    '-subj',
+    '/CN=imp e2e upstream CA',
+    '-addext',
+    'basicConstraints=critical,CA:TRUE',
+    '-addext',
+    'keyUsage=critical,keyCertSign',
+  ]);
+
+  await runOpenssl([
+    'req',
+    '-newkey',
+    'ec',
+    '-pkeyopt',
+    'ec_paramgen_curve:P-256',
+    '-nodes',
+    '-keyout',
+    `${leaf}.key`,
+    '-out',
+    `${leaf}.csr`,
+    '-subj',
+    `/CN=${address}`,
+  ]);
+
+  await runOpenssl([
+    'x509',
+    '-req',
+    '-in',
+    `${leaf}.csr`,
+    '-CA',
+    `${ca}.pem`,
+    '-CAkey',
+    `${ca}.key`,
+    '-CAcreateserial',
+    '-out',
+    `${leaf}.pem`,
+    '-days',
+    '2',
+    '-extfile',
+    ext,
+  ]);
+}
+
+function runOpenssl(argv: readonly string[]): Promise<string> {
+  return runChecked(['openssl', ...argv]);
+}
+
+// `git http-backend` writes CGI: headers, a blank line, the body
+function parseCgiOutput(output: Uint8Array): Response {
+  const text = Buffer.from(output).toString('latin1');
+  const match = CGI_HEADER_END.exec(text);
+  const headEnd = match?.index ?? text.length;
+  const bodyStart = headEnd + (match?.[0].length ?? 0);
+
+  const headers = new Headers();
+
+  let status = 200;
+
+  for (const line of text.slice(0, headEnd).split(/\r?\n/)) {
+    const at = line.indexOf(':');
+    const name = line.slice(0, at).trim();
+    const value = line.slice(at + 1).trim();
+
+    if (name.toLowerCase() === 'status') {
+      status = Number(value.split(' ')[0]);
+    } else if (name !== '') {
+      headers.set(name, value);
+    }
+  }
+
+  return new Response(output.subarray(bodyStart), { status, headers });
+}
