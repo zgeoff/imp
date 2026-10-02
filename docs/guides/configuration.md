@@ -45,15 +45,15 @@ impd backs up to a restic repository when `IMP_BACKUP_REPOSITORY` is set
 well: `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for S3, `B2_*` for B2. impd passes restic
 those, never the rest of its environment.
 
-| Variable                   | Default                      | Meaning                                                                                                     |
-| -------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `IMP_BACKUP_REPOSITORY`    | none                         | A restic repository, such as `s3:https://s3.example.com/bucket/imp`. Unset: no backups.                     |
-| `IMP_BACKUP_PASSWORD_FILE` | none                         | The file that holds the repository password. Needed with a repository. Mode 0600; keep a copy off the host. |
-| `IMP_BACKUP_INTERVAL_S`    | `21600`                      | Seconds between scheduled runs.                                                                             |
-| `IMP_BACKUP_KEEP`          | `hourly=24,daily=7,weekly=4` | What `forget` keeps; a bucket left out keeps none.                                                          |
-| `IMP_BACKUP_FORGET`        | `true`                       | `false` leaves `forget` and `prune` to one other machine, for a bucket that denies impd's key deletes.      |
-| `IMP_BACKUP_CPUS`          | `2`                          | restic's `GOMAXPROCS`.                                                                                      |
-| `IMP_BACKUP_MEMORY_MIB`    | `512`                        | restic's `GOMEMLIMIT`, a soft limit.                                                                        |
+| Variable                   | Default                      | Meaning                                                                                                        |
+| -------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `IMP_BACKUP_REPOSITORY`    | none                         | A restic repository, such as `s3:https://s3.example.com/bucket/imp`; the bucket must exist. Unset: no backups. |
+| `IMP_BACKUP_PASSWORD_FILE` | none                         | The file that holds the repository password. Needed with a repository. Mode 0600; keep a copy off the host.    |
+| `IMP_BACKUP_INTERVAL_S`    | `21600`                      | Seconds between scheduled runs.                                                                                |
+| `IMP_BACKUP_KEEP`          | `hourly=24,daily=7,weekly=4` | What `forget` keeps; a bucket left out keeps none.                                                             |
+| `IMP_BACKUP_FORGET`        | `true`                       | `false` leaves `forget` and `prune` to one other machine, for a bucket that denies impd's key deletes.         |
+| `IMP_BACKUP_CPUS`          | `2`                          | restic's `GOMAXPROCS`.                                                                                         |
+| `IMP_BACKUP_MEMORY_MIB`    | `512`                        | restic's `GOMEMLIMIT`, a soft limit.                                                                           |
 
 ## Host container
 

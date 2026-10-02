@@ -62,12 +62,12 @@ sleeps others to make room, on a nested-virtualization host.
 
 Backups, from the `backups` e2e suite on the dev box (MinIO in the dev instance's network):
 
-| What                                     | Value        |
-| ---------------------------------------- | ------------ |
-| First run: 2 imps, 1 checkpoint, 1 image | 32–45 s      |
-| Next run: 1 imp running, 1 stopped       | 10–14 s      |
-| Data added, first and next run           | 150 / 15 MiB |
-| Restore of an imp with one checkpoint    | 4.1 s        |
+| What                                     | Value               |
+| ---------------------------------------- | ------------------- |
+| First run: 2 imps, 1 checkpoint, 1 image | 31–45 s             |
+| Next run: 1 imp running, 1 stopped       | 10–14 s             |
+| Data added, first and next run           | 150–178 / 15–19 MiB |
+| Restore of an imp with one checkpoint    | 3.9–4.1 s           |
 
 From the milestone work:
 

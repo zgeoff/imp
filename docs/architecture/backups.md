@@ -58,9 +58,11 @@ The API token (`<data>/token`) is never backed up. A restored host keeps the tok
 
 ## A run
 
-1. `restic unlock` drops stale locks (see [Locks](#locks)); the first run creates the repository.
-2. `VACUUM INTO` copies the database; the run reads imps, checkpoints and images from the copy.
-3. For each imp, under its lock and only for this step:
+1. The first run creates the repository. **Create the bucket first:** restic does not exit when it
+   is missing; it retries for minutes, and the run fails then.
+2. `restic unlock` drops stale locks (see [Locks](#locks)).
+3. `VACUUM INTO` copies the database; the run reads imps, checkpoints and images from the copy.
+4. For each imp, under its lock and only for this step:
    - **running:** the agent freezes the guest's filesystems (FIFREEZE, after a sync), impd copies
      the disk, and the agent thaws them. The copy is `synced: true` in the manifest. When the freeze
      fails, the disk is copied anyway, `synced: false`.
@@ -72,11 +74,11 @@ The API token (`<data>/token`) is never backed up. A restored host keeps the tok
    - **creating:** left out of this run.
    - An imp removed or replaced since the copy, or whose copy fails, is left out, and the run goes
      on. `imp backup run` lists each one with its reason.
-4. The storage backend lays out the tree (below). Checkpoints and images removed since the database
+5. The storage backend lays out the tree (below). Checkpoints and images removed since the database
    copy are left out of the tree and the manifest.
-5. `restic backup` reads the tree. No imp lock is held: imps start, stop, sleep, checkpoint and get
+6. `restic backup` reads the tree. No imp lock is held: imps start, stop, sleep, checkpoint and get
    destroyed while restic reads.
-6. The tree closes, and `restic forget` applies the retention.
+7. The tree closes, and `restic forget` applies the retention.
 
 One run, restore, prune or check runs at a time.
 
@@ -110,7 +112,8 @@ The tree is not kept mounted between runs: its mounts would pin snapshots that b
 
 ## Schedule, retention and limits
 
-Every `IMP_BACKUP_INTERVAL_S` (6 hours by default) impd runs a backup, then:
+Every 5 minutes impd checks whether `IMP_BACKUP_INTERVAL_S` (6 hours by default) has passed since
+the last run, so a restart never puts a run off by a whole interval. A due run is a backup, then:
 
 - `forget` with `IMP_BACKUP_KEEP` (by default 24 hourly, 7 daily and 4 weekly points) after every
   run, manual ones included;
@@ -131,9 +134,9 @@ and 0.8 s unchanged (`GOMAXPROCS=2`, `GOMEMLIMIT=256MiB`). A limit would only st
 
 restic reads the holes of a sparse file as zeros: an imp disk is 32 GiB however little it holds, so
 each disk restic has to read costs about 10 s of low-priority CPU on the dev box. In the e2e drill
-(two imps, one checkpoint, one image: 161 GiB apparent, 135 MiB allocated), the first run took 32–45
-s and added 150–160 MiB; the next run, with one imp running and one stopped, took 10–14 s and added
-15 MiB.
+(two imps, one checkpoint, one image: 161 GiB apparent, 135 MiB allocated), the first run took 31–45
+s and added 150–178 MiB; the next run, with one imp running and one stopped, took 10–14 s and added
+15–19 MiB.
 
 ## Restore
 
@@ -153,7 +156,7 @@ imp backup restore --all --merge               # add every imp to a host that ha
   checkpoints share blocks as before: reflink clones on XFS, snapshots of the new dataset on ZFS.
   The disk is a plain sparse file from restic either way, so a backup from an XFS host restores onto
   ZFS and back. The writes skip holes with `lseek(SEEK_DATA)`, so a 32 GiB disk with little data
-  restores in seconds: 4.1 s in the drill for an imp with one checkpoint.
+  restores in seconds: 3.9–4.1 s in the drill for an imp with one checkpoint.
 - An image with the same digest is reused. Otherwise it is restored too, under its name, or under
   `<name>-<digest prefix>` when another image has that name.
 - A name in use stops the restore with a conflict that names the imp; `--as` picks another name.
