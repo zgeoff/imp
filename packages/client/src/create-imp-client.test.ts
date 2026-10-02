@@ -2,21 +2,21 @@ import { expect, test } from 'bun:test';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from './create-imp-client';
-import { ImpErrorStateError } from './require-awake';
 
 type App = ReturnType<typeof buildTestApp>['app'];
 
 // a client over impd's app in-process, with fake VMs; `calls` lists every
-// procedure it called, and `restartAfterUnavailable` brings up a new impd
-// once the current one answers 503
+// procedure it called, `restartAfterUnavailable` brings up a new impd once the
+// current one answers 503, and `unreachable` fails that many fetches
 async function setupClientTest(env: Readonly<Record<string, string>> = {}, token = TEST_TOKEN) {
   const harness = await setupImpTest({ env });
 
   const calls: string[] = [];
 
-  const target: { app: App; next: App | null } = {
+  const target: { app: App; next: App | null; unreachable: number } = {
     app: buildTestApp(harness, harness).app,
     next: null,
+    unreachable: 0,
   };
 
   const client = createImpClient({
@@ -24,6 +24,11 @@ async function setupClientTest(env: Readonly<Record<string, string>> = {}, token
     token,
     fetch: async (request) => {
       calls.push(new URL(request.url).pathname);
+
+      if (target.unreachable > 0) {
+        target.unreachable -= 1;
+        throw new TypeError('Failed to fetch');
+      }
 
       const response = await target.app.handle(request);
 
@@ -44,6 +49,9 @@ async function setupClientTest(env: Readonly<Record<string, string>> = {}, token
     calls,
     restartAfterUnavailable: () => {
       target.next = buildTestApp(harness, harness.restartImpd()).app;
+    },
+    failFetches: (count: number) => {
+      target.unreachable = count;
     },
   };
 }
@@ -90,11 +98,14 @@ test('requireAwake refuses an imp in error unless told to restart it', async () 
 
   await ctx.client.imps.create({ name: 'dev' }).catch(() => {});
 
+  ctx.calls.length = 0;
+
   const rejection = await ctx.client.requireAwake('dev').catch((error: unknown) => error);
   const restarted = await ctx.client.requireAwake('dev', { restartError: true });
 
-  expect(rejection).toBeInstanceOf(ImpErrorStateError);
+  expect(rejection).toMatchObject({ code: 'INVALID_STATE', data: { state: 'error' } });
   expect(restarted.state).toBe('running');
+  expect(ctx.calls).toEqual(['/rpc/imps/wake', '/rpc/imps/wake']);
 });
 
 test('requireAwake passes RAM_BUDGET_EXCEEDED on after one try', async () => {
@@ -140,7 +151,28 @@ test('requireAwake waits out a stopping impd when asked to', async () => {
   });
 
   expect(imp.state).toBe('running');
-  expect(ctx.calls).toEqual(['/rpc/imps/get', '/rpc/imps/wake', '/rpc/imps/wake']);
+  expect(ctx.calls).toEqual(['/rpc/imps/wake', '/rpc/imps/wake']);
+});
+
+test('requireAwake retries an impd it cannot reach when asked to', async () => {
+  await using ctx = await setupClientTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  ctx.failFetches(1);
+
+  const unreachable = await ctx.client.requireAwake('dev').catch((error: unknown) => error);
+
+  expect(unreachable).toBeInstanceOf(TypeError);
+
+  ctx.failFetches(2);
+
+  const imp = await ctx.client.requireAwake('dev', {
+    retryUnavailable: { attempts: 2, delayMs: 1 },
+  });
+
+  expect(imp.state).toBe('running');
 });
 
 test('checkServer compares the versions', async () => {

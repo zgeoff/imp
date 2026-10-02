@@ -24,7 +24,7 @@ export interface ImpClientOptions {
 }
 
 export interface ImpClient extends RpcClient {
-  // one wake or start; see require-awake.ts for the states it refuses
+  // one wake call; see require-awake.ts
   readonly requireAwake: (name: string, options?: RequireAwakeOptions) => Promise<Imp>;
 
   // whether impd speaks this client's version of the API

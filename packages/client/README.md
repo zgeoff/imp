@@ -7,6 +7,9 @@ in Bun and in Node 22 or later.
 npm install @zgeoff/imp-client
 ```
 
+`@opentelemetry/api` is an optional peer: oRPC's type declarations name it, so a project that
+type-checks its dependencies (no `skipLibCheck`) installs it too.
+
 ## Connect
 
 ```ts
@@ -40,10 +43,11 @@ await imp.imps.sleep({ name: 'dev' });
 ```
 
 `imp.requireAwake(name)` makes one wake call. It wakes a sleeping imp, boots a stopped one and
-returns a running one as it is. It refuses an imp in the `error` state, because a wake restarts it;
-pass `{ restartError: true }` to restart it anyway. While impd stops, calls fail with
-`SERVICE_UNAVAILABLE`; pass `{ retryUnavailable: { attempts, delayMs } }` to wait for it to come
-back. `RAM_BUDGET_EXCEEDED` is never retried.
+returns a running one as it is. impd refuses an imp in the `error` state with `INVALID_STATE`,
+because a wake would restart it; pass `{ restartError: true }` to restart it anyway. While impd
+stops, calls fail with `SERVICE_UNAVAILABLE`, and while it restarts, `fetch` cannot connect; pass
+`{ retryUnavailable: { attempts, delayMs } }` to wait for it to come back. `RAM_BUDGET_EXCEEDED` is
+never retried.
 
 ## Errors
 
@@ -56,6 +60,7 @@ A failed call throws an `ORPCError`. impd's errors carry a `code` and typed `dat
 | `INVALID_STATE`       | The imp's state does not allow the call.             | `{ state, allowed }`                   |
 | `RAM_BUDGET_EXCEEDED` | The host has no room, even after sleeping idle imps. | `{ budgetMib, usedMib, requestedMib }` |
 | `SERVICE_UNAVAILABLE` | impd is stopping.                                    |                                        |
+| `FORBIDDEN`           | An exec ticket was used for another imp.             |                                        |
 
 ```ts
 import { isDefinedError, safe } from '@zgeoff/imp-client';

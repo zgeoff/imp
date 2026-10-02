@@ -47,15 +47,21 @@
       "name": "@zgeoff/imp-client",
       "version": "0.0.0",
       "dependencies": {
-        "@orpc/client": "^1.14.15",
-        "@orpc/contract": "^1.14.15",
-        "zod": "^4.4.3",
+        "@orpc/client": "catalog:",
+        "@orpc/contract": "catalog:",
+        "zod": "catalog:",
       },
       "devDependencies": {
         "@imp/api": "workspace:*",
         "@imp/daemon": "workspace:*",
         "tsdown": "catalog:",
       },
+      "peerDependencies": {
+        "@opentelemetry/api": ">=1.9.0",
+      },
+      "optionalPeers": [
+        "@opentelemetry/api",
+      ],
     },
     "packages/daemon": {
       "name": "@imp/daemon",
