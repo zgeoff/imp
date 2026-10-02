@@ -154,6 +154,8 @@ test('the key changes with each thing a restore inherits, and not with the drive
     buildTemplateKey({ ...identity, firecrackerVersion: 'v1.18.0' }, SHAPE),
     buildTemplateKey({ ...identity, snapshotVersion: 'v13.0.0' }, SHAPE),
     buildTemplateKey({ ...identity, hostKernel: 'other' }, SHAPE),
+    buildTemplateKey({ ...identity, cpuModel: 'Other CPU' }, SHAPE),
+    buildTemplateKey({ ...identity, cpuFlags: 'other-flags' }, SHAPE),
     buildTemplateKey(identity, { ...SHAPE, vcpus: 2 }),
     buildTemplateKey(identity, { ...SHAPE, memoryMib: 1024 }),
   ];

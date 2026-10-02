@@ -16,6 +16,7 @@ the sha256 of:
 
 - the guest kernel's sha and the system drive's sha (the drive's sha covers the agent)
 - the Firecracker version, the snapshot format version and the host kernel (`uname -r`)
+- the CPU model and a sha256 of its CPUID flags, which the guest kernel picked its code paths on
 - the template's kernel command line
 - the devices: the two drives, the vsock CID, `eth0` and the balloon
 - the vCPUs and the memory size
