@@ -29,19 +29,26 @@ image's userland ([versions](./storage.md#versions)).
 `IMP_RAM_BUDGET_MIB` is the RAM awake imps may use. Both installers set it from `MemTotal`: the host
 keeps the larger of 8 GiB and 15 %, and with ZFS also the ARC cap, which is 10 % of RAM within 1 to
 8 GiB. The ARC is outside the budget, so a host plan must count both. A value an operator sets
-stays.
+stays. The NixOS module cannot read the RAM size when it is built, so it takes the ARC cap as an
+option (`zfs.arcMaxMiB`) and works out the budget at each start.
 
 ## What both installers set up
 
 - `/etc/imp/imp-host.env` (0600), from the template, with the backend, the budget and
   `IMP_HOST_FIREWALL`.
-- `imp-host.service`, which runs the image with the flags of
-  [`deploy/imp-host.service`](../../deploy/imp-host.service). With ZFS it starts after the pool is
-  imported.
+- `imp-host.service`, which runs the image with the arguments in
+  [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json). `bun run render:deploy` writes
+  them into [`deploy/imp-host.service`](../../deploy/imp-host.service) and `bootstrap.sh`, the NixOS
+  module reads the file, and a test fails when the unit differs from it. With ZFS it starts after
+  the pool is imported.
 - The image: pulled, or loaded from an archive.
-- The Tailscale join. The key goes into the env file only until the node is `Running`. Then it is
-  blanked and the container restarts, and the node state in `/var/lib/imp/tailscale` keeps it on the
-  tailnet ([the Tailscale key](../guides/install.md#the-tailscale-key)).
+- The Tailscale join, inside the container. The node comes back from its saved state in
+  `/var/lib/imp/tailscale` when it can, and joins with the key only when it has no state or the
+  saved node needs a login ([how it works](../guides/tailscale.md#how-it-works)). `bootstrap.sh`
+  puts the key in the env file and blanks it once the node is `Running`
+  ([the Tailscale key](../guides/install.md#the-tailscale-key)). The NixOS module never puts it in
+  the env file: it mounts the key file into the container read-only
+  ([the Tailscale key](../guides/nixos.md#the-tailscale-key)).
 
 ## Firewall
 
@@ -52,13 +59,14 @@ host's firewall never sees them.
 
 `IMP_HOST_FIREWALL` says who owns the host's inbound firewall:
 
-- **`own`** (the default of `bootstrap.sh`): the script loads the `inet imp_host` table, an input
-  chain with policy drop that admits SSH, ICMP and DHCP only
+- **`own`** (the default of `bootstrap.sh`; `hostFirewall = "own"` in the NixOS module): imp loads
+  the `inet imp_host` table, an input chain with policy drop that admits SSH, ICMP and DHCP only
   ([Firewall](../guides/install.md#firewall)). In nftables a drop in any base chain wins, so this
-  table blocks whatever another firewall on the host allows.
-- **`none`** (the NixOS module, or `bootstrap.sh --host-firewall none`): imp adds no host rules. The
-  platform's firewall decides, such as NixOS `networking.firewall`, and other services on the host,
-  such as a host tailscaled or k3s, keep the ports it opens.
+  table blocks whatever another firewall on the host allows. The NixOS module therefore refuses
+  `own` beside `networking.firewall.enable`.
+- **`none`** (the default of the NixOS module, or `bootstrap.sh --host-firewall none`): imp adds no
+  host rules. The platform's firewall decides, such as NixOS `networking.firewall`, and other
+  services on the host, such as a host tailscaled or k3s, keep the ports it opens.
 
 Either way, the host's firewall must leave Docker's rules alone. A `flush ruleset` on reload, as
 Debian's default `/etc/nftables.conf` does, removes the NAT that the container's traffic leaves
