@@ -40,7 +40,8 @@ const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
             suites: ${SUITES.map((suite) => suite.name).join(' ')}
             sets:   acceptance (all, tailscale required), fast (the CI subset)
   --clean   full reset first: tailnet logout, remove the dev container, wipe
-            its data dir (XFS file, db, images, imps, checkpoints)
+            its data dir (XFS file, db, images, imps, checkpoints), and the
+            moves suites' second host and its data dir
   --reuse   keep a running dev instance instead of restarting it
   --keep    leave the run's imps and images in place
 
@@ -85,9 +86,7 @@ function resolveDataPath(): string {
 
 // The data dir to wipe, or null when it does not exist. The reset deletes it
 // as root, so it must sit under <repo>/.data/ or hold an imp.xfs.
-function resolveWipeTarget(): string | null {
-  const path = resolveDataPath();
-
+function resolveWipeTarget(path: string): string | null {
   if (!existsSync(path)) {
     return null;
   }
@@ -112,11 +111,15 @@ function resolveWipeTarget(): string | null {
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = resolveWipeTarget();
-  const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
+  const data = resolveWipeTarget(resolveDataPath());
+
+  // the moves suites' second host keeps its data between runs, which spares
+  // its image seed; a reset takes it too, so no old migration outlives a
+  // rebase that renumbered it
+  const hostB = resolveWipeTarget(`${resolveDataPath()}-mv-b`);
 
   console.log(
-    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${data ?? 'nothing'}`,
+    `    clean reset: tailnet logout, remove ${instance.container}, wipe ${[data, hostB].filter((dir) => dir !== null).join(' and ') || 'nothing'}`,
   );
 
   const container = await runCommand(['docker', 'inspect', instance.container]);
@@ -131,10 +134,17 @@ async function resetInstance(): Promise<void> {
   }
 
   await runDevScript('down');
+  await runCommand(['docker', 'rm', '-f', `${instance.container}-mv-b`]);
 
-  if (data === null) {
-    return;
+  for (const dir of [data, hostB]) {
+    if (dir !== null) {
+      await removeDataFiles(dir);
+    }
   }
+}
+
+async function removeDataFiles(data: string): Promise<void> {
+  const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
 
   // scripts/lib.sh knows how the host image builds
   await runChecked([
