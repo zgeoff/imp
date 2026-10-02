@@ -4,6 +4,7 @@ import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import {
   parseImp,
+  readImpUrls,
   readInfo,
   readState,
   requireImp,
@@ -35,7 +36,7 @@ test('imp new boots the default image and the first exec answers within the limi
   checkLimit('imp new + first exec', ms, config.maxNewMs);
 
   const row = await requireImp(name);
-  const urls = await runImp('url', name);
+  const urls = await readImpUrls(name);
   const uname = await runInImp(name, 'uname', '-a');
   const info = await readInfo();
 
@@ -45,7 +46,7 @@ test('imp new boots the default image and the first exec answers within the limi
   expect(created.url).toBe(row.url);
   expect(row.url).toMatch(new RegExp(`^http://${name}\\.imp\\.localhost:\\d+$`));
   expect(row.state).toBe('running');
-  expect(urls.split('\n')[0]).toBe(row.url);
+  expect(urls.local).toBe(row.url);
   expect(uname).toStartWith(`Linux ${name} `);
   expect(info.impCount).toBeGreaterThanOrEqual(1);
 });

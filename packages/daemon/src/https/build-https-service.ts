@@ -22,7 +22,7 @@ interface BuildHttpsOptions {
 export function buildHttpsService(options: BuildHttpsOptions): HttpsService {
   const config = options.config;
   const log = options.log;
-  const store = createCertStore(options.dataDir);
+  const store = createCertStore(options.dataDir, log);
   const dns = createDnsProvider(config.dns, log);
 
   const issue = createAcmeIssuer({

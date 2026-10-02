@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
 
@@ -24,41 +34,98 @@ const AttemptStateSchema = z.object({
   lastError: z.string().nullable(),
 });
 
-// the account URL the CA gave the stored key, per ACME directory
-const AccountSchema = z.object({ directoryUrl: z.string(), url: z.string() });
+// An ACME account: its key and the URL the CA gave it, at one directory.
+// The two are kept together: a key without its URL cannot be used again.
+interface AcmeAccount {
+  readonly directoryUrl: string;
+  readonly url: string;
+  readonly keyPem: string;
+}
+
+const AccountSchema = z.object({ directoryUrl: z.string(), url: z.string(), keyPem: z.string() });
+
+// v0.1.1 kept the key in account.key and only the URL in account.json
+const LegacyAccountSchema = z.object({ directoryUrl: z.string(), url: z.string() });
 const NO_ATTEMPTS: AttemptState = { failures: 0, lastAttemptAt: null, lastError: null };
 const PEM_BLOCK = /-----BEGIN (?<label>[A-Z ]+)-----[\s\S]+?-----END \k<label>-----\n?/g;
 
 export interface CertStore {
   readonly readCertificate: () => Certificate | null;
   readonly writeCertificate: (certificate: Certificate) => void;
-  readonly readAccountKey: () => string | null;
-  readonly writeAccountKey: (pem: string) => void;
 
-  // null when the key has no account at this directory yet
-  readonly readAccountUrl: (directoryUrl: string) => string | null;
-  readonly writeAccountUrl: (directoryUrl: string, url: string) => void;
+  // null when there is no account at this directory yet
+  readonly readAccount: (directoryUrl: string) => AcmeAccount | null;
+  readonly writeAccount: (account: AcmeAccount) => void;
   readonly readAttempts: () => AttemptState;
   readonly writeAttempts: (state: AttemptState) => void;
 }
 
-// <dataDir>/tls (docs/architecture/storage.md), every file 0600 and replaced
-// by a rename. The key and its certificate share one file, so a crash never
-// pairs a key with the wrong certificate.
-export function createCertStore(dataDir: string): CertStore {
+// <dataDir>/tls (docs/architecture/storage.md), every file 0600, synced and
+// replaced by a rename. The key and its certificate share one file, so a
+// crash never pairs a key with the wrong certificate.
+export function createCertStore(
+  dataDir: string,
+  log: (message: string) => void = () => {},
+): CertStore {
   const dir = join(dataDir, 'tls');
   const certificatePath = join(dir, 'certificate.pem');
-  const accountKeyPath = join(dir, 'account.key');
   const attemptsPath = join(dir, 'attempts.json');
   const accountPath = join(dir, 'account.json');
+  const legacyKeyPath = join(dir, 'account.key');
+  const warned = { account: false };
 
   const write = (path: string, content: string): void => {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
 
     const temporary = `${path}.tmp`;
+    const fd = openSync(temporary, 'w', 0o600);
 
-    writeFileSync(temporary, content, { mode: 0o600 });
+    try {
+      writeSync(fd, content);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+
     renameSync(temporary, path);
+  };
+
+  // the stored account, whatever its directory; null when there is none.
+  // v0.1.1's pair of files at this directory becomes one account.json.
+  const readStoredAccount = (directoryUrl: string): AcmeAccount | null => {
+    const text = readIfExists(accountPath);
+
+    if (text === null) {
+      return null;
+    }
+
+    const json = parseJson(text);
+    const account = AccountSchema.safeParse(json);
+
+    if (account.success) {
+      return account.data;
+    }
+
+    const legacy = LegacyAccountSchema.safeParse(json);
+    const legacyKey = readIfExists(legacyKeyPath);
+
+    if (legacy.success && legacyKey !== null && legacy.data.directoryUrl === directoryUrl) {
+      const migrated = { ...legacy.data, keyPem: legacyKey };
+
+      write(accountPath, `${JSON.stringify(migrated)}\n`);
+
+      return migrated;
+    }
+
+    // a damaged file means a new account, which costs nothing, but say so
+    // once: a file that never parses would make one at every start
+    if (!legacy.success && !warned.account) {
+      warned.account = true;
+
+      log(`impd: https: ${accountPath} does not parse; making a new ACME account`);
+    }
+
+    return null;
   };
 
   return {
@@ -73,23 +140,16 @@ export function createCertStore(dataDir: string): CertStore {
         `${certificate.keyPem.trimEnd()}\n${certificate.chainPem.trimEnd()}\n`,
       );
     },
-    readAccountKey: () => readIfExists(accountKeyPath),
-    writeAccountKey: (pem) => {
-      write(accountKeyPath, pem);
-    },
-    readAccountUrl: (directoryUrl) => {
-      const text = readIfExists(accountPath);
+    readAccount: (directoryUrl) => {
+      const account = readStoredAccount(directoryUrl);
 
-      try {
-        const account = text === null ? null : AccountSchema.parse(JSON.parse(text));
+      // v0.1.1's key file: moved into account.json above, or of no use now
+      rmSync(legacyKeyPath, { force: true });
 
-        return account?.directoryUrl === directoryUrl ? account.url : null;
-      } catch {
-        return null;
-      }
+      return account?.directoryUrl === directoryUrl ? account : null;
     },
-    writeAccountUrl: (directoryUrl, url) => {
-      write(accountPath, `${JSON.stringify({ directoryUrl, url })}\n`);
+    writeAccount: (account) => {
+      write(accountPath, `${JSON.stringify(account)}\n`);
     },
     readAttempts: () => {
       const text = readIfExists(attemptsPath);
@@ -122,6 +182,14 @@ function splitCertificate(pem: string): Certificate | null {
     keyPem: key[0].trimEnd(),
     chainPem: chain.map((block) => block[0].trimEnd()).join('\n'),
   };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function readIfExists(path: string): string | null {

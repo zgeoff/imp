@@ -107,6 +107,30 @@ export function runShellInImp(name: string, script: string): Promise<string> {
   return runInImp(name, 'sh', '-c', script);
 }
 
+export interface ImpUrls {
+  readonly https: string | null;
+  readonly local: string;
+  readonly tailnet: string | null;
+}
+
+// `imp url NAME`, read by the shape of each line, not its place: the https
+// suite's settings stay for the whole run, so its line may come first
+export async function readImpUrls(name: string): Promise<ImpUrls> {
+  const stdout = await runImp('url', name);
+
+  const lines = stdout.split('\n').filter((line) => line !== '');
+  const local = lines.find((line) => /^http:\/\/\S+\.imp\.localhost:\d+$/v.test(line));
+
+  if (local === undefined) {
+    throw new Error(`imp url ${name} printed no local URL: ${stdout}`);
+  }
+
+  const https = lines.find((line) => line.startsWith('https://')) ?? null;
+  const tailnet = lines.find((line) => line !== local && line.startsWith('http://')) ?? null;
+
+  return { https, local, tailnet };
+}
+
 export async function listImps(): Promise<readonly ImpRow[]> {
   const stdout = await runImp('ls', '--json');
 

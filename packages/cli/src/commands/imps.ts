@@ -120,7 +120,10 @@ export const holdCommand = defineCommand({
 });
 
 export const urlCommand = defineCommand({
-  meta: { name: 'url', description: "Print an imp's URLs" },
+  meta: {
+    name: 'url',
+    description: "Print an imp's URLs: https first when HTTPS is on, then local and tailnet",
+  },
   args: { name: nameArg },
   run: (context) =>
     runAction(context.host, async (client) => {

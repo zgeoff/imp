@@ -197,7 +197,7 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
     await runDevScript('down');
   }
 
-  // before `up`: impd asks Pebble for its certificate as it starts
+  // the https suite reboots the instance onto this stack, and off it again
   if (args.suites.includes('https')) {
     await startPebble();
   }

@@ -508,7 +508,7 @@ test('no secret, key, password or token of the host reaches a backup', async () 
   await ctx.broker.addGrant('dev', 'gh');
 
   mkdirSync(join(ctx.dataDir, 'tls'), { recursive: true });
-  writeFileSync(join(ctx.dataDir, 'tls', 'account.key'), 'acme-account-key-text');
+  writeFileSync(join(ctx.dataDir, 'tls', 'account.json'), 'acme-account-key-text');
   writeFileSync(join(ctx.dataDir, 'restic-password'), 'restic-password-text');
   writeFileSync(join(ctx.dataDir, 'token'), 'api-token-text');
 
