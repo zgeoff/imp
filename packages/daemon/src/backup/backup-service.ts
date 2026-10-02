@@ -220,6 +220,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
             .filter((grant) => grant.impId === imp.id)
             .map((grant) => grant.secretName),
           disk: BACKUP_TREE.buildDisk(imp.id),
+          diskBytes: imp.diskBytes,
           checkpoints: copy.checkpoints
             .filter(
               (checkpoint) => checkpoint.impId === imp.id && tree.checkpointIds.has(checkpoint.id),
@@ -229,6 +230,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
               label: checkpoint.label,
               createdAt: new Date(checkpoint.createdAt),
               disk: BACKUP_TREE.buildCheckpointDisk(imp.id, checkpoint.id),
+              diskBytes: checkpoint.diskBytes,
             })),
         })),
       images: copy.images
@@ -497,6 +499,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
           label: checkpoint.label,
           sizeBytes: made.sizeBytes,
           createdAt: checkpoint.createdAt,
+          diskBytes: checkpoint.diskBytes,
         });
       }
 

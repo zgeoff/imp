@@ -178,7 +178,10 @@ async function setupTest(repoDir = mkdtempSync(`${tmpdir()}/impd-restic-test-`))
 
     const sizeBytes = await harness.storage.createCheckpoint(impId, id);
 
-    await createCheckpoint(harness.db, { id, impId, label, sizeBytes, createdAt });
+    // a size of its own, so a restore shows it took the manifest's
+    const diskBytes = 1000 + label.length;
+
+    await createCheckpoint(harness.db, { id, impId, label, sizeBytes, createdAt, diskBytes });
   };
 
   return {
@@ -293,10 +296,12 @@ test('a restore rebuilds the imp stopped, with its checkpoints in order', async 
   const imp = await findImpByName(ctx.db, 'dev');
   const checkpoints = await listCheckpoints(ctx.db, imp?.id ?? '');
 
-  // newest first, with new ids and the original times
-  expect(checkpoints.map((checkpoint) => [checkpoint.label, checkpoint.createdAt])).toEqual([
-    ['two', new Date('2026-09-02T00:00:00Z')],
-    ['one', new Date('2026-09-01T00:00:00Z')],
+  // newest first, with new ids and the original times and disk sizes
+  expect(
+    checkpoints.map((checkpoint) => [checkpoint.label, checkpoint.createdAt, checkpoint.diskBytes]),
+  ).toEqual([
+    ['two', new Date('2026-09-02T00:00:00Z'), 1003],
+    ['one', new Date('2026-09-01T00:00:00Z'), 1003],
   ]);
 
   expect(checkpoints.map((checkpoint) => checkpoint.id)).not.toContain('cp-one');

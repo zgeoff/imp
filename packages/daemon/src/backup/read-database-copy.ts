@@ -14,6 +14,7 @@ const CopyImpSchema = z.object({
   memoryMib: z.int(),
   httpPort: z.int(),
   egressPolicy: z.string(),
+  diskBytes: z.int(),
 });
 
 const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
@@ -23,6 +24,7 @@ const CopyCheckpointSchema = z.object({
   impId: z.string(),
   label: z.string().nullable(),
   createdAt: z.int(),
+  diskBytes: z.int(),
 });
 
 const CopyImageSchema = z.object({
@@ -66,14 +68,15 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
     const imps = copy
       .query(
         `SELECT id, name, image_id AS imageId, state, vcpus, memory_mib AS memoryMib,
-           http_port AS httpPort, egress_policy AS egressPolicy FROM imps ORDER BY name`,
+           http_port AS httpPort, egress_policy AS egressPolicy, disk_bytes AS diskBytes
+           FROM imps ORDER BY name`,
       )
       .all();
 
     const checkpoints = copy
       .query(
-        `SELECT id, imp_id AS impId, label, created_at AS createdAt FROM checkpoints
-           ORDER BY created_at, id`,
+        `SELECT id, imp_id AS impId, label, created_at AS createdAt, disk_bytes AS diskBytes
+           FROM checkpoints ORDER BY created_at, id`,
       )
       .all();
 

@@ -1,11 +1,16 @@
 import * as z from 'zod';
 
+const LEGACY_DISK_BYTES = 32 * 1024 ** 3;
+
 const ManifestCheckpointSchema = z
   .object({
     id: z.string(),
     label: z.string().nullable(),
     createdAt: z.coerce.date(),
     disk: z.string(),
+
+    // a manifest from before disk sizes had 32 GiB disks only
+    diskBytes: z.int().positive().default(LEGACY_DISK_BYTES),
   })
   .readonly();
 
@@ -23,6 +28,10 @@ const ManifestImpSchema = z
     synced: z.boolean(),
     dir: z.string(),
     disk: z.string(),
+
+    // the database's size; the disk file in the tree has the size it had
+    // when copied, which a resize during the run can pass
+    diskBytes: z.int().positive().default(LEGACY_DISK_BYTES),
 
     // the broker's policy for hosts no grant covers, and the names of the
     // secrets granted: never a value (docs/architecture/backups.md#manifest)
