@@ -26,7 +26,7 @@ const AttemptStateSchema = z.object({
 
 // An ACME account: its key and the URL the CA gave it, at one directory.
 // The two are kept together: a key without its URL cannot be used again.
-export interface AcmeAccount {
+interface AcmeAccount {
   readonly directoryUrl: string;
   readonly url: string;
   readonly keyPem: string;

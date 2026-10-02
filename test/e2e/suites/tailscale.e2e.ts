@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
-import { assertState, readInfo, requireImp, runImp } from '../lib/imp-cli';
+import { assertState, readImpUrls, readInfo, requireImp, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { REPO_ROOT, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -116,9 +116,9 @@ test.skipIf(!ready && !config.acceptance)(
     await holdImp(name);
 
     const row = await requireImp(name);
-    const urls = await runImp('url', name);
+    const urls = await readImpUrls(name);
 
-    const url = urls.split('\n')[1] ?? '';
+    const url = urls.tailnet ?? '';
 
     expect(url).not.toBe('');
 
