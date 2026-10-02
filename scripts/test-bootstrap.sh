@@ -264,6 +264,22 @@ run_distro() {
     in_container ufw --force enable >/dev/null
   fi
 
+  # Ubuntu ships the zfs module with its kernel: no contrib, no dkms.
+  if [ "$distro" = ubuntu26 ]; then
+    log "[$distro] --storage zfs --check on an empty device"
+    local dev want
+    dev=$(in_container bash -c "truncate -s 20G $disk_empty && losetup -f --show $disk_empty")
+    storage_args=(--storage zfs --data-device "$dev")
+    expect_exit 2 --check
+    for want in "would: apt-get install zfsutils-linux" "would: zpool create tank on $dev" \
+      "would: zfs create tank/imp (mountpoint=legacy)" "would: write /etc/modprobe.d/imp-zfs.conf"; do
+      grep -qF "$want" <<<"$LAST_OUTPUT" || fail "[$distro] --check with zfs did not plan: $want"
+    done
+    ! grep -qE 'zfs-dkms|linux-headers|contrib' <<<"$LAST_OUTPUT" || fail "[$distro] zfs on Ubuntu planned dkms"
+    in_container losetup -d "$dev"
+    storage_args=(--loop-file "$loop_file" --loop-size 50)
+  fi
+
   log "[$distro] --check on the fresh host"
   expect_exit 2 --check
   in_container test ! -e /etc/imp || fail "[$distro] --check changed the host"

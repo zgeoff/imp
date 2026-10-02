@@ -996,6 +996,8 @@ health() {
     die "imp-host publishes a port beyond loopback: $published"
   fi
 
+  check_storage_live
+
   if tailnet_joined; then
     wait_for "the tailnet node to be Running" 120 tailscale_running
     log "health: the tailnet node is Running"
@@ -1010,6 +1012,22 @@ health() {
   docker exec imp-host imp rm "$name"
   trap - EXIT
   log "health: impd answered; created, ran and destroyed an imp"
+}
+
+# check_storage_live: impd reports the backend the bootstrap set up, and
+# with ZFS the pool is ONLINE and the dataset is what the container mounted
+# on /var/lib/imp.
+check_storage_live() {
+  local backend
+  backend=$(docker exec imp-host imp info --json | jq -r '.storage.backend // empty')
+  [ "$backend" = "$storage" ] || die "impd reports storage backend '${backend:-none}', not $storage"
+  if [ "$storage" = zfs ]; then
+    [ "$(zpool list -H -o health "$zfs_pool")" = ONLINE ] || die "pool $zfs_pool is not ONLINE"
+    local top
+    top=$(docker exec imp-host findmnt -n -r -o SOURCE,FSTYPE --mountpoint "$DATA_DIR" | tail -n 1)
+    [ "$top" = "$zfs_root zfs" ] || die "the container has '${top:-nothing}' on $DATA_DIR, not $zfs_root"
+  fi
+  log "health: impd stores imps on $storage${zfs_root:+ ($zfs_root)}"
 }
 
 # tailnet_joined: the host container runs and holds node state.
