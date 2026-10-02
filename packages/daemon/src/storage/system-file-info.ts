@@ -7,7 +7,7 @@ export interface SystemFileInfo {
   readonly systemDrive: { readonly sha256: string };
 }
 
-interface SystemFilePaths {
+export interface SystemFilePaths {
   readonly kernelPath: string;
   readonly systemDrivePath: string;
 }

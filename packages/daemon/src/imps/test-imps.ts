@@ -15,7 +15,9 @@ import type { ImpDatabase } from '../db/open-database';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createImageService } from '../images/image-service';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
+import type { SnapshotIdentity } from '../sleep/snapshot-meta';
+import type { HostIdentity } from '../sleep/vm-identity';
+import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { buildFakeVmm } from './fake-vmm';
 
@@ -30,13 +32,20 @@ export const TEST_SYSTEM_FILES = {
 // every awake fake VM owns this much, as the governor measures it
 const FAKE_VM_RAM_MIB = 300;
 
-const TEST_IDENTITY = {
-  firecrackerVersion: 'v1.17.0',
-  snapshotVersion: 'v12.0.0',
-  hostKernel: 'test',
-  guestKernel: 'k',
-  systemDrive: 's',
-};
+// the sha256 of the system drive every test impd starts with
+const TEST_DRIVE = 'd1'.repeat(32);
+
+// what a host with `drive` installed in `dataDir` boots imps with
+function buildTestIdentity(dataDir: string, drive: string): HostIdentity {
+  return {
+    firecrackerVersion: 'v1.17.0',
+    snapshotVersion: 'v12.0.0',
+    hostKernel: 'test',
+    guestKernel: 'k',
+    systemDrive: drive,
+    systemDrivePath: buildSystemDrivePath(dataDir, drive),
+  };
+}
 
 interface ImpTestOptions {
   readonly env?: Readonly<Record<string, string>>;
@@ -48,9 +57,9 @@ interface ImpTestOptions {
   readonly onLog?: (message: string) => void;
 }
 
-// The governed imp service over an in-memory database, fake VMs and taps,
-// in a fresh data dir. `restartImpd` starts a new impd on the same database,
-// data dir and VMs, as a process restart would.
+// The governed imp service over an in-memory database, fake VMs and taps, in
+// a fresh data dir. `restartImpd` starts a new impd on the same database, data
+// dir and VMs, as a restart would; given an identity, as an upgrade would.
 export async function setupImpTest(options: ImpTestOptions = {}) {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-test-`);
 
@@ -74,10 +83,24 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       return Promise.resolve();
     });
 
-  const startImpd = () =>
-    createGovernedImps({
+  // a system drive file, as setupSystemFiles installs it
+  const createSystemDrive = (drive: string): HostIdentity => {
+    const identity = buildTestIdentity(dataDir, drive);
+
+    mkdirSync(buildSystemDrivesDir(dataDir), { recursive: true });
+    writeFileSync(identity.systemDrivePath, drive);
+
+    return identity;
+  };
+
+  const host = { identity: createSystemDrive(TEST_DRIVE) };
+
+  const startImpd = (identity: HostIdentity = host.identity) => {
+    host.identity = identity;
+
+    return createGovernedImps({
       config,
-      identity: TEST_IDENTITY,
+      identity,
       readRamMib: (pid) => (fake.alive.has(pid) ? FAKE_VM_RAM_MIB : null),
       db,
       images,
@@ -97,6 +120,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       cloneDisk,
       now: readClock,
     });
+  };
 
   const governed = startImpd();
 
@@ -123,6 +147,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       clock.offsetMs += ms;
     },
     restartImpd: startImpd,
+    createSystemDrive,
+    readIdentity: () => host.identity,
     createTestImage,
     async [Symbol.asyncDispose]() {
       fake.releaseHangs();
@@ -178,20 +204,19 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
   return { app: built.app, closeExecSessions: built.closeExecSessions, client };
 }
 
-// a memory snapshot as a sleep at `createdAt` under `firecrackerVersion`
+// a memory snapshot as a sleep at `createdAt` by a VM with `identity`
 // leaves it
 export function writeTestSnapshot(
   paths: Readonly<ImpPaths>,
   createdAt: number,
-  firecrackerVersion = TEST_IDENTITY.firecrackerVersion,
+  identity: Readonly<SnapshotIdentity>,
 ): void {
   mkdirSync(paths.snapshotDir, { recursive: true });
   writeFileSync(paths.vmstate, 'vmstate');
   writeFileSync(paths.memFile, 'mem');
 
   writeSnapshotMeta(paths, {
-    ...TEST_IDENTITY,
-    firecrackerVersion,
+    ...identity,
     createdAt,
     memoryMib: 2048,
     ramMib: FAKE_VM_RAM_MIB,

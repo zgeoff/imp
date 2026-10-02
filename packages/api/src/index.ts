@@ -19,7 +19,7 @@ export { impContract } from './imp-contract';
 export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';
 export { ImpSchema, ImpStateSchema } from './imp-schema';
-export type { Imp, ImpState } from './imp-schema';
+export type { Imp, ImpState, OutdatedPart } from './imp-schema';
 export { NameSchema } from './name-schema';
 export { SystemInfoSchema } from './system-info-schema';
 export type { SystemInfo } from './system-info-schema';

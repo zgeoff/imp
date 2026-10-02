@@ -211,7 +211,7 @@ test('a cold boot the budget refuses before anything loaded keeps the snapshot',
 
   const paths = await ctx.findPaths('a');
 
-  writeTestSnapshot(paths, Date.now(), 'v0.1.0');
+  writeTestSnapshot(paths, Date.now(), { ...ctx.readIdentity(), firecrackerVersion: 'v0.1.0' });
 
   const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
   const state = await ctx.readState('a');
@@ -231,7 +231,7 @@ test('a cold boot that fails after its admit releases the reservation', async ()
 
   const paths = await ctx.findPaths('dev');
 
-  writeTestSnapshot(paths, Date.now(), 'v0.1.0');
+  writeTestSnapshot(paths, Date.now(), { ...ctx.readIdentity(), firecrackerVersion: 'v0.1.0' });
 
   ctx.fake.queue('boot', 'fail');
 
@@ -343,8 +343,8 @@ test('a restarted impd settles imps left in every state', async () => {
   const fresh = await ctx.findPaths('dead-fresh-snapshot');
   const old = await ctx.findPaths('dead-old-snapshot');
 
-  writeTestSnapshot(fresh, lastActive + 1000);
-  writeTestSnapshot(old, lastActive - 1000);
+  writeTestSnapshot(fresh, lastActive + 1000, ctx.readIdentity());
+  writeTestSnapshot(old, lastActive - 1000, ctx.readIdentity());
 
   const lost = await ctx.findPaths('asleep-lost-snapshot');
 

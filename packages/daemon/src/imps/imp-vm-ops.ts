@@ -3,11 +3,13 @@ import { updateImpActivity, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import {
-  checkSnapshotMatch,
+  buildSnapshotIdentity,
+  findColdBootReason,
   readSnapshotMeta,
   removeSnapshot,
   writeSnapshotMeta,
 } from '../sleep/snapshot-meta';
+import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
@@ -63,7 +65,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
   };
 
-  const startImpVm = async (imp: LockedImp): Promise<LockedImp> => {
+  // `reason` says why a wake booted cold instead; null for a create or a start
+  const startColdImpVm = async (imp: LockedImp, reason: string | null): Promise<LockedImp> => {
     try {
       gate.requireOpen();
     } catch (error) {
@@ -98,7 +101,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const vm = await context.vms.startVm({
         firecrackerBin: context.config.firecrackerBin,
         kernelPath: context.config.kernelPath,
-        systemDrivePath: context.config.systemDrivePath,
+        systemDrivePath: context.identity.systemDrivePath,
         paths,
         address,
         impId: imp.id,
@@ -109,6 +112,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       });
 
       context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
+
+      // its sleeps record this, whatever the host boots by then
+      writeVmIdentity(paths, {
+        ...context.identity,
+        agentVersion: vm.agentVersion,
+        bootReason: reason,
+      });
 
       await updateImpActivity(context.db, imp.id, new Date());
 
@@ -127,6 +137,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       throw error;
     }
   };
+
+  const startImpVm = (imp: LockedImp): Promise<LockedImp> => startColdImpVm(imp, null);
 
   const stopImpVm = async (imp: LockedImp): Promise<LockedImp> => {
     const paths = context.findPaths(imp.id);
@@ -158,7 +170,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths));
 
       writeSnapshotMeta(paths, {
-        ...context.readIdentity(),
+        ...buildSnapshotIdentity(readVmIdentity(paths), context.identity),
         createdAt: Date.now(),
         memoryMib: imp.memoryMib,
         ramMib,
@@ -198,14 +210,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);
-
-    const mismatch =
-      meta === null ? 'no snapshot' : checkSnapshotMatch(meta, context.readIdentity());
+    const mismatch = meta === null ? 'no snapshot' : findColdBootReason(meta, context.identity);
 
     if (meta === null || mismatch !== null) {
       context.log(`impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot'}`);
 
-      return startImpVm(imp);
+      return startColdImpVm(imp, mismatch);
     }
 
     // a woken VM faults its pages back in; it grows toward what it owned
@@ -224,6 +234,14 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       const vm = await context.vms.wakeVm({ firecrackerBin: context.config.firecrackerBin, paths });
 
+      // the drive the snapshot reopened is the one the VM booted from, so its
+      // agent answers as it did then; anything else is not that VM
+      if (meta.agentVersion !== undefined && vm.agentVersion !== meta.agentVersion) {
+        await context.vms.stopVm(vm.pid, paths, false);
+
+        throw new Error(`the agent answered as ${vm.agentVersion}, not ${meta.agentVersion}`);
+      }
+
       const wakeMs = Math.round(performance.now() - started);
 
       context.log(
@@ -240,10 +258,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         firecrackerVersion: vm.firecrackerVersion,
       });
     } catch (error) {
-      context.log(
-        `impd: ${imp.name}: ${readErrorMessage(error).split('\n')[0] ?? ''}; booting cold`,
-      );
+      const failure = readErrorMessage(error).split('\n')[0] ?? '';
 
+      context.log(`impd: ${imp.name}: ${failure}; booting cold`);
       context.admission?.release(imp.id);
 
       // the load may have run the guest, which can write its disk: the
@@ -252,7 +269,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       const stopped = await updateState(imp, { state: 'stopped', pid: null });
 
-      return startImpVm(stopped);
+      return startColdImpVm(stopped, failure);
     }
   };
 

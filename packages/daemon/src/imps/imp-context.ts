@@ -6,8 +6,7 @@ import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
-import { readSnapshotIdentity } from '../sleep/snapshot-meta';
-import type { SnapshotIdentity } from '../sleep/snapshot-meta';
+import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import { createReflinkClone } from '../storage/reflink';
@@ -30,8 +29,8 @@ export interface ImpServiceDeps {
   // the RAM governor; without one every boot is admitted
   readonly admission?: RamAdmission;
 
-  // what a snapshot is tied to; read from the system files when left out
-  readonly identity?: SnapshotIdentity;
+  // what this host boots imps with, which a snapshot must match to load
+  readonly identity: HostIdentity;
   readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
 
   // after a create or a destroy: the proxy opens or closes the imp's port
@@ -60,7 +59,7 @@ export interface ImpContext {
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly now: () => number;
-  readonly readIdentity: () => SnapshotIdentity;
+  readonly identity: HostIdentity;
   readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
   readonly findPaths: (impId: string) => ImpPaths;
@@ -68,7 +67,6 @@ export interface ImpContext {
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
-  const identityCache: { value: SnapshotIdentity | null } = { value: deps.identity ?? null };
   const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
 
   return {
@@ -83,11 +81,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readTailnetHostname: deps.readTailnetHostname,
     now: deps.now ?? Date.now,
-    readIdentity: () => {
-      identityCache.value ??= readSnapshotIdentity(deps.config);
-
-      return identityCache.value;
-    },
+    identity: deps.identity,
     emitChanged: () => {
       deps.onImpsChanged?.();
     },

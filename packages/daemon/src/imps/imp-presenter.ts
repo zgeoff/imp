@@ -1,6 +1,7 @@
 import type { Imp } from '@imp/api';
 import { findImageById, listImages } from '../db/images';
 import type { ImpRecord } from '../db/imps';
+import { readBootStatus } from './boot-status';
 import type { ImpContext } from './imp-context';
 
 export interface ImpUrls {
@@ -48,16 +49,18 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       api.error = imp.error;
     }
 
+    const paths = context.findPaths(imp.id);
+
     const ramMib =
       imp.state === 'running' && imp.pid !== null
-        ? context.readRamMib(imp.pid, context.findPaths(imp.id).apiSocket)
+        ? context.readRamMib(imp.pid, paths.apiSocket)
         : null;
 
     if (ramMib !== null) {
       api.ramMib = ramMib;
     }
 
-    return api;
+    return { ...api, ...readBootStatus(imp, paths, context.identity) };
   };
 
   return {

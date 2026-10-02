@@ -8,6 +8,7 @@ import { openDatabase } from './db/open-database';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
+import { listDrivesInUse } from './imps/drives-in-use';
 import { readTailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { printLog } from './process/print-log';
@@ -16,7 +17,8 @@ import { waitWithin } from './process/wait-within';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
-import { readSnapshotIdentity } from './sleep/snapshot-meta';
+import { readHostIdentity } from './sleep/vm-identity';
+import { removeUnusedSystemDrives } from './storage/remove-unused-system-drives';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { readSystemFileInfo } from './storage/system-file-info';
 import { loadOrCreateToken } from './token';
@@ -55,7 +57,9 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
   mkdirSync(join(config.dataDir, 'db'), { recursive: true });
-  setupSystemFiles(config);
+
+  const systemPaths = setupSystemFiles(config);
+  const systemFiles = readSystemFileInfo(systemPaths);
 
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
@@ -70,7 +74,11 @@ async function main(): Promise<void> {
     images,
     taps: createTapDevices(),
     vms: createVmRunner(),
-    identity: readSnapshotIdentity(config),
+    identity: readHostIdentity({
+      firecrackerBin: config.firecrackerBin,
+      systemDrivePath: systemPaths.systemDrivePath,
+      systemFiles,
+    }),
     log: printLog,
     onImpsChanged: () => {
       void proxyHolder.proxy?.syncListeners();
@@ -87,6 +95,15 @@ async function main(): Promise<void> {
 
   await imps.reconcileImps();
 
+  // before anything can boot or sleep an imp, so the set of drives in use holds
+  const keep = await listDrivesInUse(db, config.dataDir);
+
+  keep.add(systemPaths.systemDrivePath);
+
+  for (const name of removeUnusedSystemDrives(config.dataDir, keep)) {
+    printLog(`impd: removed system drive ${name}: no imp uses it`);
+  }
+
   const checkpoints = createCheckpointService({ config, db, imps });
   const state = { ready: false };
 
@@ -99,7 +116,7 @@ async function main(): Promise<void> {
     governor,
     checkpoints,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
-    systemFiles: readSystemFileInfo(config),
+    systemFiles,
     readTailscale,
     isReady: () => state.ready,
   });
