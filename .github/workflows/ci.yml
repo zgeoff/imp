@@ -288,6 +288,18 @@ jobs:
             debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a \
             cat /sys/fs/cgroup/cgroup.controllers || true
 
+      # The ksm suite needs ksmd running. KSM is global to the kernel, so it is
+      # turned on here only, on this runner's own VM, and the suite skips on
+      # any host where it is off. The scan rate is high so merges come in
+      # minutes; ubuntu-24.04 runs Linux 6.17, past the 6.10 IMP_KSM needs.
+      - name: Turn KSM on for this runner
+        run: |
+          uname -r
+          echo 1 | sudo tee /sys/kernel/mm/ksm/use_zero_pages >/dev/null
+          echo 1000 | sudo tee /sys/kernel/mm/ksm/pages_to_scan >/dev/null
+          echo 1 | sudo tee /sys/kernel/mm/ksm/run >/dev/null
+          grep -H . /sys/kernel/mm/ksm/run /sys/kernel/mm/ksm/pages_to_scan /sys/kernel/mm/ksm/use_zero_pages
+
       # /mnt is the runner's larger temp disk; the XFS file goes there when
       # the image has one. CI must not pass --clean to the harness: it
       # refuses to wipe a data dir outside .data/ that holds no imp.xfs, and

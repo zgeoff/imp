@@ -43,6 +43,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'moves-tailnet',
     'chaos',
     'jail',
+    'ksm',
     'backups',
   ]);
 });
@@ -76,6 +77,7 @@ test('it expands a set and drops duplicates', () => {
     'boot-templates',
     'inner',
     'jail',
+    'ksm',
   ]);
 });
 
