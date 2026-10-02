@@ -25,6 +25,9 @@ export const instance = {
 
   // the SSH gateway, published on localhost by scripts/dev.sh
   sshPort: 2222 + offset,
+
+  // IMP_DEV_PORT_OFFSET, for what else instances side by side must not share
+  portOffset: offset,
 } as const;
 
 const HealthSchema = z.object({ ready: z.boolean() });
