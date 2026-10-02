@@ -54,6 +54,12 @@ impd reports the name the node got (the first label of its MagicDNS name) in `im
 in `imp url`, so the URLs follow a `-1` suffix. The orphan keeps the plain name: `imp` then resolves
 to a dead node. Find the node by its IP (`imp info`), not by `HostName`, which both nodes share.
 
+## Tailnet identity
+
+impd can give tailnet members access to its API without a token: `IMP_TAILNET_IDENTITIES` maps
+logins and tags to scopes, and impd checks each connection with `tailscale whois`.
+[Tokens and identities](./tokens.md#tailnet-identity) covers the rules and how impd keeps them safe.
+
 ## URL scheme
 
 | URL                                                  | Routes to                                    |

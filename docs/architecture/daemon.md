@@ -31,18 +31,25 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, the exec WebSocket at `/exec`, and the tunnel WebSocket at `/tunnel`. Each takes the bearer
-token in an `Authorization` header. A browser cannot set that header on a WebSocket, so `/exec` also
-takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket for one existing imp,
-valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The token itself is never
-accepted in a URL, where logs and browser history would keep it; no client used the old `token`
-query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The router maps
-each procedure of the contract in `packages/api` to a service call. Errors come from the contract:
-`NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd
-stops, `FORBIDDEN` for an exec ticket used for another imp, and `AGENT_OUTDATED` for a session
-request to an agent from before sessions. The token is made on first start and kept in
-`<dataDir>/token`, readable by the owner only. `/rpc` takes POST only: a GET is what a link or an
-image on any page can make a browser send.
+`/rpc`, the exec WebSocket at `/exec`, and the tunnel WebSocket at `/tunnel`. Each takes a bearer
+token in an `Authorization` header, or a tailnet identity. A browser cannot set that header on a
+WebSocket, so `/exec` also takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket
+for one existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The
+token itself is never accepted in a URL, where logs and browser history would keep it. impd keeps at
+most 32 live tickets per caller, and 1024 in all. The router maps each procedure of the contract in
+`packages/api` to a service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`,
+`INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
+call outside the caller's scope or imps, and `AGENT_OUTDATED` for a session request to an agent from
+before sessions. `/rpc` takes POST only: a GET is what a link or an image on any page can make a
+browser send.
+
+Every call runs as a caller: the root token in `<dataDir>/token`, a named token with a scope and
+optional imp patterns, the dashboard session made with one, an SSH key, or a tailnet member.
+`auth/authenticate.ts` finds the caller for every route alike. `auth/access-policy.ts` maps every
+procedure to the scope it needs; the router checks it before input validation and before the
+handler, and handlers that list filter by the caller's imps.
+[Tokens and identities](../guides/tokens.md) covers the scopes, the patterns, and how each way in is
+checked.
 
 ### Dashboard
 
@@ -51,16 +58,18 @@ redirects there. The prefix keeps every dashboard route clear of `/rpc`, `/exec`
 Hashed files under `/ui/assets/` are cached for good; the page shell is checked on every load and
 carries a CSP that allows only impd and forbids framing.
 
-The browser never holds the API token. `POST /auth/login` takes the token once and sets the session
-cookie: HttpOnly, SameSite=Strict, 30 days. Over plain HTTP it is `imp_session`. Behind TLS (an
-https URL, or `x-forwarded-proto: https`) it is `__Host-imp_session`, which is `Secure`, and the
-browser takes it only host-only and on `/`, so no other name under an
-[HTTPS domain](../guides/https.md), an imp's included, can set it. Its value is
-`v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>">`, keyed by a key derived from the token
-(HMAC-SHA256 of `imp-session-key` under the token). It survives an impd restart, and a new token
-ends every session. The cookie is host-only, with no `Domain`, so it never reaches another host
-name. `POST /auth/logout` clears the cookie in that browser, both names behind TLS; a copied value
-stays valid until it expires or the token changes.
+The browser never holds an API token. `POST /auth/login` takes a token once, the root token or a
+made one, and sets the session cookie: HttpOnly, SameSite=Strict, 30 days. The session acts with
+that token's scope. Over plain HTTP it is `imp_session`. Behind TLS (an https URL, or
+`x-forwarded-proto: https`) it is `__Host-imp_session`, which is `Secure`, and the browser takes it
+only host-only and on `/`, so no other name under an [HTTPS domain](../guides/https.md), an imp's
+included, can set it. Its value is
+`v2.<token id>.<expiry>.<HMAC-SHA256 of "imp-session-v2.<token id>.<expiry>">`, keyed by a key
+derived from the root token (HMAC-SHA256 of `imp-session-key` under it). The root token's id is
+`root`. It survives an impd restart. A new root token ends every session; removing a token ends its
+own, since impd checks on each request that the token still exists. The cookie is host-only, with no
+`Domain`, so it never reaches another host name. `POST /auth/logout` clears the cookie in that
+browser, both names behind TLS; a copied value stays valid until it expires or the token changes.
 
 `/rpc` takes the cookie only from the dashboard's own origin. Imps serve pages on other ports of the
 same host, and a browser counts those as the same site, so SameSite alone would let an imp's page

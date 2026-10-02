@@ -24,9 +24,9 @@ claude mcp add imp -- imp mcp --prefix agent-
 so a generated name fits in 31.
 
 The guard stops mistakes, such as an agent that destroys the wrong imp. It is not a security
-boundary. The token that `imp mcp` uses opens the whole impd API, and an agent that can read
-`~/.config/imp/config.json` or `IMP_TOKEN` can call impd without the server. Scoped tokens are
-[#29](https://github.com/zgeoff/imp/issues/29).
+boundary: an agent that can read `~/.config/imp/config.json` or `IMP_TOKEN` can call impd without
+the server. The boundary is the token's scope, which impd enforces. Run `imp mcp` with a
+[scoped token](./tokens.md#mcp), such as `manage` on `agent-*`, to limit what the agent can do.
 
 ## Tools
 

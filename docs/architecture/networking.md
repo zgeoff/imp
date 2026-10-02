@@ -34,6 +34,10 @@ container's own network namespace and never touch the host's.
   only, so a guest cannot send with another imp's address. The broker names the imp by its address.
   A `rp_filter` sysctl would set the floor for `eth0` and `tailscale0` too, and break an exit node,
   subnet routes, or a container on more than one network.
+- `raw PREROUTING -s 100.64.0.0/10 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP`, and the
+  same for `fd7a:115c:a1e0::/48` with ip6tables: only `tailscale0` brings in Tailscale's ranges, so
+  a [tailnet identity](../guides/tokens.md#tailnet-identity) names the real peer. A connection to
+  the node's own address comes from a local address and stays.
 - `ip6tables INPUT -i imp+` drops everything. The taps get IPv6 link-local addresses, and impd's API
   and proxy listen on IPv6 too; without this rule a guest reaches them over its tap.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a

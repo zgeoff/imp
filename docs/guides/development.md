@@ -35,7 +35,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `sleep`       | idle sleep, wake by HTTP, API and WebSocket, memory kept, the WebSocket relay                                                |
 | `scale`       | many imps under the RAM budget, LRU sleep, wake on request, an oversized imp refused                                         |
 | `restart`     | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                        |
-| `tailscale`   | an imp answers tailnet members and a tailnet request wakes it                                                                |
+| `tailscale`   | an imp answers tailnet members, a tailnet request wakes it, and a rule gives a member the API without a token                |
 | `mcp`         | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                               |
 | `sessions`    | detach, attach after sleep, takeover, idle and busy sessions, kill                                                           |
 | `ssh`         | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                  |
@@ -46,11 +46,12 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `connectors`  | a secret through the broker: an API call, a git push, tunnels, no secret in memory                                           |
 | `dashboard`   | the web dashboard in headless Chromium: login, create, console, sleep, destroy                                               |
 | `https`       | a wildcard certificate from Pebble, an imp at `https://<name>.<domain>`, a wake                                              |
+| `tokens`      | scoped tokens: a read token cannot exec, an exec token for some imps cannot touch another, the audit log, a removed token    |
 | `backups`     | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack              |
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, ssh, ssh-agent, proxy, dashboard, tokens
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```

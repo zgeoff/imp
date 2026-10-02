@@ -79,12 +79,14 @@ imp fork box box-2                # a second copy to try something else in
 | `secret add`, `ls`, `rm`               | store API tokens in impd, never in a guest                         |
 | `grant`, `revoke`, `grants`, `audit`   | let an imp use a token through the host-side broker                |
 | `mcp --prefix <p>`                     | serve imps to a coding agent as MCP tools over stdio               |
+| `token new`, `ls`, `rm`, `whoami`      | scoped API tokens, limited to some imps if you like                |
 | `login <url>`, `host ls`, `use`, `rm`  | save impd hosts and their tokens; pick one (`--host`)              |
 | `completion bash\|zsh\|fish`           | print the shell completion script                                  |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
-[Connectors](docs/guides/connectors.md) covers secrets and grants. Commands that print imps, images,
-checkpoints or `info` take `--json`. `scripts/imp` runs the CLI from the repo.
+[Connectors](docs/guides/connectors.md) covers secrets and grants; [tokens](docs/guides/tokens.md)
+covers scopes and tailnet identity. Commands that print imps, images, checkpoints or `info` take
+`--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
 size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
