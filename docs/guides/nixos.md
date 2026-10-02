@@ -130,4 +130,4 @@ docker run --rm --device /dev/kvm -v imp-nix:/nix -v "$PWD:$PWD" -w "$PWD" \
 
 In a git worktree, also mount the main checkout's `.git` at its own path. Nix sees only the files
 git tracks, so `git add` new files first. CI runs the same checks in the `nix` workflow when
-`flake.nix`, `flake.lock` or `deploy/` change.
+`flake.nix`, `flake.lock`, `deploy/` or `host/scripts/tailscale-up.sh` change.
