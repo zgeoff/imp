@@ -32,7 +32,10 @@
           { "context": "gitleaks" },
           { "context": "checks" },
           { "context": "go" },
-          { "context": "shellcheck" }
+          { "context": "shellcheck" },
+          { "context": "cli" },
+          { "context": "client" },
+          { "context": "e2e" }
         ]
       }
     }

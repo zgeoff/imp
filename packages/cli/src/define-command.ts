@@ -1,21 +1,35 @@
 import { defineCommand as defineCittyCommand } from 'citty';
-import type { ArgsDef, CommandDef } from 'citty';
+import type { ArgsDef, CommandContext, CommandDef } from 'citty';
+
+// what a command's run gets: citty's context and the saved host `--host`
+// named, which main hands every command as `--host=<name>`
+type ImpCommandContext<T extends ArgsDef> = CommandContext<T> & {
+  readonly host: string | null;
+};
+
+type ImpCommandDef<T extends ArgsDef> = Omit<CommandDef<T>, 'run'> & {
+  args?: T;
+
+  // oxlint-disable-next-line prefer-readonly-parameter-types -- citty's context is mutable
+  run?: (context: ImpCommandContext<T>) => unknown;
+};
 
 // citty's defineCommand, but a flag the command does not declare is an
 // error: citty keeps it (`--checkpoint cp1` parses to `checkpoint: true`) and
 // the command would run as if it were not there.
 // oxlint-disable-next-line prefer-readonly-parameter-types -- citty's CommandDef is mutable all the way down
-export function defineCommand<T extends ArgsDef>(def: CommandDef<T> & { args?: T }): CommandDef<T> {
-  if (def.run === undefined) {
-    return defineCittyCommand(def);
+export function defineCommand<T extends ArgsDef>(def: ImpCommandDef<T>): CommandDef<T> {
+  const { run, ...rest } = def;
+
+  if (run === undefined) {
+    return defineCittyCommand(rest);
   }
 
-  const run = def.run;
-  const known = listKnownKeys(def.args ?? {});
+  const known = listKnownKeys(def.args ?? {}).add('host');
   const command = typeof def.meta === 'object' && 'name' in def.meta ? def.meta.name : undefined;
 
   return defineCittyCommand({
-    ...def,
+    ...rest,
     run: async (context) => {
       const unknown = Object.keys(context.args).filter((key) => !known.has(key));
 
@@ -31,7 +45,7 @@ export function defineCommand<T extends ArgsDef>(def: CommandDef<T> & { args?: T
         return;
       }
 
-      await run(context);
+      await run({ ...context, host: readHost(context.args) });
     },
   });
 }
@@ -39,7 +53,7 @@ export function defineCommand<T extends ArgsDef>(def: CommandDef<T> & { args?: T
 // the keys citty can parse for these arguments: each name in its camelCase
 // and kebab-case spellings, and its aliases
 // oxlint-disable-next-line prefer-readonly-parameter-types -- citty's ArgsDef
-function listKnownKeys(args: ArgsDef): ReadonlySet<string> {
+function listKnownKeys(args: ArgsDef): Set<string> {
   const known = new Set(['_', 'help', 'h']);
 
   for (const [name, arg] of Object.entries(args)) {
@@ -61,4 +75,10 @@ function toCamelCase(name: string): string {
 
 function toKebabCase(name: string): string {
   return name.replaceAll(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
+function readHost(args: Readonly<Record<string, unknown>>): string | null {
+  const host = args['host'];
+
+  return typeof host === 'string' ? host : null;
 }

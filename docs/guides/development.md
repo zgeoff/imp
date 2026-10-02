@@ -110,9 +110,9 @@ Lefthook installs the hooks with `bun install`.
 | `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.         |
 | `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                        |
 | `shellcheck` | yes      | `bun run lint:shell`.                                                                 |
-| `cli`        | no       | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
-| `client`     | no       | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
-| `e2e`        | no       | The `fast` end-to-end set on real microVMs (below).                                   |
+| `cli`        | yes      | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
+| `client`     | yes      | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
+| `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                   |
 | `zfs`        | no       | `scripts/test-zfs.sh`: the ZFS storage backend's tests on a throwaway pool in a file. |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
@@ -139,9 +139,8 @@ After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (
 prints the last 40 lines of impd's log inline. Download the artifact with
 `gh run download <run-id> -n e2e-results`.
 
-The job is not a required check, and `release-please` does not wait for it, until it has passed
-reliably on GitHub's runners. To make it a gate, add `{ "context": "e2e" }` to
-`.github/rulesets/main.json` and `e2e` to the `needs` of `release-please`.
+The job is a required check, and `release-please` waits for it. It became one after it passed on
+every push to `main` from its first run (#2).
 
 If GitHub-hosted runners lose KVM, move the job to an ephemeral, dedicated self-hosted runner and
 run it only on push to `main`, never on pull requests. Never use the deploy box. The repo is public,
@@ -155,9 +154,9 @@ system drive rebuild to the same bytes). It takes two cold kernel builds, so it 
 
 ## Branch rules
 
-`.github/rulesets/main.json` protects `main`: the four CI jobs must pass, changes arrive through a
-squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a repository
-admin can bypass it.
+`.github/rulesets/main.json` protects `main`: the seven required CI jobs must pass, changes arrive
+through a squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a
+repository admin can bypass it.
 
 The ruleset is not applied yet. Apply it once:
 
