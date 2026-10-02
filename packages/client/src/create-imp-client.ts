@@ -1,7 +1,9 @@
-import type { Imp, ImpContract } from '@imp/api';
+import type { Image, Imp, ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { buildImage } from './build-image';
+import type { BuildContext, BuildImageOptions } from './build-image';
 import { checkServer } from './check-server';
 import type { ServerCheck } from './check-server';
 import { openAttach, openConsole, openExec, runCommand } from './exec/open-exec';
@@ -43,6 +45,14 @@ export interface ImpClient extends RpcClient {
 
   // whether impd speaks this client's version of the API
   readonly checkServer: () => Promise<ServerCheck>;
+
+  // builds an image from a tar of its build context, uploaded from here;
+  // `images.build` takes a directory on the impd host instead
+  readonly buildImage: (
+    name: string,
+    context: BuildContext,
+    options?: BuildImageOptions,
+  ) => Promise<Image>;
 
   // a command with streamed stdio over `/exec`, authenticated by an exec
   // ticket; named so, because `exec` is the contract's namespace
@@ -112,5 +122,6 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
       openAttach(execDeps, name, session, attachOptions),
     requireAwake: (name, awakeOptions) => requireAwake(rpc, name, awakeOptions),
     checkServer: () => checkServer(rpc),
+    buildImage: (name, context, buildOptions) => buildImage(execDeps, name, context, buildOptions),
   };
 }
