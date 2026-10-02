@@ -1,7 +1,11 @@
 import { CONSOLE_SHELL } from '@zgeoff/imp-client';
+import type { CliConfig } from '../cli-config';
+import { createImpClient } from '../create-imp-client';
+import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import { DEFAULT_SESSION } from '../detach-key';
 import { runExec } from '../exec-client';
+import { listSavedTargets, runOnHosts } from '../fan-out';
 import {
   formatExposeResult,
   formatImp,
@@ -13,7 +17,9 @@ import { parseDuration } from '../parse-duration';
 import { formatPolicy, parsePolicy } from '../parse-policy';
 import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
-import { runAction } from '../run-action';
+import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
+import type { PlaceRequest } from '../place-imp';
+import { printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
@@ -43,68 +49,203 @@ export const newCommand = defineCommand({
     public: { type: 'boolean', description: 'serve it to the internet too, as imp expose does' },
     ...authArgs,
     net: { type: 'string', description: 'networks to join, comma-separated (see imp net)' },
+    place: {
+      type: 'boolean',
+      description: 'create it on the saved host with the most free RAM (see imp host ls)',
+    },
     json: jsonArg,
   },
-  run: (context) =>
-    runAction(context.host, async (client) => {
-      const policy = parsePolicy(context.args.policy, context.args.allow);
-      const networks = context.args.net?.split(',').map((network) => network.trim());
-      const isPublic = context.args.public === true;
+  run: async (context) => {
+    try {
+      const request = readNewRequest(context.args);
 
-      if (!isPublic && (context.args.auth !== undefined || context.args.user !== undefined)) {
-        throw new UsageError('--auth and --user need --public');
-      }
-
-      // checked before the create, so a bad flag leaves no imp behind
-      const auth = isPublic ? parsePublicAuth(context.args.auth, context.args.user) : null;
-
-      // expose needs manage on the host; impd checks it again on the call
-      if (auth !== null) {
-        const identity = await client.tokens.whoami();
-
-        if (identity.scope !== 'manage' || identity.imps !== null) {
-          // a refusal, as impd's own would be: exit 1, not a usage error
-          throw new Error(
-            '--public needs a token with manage scope on the host; this one is limited',
-          );
-        }
-      }
-
-      const imp = await client.imps.create({
-        ...(context.args.name !== undefined && { name: context.args.name }),
-        ...(context.args.image !== undefined && { image: context.args.image }),
-        ...(context.args.cpus !== undefined && { vcpus: parseCount(context.args.cpus, 'cpus') }),
-        ...(context.args.memory !== undefined && { memoryMib: parseSize(context.args.memory) }),
-        ...(context.args.disk !== undefined && { diskMib: parseSize(context.args.disk) }),
-        ...(context.args['http-port'] !== undefined && {
-          httpPort: parseCount(context.args['http-port'], 'http-port'),
-        }),
-        ...(policy !== undefined && { policy }),
-        ...readCpuArgs(context.args),
-        ...(networks !== undefined && { networks }),
-      });
-
-      if (networks !== undefined) {
-        await printTrustWarnings(client, imp.name);
-      }
-
-      if (auth === null) {
-        console.log(formatOutput(imp, context.args.json, formatImp));
+      if (context.args.place !== true) {
+        await runAction(context.host, (client) => runNew(client, request, null));
 
         return;
       }
 
-      // a failure here leaves the imp tailnet-only; `imp expose` tries again
-      const exposed = await client.imps.expose({ name: imp.name, ...auth });
+      if (context.host !== null) {
+        throw new UsageError('--place picks among the saved hosts; drop --host');
+      }
 
-      const output =
-        context.args.json === true
-          ? formatJson({ imp, public: exposed })
-          : `${formatImp(imp)}\n${formatExposeResult(exposed)}`;
-
-      console.log(output);
-    }),
+      await runPlacedNew(request);
+    } catch (error) {
+      printError(error);
+    }
+  },
 });
+
+// Probes every saved host, ranks those that could take the imp, and
+// creates on the best; docs/guides/hosts.md#placement says how it picks.
+async function runPlacedNew(request: NewRequest): Promise<void> {
+  const targets = listSavedTargets(process.env);
+  const place = toPlaceRequest(request);
+
+  const answers = await runOnHosts(targets, (client, signal) =>
+    readHostProbe(client, signal, place),
+  );
+
+  const ranking = buildRanking(answers, place);
+
+  for (const dropped of ranking.dropped) {
+    console.error(`imp: ${dropped.host}: skipped: ${dropped.reason}`);
+  }
+
+  if (ranking.ranked.length === 0) {
+    throw new Error('no saved host can take the imp');
+  }
+
+  let config: CliConfig | null = null;
+
+  try {
+    await createPlaced(
+      ranking.ranked,
+      async (host) => {
+        config = targets.find((target) => target.host === host)?.config ?? null;
+
+        if (config === null) {
+          throw new Error(`no saved host ${host}`);
+        }
+
+        console.error(`imp: placing on ${host}`);
+
+        await runNew(createImpClient(config), request, host);
+      },
+      (host, message) => {
+        console.error(`imp: ${host}: ${message}; trying the next host`);
+      },
+    );
+  } catch (error) {
+    printError(error, config);
+  }
+}
+
+function toPlaceRequest(request: NewRequest): PlaceRequest {
+  const input = request.input;
+
+  return {
+    name: input.name ?? null,
+    image: input.image ?? null,
+    memoryMib: input.memoryMib ?? null,
+    cpuLimit: input.cpuLimit ?? null,
+    policyMode: input.policy?.mode ?? null,
+    networks: input.networks ?? [],
+    needsWholeHost: request.auth !== null || input.networks !== undefined,
+  };
+}
+
+interface NewRequest {
+  readonly input: CreateInput;
+  readonly auth: ExposeAuth | null;
+  readonly json: boolean;
+}
+
+// the create's input, with its network list read-only until the call
+type CreateInput = Readonly<Omit<Parameters<ImpClient['imps']['create']>[0], 'networks'>> & {
+  readonly networks?: readonly string[];
+};
+
+type ExposeAuth = ReturnType<typeof parsePublicAuth>;
+
+interface NewArgs extends Readonly<Record<string, unknown>> {
+  readonly name?: string | undefined;
+  readonly image?: string | undefined;
+  readonly cpus?: string | undefined;
+  readonly memory?: string | undefined;
+  readonly disk?: string | undefined;
+  readonly 'http-port'?: string | undefined;
+  readonly policy?: string | undefined;
+  readonly allow?: string | undefined;
+  readonly 'cpu-limit'?: string | undefined;
+  readonly 'cpu-weight'?: string | undefined;
+  readonly public?: boolean | undefined;
+  readonly auth?: string | undefined;
+  readonly user?: string | undefined;
+  readonly net?: string | undefined;
+  readonly json?: boolean | undefined;
+}
+
+// every flag checked before any call, so a bad one leaves no imp behind
+function readNewRequest(args: NewArgs): NewRequest {
+  const policy = parsePolicy(args.policy, args.allow);
+  const networks = args.net?.split(',').map((network) => network.trim());
+  const isPublic = args.public === true;
+
+  if (!isPublic && (args.auth !== undefined || args.user !== undefined)) {
+    throw new UsageError('--auth and --user need --public');
+  }
+
+  const input: CreateInput = {
+    ...(args.name !== undefined && { name: args.name }),
+    ...(args.image !== undefined && { image: args.image }),
+    ...(args.cpus !== undefined && { vcpus: parseCount(args.cpus, 'cpus') }),
+    ...(args.memory !== undefined && { memoryMib: parseSize(args.memory) }),
+    ...(args.disk !== undefined && { diskMib: parseSize(args.disk) }),
+    ...(args['http-port'] !== undefined && {
+      httpPort: parseCount(args['http-port'], 'http-port'),
+    }),
+    ...(policy !== undefined && { policy }),
+    ...readCpuArgs(args),
+    ...(networks !== undefined && { networks }),
+  };
+
+  return {
+    input,
+    auth: isPublic ? parsePublicAuth(args.auth, args.user) : null,
+    json: args.json === true,
+  };
+}
+
+// The create on one host, then what follows it there: trust warnings for
+// --net, and the expose for --public. `host` is the saved host placement
+// picked, null for the usual one-host create.
+async function runNew(client: ImpClient, request: NewRequest, host: string | null) {
+  const input = request.input;
+  const auth = request.auth;
+
+  // expose needs manage on the host; impd checks it again on the call.
+  // Placement checked it on every host it ranked.
+  if (auth !== null && host === null) {
+    const identity = await client.tokens.whoami();
+
+    if (identity.scope !== 'manage' || identity.imps !== null) {
+      // a refusal, as impd's own would be: exit 1, not a usage error
+      throw new Error('--public needs a token with manage scope on the host; this one is limited');
+    }
+  }
+
+  const { networks, ...fields } = input;
+
+  const imp = await client.imps.create({
+    ...fields,
+    ...(networks !== undefined && { networks: [...networks] }),
+  });
+
+  if (networks !== undefined) {
+    await printTrustWarnings(client, imp.name);
+  }
+
+  // a failure here leaves the imp tailnet-only; `imp expose` tries again
+  const exposed = auth === null ? null : await client.imps.expose({ name: imp.name, ...auth });
+
+  if (request.json) {
+    // the plain create keeps its shape: the imp alone
+    const output =
+      host === null && exposed === null
+        ? imp
+        : { ...(host !== null && { host }), imp, ...(exposed !== null && { public: exposed }) };
+
+    console.log(formatJson(output));
+
+    return;
+  }
+
+  const text =
+    exposed === null ? formatImp(imp) : `${formatImp(imp)}\n${formatExposeResult(exposed)}`;
+
+  console.log(text);
+}
 
 export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
