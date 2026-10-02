@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import packageJson from '../package.json' with { type: 'json' };
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
@@ -205,4 +206,10 @@ async function main(): Promise<void> {
   });
 }
 
-await main();
+// The release pipeline runs `impd --version` in the built image to check it
+// reports the tag it is published under.
+if (process.argv[2] === '--version') {
+  process.stdout.write(`${packageJson.version}\n`);
+} else {
+  await main();
+}
