@@ -6,6 +6,9 @@ server speaks the [Model Context Protocol](https://modelcontextprotocol.io) over
 impd as the rest of the CLI does: the current saved host, `--host`, or `IMP_URL` and `IMP_TOKEN`
 ([configuration](./configuration.md)).
 
+impd also serves the same tools over HTTP at `/mcp`, for an agent on another machine. See
+[HTTP](#http).
+
 ## Add it to an agent
 
 The server needs a guard: the imps it may touch. Give the agent a prefix of its own:
@@ -120,5 +123,47 @@ file tools work in a minimal image too.
 - `initialize` returns `instructions` that name the guard, so the agent knows which imps it has.
 
 The server lives in `packages/mcp` (`@imp/mcp`), transport-free over the SDK client
-(`@zgeoff/imp-client`); `imp mcp` connects it to stdio. An HTTP endpoint on impd is a follow-up: a
-guard per client there needs scoped tokens.
+(`@zgeoff/imp-client`); `imp mcp` connects it to stdio, and impd connects it to `/mcp`.
+
+## HTTP
+
+impd serves MCP's streamable HTTP transport at `/mcp`, on the API's address. A remote agent needs no
+`imp` CLI:
+
+```sh
+claude mcp add --transport http imp https://imp.example.com/mcp \
+  --header "Authorization: Bearer $(imp token new agent --scope manage --imps 'agent-*')"
+```
+
+- **Who calls.** A [scoped token](./tokens.md) as `Authorization: Bearer`, or a
+  [tailnet identity](./tokens.md#tailnet-identity) with no token. The dashboard's cookie does not
+  count. impd resolves the caller on every POST, and every tool call goes to the API as that caller,
+  so the same scope, imp patterns and audit rows apply as for the CLI.
+- **Browsers.** A request that says it comes from another origin (`Origin`, or `Sec-Fetch-Site`
+  other than `same-origin` or `none`) gets 403, before impd looks at its token.
+- **Tools by scope.** `tools/list` shows only the tools the caller's scope allows: `read` gets
+  `imp_list`, `imp_url`, `imp_image_list` and `imp_checkpoint_list`; `exec` adds `imp_sleep`,
+  `imp_exec` and the file tools; `manage` gets them all. impd refuses the rest with `FORBIDDEN`.
+- **The guard is the token's patterns.** No `--prefix` here. A create without a name works only for
+  a caller with exactly one pattern of the form `prefix*`, and gets `prefix` and 8 more characters.
+  Any other caller must name the imp, and gets a `GUARD` error that names its patterns.
+- **Sessions.** `initialize` returns an `Mcp-Session-Id`; send it on every later request. A session
+  answers only the caller that opened it, and another caller gets 404. `DELETE /mcp` with the id
+  ends a session. Each caller has at most 16 sessions and impd 256 in all; the least recently used
+  idle session makes room, and when every session is busy, `initialize` gets 429. A session idle for
+  an hour ends.
+- **Restarts.** Sessions live in impd's memory. After a restart a request with an old id gets 404,
+  and the client must `initialize` again, as the spec says.
+- **Revocation.** Removing a token ends its sessions, and stops their execs as a cancel does. A
+  tailnet identity has no such signal: a call already running finishes, and each later request is
+  resolved again, so it gets 401 once no rule matches.
+- **Responses.** A `tools/call` from a client that accepts `text/event-stream` gets an SSE stream:
+  its progress notifications, then the response. impd sends an SSE comment every 5 s, so no idle
+  timeout on the way ends a long call. Every other request gets one JSON response. A notification or
+  a cancelled call gets 202 with no body. A stream the client drops is no cancel: the call runs on
+  and its answer is lost; send `notifications/cancelled` to stop it.
+- **No GET and no resume.** impd sends nothing outside a POST's own response, so `GET /mcp` gets 405
+  and `Last-Event-ID` is not supported.
+
+Exec over HTTP runs inside impd: the tool takes an exec ticket as the CLI does, and the `/exec`
+session is joined in process, not over a socket.

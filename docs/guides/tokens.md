@@ -95,8 +95,9 @@ token to give an agent a real limit:
 IMP_TOKEN=$(imp token new agent --scope manage --imps 'agent-*') imp mcp --prefix agent-
 ```
 
-The server's `--prefix` guard stays a convenience. An MCP endpoint on impd with per-client tokens is
-[#50](https://github.com/zgeoff/imp/issues/50).
+The server's `--prefix` guard stays a convenience. impd's own MCP endpoint, `/mcp`, takes a token
+per client instead, and its tools follow that token's scope and patterns: see
+[MCP over HTTP](./mcp.md#http).
 
 ## Tailnet identity
 

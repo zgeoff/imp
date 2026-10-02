@@ -8,6 +8,7 @@ import {
 import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
+import type { ExecSocket } from '@zgeoff/imp-client';
 import { Elysia } from 'elysia';
 import { buildForbiddenError } from './api-errors';
 import { withAuditedOpen } from './audit/api-audit';
@@ -27,6 +28,8 @@ import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
 import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
+import { createInProcessSocket } from './exec/in-process-socket';
+import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
 import { createTunnelLimits, createTunnelSession } from './tunnel/tunnel-session';
@@ -150,6 +153,61 @@ export function buildApp(deps: AppDeps) {
     return () => signal?.removeEventListener('abort', close);
   };
 
+  // a call as `caller`, through the same access rules and audit as /rpc
+  const handleRpc = async (request: Request, caller: Readonly<Caller>): Promise<Response> => {
+    const handled = await handler.handle(request, {
+      prefix: '/rpc',
+      context: { caller, ends: readEnds(caller) },
+    });
+
+    return handled.matched ? handled.response : new Response('not found', { status: 404 });
+  };
+
+  // an `/exec` socket in process, for the MCP endpoint's execs: its ticket
+  // opens it as the caller that asked for it, as over the socket route
+  const openExecSocket = (url: string): ExecSocket => {
+    const ticket = new URL(url).searchParams.get(EXEC_TICKET_PARAM);
+
+    const holder = ticket === null ? null : execTickets.redeem(ticket);
+    const id = `in-process-${crypto.randomUUID()}`;
+
+    return createInProcessSocket((peer) => {
+      if (holder === null) {
+        return null;
+      }
+
+      const grant = { caller: holder.caller, name: holder.name };
+      const session = createExecSession(peer, buildExecBackend(grant));
+
+      const forget = handleRevocation(grant.caller, () => {
+        peer.close(CLOSE_REVOKED, 'the token was removed');
+      });
+
+      sessions.set(id, { session, close: peer.close, forget });
+
+      return {
+        handleMessage: session.handleMessage,
+        handleClose: () => {
+          session.handleClose();
+
+          forget();
+
+          sessions.delete(id);
+        },
+      };
+    });
+  };
+
+  // the server each MCP request came in on, for its peer's address
+  const mcpServers = new WeakMap<Request, PeerServer | null>();
+
+  const mcp = createMcpEndpoint({
+    findCaller: (request) => findCaller(request, mcpServers.get(request) ?? null, false),
+    handleRpc,
+    connectExec: openExecSocket,
+    readEnds,
+  });
+
   const sessionRoutes = createSessionRoutes({
     tokens: deps.tokens,
     rootToken: deps.rootToken,
@@ -174,12 +232,20 @@ export function buildApp(deps: AppDeps) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        const handled = await handler.handle(context.request, {
-          prefix: '/rpc',
-          context: { caller, ends: readEnds(caller) },
-        });
+        return handleRpc(context.request, caller);
+      },
+      { parse: 'none' },
+    )
 
-        return handled.matched ? handled.response : new Response('not found', { status: 404 });
+    // MCP over streamable HTTP: a token or a tailnet identity, never the
+    // cookie. A tool call can run for minutes, so no idle timeout ends it.
+    .all(
+      MCP_PATH,
+      (context) => {
+        context.server?.timeout(context.request, 0);
+        mcpServers.set(context.request, context.server);
+
+        return mcp.handle(context.request);
       },
       { parse: 'none' },
     )
