@@ -39,15 +39,31 @@ test('checkpoint rm with too few arguments fails instead of creating a checkpoin
   expect(process.exitCode).toBe(2);
 });
 
-test('image build rejects a relative path, which names no directory on the impd host', async () => {
+test('image build --on-host rejects a relative path, which names no directory on the impd host', async () => {
   const stderr = setupStderr();
 
-  await runCommand(imageCommand, { rawArgs: ['build', 'images/base', '--name', 'base'] });
+  await runCommand(imageCommand, {
+    rawArgs: ['build', 'images/base', '--name', 'base', '--on-host'],
+  });
 
   expect(stderr).toHaveBeenCalledWith(
-    'imp: the build context is a directory on the impd host: give its absolute path, not images/base',
+    'imp: --on-host takes an absolute path on the impd host, not images/base',
   );
 
+  expect(process.exitCode).toBe(2);
+});
+
+test('image build without a Dockerfile in the context fails before any upload', async () => {
+  const stderr = setupStderr();
+  const empty = mkdtempSync(join(tmpdir(), 'imp-empty-context-'));
+
+  try {
+    await runCommand(imageCommand, { rawArgs: ['build', empty, '--name', 'base'] });
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
+
+  expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/^imp: there is no Dockerfile in /u));
   expect(process.exitCode).toBe(2);
 });
 

@@ -8,6 +8,7 @@
   },
   "type": "module",
   "dependencies": {
+    "@balena/dockerignore": "catalog:",
     "@imp/api": "workspace:*",
     "@imp/mcp": "workspace:*",
     "@orpc/client": "catalog:",

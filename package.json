@@ -10,6 +10,7 @@
     ],
     "catalog": {
       "@ark-ui/react": "5.37.2",
+      "@balena/dockerignore": "1.0.2",
       "@commitlint/cli": "21.2.0",
       "@happy-dom/global-registrator": "20.10.6",
       "@opentelemetry/api": "1.9.1",
