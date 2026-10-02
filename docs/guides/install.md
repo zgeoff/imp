@@ -94,9 +94,13 @@ restarts and day-to-day care.
 The `imp` CLI is one binary with no runtime to install, for Linux and macOS on arm64 and x64. Each
 release attaches it to the GitHub release.
 
+**NOTE:** imp has no release yet. Until the first one, run the CLI from a checkout (`scripts/imp`,
+which needs Bun). `install.sh` works from the first release. `brew install` works once the owner has
+also set up the tap ([RELEASING.md](../../RELEASING.md#homebrew-tap)).
+
 ```sh
+curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # into ~/.local/bin
 brew install zgeoff/tap/imp                                                  # with completions
-curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh  # or this, into ~/.local/bin
 ```
 
 `install.sh` checks the binary against the release's `SHA256SUMS` before it installs it, and checks

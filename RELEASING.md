@@ -88,11 +88,15 @@ second repository, `zgeoff/homebrew-tap`. `scripts/build-formula.sh <version> di
 prints the formula, with each platform's binary from `releases/download/vX.Y.Z/` and its sha256 from
 `SHA256SUMS`. The release's `tap` job commits it with a token from the release App, scoped to the
 tap with contents write, and rebases onto the tap's main before the push, so other formulas in the
-tap can land in between. To turn it on:
+tap can land in between.
 
-1. `zgeoff/homebrew-tap` exists already; atc's formula lives there. Install the release App
-   ([Tokens](#tokens)) on it as well.
-2. Add the Actions variable `HOMEBREW_TAP` = `homebrew-tap`: the repository name, not the full slug.
+Until the owner does these steps, `brew install zgeoff/tap/imp` finds no formula:
+
+1. Set up the release App first ([Tokens](#tokens)); the `tap` job needs `RELEASE_APP_ID` and
+   `RELEASE_APP_PRIVATE_KEY` too.
+2. `zgeoff/homebrew-tap` exists already; atc's formula lives there. Install the release App on it as
+   well.
+3. Add the Actions variable `HOMEBREW_TAP` = `homebrew-tap`: the repository name, not the full slug.
 
 With the variable or the App missing, the `tap` job is skipped and every other job still runs. A
 republish of an older release leaves the formula alone. To check a formula by hand:

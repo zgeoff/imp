@@ -35,12 +35,10 @@ To put imps on your tailnet, add a tagged auth key to `.env` before `up`:
 TAILSCALE_AUTHKEY=tskey-auth-…
 ```
 
-On a laptop that talks to an impd elsewhere, only the CLI is needed:
-
-```sh
-brew install zgeoff/tap/imp       # or: curl -fsSL https://raw.githubusercontent.com/zgeoff/imp/main/install.sh | sh
-imp login https://imp.example.ts.net
-```
+On a laptop that talks to an impd elsewhere, only the CLI is needed, with
+`imp login https://imp.example.ts.net` to point it there. There is no release yet, so for now link
+`scripts/imp` from a checkout onto your `PATH`. From the first release, `install.sh` installs the
+binary, and once the Homebrew tap is set up, so does `brew install zgeoff/tap/imp`.
 
 The [install guide](./docs/guides/install.md) has the details.
 

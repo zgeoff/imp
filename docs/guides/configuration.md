@@ -123,7 +123,7 @@ impd writes the token to `<IMP_DATA_DIR>/token` on first start; `scripts/dev.sh 
 ### Shell completions
 
 `imp completion bash|zsh|fish` prints a completion script for commands and flags. The Homebrew
-formula installs all three. By hand:
+formula installs all three, once the tap is set up. By hand:
 
 ```sh
 eval "$(imp completion bash)"                    # in ~/.bashrc
