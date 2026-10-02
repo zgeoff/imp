@@ -4,8 +4,10 @@ import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpService } from '../imps/imp-service';
+import type { ImpRuntime } from '../imps/imp-runtime';
+import { createSemaphore } from '../imps/semaphore';
 import { deriveSlotAddress } from '../net/addressing';
+import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
 import { parseHostName } from './parse-host-name';
 
@@ -38,7 +40,7 @@ type ProxyServer = Server<SocketData>;
 interface WakeProxyDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: ImpService;
+  readonly imps: Pick<ImpRuntime, 'requireRunning' | 'tracker' | 'recordActivity'>;
   readonly log: (message: string) => void;
 }
 
@@ -55,6 +57,8 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   const listeners = new Map<string, { readonly slot: number; readonly server: ProxyServer }>();
   const failedSlots = new Set<number>();
 
+  const syncSlot = createSemaphore(1);
+
   const websocket: WebSocketHandler<SocketData> = {
     open: (ws) => {
       const upstream = ws.data.upstream;
@@ -69,6 +73,8 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         ws.send(event.data);
       });
 
+      // no close can come earlier: Bun runs `open` inside server.upgrade,
+      // in the same task as the upstream's open event
       upstream.addEventListener('close', (event) => {
         ws.close(toSendableCode(event.code), event.reason);
       });
@@ -172,7 +178,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     } catch (error) {
       opened.release();
 
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = readErrorMessage(error);
 
       return buildErrorPage(
         502,
@@ -200,7 +206,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     } catch (error) {
       release();
 
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = readErrorMessage(error);
 
       return buildErrorPage(502, `The WebSocket to ${target} failed: ${reason}`);
     }
@@ -240,8 +246,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
 
   deps.log(`impd: proxy on :${String(deps.config.proxyPort)}`);
 
-  return {
-    syncListeners: async () => {
+  // one at a time: a pass that read the imps before a destroy must not
+  // re-add a listener after a later pass removed it
+  const runListenerSync = (): Promise<void> =>
+    syncSlot.run(async () => {
       const imps = await listImps(deps.db);
 
       const wanted = new Map(imps.map((imp) => [imp.id, imp]));
@@ -274,7 +282,10 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
           }
         }
       }
-    },
+    });
+
+  return {
+    syncListeners: runListenerSync,
     stop: async () => {
       await Promise.all([
         main.stop(true),
@@ -393,7 +404,7 @@ function buildWakeErrorPage(name: string, error: unknown): Response {
     return buildErrorPage(404, `There is no imp named ${name}.`);
   }
 
-  const reason = error instanceof Error ? error.message : String(error);
+  const reason = readErrorMessage(error);
 
   return buildErrorPage(503, `${name} could not wake: ${reason}`);
 }

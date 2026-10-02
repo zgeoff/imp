@@ -3,7 +3,7 @@ import type { Config } from '../config';
 import { listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpService } from '../imps/imp-service';
+import type { ImpRuntime } from '../imps/imp-runtime';
 import { buildImpPaths } from '../storage/data-layout';
 import { readCpuTicks } from '../vmm/vm-stats';
 import { checkIdle } from './check-idle';
@@ -14,7 +14,7 @@ const TICKS_PER_SECOND = 100;
 interface IdleLoopDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: ImpService;
+  readonly imps: Pick<ImpRuntime, 'isImpBusy' | 'tracker' | 'trySleepImp'>;
   readonly log: (message: string) => void;
 }
 
@@ -97,7 +97,10 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
       const idleS = Math.round((now - imp.lastActiveAt.getTime()) / 1000);
       const cpu = cpuPercent === null ? '?' : cpuPercent.toFixed(1);
 
-      await deps.imps.sleepImpById(imp.id, `idle ${String(idleS)}s, cpu ${cpu}%`, true);
+      await deps.imps.trySleepImp(imp.id, `idle ${String(idleS)}s, cpu ${cpu}%`, {
+        by: 'idle',
+        seenActiveAt: imp.lastActiveAt.getTime(),
+      });
     }
   };
 

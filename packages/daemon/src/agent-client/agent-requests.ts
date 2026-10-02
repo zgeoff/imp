@@ -109,7 +109,8 @@ export async function sendThaw(vsockPath: string): Promise<void> {
   OkResponseSchema.parse(response);
 }
 
-async function readFrameWithin(
+// the next frame, or a rejection after `timeoutMs`
+export async function readFrameWithin(
   connection: AgentConnection,
   timeoutMs: number,
 ): Promise<AgentFrame | null> {

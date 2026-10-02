@@ -32,7 +32,7 @@ parameters from impd: `imp.id`, `imp.hostname`, `imp.ip`, `imp.gw` and `imp.dns`
 4. Listen on vsock port 1024.
 
 `/run` is a tmpfs every boot, so stale pid files and sockets from the last boot never reach a new
-one.
+one. Services need no cleanup of their own: `imp/base` runs `dockerd` directly, with no wrapper.
 
 ## The reaper
 

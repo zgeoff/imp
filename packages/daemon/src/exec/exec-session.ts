@@ -3,6 +3,7 @@ import type { ExecServerMessage } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import { readErrorMessage } from '../read-error-message';
 import { findSignalName, findSignalNumber } from './signal-names';
 
 // The two ends the session bridges: a WebSocket peer and the imp service.
@@ -258,5 +259,5 @@ function buildErrorMessage(error: unknown): ExecServerMessage {
     return { type: 'error', code: String(error.code), message: error.message };
   }
 
-  return { type: 'error', message: error instanceof Error ? error.message : String(error) };
+  return { type: 'error', message: readErrorMessage(error) };
 }

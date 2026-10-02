@@ -1,141 +1,36 @@
 import { expect, test } from 'bun:test';
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync } from 'node:fs';
 import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
-import { loadConfig } from './config';
-import { createImage } from './db/images';
-import { openDatabase } from './db/open-database';
-import type { ImpDatabase } from './db/open-database';
-import { createGovernedImps } from './governor/create-governed-imps';
-import { createImageService } from './images/image-service';
-import type { VmRunner } from './vmm/vm-runner';
+import { setupImpTest } from './imps/test-imps';
 
 const TOKEN = 'test-token';
 
-const IDENTITY = {
-  firecrackerVersion: 'v1.17.0',
-  snapshotVersion: 'v12.0.0',
-  hostKernel: 'test',
-  guestKernel: 'k',
-  systemDrive: 's',
-};
-
-// a VM runner that boots and sleeps instantly and tracks which pids are alive
-function buildFakeVms() {
-  const alive = new Set<number>();
-
-  const wakes: number[] = [];
-  const stops: { pid: number; graceful: boolean }[] = [];
-  let nextPid = 1000;
-
-  // failBoot: the next boot throws; sleepGate: sleeps wait for it; agentReady:
-  // what isAgentReady answers
-  const control: { failBoot: boolean; sleepGate: Promise<void> | null; agentReady: boolean } = {
-    failBoot: false,
-    sleepGate: null,
-    agentReady: true,
-  };
-
-  const vms: VmRunner = {
-    startVm: () => {
-      if (control.failBoot) {
-        control.failBoot = false;
-
-        return Promise.reject(new Error('boot failed: no agent\nlog tail'));
-      }
-
-      nextPid += 1;
-
-      alive.add(nextPid);
-
-      return Promise.resolve({ pid: nextPid, firecrackerVersion: 'v1.17.0', timings: {} });
-    },
-    stopVm: (pid, _paths, graceful) => {
-      alive.delete(pid);
-      stops.push({ pid, graceful });
-
-      return Promise.resolve();
-    },
-    sleepVm: async (pid, paths) => {
-      await control.sleepGate;
-
-      alive.delete(pid);
-
-      mkdirSync(paths.snapshotDir, { recursive: true });
-      writeFileSync(paths.vmstate, 'vmstate');
-      writeFileSync(paths.memFile, 'mem');
-
-      return {};
-    },
-    wakeVm: () => {
-      nextPid += 1;
-
-      alive.add(nextPid);
-      wakes.push(nextPid);
-
-      return Promise.resolve({ pid: nextPid, firecrackerVersion: 'v1.17.0', timings: {} });
-    },
-    isVmAlive: (pid) => alive.has(pid),
-    isAgentReady: () => Promise.resolve(control.agentReady),
-  };
-
-  return { vms, alive, stops, wakes, control };
-}
-
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
-  const dataDir = mkdtempSync(`${tmpdir()}/impd-test-`);
+  const harness = await setupImpTest({ env });
 
-  const db = await openDatabase(':memory:');
-
-  const config = loadConfig({ IMP_DATA_DIR: dataDir, ...env });
-  const images = createImageService({ config, db });
-  const fake = buildFakeVms();
-  const taps: string[] = [];
-  const logs: string[] = [];
-
-  // every awake fake VM owns 300 MiB
-  const governed = createGovernedImps({
-    config,
-    identity: IDENTITY,
-    readRamMib: (pid) => (fake.alive.has(pid) ? 300 : null),
-    db,
-    images,
-    vms: fake.vms,
-    taps: {
-      setupTap: (address) => {
-        taps.push(address.tap);
-
-        return Promise.resolve();
-      },
-      removeTap: () => Promise.resolve(),
-    },
-    log: (message) => {
-      logs.push(message);
-    },
-    cloneDisk: (source, target) => {
-      copyFileSync(source, target);
-
-      return Promise.resolve();
-    },
-  });
-
-  const app = buildApp({
-    config,
-    db,
+  const built = buildApp({
+    config: harness.config,
+    db: harness.db,
     token: TOKEN,
-    imps: governed.imps,
-    images,
-    governor: governed.governor,
-    checkpoints: createCheckpointService({ config, db, imps: governed.imps }),
+    imps: harness.imps,
+    images: harness.images,
+    governor: harness.governor,
+    checkpoints: createCheckpointService({
+      config: harness.config,
+      db: harness.db,
+      imps: harness.imps,
+    }),
     firecrackerVersion: 'v1.17.0',
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
   });
+
+  const app = built.app;
 
   const link = new RPCLink({
     url: 'http://impd.test/rpc',
@@ -147,25 +42,16 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
 
   return {
     app,
-    imps: governed.imps,
+    closeExecSessions: built.closeExecSessions,
+    imps: harness.imps,
     client,
-    db,
-    dataDir,
-    fake,
-    taps,
-    async [Symbol.asyncDispose]() {
-      await db.destroy();
-
-      rmSync(dataDir, { recursive: true, force: true });
-    },
+    db: harness.db,
+    dataDir: harness.dataDir,
+    fake: harness.fake,
+    taps: harness.taps,
+    createTestImage: harness.createTestImage,
+    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
   };
-}
-
-// an image row whose rootfs is a small file in the test data dir
-async function createFakeImage(db: ImpDatabase, dataDir: string, name: string) {
-  await Bun.write(`${dataDir}/images/${name}/rootfs.ext4`, 'rootfs');
-
-  return createImage(db, { name, ref: `${name}:latest`, digest: `sha256:${name}`, sizeBytes: 6 });
 }
 
 test('it serves system.info from config and the database', async () => {
@@ -206,7 +92,7 @@ test('it answers /health without a token', async () => {
 test('it creates, stops, starts and destroys an imp', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+  await ctx.createTestImage('ubuntu');
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -250,11 +136,11 @@ test('it creates, stops, starts and destroys an imp', async () => {
 test('it prefers the configured default image and falls back to ubuntu', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+  await ctx.createTestImage('ubuntu');
 
   const first = await ctx.client.imps.create({ name: 'a' });
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'base');
+  await ctx.createTestImage('base');
 
   const second = await ctx.client.imps.create({});
 
@@ -266,8 +152,7 @@ test('it prefers the configured default image and falls back to ubuntu', async (
 test('it rejects a duplicate name and an unknown image', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
   const duplicate = await ctx.client.imps.create({ name: 'dev' }).catch((error: unknown) => error);
@@ -283,8 +168,7 @@ test('it rejects a duplicate name and an unknown image', async () => {
 test('it marks a running imp stopped when its VM died', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
   ctx.fake.alive.clear();
@@ -297,8 +181,7 @@ test('it marks a running imp stopped when its VM died', async () => {
 test('it refuses to remove an image an imp uses', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
   const rejection = await ctx.client.images
@@ -311,8 +194,7 @@ test('it refuses to remove an image an imp uses', async () => {
 test('it sleeps, wakes and holds an imp', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
   const asleep = await ctx.client.imps.sleep({ name: 'dev' });
@@ -341,7 +223,7 @@ test('it sleeps, wakes and holds an imp', async () => {
 test('it boots cold when the snapshot belongs to another firecracker', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+  await ctx.createTestImage('ubuntu');
 
   const created = await ctx.client.imps.create({ name: 'dev' });
 
@@ -366,8 +248,7 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
     IMP_DEFAULT_MEMORY_MIB: '512',
   });
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'a' });
   await Bun.sleep(5);
   await ctx.client.imps.create({ name: 'b' });
@@ -396,7 +277,7 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
   await using ctx = await setupTest(TOKEN, { IMP_RAM_BUDGET_MIB: '800' });
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+  await ctx.createTestImage('ubuntu');
 
   const rejection = await ctx.client.imps
     .create({ name: 'huge', memoryMib: 900 })
@@ -417,7 +298,7 @@ test('it leaves nothing behind when an imp is larger than the RAM budget', async
 test('it records a boot failure as the error state with its first line', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
+  await ctx.createTestImage('ubuntu');
 
   ctx.fake.control.failBoot = true;
 
@@ -435,8 +316,7 @@ test('it records a boot failure as the error state with its first line', async (
 test('it re-adopts live VMs on reconcile, even with a silent agent', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'alive' });
   await ctx.client.imps.create({ name: 'dead' });
   await ctx.client.imps.create({ name: 'asleep' });
@@ -465,8 +345,7 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
 test('a read during a lifecycle operation does not mark the imp stopped', async () => {
   await using ctx = await setupTest(TOKEN);
 
-  await createFakeImage(ctx.db, ctx.dataDir, 'ubuntu');
-
+  await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
   const gate = Promise.withResolvers<void>();
@@ -488,4 +367,35 @@ test('a read during a lifecycle operation does not mark the imp stopped', async 
 
   expect(during.state).toBe('running');
   expect(after.state).toBe('sleeping');
+});
+
+test('impd stopping closes exec sessions with 1012', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TOKEN}`);
+
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<CloseEvent>();
+
+    socket.addEventListener('open', () => {
+      opened.resolve();
+    });
+
+    socket.addEventListener('close', closed.resolve);
+
+    await opened.promise;
+
+    ctx.closeExecSessions();
+
+    const event = await closed.promise;
+
+    expect(event.code).toBe(1012);
+  } finally {
+    await server.stop(true);
+  }
 });

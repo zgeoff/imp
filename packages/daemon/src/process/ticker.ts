@@ -1,3 +1,5 @@
+import { readErrorMessage } from '../read-error-message';
+
 export interface Ticker {
   readonly stop: () => Promise<void>;
 }
@@ -21,7 +23,7 @@ export function startTicker(
     try {
       await task();
     } catch (error) {
-      log(`impd: ${label}: ${error instanceof Error ? error.message : String(error)}`);
+      log(`impd: ${label}: ${readErrorMessage(error)}`);
     }
   };
 

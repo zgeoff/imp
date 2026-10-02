@@ -160,3 +160,21 @@ test('it refuses a handshake the agent does not accept', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('an exec fails and closes its connection when STARTED never comes', async () => {
+  const closed = Promise.withResolvers<void>();
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.on('close', () => {
+      closed.resolve();
+    });
+  });
+
+  const rejection = await openExecStream(vsock.path, { argv: ['sleep'], tty: false }, 50).catch(
+    (error: unknown) => error,
+  );
+
+  expect(rejection).toMatchObject({ message: 'agent did not answer within 50 ms' });
+
+  await closed.promise;
+});

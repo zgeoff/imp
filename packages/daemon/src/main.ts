@@ -9,17 +9,44 @@ import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
 import { readTailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
+import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
+import { waitWithin } from './process/wait-within';
 import { startWakeProxy } from './proxy/wake-proxy';
 import type { WakeProxy } from './proxy/wake-proxy';
+import { readErrorMessage } from './read-error-message';
 import { readSnapshotIdentity } from './sleep/snapshot-meta';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
 
-function printLog(message: string): void {
-  console.log(message);
+// the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
+const STOP_DEADLINE_MS = 100_000;
+
+// at most per step before the sleep pass, which gets whatever is left
+const STOP_STEP_MAX_MS = 10_000;
+
+// Bounded, and a failure is logged: impd always reaches its exit. True when
+// the step finished in time. A ticker stop waits for a pass under way.
+async function runStopStep(
+  step: string,
+  ms: number,
+  task: () => Promise<unknown>,
+): Promise<boolean> {
+  try {
+    const finished = await waitWithin(task(), ms);
+
+    if (!finished) {
+      printLog(`impd: stop: ${step} still running after ${String(ms)}ms; going on`);
+    }
+
+    return finished;
+  } catch (error) {
+    printLog(`impd: stop: ${step} failed: ${readErrorMessage(error)}`);
+
+    return true;
+  }
 }
 
 async function main(): Promise<void> {
@@ -61,7 +88,7 @@ async function main(): Promise<void> {
   const checkpoints = createCheckpointService({ config, db, imps });
   const state = { ready: false };
 
-  const app = buildApp({
+  const api = buildApp({
     config,
     db,
     token,
@@ -72,7 +99,9 @@ async function main(): Promise<void> {
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     readTailscale,
     isReady: () => state.ready,
-  }).listen(config.apiPort);
+  });
+
+  const app = api.app.listen(config.apiPort);
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
 
@@ -110,20 +139,36 @@ async function main(): Promise<void> {
   // running and the next impd re-adopts them (DESIGN 2.8).
   const stop = async (sleepImps: boolean) => {
     const started = performance.now();
+    const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));
+    const readStepMs = () => Math.min(STOP_STEP_MAX_MS, readLeftMs());
 
-    await Promise.all(tickers.map((ticker) => ticker.stop()));
-    await proxy.stop();
-    await app.stop();
+    await runStopStep('tickers', readStepMs(), () =>
+      Promise.all(tickers.map((ticker) => ticker.stop())),
+    );
+
+    await runStopStep('proxy', readStepMs(), () => proxy.stop());
+
+    api.closeExecSessions();
+
+    await runStopStep('api', readStepMs(), () => app.stop(true));
+
+    // either way, a wake or boot under way finishes first: one cut short
+    // leaves a Firecracker that no record knows
+    const settled = sleepImps
+      ? await runStopStep('sleep', readLeftMs(), () => imps.sleepAllImps())
+      : await runStopStep('lifecycle', readLeftMs(), () => imps.waitForLifecycle());
 
     if (sleepImps) {
-      await imps.sleepAllImps();
-
       const sleptMs = Math.round(performance.now() - started);
 
       printLog(`impd: every imp asleep in ${String(sleptMs)}ms`);
     }
 
-    await db.destroy();
+    // a sleep still running writes its record later: closing the database
+    // under it would fail that write. The next start finds its snapshot.
+    if (settled) {
+      await runStopStep('database', readStepMs(), () => db.destroy());
+    }
 
     process.exit(0);
   };

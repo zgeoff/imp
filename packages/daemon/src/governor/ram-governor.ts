@@ -1,5 +1,6 @@
 import { buildImpOverBudgetError, buildRamBudgetError } from '../api-errors';
-import { createKeyedMutex } from '../imps/keyed-mutex';
+import type { LockFreeSleep } from '../imps/lock-free-sleep';
+import { createSemaphore } from '../imps/semaphore';
 import { pickSleepVictims } from './pick-sleep-victims';
 
 // A reservation covers a VM until its RSS catches up: a VM that just booted
@@ -36,7 +37,6 @@ interface RamUsage {
 
   // reservations for boots and wakes the measurement does not show yet
   readonly reservedMib: number;
-  readonly byImp: ReadonlyMap<string, number>;
 }
 
 // The part of the governor the imp lifecycle calls.
@@ -65,14 +65,16 @@ export interface RamGovernorDeps {
   // or proxied requests: never a victim
   readonly isBusy: (id: string) => boolean;
 
-  // sleeps the imp if it is still running; false when it could not
-  readonly sleepImp: (id: string, reason: string) => Promise<boolean>;
+  // sleeps the imp if it still runs and is not held; the type admits only a
+  // sleep that never waits for the imp's lock, since admission is held
+  readonly trySleepImp: LockFreeSleep;
   readonly log: (message: string) => void;
   readonly now?: () => number;
 }
 
 export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
-  const lock = createKeyedMutex();
+  // one admission or enforcement at a time
+  const admission = createSemaphore(1);
 
   const reservations = new Map<string, { readonly mib: number; readonly until: number }>();
 
@@ -126,12 +128,15 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
   };
 
   // sleeps LRU imps until `findMissing` reports nothing missing; false when
-  // no imp is left to sleep
+  // no imp is left to sleep. An imp that was skipped or failed is not picked
+  // again in this call, so the loop ends.
   const makeRoom = async (
     excludeId: string | null,
     reason: string,
     findMissing: (usage: UsageTotals) => number,
   ): Promise<boolean> => {
+    const passed = new Set<string>();
+
     for (;;) {
       const usage = await readEffectiveUsage(excludeId);
 
@@ -148,7 +153,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         ramMib: usage.byImp.get(imp.id) ?? 0,
         lastActiveAt: imp.lastActiveAt,
         held: imp.holdUntil !== null && imp.holdUntil > time,
-        busy: deps.isBusy(imp.id),
+        busy: deps.isBusy(imp.id) || passed.has(imp.id),
       }));
 
       const victims = pickSleepVictims(candidates, missing);
@@ -157,27 +162,21 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
         return false;
       }
 
-      let slept = 0;
-
       for (const id of victims) {
-        const asleep = await deps.sleepImp(id, reason);
+        const outcome = await deps.trySleepImp(id, reason, { by: 'governor' });
 
-        if (asleep) {
+        if (outcome === 'slept') {
           reservations.delete(id);
-
-          slept += 1;
+        } else {
+          passed.add(id);
         }
-      }
-
-      if (slept === 0) {
-        return false;
       }
     }
   };
 
   return {
     admit: (request) =>
-      lock.runExclusive('admission', async () => {
+      admission.run(async () => {
         if (request.memoryMib > deps.budgetMib) {
           const usage = await readEffectiveUsage(request.id);
 
@@ -212,12 +211,11 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       return {
         usedMib: usage.usedMib,
         reservedMib: usage.effectiveMib - usage.usedMib,
-        byImp: usage.byImp,
       };
     },
 
     enforce: () =>
-      lock.runExclusive('admission', async () => {
+      admission.run(async () => {
         const fits = await makeRoom(
           null,
           'RAM over budget',
