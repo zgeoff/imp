@@ -191,8 +191,29 @@ async function runWarmMove(name: string): Promise<void> {
   expect(moved.state).toBe('sleeping');
 }
 
-test('a sleeping open imp moves with its memory and reaches out at once on the target', async () => {
+// A warm move keeps the imp's slot, so the two warm imps live on A side by
+// side: the second gets a slot the first does not take on B
+test('two imps for the warm moves boot on A in slots of their own', async () => {
   await createImp(open, '--image', TINY, '--memory', '256');
+
+  await createImp(
+    box,
+    '--image',
+    BASE,
+    '--memory',
+    '1g',
+    '--policy',
+    'box',
+    '--allow',
+    'example.com,api.github.com,github.com',
+  );
+
+  const slots = await Promise.all([requireImp(open), requireImp(box)]);
+
+  expect(slots[0].slot).not.toBe(slots[1].slot);
+});
+
+test('a sleeping open imp moves with its memory and reaches out at once on the target', async () => {
   await holdImp(open);
   await runImp('exec', open, '--', 'sh', '-c', MARK_SCRIPT);
 
@@ -222,18 +243,6 @@ test('a sleeping open imp moves with its memory and reaches out at once on the t
 });
 
 test('a sleeping box imp keeps its list, and the target’s broker answers right after the wake', async () => {
-  await createImp(
-    box,
-    '--image',
-    BASE,
-    '--memory',
-    '1g',
-    '--policy',
-    'box',
-    '--allow',
-    'example.com,api.github.com,github.com',
-  );
-
   await runImp('grant', box, secret);
   await holdImp(box);
   await runImp('exec', box, '--', 'sh', '-c', MARK_SCRIPT);
