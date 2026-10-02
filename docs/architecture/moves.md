@@ -4,6 +4,17 @@ A move takes a stopped imp from one impd to another over the tailnet. The
 [hosts guide](../guides/hosts.md#moves) covers its use, what it keeps and what the URLs do. This
 page covers the protocol: `packages/daemon/src/moves/`.
 
+## Scope
+
+The cold move is what ships: a stopped imp moves, and boots cold on the target. Not yet built:
+
+- A warm move, which would keep the imp's memory across hosts
+  ([#86](https://github.com/zgeoff/imp/issues/86)).
+- The whole `imp move` flow (tickets, receipt, commit) on a real ZFS pool, and between two impds in
+  the end-to-end tests. On real ZFS the CI `zfs` job runs the backend's steps (a ZFS-to-ZFS send of
+  a restored imp, an XFS-style receive); the full flow runs on a fake ZFS only
+  (`packages/daemon/src/moves/move-service.test.ts`).
+
 ## The steps
 
 | Step | Call                                                | Host   | What it does                                                                |
