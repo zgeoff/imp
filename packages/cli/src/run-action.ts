@@ -1,11 +1,13 @@
 import { ORPCError } from '@orpc/client';
 import * as z from 'zod';
+import { loadCliConfig } from './cli-config';
+import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import type { ImpClient } from './create-imp-client';
 import { UsageError } from './usage-error';
 
 export const TOKEN_HINT =
-  'unauthorized: set IMP_TOKEN or write the token from <IMP_DATA_DIR>/token to ~/.config/imp/token';
+  'unauthorized: set IMP_TOKEN to the token from <IMP_DATA_DIR>/token, or run imp login <url>';
 
 // what oRPC puts in a BAD_REQUEST's data when the input fails its schema
 const PathKeySchema = z.union([z.string(), z.number(), z.object({ key: z.unknown() })]);
@@ -16,21 +18,29 @@ const ValidationDataSchema = z.object({ issues: z.array(IssueSchema) });
 // exit code 2 for a usage error, else 1; a 401 gets a hint about where the
 // token comes from.
 export async function runAction(action: (client: ImpClient) => Promise<void>): Promise<void> {
+  let config: CliConfig | null = null;
+
   try {
-    const client = createImpClient();
+    config = loadCliConfig(process.env);
 
-    await action(client);
+    await action(createImpClient(config));
   } catch (error) {
-    console.error(`imp: ${formatError(error)}`);
-
-    process.exitCode = error instanceof UsageError ? 2 : 1;
+    printError(error, config);
   }
 }
 
-export function formatError(error: unknown): string {
+export function printError(error: unknown, config: CliConfig | null = null): void {
+  console.error(`imp: ${formatError(error, config)}`);
+
+  process.exitCode = error instanceof UsageError ? 2 : 1;
+}
+
+// `config` names the impd that was called, so a 401 can say which saved
+// host to log in to again
+export function formatError(error: unknown, config: CliConfig | null = null): string {
   if (error instanceof ORPCError) {
     if (error.status === 401) {
-      return TOKEN_HINT;
+      return formatUnauthorized(config);
     }
 
     const code = String(error.code);
@@ -64,4 +74,12 @@ function formatIssues(code: string, data: unknown): string {
   });
 
   return ` (${issues.join('; ')})`;
+}
+
+function formatUnauthorized(config: CliConfig | null): string {
+  if (config?.host === null || config?.host === undefined) {
+    return TOKEN_HINT;
+  }
+
+  return `unauthorized: ${config.host} (${config.url}) refused the token; run imp login ${config.url} --name ${config.host}`;
 }

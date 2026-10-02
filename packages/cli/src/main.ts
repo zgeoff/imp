@@ -1,55 +1,25 @@
 #!/usr/bin/env bun
-import { defineCommand, runMain } from 'citty';
-import packageJson from '../package.json' with { type: 'json' };
-import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
-import { imageCommand } from './commands/image';
-import {
-  consoleCommand,
-  execCommand,
-  forkCommand,
-  holdCommand,
-  lsCommand,
-  newCommand,
-  rmCommand,
-  sleepCommand,
-  startCommand,
-  stopCommand,
-  urlCommand,
-  wakeCommand,
-} from './commands/imps';
-import { infoCommand } from './commands/info';
-
-const main = defineCommand({
-  meta: {
-    name: 'imp',
-    version: packageJson.version,
-    description: 'Persistent Linux microVMs that sleep when idle and wake on request',
-  },
-  subCommands: {
-    new: newCommand,
-    ls: lsCommand,
-    rm: rmCommand,
-    start: startCommand,
-    stop: stopCommand,
-    exec: execCommand,
-    console: consoleCommand,
-    sleep: sleepCommand,
-    wake: wakeCommand,
-    hold: holdCommand,
-    url: urlCommand,
-    checkpoint: checkpointCommand,
-    checkpoints: checkpointsCommand,
-    restore: restoreCommand,
-    fork: forkCommand,
-    image: imageCommand,
-    info: infoCommand,
-  },
-});
+import { runMain } from 'citty';
+import { setSelectedHost } from './cli-config';
+import { mainCommand } from './command-tree';
+import { splitHostFlag } from './host-flag';
+import { printError } from './run-action';
 
 // runMain shows help when --help appears anywhere, and citty would parse
 // the command's own flags, so it sees only the arguments before `--`;
 // `imp exec` reads the command after it from process.argv
-const rawArgs = process.argv.slice(2);
-const separator = rawArgs.indexOf('--');
+try {
+  const split = splitHostFlag(process.argv.slice(2));
+  const args = split.args;
+  const separator = args.indexOf('--');
 
-await runMain(main, { rawArgs: separator === -1 ? rawArgs : rawArgs.slice(0, separator) });
+  if (split.host !== null) {
+    setSelectedHost(split.host);
+  }
+
+  await runMain(mainCommand, {
+    rawArgs: separator === -1 ? [...args] : args.slice(0, separator),
+  });
+} catch (error) {
+  printError(error);
+}
