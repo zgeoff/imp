@@ -3,6 +3,7 @@ import { connect } from 'node:net';
 import * as dnsPacket from 'dns-packet';
 import type { Answer, DecodedPacket } from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
+import { findFreePorts } from '../net/test-free-ports';
 import { createDnsForward } from './dns-upstream';
 import { createQueryHandler, startResolverServer } from './egress-resolver';
 import type { QueryVerdict, ResolverDeps } from './egress-resolver';
@@ -279,11 +280,13 @@ test('an upstream that fails, or a set that cannot take the answer, is SERVFAIL'
   expect(noSet.rcode).toBe('SERVFAIL');
 });
 
-// a fake upstream on loopback: UDP replies truncated, TCP replies whole
-async function startFakeUpstream() {
+// a fake upstream on loopback: UDP replies truncated, TCP replies whole. It
+// takes a picked port: UDP on port 0 and then TCP on the same number races
+// any TCP socket that already holds it.
+async function startFakeUpstream(listenPort: number) {
   const udp = await Bun.udpSocket({
     hostname: '127.0.0.1',
-    port: 0,
+    port: listenPort,
     socket: {
       data: (socket, data, port, address) => {
         const query = new Uint8Array(data);
@@ -329,7 +332,9 @@ async function startFakeUpstream() {
 }
 
 test('over UDP and TCP on loopback, with a truncated upstream reply retried over TCP', async () => {
-  using upstream = await startFakeUpstream();
+  const ports = findFreePorts(2);
+
+  using upstream = await startFakeUpstream(ports.take());
 
   const handle = createQueryHandler({
     subnet: parseSubnet('127.0.0.0/16'),
@@ -342,7 +347,7 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
     log: () => {},
   });
 
-  const server = await startResolverServer(0, parseSubnet('127.0.0.0/16'), handle);
+  const server = await startResolverServer(ports.take(), parseSubnet('127.0.0.0/16'), handle);
 
   try {
     // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
@@ -455,10 +460,16 @@ test('the TCP side closes an idle client and caps the clients of one slot', asyn
     log: () => {},
   });
 
-  const server = await startResolverServer(0, parseSubnet('127.0.0.0/16'), handle, {
-    idleS: 1,
-    maxPerSlot: 2,
-  });
+  // UDP and TCP on one number: a picked port, not 0 (see startFakeUpstream)
+  const server = await startResolverServer(
+    findFreePorts(1).take(),
+    parseSubnet('127.0.0.0/16'),
+    handle,
+    {
+      idleS: 1,
+      maxPerSlot: 2,
+    },
+  );
 
   try {
     const first = openTcpClient(server.port, '127.0.0.2');
