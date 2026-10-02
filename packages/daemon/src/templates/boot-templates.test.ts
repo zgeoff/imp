@@ -22,6 +22,8 @@ function buildIdentity(dataDir: string, drive: string): HostIdentity {
     guestKernel: 'k',
     systemDrive: drive,
     systemDrivePath: join(dataDir, 'system', 'drives', drive),
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
   };
 }
 
