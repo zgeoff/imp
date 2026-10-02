@@ -1,9 +1,15 @@
 # Install
 
-imp runs on one Linux machine. Today the way to run it is `scripts/dev.sh`, which builds the host
-container from `host/` and runs impd from the repo. A versioned production image and a one-command
-server bootstrap are on the [roadmap](https://github.com/zgeoff/imp/issues/41)
-([#7](https://github.com/zgeoff/imp/issues/7), [#9](https://github.com/zgeoff/imp/issues/9)).
+imp runs on one Linux machine, in one host container, in one of two ways:
+
+- **The release image** for a server: impd, the `imp` CLI, the guest kernel and the system drive are
+  baked in, and nothing from the repo is mounted. [Run the release image](#run-the-release-image)
+  covers it.
+- **The dev instance** for working on imp: `scripts/dev.sh` builds the host container and runs impd
+  from the repo. The [set up](#set-up) steps below cover it.
+
+A one-command server bootstrap is on the [roadmap](https://github.com/zgeoff/imp/issues/41)
+([#9](https://github.com/zgeoff/imp/issues/9)).
 
 ## Needs
 
@@ -66,8 +72,8 @@ restarts and day-to-day care.
 
 ## What `dev.sh up` does
 
-- Builds `host/` as the host image, and `build/imp-system.squashfs` (the agent's system drive) when
-  it is missing.
+- Builds the `dev` target of `host/Dockerfile` as the host image, and `build/imp-system.squashfs`
+  (the agent's system drive) when it is missing.
 - Starts the container with `--privileged --device /dev/kvm`, the Docker socket, and the repo
   mounted at `/src` and at its own path.
 - Keeps data in `.data/dev/imp.xfs`, a sparse XFS file that the container loop-mounts on
@@ -83,8 +89,101 @@ restarts and day-to-day care.
 - If the host runs Tailscale with MagicDNS, the container uses public resolvers instead, because its
   own tailscaled would capture `100.100.100.100`.
 
-## Bare metal
+## Run the release image
 
-On a bare-metal host, put `/var/lib/imp` on a real XFS partition with reflink, and use a
-non-ephemeral tagged Tailscale key. Expect faster boots and wakes than on a nested-virtualization
-dev box.
+The release image runs the compiled impd from `/usr/local/bin/impd` with the kernel and the system
+drive from `/usr/local/share/imp`. `imp info` shows the kernel version and the sha256 of both.
+
+### Build it
+
+```sh
+host/build-release.sh          # tags imp-host:<git describe>; IMP_VERSION overrides the version
+```
+
+The build is multi-stage: the guest kernel, the agent and its system drive, impd and the CLI each
+build in their own stage. The kernel stage reads only `kernel/version`, `kernel/config-base`,
+`kernel/docker.fragment` and `kernel/make-vmlinux.sh`, so a change anywhere else reuses the cached
+kernel layer. A CI runner without that cache rebuilds the kernel; pass `--cache-from` and
+`--cache-to` through `build-release.sh` to keep it.
+
+The kernel toolchain comes from a dated Ubuntu snapshot and the system drive has fixed times, so the
+same sources give the same kernel and drive bytes. A snapshot of a sleeping imp restores only with
+the kernel and drive it was taken on, so this is what lets an upgrade that leaves them alone keep
+every imp's memory. `host/check-reproducible.sh` checks it (two cold builds, a few minutes).
+
+### Prepare the host
+
+1. Put `/var/lib/imp` on an XFS filesystem with reflink, a partition of its own:
+
+   ```sh
+   mkfs.xfs -m reflink=1 /dev/<partition>
+   echo '/dev/<partition> /var/lib/imp xfs defaults 0 2' >> /etc/fstab
+   mkdir -p /var/lib/imp && mount /var/lib/imp
+   ```
+
+   The release image refuses to start when `/var/lib/imp` is not an XFS mount with reflink. It never
+   falls back to a loop file inside the container, which would go away with the container and take
+   every imp with it.
+
+2. Write the settings, from [`deploy/imp-host.env.example`](../../deploy/imp-host.env.example):
+
+   ```sh
+   install -d /etc/imp
+   install -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env   # then edit it
+   ```
+
+   Without `TAILSCALE_AUTHKEY` the host is local-only: the API and the proxy listen on
+   `127.0.0.1:7070` and `127.0.0.1:7080`, and no imp is reachable from another machine. With a key,
+   the tailnet reaches impd and every imp through the container's own `tailscaled`. Use a
+   non-ephemeral tagged key on a server ([Tailscale guide](./tailscale.md)).
+
+### Start it
+
+Use one of the two, not both. Both run the container with `--init --privileged --device /dev/kvm`,
+the host's Docker socket and `/var/lib/imp`, and give impd 120 seconds to sleep every imp on stop.
+
+- **systemd:** [`deploy/imp-host.service`](../../deploy/imp-host.service) runs `docker run` in the
+  foreground, so systemd supervises it.
+
+  ```sh
+  install -m 0644 deploy/imp-host.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now imp-host
+  ```
+
+- **Compose:** [`deploy/compose.yaml`](../../deploy/compose.yaml), with a Docker restart policy.
+
+  ```sh
+  docker compose -f deploy/compose.yaml up -d
+  ```
+
+  On shutdown, `dockerd` stops the container and systemd waits 90 seconds for `docker.service` by
+  default. Give it the 120 seconds impd needs with a drop-in:
+
+  ```ini
+  # /etc/systemd/system/docker.service.d/imp-stop.conf
+  [Service]
+  TimeoutStopSec=150
+  ```
+
+The systemd unit needs no drop-in: it stops the container itself before Docker stops.
+
+Then, on the host:
+
+```sh
+export IMP_TOKEN=$(cat /var/lib/imp/token)
+docker exec -e IMP_TOKEN imp-host imp info     # the CLI is in the image
+```
+
+### Images on a server
+
+`imp image build <dir>` builds from a directory impd can see, and in the release image the repo is
+not there: the build fails with `does not exist on the impd host`. Build the image with the host's
+Docker, then add it:
+
+```sh
+docker build -t imp-base images/base
+imp image add imp-base --name base
+```
+
+Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `imp new` uses `ubuntu` and impd
+logs a warning at start.
