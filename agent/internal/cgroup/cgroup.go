@@ -25,6 +25,9 @@ const poll = 20 * time.Millisecond
 // directory, and an inner container points it at its own subtree.
 type Tree struct {
 	parent string
+	// prepare, if set, runs on the parent before each new leaf, so limits
+	// set on it hold even after root removed it and it was made again
+	prepare func(parent string) error
 
 	mu   sync.Mutex
 	next uint64
@@ -50,6 +53,21 @@ func NewTree(parent string) (*Tree, error) {
 	return &Tree{parent: parent, ended: map[string]struct{}{}}, nil
 }
 
+// NewLimitedTree is NewTree with prepare, which sets the parent's limits:
+// now, and again before each new leaf. A leaf whose prepare fails is not
+// made.
+func NewLimitedTree(parent string, prepare func(parent string) error) (*Tree, error) {
+	t, err := NewTree(parent)
+	if err != nil {
+		return nil, err
+	}
+	if err := prepare(parent); err != nil {
+		return nil, err
+	}
+	t.prepare = prepare
+	return t, nil
+}
+
 // Group is one exec's leaf.
 type Group struct {
 	path string
@@ -68,6 +86,11 @@ func (t *Tree) New() (*Group, error) {
 	// the parent again: in the inner container, root can remove it
 	if err := os.MkdirAll(t.parent, 0o755); err != nil {
 		return nil, err
+	}
+	if t.prepare != nil {
+		if err := t.prepare(t.parent); err != nil {
+			return nil, err
+		}
 	}
 	if err := os.Mkdir(path, 0o755); err != nil {
 		return nil, err

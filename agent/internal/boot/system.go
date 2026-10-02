@@ -24,6 +24,8 @@ import (
 	"github.com/zgeoff/imp/agent/internal/launch"
 	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
+	"github.com/zgeoff/imp/agent/internal/outer"
+	"github.com/zgeoff/imp/agent/internal/proc"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/pty"
 	"github.com/zgeoff/imp/agent/internal/reaper"
@@ -119,12 +121,20 @@ func Run() error {
 		log.Printf("boot: exec cgroups: %v; a stop reaches only the process group", err)
 		execCgroups = nil
 	}
+	// An outer exec runs in the agent's world, while the container is down
+	// too, in its own cgroup and memory limit or not at all.
+	outerCgroups, err := outer.Setup()
+	if err != nil {
+		log.Printf("boot: outer exec: %v; every one is refused", err)
+	}
+	outerRunner := outer.Runner{Next: &proc.Direct{Reaper: r, Agent: inner.AgentBinary}}
 	bootID := readBootID()
 	if claimed {
 		bootID = newBootID()
 	}
 	srv := &server.Server{
 		Exec:     exec.NewManager(launcher, execCgroups),
+		Outer:    exec.NewStrictManager(launch.New(outerRunner, outer.Image(), pty.Open), outerCgroups),
 		Sessions: session.NewManager(launcher, bootID),
 		Services: sup,
 		Listen:   listener,

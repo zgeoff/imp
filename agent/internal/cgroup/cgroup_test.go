@@ -113,3 +113,35 @@ func TestWaitEmptyReadsPopulated(t *testing.T) {
 		t.Fatal("the leaf never emptied")
 	}
 }
+
+// TestLimitedTreeSetsItsLimitsAgain: a parent removed under the tree is made
+// again with its limits, and a leaf whose limits cannot be set is not made.
+func TestLimitedTreeSetsItsLimitsAgain(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "outer")
+	var failing bool
+	prepare := func(dir string) error {
+		if failing {
+			return os.ErrPermission
+		}
+		return os.WriteFile(filepath.Join(dir, "memory.max"), []byte("33554432"), 0o644)
+	}
+	tree, err := NewLimitedTree(parent, prepare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(parent); err != nil {
+		t.Fatal(err)
+	}
+	g, err := tree.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree.Release(g)
+	if b, err := os.ReadFile(filepath.Join(parent, "memory.max")); err != nil || string(b) != "33554432" {
+		t.Fatalf("memory.max = %q (%v), want the limit again", b, err)
+	}
+	failing = true
+	if _, err := tree.New(); err == nil {
+		t.Fatal("made a leaf whose limits could not be set")
+	}
+}
