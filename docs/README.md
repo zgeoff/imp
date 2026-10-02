@@ -15,6 +15,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   errors, unary requests and exec streams.
 - [Storage and images](./architecture/storage.md): XFS reflinks, the data directory, checkpoints,
   restores and forks, and how an OCI image becomes an ext4 disk.
+- [Backups](./architecture/backups.md): restic, what a backup holds, a run on XFS and ZFS, the
+  schedule, restores, whole-host restore, and the repository's security.
 - [Networking](./architecture/networking.md): addressing, iptables, the wake proxy and the URLs.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
