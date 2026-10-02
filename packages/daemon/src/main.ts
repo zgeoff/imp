@@ -35,6 +35,7 @@ import {
 import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
+import { createNetworkService } from './networks/network-service';
 import { printLog } from './process/print-log';
 import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
@@ -250,6 +251,7 @@ async function main(): Promise<void> {
 
   const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
   const templates = createTemplateService({ config, db, imps, storage, storageGate, diskBudget });
+  const networks = createNetworkService({ db, egress });
 
   const backups =
     config.backup === null
@@ -317,6 +319,7 @@ async function main(): Promise<void> {
     backups,
     broker,
     egress,
+    networks,
     firecrackerVersion:
       identity.firecrackerVersion === UNKNOWN_VERSION ? null : identity.firecrackerVersion,
     systemFiles: systemFiles.info,

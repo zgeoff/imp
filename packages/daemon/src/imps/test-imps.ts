@@ -28,6 +28,7 @@ import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
 import type { Ipv6Plan } from '../net/ipv6-plan';
+import { createNetworkService } from '../networks/network-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
@@ -181,6 +182,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   // every nft script and conntrack flush the egress firewall ran
   const nftScripts: string[] = [];
   const flushed: string[] = [];
+  const flushedPairs: string[] = [];
 
   const egress = createEgressService({
     config,
@@ -197,6 +199,11 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       }),
     flushConnections: (guestIp) => {
       flushed.push(guestIp);
+
+      return Promise.resolve();
+    },
+    flushPair: (first, second) => {
+      flushedPairs.push(`${first} ${second}`);
 
       return Promise.resolve();
     },
@@ -290,6 +297,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     egress,
     nftScripts,
     flushed,
+    flushedPairs,
     bundleInstalls,
     storage,
     storageGate,
@@ -399,6 +407,7 @@ export function buildTestApp(
     backups: null,
     broker: ctx.broker,
     egress: ctx.egress,
+    networks: createNetworkService({ db: ctx.db, egress: ctx.egress }),
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,

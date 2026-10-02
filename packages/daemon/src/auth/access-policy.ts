@@ -112,6 +112,15 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'secrets.add': manageHost,
   'secrets.list': readAny,
   'secrets.delete': manageHost,
+
+  // a member reaches every other imp on the network, so a token limited to
+  // some imps could reach past them; list shows the caller's imps only
+  'networks.list': readAny,
+  'networks.create': manageHost,
+  'networks.delete': manageHost,
+  'networks.join': manageHost,
+  'networks.leave': manageHost,
+
   'grants.add': manageHost,
   'grants.delete': manageHost,
   'grants.list': readImp,

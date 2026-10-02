@@ -1,0 +1,130 @@
+import { expect, test } from 'bun:test';
+import { listImps } from '../db/imps';
+import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { readRejection } from '../read-rejection';
+
+// web in slot 0 and db in slot 1, both on lab
+async function setupNetwork(runNft?: (script: string) => Promise<void>) {
+  const options = runNft === undefined ? {} : { runNft };
+
+  const ctx = await setupImpTest(options);
+
+  await ctx.createTestImage('base');
+
+  const client = buildTestApp(ctx, ctx).client;
+
+  await client.networks.create({ name: 'lab' });
+  await client.imps.create({ name: 'web', networks: ['lab'] });
+  await client.imps.create({ name: 'db' });
+  await client.networks.join({ network: 'lab', name: 'db' });
+
+  return Object.assign(ctx, { client });
+}
+
+// by imp name
+const LAB = 'elements = { "imp1" . 10.66.0.6, "imp0" . 10.66.0.2 }';
+
+test('the imps on a network are in its set, and a second join changes nothing', async () => {
+  await using ctx = await setupNetwork();
+
+  expect(ctx.nftScripts.at(-1)).toContain(LAB);
+
+  const again = await ctx.client.networks.join({ network: 'lab', name: 'db' });
+  const networks = await ctx.client.networks.list();
+
+  expect(again.imps).toEqual(['db', 'web']);
+  expect(networks.map((network) => [network.name, network.imps])).toEqual([['lab', ['db', 'web']]]);
+});
+
+test("a leave takes the imp out of the set and drops the pair's flows", async () => {
+  await using ctx = await setupNetwork();
+
+  const left = await ctx.client.networks.leave({ network: 'lab', name: 'db' });
+
+  expect(left.imps).toEqual(['web']);
+  expect(ctx.nftScripts.at(-1)).toContain('elements = { "imp0" . 10.66.0.2 }');
+  expect(ctx.flushedPairs).toEqual(['10.66.0.2 10.66.0.6']);
+
+  // not on it any more: nothing to part
+  await ctx.client.networks.leave({ network: 'lab', name: 'db' });
+
+  expect(ctx.flushedPairs).toEqual(['10.66.0.2 10.66.0.6']);
+});
+
+test('a pair that still shares another network keeps its flows', async () => {
+  await using ctx = await setupNetwork();
+
+  await ctx.client.networks.create({ name: 'ops' });
+  await ctx.client.networks.join({ network: 'ops', name: 'web' });
+  await ctx.client.networks.join({ network: 'ops', name: 'db' });
+  await ctx.client.networks.delete({ name: 'lab' });
+
+  expect(ctx.flushedPairs).toEqual([]);
+
+  await ctx.client.networks.delete({ name: 'ops' });
+
+  expect(ctx.flushedPairs).toEqual(['10.66.0.2 10.66.0.6']);
+  expect(ctx.nftScripts.at(-1)).not.toContain('@net0');
+});
+
+test('a create on a network that does not exist leaves no imp', async () => {
+  await using ctx = await setupNetwork();
+
+  const error = await readRejection(ctx.client.imps.create({ name: 'api', networks: ['nope'] }));
+  const imps = await listImps(ctx.db);
+
+  expect(error).toMatchObject({ code: 'NOT_FOUND', data: { kind: 'network', name: 'nope' } });
+  expect(imps.map((imp) => imp.name)).toEqual(['db', 'web']);
+});
+
+test('a token limited to some imps cannot put one on a network', async () => {
+  await using ctx = await setupNetwork();
+
+  const created = await ctx.client.tokens.create({ name: 'dev', scope: 'manage', imps: ['dev-*'] });
+
+  const limited = buildTestApp(ctx, ctx, created.secret).client;
+
+  const errors = [
+    await readRejection(limited.imps.create({ name: 'dev-a', networks: ['lab'] })),
+    await readRejection(limited.networks.join({ network: 'lab', name: 'dev-a' })),
+  ];
+
+  const networks = await limited.networks.list();
+
+  expect(errors).toEqual([
+    expect.objectContaining({ code: 'FORBIDDEN' }),
+    expect.objectContaining({ code: 'FORBIDDEN' }),
+  ]);
+
+  expect(networks.map((network) => network.imps)).toEqual([[]]);
+});
+
+test('a table nft refuses puts the membership back', async () => {
+  const state = { refuse: false };
+
+  await using ctx = await setupNetwork(() => {
+    const result = state.refuse ? Promise.reject(new Error('nft exited 1')) : Promise.resolve();
+
+    return result;
+  });
+
+  state.refuse = true;
+
+  const error = await readRejection(ctx.client.networks.leave({ network: 'lab', name: 'db' }));
+  const networks = await ctx.client.networks.list();
+
+  expect(error).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  expect(networks[0]?.imps).toEqual(['db', 'web']);
+  expect(ctx.flushedPairs).toEqual([]);
+});
+
+test("a destroyed imp leaves its networks' sets before its row goes", async () => {
+  await using ctx = await setupNetwork();
+
+  await ctx.client.imps.destroy({ name: 'db' });
+
+  const networks = await ctx.client.networks.list();
+
+  expect(ctx.nftScripts.at(-1)).toContain('elements = { "imp0" . 10.66.0.2 }');
+  expect(networks[0]?.imps).toEqual(['web']);
+});

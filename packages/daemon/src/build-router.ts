@@ -33,6 +33,7 @@ import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
+import type { NetworkService } from './networks/network-service';
 import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
@@ -55,6 +56,7 @@ export interface RouterDeps {
   readonly templates: TemplateService;
   readonly broker: Broker;
   readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy'>;
+  readonly networks: NetworkService;
 
   // null when no repository is set
   readonly backups: BackupService | null;
@@ -162,13 +164,21 @@ export function buildRouter(deps: RouterDeps) {
 
   return os.router({
     imps: {
+      // a network reaches past a caller's imp patterns, as a join does
       create: os.imps.create.handler(async (context) => {
         const caller = context.context.caller;
+        const { networks, ...input } = context.input;
+
+        if (networks !== undefined && caller.imps !== null) {
+          throw buildForbiddenError(
+            `${formatCaller(caller)} is limited to some imps, so it cannot put an imp on a network`,
+          );
+        }
 
         // a template holds its source imp's disk: a caller limited to some
         // imps must reach the source, as for a fork
         if (caller.imps !== null) {
-          const image = await deps.images.resolveImage(context.input.image);
+          const image = await deps.images.resolveImage(input.image);
 
           if (image.sourceImp !== null && !isCallerAllowed(caller, 'manage', image.sourceImp)) {
             throw buildForbiddenError(
@@ -177,7 +187,9 @@ export function buildRouter(deps: RouterDeps) {
           }
         }
 
-        return deps.imps.createImp(context.input);
+        const networkIds = await deps.networks.resolveNetworkIds(networks ?? []);
+
+        return deps.imps.createImp({ ...input, networkIds });
       }),
       list: os.imps.list.handler((context) => listCallerImps(context.context.caller)),
       get: os.imps.get.handler((context) => deps.imps.getImp(context.input.name)),
@@ -354,6 +366,34 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+    },
+    networks: {
+      // a caller limited to some imps sees those members only
+      list: os.networks.list.handler(async (context) => {
+        const patterns = context.context.caller.imps;
+
+        const networks = await deps.networks.listNetworks();
+
+        return networks.map((network) => ({
+          name: network.name,
+          imps: network.imps.filter((name) => isImpAllowed(patterns, name)),
+          createdAt: network.createdAt,
+        }));
+      }),
+      create: os.networks.create.handler((context) =>
+        deps.networks.createNetwork(context.input.name),
+      ),
+      delete: os.networks.delete.handler(async (context) => {
+        await deps.networks.deleteNetwork(context.input.name);
+
+        return {};
+      }),
+      join: os.networks.join.handler((context) =>
+        deps.networks.joinNetwork(context.input.network, context.input.name),
+      ),
+      leave: os.networks.leave.handler((context) =>
+        deps.networks.leaveNetwork(context.input.network, context.input.name),
+      ),
     },
     grants: {
       add: os.grants.add.handler(async (context) => {

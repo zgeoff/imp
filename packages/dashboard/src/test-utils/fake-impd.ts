@@ -281,6 +281,21 @@ export function createFakeImpd(): FakeImpd {
       list: os.secrets.list.handler(() => []),
       delete: os.secrets.delete.handler(() => ({})),
     },
+
+    // nor networks
+    networks: {
+      list: os.networks.list.handler(() => []),
+      create: os.networks.create.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      delete: os.networks.delete.handler(() => ({})),
+      join: os.networks.join.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      leave: os.networks.leave.handler(() => {
+        throw new Error('not in the fake');
+      }),
+    },
     grants: {
       add: os.grants.add.handler(() => ({})),
       delete: os.grants.delete.handler(() => ({})),

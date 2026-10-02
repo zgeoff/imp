@@ -19,6 +19,7 @@ interface NewImpInput {
   readonly cpuLimit?: number | null | undefined;
   readonly cpuWeight?: number | undefined;
   readonly isIdentityResetPending?: boolean;
+  readonly networkIds?: readonly string[] | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -44,6 +45,7 @@ export async function createImpRecord(
         memoryMib: input.memoryMib ?? context.config.defaultMemoryMib,
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
         ...(input.policy !== undefined && { egress: input.policy }),
+        ...(input.networkIds !== undefined && { networkIds: input.networkIds }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
         cpu,
         ...(input.isIdentityResetPending === true && { isIdentityResetPending: true }),
