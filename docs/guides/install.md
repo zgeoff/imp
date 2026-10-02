@@ -133,7 +133,7 @@ The phases run in order:
   `/etc/modprobe.d/imp-zfs.conf`.
 - **firewall:** Disables `ufw` and `firewalld`, and loads `/etc/imp/firewall.nft` with
   `imp-firewall.service`, after `nft -c` accepts the ruleset. It refuses while `nftables.service` is
-  enabled.
+  enabled. With `--host-firewall none`, it does none of this ([Firewall](#firewall)).
 - **imp:** Writes `/etc/imp/imp-host.env` (0600) and `/etc/systemd/system/imp-host.service`, pulls
   the image (or loads `--image-archive`), and starts the unit. The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
@@ -237,6 +237,13 @@ the health phase fails when one is published on `0.0.0.0` or `::`. Docker keeps 
 rules, and a reload replaces this table alone. The SSH ports are those `sshd -T`, `ssh.socket` and
 the live `sshd` listeners report, plus `--ssh-port`. The script refuses the run when the current SSH
 session's port is not among them, and warns when `sshd` allows password logins.
+
+On a host whose platform owns the firewall, run with `--host-firewall none`. The script then adds no
+host rules and leaves `ufw` and `firewalld` alone, and the env file records
+`IMP_HOST_FIREWALL=none`, so later runs keep it. On a host that an earlier run gave the `imp_host`
+table, the flag removes the table and `imp-firewall.service`. Without the flag, a table that is
+still there beside `IMP_HOST_FIREWALL=none` is drift: `--check` exits 2, and `--yes` refuses. imp
+needs no inbound port either way ([host contract](../architecture/host-contract.md#firewall)).
 
 ### Test it
 

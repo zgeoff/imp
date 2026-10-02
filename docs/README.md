@@ -19,6 +19,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   schedule, restores, whole-host restore, and the repository's security.
 - [Networking](./architecture/networking.md): addressing, iptables, the wake proxy, the credential
   broker's port and the URLs.
+- [Host contract](./architecture/host-contract.md): what the host under the container must give, the
+  two installers, the RAM budget, and who owns the host firewall.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
 
@@ -26,6 +28,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 
 - [Install](./guides/install.md): what imp needs, how to run it with `scripts/dev.sh`, and how to
   get and run the release image.
+- [NixOS](./guides/nixos.md): `nixosModules.imp`, what it sets, the env file, the Tailscale key and
+  the VM test.
 - [Configuration](./guides/configuration.md): every variable for impd, the host container, the dev
   instance and the CLI.
 - [Images](./guides/images.md): the shipped images, what a guest takes from an image, services,
