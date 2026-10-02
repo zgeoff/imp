@@ -1,10 +1,10 @@
 name: Bootstrap
 
 # Runs deploy/bootstrap.sh twice in a systemd container on Debian 13 and
-# Ubuntu 24.04 (scripts/test-bootstrap.sh) and checks the second run changes
-# nothing, on XFS and on a ZFS pool. A stand-in image replaces the release image, so the health check,
-# which boots an imp, runs by hand: scripts/test-bootstrap.sh --image
-# imp-host:<tag> --health.
+# Ubuntu 24.04 and 26.04 (scripts/test-bootstrap.sh), and checks the second
+# run changes nothing, on XFS and on a ZFS pool. A stand-in image replaces
+# the release image, so the health check, which boots an imp, runs by hand:
+# scripts/test-bootstrap.sh --image imp-host:<tag> --health.
 on:
   pull_request:
     paths:
@@ -28,7 +28,7 @@ concurrency:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
