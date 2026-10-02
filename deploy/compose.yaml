@@ -1,0 +1,33 @@
+# imp host under Docker Compose. One of the two supported ways to run the
+# release image; deploy/imp-host.service is the other. Run one, not both.
+#
+#   docker compose -f deploy/compose.yaml up -d
+#
+# /var/lib/imp on the host must be XFS with reflink (docs/guides/install.md).
+# The container refuses to start otherwise.
+name: imp
+
+services:
+  imp-host:
+    image: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:latest}
+    container_name: imp-host
+    init: true
+    privileged: true
+    devices:
+      - /dev/kvm
+    env_file:
+      - path: ${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
+        required: true
+    volumes:
+      - ${IMP_HOST_DATA:-/var/lib/imp}:/var/lib/imp
+      # impd pulls and builds imp images with the host's docker
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Local only: the tailnet reaches impd and every imp through the
+    # container's own tailscaled, so nothing else is published.
+    ports:
+      - 127.0.0.1:7070:7070
+      - 127.0.0.1:7080:7080
+    # SIGTERM makes impd sleep every awake imp, so memory survives; give it
+    # the time (docs/guides/operations.md).
+    stop_grace_period: 120s
+    restart: unless-stopped
