@@ -19,7 +19,13 @@ import { readErrorMessage } from '../read-error-message';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
-import { buildJailerCommand, createJails, listBoundDirs, listMountsUnder } from './jail';
+import {
+  buildJailerCommand,
+  createJails,
+  listBoundDirs,
+  listMountsUnder,
+  setupTemplateFile,
+} from './jail';
 import type { JailDeps } from './jail';
 
 // the test's own uid, so the chowns work without root
@@ -450,4 +456,108 @@ test('an unjailed start sweeps what a jailed VM planted, so its seal passes', as
   jail.jails.seal(jail.paths, 4242);
 
   expect(readdirSync(jail.paths.runDir).toSorted()).toEqual(['firecracker.log', 'pid']);
+});
+
+test('a template build binds its work dir and gets a placeholder of its own in the chroot', async () => {
+  const jail = setupJails();
+  const work = join(jail.dataDir, 'templates', '.build-1');
+  const runDir = join(work, 'run');
+  const placeholder = join(jail.dataDir, 'templates', 'placeholder.ext4');
+  const kernel = join(jail.dataDir, 'vmlinux');
+  const buildRoot = join(jail.dataDir, 'jail', 'firecracker', 'tpl-build', 'root');
+
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(kernel, '');
+  writeFileSync(placeholder, 'shared');
+
+  const command = await jail.jails.prepareBuild({
+    id: 'tpl-build',
+    user: USER,
+    workDir: work,
+    paths: {
+      runDir,
+      apiSocket: join(runDir, 'api.sock'),
+      vsockSocket: join(runDir, 'vsock.sock'),
+      logFile: join(runDir, 'firecracker.log'),
+      pidFile: join(runDir, 'pid'),
+    },
+    readOnlyFiles: [kernel],
+    scratchFiles: [placeholder],
+  });
+
+  expect(command.join(' ')).toContain('--id tpl-build');
+
+  expect(jail.calls).toContain(
+    `mount --rbind -o nosuid=recursive,nodev=recursive ${work} ${buildRoot}${work}`,
+  );
+
+  expect(jail.calls).toContain(`mount -o remount,bind,ro,nosuid,nodev ${buildRoot}${kernel}`);
+
+  // the build's placeholder is in the chroot only: the shared one is untouched
+  expect(lstatSync(join(buildRoot, placeholder)).size).toBe(1024 * 1024);
+  expect(readFileSync(placeholder, 'utf8')).toBe('shared');
+  expect(jail.calls.some((call) => call.includes('placeholder'))).toBeFalse();
+});
+
+test('a scratch file inside a bound dir is refused: it would land in the real one', async () => {
+  const jail = setupJails();
+
+  const error = await readRejection(
+    jail.jails.prepare({
+      impId: 'i1',
+      user: USER,
+      paths: jail.paths,
+      readOnlyFiles: [],
+      scratchFiles: [join(jail.paths.dir, 'placeholder.ext4')],
+    }),
+  );
+
+  expect(readErrorMessage(error)).toContain('inside a bound directory');
+  expect(existsSync(join(jail.paths.dir, 'placeholder.ext4'))).toBeFalse();
+});
+
+test('a restore prepares before its disk exists, and owns the disk once it is a file', async () => {
+  const jail = setupJails();
+
+  rmSync(jail.paths.disk);
+
+  await jail.jails.prepare({
+    impId: 'i1',
+    user: USER,
+    paths: jail.paths,
+    readOnlyFiles: [],
+    isDiskLate: true,
+  });
+
+  // the clone left a symlink, not a disk
+  symlinkSync('/etc/hostname', jail.paths.disk);
+
+  expect(() => {
+    jail.jails.setupDiskOwner(jail.paths, USER);
+  }).toThrow('not a regular file');
+
+  rmSync(jail.paths.disk);
+  writeFileSync(jail.paths.disk, '');
+
+  jail.jails.setupDiskOwner(jail.paths, USER);
+
+  expect(lstatSync(jail.paths.disk).uid).toBe(USER.uid);
+});
+
+test('a template file goes to root, readable by all, only as a file with one name', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-tpl-'));
+  const mem = join(dir, 'mem');
+
+  writeFileSync(mem, 'm');
+  chmodSync(mem, 0o600);
+  linkSync(mem, join(dir, 'kept'));
+
+  expect(() => {
+    setupTemplateFile(mem);
+  }).toThrow('one name');
+
+  rmSync(join(dir, 'kept'));
+  setupTemplateFile(mem);
+
+  expect(lstatSync(mem).mode & 0o777).toBe(0o644);
 });

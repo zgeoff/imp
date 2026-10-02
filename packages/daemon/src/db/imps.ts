@@ -117,6 +117,9 @@ export interface ImpStateChange {
 // any account in the host image, and kept for the imp's life
 export const JAIL_UIDS = { first: 900_000, count: 65_536 } as const;
 
+// what every boot template build runs as, one at a time: below the imps'
+export const TEMPLATE_BUILD_UID = JAIL_UIDS.first - 1;
+
 // the lowest free uid of JAIL_UIDS; a destroyed imp's uid goes back
 async function allocateJailUid(db: ImpDatabase): Promise<number> {
   const rows = await db

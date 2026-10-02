@@ -432,12 +432,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       // cgroups of imps destroyed while impd was down, or whose remove failed
       const impIds = new Set(imps.map((imp) => imp.id));
 
-      for (const impId of context.cgroups.removeOrphans(impIds)) {
-        context.log(`impd: removed the cgroup of imp ${impId}: no imp has that id`);
-      }
-
+      // the jails first: their sweep kills every process of the uid, a
+      // template build's too, so the cgroups are empty for the rmdir
       for (const impId of await context.vms.removeOrphanJails(impIds)) {
         context.log(`impd: removed the jail of imp ${impId}: no imp has that id`);
+      }
+
+      for (const impId of context.cgroups.removeOrphans(impIds)) {
+        context.log(`impd: removed the cgroup of imp ${impId}: no imp has that id`);
       }
 
       await Promise.all(

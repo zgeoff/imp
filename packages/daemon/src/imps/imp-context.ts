@@ -1,6 +1,7 @@
 import { availableParallelism } from 'node:os';
 import type { EgressPolicy } from '@imp/api';
 import type { Config } from '../config';
+import { TEMPLATE_BUILD_UID } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { EventBus } from '../events/event-bus';
@@ -213,7 +214,8 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     egress: deps.egress ?? NO_EGRESS,
     cgroups,
     hostCpus: deps.hostCpus ?? availableParallelism(),
-    templates: deps.templates === undefined ? createDefaultTemplates(deps, log) : deps.templates,
+    templates:
+      deps.templates === undefined ? createDefaultTemplates(deps, cgroups, log) : deps.templates,
     resources: createResourceSampler({
       now: deps.now ?? Date.now,
       readCpuStat: cgroups.readCpuStat,
@@ -226,6 +228,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
 
 function createDefaultTemplates(
   deps: Readonly<ImpServiceDeps>,
+  cgroups: CpuCgroups,
   log: (message: string) => void,
 ): BootTemplates | null {
   if (!deps.config.bootTemplates) {
@@ -241,6 +244,9 @@ function createDefaultTemplates(
     bootReservePercent: deps.config.bootReservePercent,
     buildVm: deps.vms.buildTemplateVm,
     taps: deps.taps,
+    jail:
+      deps.config.jailerBin === null ? null : { uid: TEMPLATE_BUILD_UID, gid: TEMPLATE_BUILD_UID },
+    cgroups,
     admission: deps.admission,
     diskBudget: deps.diskBudget,
     log,

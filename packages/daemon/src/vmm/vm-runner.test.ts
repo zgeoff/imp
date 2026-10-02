@@ -15,6 +15,8 @@ import { buildBootArgs, createVmRunner } from './vm-runner';
 // a VM these tests start runs unjailed
 const NO_JAILS: Jails = {
   prepare: () => Promise.reject(new Error('no jails here')),
+  prepareBuild: () => Promise.reject(new Error('no jails here')),
+  setupDiskOwner: () => {},
   release: () => Promise.resolve(),
   sweepRunDir: () => Promise.resolve(),
   remove: () => Promise.resolve(),
