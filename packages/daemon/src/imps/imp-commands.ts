@@ -137,28 +137,30 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           await context.egress.addSlot(imp.slot);
 
           mkdirSync(paths.runDir, { recursive: true });
-
-          await (
-            input.prepareDisk ??
-            ((impId) =>
-              context.storage.createImpDisk(impId, { kind: 'image', digest: image.digest }))
-          )(imp.id);
         } catch (error) {
           await ops.writeFailure(imp, error);
 
           throw error;
         }
 
-        const cloneMs = Math.round(performance.now() - started);
+        const timing = { cloneMs: 0, sizeMs: 0 };
 
-        context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
+        const createDiskCopy = async () => {
+          await (
+            input.prepareDisk ??
+            ((impId) =>
+              context.storage.createImpDisk(impId, { kind: 'image', digest: image.digest }))
+          )(imp.id);
 
-        const sizeStarted = performance.now();
-        const timing = { sizeMs: 0 };
+          timing.cloneMs = Math.round(performance.now() - started);
+
+          context.log(`impd: ${imp.name}: disk cloned in ${String(timing.cloneMs)}ms`);
+        };
 
         // a fork or a restore takes its source's size, an image's disk grows
         // past the image's filesystem, and the filesystem with it
         const growNewDisk = async () => {
+          const sizeStarted = performance.now();
           const cloneBytes = readFileBytes(paths.disk);
           const sizedBytes = growDiskFile(paths.disk, diskBytes ?? 0);
 
@@ -176,9 +178,21 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return sized;
         };
 
+        const setupNewDisk = async () => {
+          await createDiskCopy();
+
+          return growNewDisk();
+        };
+
         // past the lifecycle table: no stop ever leaves `creating` otherwise
         if (input.start === false) {
-          await growNewDisk();
+          try {
+            await setupNewDisk();
+          } catch (error) {
+            await ops.writeFailure(imp, error);
+
+            throw error;
+          }
 
           const stopped = await updateImpState(context.db, imp.id, {
             reason: 'stopped',
@@ -188,9 +202,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return presenter.toApi(stopped);
         }
 
-        // the boot starts while the disk is sized: a template restore only
-        // needs the disk once its guest is parked
-        const sizing = growNewDisk();
+        // the boot starts while the disk is cloned and sized: a template
+        // restore only needs the disk once its guest is parked
+        const sizing = setupNewDisk();
 
         // handled now: the boot may fail before it looks at the disk
         void Promise.allSettled([sizing]);
@@ -206,10 +220,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const totalMs = Math.round(performance.now() - received);
 
-          // the server's side of `imp new`; size runs inside boot, and the
-          // boot's own steps are on its line
+          // the server's side of `imp new`; clone and size run inside boot,
+          // and the boot's own steps are on its line
           context.log(
-            `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(cloneMs)}ms size=${String(timing.sizeMs)}ms boot=${String(bootMs)}ms`,
+            `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(timing.cloneMs)}ms size=${String(timing.sizeMs)}ms boot=${String(bootMs)}ms`,
           );
 
           return presented;
