@@ -48,7 +48,9 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   `loop`. With ZFS, also `zfs`, `boot.supportedFilesystems.zfs`, and the ARC cap (`zfs.arcMaxMiB`)
   in `boot.extraModprobeConfig`.
 - **Storage:** the module expects the pool and never creates it. It needs `networking.hostId`, and
-  with `zfs.importPool` (the default) it adds the pool to `boot.zfs.extraPools`.
+  with `zfs.importPool` (the default) it adds the pool to `boot.zfs.extraPools`, and imports it by
+  `/dev/disk/by-partuuid` (`boot.zfs.devNodes`, a default you can override): virtio disks have no
+  serial, so `/dev/disk/by-id` has no link to them and the import finds the pool `MISSING`.
   `imp-zfs-dataset.service` runs after `zfs-import.target` and creates `zfs.root` (default
   `tank/imp`) with `mountpoint=legacy` only when it is missing. With `storage = "xfs"`, declare
   `/var/lib/imp` in `fileSystems`, as XFS with reflink; the module refuses the build without it.

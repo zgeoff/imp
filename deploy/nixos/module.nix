@@ -571,6 +571,10 @@ in
 
     boot.supportedFilesystems.zfs = lib.mkIf zfs true;
     boot.zfs.extraPools = lib.mkIf (zfs && cfg.zfs.importPool) [ cfg.zfs.pool ];
+    # Virtio disks have no serial, so /dev/disk/by-id (the default) has no
+    # link to them and the import finds the pool MISSING; ZFS partitions a
+    # whole disk, so by-partuuid has one.
+    boot.zfs.devNodes = lib.mkIf (zfs && cfg.zfs.importPool) (lib.mkDefault "/dev/disk/by-partuuid");
     boot.extraModprobeConfig = lib.mkIf (zfs && cfg.zfs.arcMaxMiB != null) ''
       options zfs zfs_arc_max=${toString (cfg.zfs.arcMaxMiB * 1024 * 1024)}
     '';

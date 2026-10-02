@@ -176,6 +176,12 @@ let
     ))
     (expect "a failing start stops after five tries" (unit.unitConfig.StartLimitBurst == 5))
     (expect "importPool = false imports nothing" (poolElsewhere.config.boot.zfs.extraPools == [ ]))
+    (expect "the pool imports by partuuid, which virtio disks have" (
+      zfsCfg.boot.zfs.devNodes == "/dev/disk/by-partuuid"
+    ))
+    (expect "importPool = false keeps the default devNodes" (
+      poolElsewhere.config.boot.zfs.devNodes == "/dev/disk/by-id"
+    ))
     (expect "the dataset waits for the pools" (
       lib.elem "zfs-import.target" zfsCfg.systemd.services.imp-zfs-dataset.after
     ))
