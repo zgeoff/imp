@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { readErrorMessage } from '../read-error-message';
+import { readRejection } from '../read-rejection';
 import { createKeyedMutex } from './keyed-mutex';
 
 test('it serializes tasks for one key and runs other keys alongside', async () => {
@@ -31,7 +33,9 @@ test('it keeps the queue moving after a task fails', async () => {
   const failed = mutex.runExclusive('a', () => Promise.reject(new Error('boom')));
   const next = mutex.runExclusive('a', () => Promise.resolve('ok'));
 
-  expect(failed).rejects.toThrow('boom');
+  const error = await readRejection(failed);
+
+  expect(readErrorMessage(error)).toBe('boom');
 
   const result = await next;
 
