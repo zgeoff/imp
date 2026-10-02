@@ -52,6 +52,9 @@ Options:
   --image-archive FILE        docker load FILE when REF is missing, instead of a pull
   --tailscale-authkey-file F  a tagged auth key for the host container's node
                               (or TAILSCALE_AUTHKEY in the environment)
+  --host-firewall own|none    own (default): an nft table admits SSH only;
+                              none: the platform owns the inbound firewall,
+                              and a table loaded by an earlier run is removed
   --ssh-port N                one more SSH port to keep open (repeatable)
   --skip-health               skip the closing health check
 EOF
@@ -83,6 +86,8 @@ image_archive=
 authkey=${TAILSCALE_AUTHKEY:-}
 authkey_file=
 extra_ssh_ports=()
+host_firewall=
+host_firewall_set=
 skip_health=
 changes=0
 in_container=
@@ -247,24 +252,25 @@ table inet imp_host {
 EOF
 }
 
-# render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT:
-# imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
+# render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT
+# HOST_FIREWALL: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
 # file) wins over TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE
 # is set when IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB
-# when it is empty or still the template's, IMP_STORAGE_BACKEND always, and
-# IMP_ZFS_ROOT when ZFS_ROOT is non-empty. TAILSCALE_AUTHKEY comes from the
+# when it is empty or still the template's, IMP_STORAGE_BACKEND and
+# IMP_HOST_FIREWALL always, and IMP_ZFS_ROOT when ZFS_ROOT is non-empty. TAILSCALE_AUTHKEY comes from the
 # environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
 # non-empty.
 render_env() {
   local base=$1 template=$2 budget=$3 img=$4 img_set=$5
   [ -z "$base" ] && base=$template && img_set=1
   BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
-    STORAGE=$6 ZFS_ROOT=$7 \
+    STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
       /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
       /^IMP_STORAGE_BACKEND=/ { set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"]); next }
       /^IMP_ZFS_ROOT=/ && ENVIRON["ZFS_ROOT"] != "" { set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"]); next }
+      /^IMP_HOST_FIREWALL=/ { set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"]); next }
       /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
         set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
       }
@@ -280,6 +286,7 @@ render_env() {
         if (!done["IMP_RAM_BUDGET_MIB"]) set("IMP_RAM_BUDGET_MIB", ENVIRON["BUDGET"])
         if (!done["IMP_STORAGE_BACKEND"]) set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"])
         if (!done["IMP_ZFS_ROOT"] && ENVIRON["ZFS_ROOT"] != "") set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"])
+        if (!done["IMP_HOST_FIREWALL"]) set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"])
       }
     ' <<<"$base"
 }
@@ -387,6 +394,12 @@ IMP_DEFAULT_MEMORY_MIB=2048
 IMP_STORAGE_BACKEND=xfs
 IMP_ZFS_ROOT=
 
+# Who owns the host's inbound firewall (docs/architecture/host-contract.md):
+# own, deploy/bootstrap.sh loads an nft table that admits SSH only; none, the
+# platform does (NixOS networking.firewall), and imp adds no host rules.
+# impd needs no inbound host port either way.
+IMP_HOST_FIREWALL=own
+
 # Off-host backups with restic (docs/architecture/backups.md): unset
 # IMP_BACKUP_REPOSITORY means none. The container sees /etc/imp read-only;
 # keep the password there, mode 0600, and a copy off the host.
@@ -457,6 +470,7 @@ parse_args() {
         shift
         ;;
       --ssh-port) extra_ssh_ports+=("${2:?--ssh-port needs a port}") && shift ;;
+      --host-firewall) host_firewall=${2:?--host-firewall needs own or none} host_firewall_set=1 && shift ;;
       --skip-health) skip_health=1 ;;
       -h | --help) usage && exit 0 ;;
       *) usage >&2 && die "unknown argument: $1" ;;
@@ -469,6 +483,7 @@ parse_args() {
   fi
   [[ $loop_size_gib =~ ^([1-9][0-9]*|auto)$ ]] || die "--loop-size must be a whole number of GiB, or auto"
   case ${storage:-xfs} in xfs | zfs) ;; *) die "--storage must be xfs or zfs" ;; esac
+  case ${host_firewall:-own} in own | none) ;; *) die "--host-firewall must be own or none" ;; esac
   if [ -n "$zfs_pool" ] && ! [[ $zfs_pool =~ ^[A-Za-z][A-Za-z0-9_.:-]*$ ]]; then
     die "--zfs-pool must be a pool name: $zfs_pool"
   fi
@@ -503,6 +518,7 @@ preflight() {
   grep -qwE 'vmx|svm' /proc/cpuinfo || die "the CPU reports neither vmx nor svm"
 
   resolve_storage
+  resolve_host_firewall
   if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
@@ -545,6 +561,15 @@ resolve_storage() {
   if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
     die "/etc/fstab has an entry for $DATA_DIR (XFS imps); ZFS would leave them behind"
   fi
+}
+
+# resolve_host_firewall: the flag, else the env file, else own.
+resolve_host_firewall() {
+  local env_value=""
+  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_FIREWALL=//p' "$ENV_FILE" | tail -n 1)
+  host_firewall=${host_firewall:-${env_value:-own}}
+  case $host_firewall in own | none) ;; *) die "$ENV_FILE says IMP_HOST_FIREWALL=$host_firewall; want own or none" ;; esac
+  log "host firewall: $host_firewall"
 }
 
 ensure_packages() {
@@ -879,6 +904,10 @@ memtotal_kib() { awk '/^MemTotal:/ { print $2 }' /proc/meminfo; }
 
 ensure_firewall() {
   phase firewall
+  if [ "$host_firewall" = none ]; then
+    remove_firewall
+    return
+  fi
   if systemctl -q is-enabled nftables 2>/dev/null; then
     die "nftables.service is enabled; its /etc/nftables.conf flushes every ruleset (Docker's too). Disable it first"
   fi
@@ -918,6 +947,39 @@ ensure_firewall() {
   else
     ensure_service imp-firewall
   fi
+}
+
+# remove_firewall: with none, take out what an earlier run with own put in,
+# but only when --host-firewall none asks for it; an env file that says none
+# beside a loaded table is drift for the operator to settle. Only our table
+# goes; the platform's rules stay.
+remove_firewall() {
+  local loaded=""
+  if [ -e /etc/systemd/system/imp-firewall.service ] || [ -e "$FIREWALL_FILE" ] \
+    || { command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; }; then
+    loaded=1
+  fi
+  if [ -z "$loaded" ]; then
+    log "host firewall: none; imp adds no host rules"
+    return
+  fi
+  if [ -z "$host_firewall_set" ]; then
+    local msg="IMP_HOST_FIREWALL=none, but imp-firewall is still installed; run with --host-firewall none to remove it"
+    dry || die "$msg"
+    warn "$msg"
+    changes=$((changes + 1))
+    return
+  fi
+  change "remove imp-firewall.service and the inet imp_host table" uninstall_firewall
+}
+
+uninstall_firewall() {
+  systemctl disable -q --now imp-firewall 2>/dev/null || true
+  if command -v nft >/dev/null && nft list table inet imp_host >/dev/null 2>&1; then
+    nft delete table inet imp_host || return 1
+  fi
+  rm -f /etc/systemd/system/imp-firewall.service "$FIREWALL_FILE"
+  systemctl daemon-reload
 }
 
 # check_ruleset RULESET: nft parses it against this kernel, so a bad ruleset
@@ -980,7 +1042,7 @@ ensure_imp() {
 
   local env changed=
   env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
-    "$storage" "$zfs_root")
+    "$storage" "$zfs_root" "$host_firewall")
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
   if [ "$storage" = zfs ]; then

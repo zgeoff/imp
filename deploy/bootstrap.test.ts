@@ -150,6 +150,7 @@ interface EnvInput {
   readonly key?: string;
   readonly storage?: string;
   readonly zfsRoot?: string;
+  readonly hostFirewall?: string;
 }
 
 function renderEnv(input: EnvInput): string {
@@ -161,6 +162,7 @@ function renderEnv(input: EnvInput): string {
     input.imageSet === true ? '1' : '',
     input.storage ?? 'xfs',
     input.zfsRoot ?? '',
+    input.hostFirewall ?? 'own',
   ];
 
   return runFunction('render_env', args, { env: { BOOTSTRAP_AUTHKEY: input.key ?? '' } });
@@ -181,6 +183,7 @@ test('a new env file is the template with the budget, the image and the key', ()
   expect(getEnvValues(env, 'TAILSCALE_AUTHKEY')).toEqual(['fake-key-for-tests']);
   expect(getEnvValues(env, 'IMP_STORAGE_BACKEND')).toEqual(['xfs']);
   expect(getEnvValues(env, 'IMP_ZFS_ROOT')).toEqual(['']);
+  expect(getEnvValues(env, 'IMP_HOST_FIREWALL')).toEqual(['own']);
   expect(getEnvValues(env, 'IMP_IDLE_TIMEOUT_S')).toEqual(['60']);
 });
 
@@ -215,6 +218,13 @@ test('zfs sets the backend and the dataset', () => {
   expect(renderEnv({ existing: env, storage: 'zfs', zfsRoot: 'tank/imp' })).toBe(env);
 });
 
+test('none replaces own, and stays on the next render', () => {
+  const env = renderEnv({ existing: template, hostFirewall: 'none' });
+
+  expect(getEnvValues(env, 'IMP_HOST_FIREWALL')).toEqual(['none']);
+  expect(renderEnv({ existing: env, hostFirewall: 'none' })).toBe(env);
+});
+
 test('missing keys are appended once, and rendering twice changes nothing', () => {
   const once = renderEnv({
     existing: 'IMP_IDLE_TIMEOUT_S=30',
@@ -223,7 +233,7 @@ test('missing keys are appended once, and rendering twice changes nothing', () =
   });
 
   expect(once).toBe(
-    'IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\nIMP_STORAGE_BACKEND=xfs\n',
+    'IMP_IDLE_TIMEOUT_S=30\nIMP_HOST_IMAGE=imp-host:1\nIMP_RAM_BUDGET_MIB=54400\nIMP_STORAGE_BACKEND=xfs\nIMP_HOST_FIREWALL=own\n',
   );
 
   expect(renderEnv({ existing: once, image: 'imp-host:1', imageSet: true })).toBe(once);
