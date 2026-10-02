@@ -125,18 +125,36 @@ export async function stopPebbleStack(prefix: string): Promise<void> {
   await runCommand(['docker', 'network', 'rm', names.network]);
 }
 
-// The harness's stack, and the env that scripts/dev.sh hands impd, so the
-// dev instance joins the stack's network and gets its certificate from Pebble.
+// The harness's stack, which the https suite reboots the dev instance onto
 export async function startPebble(): Promise<void> {
-  const endpoints = await startPebbleStack(instance.container);
+  await startPebbleStack(instance.container);
+}
 
-  process.env['IMP_DEV_NETWORK'] = buildNames(instance.container).network;
-  process.env['IMP_E2E'] = '1';
-  process.env['IMP_DOMAIN'] = PEBBLE_DOMAIN;
-  process.env['IMP_DNS_PROVIDER'] = 'challtestsrv';
-  process.env['IMP_DNS_API_URL'] = 'http://challtestsrv:8055';
-  process.env['IMP_ACME_DIRECTORY'] = 'https://pebble:14000/dir';
-  process.env['IMP_ACME_CA_FILE'] = endpoints.minicaFile;
+// true when the harness started the stack for this run
+export function isPebbleRunning(): boolean {
+  const inspect = Bun.spawnSync(
+    ['docker', 'inspect', '-f', '{{.State.Running}}', buildNames(instance.container).pebble],
+    { stdout: 'pipe', stderr: 'ignore' },
+  );
+
+  return inspect.stdout.toString().trim() === 'true';
+}
+
+// The env that scripts/dev.sh hands impd, so the dev instance joins the
+// stack's network and gets its certificate from Pebble. Only the https suite
+// sets it, and removes it when it ends.
+export function buildPebbleEnv(): Readonly<Record<string, string>> {
+  const names = buildNames(instance.container);
+
+  return {
+    IMP_DEV_NETWORK: names.network,
+    IMP_E2E: '1',
+    IMP_DOMAIN: PEBBLE_DOMAIN,
+    IMP_DNS_PROVIDER: 'challtestsrv',
+    IMP_DNS_API_URL: 'http://challtestsrv:8055',
+    IMP_ACME_DIRECTORY: 'https://pebble:14000/dir',
+    IMP_ACME_CA_FILE: names.minicaFile,
+  };
 }
 
 export function stopPebble(): Promise<void> {
