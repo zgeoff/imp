@@ -1,6 +1,6 @@
 #!/bin/bash
-# Run shellcheck over every tracked shell file under scripts/, host/, kernel/
-# and test/.
+# Run shellcheck over every tracked shell file under scripts/, host/, kernel/,
+# deploy/ and test/.
 # A file counts as shell when it ends in .sh, starts with a shell shebang
 # (scripts/imp, host/entrypoint), or carries a `# shellcheck shell=` directive
 # (sourced libraries such as scripts/lib.sh).
@@ -44,7 +44,7 @@ files=()
 while IFS= read -r file; do
   is_excluded "$file" && continue
   is_shell "$file" && files+=("$file")
-done < <(git ls-files scripts host kernel test)
+done < <(git ls-files scripts host kernel deploy test)
 
 # -x follows `source` lines, so lib.sh functions resolve in their callers
 shellcheck -x "${files[@]}"

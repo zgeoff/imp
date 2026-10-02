@@ -1,0 +1,781 @@
+#!/bin/bash
+# Take a fresh Ubuntu 24.04 or Debian 13 server to a running imp host
+# (docs/guides/install.md, "Bootstrap a server"). Run as root:
+#
+#   bootstrap.sh --yes --data-device /dev/nvme1n1
+#   bootstrap.sh --yes --loop-file /srv/imp.xfs --loop-size 400
+#   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 1 if a run would change anything
+#
+# Phases, in order: preflight, packages, storage, kernel, firewall, imp,
+# health. Each phase compares the host with what it wants and changes only
+# the difference, so a second run changes nothing. --dry-run prints the
+# changes instead of making them.
+#
+# The script is self-contained, so it runs on a server without a checkout:
+# it embeds deploy/imp-host.service and deploy/imp-host.env.example (a test
+# keeps the copies equal to those files).
+#
+# The Tailscale key comes from --tailscale-authkey-file or TAILSCALE_AUTHKEY
+# and goes only to /etc/imp/imp-host.env (0600). It is never printed and
+# never put in argv. Never run this script with `bash -x`.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bootstrap.sh [--yes | --dry-run | --check] STORAGE [options]
+
+Modes (one):
+  --yes                       make the changes
+  --dry-run                   print the changes, make none
+  --check                     like --dry-run; exit 1 if any change is pending
+
+Storage (one):
+  --data-device DEV           an empty disk or partition for /var/lib/imp; it gets
+                              XFS with reflink. A device with any other
+                              signature, partitions or mounts is refused.
+  --loop-file PATH            a sparse XFS file on the root filesystem instead
+  --loop-size GIB             its apparent size (default 200)
+
+Options:
+  --image REF                 host image (default ghcr.io/zgeoff/imp-host:latest)
+  --image-archive FILE        docker load FILE when REF is missing, instead of a pull
+  --tailscale-authkey-file F  a tagged auth key for the host container's node
+                              (or TAILSCALE_AUTHKEY in the environment)
+  --ssh-port N                one more SSH port to keep open (repeatable)
+  --skip-health               skip the closing health check
+EOF
+}
+
+readonly IMP_DIR=/etc/imp
+readonly ENV_FILE=$IMP_DIR/imp-host.env
+readonly FIREWALL_FILE=$IMP_DIR/firewall.nft
+readonly DATA_DIR=/var/lib/imp
+readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# The template's IMP_RAM_BUDGET_MIB; a file still holding it gets the
+# computed budget, any other value is the operator's and stays.
+readonly TEMPLATE_BUDGET_MIB=16384
+# Below this much free space on the root filesystem, a loop file is refused.
+readonly LOOP_MIN_FREE_GIB=20
+
+mode=
+data_device=
+loop_file=
+loop_size_gib=200
+image=$DEFAULT_IMAGE
+image_set=
+image_archive=
+authkey=${TAILSCALE_AUTHKEY:-}
+extra_ssh_ports=()
+skip_health=
+changes=0
+in_container=
+
+# --- output and change tracking ---
+
+log() { echo "bootstrap: $*"; }
+warn() { echo "bootstrap: WARNING: $*" >&2; }
+die() {
+  echo "bootstrap: $*" >&2
+  exit 1
+}
+phase() { echo "== $*"; }
+
+dry() { [ "$mode" != yes ]; }
+
+# change DESCRIPTION CMD...: count a change, then run CMD (with --yes) or
+# print the description only. DESCRIPTION must never hold a secret.
+change() {
+  local what=$1
+  shift
+  changes=$((changes + 1))
+  if dry; then
+    log "would: $what"
+    return 0
+  fi
+  log "change: $what"
+  "$@"
+}
+
+# put_file PATH MODE CONTENT: write PATH when its content or mode differs.
+# Returns 0 when it changed (or would change), 1 when it was already right.
+# CONTENT may be secret: it goes through printf, a builtin, so not to argv.
+put_file() {
+  local path=$1 perm=$2 content=$3
+  if [ -f "$path" ] && [ "$(stat -c %a "$path")" = "$perm" ] \
+    && [ "$(cat "$path")" = "$content" ]; then
+    return 1
+  fi
+  change "write $path (mode $perm)" write_file "$path" "$perm" "$content"
+}
+
+write_file() {
+  local path=$1 perm=$2 content=$3 tmp
+  mkdir -p "$(dirname "$path")"
+  tmp=$(mktemp "$path.XXXXXX")
+  chmod "$perm" "$tmp"
+  printf '%s\n' "$content" >"$tmp"
+  mv "$tmp" "$path"
+}
+
+# --- pure helpers (deploy/bootstrap.test.ts covers them) ---
+
+# version_ge A B: A >= B for dotted versions.
+version_ge() {
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$2" ]
+}
+
+# ram_budget_mib MEMTOTAL_KIB: the RAM awake imps may use. The host keeps
+# the larger of 8 GiB and 15 % for itself, Docker, impd and the page cache.
+ram_budget_mib() {
+  local total=$(($1 / 1024)) reserve
+  reserve=$((total * 15 / 100))
+  [ "$reserve" -lt 8192 ] && reserve=8192
+  echo $((total - reserve))
+}
+
+# mkfs_xfs_opts KERNEL XFSPROGS: the mkfs.xfs options for an XFS this kernel
+# can mount. Each feature is turned off only when xfsprogs knows the option
+# (an older mkfs.xfs rejects it) and the kernel cannot mount it.
+mkfs_xfs_opts() {
+  local kernel=$1 progs=$2 inode=()
+  local opts=(-m reflink=1)
+  if version_ge "$progs" 5.19 && ! version_ge "$kernel" 5.19; then
+    inode+=(nrext64=0)
+  fi
+  if version_ge "$progs" 6.13 && ! version_ge "$kernel" 6.10; then
+    inode+=(exchange=0)
+  fi
+  if [ ${#inode[@]} -gt 0 ]; then
+    opts+=(-i "$(
+      IFS=,
+      echo "${inode[*]}"
+    )")
+  fi
+  if version_ge "$progs" 6.13 && ! version_ge "$kernel" 6.12; then
+    opts+=(-n parent=0)
+  fi
+  echo "${opts[*]}"
+}
+
+# fstab_line SOURCE KIND: the /etc/fstab entry for /var/lib/imp. nofail: a
+# missing disk must not stop the boot; the host container then refuses to
+# start, because nothing is mounted.
+fstab_line() {
+  case $2 in
+    device) printf '%s %s xfs defaults,nofail 0 2\n' "$1" "$DATA_DIR" ;;
+    loop) printf '%s %s xfs loop,nofail 0 0\n' "$1" "$DATA_DIR" ;;
+  esac
+}
+
+# ssh_ports_from_sshd_t: ports from `sshd -T` output on stdin.
+ssh_ports_from_sshd_t() { awk 'tolower($1) == "port" { print $2 }'; }
+
+# ssh_ports_from_listen: ports from systemd socket Listen= values or `ss`
+# local addresses on stdin, such as "[::]:22 (Stream)" or "0.0.0.0:2222".
+ssh_ports_from_listen() { grep -oE ':[0-9]+( |$)' | tr -d ': '; }
+
+# render_firewall PORT...: the nft ruleset. One transaction: create the
+# table, delete it, create it again, so a reload replaces only our rules and
+# never Docker's. Input only; Docker owns forwarding. The host itself is not
+# a tailnet node (the host container is, and its traffic is forwarded), so no
+# Tailscale port is open.
+render_firewall() {
+  local ports
+  ports=$(printf '%s\n' "$@" | sort -nu | paste -sd, - | sed 's/,/, /g')
+  cat <<EOF
+# imp host firewall, written by deploy/bootstrap.sh. Loaded by
+# imp-firewall.service. Inbound: SSH only.
+table inet imp_host
+delete table inet imp_host
+table inet imp_host {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto icmp accept
+		meta l4proto ipv6-icmp accept
+		udp dport 68 accept comment "DHCPv4 client"
+		udp dport 546 accept comment "DHCPv6 client"
+		tcp dport { $ports } accept comment "SSH"
+	}
+}
+EOF
+}
+
+# render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET: imp-host.env with
+# bootstrap's keys set. EXISTING (empty when there is no file) wins over
+# TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE is set when
+# IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB when it is
+# empty or still the template's. TAILSCALE_AUTHKEY comes from the
+# environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
+# non-empty.
+render_env() {
+  local base=$1 template=$2 budget=$3 img=$4 img_set=$5
+  [ -z "$base" ] && base=$template && img_set=1
+  BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
+    awk '
+      function set(key, value) { print key "=" value; done[key] = 1 }
+      /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
+      /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
+        set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
+      }
+      /^IMP_RAM_BUDGET_MIB=/ {
+        value = substr($0, length("IMP_RAM_BUDGET_MIB=") + 1)
+        if (value == "" || value == ENVIRON["TEMPLATE_BUDGET"]) { set("IMP_RAM_BUDGET_MIB", ENVIRON["BUDGET"]); next }
+        done["IMP_RAM_BUDGET_MIB"] = 1
+      }
+      { print }
+      END {
+        if (!done["IMP_HOST_IMAGE"] && ENVIRON["IMG_SET"] != "") set("IMP_HOST_IMAGE", ENVIRON["IMG"])
+        if (!done["TAILSCALE_AUTHKEY"] && ENVIRON["BOOTSTRAP_AUTHKEY"] != "") set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"])
+        if (!done["IMP_RAM_BUDGET_MIB"]) set("IMP_RAM_BUDGET_MIB", ENVIRON["BUDGET"])
+      }
+    ' <<<"$base"
+}
+
+# --- embedded deploy files: keep equal to deploy/ (the test checks) ---
+
+unit_imp_host() {
+  cat <<'EOF'
+# imp host as a systemd service. One of the two supported ways to run the
+# release image; deploy/compose.yaml is the other. Run one, not both.
+#
+#   install -m 0644 deploy/imp-host.service /etc/systemd/system/
+#   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
+#   systemctl daemon-reload && systemctl enable --now imp-host
+#
+# /var/lib/imp must be XFS with reflink (docs/guides/install.md).
+[Unit]
+Description=imp host (impd, Firecracker, tailscaled)
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+EnvironmentFile=/etc/imp/imp-host.env
+# A container left over from a crash would hold the name.
+ExecStartPre=-/usr/bin/docker rm -f imp-host
+# In the foreground and without a docker restart policy: systemd supervises
+# it and restarts it on failure.
+ExecStart=/usr/bin/docker run --rm --name imp-host \
+  --init --privileged --device /dev/kvm \
+  --env-file /etc/imp/imp-host.env \
+  -v /var/lib/imp:/var/lib/imp \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
+  ${IMP_HOST_IMAGE}
+# SIGTERM makes impd sleep every awake imp, so memory survives; it gets up
+# to 120 s, and systemd waits a little longer before it kills anything.
+ExecStop=/usr/bin/docker stop -t 120 imp-host
+TimeoutStopSec=150
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+env_template() {
+  cat <<'EOF'
+# imp host settings. Copy to /etc/imp/imp-host.env (mode 0600: it holds the
+# Tailscale key). Both deploy/imp-host.service and deploy/compose.yaml pass
+# it to the container. docs/guides/configuration.md lists every variable.
+#
+# docker --env-file format: KEY=value, one per line, no quotes, no
+# expansion. An empty value counts as unset.
+
+# The image to run. The systemd unit reads it; compose reads it from the
+# shell or a .env next to compose.yaml.
+IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+
+# A tagged, non-ephemeral auth key (docs/guides/tailscale.md). Without one
+# the host is local-only: the API listens on 127.0.0.1:7070 and no imp is
+# reachable from elsewhere.
+TAILSCALE_AUTHKEY=
+IMP_TAILSCALE_HOSTNAME=imp
+
+# The RAM awake imps may use, in MiB. Leave room for the host itself.
+IMP_RAM_BUDGET_MIB=16384
+IMP_IDLE_TIMEOUT_S=60
+IMP_DEFAULT_IMAGE=base
+IMP_DEFAULT_VCPUS=2
+IMP_DEFAULT_MEMORY_MIB=2048
+
+# Set when the uplink MTU is below 1500, so guest TCP is clamped to match.
+IMP_UPLINK_MTU=
+EOF
+}
+
+unit_imp_firewall() {
+  cat <<EOF
+# Written by deploy/bootstrap.sh. Loads $FIREWALL_FILE before the network
+# comes up, as Debian's nftables.service does.
+[Unit]
+Description=imp host firewall (inbound SSH only)
+DefaultDependencies=no
+Wants=network-pre.target
+Before=network-pre.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f $FIREWALL_FILE
+ExecReload=/usr/sbin/nft -f $FIREWALL_FILE
+ExecStop=/usr/sbin/nft delete table inet imp_host
+
+[Install]
+WantedBy=sysinit.target
+EOF
+}
+
+# --- phases ---
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --yes | --dry-run | --check)
+        [ -n "$mode" ] && die "give one of --yes, --dry-run and --check"
+        mode=${1#--}
+        ;;
+      --data-device) data_device=${2:?--data-device needs a device} && shift ;;
+      --loop-file) loop_file=${2:?--loop-file needs a path} && shift ;;
+      --loop-size) loop_size_gib=${2:?--loop-size needs GiB} && shift ;;
+      --image) image=${2:?--image needs a reference} image_set=1 && shift ;;
+      --image-archive) image_archive=${2:?--image-archive needs a file} && shift ;;
+      --tailscale-authkey-file)
+        [ -r "${2:-}" ] || die "--tailscale-authkey-file: cannot read ${2:-}"
+        authkey=$(tr -d '[:space:]' <"$2")
+        shift
+        ;;
+      --ssh-port) extra_ssh_ports+=("${2:?--ssh-port needs a port}") && shift ;;
+      --skip-health) skip_health=1 ;;
+      -h | --help) usage && exit 0 ;;
+      *) usage >&2 && die "unknown argument: $1" ;;
+    esac
+    shift
+  done
+  [ -n "$mode" ] || { usage >&2 && die "give one of --yes, --dry-run and --check"; }
+  if [ -n "$data_device" ] && [ -n "$loop_file" ]; then
+    die "give --data-device or --loop-file, not both"
+  fi
+  [[ $loop_size_gib =~ ^[1-9][0-9]*$ ]] || die "--loop-size must be a whole number of GiB"
+  local port
+  for port in "${extra_ssh_ports[@]}"; do
+    [[ $port =~ ^[1-9][0-9]*$ ]] || die "--ssh-port must be a port number: $port"
+  done
+}
+
+preflight() {
+  phase preflight
+  [ "$(id -u)" = 0 ] || die "run as root"
+  if systemd-detect-virt -q --container 2>/dev/null; then
+    in_container=1
+    warn "running in a container: kernel settings are written, not applied"
+  fi
+  # The dev box is WSL2 Ubuntu; a stray run there must not touch it. A test
+  # container on that box shares its kernel but is allowed (see above).
+  if grep -qi microsoft /proc/sys/kernel/osrelease && [ -z "$in_container" ]; then
+    die "refusing to run on WSL; this script is for a bare-metal server"
+  fi
+
+  # shellcheck source=/dev/null
+  . /etc/os-release
+  case "${ID:-}:${VERSION_ID:-}" in
+    ubuntu:24.04 | debian:13) log "OS: $PRETTY_NAME" ;;
+    *) die "unsupported OS ${PRETTY_NAME:-unknown}; use Ubuntu 24.04 or Debian 13" ;;
+  esac
+  [ "$(uname -m)" = x86_64 ] || die "the host image is x86_64 only"
+
+  [ -c /dev/kvm ] || die "/dev/kvm is missing; enable VT-x/AMD-V in the firmware"
+  grep -qwE 'vmx|svm' /proc/cpuinfo || die "the CPU reports neither vmx nor svm"
+
+  if [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
+    die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
+  fi
+  if [ -z "$authkey" ]; then
+    warn "no Tailscale key: the host stays local-only (docs/guides/tailscale.md)"
+  fi
+}
+
+ensure_packages() {
+  phase packages
+  local wanted=(ca-certificates curl gnupg xfsprogs nftables jq iproute2 util-linux)
+  local pkg missing=()
+  for pkg in "${wanted[@]}"; do
+    dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || missing+=("$pkg")
+  done
+  if [ ${#missing[@]} -gt 0 ]; then
+    change "apt-get install ${missing[*]}" apt_install "${missing[@]}"
+  fi
+  ensure_docker
+}
+
+# apt_install PKG...: apt's output goes to a log, shown only on failure.
+apt_install() {
+  local apt_log=/var/log/imp-bootstrap-apt.log
+  if ! {
+    apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends "$@"
+  } >"$apt_log" 2>&1; then
+    tail -n 20 "$apt_log" >&2
+    die "apt-get install $* failed; the whole log is in $apt_log"
+  fi
+}
+
+# Docker CE from Docker's apt repo, as host/Dockerfile uses. A Docker that is
+# already installed (docker-ce or the distro's docker.io) is kept.
+ensure_docker() {
+  local pkg
+  for pkg in docker-ce docker.io; do
+    if dpkg-query -W -f '${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+      log "docker: $pkg is installed"
+      ensure_service docker
+      return
+    fi
+  done
+  # shellcheck source=/dev/null
+  . /etc/os-release
+  local key=/etc/apt/keyrings/docker.asc
+  if [ ! -s "$key" ]; then
+    change "fetch Docker's apt key to $key" fetch_docker_key "$key" "$ID"
+  fi
+  put_file /etc/apt/sources.list.d/docker.list 644 \
+    "deb [arch=amd64 signed-by=$key] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" || true
+  change "apt-get install docker-ce" apt_install docker-ce docker-ce-cli containerd.io
+  ensure_service docker
+}
+
+fetch_docker_key() {
+  install -m 0755 -d "$(dirname "$1")"
+  curl -fsSL "https://download.docker.com/linux/$2/gpg" -o "$1"
+  chmod 0644 "$1"
+}
+
+# ensure_service UNIT: enabled and active.
+ensure_service() {
+  systemctl -q is-enabled "$1" 2>/dev/null || change "enable $1" systemctl enable -q "$1"
+  systemctl -q is-active "$1" 2>/dev/null || change "start $1" systemctl start "$1"
+}
+
+# Storage backends: xfs now; ZFS (#11) adds storage_zfs and a flag.
+ensure_storage() {
+  phase storage
+  storage_xfs
+}
+
+storage_xfs() {
+  if mountpoint -q "$DATA_DIR"; then
+    check_xfs_reflink
+    grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab \
+      || warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
+  else
+    local source
+    if [ -n "$data_device" ]; then
+      prepare_device "$data_device"
+      source=$(device_source "$data_device")
+      ensure_fstab "$(fstab_line "$source" device)"
+    else
+      prepare_loop_file
+      ensure_fstab "$(fstab_line "$loop_file" loop)"
+    fi
+    change "mount $DATA_DIR" mount_data
+    dry || check_xfs_reflink
+  fi
+  local dir
+  for dir in db system images imps; do
+    [ -d "$DATA_DIR/$dir" ] || change "mkdir $DATA_DIR/$dir" mkdir -p "$DATA_DIR/$dir"
+  done
+}
+
+mount_data() {
+  mkdir -p "$DATA_DIR"
+  systemctl daemon-reload
+  mount "$DATA_DIR"
+}
+
+check_xfs_reflink() {
+  [ "$(findmnt -n -o FSTYPE --mountpoint "$DATA_DIR")" = xfs ] \
+    || die "$DATA_DIR is mounted but not XFS; imp needs XFS with reflink"
+  [[ $(xfs_info "$DATA_DIR") == *reflink=1* ]] \
+    || die "$DATA_DIR is XFS without reflink; recreate it with mkfs.xfs -m reflink=1"
+  log "$DATA_DIR is XFS with reflink"
+}
+
+# device_source DEV: UUID=… once DEV has a filesystem; the device path in a
+# dry run, before mkfs.
+device_source() {
+  local uuid
+  uuid=$(blkid -s UUID -o value "$1" 2>/dev/null || true)
+  if [ -n "$uuid" ]; then echo "UUID=$uuid"; else echo "$1"; fi
+}
+
+# prepare_device DEV: refuse anything that may hold data, then mkfs it. A
+# device that already holds an XFS with reflink is reused (a second run).
+prepare_device() {
+  local dev=$1
+  [ -b "$dev" ] || die "$dev is not a block device"
+  dev=$(readlink -f "$dev")
+  local root_disk
+  root_disk=$(findmnt -n -o SOURCE / | sed 's/\[.*//')
+  if lsblk -n -s -o PATH "$root_disk" 2>/dev/null | grep -qx "$dev"; then
+    die "$dev holds the root filesystem"
+  fi
+  if [ -n "$(lsblk -n -o MOUNTPOINTS "$dev" | tr -d '[:space:]')" ]; then
+    die "$dev or a partition on it is mounted"
+  fi
+  if [ "$(lsblk -n -o PATH "$dev" | wc -l)" -gt 1 ]; then
+    die "$dev has partitions or holders (RAID, LVM); give an empty disk or partition"
+  fi
+  local fstype
+  fstype=$(blkid -p -s TYPE -o value "$dev" 2>/dev/null || true)
+  case $fstype in
+    xfs) log "$dev already holds XFS; reusing it" ;;
+    "")
+      if blkid -p "$dev" >/dev/null 2>&1; then
+        die "$dev carries a signature (a partition table?); wipe it by hand if it is free"
+      fi
+      # shellcheck disable=SC2046 # the options are words
+      change "mkfs.xfs $dev" mkfs.xfs -q $(mkfs_xfs_opts "$(uname -r)" "$(xfsprogs_version)") "$dev"
+      ;;
+    *) die "$dev holds $fstype; give an empty disk or partition" ;;
+  esac
+}
+
+prepare_loop_file() {
+  local dir avail_gib
+  dir=$(dirname "$loop_file")
+  [ "$(findmnt -n -o TARGET --target "$dir")" = / ] \
+    || die "--loop-file must be on the root filesystem, which mounts before $DATA_DIR"
+  if [ -e "$loop_file" ]; then
+    [ "$(blkid -p -s TYPE -o value "$loop_file" 2>/dev/null || true)" = xfs ] \
+      || die "$loop_file exists and is not XFS"
+    log "$loop_file already holds XFS; reusing it"
+    return
+  fi
+  avail_gib=$(($(df --output=avail -k / | tail -n 1) / 1024 / 1024))
+  [ "$avail_gib" -ge "$LOOP_MIN_FREE_GIB" ] \
+    || die "only ${avail_gib} GiB free on /; a loop file needs at least ${LOOP_MIN_FREE_GIB}"
+  if [ "$avail_gib" -lt "$loop_size_gib" ]; then
+    warn "$loop_file is sparse: ${loop_size_gib} GiB apparent, ${avail_gib} GiB free on /"
+  fi
+  change "create a ${loop_size_gib} GiB sparse XFS file $loop_file" make_loop_file
+}
+
+make_loop_file() {
+  mkdir -p "$(dirname "$loop_file")"
+  truncate -s "${loop_size_gib}G" "$loop_file"
+  # shellcheck disable=SC2046 # the options are words
+  mkfs.xfs -q $(mkfs_xfs_opts "$(uname -r)" "$(xfsprogs_version)") "$loop_file"
+}
+
+xfsprogs_version() {
+  if command -v mkfs.xfs >/dev/null; then
+    mkfs.xfs -V | grep -oE '[0-9]+(\.[0-9]+)+'
+  else
+    echo 0 # a dry run before the package is installed
+  fi
+}
+
+ensure_fstab() {
+  local line=$1
+  if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
+    grep -qxF "$line" /etc/fstab \
+      || die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first"
+    return
+  fi
+  change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line"
+}
+
+append_line() { printf '%s\n' "$2" >>"$1"; }
+
+ensure_kernel() {
+  phase kernel
+  local sysctls=$'# Written by deploy/bootstrap.sh.\n# Guests are sized past RAM by design: the governor sleeps imps to keep the\n# awake ones under IMP_RAM_BUDGET_MIB, so large sparse maps must not fail.\nvm.overcommit_memory = 1\n# Keep guest memory in RAM. Swap stays as the installer made it, but the\n# governor measures RAM per VM, and swapped guest pages would hide from it.\nvm.swappiness = 1'
+  local modules=$'# Written by deploy/bootstrap.sh.\nkvm\ntun\nloop'
+  put_file /etc/sysctl.d/90-imp.conf 644 "$sysctls" || true
+  put_file /etc/modules-load.d/imp.conf 644 "$modules" || true
+
+  if [ -n "$in_container" ]; then
+    log "container: not applying sysctls or loading modules (they are global to the kernel)"
+    return
+  fi
+  local key want
+  while read -r key want; do
+    [ "$(sysctl -n "$key")" = "$want" ] || change "sysctl $key=$want" sysctl -qw "$key=$want"
+  done <<<$'vm.overcommit_memory 1\nvm.swappiness 1'
+  local mod
+  for mod in kvm tun loop; do
+    [ -d "/sys/module/$mod" ] || change "modprobe $mod" modprobe "$mod"
+  done
+  local swap
+  swap=$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+  log "swap: ${swap} MiB, left as it is"
+}
+
+ensure_firewall() {
+  phase firewall
+  if systemctl -q is-enabled nftables 2>/dev/null; then
+    die "nftables.service is enabled; its /etc/nftables.conf flushes every ruleset (Docker's too). Disable it first"
+  fi
+  if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; then
+    change "disable ufw (imp-firewall.service replaces it)" disable_ufw
+  fi
+  if systemctl -q is-active firewalld 2>/dev/null; then
+    change "stop and disable firewalld (imp-firewall.service replaces it)" systemctl disable -q --now firewalld
+  fi
+
+  local ports
+  mapfile -t ports < <(ssh_ports)
+  [ ${#ports[@]} -gt 0 ] || die "found no SSH port; give --ssh-port"
+  local session_port
+  session_port=$(awk '{ print $4 }' <<<"${SSH_CONNECTION:-}")
+  if [ -n "$session_port" ] && ! printf '%s\n' "${ports[@]}" | grep -qx "$session_port"; then
+    die "this SSH session uses port $session_port, which sshd does not report; give --ssh-port $session_port"
+  fi
+  log "SSH ports kept open: ${ports[*]}"
+  if sshd -T 2>/dev/null | grep -qi '^passwordauthentication yes'; then
+    warn "sshd allows password logins; set PasswordAuthentication no"
+  fi
+
+  local changed=
+  put_file "$FIREWALL_FILE" 644 "$(render_firewall "${ports[@]}")" && changed=1
+  put_file /etc/systemd/system/imp-firewall.service 644 "$(unit_imp_firewall)" && changed=1
+  if [ -n "$changed" ]; then
+    change "load the firewall" reload_unit imp-firewall
+  else
+    ensure_service imp-firewall
+  fi
+}
+
+disable_ufw() {
+  ufw --force disable >/dev/null
+  systemctl disable -q ufw
+}
+
+# ssh_ports: the union of the configured and the live SSH ports, plus
+# --ssh-port. Ubuntu 24.04 starts sshd from ssh.socket, so sshd -T may not
+# know the port the socket listens on.
+ssh_ports() {
+  {
+    sshd -T 2>/dev/null | ssh_ports_from_sshd_t || true
+    if systemctl -q is-active ssh.socket 2>/dev/null; then
+      systemctl show -p Listen --value ssh.socket | ssh_ports_from_listen || true
+    fi
+    ss -Hltnp 2>/dev/null | awk '/"sshd/ { print $4 }' | ssh_ports_from_listen || true
+    printf '%s\n' "${extra_ssh_ports[@]}"
+  } | grep -E '^[0-9]+$' | sort -nu
+}
+
+reload_unit() {
+  systemctl daemon-reload
+  systemctl enable -q "$1"
+  systemctl restart "$1"
+}
+
+ensure_imp() {
+  phase imp
+  local existing="" memtotal budget
+  [ -f "$ENV_FILE" ] && existing=$(cat "$ENV_FILE")
+  memtotal=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+  budget=$(ram_budget_mib "$memtotal")
+  log "RAM: $((memtotal / 1024)) MiB, budget for awake imps ${budget} MiB"
+
+  local env changed=
+  env=$(BOOTSTRAP_AUTHKEY=$authkey render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set")
+  put_file "$ENV_FILE" 600 "$env" && changed=1
+  put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
+
+  # The image the unit runs: the env file's, which an operator may pin.
+  local run_image
+  run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
+  ensure_image "${run_image:-$DEFAULT_IMAGE}"
+
+  if [ -n "$changed" ]; then
+    change "restart imp-host" reload_unit imp-host
+  else
+    ensure_service imp-host
+  fi
+}
+
+ensure_image() {
+  local ref=$1
+  if command -v docker >/dev/null && docker image inspect "$ref" >/dev/null 2>&1; then
+    log "image $ref is present"
+    return
+  fi
+  if [ -n "$image_archive" ]; then
+    [ -r "$image_archive" ] || die "cannot read $image_archive"
+    change "docker load $ref from $image_archive" load_image "$ref"
+  else
+    change "docker pull $ref" docker pull -q "$ref"
+  fi
+}
+
+load_image() {
+  docker load -q -i "$image_archive" >/dev/null
+  docker image inspect "$1" >/dev/null 2>&1 || die "$image_archive does not hold $1"
+}
+
+health() {
+  phase health
+  local name=bootstrap-check
+  wait_for "impd to answer" 120 docker exec imp-host imp info
+  docker exec imp-host imp info
+
+  # Nothing may be published past loopback; the tailnet reaches impd through
+  # the container's own tailscaled.
+  local published
+  published=$(docker port imp-host)
+  if grep -vE ' -> 127\.0\.0\.1:' <<<"$published" | grep -q .; then
+    die "imp-host publishes a port beyond loopback: $published"
+  fi
+
+  # On a new host impd adds ubuntu:24.04 as `ubuntu` after it starts.
+  wait_for "the ubuntu image" 600 has_ubuntu_image
+  trap 'docker exec imp-host imp rm '"$name"' >/dev/null 2>&1 || true' EXIT
+  docker exec imp-host imp rm "$name" >/dev/null 2>&1 || true
+  docker exec imp-host imp new "$name" --image ubuntu
+  docker exec imp-host imp exec "$name" -- uname -a
+  docker exec imp-host imp rm "$name"
+  trap - EXIT
+  log "health: impd answered; created, ran and destroyed an imp"
+}
+
+has_ubuntu_image() { docker exec imp-host imp image ls 2>/dev/null | grep -q '^ubuntu '; }
+
+# wait_for WHAT SECONDS CMD...: retry CMD once a second until it succeeds.
+wait_for() {
+  local what=$1 seconds=$2 i
+  shift 2
+  for i in $(seq "$seconds"); do
+    "$@" >/dev/null 2>&1 && return 0
+    [ "$i" = "$seconds" ] || sleep 1
+  done
+  die "gave up waiting ${seconds} s for $what; see journalctl -u imp-host"
+}
+
+main() {
+  parse_args "$@"
+  preflight
+  ensure_packages
+  ensure_storage
+  ensure_kernel
+  ensure_firewall
+  ensure_imp
+  if dry; then
+    log "$changes change(s) pending"
+    [ "$mode" = check ] && [ "$changes" -gt 0 ] && exit 1
+    exit 0
+  fi
+  log "$changes change(s) made"
+  [ -n "$skip_health" ] || health
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
