@@ -3,12 +3,14 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveImageName } from '../lib/fixtures';
+import { getThroughProxy } from '../lib/http';
 import {
   listCheckpoints,
   readState,
   runImp,
   runInImp,
   runShellInImp,
+  startImp,
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, holdImp, readGuestFile, waitForExec, writeGuestFile } from '../lib/imps';
@@ -33,6 +35,32 @@ async function readUptime(): Promise<number> {
   const uptime = await runShellInImp(name, 'cut -d. -f1 /proc/uptime');
 
   return Number(uptime);
+}
+
+const PAGE = 'e2e-tiny-ok\n';
+const REVERSE_PAGE = 'e2e-inner-reverse\n';
+
+async function readOk(url: string): Promise<string> {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`${url}: ${String(response.status)}`);
+  }
+
+  return response.text();
+}
+
+interface TextSink {
+  text: string;
+}
+
+// oxlint-disable-next-line prefer-readonly-parameter-types -- the sink collects
+async function collectText(stream: ReadableStream<Uint8Array>, sink: TextSink): Promise<void> {
+  const decoder = new TextDecoder();
+
+  for await (const chunk of stream) {
+    sink.text += decoder.decode(chunk);
+  }
 }
 
 async function waitForInit(): Promise<void> {
@@ -185,6 +213,101 @@ test('a reboot inside starts the container again, not the guest', async () => {
   expect(pids.split(' ').filter((pid) => pid !== '')).toHaveLength(1);
 });
 
+test('forwards, reverse forwards and the service port work again after a restart', async () => {
+  const page = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(REVERSE_PAGE),
+  });
+
+  const pagePort = String(page.port);
+
+  const proxy = await startImp([
+    'proxy',
+    name,
+    '0:8080',
+    '--reverse',
+    `0:${pagePort}`,
+    '--reverse',
+    `:${pagePort}`,
+  ]);
+
+  const stdout = { text: '' };
+  const stderr = { text: '' };
+
+  void collectText(proxy.stdout, stdout);
+  void collectText(proxy.stderr, stderr);
+
+  try {
+    const lines = await waitFor('imp proxy to listen', () => {
+      const local = /forwarding localhost:(?<port>\d+) ->/v.exec(stdout.text)?.groups?.['port'];
+
+      const guestPort = /forwarding (?!localhost:)[^:]+:(?<port>\d+) ->/v.exec(stdout.text)
+        ?.groups?.['port'];
+
+      const own = /forwarding [^:]+:(?<path>\/run\/imp\/forward\/\S+) ->/v.exec(stdout.text)
+        ?.groups?.['path'];
+
+      if (local === undefined || guestPort === undefined || own === undefined) {
+        throw new Error(`imp proxy printed ${stdout.text}${stderr.text}`);
+      }
+
+      return { local, guestPort, own };
+    });
+
+    const fetchInGuest = `wget -qO- http://127.0.0.1:${lines.guestPort}/`;
+
+    const before = await readOk(`http://127.0.0.1:${lines.local}/`);
+    const reversedBefore = await runShellInImp(name, fetchInGuest);
+
+    expect(before).toBe(PAGE);
+    expect(reversedBefore).toBe(REVERSE_PAGE.trim());
+
+    await tryImp(['exec', name, '--', 'reboot', '-f']);
+    await waitForInit();
+
+    // the forward dials anew for each connection, once the service is back
+    await waitFor('the forward to the service after the restart', async () => {
+      const after = await readOk(`http://127.0.0.1:${lines.local}/`);
+
+      expect(after).toBe(PAGE);
+    });
+
+    // the TCP reverse forward kept its port: the guest has one network
+    const reversedAfter = await runShellInImp(name, fetchInGuest);
+
+    expect(reversedAfter).toBe(REVERSE_PAGE.trim());
+
+    // the socket in the old container's /run went with it; the client
+    // listens again in the new one
+    const again = await waitFor('the reverse forward on a socket to listen again', () => {
+      const path = /forwarding [^:]+:(?<path>\/run\/imp\/forward\/\S+) -> \S+ again/v.exec(
+        stderr.text,
+      )?.groups?.['path'];
+
+      if (path === undefined) {
+        throw new Error(`imp proxy said ${stderr.text}`);
+      }
+
+      return path;
+    });
+
+    const exists = await runShellInImp(name, `test -S '${again}' && echo socket`);
+
+    expect(exists).toBe('socket');
+
+    const throughProxy = await getThroughProxy(name);
+
+    expect(throughProxy).toBe(PAGE.trim());
+  } finally {
+    proxy.kill('SIGINT');
+
+    await proxy.exited;
+
+    await page.stop(true);
+  }
+});
+
 test('imp cp works with the system drive unmounted inside', async () => {
   await writeGuestFile(name, '/root/copied', 'through-the-agent-fd');
   await runInImp(name, 'umount', '/run/imp/sys');
@@ -227,6 +350,46 @@ test('rm -rf / inside leaves the agent answering and a checkpoint restores it', 
   const marker = await readGuestFile(name, '/root/marker');
 
   expect(marker).toBe('kept');
+});
+
+// The init is the agent binary from the system drive and makes its own mount
+// points. Only busybox and its loader and libc (/lib, /lib64) stay.
+test('a container whose root was wiped starts again', async () => {
+  const keep = '/keep/busybox';
+
+  const before = await readInitStart();
+
+  await runShellInImp(name, `mkdir /keep && cp /bin/busybox ${keep}`);
+
+  await tryImp([
+    'exec',
+    name,
+    '--',
+    'sh',
+    '-c',
+    `for f in /*; do case $f in /keep|/lib|/lib64) ;; *) ${keep} rm -rf "$f" ;; esac; done 2>/dev/null; ${keep} reboot -f`,
+  ]);
+
+  const after = await waitFor(`the inner container in ${name} after the wipe`, async () => {
+    const stat = await runInImp(name, keep, 'cat', '/proc/1/stat');
+
+    const start = stat.split(' ').at(21);
+
+    if (start === before) {
+      throw new Error('the old container still runs');
+    }
+
+    return start;
+  });
+
+  const listed = await runInImp(name, keep, 'ls', '/');
+  const broken = await tryImp(['exec', name, '--', 'true']);
+
+  expect(after).not.toBe(before);
+  expect(listed.split('\n')).toContain('keep');
+  expect(listed.split('\n')).toContain('proc');
+  expect(listed.split('\n')).toContain('run');
+  expect(broken.stderr).toContain('EXEC_FAILED');
 });
 
 test('an imp whose disk was wiped still stops and goes', async () => {
