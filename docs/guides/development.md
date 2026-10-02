@@ -118,7 +118,12 @@ The scale suite needs the budget plus 2 GiB of free host memory, and free disk o
 for a memory snapshot of each imp (count × memory). It restarts the instance with a 600 s idle
 timeout, so the RAM governor, not idleness, decides which imps sleep; the suites after it keep that
 timeout. On a smaller machine, lower the budget and the count, for example
-`E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`.
+`E2E_RAM_BUDGET_MIB=2560 E2E_SCALE_COUNT=10`. The count must pass the number of imps that fit, or
+the governor sleeps none and the suite fails at once: an imp restored from a warm boot template owns
+about 280 MiB at the default sizes, a cold-booted one about 320 MiB. The suite holds what the
+Firecrackers own (`Pss_Anon` + `Pss_Shmem`, read from `smaps_rollup` without impd) to the budget,
+and reports their full PSS, which also has clean file pages the governor does not count
+([what the governor measures](../architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)).
 
 The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
 default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists
