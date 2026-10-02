@@ -388,8 +388,14 @@ guest writes become anonymous (`RssAnon`, `Private_Dirty`). Example: after the g
 MiB blob, Firecracker had 341 MiB RSS, of which 326 MiB was clean `RssFile`.
 
 So the governor counts `Pss_Anon` + `Pss_Shmem` from `/proc/<pid>/smaps_rollup`, not the full PSS. A
-woken imp with mostly clean pages costs less than its PSS. A cold-booted imp has only anonymous
-pages.
+woken imp with mostly clean pages costs less than its PSS.
+
+Two more kinds of clean file pages came later, and the governor does not count them either. A cold
+boot from a [boot template](./boot-templates.md) is a restore: pages the guest has not written are
+clean pages of the template's mem file, which every imp of that template shares. And the jailer
+copies the `firecracker` binary into each VM's chroot, so each VM holds its own 2.6 MiB of it.
+Measured 2026-10-03 with 10 template-restored imps of 512 MiB that each filled 256 MiB: they owned
+2740 MiB, and their full PSS was 2826 MiB.
 
 ### 6. RAM reclamation for awake VMs: the balloon
 
