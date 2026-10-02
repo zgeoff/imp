@@ -60,6 +60,8 @@ test('it creates, stops, starts and destroys an imp', async () => {
     ip: '10.66.0.2',
     port: 20_000,
     url: 'http://dev.imp.localhost:7080',
+    ramMib: 300,
+    rssMib: 340,
   });
 
   expect(ctx.taps).toEqual(['imp0']);
