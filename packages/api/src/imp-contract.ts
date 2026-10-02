@@ -107,6 +107,13 @@ export const impContract = {
     delete: base.input(NameInputSchema).output(EmptySchema),
   },
 
+  exec: {
+    // a single-use ticket for one `/exec` WebSocket to this imp (exec-protocol)
+    ticket: base
+      .input(NameInputSchema)
+      .output(z.object({ ticket: z.string(), expiresAt: z.date() })),
+  },
+
   system: {
     info: base.output(SystemInfoSchema),
   },

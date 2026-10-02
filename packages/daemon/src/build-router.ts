@@ -7,6 +7,7 @@ import type { Config } from './config';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
@@ -23,6 +24,7 @@ export interface RouterDeps {
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
+  readonly execTickets: ExecTickets;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -89,6 +91,9 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+    },
+    exec: {
+      ticket: os.exec.ticket.handler((context) => deps.execTickets.issue(context.input.name)),
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),

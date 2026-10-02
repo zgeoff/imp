@@ -362,7 +362,9 @@ test('impd stopping closes exec sessions with 1012', async () => {
   try {
     const port = String(server.server?.port);
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TEST_TOKEN}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
 
     const opened = Promise.withResolvers<void>();
     const closed = Promise.withResolvers<CloseEvent>();
@@ -380,6 +382,79 @@ test('impd stopping closes exec sessions with 1012', async () => {
     const event = await closed.promise;
 
     expect(event.code).toBe(1012);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+// opens /exec with `query` and reports whether the upgrade succeeded; a
+// session it opens sends `start` for `name` and reports the first message
+async function tryExecSocket(port: string, query: string, name = 'dev') {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`);
+
+  const outcome = Promise.withResolvers<string>();
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'start', name, argv: ['true'], tty: false }));
+  });
+
+  socket.addEventListener('message', (event) => {
+    outcome.resolve(String(event.data));
+  });
+
+  socket.addEventListener('error', () => {
+    outcome.resolve('rejected');
+  });
+
+  try {
+    return await outcome.promise;
+  } finally {
+    socket.close();
+  }
+}
+
+test('an exec ticket opens one socket for its imp, once', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const issued = await ctx.client.exec.ticket({ name: 'other' });
+
+    // accepted at the upgrade, refused at start: the ticket names another imp
+    const first = await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    const forbidden: unknown = JSON.parse(first);
+
+    expect(forbidden).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
+
+    const reused = await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    expect(reused).toBe('rejected');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('/exec rejects an expired ticket and the token in the query', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+
+    ctx.advance(30_000);
+
+    const expired = await tryExecSocket(port, `ticket=${issued.ticket}`);
+    const queryToken = await tryExecSocket(port, `token=${TEST_TOKEN}`);
+
+    expect(expired).toBe('rejected');
+    expect(queryToken).toBe('rejected');
   } finally {
     await server.stop(true);
   }

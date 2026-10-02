@@ -5,7 +5,14 @@ import { NameSchema } from './name-schema';
 // binary messages are one channel byte then raw bytes, so stream data is
 // never base64'd. The client sends `start` first and waits for `started`.
 
+// auth is the bearer header, or `?ticket=` from `exec.ticket` for a browser;
+// a ticket starts only the imp it was issued for
+
 export const EXEC_PATH = '/exec';
+export const EXEC_TICKET_PARAM = 'ticket';
+
+// impd closes every exec socket with this code when it stops or restarts
+export const EXEC_CLOSE_RESTARTING = 1012;
 
 export const EXEC_CHANNELS = {
   stdin: 0,
@@ -51,7 +58,15 @@ export const ExecServerMessageSchema = z.discriminatedUnion('type', [
     code: z.int().nullable(),
     signal: z.string().nullable(),
   }),
-  z.object({ type: z.literal('error'), message: z.string(), code: z.string().optional() }),
+
+  // code is a contract error (NOT_FOUND, RAM_BUDGET_EXCEEDED, …) or an agent
+  // error (EXEC_FAILED, …); data is that error's data, as over RPC
+  z.object({
+    type: z.literal('error'),
+    message: z.string(),
+    code: z.string().optional(),
+    data: z.unknown().optional(),
+  }),
 ]);
 
 export type ExecServerMessage = z.infer<typeof ExecServerMessageSchema>;
