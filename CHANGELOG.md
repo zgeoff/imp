@@ -2,23 +2,40 @@
 
 ## [0.14.0](https://github.com/zgeoff/imp/compare/v0.13.1...v0.14.0) (2026-10-02)
 
-
 ### Features
 
-* **deploy:** add ipv6 and forward rules to the nixos module ([bea47d4](https://github.com/zgeoff/imp/commit/bea47d451284162f7deae4c268c5579afba0ad27)), closes [#84](https://github.com/zgeoff/imp/issues/84)
-* **deploy:** run imp-host on an ipv6 docker network from bootstrap.sh ([1910f0f](https://github.com/zgeoff/imp/commit/1910f0f1b265d1813522dd8091abdb69a476bdf8)), closes [#84](https://github.com/zgeoff/imp/issues/84)
-
+- **deploy:** add ipv6 and forward rules to the nixos module
+  ([bea47d4](https://github.com/zgeoff/imp/commit/bea47d451284162f7deae4c268c5579afba0ad27)), closes
+  [#84](https://github.com/zgeoff/imp/issues/84)
+- **deploy:** run imp-host on an ipv6 docker network from bootstrap.sh
+  ([1910f0f](https://github.com/zgeoff/imp/commit/1910f0f1b265d1813522dd8091abdb69a476bdf8)), closes
+  [#84](https://github.com/zgeoff/imp/issues/84)
 
 ### Bug Fixes
 
-* **deploy:** clear imp-host's start limit before a restart ([337138f](https://github.com/zgeoff/imp/commit/337138fa8d6c07bb6d9c21769d97745ef7e7552e)), closes [#84](https://github.com/zgeoff/imp/issues/84)
-* **deploy:** import the pool by partuuid on virtio hosts ([977d3fc](https://github.com/zgeoff/imp/commit/977d3fcb59ad089c180e674da7b8c6692e6957b6))
-* **deploy:** let auto stay off when a client owns router adverts ([d6e5817](https://github.com/zgeoff/imp/commit/d6e5817cf9a2feec6db03cc69c039fa608f0f701)), closes [#84](https://github.com/zgeoff/imp/issues/84)
-* **deploy:** narrow the module's forward rules and check its ipv6 setup ([a65435a](https://github.com/zgeoff/imp/commit/a65435a91b050e244589c113aa17f713726847c5)), closes [#84](https://github.com/zgeoff/imp/issues/84)
-* **storage:** keep checkpoints no row names, and log staging and reclaim ([9d75618](https://github.com/zgeoff/imp/commit/9d75618ad269d23a715bcf406ad7037f642ba5ea)), closes [#90](https://github.com/zgeoff/imp/issues/90)
-* **storage:** keep disks and images the database does not name ([695e2f3](https://github.com/zgeoff/imp/commit/695e2f3fb78b2a12f7458c70c79cc4ba3e4dabf8)), closes [#90](https://github.com/zgeoff/imp/issues/90)
-* **storage:** keep the memory snapshots and images no row names ([cb67df1](https://github.com/zgeoff/imp/commit/cb67df185230df2bf7c8c0e4e5e13b7efea99d1b)), closes [#90](https://github.com/zgeoff/imp/issues/90)
-* **storage:** take an image's [@base](https://github.com/base) in staging, before its rename ([22ac88f](https://github.com/zgeoff/imp/commit/22ac88faca8f0321532990568c6dcfaaf9a7b3da)), closes [#90](https://github.com/zgeoff/imp/issues/90) [#90](https://github.com/zgeoff/imp/issues/90)
+- **deploy:** clear imp-host's start limit before a restart
+  ([337138f](https://github.com/zgeoff/imp/commit/337138fa8d6c07bb6d9c21769d97745ef7e7552e)), closes
+  [#84](https://github.com/zgeoff/imp/issues/84)
+- **deploy:** import the pool by partuuid on virtio hosts
+  ([977d3fc](https://github.com/zgeoff/imp/commit/977d3fcb59ad089c180e674da7b8c6692e6957b6))
+- **deploy:** let auto stay off when a client owns router adverts
+  ([d6e5817](https://github.com/zgeoff/imp/commit/d6e5817cf9a2feec6db03cc69c039fa608f0f701)), closes
+  [#84](https://github.com/zgeoff/imp/issues/84)
+- **deploy:** narrow the module's forward rules and check its ipv6 setup
+  ([a65435a](https://github.com/zgeoff/imp/commit/a65435a91b050e244589c113aa17f713726847c5)), closes
+  [#84](https://github.com/zgeoff/imp/issues/84)
+- **storage:** keep checkpoints no row names, and log staging and reclaim
+  ([9d75618](https://github.com/zgeoff/imp/commit/9d75618ad269d23a715bcf406ad7037f642ba5ea)), closes
+  [#90](https://github.com/zgeoff/imp/issues/90)
+- **storage:** keep disks and images the database does not name
+  ([695e2f3](https://github.com/zgeoff/imp/commit/695e2f3fb78b2a12f7458c70c79cc4ba3e4dabf8)), closes
+  [#90](https://github.com/zgeoff/imp/issues/90)
+- **storage:** keep the memory snapshots and images no row names
+  ([cb67df1](https://github.com/zgeoff/imp/commit/cb67df185230df2bf7c8c0e4e5e13b7efea99d1b)), closes
+  [#90](https://github.com/zgeoff/imp/issues/90)
+- **storage:** take an image's [@base](https://github.com/base) in staging, before its rename
+  ([22ac88f](https://github.com/zgeoff/imp/commit/22ac88faca8f0321532990568c6dcfaaf9a7b3da)), closes
+  [#90](https://github.com/zgeoff/imp/issues/90) [#90](https://github.com/zgeoff/imp/issues/90)
 
 ## [0.13.1](https://github.com/zgeoff/imp/compare/v0.13.0...v0.13.1) (2026-10-02)
 
