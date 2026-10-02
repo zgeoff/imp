@@ -5,6 +5,7 @@ import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { createApiAudit } from '../audit/api-audit';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
 import { TunnelRefusedError } from '../broker/tunnel-target';
@@ -249,6 +250,7 @@ export function buildTestApp(
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
     now: ctx.now,
+    audit: createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} }),
   });
 
   const link = new RPCLink({

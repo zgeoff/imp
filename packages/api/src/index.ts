@@ -1,3 +1,6 @@
+export { ApiActorSchema, ApiCallSchema } from './api-call-schema';
+export type { ApiActor, ApiCall } from './api-call-schema';
+
 export {
   BackupPointSchema,
   BackupRestoreSchema,
@@ -30,6 +33,15 @@ export type {
   ExecFrame,
   ExecServerMessage,
 } from './exec-protocol';
+
+export {
+  EVENT_VERSION,
+  ImpChangeReasonSchema,
+  ImpEventDetailSchema,
+  ImpEventSchema,
+} from './event-schema';
+
+export type { ImpChangeReason, ImpEvent, ImpEventDetail } from './event-schema';
 
 export {
   TUNNEL_CLOSE_LOST,

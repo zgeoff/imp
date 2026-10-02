@@ -1,4 +1,15 @@
-export type { Checkpoint, DetachReason, Image, Imp, ImpState, Session, SystemInfo } from '@imp/api';
+export type {
+  ApiCall,
+  Checkpoint,
+  DetachReason,
+  Image,
+  Imp,
+  ImpEvent,
+  ImpState,
+  Session,
+  SystemInfo,
+} from '@imp/api';
+
 export { ORPCError, isDefinedError, safe } from '@orpc/client';
 export { CLIENT_VERSION } from './check-server';
 export type { ServerCheck } from './check-server';

@@ -16,9 +16,9 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
 - **RAM**: the budget, what awake imps own, what the governor holds back for boots and wakes, and
   the RAM each awake imp owns and has resident.
 
-Views ask impd again every 2 s (lists that change only by hand: every 10 s). The governor's
-decisions are not in the API yet; they come with the event stream
-([#38](https://github.com/zgeoff/imp/issues/38)).
+Views follow impd's [event stream](./events.md): a change shows as impd makes it. What moves with no
+event, such as RAM in use, sessions and last activity, refreshes every 10 s. When the stream ends,
+the dashboard opens it again after 2 s and refreshes every view.
 
 ## Log in
 

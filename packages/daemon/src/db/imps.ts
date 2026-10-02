@@ -1,5 +1,6 @@
-import type { ImpState } from '@imp/api';
+import type { ImpChangeReason, ImpEventDetail, ImpState } from '@imp/api';
 import type { Selectable, Updateable } from 'kysely';
+import { emitImpWrite } from './imp-write-feed';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
 
@@ -37,6 +38,9 @@ export interface NewImp {
 }
 
 export interface ImpStateChange {
+  // why, for the event stream
+  readonly reason: ImpChangeReason;
+  readonly detail?: ImpEventDetail;
   readonly state: ImpState;
   readonly error?: string | null;
   readonly pid?: number | null;
@@ -67,6 +71,15 @@ export async function allocateSlot(db: ImpDatabase, slotCount: number): Promise<
 }
 
 export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
+  const created = await writeImpRow(db, imp);
+
+  emitImpWrite(db, { kind: 'added', imp: created });
+
+  return created;
+}
+
+// the insert alone; the caller emits once the row is committed
+async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
   const now = Date.now();
 
   const row = await db
@@ -90,6 +103,29 @@ export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord
   return toImpRecord(row);
 }
 
+interface FreeSlots {
+  readonly count: number;
+  readonly findIp: (slot: number) => string;
+}
+
+// A `creating` record in the lowest free slot: the slot and the insert share
+// one transaction, and the write is reported once it commits.
+export async function createImpInFreeSlot(
+  db: ImpDatabase,
+  imp: Omit<NewImp, 'slot' | 'ip'>,
+  slots: FreeSlots,
+): Promise<ImpRecord> {
+  const created = await db.transaction().execute(async (trx) => {
+    const slot = await allocateSlot(trx, slots.count);
+
+    return writeImpRow(trx, { ...imp, slot, ip: slots.findIp(slot) });
+  });
+
+  emitImpWrite(db, { kind: 'added', imp: created });
+
+  return created;
+}
+
 export async function findImpByName(db: ImpDatabase, name: string): Promise<ImpRecord | undefined> {
   const row = await db.selectFrom('imps').selectAll().where('name', '=', name).executeTakeFirst();
 
@@ -106,6 +142,17 @@ export async function listImps(db: ImpDatabase): Promise<ImpRecord[]> {
   const rows = await db.selectFrom('imps').selectAll().orderBy('name').execute();
 
   return rows.map((row) => toImpRecord(row));
+}
+
+// imps by state; a state no imp is in is absent
+export async function countImpsByState(db: ImpDatabase): Promise<Map<ImpState, number>> {
+  const rows = await db
+    .selectFrom('imps')
+    .select((eb) => ['state', eb.fn.countAll<number>().as('count')])
+    .groupBy('state')
+    .execute();
+
+  return new Map(rows.map((row) => [row.state, row.count]));
 }
 
 // Fields the change leaves out keep their value; null clears one.
@@ -139,7 +186,7 @@ export async function updateImpState(
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  return toImpRecord(row);
+  return emitChange(db, toImpRecord(row), change);
 }
 
 // Compare-and-set: applies the change only while the row still has
@@ -171,7 +218,16 @@ export async function updateImpStateIf(
     .returningAll()
     .executeTakeFirst();
 
-  return row === undefined ? undefined : toImpRecord(row);
+  return row === undefined ? undefined : emitChange(db, toImpRecord(row), change);
+}
+
+// The API does not show the policy, so this write is no event.
+export async function updateImpEgressPolicy(
+  db: ImpDatabase,
+  id: string,
+  policy: string,
+): Promise<void> {
+  await db.updateTable('imps').set({ egress_policy: policy }).where('id', '=', id).execute();
 }
 
 export async function updateImpActivity(db: ImpDatabase, id: string, at: Date): Promise<void> {
@@ -190,14 +246,39 @@ export async function updateImpHold(
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  return toImpRecord(row);
+  const held = toImpRecord(row);
+
+  emitImpWrite(db, { kind: 'changed', imp: held, reason: 'held' });
+
+  return held;
 }
 
 // cascades to the imp's checkpoints
 export async function removeImp(db: ImpDatabase, id: string): Promise<boolean> {
-  const result = await db.deleteFrom('imps').where('id', '=', id).executeTakeFirst();
+  const row = await db.deleteFrom('imps').where('id', '=', id).returningAll().executeTakeFirst();
 
-  return result.numDeletedRows > 0n;
+  if (row === undefined) {
+    return false;
+  }
+
+  emitImpWrite(db, { kind: 'removed', imp: toImpRecord(row) });
+
+  return true;
+}
+
+function emitChange(
+  db: ImpDatabase,
+  imp: Readonly<ImpRecord>,
+  change: Readonly<ImpStateChange>,
+): ImpRecord {
+  emitImpWrite(db, {
+    kind: 'changed',
+    imp,
+    reason: change.reason,
+    ...(change.detail !== undefined && { detail: change.detail }),
+  });
+
+  return imp;
 }
 
 function toImpRecord(row: Readonly<ImpRow>): ImpRecord {

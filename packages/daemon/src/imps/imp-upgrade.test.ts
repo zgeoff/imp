@@ -97,7 +97,7 @@ async function setupUpgradeTest() {
       ip: '10.66.0.38',
     });
 
-    await updateImpState(ctx.db, creating.id, { state: 'creating' });
+    await updateImpState(ctx.db, creating.id, { reason: 'failed', state: 'creating' });
 
     return broken;
   };

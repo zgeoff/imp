@@ -80,6 +80,17 @@ With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the
 | `IMP_HTTPS_PORT`     | `443`          | The HTTPS port on the tailnet IP and loopback.                                               |
 | `IMP_HTTP_PORT`      | `80`           | The port that redirects to HTTPS.                                                            |
 
+### Telemetry
+
+impd exports [metrics and spans](./events.md#telemetry) only when `OTEL_EXPORTER_OTLP_ENDPOINT` is
+set. The OTLP exporters read the other standard `OTEL_EXPORTER_OTLP_*` variables themselves.
+
+| Variable                      | Default | Meaning                                                                      |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | none    | The collector's base URL, such as `http://collector:4318`. Unset: no export. |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | none    | Headers on every export, as `key=value,key=value`, such as an API key.       |
+| `OTEL_SERVICE_NAME`           | `impd`  | The `service.name` on everything impd sends.                                 |
+
 ## Host container
 
 The host container's scripts in `host/` read these before impd starts.

@@ -1,11 +1,15 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
+import { createApiAudit } from './audit/api-audit';
 import { createBackupService } from './backup/backup-service';
 import { createBroker } from './broker/broker-service';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
+import { subscribeImpWrites } from './db/imp-write-feed';
+import { countImpsByState } from './db/imps';
+import { isImpSetWrite } from './db/is-imp-set-write';
 import { openDatabase } from './db/open-database';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
@@ -25,6 +29,8 @@ import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
+import { startImpTelemetry } from './telemetry/imp-telemetry';
+import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
@@ -60,6 +66,9 @@ async function runStopStep(
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
+  // before any instrument is made: a meter taken earlier stays a no-op
+  const stopExport = await startOtlpExport(process.env, packageJson.version);
+
   mkdirSync(join(config.dataDir, 'db'), { recursive: true });
 
   const systemFiles = await setupSystemFiles(config);
@@ -90,10 +99,6 @@ async function main(): Promise<void> {
     identity: readHostIdentity(config.firecrackerBin, systemFiles),
     log: printLog,
     readExecEnv: broker.readExecEnv,
-    onImpsChanged: () => {
-      void proxyHolder.proxy?.syncListeners();
-      void broker.applyGrants();
-    },
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -103,6 +108,24 @@ async function main(): Promise<void> {
 
   const imps = governed.imps;
   const governor = governed.governor;
+
+  startImpTelemetry({
+    bus: imps.events,
+    readStateCounts: () => countImpsByState(db),
+    readRam: async () => {
+      const usage = await governor.readUsage();
+
+      return { usedMib: usage.usedMib, budgetMib: config.ramBudgetMib };
+    },
+  });
+
+  // an imp that comes or goes opens or closes its proxy port and its grants
+  subscribeImpWrites(db, (write) => {
+    if (isImpSetWrite(write)) {
+      void proxyHolder.proxy?.syncListeners();
+      void broker.applyGrants();
+    }
+  });
 
   await imps.reconcileImps();
 
@@ -133,6 +156,7 @@ async function main(): Promise<void> {
         });
 
   const state = { ready: false };
+  const audit = createApiAudit({ db, now: Date.now, log: printLog });
 
   const api = buildApp({
     config,
@@ -150,6 +174,7 @@ async function main(): Promise<void> {
     readTailscale,
     isReady: () => state.ready,
     now: Date.now,
+    audit,
   });
 
   const app = api.app.listen(config.apiPort);
@@ -179,7 +204,7 @@ async function main(): Promise<void> {
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
 
-  const ssh = await startSsh({ config, db, imps, log: printLog });
+  const ssh = await startSsh({ config, db, imps, log: printLog, audit, now: Date.now });
 
   const idle = createIdleLoop({ config, db, imps, log: printLog });
 
@@ -269,6 +294,11 @@ async function main(): Promise<void> {
 
     // a reclaim pass left running would race the next impd's start
     await runStopStep('storage', readStepMs(), () => storage.stop());
+
+    // sends what the sleep pass recorded; its gauges still read the database
+    if (stopExport !== null) {
+      await runStopStep('telemetry', readStepMs(), stopExport);
+    }
 
     // a sleep still running writes its record later: closing the database
     // under it would fail that write. The next start finds its snapshot.

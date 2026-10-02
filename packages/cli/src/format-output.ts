@@ -1,4 +1,5 @@
 import type {
+  ApiCall,
   AuditEntry,
   BackupRun,
   BackupStatus,
@@ -209,6 +210,20 @@ export function formatAudit(entries: readonly AuditEntry[]): string {
       String(entry.status),
       `${String(entry.requestBytes)}/${String(entry.responseBytes)}`,
       String(entry.durationMs),
+    ]),
+  );
+}
+
+export function formatApiCalls(calls: readonly ApiCall[]): string {
+  return formatTable(
+    ['TIME', 'IMP', 'PROCEDURE', 'ACTOR', 'OUTCOME', 'MS'],
+    calls.map((call) => [
+      call.at.toISOString(),
+      call.imp ?? '-',
+      call.procedure,
+      call.actor,
+      call.outcome,
+      String(call.durationMs),
     ]),
   );
 }

@@ -120,6 +120,18 @@ never leads to more sleeps than the new pick needs. Every 5 s it also sleeps imp
 use is over the budget, all it may sleep when they cannot bring it under.
 [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
 
+### events: the event stream
+
+`db/imps.ts` and `db/checkpoints.ts` emit a write after each commit, with the reason its caller
+gives; no other code writes those rows. The publisher turns each write into an event in the API's
+shape, one at a time, so events keep the order of the writes, and puts it on the bus. The bus feeds
+`events.stream`, the proxy's and the broker's resync when an imp comes or goes, and the telemetry.
+The governor puts its decisions on the same bus. A stream subscribes before it reads its snapshot
+and ends a reader that falls 1000 events behind. [Events](../guides/events.md) has the format.
+
+The audit module writes one `api_audit` row per mutation, from oRPC middleware, and per exec,
+console, attach and SSH open, after the answer. It never stores the input.
+
 ### idle: the idle loop
 
 Every 2 s the idle loop asks each running imp's agent for its `activity` and reads Firecracker's CPU
@@ -310,9 +322,10 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 ### db: SQLite
 
-The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code. It has
-three tables: `images`, `imps` and `checkpoints`. SQLite has one connection, so a promise-chain
-mutex gives it to one caller at a time. Timestamps are integer milliseconds since the epoch.
+The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code. Its
+tables are `images`, `imps`, `checkpoints`, the broker's `secrets`, `grants` and `broker_audit`, and
+`api_audit`. SQLite has one connection, so a promise-chain mutex gives it to one caller at a time.
+Timestamps are integer milliseconds since the epoch.
 
 ### process: helpers
 

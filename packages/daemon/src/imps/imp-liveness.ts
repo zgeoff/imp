@@ -28,7 +28,7 @@ export async function checkLiveness(
     context.db,
     imp.id,
     { state: imp.state, pid: imp.pid },
-    change ?? { state: 'stopped', pid: null },
+    change ?? { reason: 'repaired', state: 'stopped', pid: null },
   );
 
   if (repaired === undefined) {
@@ -54,5 +54,5 @@ function findSleptChange(imp: ImpRecord, paths: ImpPaths): ImpStateChange | null
     return null;
   }
 
-  return { state: 'sleeping', pid: null, sleptAt: new Date(meta.createdAt) };
+  return { reason: 'repaired', state: 'sleeping', pid: null, sleptAt: new Date(meta.createdAt) };
 }

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
 import packageJson from '../package.json' with { type: 'json' };
+import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
 import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 
@@ -478,6 +479,39 @@ test('an exec ticket opens one socket for its imp, once', async () => {
     const reused = await tryExecSocket(port, `ticket=${issued.ticket}`);
 
     expect(reused).toBe('rejected');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('an exec on a ticket the token asked for is audited as the token', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+
+    await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    // the row lands after the open settles
+    const deadline = Date.now() + 5000;
+    let execs: { readonly actor: string }[] = [];
+
+    while (execs.length === 0 && Date.now() < deadline) {
+      const calls = await listApiCalls(ctx.db, 'dev', 10);
+
+      execs = calls.filter((call) => call.procedure === 'exec');
+
+      await Bun.sleep(1);
+    }
+
+    expect(execs.map((call) => call.actor)).toEqual(['token']);
   } finally {
     await server.stop(true);
   }

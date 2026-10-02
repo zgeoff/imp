@@ -65,14 +65,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       const image = await context.images.resolveImage(input.image);
 
       const id = Bun.randomUUIDv7();
-
-      const writeRecord = async () => {
-        const created = await createImpRecord(context, id, input, image);
-
-        context.emitChanged();
-
-        return created;
-      };
+      const writeRecord = () => createImpRecord(context, id, input, image);
 
       return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
@@ -98,9 +91,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         // past the lifecycle table: no stop ever leaves `creating` otherwise
         if (input.start === false) {
-          const stopped = await updateImpState(context.db, imp.id, { state: 'stopped' });
-
-          context.emitChanged();
+          const stopped = await updateImpState(context.db, imp.id, {
+            reason: 'stopped',
+            state: 'stopped',
+          });
 
           return presenter.toApi(stopped);
         }
@@ -115,8 +109,6 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           if (isRamBudgetError(error)) {
             await removeImpFiles(context, imp.id, []);
             await removeImp(context.db, imp.id);
-
-            context.emitChanged();
           }
 
           throw error;
@@ -182,8 +174,6 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
         await removeImp(context.db, imp.id);
       });
-
-      context.emitChanged();
     },
 
     readUrls: async (name) => {

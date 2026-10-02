@@ -592,7 +592,7 @@ test('an imp being created is left out of the run', async () => {
 
   const dev = await findImpByName(ctx.db, 'dev');
 
-  await updateImpState(ctx.db, dev?.id ?? '', { state: 'creating' });
+  await updateImpState(ctx.db, dev?.id ?? '', { reason: 'failed', state: 'creating' });
 
   const run = await ctx.backups.runBackup();
 

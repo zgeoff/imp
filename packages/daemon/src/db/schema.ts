@@ -1,4 +1,4 @@
-import type { ImpState } from '@imp/api';
+import type { ApiActor, ImpState } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -72,6 +72,18 @@ interface BrokerAuditTable {
   duration_ms: number;
 }
 
+export interface ApiAuditTable {
+  id: Generated<number>;
+  at: number;
+  procedure: string;
+  actor: ApiActor;
+
+  // the name, not a reference: a destroyed imp's rows stay
+  imp_name: string | null;
+  outcome: string;
+  duration_ms: number;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -79,4 +91,5 @@ export interface DatabaseSchema {
   secrets: SecretsTable;
   grants: GrantsTable;
   broker_audit: BrokerAuditTable;
+  api_audit: ApiAuditTable;
 }

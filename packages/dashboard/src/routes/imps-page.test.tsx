@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { EVENT_VERSION } from '@imp/api';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { buildImp, createFakeImpd } from '../test-utils/fake-impd';
@@ -113,4 +114,38 @@ test('a new imp sends only the fields that were filled in', async () => {
   expect(fake.state.calls).toEqual([
     { path: 'imps.create', input: { name: 'box', memoryMib: 512 } },
   ]);
+});
+
+test('it shows a change impd streams without waiting for the next poll', async () => {
+  const fake = createFakeImpd();
+
+  fake.state.imps.push(buildImp({ name: 'web' }));
+
+  const rendered = renderApp(fake);
+
+  const web = await screen.findByRole('row', { name: /web/ });
+
+  expect(within(web).getByText('running')).toBeInTheDocument();
+
+  // another client slept it: impd's event is all the dashboard hears, sent
+  // again until the dashboard's stream is open to take it
+  const slept = buildImp({ name: 'web', state: 'sleeping' });
+
+  fake.state.imps.splice(0, 1, slept);
+
+  await waitFor(() => {
+    fake.emitEvent({
+      v: EVENT_VERSION,
+      at: new Date(),
+      ev: 'ImpChanged',
+      reason: 'slept',
+      imp: slept,
+    });
+
+    expect(
+      within(screen.getByRole('row', { name: /web/ })).getByText('sleeping'),
+    ).toBeInTheDocument();
+  });
+
+  rendered.unmount();
 });

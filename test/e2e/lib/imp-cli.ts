@@ -84,7 +84,7 @@ export async function tryImp(
 }
 
 // Starts the imp CLI for a command that runs until stopped, such as
-// `imp proxy`, with its output piped.
+// `imp proxy` or `imp events`, with its output piped.
 export async function startImp(args: readonly string[]) {
   const env = await readImpEnv();
 

@@ -21,16 +21,16 @@ put secrets into the sandbox as environment variables.
 
 ## Secrets and grants
 
-| Command                               | What it does                                                                                   |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag. |
-| `imp secret add <name> ... --replace` | Replaces the value and the hosts of a secret that exists, for a rotation.                      |
-| `imp secret ls`                       | Lists each secret's kind, hosts and imps. It never shows a value.                              |
-| `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                |
-| `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                   |
-| `imp revoke <imp> <secret>`           | Takes it away. A request on a connection that is already open gets a 403 from then on.         |
-| `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                          |
-| `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential, newest first.                            |
+| Command                               | What it does                                                                                                                                                          |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                        |
+| `imp secret add <name> ... --replace` | Replaces the value and the hosts of a secret that exists, for a rotation.                                                                                             |
+| `imp secret ls`                       | Lists each secret's kind, hosts and imps. It never shows a value.                                                                                                     |
+| `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                       |
+| `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                          |
+| `imp revoke <imp> <secret>`           | Takes it away. A request on a connection that is already open gets a 403 from then on.                                                                                |
+| `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                                                                                                 |
+| `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential, newest first. `--kind api` lists the calls that changed impd instead ([events](./events.md#the-api-audit-log)). |
 
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same

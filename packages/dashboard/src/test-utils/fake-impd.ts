@@ -1,5 +1,5 @@
-import type { Checkpoint, Image, Imp, SystemInfo } from '@imp/api';
-import { impContract } from '@imp/api';
+import type { Checkpoint, Image, Imp, ImpEvent, SystemInfo } from '@imp/api';
+import { EVENT_VERSION, impContract } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { CLIENT_VERSION, createImpClient } from '@zgeoff/imp-client';
@@ -11,6 +11,9 @@ import type { Impd } from '../lib/impd';
 export interface FakeImpd {
   readonly impd: Impd;
   readonly state: FakeImpdState;
+
+  // sends an event to every open stream, as impd does after a change
+  readonly emitEvent: (event: ImpEvent) => void;
 }
 
 interface FakeImpdState {
@@ -38,6 +41,14 @@ export function createFakeImpd(): FakeImpd {
     info: buildSystemInfo(),
     unauthorized: false,
     notFound: 0,
+  };
+
+  const listeners = new Set<EventListener>();
+
+  const emitEvent = (event: ImpEvent): void => {
+    for (const listener of listeners) {
+      listener(event);
+    }
   };
 
   const os = implement(impContract);
@@ -207,6 +218,22 @@ export function createFakeImpd(): FakeImpd {
     },
     audit: {
       list: os.audit.list.handler(() => []),
+      calls: os.audit.calls.handler(() => []),
+    },
+    events: {
+      stream: os.events.stream.handler((context) =>
+        openStream(
+          (listener) => {
+            listeners.add(listener);
+
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+          fake.imps,
+          context.signal,
+        ),
+      ),
     },
     system: {
       info: os.system.info.handler(() => fake.info),
@@ -228,10 +255,68 @@ export function createFakeImpd(): FakeImpd {
     },
   });
 
-  return { impd: createImpd(client), state: fake };
+  return { impd: createImpd(client), state: fake, emitEvent };
 }
 
 const NOW = new Date('2026-10-02T12:00:00Z');
+
+type EventListener = (event: ImpEvent) => void;
+
+// the snapshot, then each event emitted until the dashboard lets go
+async function* openStream(
+  subscribe: (listener: EventListener) => () => void,
+  imps: readonly Imp[],
+  signal: AbortSignal | undefined,
+): AsyncGenerator<ImpEvent> {
+  const queue: ImpEvent[] = imps.map((imp) => ({
+    v: EVENT_VERSION,
+    at: NOW,
+    ev: 'ImpAdded',
+    reason: 'snapshot',
+    imp,
+  }));
+
+  const state = { wake: (): void => {} };
+
+  const handleEvent = (event: ImpEvent): void => {
+    queue.push(event);
+    state.wake();
+  };
+
+  const stopStream = (): void => {
+    state.wake();
+  };
+
+  const unsubscribe = subscribe(handleEvent);
+
+  signal?.addEventListener('abort', stopStream);
+
+  try {
+    for (;;) {
+      if (signal?.aborted === true) {
+        return;
+      }
+
+      const next = queue.shift();
+
+      if (next !== undefined) {
+        yield next;
+        continue;
+      }
+
+      const waiting = Promise.withResolvers<undefined>();
+
+      state.wake = () => {
+        waiting.resolve(undefined);
+      };
+
+      await waiting.promise;
+    }
+  } finally {
+    unsubscribe();
+    signal?.removeEventListener('abort', stopStream);
+  }
+}
 
 export function buildImp(overrides: Partial<Imp> & { readonly name: string }): Imp {
   return {

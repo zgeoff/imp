@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { createEventBus } from '../events/event-bus';
 import { createKeyedMutex } from '../imps/keyed-mutex';
 import { createLockFreeSleep } from '../imps/lock-free-sleep';
 import type { SleepOutcome } from '../imps/lock-free-sleep';
@@ -22,9 +23,18 @@ test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
   ]);
 
   const slept: string[] = [];
+  const events = createEventBus();
+  const decisions: string[] = [];
+
+  events.subscribe((event) => {
+    if (event.ev === 'GovernorDecision') {
+      decisions.push(`${event.decision} ${event.name} ${event.trigger} ${String(event.usedMib)}`);
+    }
+  });
 
   const governor = createRamGovernor({
     budgetMib: 1000,
+    events,
     listAwake: () =>
       Promise.resolve(
         [...awake].map(([id, imp]) => ({
@@ -61,6 +71,12 @@ test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
 
   // sleeping `new` alone could not make room, so it stays awake
   expect(slept).toEqual(['old']);
+
+  expect(decisions).toEqual([
+    'slept old to make room for x 900',
+    'admitted x admission 600',
+    'refused y admission 900',
+  ]);
 });
 
 test('it never admits an imp whose memory is larger than the whole budget', async () => {
