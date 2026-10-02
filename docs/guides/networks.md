@@ -42,8 +42,9 @@ on it carries the box imp's traffic anywhere. A `box` or `none` imp on a network
 peer on it with its egress.
 
 `imp net join` warns when a join puts a `box` or `none` imp on a network with an `open` one, from
-either side, and `--json` carries the same text in `warning`. `imp new --net` does not warn: check
-the network's imps first. To keep a box imp boxed, keep every imp on its networks `box` or `none`.
+either side, and `--json` carries the same text in `warning`. `imp new --net` and `imp policy` print
+the same warning on stderr, one for each of the imp's networks that mixes them; the API gives them
+with `networks.warnings`. To keep a box imp boxed, keep every imp on its networks `box` or `none`.
 
 ## Names
 

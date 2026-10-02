@@ -351,6 +351,10 @@ export const impContract = {
     // from now on, whatever their egress policies; joining twice is a no-op
     join: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkJoinSchema),
 
+    // the trust warnings for each network the imp is on, as a join gives
+    // them: after a policy change, or a create with networks
+    warnings: base.input(NameInputSchema).output(z.array(z.string())),
+
     // its connections to the others end; leaving one it is not on is a no-op
     leave: base.input(z.object({ network: NameSchema, name: NameSchema })).output(NetworkSchema),
   },

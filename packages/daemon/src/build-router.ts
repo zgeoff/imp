@@ -394,6 +394,9 @@ export function buildRouter(deps: RouterDeps) {
       leave: os.networks.leave.handler((context) =>
         deps.networks.leaveNetwork(context.input.network, context.input.name),
       ),
+      warnings: os.networks.warnings.handler((context) =>
+        deps.networks.readTrustWarnings(context.input.name),
+      ),
     },
     grants: {
       add: os.grants.add.handler(async (context) => {

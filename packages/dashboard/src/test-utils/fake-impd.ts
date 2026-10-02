@@ -295,6 +295,7 @@ export function createFakeImpd(): FakeImpd {
       leave: os.networks.leave.handler(() => {
         throw new Error('not in the fake');
       }),
+      warnings: os.networks.warnings.handler(() => []),
     },
     grants: {
       add: os.grants.add.handler(() => ({})),

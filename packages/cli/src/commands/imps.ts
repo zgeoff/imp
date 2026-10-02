@@ -18,6 +18,7 @@ import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { cpuLimitArg, cpuWeightArg, readCpuArgs } from './cpu';
 import { authArgs } from './expose';
+import { printTrustWarnings } from './networks';
 
 export const newCommand = defineCommand({
   meta: { name: 'new', description: 'Create an imp and boot it' },
@@ -82,6 +83,10 @@ export const newCommand = defineCommand({
         ...readCpuArgs(context.args),
         ...(networks !== undefined && { networks }),
       });
+
+      if (networks !== undefined) {
+        await printTrustWarnings(client, imp.name);
+      }
 
       if (auth === null) {
         console.log(formatOutput(imp, context.args.json, formatImp));
@@ -238,6 +243,10 @@ export const policyCommand = defineCommand({
           : await client.imps.setPolicy({ name: context.args.name, policy });
 
       console.log(formatOutput(current, context.args.json, formatPolicy));
+
+      if (policy !== undefined) {
+        await printTrustWarnings(client, context.args.name);
+      }
     }),
 });
 

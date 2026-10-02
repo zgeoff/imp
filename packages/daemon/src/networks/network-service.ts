@@ -32,6 +32,10 @@ export interface NetworkService {
   readonly joinNetwork: (network: string, imp: string) => Promise<NetworkJoin>;
   readonly leaveNetwork: (network: string, imp: string) => Promise<Network>;
 
+  // a trust warning for each network the imp is on that mixes open imps
+  // with box or none ones; NOT_FOUND for no such imp
+  readonly readTrustWarnings: (imp: string) => Promise<string[]>;
+
   // a new imp's networks; NOT_FOUND for one that does not exist
   readonly resolveNetworkIds: (names: readonly string[]) => Promise<string[]>;
 
@@ -194,6 +198,24 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
       });
 
       return readNetwork(networkName);
+    },
+
+    readTrustWarnings: async (impName) => {
+      await requireImpId(impName);
+
+      const networks = await listNetworks(db);
+
+      const warnings: string[] = [];
+
+      for (const network of networks.filter((each) => each.imps.includes(impName))) {
+        const warning = await readTrustWarning(network.name, impName);
+
+        if (warning !== null) {
+          warnings.push(warning);
+        }
+      }
+
+      return warnings;
     },
 
     resolveNetworkIds: async (names) => {
