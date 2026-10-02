@@ -318,8 +318,12 @@ export function buildFakeVmm() {
             throw new TemplateRestoreError('restore failed', true, error);
           });
 
-          // as the real restore: the disk before the claim
-          await plan.diskReady;
+          // as the real restore: the disk before the claim, and a disk that
+          // fails is the imp's fault and ends the VM
+          await plan.diskReady.catch((error: unknown) => {
+            alive.delete(vm.pid);
+            throw new TemplateRestoreError('disk failed', false, error);
+          });
 
           if ((await pickOutcome('claim')) !== 'ok') {
             alive.delete(vm.pid);

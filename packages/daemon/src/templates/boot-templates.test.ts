@@ -31,6 +31,9 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
   const admitted: string[] = [];
   const logs: string[] = [];
   const roomAsked: number[] = [];
+
+  // the disk room each build ran in, at the time it ran
+  const roomHeld = { bytes: 0, atBuild: [] as number[] };
   const gate = { promise: Promise.resolve() };
 
   // `fail` makes every build fail until a test sets it back
@@ -46,6 +49,7 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
     bootReservePercent: 50,
     buildVm: async (plan) => {
       builds.push(plan);
+      roomHeld.atBuild.push(roomHeld.bytes);
 
       await gate.promise;
 
@@ -71,10 +75,16 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
       },
     },
     diskBudget: {
-      requireRoom: (bytes) => {
+      withRoom: async (bytes, task) => {
         roomAsked.push(bytes);
 
-        return Promise.resolve();
+        roomHeld.bytes += bytes;
+
+        try {
+          return await task();
+        } finally {
+          roomHeld.bytes -= bytes;
+        }
       },
     },
     now: () => clock.ms,
@@ -91,6 +101,7 @@ function setupStore(overrides: Partial<BootTemplateDeps> = {}) {
     admitted,
     logs,
     roomAsked,
+    roomHeld,
     gate,
     failing,
     clock,
@@ -149,7 +160,9 @@ test('a shape builds on its second miss; misses of one key share the build', asy
     `release template-${key.slice(0, 12)}`,
   ]);
 
+  // held through the build, and given back after it
   expect(ctx.roomAsked).toEqual([512 * 1024 * 1024]);
+  expect(ctx.roomHeld).toEqual({ bytes: 0, atBuild: [512 * 1024 * 1024] });
 
   // the build's work directory is gone; only the template and the placeholder stay
   expect(readdirSync(join(ctx.dataDir, 'templates')).toSorted()).toEqual([key, PLACEHOLDER]);
@@ -189,10 +202,14 @@ test('a failing build backs off, and its third failure turns the key off', async
   expect(ctx.builds).toHaveLength(1);
   expect(readdirSync(join(ctx.dataDir, 'templates'))).toEqual([PLACEHOLDER]);
 
-  // within the backoff, misses start nothing
+  // within the backoff, misses start nothing, and nor does a direct build
   await runTwoMisses();
 
   expect(ctx.builds).toHaveLength(1);
+
+  const heldOff = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
+
+  expect(String(heldOff)).toContain('back off');
 
   ctx.clock.ms += 60_000;
 
@@ -214,6 +231,58 @@ test('a failing build backs off, and its third failure turns the key off', async
   await runTwoMisses();
 
   expect(ctx.builds).toHaveLength(3);
+
+  const turnedOff = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
+
+  expect(String(turnedOff)).toContain('off until impd restarts');
+});
+
+test('a build the RAM or the disk turns away backs off, but never counts as a failure', async () => {
+  const refusal = { by: 'ram' };
+  const released: string[] = [];
+
+  const readRoom = (by: string) =>
+    refusal.by === by ? Promise.reject(new Error(`no room: ${by}`)) : Promise.resolve();
+
+  using refused = setupStore({
+    admission: {
+      admit: () => readRoom('ram'),
+      release: (id) => {
+        released.push(id);
+      },
+    },
+    diskBudget: {
+      withRoom: async (_bytes, task) => {
+        await readRoom('disk');
+
+        return task();
+      },
+    },
+  });
+
+  for (const by of ['ram', 'disk', 'ram', 'disk']) {
+    refusal.by = by;
+
+    const rejection = await refused.store.buildTemplate(SHAPE).catch((error: unknown) => error);
+
+    expect(String(rejection)).toContain(`no room: ${by}`);
+
+    refused.clock.ms += 60_000;
+  }
+
+  expect(refused.logs.at(-1)).toContain('build refused (next try in 60s): no room: disk');
+  expect(refused.builds).toHaveLength(0);
+
+  // the admission goes back each time, and no work directory stays
+  expect(released).toHaveLength(4);
+  expect(existsSync(join(refused.dataDir, 'templates'))).toBe(false);
+
+  // four refusals, and the key still builds once there is room
+  refusal.by = 'none';
+
+  await refused.store.buildTemplate(SHAPE);
+
+  expect(refused.store.find(SHAPE)).not.toBeNull();
 });
 
 test('a restore that fails in the template removes it; one that fails in the imp keeps it', async () => {
@@ -245,23 +314,58 @@ test('a failure report for an older build leaves the rebuilt template', async ()
   expect(existsSync(rebuilt.memFile)).toBe(true);
 });
 
-test('three failed restores in a row turn a key off; a good one resets the count', async () => {
+test('three template faults in a row turn a key off; an imp fault does not count, a good restore resets', async () => {
   using ctx = setupStore();
+
+  const runTemplateFault = async () => {
+    const files = await ctx.store.buildTemplate(SHAPE);
+
+    ctx.store.reportFailure(files, true);
+  };
+
+  await runTemplateFault();
+  await runTemplateFault();
 
   const files = await ctx.store.buildTemplate(SHAPE);
 
-  ctx.store.reportFailure(files, false);
-  ctx.store.reportFailure(files, false);
   ctx.store.reportRestored(files);
-  ctx.store.reportFailure(files, false);
-  ctx.store.reportFailure(files, false);
 
-  expect(ctx.store.find(SHAPE)).toEqual(files);
+  // an image that never pings fails in the imp, every time
+  for (let count = 0; count < 5; count += 1) {
+    ctx.store.reportFailure(files, false);
+  }
 
-  ctx.store.reportFailure(files, false);
+  ctx.store.reportFailure(files, true);
+
+  await runTemplateFault();
 
   expect(ctx.store.find(SHAPE)).toBeNull();
+  expect(ctx.logs.at(-1)).not.toContain('off until impd restarts');
+
+  await runTemplateFault();
+
   expect(ctx.logs.at(-1)).toContain('off until impd restarts: 3 restores failed');
+
+  const offAfterFaults = await ctx.store.buildTemplate(SHAPE).catch((error: unknown) => error);
+
+  expect(String(offAfterFaults)).toContain('off until impd restarts');
+});
+
+test('a template evicted before its restore failed counts no failure', async () => {
+  using ctx = setupStore();
+
+  for (let count = 0; count < 3; count += 1) {
+    const files = await ctx.store.buildTemplate(SHAPE);
+
+    rmSync(join(ctx.dataDir, 'templates', files.key), { recursive: true });
+
+    ctx.store.reportFailure(files, true);
+  }
+
+  const rebuilt = await ctx.store.buildTemplate(SHAPE);
+
+  expect(ctx.store.find(SHAPE)).toEqual(rebuilt);
+  expect(ctx.logs.join('\n')).not.toContain('restores failed');
 });
 
 test('past four templates, the least recently used goes', async () => {

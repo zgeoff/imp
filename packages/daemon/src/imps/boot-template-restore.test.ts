@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { readdirSync } from 'node:fs';
+import { copyFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { findImpByName } from '../db/imps';
 import { buildTemplateKey } from '../templates/boot-templates';
@@ -11,9 +11,21 @@ import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 const SHAPE = { vcpus: 1, memoryMib: 256 };
 
+// `cloneFails` turns every disk clone away until a test sets it back
 async function setupRestoreTest() {
+  const cloneFails = { isOn: false };
+
   const harness = await setupImpTest({
     env: { IMP_BOOT_TEMPLATES: 'true', IMP_DEFAULT_MEMORY_MIB: '256', IMP_DEFAULT_VCPUS: '1' },
+    cloneDisk: (source, target) => {
+      if (cloneFails.isOn) {
+        return Promise.reject(new Error('clone failed: no space'));
+      }
+
+      copyFileSync(source, target);
+
+      return Promise.resolve();
+    },
   });
 
   await harness.createTestImage('ubuntu');
@@ -28,7 +40,7 @@ async function setupRestoreTest() {
   // the template a first boot started in the background
   const waitForTemplate = () => templates.buildTemplate(SHAPE);
 
-  return { ...harness, client: app.client, templates, waitForTemplate };
+  return { ...harness, client: app.client, templates, waitForTemplate, cloneFails };
 }
 
 test('the second boot of a shape builds its template; the next restores it', async () => {
@@ -105,6 +117,37 @@ test('a restore that fails after the claim keeps the template for the next imp',
   expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first', 'second']);
   expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['third']);
   expect(ctx.fake.templateBuilds).toHaveLength(1);
+});
+
+test('a disk that fails after the resume fails the create, and costs the template nothing', async () => {
+  await using ctx = await setupRestoreTest();
+
+  await ctx.client.imps.create({ name: 'first' });
+  await ctx.waitForTemplate();
+
+  const aliveBefore = ctx.fake.alive.size;
+
+  ctx.cloneFails.isOn = true;
+
+  // more than the restore failures that would turn the key off
+  for (const name of ['second', 'third', 'fourth']) {
+    const failed = await ctx.client.imps.create({ name }).catch((error: unknown) => error);
+
+    expect(failed).toBeInstanceOf(Error);
+  }
+
+  const key = buildTemplateKey(ctx.readIdentity(), SHAPE);
+
+  // the restored VMs ended, none booted the kernel, and the template stays
+  expect(ctx.fake.alive.size).toBe(aliveBefore);
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first']);
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).toContain(key);
+
+  ctx.cloneFails.isOn = false;
+
+  await ctx.client.imps.create({ name: 'fifth' });
+
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['fifth']);
 });
 
 test('a restore claims the identity reset an imp owes, and a done reset clears it', async () => {
