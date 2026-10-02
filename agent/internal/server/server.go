@@ -181,7 +181,7 @@ func (s *Server) safeUnary(req proto.Request) (resp any, err error) {
 func (s *Server) unary(req proto.Request) (any, error) {
 	switch req.Op {
 	case proto.OpPing:
-		ping := buildPing(unix.ClockGettime)
+		ping := BuildPing(unix.ClockGettime)
 		ping.IdentityReset = s.IdentityReset
 		return ping, nil
 	case proto.OpActivity:
@@ -247,9 +247,9 @@ func replyErr(w *proto.Writer, code, msg string) {
 	w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: &proto.Error{Code: code, Message: msg}})
 }
 
-// buildPing reports the uptime from CLOCK_BOOTTIME, or none when the clock
+// BuildPing reports the uptime from CLOCK_BOOTTIME, or none when the clock
 // read fails: a 0 would make impd wait out a guest that is not young.
-func buildPing(clockGettime func(int32, *unix.Timespec) error) proto.Ping {
+func BuildPing(clockGettime func(int32, *unix.Timespec) error) proto.Ping {
 	ping := proto.Ping{OK: true, Version: proto.Version}
 	var ts unix.Timespec
 	if clockGettime(unix.CLOCK_BOOTTIME, &ts) == nil {

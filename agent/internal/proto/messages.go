@@ -38,6 +38,10 @@ const (
 	// reverse forwards: listen serves a unix socket or a loopback port, as
 	// agent.listen does; agent.accept relays its clients too
 	OpListen = "listen"
+
+	// claim gives a guest restored from a boot template its own identity;
+	// only stage 1, parked in a template, answers it
+	OpClaim = "claim"
 )
 
 // Request is the first frame on every connection. Fields beyond Op are
@@ -80,6 +84,9 @@ type Request struct {
 
 	// grow: the disk's new size in bytes
 	DiskBytes int64 `json:"disk_bytes,omitempty"`
+
+	// claim: the values a cold boot reads from the kernel cmdline, and more
+	Claim *Claim `json:"claim,omitempty"`
 
 	// services.remove, services.restart, services.logs: the service name
 	Service string `json:"service,omitempty"`
@@ -141,6 +148,26 @@ type Ping struct {
 	// set on a boot that reset a template copy's identity: ok, or failed
 	// when impd must ask again on the next boot
 	IdentityReset string `json:"identity_reset,omitempty"`
+	// "template" while stage 1 waits for a claim; empty once stage 2 runs
+	Stage string `json:"stage,omitempty"`
+}
+
+// StageTemplate is Ping.Stage for a guest parked in a boot template.
+const StageTemplate = "template"
+
+// Claim is what a guest restored from a boot template needs to become one
+// imp (docs/architecture/boot-templates.md#claim). The seed is mixed into
+// the kernel's entropy pool before the CRNG reseeds.
+type Claim struct {
+	ID            string   `json:"id"`
+	Hostname      string   `json:"hostname"`
+	IP            string   `json:"ip"`
+	GW            string   `json:"gw"`
+	DNS           []string `json:"dns,omitempty"`
+	MAC           string   `json:"mac"`
+	UnixMs        int64    `json:"unix_ms"`
+	Seed          []byte   `json:"seed"`
+	ResetIdentity bool     `json:"reset_identity,omitempty"`
 }
 
 // Ping.IdentityReset values.

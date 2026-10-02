@@ -50,6 +50,18 @@ interface SnapshotFiles {
   readonly memFilePath: string;
 }
 
+// A boot template's restore (docs/architecture/boot-templates.md): the
+// imp's own tap and vsock socket in place of the ones the snapshot names.
+interface SnapshotOverrides {
+  readonly hostDevName: string;
+  readonly vsockPath: string;
+}
+
+interface LoadOptions {
+  readonly resumeVm: boolean;
+  readonly overrides?: SnapshotOverrides;
+}
+
 export interface FirecrackerClient {
   readonly putBootSource: (source: BootSource) => Promise<void>;
   readonly putMachineConfig: (config: MachineConfig) => Promise<void>;
@@ -70,7 +82,7 @@ export interface FirecrackerClient {
   readonly createSnapshot: (files: SnapshotFiles) => Promise<void>;
 
   // only on a fresh Firecracker process, before any other configuration
-  readonly loadSnapshot: (files: SnapshotFiles, resumeVm: boolean) => Promise<void>;
+  readonly loadSnapshot: (files: SnapshotFiles, options: LoadOptions) => Promise<void>;
   readonly getVersion: () => Promise<string>;
   readonly getInstanceState: () => Promise<InstanceState>;
 }
@@ -193,13 +205,17 @@ export function createFirecrackerClient(
         },
         timeouts.snapshotMs,
       ),
-    loadSnapshot: (files, resumeVm) =>
+    loadSnapshot: (files, options) =>
       sendPut(
         '/snapshot/load',
         {
           snapshot_path: files.snapshotPath,
           mem_backend: { backend_type: 'File', backend_path: files.memFilePath },
-          resume_vm: resumeVm,
+          resume_vm: options.resumeVm,
+          ...(options.overrides !== undefined && {
+            network_overrides: [{ iface_id: 'eth0', host_dev_name: options.overrides.hostDevName }],
+            vsock_override: { uds_path: options.overrides.vsockPath },
+          }),
         },
         timeouts.snapshotMs,
       ),

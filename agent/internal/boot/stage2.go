@@ -44,10 +44,7 @@ func Stage2() error {
 	if err := mountSystem(); err != nil {
 		return err
 	}
-	params, err := cmdline.Read()
-	if err != nil {
-		return err
-	}
+	params := readHandoff(os.Args)
 	// Problems below are logged, not fatal: an agent that answers on vsock
 	// with a broken network is still reachable to debug.
 	if err := setHostname(params.Hostname); err != nil {
@@ -76,14 +73,6 @@ func Stage2() error {
 		log.Printf("services: %v", err)
 	}
 
-	listenVsock := func() (net.Listener, error) {
-		l, err := vsock.Listen(server.Port, nil)
-		if err != nil {
-			return nil, fmt.Errorf("vsock listen: %w", err)
-		}
-		log.Printf("stage2: ready on vsock port %d", server.Port)
-		return l, nil
-	}
 	launcher := launch.New(r, image)
 	dialer := dial.NewDialer(r, image.User, AgentPath)
 	// Each non-tty exec gets a cgroup leaf, so a stop kills its escapees too.
@@ -255,4 +244,31 @@ func hostsWithName(hosts, name string) string {
 		out = append(out, line)
 	}
 	return strings.Join(out, "\n") + "\n"
+}
+
+// listenVsock listens on the agent's port, for stage 1 parked in a template
+// and for stage 2.
+func listenVsock() (net.Listener, error) {
+	l, err := vsock.Listen(server.Port, nil)
+	if err != nil {
+		return nil, fmt.Errorf("vsock listen: %w", err)
+	}
+	log.Printf("ready on vsock port %d", server.Port)
+	return l, nil
+}
+
+// readHandoff is what stage 1 passed: the cmdline's values on a cold boot,
+// a claim's after a template restore. Without them stage 2 fails closed: no
+// hostname, no network, never the template's cmdline.
+func readHandoff(args []string) cmdline.Params {
+	if len(args) < 3 {
+		log.Printf("stage2: no parameters from stage 1; the network stays down")
+		return cmdline.Params{}
+	}
+	params, err := cmdline.Decode(args[2])
+	if err != nil {
+		log.Printf("stage2: parameters from stage 1: %v; the network stays down", err)
+		return cmdline.Params{}
+	}
+	return params
 }
