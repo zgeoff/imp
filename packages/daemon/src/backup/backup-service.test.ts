@@ -535,7 +535,7 @@ test('no secret, key, password or token of the host reaches a backup', async () 
   expect(manifest.imps[0]?.grants).toEqual(['gh']);
 });
 
-test('a restore brings back the egress policy and the grants whose secret is here', async () => {
+test('a restore regrants by name, and an unknown egress policy comes back open', async () => {
   await using ctx = await setupTest();
 
   await ctx.createDevImp();
@@ -543,6 +543,8 @@ test('a restore brings back the egress policy and the grants whose secret is her
   await ctx.broker.addSecret({ name: 'npm-old', kind: 'npm', value: 'npm_value' });
   await ctx.broker.addGrant('dev', 'gh');
   await ctx.broker.addGrant('dev', 'npm-old');
+
+  // a policy from another impd version than this one knows
   await ctx.db.updateTable('imps').set({ egress_policy: 'granted-only' }).execute();
   await ctx.backups.runBackup();
   await ctx.broker.deleteSecret('npm-old');
@@ -565,7 +567,11 @@ test('a restore brings back the egress policy and the grants whose secret is her
     .where('id', '=', back?.id ?? '')
     .executeTakeFirst();
 
-  expect(row?.egress_policy).toBe('granted-only');
+  expect(row?.egress_policy).toBe('open');
+
+  expect(ctx.logs).toContain(
+    'impd: backup: back: unknown egress policy "granted-only"; restored as open',
+  );
 });
 
 test('a restore fetches one file at a time and leaves none behind', async () => {
@@ -588,6 +594,29 @@ test('a restore fetches one file at a time and leaves none behind', async () => 
   ]);
 
   expect(readdirSync(join(ctx.dataDir, 'backup', 'restore'))).toEqual([]);
+});
+
+test('a manual run that succeeds ends the backoff of a failed scheduled run', async () => {
+  await using ctx = await setupTest();
+
+  ctx.fake.state.failBackup = true;
+
+  await ctx.backups.runScheduled().catch(() => {});
+
+  ctx.fake.state.failBackup = false;
+
+  ctx.advance(60 * 1000);
+
+  await ctx.backups.runBackup();
+
+  // with the backoff left, the retry would be due 5 minutes after the failure
+  ctx.fake.calls.length = 0;
+
+  ctx.advance(5 * 60 * 1000);
+
+  await ctx.backups.runScheduled();
+
+  expect(ctx.fake.calls).toEqual([]);
 });
 
 test('a failed scheduled run waits twice as long each time, up to the interval', async () => {

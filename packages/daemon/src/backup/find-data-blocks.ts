@@ -43,19 +43,32 @@ function runLseek(fd: number, offset: number, whence: number): SeekResult {
   return { errno: errnoAt === null ? -1 : read.i32(errnoAt) };
 }
 
-function listEveryBlock(size: number, blockBytes: number): Set<number> {
-  const blocks = new Set<number>();
+function buildBlocksFrom(
+  found: ReadonlySet<number>,
+  offset: number,
+  size: number,
+  blockBytes: number,
+): Set<number> {
+  const blocks = new Set(found);
 
-  for (let block = 0; block * blockBytes < size; block += 1) {
+  for (let block = Math.floor(offset / blockBytes); block * blockBytes < size; block += 1) {
     blocks.add(block);
   }
 
   return blocks;
 }
 
+// ENXIO from SEEK_DATA is trusted only when the offset is in a hole by an
+// answer of its own
+function isHoleAt(fd: number, offset: number, seek: SeekFile): boolean {
+  const hole = seek(fd, offset, SEEK_HOLE);
+
+  return !('errno' in hole) && hole.offset === offset;
+}
+
 // The indexes of the `blockBytes` blocks that hold data: SEEK_DATA skips a
-// sparse disk's holes. Any error but "no more data" means every block, never
-// a block left out.
+// sparse disk's holes. Any answer it cannot confirm means every block from
+// there, never a block left out.
 export function findDataBlocks(
   fd: number,
   size: number,
@@ -68,11 +81,13 @@ export function findDataBlocks(
     const data = seek(fd, offset, SEEK_DATA);
 
     if ('errno' in data) {
-      if (data.errno === ENXIO) {
+      if (data.errno === ENXIO && isHoleAt(fd, offset, seek)) {
         break;
       }
 
-      return listEveryBlock(size, blockBytes);
+      // errno comes from a second FFI call and may be stale: data left out
+      // would be lost, so every block from here on is read instead
+      return buildBlocksFrom(blocks, offset, size, blockBytes);
     }
 
     if (data.offset >= size) {
@@ -82,7 +97,7 @@ export function findDataBlocks(
     const hole = seek(fd, data.offset, SEEK_HOLE);
 
     if ('errno' in hole) {
-      return listEveryBlock(size, blockBytes);
+      return buildBlocksFrom(blocks, data.offset, size, blockBytes);
     }
 
     const end = Math.min(hole.offset, size);

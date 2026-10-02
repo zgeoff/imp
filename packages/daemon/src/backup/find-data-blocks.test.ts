@@ -60,7 +60,29 @@ test('an lseek error other than "no more data" means every block', () => {
 
   expect(sortBlocks(dataFails)).toEqual([0, 1]);
 
-  const allHoles = findDataBlocks(3, 2 * MIB, MIB, () => ({ errno: 6 }));
+  // a true ENXIO: the offset is in a hole by SEEK_HOLE's own answer
+  const allHoles = findDataBlocks(3, 2 * MIB, MIB, (_fd, offset, whence) =>
+    whence === 3 ? { errno: 6 } : { offset },
+  );
 
   expect(allHoles.size).toBe(0);
+});
+
+test('an ENXIO that SEEK_HOLE does not confirm reads every block from there', () => {
+  // data in block 0, then a stale ENXIO at 1 MiB, where data really follows
+  const stale = findDataBlocks(3, 4 * MIB, MIB, (_fd, offset, whence) => {
+    if (whence === 3) {
+      return offset === 0 ? { offset: 0 } : { errno: 6 };
+    }
+
+    return offset === 0 ? { offset: MIB } : { offset: 2 * MIB };
+  });
+
+  expect(sortBlocks(stale)).toEqual([0, 1, 2, 3]);
+
+  const holeFails = findDataBlocks(3, 3 * MIB, MIB, (_fd, _offset, whence) =>
+    whence === 3 ? { errno: 6 } : { errno: 9 },
+  );
+
+  expect(sortBlocks(holeFails)).toEqual([0, 1, 2]);
 });

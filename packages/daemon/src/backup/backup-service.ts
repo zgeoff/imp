@@ -5,6 +5,7 @@ import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { sendFreeze, sendThaw } from '../agent-client/agent-requests';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
+import { EGRESS_POLICIES } from '../broker/broker-front';
 import type { Broker } from '../broker/broker-service';
 import { FREEZE_TIMEOUT_MS, buildCheckpointId } from '../checkpoints/checkpoint-service';
 import type { DiskFreezer } from '../checkpoints/checkpoint-service';
@@ -300,6 +301,9 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
       writeState({ lastRunAt: now() });
 
+      // a manual run that succeeds ends a scheduled run's backoff too
+      retry.failures = 0;
+
       if (deps.backup.forget) {
         await restic.forget(deps.backup.keep);
       }
@@ -481,7 +485,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
       await deps.db
         .updateTable('imps')
-        .set({ egress_policy: imp.egressPolicy })
+        .set({ egress_policy: resolveEgressPolicy(target.name, imp.egressPolicy) })
         .where('id', '=', impId)
         .execute();
     };
@@ -517,6 +521,18 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     }
 
     return skipped;
+  };
+
+  // a policy this impd does not know would leave the broker guessing: an
+  // older or newer backup falls back to `open`, with a warning
+  const resolveEgressPolicy = (name: string, policy: string): string => {
+    if ((EGRESS_POLICIES as readonly string[]).includes(policy)) {
+      return policy;
+    }
+
+    log(`impd: backup: ${name}: unknown egress policy ${JSON.stringify(policy)}; restored as open`);
+
+    return 'open';
   };
 
   // only the imp this restore made: a name clash fails before any disk
