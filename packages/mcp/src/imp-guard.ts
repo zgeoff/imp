@@ -118,3 +118,48 @@ function buildSuffix(): string {
 
   return Array.from(bytes, (byte) => SUFFIX_ALPHABET[byte % SUFFIX_ALPHABET.length]).join('');
 }
+
+// The guard for a caller whose token impd already limits to `patterns` (null
+// for every imp): impd refuses what is outside them, so this only names a
+// create. It picks a name for one `prefix*` pattern; other patterns need one.
+export function createPatternGuard(patterns: readonly string[] | null): ImpGuard {
+  if (patterns === null) {
+    return createImpGuard({ all: true });
+  }
+
+  const summary = `imps matching ${patterns.join(', ')}`;
+  const prefix = readPrefix(patterns);
+
+  return {
+    isAllowed: () => true,
+    require: () => {},
+    pickNewName: () => {
+      if (prefix === null) {
+        throw new GuardError(
+          `this token may touch only ${summary}, so give the new imp a name that matches`,
+        );
+      }
+
+      return `${prefix}${buildSuffix()}`;
+    },
+    summary,
+  };
+}
+
+// the prefix of a single `prefix*` pattern that leaves room for a suffix
+function readPrefix(patterns: readonly string[]): string | null {
+  const [pattern] = patterns;
+
+  if (patterns.length !== 1 || pattern === undefined || !pattern.endsWith('*')) {
+    return null;
+  }
+
+  const prefix = pattern.slice(0, -1);
+  const sample = `${prefix}${'a'.repeat(SUFFIX_LENGTH)}`;
+
+  if (prefix.includes('*') || sample.length > MAX_NAME_LENGTH) {
+    return null;
+  }
+
+  return NameSchema.safeParse(sample).success ? prefix : null;
+}
