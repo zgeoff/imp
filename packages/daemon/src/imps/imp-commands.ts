@@ -88,7 +88,7 @@ interface ImpCommandParts {
   readonly lock: ImpLock;
   readonly ops: ImpVmOps;
   readonly presenter: ImpPresenter;
-  readonly leases: Pick<ImpLeases, 'requireUnleased'>;
+  readonly leases: Pick<ImpLeases, 'requireUnleased' | 'endForcedLeases'>;
 }
 
 export function createImpCommands(parts: ImpCommandParts): ImpCommands {
@@ -261,19 +261,24 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(running);
       }),
 
+    // a call that changes nothing answers as it always did, leased or not;
+    // a forced one ends the leases only once the imp has stopped
     stopImp: (name, force = false) =>
-      lock.withImp(name, async (found) => {
-        const imp = await leases.requireUnleased(found, force);
-
+      lock.withImp(name, async (imp) => {
         if (imp.state === 'stopped') {
           return presenter.toApi(imp);
         }
 
         requireTransition(imp.state, 'stopped', 'stop');
 
+        await leases.requireUnleased(imp, force);
+
         const stopped = await ops.stopImpVm(imp);
 
-        return presenter.toApi(stopped);
+        const after =
+          force && stopped.state === 'stopped' ? await leases.endForcedLeases(stopped) : stopped;
+
+        return presenter.toApi(after);
       }),
 
     destroyImp: async (name) => {
@@ -311,13 +316,23 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       return presenter.readUrls(imp);
     },
 
+    // as for stop
     sleepImp: (name, force = false) =>
-      lock.withImp(name, async (found) => {
-        const imp = await leases.requireUnleased(found, force);
+      lock.withImp(name, async (imp) => {
+        if (imp.state === 'sleeping') {
+          return presenter.toApi(imp);
+        }
 
-        const asleep = imp.state === 'sleeping' ? imp : await ops.sleepImpVm(imp, 'requested');
+        requireTransition(imp.state, 'sleeping', 'sleep');
 
-        return presenter.toApi(asleep);
+        await leases.requireUnleased(imp, force);
+
+        const asleep = await ops.sleepImpVm(imp, 'requested');
+
+        const after =
+          force && asleep.state === 'sleeping' ? await leases.endForcedLeases(asleep) : asleep;
+
+        return presenter.toApi(after);
       }),
 
     wakeImp: (name, restartError = true) =>

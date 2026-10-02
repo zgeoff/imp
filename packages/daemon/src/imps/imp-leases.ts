@@ -1,6 +1,5 @@
 import type { Imp } from '@imp/api';
 import { buildLeaseNotHeldError, buildLeasedError } from '../api-errors';
-import type { Caller } from '../auth/caller';
 import { listImps, updateImpActivity } from '../db/imps';
 import {
   HOLD_LABEL,
@@ -18,7 +17,10 @@ import type { ImpPresenter } from './imp-presenter';
 import type { ImpVmOps } from './imp-vm-ops';
 
 // who a lease belongs to: the caller's principal, and its name for people
-type LeaseHolder = Pick<Caller, 'principal' | 'display'>;
+interface LeaseHolder {
+  readonly principal: string;
+  readonly display: string;
+}
 
 // a lease with its imp's name
 interface NamedLease {
@@ -59,9 +61,13 @@ export interface ImpLeases {
   // keeps it; 0 releases it and a legacy hold
   readonly holdImp: (name: string, seconds: number, holder: LeaseHolder) => Promise<Imp>;
 
-  // under the imp's lock, before a user's sleep or stop: LEASED while a
-  // lease from leases.* lives, unless `force` ends them all
-  readonly requireUnleased: (imp: LockedImp, force: boolean) => Promise<LockedImp>;
+  // under the imp's lock, before a user's sleep or stop that changes the
+  // imp's state: LEASED while a lease from leases.* lives, unless `force`
+  readonly requireUnleased: (imp: LockedImp, force: boolean) => Promise<void>;
+
+  // after a forced sleep or stop succeeded, under the same lock: ends the
+  // leases from leases.* and emits `released`
+  readonly endForcedLeases: (imp: LockedImp) => Promise<LockedImp>;
 }
 
 interface ImpLeaseParts {
@@ -173,7 +179,7 @@ export function createImpLeases(parts: ImpLeaseParts): ImpLeases {
               { principal: holder.principal, label: HOLD_LABEL },
               { principal: LEGACY_PRINCIPAL, label: HOLD_LABEL },
             ],
-            { at, reason: 'held' },
+            { at, reason: 'held', isEmittedWhenNone: true },
           );
 
           return presenter.toApi(toLockedImp(imp, released.imp));
@@ -203,28 +209,30 @@ export function createImpLeases(parts: ImpLeaseParts): ImpLeases {
       }),
 
     requireUnleased: async (imp, force) => {
-      const at = context.now();
+      if (force) {
+        return;
+      }
 
-      const leases = await listLeases(context.db, at, [imp.id]);
+      const leases = await listLeases(context.db, context.now(), [imp.id]);
 
       const blocking = leases.filter((lease) => isBlockingLease(lease));
 
-      if (blocking.length === 0) {
-        return imp;
-      }
-
-      if (!force) {
+      if (blocking.length > 0) {
         throw buildLeasedError(imp.name, blocking);
       }
+    },
 
+    endForcedLeases: async (imp) => {
       const released = await removeLeases(context.db, imp.id, 'blocking', {
-        at,
+        at: context.now(),
         reason: 'released',
       });
 
-      context.log(
-        `impd: ${imp.name}: a forced sleep or stop ended ${String(released.removed)} lease(s)`,
-      );
+      if (released.removed > 0) {
+        context.log(
+          `impd: ${imp.name}: a forced sleep or stop ended ${String(released.removed)} lease(s)`,
+        );
+      }
 
       return toLockedImp(imp, released.imp);
     },

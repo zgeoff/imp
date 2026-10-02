@@ -4,6 +4,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { listLeases, writeLease } from './db/leases';
+import { readPresentedLeases } from './imps/imp-presenter';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 import { readRejection } from './read-rejection';
 
@@ -353,4 +354,141 @@ test('a refusal names only the protected imps the caller may read', async () => 
   );
 
   expect(decision).toMatchObject({ neededMib: 100, protectedCount: 2 });
+});
+
+test('every write sets holdUntil from the live leases, longer or shorter', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const a = await ctx.createTokenClient('a');
+
+  const at = ctx.now();
+
+  const readHold = async () => {
+    const imp = await ctx.client.imps.get({ name: 'dev' });
+
+    return imp.holdUntil?.getTime() ?? null;
+  };
+
+  await a.client.leases.acquire({ name: 'dev', label: 'short', ttlSeconds: 60 });
+  await a.client.leases.acquire({ name: 'dev', label: 'long', ttlSeconds: 600 });
+
+  const acquired = await readHold();
+
+  await a.client.leases.renew({ name: 'dev', label: 'short', ttlSeconds: 900 });
+
+  const renewed = await readHold();
+
+  await a.client.leases.release({ name: 'dev', label: 'short' });
+
+  const released = await readHold();
+
+  await a.client.imps.hold({ name: 'dev', seconds: 30 });
+  await a.client.imps.hold({ name: 'dev', seconds: 0 });
+
+  const unheld = await readHold();
+
+  await ctx.client.imps.hold({ name: 'dev', seconds: 30 });
+  await ctx.client.imps.sleep({ name: 'dev', force: true });
+
+  const cleared = await readHold();
+
+  expect([acquired, renewed, released, unheld, cleared]).toEqual([
+    at + 600_000,
+    at + 900_000,
+    at + 600_000,
+    at + 600_000,
+
+    // the forced sleep took the leases; root's hold stays
+    at + 30_000,
+  ]);
+});
+
+test('a forced sleep that fails keeps the leases and emits no release', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
+
+  ctx.fake.queue('sleep', 'fail');
+
+  const failed = await readRejection(ctx.client.imps.sleep({ name: 'dev', force: true }));
+
+  await Bun.sleep(10);
+
+  const leases = await ctx.client.leases.list({ name: 'dev' });
+  const imp = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(failed).not.toBeNull();
+  expect(leases.map((lease) => lease.owner.label)).toEqual(['job']);
+  expect(imp.holdUntil).toEqual(new Date(ctx.now() + 60_000));
+
+  expect(ctx.events.some((event) => event.ev === 'ImpChanged' && event.reason === 'released')).toBe(
+    false,
+  );
+});
+
+test('a sleep of a sleeping leased imp, or a stop of a stopped one, answers as before', async () => {
+  await using ctx = await setupTest();
+
+  const created = await ctx.client.imps.create({ name: 'dev' });
+
+  await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 600 });
+
+  // as after an impd restart: the shutdown pass slept it and kept the lease
+  await ctx.imps.sleepAllImps();
+
+  const asleep = await ctx.client.imps.sleep({ name: 'dev' });
+
+  await ctx.client.imps.stop({ name: 'dev', force: true });
+
+  const at = ctx.now();
+
+  await writeLease(
+    ctx.db,
+    {
+      impId: created.id,
+      principal: 'token:other',
+      label: 'job',
+      display: 'other',
+      until: new Date(at + 600_000),
+      createdAt: new Date(at),
+    },
+    { at, reason: null },
+  );
+
+  const stopped = await ctx.client.imps.stop({ name: 'dev' });
+  const leases = await listLeases(ctx.db, ctx.now());
+
+  expect(asleep.state).toBe('sleeping');
+  expect(stopped.state).toBe('stopped');
+  expect(leases.map((lease) => lease.principal)).toEqual(['token:other']);
+});
+
+test('hold 0 emits held even when it releases nothing', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await Bun.sleep(10);
+
+  const before = ctx.events.length;
+
+  await ctx.client.imps.hold({ name: 'dev', seconds: 0 });
+  await Bun.sleep(10);
+
+  const after = ctx.events.slice(before);
+
+  expect(after).toMatchObject([{ ev: 'ImpChanged', reason: 'held' }]);
+});
+
+test('an imp answer names its lease owners from the presenter’s one read', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.leases.acquire({ name: 'dev', label: 'job', ttlSeconds: 60 });
+
+  const presented = await ctx.imps.getImp('dev');
+
+  expect(readPresentedLeases(presented)?.map((lease) => lease.label)).toEqual(['job']);
 });
