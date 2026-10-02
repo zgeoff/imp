@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import * as z from 'zod';
 
 const LETS_ENCRYPT_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
@@ -31,6 +32,9 @@ export const HttpsEnvSchema = z.object({
   IMP_ACME_DIRECTORY: z.url().default(LETS_ENCRYPT_DIRECTORY),
   IMP_ACME_EMAIL: z.email().optional(),
   IMP_ACME_CA_FILE: z.string().optional(),
+
+  // set by the end-to-end harness only; unlocks the challtestsrv provider
+  IMP_E2E: z.literal('1').optional(),
 });
 
 export interface DnsConfig {
@@ -73,8 +77,17 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
     throw new Error('IMP_DNS_PROVIDER=cloudflare needs IMP_DNS_API_TOKEN');
   }
 
-  if (env.IMP_DNS_PROVIDER === 'challtestsrv' && env.IMP_DNS_API_URL === undefined) {
-    throw new Error('IMP_DNS_PROVIDER=challtestsrv needs IMP_DNS_API_URL, its management API');
+  if (env.IMP_DNS_PROVIDER === 'challtestsrv') {
+    checkTestProvider(env);
+  }
+
+  // the token goes in a header to this URL
+  if (env.IMP_DNS_PROVIDER === 'cloudflare' && env.IMP_DNS_API_URL !== undefined) {
+    checkSecureUrl(env.IMP_DNS_API_URL);
+  }
+
+  if (env.IMP_ACME_CA_FILE !== undefined && !existsSync(env.IMP_ACME_CA_FILE)) {
+    throw new Error(`IMP_ACME_CA_FILE ${env.IMP_ACME_CA_FILE} does not exist`);
   }
 
   if (env.IMP_HTTPS_PORT === env.IMP_HTTP_PORT) {
@@ -94,4 +107,26 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
     acmeEmail: env.IMP_ACME_EMAIL ?? null,
     acmeCaFile: env.IMP_ACME_CA_FILE ?? null,
   };
+}
+
+// challtestsrv answers every lookup Pebble makes and none a real CA makes:
+// set by mistake, it would only fail, but it has no place outside a test
+function checkTestProvider(env: z.infer<typeof HttpsEnvSchema>): void {
+  if (env.IMP_E2E !== '1') {
+    throw new Error('IMP_DNS_PROVIDER=challtestsrv is for tests only and needs IMP_E2E=1');
+  }
+
+  if (env.IMP_DNS_API_URL === undefined) {
+    throw new Error('IMP_DNS_PROVIDER=challtestsrv needs IMP_DNS_API_URL, its management API');
+  }
+}
+
+function checkSecureUrl(url: string): void {
+  const parsed = new URL(url);
+
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+
+  if (parsed.protocol !== 'https:' && !loopback) {
+    throw new Error(`IMP_DNS_API_URL must be https, unless it is on loopback: ${url}`);
+  }
 }

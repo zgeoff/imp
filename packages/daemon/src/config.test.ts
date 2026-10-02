@@ -105,7 +105,7 @@ test('it refuses a domain it cannot get a certificate for', () => {
   ).toThrow('IMP_DNS_API_TOKEN');
 
   expect(() =>
-    loadConfig({ IMP_DOMAIN: 'imp.example.com', IMP_DNS_PROVIDER: 'challtestsrv' }),
+    loadConfig({ IMP_DOMAIN: 'imp.example.com', IMP_DNS_PROVIDER: 'challtestsrv', IMP_E2E: '1' }),
   ).toThrow('IMP_DNS_API_URL');
 
   expect(() => loadConfig({ IMP_DOMAIN: '*.example.com', IMP_DNS_PROVIDER: 'cloudflare' })).toThrow(
@@ -114,5 +114,42 @@ test('it refuses a domain it cannot get a certificate for', () => {
 
   expect(() => loadConfig({ IMP_DOMAIN: 'localhost', IMP_DNS_PROVIDER: 'cloudflare' })).toThrow(
     'domain name',
+  );
+});
+
+const CLOUDFLARE = {
+  IMP_DOMAIN: 'imp.example.com',
+  IMP_DNS_PROVIDER: 'cloudflare',
+  IMP_DNS_API_TOKEN: 'cf-token',
+};
+
+test('the challtestsrv provider needs the test flag', () => {
+  const challtestsrv = {
+    IMP_DOMAIN: 'imp.test',
+    IMP_DNS_PROVIDER: 'challtestsrv',
+    IMP_DNS_API_URL: 'http://challtestsrv:8055',
+  };
+
+  expect(() => loadConfig(challtestsrv)).toThrow('for tests only and needs IMP_E2E=1');
+  expect(loadConfig({ ...challtestsrv, IMP_E2E: '1' }).https?.dns.provider).toBe('challtestsrv');
+});
+
+test('the token goes to an https API, or one on loopback', () => {
+  expect(() => loadConfig({ ...CLOUDFLARE, IMP_DNS_API_URL: 'http://dns.example.com' })).toThrow(
+    'IMP_DNS_API_URL must be https',
+  );
+
+  expect(
+    loadConfig({ ...CLOUDFLARE, IMP_DNS_API_URL: 'https://dns.example.com' }).https,
+  ).not.toBeNull();
+
+  expect(
+    loadConfig({ ...CLOUDFLARE, IMP_DNS_API_URL: 'http://127.0.0.1:9000' }).https,
+  ).not.toBeNull();
+});
+
+test('a CA file that does not exist is refused by name', () => {
+  expect(() => loadConfig({ ...CLOUDFLARE, IMP_ACME_CA_FILE: '/nonexistent/ca.pem' })).toThrow(
+    'IMP_ACME_CA_FILE /nonexistent/ca.pem does not exist',
   );
 });
