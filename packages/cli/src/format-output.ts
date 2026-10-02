@@ -7,6 +7,7 @@ import type {
   Imp,
   Secret,
   Session,
+  SystemInfo,
 } from '@imp/api';
 
 type Row = readonly string[];
@@ -108,6 +109,33 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
     `last prune: ${status.lastPruneAt?.toISOString() ?? 'never'}`,
     `last check: ${check}`,
   ].join('\n');
+}
+
+// what `imp info` says an upgrade left: the imps whose next wake boots
+// cold, and how many run each older part; an older impd does not count them
+export function formatBootStatus(
+  status: Readonly<SystemInfo['bootStatus']> | undefined,
+  impdVersion: string,
+): string {
+  if (status === undefined) {
+    return `unknown (impd ${impdVersion} predates it)`;
+  }
+
+  const notes: string[] = [];
+
+  if (status.coldBoots > 0) {
+    notes.push(`${String(status.coldBoots)} will boot cold`);
+  }
+
+  const outdated = Object.entries(status.outdated)
+    .filter(([, count]) => count > 0)
+    .map(([part, count]) => `${String(count)} ${part}`);
+
+  if (outdated.length > 0) {
+    notes.push(`outdated: ${outdated.join(', ')}`);
+  }
+
+  return notes.length === 0 ? 'none' : notes.join('; ');
 }
 
 export function formatBackupRun(run: Readonly<BackupRun>): string {

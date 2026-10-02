@@ -34,7 +34,7 @@ deploy/upgrade.sh
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
-   back, and lists the imps.
+   back, prints the boot status counts from `imp info`, and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
 disk is never touched. [Snapshot identity](../architecture/sleep-and-wake.md#snapshot-identity) has
@@ -44,6 +44,15 @@ the full rule:
   needs it, and the woken imp runs its old agent until its next cold boot.
 - A new guest kernel: memory restores, and the imp runs its old kernel until its next cold boot.
 - A new Firecracker or host kernel: every sleeping imp boots cold.
+
+An outdated kernel or agent alone never causes a cold boot: the snapshot still loads. The imp picks
+up the new part only at its next stop and start; a sleep and a wake does not clear it.
+
+`imp info` counts both kinds on its `boot status` line, over running and sleeping imps, for example
+`3 will boot cold; outdated: 2 agent`. A sleeping imp counts as a cold boot when its snapshot cannot
+load or is gone. A running imp counts when it runs an older Firecracker or an older impd booted it:
+its next sleep writes a snapshot the host cannot load. `imp info --json` has the same numbers under
+`bootStatus`.
 
 `imp ls` says what an upgrade means for each imp in its NOTE column:
 

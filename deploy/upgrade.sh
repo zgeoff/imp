@@ -9,7 +9,8 @@
 #    first that fails: the host keeps running the old image, untouched.
 #    Stopping the container would sleep them too, but within its 120 s.
 # 3. Restarts the host on the new image and waits for impd.
-# 4. Lists the imps: a NOTE says which boot cold on their next wake, and why
+# 4. Prints how many imps will boot cold and how many run outdated parts, then
+#    lists the imps: a NOTE says which boot cold on their next wake, and why
 #    (docs/guides/operations.md#upgrade).
 #
 # Needs docker, curl and jq on the host.
@@ -57,6 +58,25 @@ list_awake() {
   local imps
   imps=$(imp ls --json) || return 1
   jq -r '.[] | select(.state == "running") | .name' <<<"$imps"
+}
+
+# the counts `imp info` reports; an older impd has none, and the NOTE column
+# that follows still names each imp
+print_boot_status() {
+  local info
+  if ! info=$(imp info --json); then
+    echo "upgrade: imp info failed; see the NOTE column below" >&2
+    return
+  fi
+  jq -r '
+    if .bootStatus == null then
+      "upgrade: this impd does not count cold boots; see the NOTE column below"
+    else
+      .bootStatus as $status
+      | [$status.outdated | to_entries[] | select(.value > 0) | "\(.value) \(.key)"]
+      | (if length == 0 then "none" else join(", ") end) as $outdated
+      | "upgrade: \($status.coldBoots) imps will boot cold; outdated: \($outdated)"
+    end' <<<"$info" || echo "upgrade: could not read imp info; see the NOTE column below" >&2
 }
 
 restart_host() {
@@ -117,4 +137,5 @@ restart_host
 wait_ready
 
 echo "upgrade: done. To roll back: docker tag $old $image, then run the restart again."
+print_boot_status
 imp ls

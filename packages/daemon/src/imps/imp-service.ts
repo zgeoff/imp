@@ -3,6 +3,8 @@ import type { ImpRecord } from '../db/imps';
 import { countSessions } from '../sessions/count-sessions';
 import { createSessionService } from '../sessions/session-service';
 import type { SessionService } from '../sessions/session-service';
+import { readBootStatus } from './boot-status';
+import type { BootStatus } from './boot-status';
 import type { ImpCommands } from './imp-commands';
 import { createImpCommands } from './imp-commands';
 import { createImpContext } from './imp-context';
@@ -23,6 +25,7 @@ export type ImpService = ImpCommands &
   Pick<ImpRuntime, 'openExec' | 'openAttach' | 'recordActivity'> & {
     // sessions impd last saw in the imp; undefined when it has not seen any
     readonly countSessions: (imp: ImpRecord) => number | undefined;
+    readonly readBootStatus: (imp: ImpRecord) => BootStatus;
   };
 
 // For checkpoints/checkpoint-service.ts. `lockImp` runs `action` under the
@@ -61,6 +64,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     ...runtime,
     ...sessions,
     countSessions: (imp) => countSessions(context, imp),
+    readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
     lockImp: lock.withImp,
     haltImp: ops.stopImpVm,
     bootImp: ops.startImpVm,

@@ -13,6 +13,7 @@ import type { ImpDatabase } from './db/open-database';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
+import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { StorageBackend } from './storage/storage-backend';
@@ -204,6 +205,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     awakeCount: running.length,
     impCount: imps.length,
     sessionCount: imps.reduce((sum, imp) => sum + (deps.imps.countSessions(imp) ?? 0), 0),
+    bootStatus: countBootStatuses(imps, deps.imps.readBootStatus),
     firecrackerVersion: deps.firecrackerVersion,
     guestKernel: deps.systemFiles.guestKernel,
     systemDrive: deps.systemFiles.systemDrive,

@@ -250,10 +250,14 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const paths = context.findPaths(imp.id);
     const meta = readSnapshotMeta(paths);
-    const mismatch = meta === null ? 'no snapshot' : findColdBootReason(meta, context.identity);
+
+    const mismatch =
+      meta === null ? 'no snapshot it can load' : findColdBootReason(meta, context.identity);
 
     if (meta === null || mismatch !== null) {
-      context.log(`impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot'}`);
+      context.log(
+        `impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot it can load'}`,
+      );
 
       return startColdImpVm(imp, mismatch);
     }
