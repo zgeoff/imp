@@ -389,8 +389,13 @@ test('impd stopping closes exec sessions with 1012', async () => {
 
 // opens /exec with `query` and reports whether the upgrade succeeded; a
 // session it opens sends `start` for `name` and reports the first message
-async function tryExecSocket(port: string, query: string, name = 'dev') {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`);
+async function tryExecSocket(
+  port: string,
+  query: string,
+  name = 'dev',
+  headers: Readonly<Record<string, string>> = {},
+) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`, { headers });
 
   const outcome = Promise.withResolvers<string>();
 
@@ -421,6 +426,9 @@ test('an exec ticket opens one socket for its imp, once', async () => {
   try {
     const port = String(server.server?.port);
 
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'other' });
+
     const issued = await ctx.client.exec.ticket({ name: 'other' });
 
     // accepted at the upgrade, refused at start: the ticket names another imp
@@ -438,6 +446,25 @@ test('an exec ticket opens one socket for its imp, once', async () => {
   }
 });
 
+test('a bearer exec socket may start any imp', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const reply = await tryExecSocket(port, '', 'other', { authorization: `Bearer ${TEST_TOKEN}` });
+
+    const message: unknown = JSON.parse(reply);
+
+    // past the grant: the imp does not exist
+    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('/exec rejects an expired ticket and the token in the query', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 
@@ -445,6 +472,9 @@ test('/exec rejects an expired ticket and the token in the query', async () => {
 
   try {
     const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
 
     const issued = await ctx.client.exec.ticket({ name: 'dev' });
 
@@ -458,4 +488,35 @@ test('/exec rejects an expired ticket and the token in the query', async () => {
   } finally {
     await server.stop(true);
   }
+});
+
+test('exec.ticket refuses an imp that does not exist', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const rejection = await ctx.client.exec.ticket({ name: 'nope' }).catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('wake with restartError false refuses an imp in error', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  await ctx.createTestImage('ubuntu');
+
+  ctx.fake.queue('boot', 'fail');
+
+  await ctx.client.imps.create({ name: 'dev' }).catch(() => {});
+
+  const rejection = await ctx.client.imps
+    .wake({ name: 'dev', restartError: false })
+    .catch((error: unknown) => error);
+
+  const restarted = await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(rejection).toMatchObject({
+    code: 'INVALID_STATE',
+    data: { state: 'error', allowed: ['running', 'sleeping', 'stopped'] },
+  });
+
+  expect(restarted.state).toBe('running');
 });

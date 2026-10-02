@@ -43,7 +43,9 @@ export function buildRouter(deps: RouterDeps) {
       start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
       stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
       sleep: os.imps.sleep.handler((context) => deps.imps.sleepImp(context.input.name)),
-      wake: os.imps.wake.handler((context) => deps.imps.wakeImp(context.input.name)),
+      wake: os.imps.wake.handler((context) =>
+        deps.imps.wakeImp(context.input.name, context.input.restartError),
+      ),
       hold: os.imps.hold.handler((context) =>
         deps.imps.holdImp(context.input.name, context.input.seconds),
       ),
@@ -93,7 +95,12 @@ export function buildRouter(deps: RouterDeps) {
       }),
     },
     exec: {
-      ticket: os.exec.ticket.handler((context) => deps.execTickets.issue(context.input.name)),
+      // NOT_FOUND now, rather than at the socket's start
+      ticket: os.exec.ticket.handler(async (context) => {
+        await deps.imps.getImp(context.input.name);
+
+        return deps.execTickets.issue(context.input.name);
+      }),
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),

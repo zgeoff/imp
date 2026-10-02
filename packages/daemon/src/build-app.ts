@@ -4,8 +4,10 @@ import { RPCHandler } from '@orpc/server/fetch';
 import { Elysia } from 'elysia';
 import { buildRouter } from './build-router';
 import type { RouterDeps } from './build-router';
+import { ANY_IMP_GRANT, buildGrantedBackend } from './exec/exec-grant';
+import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
-import type { ExecBackend, ExecSession } from './exec/exec-session';
+import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
 import { isAuthorized } from './token';
 
@@ -40,9 +42,8 @@ export function buildApp(deps: AppDeps) {
     { readonly session: ExecSession; readonly close: (code: number, reason: string) => void }
   >();
 
-  // the imp a ticket-authenticated exec socket may start, by its upgrade
-  // request; a bearer-authenticated socket has none and may start any imp
-  const ticketNames = new WeakMap<Request, string>();
+  // each exec socket's grant, by its upgrade request
+  const grants = new WeakMap<Request, ExecGrant>();
 
   const app = new Elysia()
     .get('/health', () => ({ status: 'ok', ready: deps.isReady() }))
@@ -68,6 +69,8 @@ export function buildApp(deps: AppDeps) {
       beforeHandle: (context) => {
         // Elysia ends the upgrade on any returned value, null included
         if (isAuthorized(context.request.headers.get('authorization'), deps.token)) {
+          grants.set(context.request, ANY_IMP_GRANT);
+
           // oxlint-disable-next-line unicorn/no-useless-undefined
           return undefined;
         }
@@ -80,7 +83,7 @@ export function buildApp(deps: AppDeps) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        ticketNames.set(context.request, name);
+        grants.set(context.request, { kind: 'imp', name });
 
         // oxlint-disable-next-line unicorn/no-useless-undefined
         return undefined;
@@ -99,7 +102,7 @@ export function buildApp(deps: AppDeps) {
             },
             readBufferedAmount: () => readBufferedAmount(ws.raw),
           },
-          buildTicketBackend(deps.imps, ticketNames.get(ws.data.request)),
+          buildGrantedBackend(deps.imps, grants.get(ws.data.request)),
         );
 
         sessions.set(ws.id, {
@@ -130,23 +133,6 @@ export function buildApp(deps: AppDeps) {
         entry.close(EXEC_CLOSE_RESTARTING, 'impd is restarting');
       }
     },
-  };
-}
-
-// a ticket only starts the imp it was issued for
-function buildTicketBackend(backend: ExecBackend, ticketName: string | undefined): ExecBackend {
-  if (ticketName === undefined) {
-    return backend;
-  }
-
-  return {
-    openExec: (name, request) =>
-      name === ticketName
-        ? backend.openExec(name, request)
-        : Promise.reject(
-            new ORPCError('FORBIDDEN', { message: `the exec ticket is for imp ${ticketName}` }),
-          ),
-    recordActivity: (name) => backend.recordActivity(name),
   };
 }
 

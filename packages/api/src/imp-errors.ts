@@ -14,6 +14,9 @@ const ResourceDataSchema = z.object({
 export const IMP_ERRORS = defineErrors({
   NOT_FOUND: { message: 'Not found', data: ResourceDataSchema },
   CONFLICT: { message: 'Already exists', data: ResourceDataSchema },
+
+  // an exec ticket used for another imp
+  FORBIDDEN: { message: 'Not allowed' },
   RAM_BUDGET_EXCEEDED: {
     message: 'Not enough RAM budget, even after sleeping idle imps',
     status: 503,

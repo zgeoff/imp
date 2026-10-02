@@ -45,7 +45,11 @@ export const impContract = {
 
     sleep: base.input(NameInputSchema).output(ImpSchema),
 
-    wake: base.input(NameInputSchema).output(ImpSchema),
+    // restartError: false refuses an imp in error with INVALID_STATE instead
+    // of booting it again
+    wake: base
+      .input(z.object({ name: NameSchema, restartError: z.boolean().optional() }))
+      .output(ImpSchema),
 
     // seconds = 0 releases a hold
     hold: base

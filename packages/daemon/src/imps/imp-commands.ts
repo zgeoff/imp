@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import type { Imp } from '@imp/api';
-import { isRamBudgetError } from '../api-errors';
+import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listImps, removeImp, updateImpActivity, updateImpHold } from '../db/imps';
 import { createImpRecord } from './create-imp-record';
 import type { ImpContext } from './imp-context';
@@ -35,8 +35,9 @@ export interface ImpCommands {
   // snapshot memory to disk and stop Firecracker (DESIGN 2.8)
   readonly sleepImp: (name: string) => Promise<Imp>;
 
-  // a sleeping imp resumes from its snapshot, a stopped one boots cold
-  readonly wakeImp: (name: string) => Promise<Imp>;
+  // a sleeping imp resumes from its snapshot, a stopped one boots cold; an
+  // imp in error boots cold too, unless restartError is false
+  readonly wakeImp: (name: string, restartError?: boolean) => Promise<Imp>;
 
   // keeps the imp awake until now + seconds; 0 releases; wakes it if needed
   readonly holdImp: (name: string, seconds: number) => Promise<Imp>;
@@ -178,8 +179,12 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         return presenter.toApi(asleep);
       }),
 
-    wakeImp: (name) =>
+    wakeImp: (name, restartError = true) =>
       lock.withImp(name, async (imp) => {
+        if (imp.state === 'error' && !restartError) {
+          throw buildInvalidStateError(imp.state, ['running', 'sleeping', 'stopped'], 'wake');
+        }
+
         const running = await ops.requireRunningImp(imp);
 
         return presenter.toApi(running);
