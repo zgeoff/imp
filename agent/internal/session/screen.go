@@ -7,8 +7,9 @@ type Screen interface {
 	// Write takes the program's output, in order.
 	Write(p []byte)
 	// Replay returns the bytes that bring a terminal in its default modes
-	// up to date.
-	Replay() []byte
+	// up to date: a prelude of modes, then the kept output, which ends with
+	// the last byte written.
+	Replay() (prelude, kept []byte)
 }
 
 // history is a Screen that keeps the last stretch of raw output. Its replay
@@ -67,8 +68,6 @@ func (h *history) skip(b []byte, k int) int {
 	return k
 }
 
-func (h *history) Replay() []byte {
-	prefix := h.start.sequence()
-	out := make([]byte, 0, len(prefix)+len(h.buf))
-	return append(append(out, prefix...), h.buf...)
+func (h *history) Replay() (prelude, kept []byte) {
+	return h.start.sequence(), h.buf
 }

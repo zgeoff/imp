@@ -38,6 +38,8 @@ type Server struct {
 	Shutdown func()
 	// IdentityReset is what this boot's identity reset reported, or "".
 	IdentityReset string
+	// BootID is the guest's boot_id, for ping
+	BootID string
 	// Inner reports the inner container for ping; nil leaves it out
 	Inner func() *proto.InnerStatus
 
@@ -185,6 +187,7 @@ func (s *Server) unary(req proto.Request) (any, error) {
 	case proto.OpPing:
 		ping := BuildPing(unix.ClockGettime)
 		ping.IdentityReset = s.IdentityReset
+		ping.BootID = s.BootID
 		if s.Inner != nil {
 			ping.Inner = s.Inner()
 		}

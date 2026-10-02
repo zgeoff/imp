@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.14.0"
+const Version = "0.15.0"
 
 // Op names.
 const (
@@ -66,6 +66,10 @@ type Request struct {
 	// exec, session.attach, session.kill: the session name
 	Session string `json:"session,omitempty"`
 
+	// exec with a session, session.attach: resume the output after the last
+	// byte the client saw, rather than replay it
+	ResumeFrom *ResumeFrom `json:"resume_from,omitempty"`
+
 	// freeze: auto-thaw after this many ms (default 30000)
 	TimeoutMs int64 `json:"timeout_ms,omitempty"`
 
@@ -103,6 +107,13 @@ type Request struct {
 	Cursor *LogCursor `json:"cursor,omitempty"`
 }
 
+// ResumeFrom names a session's generation and the offset of the first
+// output byte the client lacks.
+type ResumeFrom struct {
+	Generation string `json:"execution_generation"`
+	Offset     uint64 `json:"offset"`
+}
+
 // LogCursor is a place in a service's log: the file, by inode, and the
 // offset after the last byte sent.
 type LogCursor struct {
@@ -116,22 +127,39 @@ const (
 	ErrUnknownOp  = "UNKNOWN_OP"
 	ErrExecFailed = "EXEC_FAILED"
 	// the inner container, where every process runs, is down
-	ErrInnerDown    = "INNER_DOWN"
-	ErrFrozen       = "FROZEN"
-	ErrPoweringOff  = "POWERING_OFF"
-	ErrInternal     = "INTERNAL"
-	ErrNoSession    = "NO_SESSION"
-	ErrSessionCap   = "SESSION_LIMIT"
-	ErrDialFailed   = "DIAL_FAILED"
-	ErrNoConnection = "NO_CONNECTION"
-	ErrListenFailed = "LISTEN_FAILED"
-	ErrNoService    = "NO_SERVICE"
-	ErrServiceTaken = "SERVICE_EXISTS"
+	ErrInnerDown   = "INNER_DOWN"
+	ErrFrozen      = "FROZEN"
+	ErrPoweringOff = "POWERING_OFF"
+	ErrInternal    = "INTERNAL"
+	ErrNoSession   = "NO_SESSION"
+	// a resume named an offset past the end of the generation it names
+	ErrInvalidResume = "INVALID_RESUME"
+	ErrSessionCap    = "SESSION_LIMIT"
+	ErrDialFailed    = "DIAL_FAILED"
+	ErrNoConnection  = "NO_CONNECTION"
+	ErrListenFailed  = "LISTEN_FAILED"
+	ErrNoService     = "NO_SERVICE"
+	ErrServiceTaken  = "SERVICE_EXISTS"
 )
 
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Data is the code's detail: NoSessionData or InvalidResumeData
+	Data any `json:"data,omitempty"`
+}
+
+// NoSessionData is the data of NO_SESSION: this boot, and the generation
+// that last ran under the name in it.
+type NoSessionData struct {
+	BootID   string    `json:"boot_id"`
+	Previous *Previous `json:"previous,omitempty"`
+}
+
+// InvalidResumeData is the data of INVALID_RESUME.
+type InvalidResumeData struct {
+	End         uint64 `json:"end"`
+	BufferStart uint64 `json:"buffer_start"`
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
@@ -154,6 +182,9 @@ type Ping struct {
 	Stage string `json:"stage,omitempty"`
 	// Inner is the inner container's state; absent from older agents
 	Inner *InnerStatus `json:"inner,omitempty"`
+	// BootID is the guest kernel's boot_id: a wake from memory keeps it,
+	// every cold boot changes it
+	BootID string `json:"boot_id,omitempty"`
 }
 
 // StageTemplate is Ping.Stage for a guest parked in a boot template.
@@ -245,6 +276,11 @@ type SessionInfo struct {
 	StartedUnixMs int64 `json:"started_unix_ms"`
 	// Exit is set once the process exited and its output drained.
 	Exit *Exit `json:"exit,omitempty"`
+	// Generation names this run of the session's process; End is the
+	// offset after the last output byte so far.
+	Generation string `json:"execution_generation"`
+	BootID     string `json:"boot_id"`
+	End        uint64 `json:"end"`
 }
 
 // ServiceDef is one services.d file. Name is the file name without .json;
@@ -290,6 +326,56 @@ type Started struct {
 	// host knows this agent will kill a stopped command's group; older ones
 	// omit it.
 	KillGraceMs int64 `json:"kill_grace_ms,omitempty"`
+	// Output is set on a session connection: where its output stands, and
+	// where the data that follows starts.
+	Output *Output `json:"output,omitempty"`
+}
+
+// Output places a session connection's data in the generation's output.
+// Offsets count the pty output bytes of one generation from 0.
+type Output struct {
+	BootID     string `json:"boot_id"`
+	Generation string `json:"execution_generation"`
+	// BufferStart is the first byte the raw ring still holds; End the
+	// offset after the last byte written so far
+	BufferStart uint64 `json:"buffer_start"`
+	End         uint64 `json:"end"`
+	// Offset is the offset of the first data byte this connection sends;
+	// Prelude counts the mode bytes sent before it, which have no offset
+	Offset  uint64 `json:"offset"`
+	Prelude int    `json:"prelude"`
+	// Previous is the last generation under this name that ended and
+	// was replaced or removed, in this boot
+	Previous *Previous `json:"previous,omitempty"`
+	// Resume is set when the request had resume_from
+	Resume *Resume `json:"resume,omitempty"`
+}
+
+// Previous is a generation whose process ended: its end and exit are
+// final.
+type Previous struct {
+	Generation string `json:"execution_generation"`
+	End        uint64 `json:"end"`
+	Exit       Exit   `json:"exit"`
+}
+
+// Resume kinds.
+const (
+	ResumeExact             = "exact"
+	ResumeGap               = "gap"
+	ResumeGenerationChanged = "generation_changed"
+)
+
+// Resume says how a resume_from was met: exact; a gap, whose bytes
+// [From, To) are gone; or generation_changed, when the named generation is
+// not the one running and the data is this one's from FirstOffset. Each
+// kind sends only its own fields; pointers keep a 0 among them.
+type Resume struct {
+	Kind        string  `json:"kind"`
+	From        *uint64 `json:"from,omitempty"`
+	To          *uint64 `json:"to,omitempty"`
+	Generation  string  `json:"execution_generation,omitempty"`
+	FirstOffset *uint64 `json:"first_offset,omitempty"`
 }
 
 // Detached is why the guest ended a session connection without an EXIT.
