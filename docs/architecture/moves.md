@@ -152,3 +152,11 @@ target removes the staged imp of a stream with no receipt, deletes tickets never
 window, and clears `<data>/moves`. A staged imp with a receipt stays until the source commits or
 aborts it; one with no ticket left, which an abort cut short, goes. A committed ticket goes once its
 commit window ends.
+
+## Warm moves
+
+A warm move (#86) brings a sleeping imp with its memory, into the same slot on the target: the
+snapshot holds the slot's tap, addresses and MAC. Its ticket keeps that slot (`move_tickets.slot`)
+until the commit once its stream started, else until its start window ends. So an `imp new` on the
+target during a long stream takes another. The staged imp is created in exactly that slot, or the
+receive fails with `slot <n> is taken on this host`.

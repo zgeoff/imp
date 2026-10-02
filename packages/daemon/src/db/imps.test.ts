@@ -119,6 +119,51 @@ test('each imp gets its own jail uid, the lowest free one', async () => {
   expect(found?.jailUid).toBe(JAIL_UIDS.first);
 });
 
+test('a live ticket keeps its slot from a new imp until the commit', async () => {
+  await using ctx = await setupTestDatabase();
+
+  const slots = { count: 4, findIp: (slot: number) => `10.66.0.${String(slot * 4 + 2)}` };
+  const imp = { imageId: ctx.image.id, vcpus: 2, memoryMib: 2048 };
+
+  await ctx.db
+    .insertInto('move_tickets')
+    .values({
+      id: 'ticket',
+      secret_sha256: 'sha',
+      name: 'moved',
+      bytes: 1,
+      imp_id: null,
+      issued_at: 0,
+      stream_by: Date.now() + 60_000,
+      stream_used_at: null,
+      receipt: null,
+      commit_until: null,
+      committed_at: null,
+      slot: 0,
+    })
+    .execute();
+
+  const other = await createImpInFreeSlot(ctx.db, { ...imp, name: 'new' }, slots);
+
+  // a ticket whose stream never started holds the slot only until its window ends
+  const late = await allocateSlot(ctx.db, 4, Date.now() + 120_000);
+  const moved = await createImpInFreeSlot(ctx.db, { ...imp, name: 'moved' }, { ...slots, slot: 0 });
+
+  const clash = await readRejectionMessage(
+    createImpInFreeSlot(ctx.db, { ...imp, name: 'again' }, { ...slots, slot: 1 }),
+  );
+
+  const outside = await readRejectionMessage(
+    createImpInFreeSlot(ctx.db, { ...imp, name: 'far' }, { ...slots, slot: 4 }),
+  );
+
+  expect(other.slot).toBe(1);
+  expect(late).toBe(0);
+  expect(moved.slot).toBe(0);
+  expect(clash).toBe('slot 1 is taken on this host');
+  expect(outside).toBe('slot 4 is taken on this host');
+});
+
 test('it rejects a duplicate name', async () => {
   await using ctx = await setupTestDatabase();
 

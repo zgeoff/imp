@@ -400,6 +400,13 @@ export const MIGRATIONS: Record<string, Migration> = {
       }
     },
   },
+
+  // warm moves (#86): the slot a ticket keeps for the imp it brings
+  '017_add_move_slots': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('move_tickets').addColumn('slot', 'integer').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

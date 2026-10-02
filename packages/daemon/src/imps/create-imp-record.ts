@@ -23,6 +23,9 @@ interface NewImpInput {
   readonly isIdentityResetPending?: boolean;
   readonly networkIds?: readonly string[] | undefined;
   readonly moveState?: 'receiving' | undefined;
+
+  // a warm move's: this slot, or a SlotTakenError
+  readonly slot?: number | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -57,6 +60,8 @@ export async function createImpRecord(
       {
         count: countSlots(context.config.subnet),
         findIp: (slot) => context.findAddress(slot).guestIp,
+        slot: input.slot,
+        now: context.now,
       },
     );
 

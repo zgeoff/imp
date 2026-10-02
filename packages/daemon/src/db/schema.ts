@@ -220,6 +220,9 @@ interface MoveTicketsTable {
   receipt: string | null;
   commit_until: number | null;
   committed_at: number | null;
+
+  // a warm move's slot, which no other imp takes until the commit
+  slot: number | null;
 }
 
 // The source's side of a move: the target's URL and ticket, kept so a

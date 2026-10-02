@@ -44,9 +44,11 @@ interface CreateImpInput {
   // a fork of a template copy that has not booted yet owes the reset too
   readonly isIdentityResetPending?: boolean;
 
-  // a move keeps the imp's id, and stages it marked `receiving`
+  // a move keeps the imp's id, and stages it marked `receiving`; a warm
+  // move keeps its slot too
   readonly id?: string;
   readonly moveState?: 'receiving';
+  readonly slot?: number;
 }
 
 interface DestroyOptions {
