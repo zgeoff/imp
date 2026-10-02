@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { listAuditEntries } from '../db/broker-audit';
 import { findImpByName } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
+import { readRejection } from '../read-rejection';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import type { Broker } from './broker-service';
 
@@ -142,14 +143,24 @@ async function setupBroker() {
   };
 
   // a CONNECT from slot 0's guest that stays open: `established` once the
-  // broker answers 200, `closed` when either end ends it
-  const startTunnel = (target: string) => {
+  // broker answers 200, `closed` when either end ends it; with `holdHead`
+  // the head waits for sendHead
+  const startTunnel = (target: string, holdHead = false) => {
     const established = Promise.withResolvers<void>();
+    const connected = Promise.withResolvers<void>();
     const closed = Promise.withResolvers<void>();
     const state = { open: true };
 
-    const socket = createConnection({ host: '127.0.0.1', port, localAddress: '127.0.0.2' }, () => {
+    const sendHead = (): void => {
       socket.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
+    };
+
+    const socket = createConnection({ host: '127.0.0.1', port, localAddress: '127.0.0.2' }, () => {
+      connected.resolve();
+
+      if (!holdHead) {
+        sendHead();
+      }
     });
 
     socket.on('data', (chunk: Buffer) => {
@@ -169,8 +180,10 @@ async function setupBroker() {
     });
 
     return {
+      connected: connected.promise,
       established: established.promise,
       closed: closed.promise,
+      sendHead,
       isOpen: () => state.open,
       end: () => {
         socket.destroy();
@@ -352,6 +365,24 @@ test('a tighter policy ends the open tunnels it denies, and keeps the rest', asy
 
     hold.close();
   }
+});
+
+test('a connection opened under an open policy gets no tunnel once a tighter one is set', async () => {
+  await using ctx = await setupBroker();
+
+  const early = ctx.startTunnel('late.test:9', true);
+
+  await early.connected;
+
+  // the broker has accepted it and is waiting for the head
+  await Bun.sleep(100);
+  await ctx.egress.setPolicy('dev', { mode: 'none', allow: [] });
+
+  early.sendHead();
+
+  const refused = await readRejection(early.established);
+
+  expect(String(refused)).toContain('403 Forbidden');
 });
 
 test('a guest on another imp’s gateway, or a request that is not CONNECT, gets nothing', async () => {

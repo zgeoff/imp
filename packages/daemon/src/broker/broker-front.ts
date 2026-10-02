@@ -48,21 +48,35 @@ export interface BrokerFront {
   readonly stop: () => Promise<void>;
 }
 
-// each imp's open plain tunnels, by the host its CONNECT named
+// Each imp's connections from accept, with their CONNECT's host once it
+// comes. A policy change ends those with a host it denies, and leaves its
+// `keep` on the rest for their tunnel start to check.
 interface TunnelRegistry {
-  readonly add: (impId: string, socket: Socket, host: string) => void;
+  readonly add: (impId: string, socket: Socket) => void;
+  readonly setHost: (impId: string, socket: Socket, host: string) => void;
+
+  // a connection to a granted host, which every policy allows
+  readonly drop: (impId: string, socket: Socket) => void;
+
+  // false once a policy change denies the host, or the connection ended
+  readonly isKept: (impId: string, socket: Socket, host: string) => boolean;
   readonly closeDenied: (impId: string, keep: (host: string) => boolean) => void;
 }
 
+interface TunnelEntry {
+  host: string | null;
+  keep: ((host: string) => boolean) | null;
+}
+
 function createTunnelRegistry(): TunnelRegistry {
-  const tunnels = new Map<string, Map<Socket, string>>();
+  const tunnels = new Map<string, Map<Socket, TunnelEntry>>();
 
   return {
-    add: (impId, socket, host) => {
-      const own = tunnels.get(impId) ?? new Map<Socket, string>();
+    add: (impId, socket) => {
+      const own = tunnels.get(impId) ?? new Map<Socket, TunnelEntry>();
 
       tunnels.set(impId, own);
-      own.set(socket, host);
+      own.set(socket, { host: null, keep: null });
 
       socket.once('close', () => {
         own.delete(socket);
@@ -72,9 +86,26 @@ function createTunnelRegistry(): TunnelRegistry {
         }
       });
     },
+    setHost: (impId, socket, host) => {
+      const entry = tunnels.get(impId)?.get(socket);
+
+      if (entry !== undefined) {
+        entry.host = host;
+      }
+    },
+    drop: (impId, socket) => {
+      tunnels.get(impId)?.delete(socket);
+    },
+    isKept: (impId, socket, host) => {
+      const entry = tunnels.get(impId)?.get(socket);
+
+      return !socket.destroyed && entry !== undefined && (entry.keep?.(host) ?? true);
+    },
     closeDenied: (impId, keep) => {
-      for (const [socket, host] of tunnels.get(impId) ?? []) {
-        if (!keep(host)) {
+      for (const [socket, entry] of tunnels.get(impId) ?? []) {
+        entry.keep = keep;
+
+        if (entry.host !== null && !keep(entry.host)) {
           socket.destroy();
         }
       }
@@ -212,6 +243,7 @@ async function runConnection(
   });
 
   socket.setKeepAlive(true, KEEPALIVE_MS);
+  tunnels.add(peer.id, socket);
 
   const read = await readHead(socket, deps.headTimeoutMs ?? HEAD_TIMEOUT_MS);
 
@@ -232,6 +264,8 @@ async function runConnection(
   const granted = head.port === 443 ? await deps.isGranted(peer.id, head.host) : false;
 
   if (granted) {
+    tunnels.drop(peer.id, socket);
+
     const path = await deps.openTerminator({ impId: peer.id, host: head.host });
 
     startRelay(socket, createConnection({ path }), read.rest);
@@ -239,7 +273,18 @@ async function runConnection(
     return;
   }
 
-  if (!isTunnelAllowed(peer.egress, head.host)) {
+  tunnels.setHost(peer.id, socket, head.host);
+
+  // the policy as it is now: it may have changed while the head was coming
+  const current = await deps.findPeer(slot);
+
+  if (current?.id !== peer.id) {
+    socket.destroy();
+
+    return;
+  }
+
+  if (!isTunnelAllowed(current.egress, head.host)) {
     sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
 
     return;
@@ -257,9 +302,15 @@ async function runConnection(
     return;
   }
 
-  const dialTunnel = deps.dialTunnel ?? ((host, port) => createConnection({ host, port }));
+  if (!tunnels.isKept(peer.id, socket, head.host)) {
+    if (!socket.destroyed) {
+      sendReply(socket, 403, `egress to ${head.host} is not allowed by the imp's egress policy`);
+    }
 
-  tunnels.add(peer.id, socket, head.host);
+    return;
+  }
+
+  const dialTunnel = deps.dialTunnel ?? ((host, port) => createConnection({ host, port }));
 
   startRelay(socket, dialTunnel(address, head.port), read.rest);
 }
