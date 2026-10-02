@@ -49,6 +49,13 @@ export function buildRuleset(input: RulesetInput): string {
       [],
     ),
     ...box.flatMap((slot) => buildBoxSets(slot, input.setSize)),
+
+    // A refusal: TCP gets a reset, which ends a live connection at once, as
+    // after a flush of a tighter policy; ICMP alone leaves it retrying.
+    '  chain deny {',
+    '    meta l4proto tcp reject with tcp reset',
+    '    reject with icmpx admin-prohibited',
+    '  }',
     ...input.slots.flatMap((slot) => buildSlotChain(slot)),
     ...buildSet(
       'slots',
@@ -63,8 +70,8 @@ export function buildRuleset(input: RulesetInput): string {
     '    meta nfproto ipv6 reject with icmpx admin-prohibited',
     '    iifname vmap @slots',
 
-    // a tap with no slot, or a slot whose chain fell through
-    '    reject with icmpx admin-prohibited',
+    // a tap with no slot
+    '    goto deny',
     '  }',
     '  chain dns {',
     '    type nat hook prerouting priority dstnat - 1; policy accept;',
@@ -101,20 +108,16 @@ function buildSlotChain(slot: FirewallSlot): readonly string[] {
   const id = String(slot.slot);
 
   const body: Record<EgressMode, readonly string[]> = {
-    open: [
-      `ip daddr { ${OPEN_BLOCKED_RANGES.join(', ')} } reject with icmpx admin-prohibited`,
-      'accept',
-    ],
+    open: [`ip daddr { ${OPEN_BLOCKED_RANGES.join(', ')} } goto deny`, 'accept'],
     box: [
       'ct state invalid drop',
       'ct state established,related accept',
       `ip daddr @cidr${id} accept`,
-      'ip daddr @private reject with icmpx admin-prohibited',
+      'ip daddr @private goto deny',
       `ip daddr @allow${id} accept`,
-      'meta l4proto tcp reject with tcp reset',
-      'reject with icmpx admin-prohibited',
+      'goto deny',
     ],
-    none: ['meta l4proto tcp reject with tcp reset', 'reject with icmpx admin-prohibited'],
+    none: ['goto deny'],
   };
 
   return [

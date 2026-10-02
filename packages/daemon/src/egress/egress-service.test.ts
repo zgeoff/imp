@@ -71,9 +71,7 @@ test('a fork has its source policy in its first table', async () => {
 
   const first = ctx.nftScripts.find((script) => script.includes('chain slot1'));
 
-  expect(first).toMatch(
-    /chain slot1 \{\n\s+ip saddr != 10\.66\.0\.6 drop\n\s+meta l4proto tcp reject/v,
-  );
+  expect(first).toMatch(/chain slot1 \{\n\s+ip saddr != 10\.66\.0\.6 drop\n\s+goto deny\n/v);
 
   const policy = await ctx.egress.readPolicy('copy');
 
@@ -148,7 +146,7 @@ test('a tighter policy flushes the guest, prunes the set and refreshes the table
 
   await ctx.imps.createImp({ name: 'dev' });
 
-  expect(ctx.nftScripts.at(-1)).toContain('ip daddr { 169.254.0.0/16, 100.64.0.0/10 } reject');
+  expect(ctx.nftScripts.at(-1)).toContain('ip daddr { 169.254.0.0/16, 100.64.0.0/10 } goto deny');
 
   await ctx.egress.setPolicy('dev', { mode: 'box', allow: ['github.com', 'npmjs.org'] });
   await ctx.egress.writeAnswers(0, ['github.com'], [{ address: '140.82.112.3', ttlS: 300 }]);
