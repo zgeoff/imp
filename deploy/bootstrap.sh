@@ -983,6 +983,12 @@ uninstall_firewall() {
   fi
   rm -f /etc/systemd/system/imp-firewall.service "$FIREWALL_FILE"
   systemctl daemon-reload
+  # An earlier run with own disabled ufw and firewalld.
+  if ! nft list ruleset 2>/dev/null | grep -q 'hook input' \
+    && ! { command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active'; } \
+    && ! systemctl -q is-active firewalld 2>/dev/null; then
+    warn "the host now has no inbound firewall; the platform must give one (docs/architecture/host-contract.md#firewall)"
+  fi
 }
 
 # check_ruleset RULESET: nft parses it against this kernel, so a bad ruleset
