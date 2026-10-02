@@ -11,6 +11,7 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/fsroot"
 	"github.com/zgeoff/imp/agent/internal/proto"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -78,11 +79,15 @@ type logFile struct {
 
 // openLogFile opens a log and reads its size; nil when it does not exist.
 func openLogFile(fsys fsroot.FS, path string) (*logFile, int64, error) {
-	f, err := fsys.OpenFile(path, os.O_RDONLY, 0)
+	f, err := fsys.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, 0, nil
 	}
 	if err != nil {
+		return nil, 0, err
+	}
+	if err := fsroot.CheckRegular(f, path); err != nil {
+		f.Close()
 		return nil, 0, err
 	}
 	fi, err := f.Stat()
