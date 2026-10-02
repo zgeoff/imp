@@ -34,7 +34,7 @@ RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.lis
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
       xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
-      iproute2 iptables procps util-linux kmod jq bzip2 \
+      iproute2 iptables nftables conntrack procps util-linux kmod jq bzip2 \
  && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI and Tailscale from their upstream apt repos.
