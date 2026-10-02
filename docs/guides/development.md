@@ -17,6 +17,18 @@ scripts/acceptance.sh --clean     # end to end, from a clean state
 `scripts/acceptance.sh` against a real instance when a change touches the lifecycle, the agent or
 the host; [STATUS.md](../../STATUS.md) has the latest results.
 
+## Daemon tests
+
+The daemon's tests need no VM. `packages/daemon/src/imps/test-imps.ts` runs the governed imp service
+over an in-memory database and a fake VMM (`fake-vmm.ts`). A test scripts what the next boot, wake,
+sleep, stop or agent check does (succeed, fail, die or hang), holds a step until it releases it, and
+restarts impd over the same database and VMs. `findBrokenInvariants` reads the raw records, because
+a read through the service repairs what it finds.
+
+The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
+path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay
+the case.
+
 ## Git hooks
 
 Lefthook installs the hooks with `bun install`.
