@@ -70,7 +70,8 @@ and wake, and end with the guest.
 ## Dial, SFTP and agent forwarding
 
 Three pieces serve impd's [SSH gateway](../guides/ssh.md). The `dial` op connects to an address in
-the guest and relays bytes, for port forwarding ([protocol](./protocol.md#dial)). And
+the guest and relays bytes, for port forwarding ([protocol](./protocol.md#dial)); a unix socket dial
+runs `imp-agent dial-unix` as the image's user, which hands the connected socket back. And
 `imp-agent sftp`, run from the system drive as `/run/imp/sys/imp-agent sftp`, is an SFTP server on
 stdin and stdout (`github.com/pkg/sftp`). impd starts it through a plain `exec`, as the image's
 user, so every image gets SFTP without an `sftp-server` of its own. It starts in `$HOME`. And

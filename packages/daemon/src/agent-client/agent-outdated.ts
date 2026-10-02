@@ -7,6 +7,7 @@ const FEATURES = {
   ssh: { since: [0, 3], missing: 'no port forwarding or SFTP' },
   'agent-forwarding': { since: [0, 4], missing: 'no ssh-agent forwarding' },
   grow: { since: [0, 5], missing: 'no online disk grow' },
+  'unix-dial-as-user': { since: [0, 6], missing: 'no safe unix socket forwarding' },
 } as const;
 
 export type AgentFeature = keyof typeof FEATURES;

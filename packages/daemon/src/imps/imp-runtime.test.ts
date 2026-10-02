@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
 import { findImpByName, updateImpActivity, updateImpHold } from '../db/imps';
+import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
+import { buildImpPaths } from '../storage/data-layout';
 import { setupImpTest, waitForOutcome } from './test-imps';
 
 // these tests wait up to 10 s for held calls to settle; a loaded host is slow
@@ -355,4 +357,28 @@ test('a session exec on an agent from before sessions fails before it connects',
 
   expect(rejection).toMatchObject({ code: 'AGENT_OUTDATED' });
   expect(ctx.imps.tracker.count(ctx.impId)).toBe(0);
+});
+
+test('a unix socket dial on an agent from before 0.6.0 fails as AGENT_OUTDATED, a tcp one does not', async () => {
+  await using ctx = await setupRunningImp();
+
+  const paths = buildImpPaths(ctx.dataDir, ctx.impId);
+  const identity = readVmIdentity(paths);
+
+  if (identity === null) {
+    throw new Error('no vm identity');
+  }
+
+  writeVmIdentity(paths, { ...identity, agentVersion: '0.5.0' });
+
+  const unixDial = await ctx.imps
+    .openDial('dev', { network: 'unix', address: '/run/docker.sock' }, 'ssh')
+    .catch((error: unknown) => error);
+
+  const tcpDial = await ctx.imps
+    .openDial('dev', { network: 'tcp', address: '127.0.0.1:80' }, 'ssh')
+    .catch((error: unknown) => error);
+
+  expect(unixDial).toMatchObject({ code: 'AGENT_OUTDATED' });
+  expect(tcpDial).not.toMatchObject({ code: 'AGENT_OUTDATED' });
 });

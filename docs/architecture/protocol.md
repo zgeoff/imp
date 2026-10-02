@@ -6,8 +6,9 @@ connection carries one request. The first frame is a JSON request; exec connecti
 binary frames for stdin, output, resizes, signals and the exit, and dial connections carry raw bytes
 both ways. An `agent.listen` connection stays open for the life of an SSH connection.
 
-Version `0.5.0`, which added `grow`. The Go side is `agent/internal/proto`; the host side is the
-agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.6.0`, which dials a unix socket as the image's USER (`0.5.0` added `grow`). The Go side
+is `agent/internal/proto`; the host side is the agent client in impd
+([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -318,9 +319,21 @@ socket, which the guest IP cannot. Since `0.3.0`.
 ```
 
 The agent gives up a connect after 5 s. A connect that fails gets `DIAL_FAILED`; a `network` other
-than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The host decides what a dial may reach;
-the agent only refuses, with `BAD_REQUEST`, a unix path whose symlinks lead under `/run/imp/`, where
-its own sockets are (the agent dials as root).
+than `tcp` or `unix`, or no `address`, gets `BAD_REQUEST`. The host decides what a dial may reach.
+
+A `tcp` dial runs as root. Since `0.6.0`, a `unix` dial runs as the image's USER, the user an SSH
+login gets, so a forward reaches only the sockets that user can open; impd refuses a `unix` dial to
+an older agent with `AGENT_OUTDATED`. The agent starts `imp-agent dial-unix <path>` from the system
+drive with the user's uid, gid and supplementary groups, an empty environment and one socketpair
+end. The helper connects and passes the socket back with `SCM_RIGHTS`, received close-on-exec; the
+agent kills a helper that has not answered in 7 s, and treats no answer, or anything but a stream
+socket, as `DIAL_FAILED`. A process, not a thread with other credentials, so the server's
+`SO_PEERCRED` sees the user. A root image dials in the agent itself.
+
+The path must be absolute (`BAD_REQUEST` otherwise); abstract sockets are not supported. The dial
+opens the path with `O_PATH` and connects through `/proc/self/fd`, and refuses with `BAD_REQUEST` a
+path that leads under `/run/imp/`, where the agent's own sockets are. That check is not a boundary:
+every forwarded ssh-agent socket there belongs to the image's USER anyway.
 
 After the RESPONSE:
 
