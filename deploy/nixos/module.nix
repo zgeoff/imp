@@ -20,15 +20,16 @@ let
   joined = "${stateDir}/tailscale-joined";
   zfs = cfg.storage == "zfs";
 
-  # The module's keys, then the operator's. No secret goes here: it is in
-  # the Nix store.
-  settings = {
+  # The module's own keys; settings may not set them (an assertion below).
+  # No secret goes here: it is in the Nix store.
+  moduleSettings = {
     IMP_HOST_IMAGE = cfg.image;
     IMP_STORAGE_BACKEND = cfg.storage;
     IMP_ZFS_ROOT = if zfs then cfg.zfs.root else "";
     IMP_HOST_FIREWALL = "none";
-  }
-  // cfg.settings;
+  };
+  settings = cfg.settings // moduleSettings;
+  overridden = lib.attrNames (lib.intersectAttrs moduleSettings cfg.settings);
   settingsFile = pkgs.writeText "imp-host-settings.env" (
     lib.concatStrings (lib.mapAttrsToList (key: value: "${key}=${toString value}\n") settings)
   );
@@ -211,6 +212,10 @@ in
       {
         assertion = !(config.networking.nftables.enable && config.networking.nftables.flushRuleset);
         message = "services.imp: networking.nftables.flushRuleset would flush Docker's rules on every reload; leave it false";
+      }
+      {
+        assertion = overridden == [ ];
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root) instead";
       }
       {
         assertion = zfs || (config.fileSystems ? "/var/lib/imp");
