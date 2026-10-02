@@ -59,6 +59,18 @@ export function parseSubnet(cidr: string): Subnet {
   return { network, prefixLength: prefix };
 }
 
+// Tailscale's 100.64.0.0/10: a guest with an address in it would look like
+// a tailnet peer to impd's tailnet identity
+const TAILNET_NETWORK = 100 * 2 ** 24 + 64 * 2 ** 16;
+const TAILNET_SIZE = 2 ** 22;
+
+export function isTailnetOverlap(subnet: Subnet): boolean {
+  const start = subnet.network;
+  const end = start + 2 ** (32 - subnet.prefixLength);
+
+  return start < TAILNET_NETWORK + TAILNET_SIZE && TAILNET_NETWORK < end;
+}
+
 export function countSlots(subnet: Subnet): number {
   return 2 ** (32 - subnet.prefixLength) / SLOT_SIZE;
 }

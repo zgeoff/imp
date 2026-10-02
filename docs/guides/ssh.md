@@ -65,15 +65,17 @@ Host box.imp
 
 - The SSH user names the imp. Commands run as the image's user (its `USER`, else root), as with
   `imp exec`.
-- Every key in `authorized_keys` reaches every imp. imp has one owner.
+- Every key in `authorized_keys` gives `exec` and tunnels on every imp, whatever
+  [tokens](./tokens.md) exist: the file is the host owner's. The API audit log names the key by its
+  comment.
 - A line with options (`from=`, `command=`, `restrict`, ...) is skipped, and impd logs why. The
   gateway cannot enforce options, so it does not grant what they would limit. ed25519, ECDSA and RSA
   keys work. FIDO (`sk-`) and DSA keys do not.
 - An unknown imp and an unknown key get the same `Permission denied (publickey)`, so nobody can
   probe for imp names. A refused login wakes nothing.
-- Tailscale identity (logins checked with `tailscale whois`, as Tailscale SSH does) is not built
-  yet. It needs the peer's real address, which the gateway gets because it listens on the tailnet
-  directly, not behind `tailscale serve`.
+- Tailscale identity for SSH logins (checked with `tailscale whois`, as Tailscale SSH does), and
+  keys tied to scoped tokens, are not built yet. The API takes a
+  [tailnet identity](./tokens.md#tailnet-identity) already.
 
 ## What works
 

@@ -1,8 +1,8 @@
 import { NameSchema } from '@imp/api';
 
 // Which imps one MCP server may touch. It keeps an agent from destroying an
-// imp it was not given by mistake; it is not a security boundary, because the
-// token it runs with opens the whole impd API (scoped tokens are #29).
+// imp it was not given by mistake; the boundary is the scope of the token it
+// runs with (docs/guides/tokens.md), which impd enforces.
 export interface ImpGuard {
   readonly isAllowed: (name: string) => boolean;
 

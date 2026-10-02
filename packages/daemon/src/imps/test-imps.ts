@@ -6,10 +6,13 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { createApiAudit } from '../audit/api-audit';
+import { createRevocations } from '../auth/revocations';
+import { loadTokenStore } from '../auth/token-store';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
 import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
+import type { AppDeps } from '../build-app';
 import { createCheckpointService } from '../checkpoints/checkpoint-service';
 import { loadConfig } from '../config';
 import type { Config } from '../config';
@@ -20,6 +23,7 @@ import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
 import { createGovernedImps } from '../governor/create-governed-imps';
 import { createImageService } from '../images/image-service';
+import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
@@ -196,6 +200,14 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   };
 
   const governed = startImpd();
+  const revocations = createRevocations();
+
+  const tokens = await loadTokenStore({
+    db,
+    rootToken: TEST_TOKEN,
+    now: readClock,
+    onRemove: revocations.revoke,
+  });
 
   // an image row whose rootfs is a small file in the data dir
   const createTestImage = async (name: string): Promise<ImageRecord> => {
@@ -221,6 +233,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     storageGate,
     diskBudget,
     diskUsage,
+    tokens,
+    revocations,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -246,7 +260,16 @@ type Impd = ReturnType<ImpTest['restartImpd']>;
 
 type AppParts = Pick<
   ImpTest,
-  'config' | 'db' | 'images' | 'storage' | 'storageGate' | 'diskBudget' | 'now' | 'broker'
+  | 'config'
+  | 'db'
+  | 'images'
+  | 'storage'
+  | 'storageGate'
+  | 'diskBudget'
+  | 'now'
+  | 'broker'
+  | 'tokens'
+  | 'revocations'
 >;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
@@ -259,6 +282,9 @@ export function buildTestApp(
 
   // a fake agent's streams in place of the VM's
   agent: Partial<Pick<ImpService, 'openExec' | 'openAttach'>> = {},
+
+  // tailnet identity, off by default
+  tailnet: AppDeps['tailnet'] = null,
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
 
@@ -272,10 +298,16 @@ export function buildTestApp(
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
 
+  const peers = createForwardedPeers(ctx.now);
+
   const built = buildApp({
     config: ctx.config,
     db: ctx.db,
-    token: TEST_TOKEN,
+    rootToken: TEST_TOKEN,
+    tokens: ctx.tokens,
+    revocations: ctx.revocations,
+    peers,
+    tailnet,
     imps,
     images: ctx.images,
     governor: impd.governor,
@@ -292,7 +324,8 @@ export function buildTestApp(
       storageGate: ctx.storageGate,
       log: () => {},
     }),
-    readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     isReady: () => true,
     now: ctx.now,
     audit: createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} }),
@@ -306,7 +339,7 @@ export function buildTestApp(
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
-  return { app: built.app, closeExecSessions: built.closeExecSessions, client };
+  return { app: built.app, closeExecSessions: built.closeExecSessions, client, peers };
 }
 
 // a memory snapshot as a sleep at `createdAt` by a VM with `identity`

@@ -32,6 +32,7 @@ import {
   secretCommand,
 } from './commands/secrets';
 import { attachCommand, sessionsCommand } from './commands/sessions';
+import { tokenCommand } from './commands/tokens';
 
 // Every imp command. `completion` walks this tree to write its scripts, so
 // it loads lazily: a static import would be a cycle.
@@ -72,6 +73,7 @@ export const mainCommand = defineCommand({
     revoke: revokeCommand,
     grants: grantsCommand,
     audit: auditCommand,
+    token: tokenCommand,
     events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,

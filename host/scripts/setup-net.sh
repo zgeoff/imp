@@ -76,6 +76,17 @@ iptables -C INPUT -i imp+ -p tcp --dport "$broker_port" "${broker_tag[@]}" -j AC
 rule raw PREROUTING ! -i imp+ -p tcp --dport "$broker_port" -m addrtype --dst-type LOCAL \
   "${broker_tag[@]}" -j DROP
 
+# Tailnet identity (docs/guides/tokens.md) names a peer by its source
+# address, so only tailscale0 may bring in Tailscale's ranges. tailscaled's
+# own ts-input chain drops the rest in INPUT; this does it in raw, before
+# any chain, for IPv4 and IPv6. Loopback stays: a connection to impd's own
+# tailnet address comes in on lo.
+rule raw PREROUTING -s 100.64.0.0/10 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
+if ip6tables -t raw -S PREROUTING >/dev/null 2>&1; then
+  ip6tables -t raw -C PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP 2>/dev/null \
+    || ip6tables -t raw -A PREROUTING -s fd7a:115c:a1e0::/48 ! -i tailscale0 -m addrtype ! --src-type LOCAL -j DROP
+fi
+
 # Clamp the TCP MSS of guest connections to the real uplink MTU. Behind a
 # smaller-MTU uplink (WSL eth0 is 1360) frag-needed ICMP never reaches the
 # guests, so large TLS records stall. IMP_UPLINK_MTU is the MTU outside this

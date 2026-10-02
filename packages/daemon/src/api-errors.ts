@@ -1,7 +1,15 @@
 import type { ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 
-type ResourceKind = 'imp' | 'image' | 'checkpoint' | 'session' | 'secret' | 'grant' | 'backup';
+type ResourceKind =
+  | 'imp'
+  | 'image'
+  | 'checkpoint'
+  | 'session'
+  | 'secret'
+  | 'grant'
+  | 'backup'
+  | 'token';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.
@@ -18,6 +26,11 @@ export function buildConflictError(kind: ResourceKind, name: string, message?: s
     message: message ?? `${kind} ${name} already exists`,
     data: { kind, name },
   });
+}
+
+// the caller's scope or imp patterns do not cover the call
+export function buildForbiddenError(message: string) {
+  return new ORPCError('FORBIDDEN', { message });
 }
 
 export function buildInvalidStateError(

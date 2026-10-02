@@ -95,7 +95,14 @@ function setup(options: ServiceTestOptions) {
     readTailscale:
       tailnetIp === undefined
         ? null
-        : () => Promise.resolve({ state: 'Running', hostname: 'imp', ip: tailnetIp }),
+        : () =>
+            Promise.resolve({
+              state: 'Running',
+              hostname: 'imp',
+              dnsName: null,
+              ip: tailnetIp,
+              ips: [tailnetIp],
+            }),
     readServePorts: () => Promise.resolve(servePorts),
     now: Date.now,
     log: (message) => {
@@ -310,8 +317,9 @@ test('a failed tailscale status keeps the tailnet listener and its connections',
     },
     readTailscale: () => {
       const ip = answers.length === 0 ? TAILNET_IP : (answers.shift() ?? null);
+      const ips = ip === null ? [] : [ip];
 
-      return Promise.resolve({ state: 'Running', hostname: 'imp', ip });
+      return Promise.resolve({ state: 'Running', hostname: 'imp', dnsName: null, ip, ips });
     },
     readServePorts: () => Promise.resolve([]),
     now: Date.now,

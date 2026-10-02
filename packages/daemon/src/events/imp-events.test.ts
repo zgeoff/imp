@@ -4,6 +4,7 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import { buildSessionValue } from '../auth/session-cookie';
+import { ROOT_TOKEN_ID } from '../auth/token-store';
 import { listApiCalls } from '../db/api-audit';
 import { findImpByName } from '../db/imps';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
@@ -86,7 +87,7 @@ function buildDashboardClient(app: DashboardApp, expiresAt: number) {
   const link = new RPCLink({
     url: 'http://impd.test/rpc',
     headers: {
-      cookie: `imp_session=${buildSessionValue(TEST_TOKEN, expiresAt)}`,
+      cookie: `imp_session=${buildSessionValue(TEST_TOKEN, { tokenId: ROOT_TOKEN_ID, expiresAt })}`,
       'sec-fetch-site': 'same-origin',
     },
     fetch: (request) => app.app.handle(request),
@@ -235,7 +236,7 @@ async function waitForCalls(ctx: Readonly<Pick<ImpTest, 'db'>>, count: number) {
   const deadline = Date.now() + 5000;
 
   for (;;) {
-    const calls = await listApiCalls(ctx.db, null, 100);
+    const calls = await listApiCalls(ctx.db, null, 100, null);
 
     if (calls.length >= count || Date.now() > deadline) {
       return calls;

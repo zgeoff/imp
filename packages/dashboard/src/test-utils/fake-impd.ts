@@ -1,4 +1,4 @@
-import type { Checkpoint, Image, Imp, ImpEvent, SystemInfo } from '@imp/api';
+import type { Checkpoint, Identity, Image, Imp, ImpEvent, SystemInfo, Token } from '@imp/api';
 import { EVENT_VERSION, impContract } from '@imp/api';
 import { ORPCError, implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
@@ -20,6 +20,10 @@ interface FakeImpdState {
   readonly imps: Imp[];
   readonly images: Image[];
   readonly checkpoints: Map<string, Checkpoint[]>;
+  readonly tokens: Token[];
+
+  // who tokens.whoami says the dashboard is
+  identity: Identity;
 
   // procedure paths with their inputs, in call order
   readonly calls: { readonly path: string; readonly input: unknown }[];
@@ -37,6 +41,8 @@ export function createFakeImpd(): FakeImpd {
     imps: [],
     images: [],
     checkpoints: new Map(),
+    tokens: [],
+    identity: { kind: 'dashboard', name: 'root', scope: 'manage', imps: null },
     calls: [],
     info: buildSystemInfo(),
     unauthorized: false,
@@ -252,6 +258,34 @@ export function createFakeImpd(): FakeImpd {
         dryRun: context.input.dryRun ?? false,
         dropped: [],
       })),
+    },
+    tokens: {
+      list: os.tokens.list.handler(() => fake.tokens),
+      create: os.tokens.create.handler((context) => {
+        registerCall('tokens.create', context.input);
+
+        const token: Token = {
+          name: context.input.name,
+          scope: context.input.scope,
+          imps: context.input.imps ?? null,
+          createdAt: NOW,
+        };
+
+        fake.tokens.push(token);
+
+        return { token, secret: `imp_fake.${context.input.name}-secret` };
+      }),
+      delete: os.tokens.delete.handler((context) => {
+        registerCall('tokens.delete', context.input);
+
+        fake.tokens.splice(
+          fake.tokens.findIndex((token) => token.name === context.input.name),
+          1,
+        );
+
+        return {};
+      }),
+      whoami: os.tokens.whoami.handler(() => fake.identity),
     },
   });
 

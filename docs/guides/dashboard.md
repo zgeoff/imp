@@ -15,6 +15,8 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
 - **Images**: add one from an image ref, or delete one.
 - **RAM**: the budget, what awake imps own, what the governor holds back for boots and wakes, and
   the RAM each awake imp owns and has resident.
+- **Tokens**: make a scoped token, which shows its secret once, or delete one. Only for a `manage`
+  token with no imp patterns ([tokens](./tokens.md)). The nav shows who the session runs as.
 
 Views follow impd's [event stream](./events.md): a change shows as impd makes it. What moves with no
 event, such as RAM in use, sessions and last activity, refreshes every 10 s. When the stream ends,
@@ -22,11 +24,13 @@ the dashboard opens it again after 2 s and refreshes every view.
 
 ## Log in
 
-The login page asks for the API token once: `/var/lib/imp/token` on the host, or
-`scripts/dev.sh token` for a dev instance. impd answers with a session cookie and the browser never
-keeps the token. The session lasts 30 days. Log out clears it in that browser; a new token ends
-every session. [The daemon](../architecture/daemon.md#dashboard) has the details and the security
-model.
+The login page asks for a token once: the root token in `/var/lib/imp/token` on the host,
+`scripts/dev.sh token` for a dev instance, or a token from `imp token new`. impd answers with a
+session cookie and the browser never keeps the token. The session acts with that token's scope and
+lasts 30 days. Log out clears it in that browser; removing the token ends its sessions, and a new
+root token ends every session. A tailnet member that an
+[`IMP_TAILNET_IDENTITIES`](./tokens.md#tailnet-identity) rule matches needs no login.
+[The daemon](../architecture/daemon.md#dashboard) has the details and the security model.
 
 ## Build and run it
 
@@ -68,7 +72,6 @@ first.
 
 - HTTPS on `https://imp.<tailnet>.ts.net` through `tailscale serve`. The session and its origin
   check already work behind such a front.
-- Tailnet identity instead of the token ([#29](https://github.com/zgeoff/imp/issues/29)).
 - Detachable sessions in the console ([#13](https://github.com/zgeoff/imp/issues/13)). The console
   view takes a terminal source, so attaching to a session is a second source next to the login
   shell.

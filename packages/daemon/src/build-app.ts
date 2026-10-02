@@ -9,20 +9,26 @@ import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import { Elysia } from 'elysia';
+import { buildForbiddenError } from './api-errors';
 import { withAuditedOpen } from './audit/api-audit';
-import { readCaller } from './auth/authenticate';
+import { resolveCaller } from './auth/authenticate';
+import type { CallerSources } from './auth/authenticate';
+import { formatCaller, isCallerAllowed } from './auth/caller';
+import type { Caller } from './auth/caller';
 import { createLogouts } from './auth/logouts';
+import type { Revocations } from './auth/revocations';
 import { createSessionRoutes } from './auth/session-routes';
 import { buildRouter } from './build-router';
 import type { RouterDeps } from './build-router';
 import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
 import { buildAuditedBackend } from './exec/audited-backend';
-import { ANY_IMP_GRANT, buildGrantedBackend } from './exec/exec-grant';
+import { buildGrantedBackend } from './exec/exec-grant';
 import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
 import type { ExecSession } from './exec/exec-session';
 import { createExecTickets } from './exec/exec-tickets';
-import { isAuthorized } from './token';
+import { readPeerAddress } from './proxy/forwarded-peers';
+import type { ForwardedPeers } from './proxy/forwarded-peers';
 import { createTunnelLimits, createTunnelSession } from './tunnel/tunnel-session';
 import type { TunnelSession } from './tunnel/tunnel-session';
 
@@ -31,16 +37,53 @@ import type { TunnelSession } from './tunnel/tunnel-session';
 // go of its session, and of the imp's idle timer, within a minute
 const EXEC_SOCKET_OPTIONS = { idleTimeout: 30, sendPings: true } as const;
 
+// a socket whose token is removed closes with this: policy violation
+const CLOSE_REVOKED = 1008;
+
 // `now` is the clock exec tickets and sessions expire by
 export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
-  readonly token: string;
+  // the token in <dataDir>/token, which keys the dashboard's sessions
+  readonly rootToken: string;
+  readonly tailnet: CallerSources['tailnet'];
+  readonly revocations: Revocations;
+
+  // client addresses the wake proxy hands over for requests it forwards
+  readonly peers: ForwardedPeers;
 
   // false until the default image is seeded; /health reports it
   readonly isReady: () => boolean;
 }
 
+interface SocketEntry<Session> {
+  readonly session: Session;
+  readonly close: (code: number, reason: string) => void;
+  readonly forget: () => void;
+}
+
+// Elysia's server, or none under app.handle in tests
+interface PeerServer {
+  readonly requestIP: (request: Request) => { readonly address: string } | null;
+}
+
 export function buildApp(deps: AppDeps) {
-  const execTickets = createExecTickets(deps.now);
+  const execTickets = createExecTickets({
+    now: deps.now,
+    isLive: (caller) => caller.tokenId === null || deps.tokens.findById(caller.tokenId) !== null,
+  });
+
+  const sources: CallerSources = {
+    tokens: deps.tokens,
+    rootToken: deps.rootToken,
+    now: deps.now,
+    tailnet: deps.tailnet,
+  };
+
+  const findCaller = (request: Request, server: PeerServer | null, cookie: boolean) => {
+    const socket = server?.requestIP(request)?.address ?? null;
+    const peer = readPeerAddress(request, socket, deps.peers);
+
+    return resolveCaller(request, sources, { peer, cookie });
+  };
 
   // expected errors (NOT_FOUND, INVALID_STATE, …) go to the client; anything
   // else is a bug or a host failure worth a log line
@@ -56,35 +99,64 @@ export function buildApp(deps: AppDeps) {
     ],
   });
 
-  // per exec WebSocket: its session, and a close for impd's stop
-  const sessions = new Map<
-    string,
-    { readonly session: ExecSession; readonly close: (code: number, reason: string) => void }
-  >();
+  // per exec WebSocket: its session, a close for impd's stop, and the undo
+  // of its close on a removed token
+  const sessions = new Map<string, SocketEntry<ExecSession>>();
 
-  // per tunnel WebSocket: its session, and a close for impd's stop
-  const tunnels = new Map<
-    string,
-    { readonly session: TunnelSession; readonly close: (code: number, reason: string) => void }
-  >();
+  // per tunnel WebSocket: the same, with its tunnel session
+  const tunnels = new Map<string, SocketEntry<TunnelSession>>();
 
   const tunnelLimits = createTunnelLimits();
 
-  // each exec socket's grant, by its upgrade request
+  // each exec socket's grant and each tunnel socket's caller, by its
+  // upgrade request
   const grants = new WeakMap<Request, ExecGrant>();
+  const tunnelCallers = new WeakMap<Request, Caller>();
 
   const logouts = createLogouts();
 
-  // what an `/exec` socket may open, audited as the bearer token or, with a
-  // ticket, the caller that asked for the ticket
-  const buildExecBackend = (request: Request) => {
-    const grant = grants.get(request);
-    const actor = grant?.kind === 'imp' ? grant.actor : 'token';
+  // what an `/exec` socket may open, audited as the caller it runs as: the
+  // bearer token's, or the one that asked for the ticket
+  const buildExecBackend = (grant: ExecGrant | undefined) => {
+    const actor = grant?.caller ?? { kind: 'token', name: 'unknown' };
 
     return buildAuditedBackend(buildGrantedBackend(deps.imps, grant), deps.audit, actor, deps.now);
   };
 
-  const sessionRoutes = createSessionRoutes({ ...deps, onLogout: logouts.logOut });
+  // what ends when the caller's dashboard logs out or its token goes
+  const readEnds = (caller: Readonly<Caller>): AbortSignal | null => {
+    const signals = [
+      caller.kind === 'dashboard' ? logouts.readSignal() : null,
+      deps.revocations.readSignal(caller.tokenId),
+    ].filter((signal) => signal !== null);
+
+    return signals.length === 0 ? null : AbortSignal.any(signals);
+  };
+
+  // closes a socket when its caller's token is removed; returns the undo
+  const handleRevocation = (
+    caller: Readonly<Caller> | undefined,
+    close: () => void,
+  ): (() => void) => {
+    const signal = deps.revocations.readSignal(caller?.tokenId ?? null);
+
+    // removed between the upgrade and the open
+    if (signal?.aborted === true) {
+      close();
+    }
+
+    signal?.addEventListener('abort', close);
+
+    return () => signal?.removeEventListener('abort', close);
+  };
+
+  const sessionRoutes = createSessionRoutes({
+    tokens: deps.tokens,
+    rootToken: deps.rootToken,
+    now: deps.now,
+    onLogout: logouts.logOut,
+  });
+
   const dashboard = createDashboardFiles(deps.config.dashboardDir);
 
   const app = new Elysia({ websocket: EXEC_SOCKET_OPTIONS })
@@ -96,17 +168,15 @@ export function buildApp(deps: AppDeps) {
     .all(
       '/rpc*',
       async (context) => {
-        const caller = readCaller(context.request, deps.token, deps.now());
+        const caller = await findCaller(context.request, context.server, true);
 
         if (caller === null) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        const logout = caller.actor === 'dashboard' ? logouts.readSignal() : null;
-
         const handled = await handler.handle(context.request, {
           prefix: '/rpc',
-          context: { caller, logout },
+          context: { caller, ends: readEnds(caller) },
         });
 
         return handled.matched ? handled.response : new Response('not found', { status: 404 });
@@ -114,33 +184,41 @@ export function buildApp(deps: AppDeps) {
       { parse: 'none' },
     )
 
-    // text frames are JSON control (Elysia parses them), binary frames are
-    // channel-tagged stream data (packages/api exec-protocol). The token or a
-    // ticket, never the session cookie: the dashboard gets tickets over /rpc.
+    // JSON text frames and channel-tagged binary frames (exec-protocol). A
+    // ticket, a token or a tailnet identity, never the session cookie: the
+    // dashboard gets tickets over /rpc. Each start checks the scope.
     .ws(EXEC_PATH, {
-      beforeHandle: (context) => {
-        // Elysia ends the upgrade on any returned value, null included
-        if (isAuthorized(context.request.headers.get('authorization'), deps.token)) {
-          grants.set(context.request, ANY_IMP_GRANT);
+      beforeHandle: async (context) => {
+        const ticket = new URL(context.request.url).searchParams.get(EXEC_TICKET_PARAM);
 
+        if (ticket !== null) {
+          const holder = execTickets.redeem(ticket);
+
+          if (holder === null) {
+            return Response.json({ error: 'unauthorized' }, { status: 401 });
+          }
+
+          grants.set(context.request, { caller: holder.caller, name: holder.name });
+
+          // Elysia ends the upgrade on any returned value, null included
           // oxlint-disable-next-line unicorn/no-useless-undefined
           return undefined;
         }
 
-        const ticket = new URL(context.request.url).searchParams.get(EXEC_TICKET_PARAM);
+        const caller = await findCaller(context.request, context.server, false);
 
-        const holder = ticket === null ? null : execTickets.redeem(ticket);
-
-        if (holder === null) {
+        if (caller === null) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        grants.set(context.request, { kind: 'imp', name: holder.name, actor: holder.actor });
+        grants.set(context.request, { caller, name: null });
 
         // oxlint-disable-next-line unicorn/no-useless-undefined
         return undefined;
       },
       open: (ws) => {
+        const grant = grants.get(ws.data.request);
+
         const session = createExecSession(
           {
             sendText: (text) => {
@@ -154,14 +232,19 @@ export function buildApp(deps: AppDeps) {
             },
             readBufferedAmount: () => readBufferedAmount(ws.raw),
           },
-          buildExecBackend(ws.data.request),
+          buildExecBackend(grant),
         );
+
+        const forget = handleRevocation(grant?.caller, () => {
+          ws.raw.close(CLOSE_REVOKED, 'the token was removed');
+        });
 
         sessions.set(ws.id, {
           session,
           close: (code, reason) => {
             ws.raw.close(code, reason);
           },
+          forget,
         });
       },
       message: (ws, message) => {
@@ -171,24 +254,33 @@ export function buildApp(deps: AppDeps) {
         sessions.get(ws.id)?.session.handleDrain();
       },
       close: (ws) => {
-        sessions.get(ws.id)?.session.handleClose();
+        const entry = sessions.get(ws.id);
+
+        entry?.session.handleClose();
+        entry?.forget();
         sessions.delete(ws.id);
       },
     })
 
-    // `imp proxy`: the bearer header only. A ticket lives 30 s and redeems
-    // once, which suits a console, not a listener that opens a tunnel per
-    // connection for hours.
+    // `imp proxy`: a token or a tailnet identity. Never a ticket, which
+    // redeems once: a listener opens a tunnel per connection for hours.
+    // Each tunnel checks the caller's scope.
     .ws(TUNNEL_PATH, {
-      beforeHandle: (context) => {
-        if (isAuthorized(context.request.headers.get('authorization'), deps.token)) {
-          // oxlint-disable-next-line unicorn/no-useless-undefined
-          return undefined;
+      beforeHandle: async (context) => {
+        const caller = await findCaller(context.request, context.server, false);
+
+        if (caller === null) {
+          return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        return Response.json({ error: 'unauthorized' }, { status: 401 });
+        tunnelCallers.set(context.request, caller);
+
+        // oxlint-disable-next-line unicorn/no-useless-undefined
+        return undefined;
       },
       open: (ws) => {
+        const caller = tunnelCallers.get(ws.data.request);
+
         const peer = {
           close: (code: number, reason: string): void => {
             ws.raw.close(code, reason);
@@ -207,6 +299,12 @@ export function buildApp(deps: AppDeps) {
           },
           {
             findImpId: async (name) => {
+              if (caller === undefined || !isCallerAllowed(caller, 'exec', name)) {
+                const who = caller === undefined ? 'nobody' : formatCaller(caller);
+
+                throw buildForbiddenError(`${who} may not open a tunnel into imp ${name}`);
+              }
+
               const imp = await deps.imps.getImp(name);
 
               return imp.id;
@@ -220,7 +318,7 @@ export function buildApp(deps: AppDeps) {
                 deps.audit,
                 {
                   procedure: `tunnel:${port}`,
-                  actor: 'token',
+                  actor: caller ?? { kind: 'token', name: 'unknown' },
                   impName: name,
                   startedAt: deps.now(),
                 },
@@ -231,13 +329,20 @@ export function buildApp(deps: AppDeps) {
           tunnelLimits,
         );
 
-        tunnels.set(ws.id, { session, close: peer.close });
+        const forget = handleRevocation(caller, () => {
+          peer.close(CLOSE_REVOKED, 'the token was removed');
+        });
+
+        tunnels.set(ws.id, { session, close: peer.close, forget });
       },
       message: (ws, message) => {
         tunnels.get(ws.id)?.session.handleMessage(message);
       },
       close: (ws) => {
-        tunnels.get(ws.id)?.session.handleClose();
+        const entry = tunnels.get(ws.id);
+
+        entry?.session.handleClose();
+        entry?.forget();
         tunnels.delete(ws.id);
       },
     })

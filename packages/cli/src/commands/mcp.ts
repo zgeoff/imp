@@ -10,7 +10,7 @@ export const mcpCommand = defineCommand({
   meta: {
     name: 'mcp',
     description:
-      'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes, not a hostile agent, which can read the same token.',
+      'Serve imps to a coding agent as MCP tools over stdio. The guard limits which imps the tools touch; it stops mistakes. For a real limit, run it with a scoped token (imp token new).',
   },
   args: {
     prefix: {

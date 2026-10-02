@@ -10,6 +10,8 @@ import { createSemaphore } from '../imps/semaphore';
 import { deriveSlotAddress } from '../net/addressing';
 import { readErrorMessage } from '../read-error-message';
 import { buildErrorPage } from './error-pages';
+import { PEER_HEADER, isCallerPath } from './forwarded-peers';
+import type { ForwardedPeers } from './forwarded-peers';
 import { parseHostName } from './parse-host-name';
 
 // hop-by-hop headers (RFC 9110 7.6.1) stay on their own hop
@@ -41,6 +43,7 @@ interface WakeProxyDeps {
   readonly db: ImpDatabase;
   readonly imps: Pick<ImpRuntime, 'requireRunning' | 'tracker' | 'recordActivity'>;
   readonly log: (message: string) => void;
+  readonly peers: ForwardedPeers;
 }
 
 // Where a request goes: an imp, which it wakes, impd's own API, or nowhere
@@ -68,8 +71,9 @@ interface UpstreamOptions {
   readonly wokeMs: number | null;
   readonly formatFailure: (reason: string) => string;
 
-  // impd's own API needs the dashboard's session; an imp must never get it
-  readonly keepSession: boolean;
+  // impd's own API needs the dashboard's session, and the client's address
+  // for its tailnet identity; an imp must never get either
+  readonly toApi: boolean;
 }
 
 export interface WakeProxy {
@@ -138,7 +142,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         },
         wokeMs: null,
         formatFailure: (reason) => `impd's API did not answer (${reason}).`,
-        keepSession: true,
+        toApi: true,
       });
     }
 
@@ -182,7 +186,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       wokeMs,
       formatFailure: (reason) =>
         `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
-      keepSession: false,
+      toApi: false,
     });
   };
 
@@ -198,7 +202,16 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const url = new URL(request.url);
 
     const target = `${address}${url.pathname}${url.search}`;
-    const upstreamHeaders = buildUpstreamHeaders(request, server, options.keepSession);
+    const upstreamHeaders = buildUpstreamHeaders(request, server, options.toApi);
+
+    // no client names its own address to the API, nor learns a handle
+    upstreamHeaders.delete(PEER_HEADER);
+
+    const client = server.requestIP(request)?.address;
+
+    if (options.toApi && client !== undefined && isCallerPath(url.pathname)) {
+      upstreamHeaders.set(PEER_HEADER, deps.peers.register(client));
+    }
 
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
       return handleWebSocket(request, server, `ws://${target}`, upstreamHeaders, release);

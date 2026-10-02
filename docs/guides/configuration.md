@@ -39,6 +39,7 @@ error.
 | `IMP_SYSTEM_DRIVE`              | none                        | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own.    |
 | `TAILSCALE_AUTHKEY`             | none                        | Set means the host joins the tailnet; impd then reports tailnet URLs.                                                                               |
 | `IMP_TAILSCALE_HOSTNAME`        | `imp`                       | The tailnet hostname to ask for.                                                                                                                    |
+| `IMP_TAILNET_IDENTITIES`        | none                        | JSON rules that give tailnet members a scope without a token ([tokens](./tokens.md#tailnet-identity)). Unset, every caller needs a token.           |
 | `IMP_DASHBOARD_DIR`             | none                        | The [dashboard](./dashboard.md)'s built files, served at `/ui/`. The release image sets its own.                                                    |
 
 A host on Linux 6.7 or later does not set a restored TSC back, so it can set
@@ -137,14 +138,14 @@ impd tuning passes through an allowlist. When set on your machine, `dev.sh` pass
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_SLEEP_MIN_GUEST_UPTIME_MS`, `IMP_DEFAULT_VCPUS`,
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*` variables, and the HTTPS
-settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`,
-`IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as
-a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker network.
-`IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so the keys in
-your own shell never reach the container. Other impd variables keep their defaults in the dev
-container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh` runs
-one on a throwaway pool.
+`IMP_TAILNET_IDENTITIES`, `IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, the `IMP_BACKUP_*`
+variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
+`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and
+`IMP_ACME_CA_FILE` as a path under the repo. `IMP_DEV_NETWORK` puts the container on that Docker
+network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
+the keys in your own shell never reach the container. Other impd variables keep their defaults in
+the dev container. A ZFS dev instance needs the zfs module on the machine;
+`scripts/zfs-host-test.sh` runs one on a throwaway pool.
 
 ## CLI
 

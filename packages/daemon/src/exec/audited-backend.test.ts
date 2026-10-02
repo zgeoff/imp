@@ -19,7 +19,7 @@ test('a terminal exec is audited as a console, a plain one as an exec, with its 
         calls.push([call, failure]);
       },
     },
-    'dashboard',
+    { kind: 'dashboard', name: 'laptop' },
     () => 5,
   );
 
@@ -34,7 +34,12 @@ test('a terminal exec is audited as a console, a plain one as an exec, with its 
   expect(failures.map((failure) => failure.status)).toEqual(['rejected', 'rejected', 'rejected']);
 
   expect(
-    calls.map(([call, failure]) => [call.procedure, call.actor, call.impName, failure !== null]),
+    calls.map(([call, failure]) => [
+      call.procedure,
+      call.actor.kind,
+      call.impName,
+      failure !== null,
+    ]),
   ).toEqual([
     ['console', 'dashboard', 'dev', true],
     ['exec', 'dashboard', 'dev', true],

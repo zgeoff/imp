@@ -68,7 +68,14 @@ export interface Broker {
   readonly addGrant: (impName: string, secretName: string) => Promise<void>;
   readonly removeGrant: (impName: string, secretName: string) => Promise<void>;
   readonly listGrants: (impName: string) => Promise<string[]>;
-  readonly listAudit: (impName: string | null, limit: number) => Promise<AuditEntry[]>;
+
+  // one imp's, or every imp's; only imps within the patterns when there
+  // are any
+  readonly listAudit: (
+    impName: string | null,
+    limit: number,
+    patterns: readonly string[] | null,
+  ) => Promise<AuditEntry[]>;
 
   // a fork gets its source's grants; a failure is logged, not thrown, as
   // the fork exists by then
@@ -347,10 +354,10 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return listGrantNames(db, imp.id);
     },
 
-    listAudit: async (impName, limit) => {
+    listAudit: async (impName, limit, patterns) => {
       const imp = impName === null ? null : await requireImp(impName);
 
-      return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000));
+      return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
     createForkGrants: async (fromImpName, toImpName) => {

@@ -10,6 +10,7 @@ const ResourceKindSchema = z.enum([
   'secret',
   'grant',
   'backup',
+  'token',
 ]);
 
 const ResourceDataSchema = z.object({
@@ -23,7 +24,7 @@ export const IMP_ERRORS = defineErrors({
   NOT_FOUND: { message: 'Not found', data: ResourceDataSchema },
   CONFLICT: { message: 'Already exists', data: ResourceDataSchema },
 
-  // an exec ticket used for another imp
+  // the caller's token lacks the scope, or the imp is outside its patterns
   FORBIDDEN: { message: 'Not allowed' },
 
   // the host is not set up for this, such as backups with no repository

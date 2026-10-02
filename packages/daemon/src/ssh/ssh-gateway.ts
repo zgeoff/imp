@@ -45,8 +45,16 @@ interface PendingSocket {
   readonly timer: Timer;
 }
 
-// a full login with its imp, a key query to accept, or a refusal
-type LoginOutcome = ImpRecord | 'query' | 'rejected';
+// a full login with its imp and the key's name, a key query to accept, or
+// a refusal
+type LoginOutcome = Login | 'query' | 'rejected';
+
+interface Login {
+  readonly imp: ImpRecord;
+
+  // the key's comment in authorized_keys, which the audit log names
+  readonly keyName: string;
+}
 
 // The SSH gateway: `ssh <imp>@<host>` lands in the imp, waking it if needed.
 // impd accepts each TCP connection and hands it to ssh2, so the login limits
@@ -165,7 +173,7 @@ function handleClient(
   deps: SshGatewayDeps,
   onAuthenticated: () => void,
 ): void {
-  const login: { imp: ImpRecord | null; failures: number } = { imp: null, failures: 0 };
+  const login: { granted: Login | null; failures: number } = { granted: null, failures: 0 };
 
   const handleAuthentication = async (ctx: AuthContext): Promise<void> => {
     let outcome: LoginOutcome;
@@ -191,9 +199,9 @@ function handleClient(
       return;
     }
 
-    // ssh2 emits `ready` inside accept, so the imp is set first
+    // ssh2 emits `ready` inside accept, so the login is set first
     if (outcome !== 'query') {
-      login.imp = outcome;
+      login.granted = outcome;
     }
 
     ctx.accept();
@@ -204,9 +212,9 @@ function handleClient(
   });
 
   client.on('ready', () => {
-    const imp = login.imp;
+    const granted = login.granted;
 
-    if (imp === null) {
+    if (granted === null) {
       client.end();
 
       return;
@@ -214,15 +222,15 @@ function handleClient(
 
     onAuthenticated();
 
-    deps.log(`impd: ssh: ${imp.name}: login from ${info.ip}`);
+    deps.log(`impd: ssh: ${granted.imp.name}: login from ${info.ip}`);
 
-    handleLogin(client, imp, buildSshEnv(info, socket), deps);
+    handleLogin(client, granted, buildSshEnv(info, socket), deps);
   });
 }
 
 // An unknown user and an unknown key get the same answer, so nobody can
-// probe for imp names. A key query (no signature) is answered from the key
-// alone. Nothing here wakes the imp.
+// probe for imp names. A key query is answered from the key alone. Any key
+// in authorized_keys logs in to any imp. Nothing here wakes the imp.
 async function checkLogin(ctx: AuthContext, deps: SshGatewayDeps): Promise<LoginOutcome> {
   if (ctx.method !== 'publickey') {
     return 'rejected';
@@ -244,17 +252,18 @@ async function checkLogin(ctx: AuthContext, deps: SshGatewayDeps): Promise<Login
 
   const imp = await deps.backend.findImp(ctx.username);
 
-  return imp ?? 'rejected';
+  return imp === undefined ? 'rejected' : { imp, keyName: key.comment || `${key.type} key` };
 }
 
 // An authenticated connection counts as activity until it closes. It starts
 // the imp's wake at once, while the client still opens its channels.
 function handleLogin(
   client: Connection,
-  imp: ImpRecord,
+  granted: Login,
   sshEnv: readonly string[],
   deps: SshGatewayDeps,
 ): void {
+  const imp = granted.imp;
   const backend = deps.backend;
   const release = backend.tracker.open(imp.id, 'ssh');
 
@@ -284,6 +293,7 @@ function handleLogin(
 
   const context: SshConnectionContext = {
     impName: imp.name,
+    keyName: granted.keyName,
     backend,
     awake,
     sshEnv,

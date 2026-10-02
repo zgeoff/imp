@@ -1,12 +1,15 @@
 import { expect, test } from 'bun:test';
 import type { Imp } from '@imp/api';
 import {
+  formatApiCalls,
   formatBootStatus,
   formatCheckpoints,
   formatGc,
+  formatIdentity,
   formatImps,
   formatSessions,
   formatTable,
+  formatTokens,
 } from './format-output';
 
 test('it pads each column to its widest cell', () => {
@@ -244,4 +247,35 @@ test('the imp list shows what a destroy frees and what the imp shares', () => {
     ['<=300 MiB?', '1200 MiB?'],
     ['-', '-'],
   ]);
+});
+
+test('it lists tokens with their scope and imps, and * for every imp', () => {
+  const createdAt = new Date('2026-10-02T00:00:00Z');
+
+  const text = formatTokens([
+    { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'], createdAt },
+    { name: 'ops', scope: 'manage', imps: null, createdAt },
+  ]);
+
+  expect(text.split('\n').map((line) => line.trimEnd())).toEqual([
+    'NAME  SCOPE   IMPS        CREATED',
+    'ci    exec    dev-*,ci-*  2026-10-02T00:00:00.000Z',
+    'ops   manage  *           2026-10-02T00:00:00.000Z',
+  ]);
+});
+
+test('it names the caller and what it may do, and who made each api call', () => {
+  expect(
+    formatIdentity({ kind: 'tailnet', name: 'me@example.com', scope: 'read', imps: null }),
+  ).toBe('tailnet me@example.com: read on every imp');
+
+  const call = { at: new Date(0), procedure: 'imps.stop', outcome: 'ok', durationMs: 3 };
+
+  const text = formatApiCalls([
+    { ...call, actor: 'token', actorName: 'ci', imp: 'dev' },
+    { ...call, actor: 'dashboard' },
+  ]);
+
+  expect(text).toContain('token ci');
+  expect(text.split('\n')[2]).toContain(' dashboard ');
 });

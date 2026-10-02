@@ -6,7 +6,7 @@ import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, readImpUrls, readInfo, requireImp, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { REPO_ROOT, runCommand, runInContainer } from '../lib/instance';
+import { REPO_ROOT, runCommand, runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -51,6 +51,33 @@ async function readLocalStatus(): Promise<z.infer<typeof TailscaleStatusSchema> 
   }
 }
 
+// impd until its node is up again, as after a reboot
+async function waitForTailnetIp(): Promise<string> {
+  await waitFor(
+    'impd tailscale state Running',
+    async () => {
+      const info = await readInfo();
+
+      expect(info.tailscale.state).toBe('Running');
+    },
+    { timeoutMs: 120_000 },
+  );
+
+  const info = await readInfo();
+
+  return info.tailscale.ip ?? '';
+}
+
+// a call to impd's API over the tailnet, with no token
+function sendTailnetRpc(ip: string, path: string, input: unknown): Promise<Response> {
+  return fetch(`http://${ip}:7070/rpc/${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ json: input }),
+    signal: AbortSignal.timeout(30_000),
+  });
+}
+
 async function readTailnetBody(url: string, host?: string): Promise<string> {
   const response = await fetch(url, {
     ...(host !== undefined && { headers: { host } }),
@@ -80,19 +107,8 @@ test.skipIf(!ready && !config.acceptance)(
       throw new Error(NOT_READY);
     }
 
-    await waitFor(
-      'impd tailscale state Running',
-      async () => {
-        const info = await readInfo();
-
-        expect(info.tailscale.state).toBe('Running');
-      },
-      { timeoutMs: 120_000 },
-    );
-
+    const ip = await waitForTailnetIp();
     const info = await readInfo();
-
-    const ip = info.tailscale.ip ?? '';
 
     expect(ip).toStartWith('100.');
 
@@ -159,5 +175,33 @@ test.skipIf(!ready && !config.acceptance)(
     const woken = await readTailnetBody(url);
 
     expect(woken).toBe('e2e-tiny-ok');
+  },
+);
+
+test.skipIf(!ready && !config.acceptance)(
+  'a tailnet member a rule names reaches the API without a token, with that scope only',
+  async () => {
+    if (!ready) {
+      throw new Error(NOT_READY);
+    }
+
+    // impd reads the rules at start; the reboot keeps its node and imps
+    process.env['IMP_TAILNET_IDENTITIES'] = JSON.stringify([{ match: '*', scope: 'read' }]);
+
+    try {
+      await runDevScript('reboot');
+
+      const ip = await waitForTailnetIp();
+      const whoami = await sendTailnetRpc(ip, 'tokens/whoami', {});
+      const stop = await sendTailnetRpc(ip, 'imps/stop', { name });
+      const identity: unknown = await whoami.json();
+
+      expect(identity).toMatchObject({ json: { kind: 'tailnet', scope: 'read', imps: null } });
+      expect(stop.status).toBe(403);
+    } finally {
+      delete process.env['IMP_TAILNET_IDENTITIES'];
+
+      await runDevScript('reboot');
+    }
   },
 );

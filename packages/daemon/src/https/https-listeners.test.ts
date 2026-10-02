@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { connect } from 'node:tls';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
+import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
 import { readRejection } from '../read-rejection';
 import { createHttpsListeners } from './https-listeners';
@@ -64,7 +65,15 @@ async function setup() {
   });
 
   const api = startFakeApi(ports.api);
-  const proxy = startWakeProxy({ config: ctx.config, db: ctx.db, imps: ctx.imps, log: () => {} });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
   const logs: string[] = [];
 
   const listeners = createHttpsListeners({
