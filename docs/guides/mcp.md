@@ -61,7 +61,8 @@ exit is a normal result, not a tool error.
 
 - **Output.** Each stream keeps at most `maxOutputBytes` (default 64 KiB, at most 256 KiB): the
   first 8 KiB and the last bytes, with a `[... N bytes dropped ...]` marker between. The command is
-  read to its end; only the middle is dropped. Invalid UTF-8 becomes U+FFFD.
+  read to its end; only the middle is dropped. The cut never splits a UTF-8 character; invalid UTF-8
+  becomes U+FFFD.
 - **Timeout.** `timeoutSeconds` (default 120, at most 1800) counts from the call, so a wake is
   inside it. At the timeout the command's process group gets SIGTERM, and 2 s later SIGKILL goes to
   whatever is left of the group, and the result has `timedOut: true`. Closing the exec socket alone
@@ -72,7 +73,7 @@ exit is a normal result, not a tool error.
   request gets no response. When the client goes away (stdin closes), every exec still running is
   stopped before `imp mcp` exits.
 - **Progress.** A call whose request has a `progressToken` gets `notifications/progress` every 15 s,
-  so a client can keep a long call alive.
+  so a client can keep a long call alive. A cancel stops them.
 
 For a server, or a job that runs longer than the timeout, start it in the background and return at
 once:
@@ -85,7 +86,7 @@ Then read `/tmp/test.log` with later calls. Such a job is outside the call and t
 stop it. A process that calls `setsid` leaves the process group, so a stop does not reach it either.
 
 Only exec and the file tools stop on a cancel. A create, fork or restore that impd has started runs
-to its end; its result is not sent, so look for the imp with `imp_list`.
+to its end, and its result is sent despite the cancel, so the agent learns the name of what it made.
 
 ## Files
 
@@ -98,9 +99,10 @@ under a 60 s timeout.
   rather than coming back cut; read a part of it with `imp_exec` (`head`, `tail`, `sed -n`).
 - **Write.** At most 4 MiB. The parent directories are created. The content goes to a temp file in
   the same directory, which is then renamed over the path, so no reader sees half a file. A file
-  that exists keeps its mode; a new one gets 0666 less the umask. A symlink at the path is replaced
-  by the file, not followed. A write that fails in the guest (a read-only file system, a full disk)
-  is an `isError` result with the command's stderr.
+  that exists keeps its mode; a new one gets 0666 less the umask. A symlink at the path is followed
+  (`readlink -f`), so the file it points to is written and the link stays. A directory at the path
+  is refused. A write that fails in the guest (a read-only file system, a full disk) is an `isError`
+  result with the command's stderr.
 
 The commands (`head`, `mkdir`, `mktemp`, `stat -c`, `mv`) work in coreutils and in BusyBox, so the
 file tools work in a minimal image too.
@@ -109,7 +111,8 @@ file tools work in a minimal image too.
 
 - Versions `2025-11-25`, `2025-06-18` and `2025-03-26`; a client that asks for another gets
   `2025-11-25`. Tools are the only capability.
-- One JSON-RPC message per line. A batch (a JSON array) is an invalid request.
+- One JSON-RPC message per line. Batches (JSON arrays, which `2025-03-26` allows) are not supported:
+  a batch is an invalid request.
 - stdout carries only JSON-RPC messages; `imp mcp` writes everything else to stderr.
 - `initialize` returns `instructions` that name the guard, so the agent knows which imps it has.
 
