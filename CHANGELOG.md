@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.13.0](https://github.com/zgeoff/imp/compare/v0.12.0...v0.13.0) (2026-10-02)
+
+### Features
+
+- **cli:** imp net and imp new --net ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([6c4cde3](https://github.com/zgeoff/imp/commit/6c4cde3d5041388d4b0028a215db7a47c1c5b51e))
+- **daemon:** backups carry an imp's networks; a fork joins none
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([bc69259](https://github.com/zgeoff/imp/commit/bc692590308af91efd03d50d25a4beec24a89693))
+- **daemon:** firewall rules for imps on one network
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([a95dae2](https://github.com/zgeoff/imp/commit/a95dae22c61879ecf5967ea78b7f7df852fb9733))
+- **daemon:** impd answers network names and never forwards them
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([239e3ad](https://github.com/zgeoff/imp/commit/239e3ad35d9266af838b7e7e0a0529a797533cf4))
+- **daemon:** tables for networks and their members ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([6f140ae](https://github.com/zgeoff/imp/commit/6f140aee8bf2b005ba3ec3bc8d36668c5844f06a))
+- **host:** accept marked traffic between imps on one network
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([d8145e7](https://github.com/zgeoff/imp/commit/d8145e769ae085ba0e049c388bbd3669ea42f794))
+- networks api; a join or leave rebuilds the firewall
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([45c2e58](https://github.com/zgeoff/imp/commit/45c2e5808cbd3a7b2ce4dfd2725026cddf849685))
+- trust warnings after imp policy and imp new --net ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([cab6d40](https://github.com/zgeoff/imp/commit/cab6d40e0d3125235d64417e5a75795e4a185144))
+
+### Bug Fixes
+
+- **daemon:** look again soon when a follow finds a running imp held
+  ([d364b11](https://github.com/zgeoff/imp/commit/d364b110f59161272b34ec428cd63a39031e17a0))
+- **daemon:** networks fail closed on a failed undo; join warns
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([2c9262e](https://github.com/zgeoff/imp/commit/2c9262ecbcb9e96fcd82b30f8564f1f17de525a4))
+- **daemon:** retry a network undo; check forward on each apply
+  ([#31](https://github.com/zgeoff/imp/issues/31))
+  ([7570ca5](https://github.com/zgeoff/imp/commit/7570ca59d5dd8c7de4e2b8e0e871448e39b9ba9b))
+
 ## [0.12.0](https://github.com/zgeoff/imp/compare/v0.11.0...v0.12.0) (2026-10-02)
 
 ### Features
