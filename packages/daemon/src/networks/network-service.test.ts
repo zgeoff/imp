@@ -128,3 +128,13 @@ test("a destroyed imp leaves its networks' sets before its row goes", async () =
   expect(ctx.nftScripts.at(-1)).toContain('elements = { "imp0" . 10.66.0.2 }');
   expect(networks[0]?.imps).toEqual(['web']);
 });
+
+test('a fork is on no network: a join is a choice made for each imp', async () => {
+  await using ctx = await setupNetwork();
+
+  await ctx.client.imps.fork({ source: 'web', name: 'copy' });
+
+  const networks = await ctx.client.networks.list();
+
+  expect(networks[0]?.imps).toEqual(['db', 'web']);
+});

@@ -263,6 +263,7 @@ async function main(): Promise<void> {
           imps,
           storage,
           grants: broker,
+          networks,
           storageGate,
           diskBudget,
         });

@@ -21,6 +21,7 @@ const CopyImpSchema = z.object({
 });
 
 const CopyGrantSchema = z.object({ impId: z.string(), secretName: z.string() });
+const CopyMemberSchema = z.object({ impId: z.string(), network: z.string() });
 
 const CopyCheckpointSchema = z.object({
   id: z.string(),
@@ -48,6 +49,8 @@ type CopyImage = z.infer<typeof CopyImageSchema>;
 
 type CopyGrant = z.infer<typeof CopyGrantSchema>;
 
+type CopyMember = z.infer<typeof CopyMemberSchema>;
+
 export interface DatabaseCopy {
   readonly imps: readonly CopyImp[];
 
@@ -57,6 +60,9 @@ export interface DatabaseCopy {
 
   // secret names only: values live in <data>/secrets, which no backup reads
   readonly grants: readonly CopyGrant[];
+
+  // network names: a restore makes any that are missing
+  readonly members: readonly CopyMember[];
 }
 
 // One consistent view of the database for a backup run: `VACUUM INTO` copies
@@ -97,9 +103,17 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
       .query('SELECT imp_id AS impId, secret_name AS secretName FROM grants ORDER BY secret_name')
       .all();
 
+    const members = copy
+      .query(
+        `SELECT network_members.imp_id AS impId, networks.name AS network FROM network_members
+           JOIN networks ON networks.id = network_members.network_id ORDER BY networks.name`,
+      )
+      .all();
+
     return {
       imps: z.array(CopyImpSchema).parse(imps),
       grants: z.array(CopyGrantSchema).parse(grants),
+      members: z.array(CopyMemberSchema).parse(members),
       checkpoints: z.array(CopyCheckpointSchema).parse(checkpoints),
       images: z.array(CopyImageSchema).parse(images),
     };
