@@ -52,6 +52,10 @@ async function requireSession(imp: string, session: string) {
   return found;
 }
 
+function countText(output: string, text: string): number {
+  return output.split(text).length - 1;
+}
+
 function waitAsleep(imp: string): Promise<void> {
   return waitFor(`${imp} to sleep`, () => assertState(imp, 'sleeping'), {
     timeoutMs: ASLEEP_WITHIN_MS,
@@ -132,9 +136,14 @@ test('a second attach takes the session over', async () => {
   const second = await openTerminal(['attach', name]);
   const firstCode = await first.exited;
 
-  // the same size: the redraw goes through one row less first
-  await second.waitForText('size=23 80');
-  await second.waitForText('size=24 80', second.readOutput().lastIndexOf('size=23 80'));
+  // the replay holds the sizes the first terminal saw; the redraw adds one
+  const seen = countText(first.readOutput(), 'size=24 80');
+
+  await waitFor('the second terminal to redraw', () => {
+    if (countText(second.readOutput(), 'size=24 80') <= seen) {
+      throw new Error('no redraw yet');
+    }
+  });
 
   const typed = second.readOutput().length;
 
