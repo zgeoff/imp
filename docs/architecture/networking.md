@@ -25,8 +25,11 @@ container's own network namespace and never touch the host's.
 - `INPUT -i imp+` drops everything except replies to connections the container opened (the proxy
   dials into guests), and the credential broker's port, `IMP_BROKER_PORT`. That rule is inserted
   first, above the drop.
-- The broker listens on every address, so `INPUT ! -i imp+` drops its port: only guests reach it.
-  Both broker rules carry the comment `imp-broker`; a start with another port removes the old ones.
+- The broker listens on every address, so
+  `raw PREROUTING ! -i imp+ -p tcp --dport $IMP_BROKER_PORT -m addrtype --dst-type LOCAL -j DROP`
+  drops its port for anything but a guest. It sits in `raw`, before `INPUT`, where tailscaled later
+  puts its `ts-input` chain first and would accept tailnet packets. Both broker rules carry the
+  comment `imp-broker`; a start with another port removes the old ones.
 - `raw PREROUTING -i imp+ -m rpfilter --invert -j DROP`: a strict reverse-path check on the taps
   only, so a guest cannot send with another imp's address. The broker names the imp by its address.
   A `rp_filter` sysctl would set the floor for `eth0` and `tailscale0` too, and break an exit node,
