@@ -330,3 +330,25 @@ test('a restore whose clone fails leaves a sleeping imp asleep with its memory',
   expect(existsSync(paths.memFile)).toBe(true);
   expect(existsSync(`${paths.disk}.new`)).toBe(false);
 });
+
+test('a restore whose clone fails leaves a running imp running on its own disk', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.checkpoints.createCheckpoint('dev', 'v1');
+  await ctx.writeDisk('dev', 'changed');
+
+  ctx.state.failClone = true;
+
+  const rejection = await ctx.checkpoints
+    .restoreCheckpoint('dev', 'v1')
+    .catch((error: unknown) => error);
+
+  const record = await findImpByName(ctx.db, 'dev');
+  const disk = await ctx.readDisk('dev');
+
+  expect(rejection).toMatchObject({ message: 'clone failed' });
+  expect(record).toMatchObject({ state: 'running', pid: 1001 });
+  expect(ctx.fake.stops).toEqual([]);
+  expect(disk).toBe('changed');
+});
