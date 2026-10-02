@@ -20,15 +20,31 @@ let
   # The docker run arguments, shared with deploy/imp-host.service and
   # bootstrap.sh (scripts/render-imp-host.ts writes those two from it).
   sharedArgs = lib.flatten (lib.importJSON ../imp-host.args.json).lines;
+  stateDir = "/var/lib/imp-host";
   # The key file, read by tailscale inside the container and only when the
-  # node has to join (host/scripts/tailscale-up.sh).
+  # node has to join (host/scripts/tailscale-up.sh). The container mounts a
+  # copy, empty when the operator's file is gone, so a missing key never
+  # stops the start: the node comes back from its saved state.
   keyPath = "/run/imp/tailscale-authkey";
+  keyCopy = "/run/imp-host/tailscale-authkey";
   keyArgs = lib.optionals (cfg.tailscaleAuthKeyFile != null) [
     "-v"
-    "${cfg.tailscaleAuthKeyFile}:${keyPath}:ro"
+    "${keyCopy}:${keyPath}:ro"
     "-e"
     "IMP_TAILSCALE_AUTHKEY_FILE=${keyPath}"
   ];
+  stageKey = pkgs.writeShellScript "imp-host-key" ''
+    set -euo pipefail
+    export PATH=${lib.makeBinPath [ pkgs.coreutils ]}
+    src=${lib.escapeShellArg (toString cfg.tailscaleAuthKeyFile)}
+    install -d -m 0700 ${dirOf keyCopy}
+    if [ -s "$src" ] && [ -r "$src" ]; then
+      install -m 0400 "$src" ${keyCopy}
+    else
+      install -m 0400 /dev/null ${keyCopy}
+      echo "imp-host: $src is missing or empty; the node starts from its saved state and cannot join again without a key" >&2
+    fi
+  '';
   runArgs = sharedArgs ++ keyArgs ++ [ cfg.image ];
 
   # The module's own keys; settings may not set them (an assertion below).
@@ -60,28 +76,36 @@ let
     export IMP_SETTINGS=${settingsFile}
     export IMP_STORAGE=${cfg.storage}
     export IMP_RAM_BUDGET=${lib.optionalString (cfg.ramBudgetMiB != null) (toString cfg.ramBudgetMiB)}
-    export IMP_ARC_MAX=${lib.optionalString zfs (toString cfg.zfs.arcMaxMiB)}
+    export IMP_ARC_MAX=${lib.optionalString (cfg.zfs.arcMaxMiB != null) (toString cfg.zfs.arcMaxMiB)}
     export IMP_SECRETS=${lib.optionalString (cfg.environmentFile != null) cfg.environmentFile}
     exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../bootstrap.sh}
   '';
 
-  # The image the unit runs: there already, else loaded from imageArchive,
-  # else pulled.
+  # The image the unit runs. With imageArchive, it is loaded whenever the
+  # archive differs from the one loaded last: a store path names its
+  # content, so a new archive is a new path. Without, it is pulled when
+  # missing.
   ensureImage = pkgs.writeShellScript "imp-host-image" ''
     set -euo pipefail
     ref=${lib.escapeShellArg cfg.image}
-    if ${docker} image inspect "$ref" >/dev/null 2>&1; then
-      exit 0
-    fi
     ${
       if cfg.imageArchive != null then
         ''
+          stamp=${stateDir}/image-archive
+          if ${docker} image inspect "$ref" >/dev/null 2>&1 \
+            && [ "$(cat "$stamp" 2>/dev/null)" = ${cfg.imageArchive} ]; then
+            exit 0
+          fi
+          echo "imp-host: loading $ref from ${cfg.imageArchive}"
           ${docker} load -q -i ${cfg.imageArchive} >/dev/null
           ${docker} image inspect "$ref" >/dev/null 2>&1 \
             || { echo "imp-host: ${cfg.imageArchive} does not hold $ref" >&2; exit 1; }
+          echo ${cfg.imageArchive} >"$stamp"
         ''
       else
-        ''${docker} pull -q "$ref"''
+        ''
+          ${docker} image inspect "$ref" >/dev/null 2>&1 || ${docker} pull -q "$ref"
+        ''
     }
   '';
 
@@ -138,12 +162,14 @@ in
         description = "imp's dataset, created with mountpoint=legacy when it is missing.";
       };
       arcMaxMiB = lib.mkOption {
-        type = lib.types.ints.positive;
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
         example = 6400;
         description = ''
-          The ZFS ARC cap, set with boot.extraModprobeConfig. The RAM budget
-          leaves room for it. deploy/bootstrap.sh uses 10 % of RAM, within 1
-          to 8 GiB.
+          The ZFS ARC cap, set with boot.extraModprobeConfig so it holds from
+          boot. The RAM budget leaves room for it. null: keep a cap already
+          set, else set 10 % of RAM within 1 to 8 GiB, as deploy/bootstrap.sh
+          does, at each start of imp-host.
         '';
       };
     };
@@ -153,7 +179,8 @@ in
       default = null;
       description = ''
         IMP_RAM_BUDGET_MIB, the RAM awake imps may use. null: RAM less the
-        larger of 8 GiB and 15 %, less zfs.arcMaxMiB, measured at each start.
+        larger of 8 GiB and 15 %, less the ARC cap, measured at each start;
+        imp-host refuses to start when that is below 512 MiB.
       '';
     };
 
@@ -195,7 +222,9 @@ in
       example = "/run/secrets/imp-host.env";
       description = ''
         An env file of secrets (IMP_DNS_API_TOKEN, AWS_SECRET_ACCESS_KEY),
-        outside the Nix store. Copied into imp-host.env at each start.
+        outside the Nix store. Copied into imp-host.env at each start. It is
+        docker --env-file format: KEY=value, no expansion, and quotes stay
+        part of the value.
       '';
     };
 
@@ -205,9 +234,11 @@ in
       example = "/run/secrets/imp-tailscale-authkey";
       description = ''
         A tagged auth key for the host container's node, outside the Nix
-        store. It is mounted read-only into the container, and tailscale
-        reads it only when the node has to join: when the pool holds no node
-        state, or the saved node does not reach Running.
+        store, such as /var/lib/imp-host/secrets/tailscale-authkey (root,
+        0400). A copy is mounted read-only into the container at each start,
+        and tailscale reads it only when the node has to join: when the pool
+        holds no node state, or the saved node needs a login. A missing file
+        only warns; the node then comes back from its saved state.
       '';
     };
   };
@@ -259,13 +290,14 @@ in
     };
     boot.supportedFilesystems.zfs = lib.mkIf zfs true;
     boot.zfs.extraPools = lib.mkIf (zfs && cfg.zfs.importPool) [ cfg.zfs.pool ];
-    boot.extraModprobeConfig = lib.mkIf zfs ''
+    boot.extraModprobeConfig = lib.mkIf (zfs && cfg.zfs.arcMaxMiB != null) ''
       options zfs zfs_arc_max=${toString (cfg.zfs.arcMaxMiB * 1024 * 1024)}
     '';
 
     systemd.tmpfiles.rules = [
       "d /etc/imp 0755 root root -"
       "d /var/lib/imp 0755 root root -"
+      "d ${stateDir} 0700 root root -"
     ];
 
     # imp's dataset, with mountpoint=legacy: the host never mounts it. Made
@@ -320,11 +352,20 @@ in
         "network-online.target"
       ]
       ++ lib.optional zfs "imp-zfs-dataset.service";
-      unitConfig.RequiresMountsFor = "/var/lib/imp";
+      unitConfig = {
+        RequiresMountsFor = "/var/lib/imp";
+        # A start that keeps failing (a refused budget, a missing pool) stops
+        # after five tries instead of looping.
+        StartLimitIntervalSec = 300;
+        StartLimitBurst = 5;
+      };
       serviceConfig = {
         Type = "exec";
         ExecStartPre = [
           writeEnv
+        ]
+        ++ lib.optional (cfg.tailscaleAuthKeyFile != null) stageKey
+        ++ [
           ensureImage
           # A container left over from a crash would hold the name.
           "-${docker} rm -f imp-host"

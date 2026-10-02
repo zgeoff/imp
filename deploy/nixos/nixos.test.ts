@@ -31,11 +31,25 @@ interface WriterInput {
   readonly memTotalKib?: number;
   readonly ramBudget?: string;
   readonly arcMax?: string;
+  readonly liveArcMib?: number;
   readonly secrets?: string;
 }
 
-function runWriter(input: WriterInput = {}): string {
+interface WriterResult {
+  readonly exitCode: number;
+  readonly output: string;
+  readonly env: string;
+  readonly arcParam: string;
+}
+
+const MIB = 1024 * 1024;
+
+function runWriter(input: WriterInput = {}): WriterResult {
   const out = path.join(dir, 'imp-host.env');
+
+  rmSync(out, { force: true });
+
+  const arcParam = writeTempFile('zfs_arc_max', `${String((input.liveArcMib ?? 0) * MIB)}\n`);
 
   const result = Bun.spawnSync(['bash', writer, bootstrap], {
     env: {
@@ -43,18 +57,31 @@ function runWriter(input: WriterInput = {}): string {
       IMP_SETTINGS: writeTempFile('settings', 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n'),
       IMP_STORAGE: input.storage ?? 'zfs',
       IMP_RAM_BUDGET: input.ramBudget ?? '',
-      IMP_ARC_MAX: input.arcMax ?? '6400',
+      IMP_ARC_MAX: input.arcMax ?? '',
       IMP_SECRETS: input.secrets === undefined ? '' : writeTempFile('secrets', input.secrets),
       IMP_ENV_OUT: out,
-      IMP_MEMINFO: writeTempFile('meminfo', `MemTotal: ${input.memTotalKib ?? 64_000 * 1024} kB\n`),
+      IMP_MEMINFO: writeTempFile(
+        'meminfo',
+        `MemTotal: ${String(input.memTotalKib ?? 64_000 * 1024)} kB\n`,
+      ),
+      IMP_ARC_PARAM: arcParam,
     },
   });
 
-  if (result.exitCode !== 0) {
-    throw new Error(`imp-host-env.sh exited ${result.exitCode}: ${result.stderr.toString()}`);
+  let env = '';
+
+  try {
+    env = readFileSync(out, 'utf8');
+  } catch {
+    env = '';
   }
 
-  return readFileSync(out, 'utf8');
+  return {
+    exitCode: result.exitCode,
+    output: result.stdout.toString() + result.stderr.toString(),
+    env,
+    arcParam: readFileSync(arcParam, 'utf8').trim(),
+  };
 }
 
 function getEnvValues(env: string, key: string): string[] {
@@ -64,21 +91,56 @@ function getEnvValues(env: string, key: string): string[] {
     .map((line) => line.slice(key.length + 1));
 }
 
-test('it sizes a zfs host as bootstrap.sh does, leaving out the ARC cap', () => {
-  const env = runWriter();
+test('it sizes a zfs host as bootstrap.sh does, and sets the ARC cap it leaves out', () => {
+  const result = runWriter();
 
-  expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB')).toEqual(['48000']);
-  expect(getEnvValues(env, 'IMP_HOST_FIREWALL')).toEqual(['none']);
+  expect(result.exitCode).toBe(0);
+  expect(getEnvValues(result.env, 'IMP_RAM_BUDGET_MIB')).toEqual(['48000']);
+  expect(result.arcParam).toBe(String(6400 * MIB));
+  expect(getEnvValues(result.env, 'IMP_HOST_FIREWALL')).toEqual(['none']);
   expect(statSync(path.join(dir, 'imp-host.env')).mode & 0o777).toBe(0o600);
 });
 
+test('a cap already set stays, and arcMaxMiB wins over both', () => {
+  const kept = runWriter({ liveArcMib: 2048 });
+
+  expect(kept.arcParam).toBe(String(2048 * MIB));
+  expect(getEnvValues(kept.env, 'IMP_RAM_BUDGET_MIB')).toEqual(['52352']);
+  expect(kept.output).toContain('keeping the ZFS ARC cap already set, 2048 MiB');
+
+  const set = runWriter({ liveArcMib: 2048, arcMax: '4096' });
+
+  expect(set.arcParam).toBe(String(4096 * MIB));
+  expect(getEnvValues(set.env, 'IMP_RAM_BUDGET_MIB')).toEqual(['50304']);
+});
+
 test('xfs has no ARC, and a set budget wins over the formula', () => {
-  expect(getEnvValues(runWriter({ storage: 'xfs' }), 'IMP_RAM_BUDGET_MIB')).toEqual(['54400']);
-  expect(getEnvValues(runWriter({ ramBudget: '20000' }), 'IMP_RAM_BUDGET_MIB')).toEqual(['20000']);
+  const xfs = runWriter({ storage: 'xfs' });
+
+  expect(getEnvValues(xfs.env, 'IMP_RAM_BUDGET_MIB')).toEqual(['54400']);
+  expect(xfs.arcParam).toBe('0');
+
+  expect(getEnvValues(runWriter({ ramBudget: '20000' }).env, 'IMP_RAM_BUDGET_MIB')).toEqual([
+    '20000',
+  ]);
+});
+
+test('a small host is refused unless ramBudgetMiB is set', () => {
+  const small = { memTotalKib: 3 * 1024 * 1024, arcMax: '1024' };
+  const refused = runWriter(small);
+
+  expect(refused.exitCode).not.toBe(0);
+  expect(refused.env).toBe('');
+  expect(refused.output).toContain('below the 512 MiB floor: RAM 3072 MiB');
+  expect(refused.output).toContain('Set services.imp.ramBudgetMiB');
+
+  expect(
+    getEnvValues(runWriter({ ...small, ramBudget: '1024' }).env, 'IMP_RAM_BUDGET_MIB'),
+  ).toEqual(['1024']);
 });
 
 test('the secrets file is copied in before the budget', () => {
-  const env = runWriter({ secrets: 'IMP_DNS_API_TOKEN=fake-token\nIMP_RAM_BUDGET_MIB=1\n' });
+  const env = runWriter({ secrets: 'IMP_DNS_API_TOKEN=fake-token\nIMP_RAM_BUDGET_MIB=1\n' }).env;
 
   expect(getEnvValues(env, 'IMP_DNS_API_TOKEN')).toEqual(['fake-token']);
 
