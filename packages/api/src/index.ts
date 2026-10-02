@@ -110,10 +110,20 @@ export {
   MoveStateSchema,
   MoveStatusSchema,
   MoveTicketSchema,
+  WarmHostSchema,
+  WarmMoveSchema,
   PeerUrlSchema,
 } from './move-schema';
 
-export type { MovePlan, MoveState, MoveStatus, MoveTicket } from './move-schema';
+export type {
+  MovePlan,
+  MoveState,
+  MoveStatus,
+  MoveTicket,
+  WarmHost,
+  WarmMove,
+} from './move-schema';
+
 export { NameSchema } from './name-schema';
 export { NetworkJoinSchema, NetworkSchema } from './network-schema';
 export type { Network, NetworkJoin } from './network-schema';

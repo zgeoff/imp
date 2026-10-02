@@ -31,6 +31,7 @@ export const FAKE_IMP: ImpRecord = {
   awakeMs: 0,
   awakeSince: null,
   isIdentityResetPending: false,
+  isTrustPending: false,
   publicAuth: null,
   moveState: null,
   jailUid: 900_000,

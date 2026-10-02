@@ -1,4 +1,4 @@
-import type { MoveStatus } from '@imp/api';
+import type { MovePlan, MoveStatus, WarmHost } from '@imp/api';
 import { loadCliConfig } from '../cli-config';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { ProgressOutput } from '../cp/copy-progress';
@@ -49,16 +49,19 @@ export async function runMove(run: MoveRun): Promise<void> {
     return;
   }
 
-  // a ZFS source sends ZFS streams to a ZFS target, else files
+  // a ZFS source sends ZFS streams to a ZFS target, else files; a sleeping
+  // imp moves with its memory when the target's facts match
   const info = await run.to.system.info();
+  const facts = await readFacts(run);
 
   const plan = await run.from.moves.prepare({
     name: run.name,
     stop: run.stop,
     targetStorage: info.storage.backend,
+    ...(facts !== null && { target: facts }),
   });
 
-  const ticket = await requireTicket(run, plan.bytes);
+  const ticket = await requireTicket(run, plan);
 
   await run.from.moves.send({ name: run.name, to: ticket.peerUrl, ticket: ticket.ticket });
 
@@ -66,13 +69,28 @@ export async function runMove(run: MoveRun): Promise<void> {
 
   requireDone(run, status);
 
-  run.print(`${run.name}: moved to ${run.toHost}`);
+  const how = plan.warm === null ? '' : ', asleep with its memory';
+
+  run.print(`${run.name}: moved to ${run.toHost}${how}`);
+}
+
+// an older target has no facts to give, and takes cold moves only
+async function readFacts(run: MoveRun): Promise<WarmHost | null> {
+  try {
+    return await run.to.moves.facts();
+  } catch {
+    return null;
+  }
 }
 
 // a refused ticket leaves the source marked: the mark comes off first
-async function requireTicket(run: MoveRun, bytes: number) {
+async function requireTicket(run: MoveRun, plan: Readonly<MovePlan>) {
   try {
-    return await run.to.moves.receive({ name: run.name, bytes });
+    return await run.to.moves.receive({
+      name: run.name,
+      bytes: plan.bytes,
+      ...(plan.warm !== null && { warm: plan.warm }),
+    });
   } catch (error) {
     await run.from.moves.abort({ name: run.name });
 
@@ -149,12 +167,13 @@ function readFailureHint(run: MoveRun, status: Readonly<MoveStatus>): string {
 export const moveCommand = defineCommand({
   meta: {
     name: 'move',
-    description: 'Move a stopped imp to another saved host (see docs/guides/hosts.md)',
+    description:
+      'Move an imp to another saved host: a stopped one cold, a sleeping one with its memory (see docs/guides/hosts.md)',
   },
   args: {
     name: nameArg,
     to: { type: 'positional', description: 'saved host to move it to', required: true },
-    stop: { type: 'boolean', description: 'stop a running imp first' },
+    stop: { type: 'boolean', description: 'stop a running or sleeping imp first: a cold move' },
     resume: { type: 'boolean', description: 'commit a move the target verified' },
     abort: { type: 'boolean', description: 'end a move; the imp stays here' },
   },

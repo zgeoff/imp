@@ -17,7 +17,14 @@ import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
 import { ImpSchema } from './imp-schema';
 import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
-import { MovePlanSchema, MoveStatusSchema, MoveTicketSchema, PeerUrlSchema } from './move-schema';
+import {
+  MovePlanSchema,
+  MoveStatusSchema,
+  MoveTicketSchema,
+  PeerUrlSchema,
+  WarmHostSchema,
+  WarmMoveSchema,
+} from './move-schema';
 import { NameSchema } from './name-schema';
 import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
 import {
@@ -221,22 +228,33 @@ export const impContract = {
   // moves between hosts (docs/guides/hosts.md#moves); each is a call on
   // one host, and the CLI runs them in turn
   moves: {
-    // the source: marks the imp `sending` (it must be stopped; `stop` stops
-    // it first) and counts what a send would carry to a target with
-    // `targetStorage` (xfs when not given)
+    // the source: marks the imp `sending`, counts what a send to a
+    // `targetStorage` target carries; a sleeping imp without `stop` moves
+    // warm when `target` matches (docs/architecture/moves.md#warm-moves)
     prepare: base
       .input(
         z.object({
           name: NameSchema,
           stop: z.boolean().optional(),
           targetStorage: z.enum(['xfs', 'zfs']).optional(),
+          target: WarmHostSchema.optional(),
         }),
       )
       .output(MovePlanSchema),
 
-    // the target: a ticket for one stream of `bytes` bytes into imp `name`
+    // the target: what a warm move to this host must match
+    facts: base.output(WarmHostSchema),
+
+    // the target: a ticket for one stream of `bytes` bytes into imp `name`;
+    // with `warm`, checked against this host and keeping the imp's slot
     receive: base
-      .input(z.object({ name: NameSchema, bytes: z.int().nonnegative() }))
+      .input(
+        z.object({
+          name: NameSchema,
+          bytes: z.int().nonnegative(),
+          warm: WarmMoveSchema.optional(),
+        }),
+      )
       .output(MoveTicketSchema),
 
     // the source: sends the imp to `to` with the target's ticket, in the

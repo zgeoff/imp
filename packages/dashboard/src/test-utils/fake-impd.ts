@@ -273,6 +273,9 @@ export function createFakeImpd(): FakeImpd {
       prepare: os.moves.prepare.handler(() => {
         throw new Error('not in the fake');
       }),
+      facts: os.moves.facts.handler(() => {
+        throw new Error('not in the fake');
+      }),
       receive: os.moves.receive.handler(() => {
         throw new Error('not in the fake');
       }),

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { copyFile, open } from 'node:fs/promises';
-import { join } from 'node:path';
-import type { EgressPolicy, MoveTicket } from '@imp/api';
+import { dirname, join } from 'node:path';
+import type { EgressPolicy, MoveTicket, WarmHost, WarmMove } from '@imp/api';
 import { EgressPolicySchema } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ApiAudit } from '../audit/api-audit';
@@ -11,11 +11,17 @@ import type { Broker } from '../broker/broker-service';
 import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { findImpById, findImpByName, listImps, updateImpCommitted } from '../db/imps';
+import { findImpById, findImpByName, isSlotFree, listImps, updateImpCommitted } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
 import { readErrorMessage } from '../read-error-message';
+import { findColdBootReason, readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
+import type { SnapshotMeta } from '../sleep/snapshot-meta';
+import type { HostIdentity } from '../sleep/vm-identity';
+import { writeVmIdentity } from '../sleep/vm-identity';
+import { buildSystemDrivePath } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -49,6 +55,7 @@ import {
 } from './move-tickets';
 import type { ParsedTicket, ReceiptBody } from './move-tickets';
 import type { PeerRanges } from './peer-address';
+import { findWarmMismatches } from './warm-facts';
 
 // a stream must start this soon after its ticket; the commit is good this
 // long after the receipt (docs/architecture/moves.md#tickets)
@@ -67,10 +74,14 @@ interface MoveTicketRow {
   readonly receipt: string | null;
   readonly commit_until: number | null;
   readonly committed_at: number | null;
+
+  // a warm move's slot
+  readonly slot: number | null;
 }
 
 export interface MoveReceiver {
-  readonly issueTicket: (name: string, bytes: number) => Promise<MoveTicket>;
+  // with `warm`, a warm move's: checked against this host, its slot kept
+  readonly issueTicket: (name: string, bytes: number, warm?: WarmMove) => Promise<MoveTicket>;
 
   // a fresh commit ticket for an imp staged `receiving`
   readonly reissueTicket: (name: string) => Promise<MoveTicket>;
@@ -98,7 +109,12 @@ export interface MoveReceiverDeps {
   readonly diskBudget: Pick<DiskBudget, 'requireRoom' | 'withRoom'>;
   readonly imps: Pick<Imps, 'createImp' | 'destroyImp' | 'lockImpId'>;
   readonly grants: Pick<Broker, 'addGrant' | 'listSecrets'>;
+  readonly egress: Pick<EgressService, 'writeAnswers'>;
   readonly ranges: PeerRanges;
+
+  // what loads a memory snapshot here, and the facts a warm move must match
+  readonly readIdentity: () => HostIdentity;
+  readonly readWarmHost: () => WarmHost;
 
   // this host's base URL as a source reaches it
   readonly readPeerUrl: () => Promise<string>;
@@ -205,11 +221,16 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     return { row, ticket };
   };
 
-  const writeTicketRow = async (name: string, bytes: number, fields: Partial<MoveTicketRow>) => {
+  const writeTicketRow = async (
+    name: string,
+    bytes: number,
+    fields: Partial<MoveTicketRow>,
+    db: ImpDatabase = deps.db,
+  ) => {
     const created = createTicket();
     const now = deps.now();
 
-    await deps.db
+    await db
       .insertInto('move_tickets')
       .values({
         id: created.id,
@@ -223,6 +244,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
         receipt: fields.receipt ?? null,
         commit_until: fields.commit_until ?? null,
         committed_at: null,
+        slot: fields.slot ?? null,
       })
       .execute();
 
@@ -480,6 +502,17 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, `this host has an imp with id ${header.imp.id}`);
     }
 
+    // the ticket's checks again, on what the stream itself says
+    if (header.warm !== null) {
+      requireWarmMove(header.warm.move);
+
+      if (header.warm.move.slot !== row.slot) {
+        throw new MoveRequestError(409, `the ticket keeps slot ${String(row.slot)}, not this one`);
+      }
+    } else if (row.slot !== null) {
+      throw new MoveRequestError(409, 'the ticket is for a warm move, and the stream is cold');
+    }
+
     await deps.db
       .updateTable('move_tickets')
       .set({ imp_id: header.imp.id })
@@ -558,8 +591,15 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
           start: false,
           moveState: 'receiving',
           isIdentityResetPending: header.imp.isIdentityResetPending,
+          ...(header.warm !== null && { slot: header.warm.move.slot }),
           prepareDisk: writeDisk,
         });
+
+        if (header.warm !== null) {
+          await writeWarmFiles(header.imp.id, header.warm, reader, count, temp, (file) => {
+            files.push(file);
+          });
+        }
       });
 
       const end = await reader.readFrame();
@@ -593,6 +633,85 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     return { status: 200, body: receipt };
   };
 
+  // the facts of a warm move this host does not match, as a refusal
+  const requireWarmMove = (move: WarmMove): void => {
+    const mismatches = findWarmMismatches(move, deps.readWarmHost());
+
+    if (mismatches.length > 0) {
+      throw new MoveRequestError(409, `this host cannot load the memory: ${mismatches.join('; ')}`);
+    }
+  };
+
+  // A warm move's files, after the disk: the system drive when this host
+  // lacks it, then vmstate and mem straight into the snapshot directory,
+  // which loads nothing without meta.json. meta.json goes last.
+  const writeWarmFiles = async (
+    impId: string,
+    warm: NonNullable<MoveHeader['warm']>,
+    reader: FrameReader,
+    count: ByteCounter,
+    temp: string,
+    onFile: (file: ReceivedFile) => void,
+  ): Promise<void> => {
+    const paths = deps.storage.resolveImpPaths(impId);
+
+    if (warm.isDriveIncluded) {
+      const got = await readFileInto(reader, 'system-drive', temp, count);
+
+      await writeSystemDrive(temp, warm.meta);
+
+      onFile({ kind: 'system-drive', sha256: got.sha256, bytes: got.bytes });
+    }
+
+    mkdirSync(paths.snapshotDir, { recursive: true });
+
+    for (const kind of ['vmstate', 'mem'] as const) {
+      const path = kind === 'vmstate' ? paths.vmstate : paths.memFile;
+
+      const got = await readFileInto(reader, kind, path, count);
+
+      onFile({ kind, sha256: got.sha256, bytes: got.bytes });
+    }
+
+    if (warm.vm !== null) {
+      writeVmIdentity(paths, warm.vm);
+    }
+
+    for (const answer of warm.answers) {
+      await deps.egress.writeAnswers(warm.move.slot, answer.names, [answer]);
+    }
+
+    // the wake's own check, before the record that lets a wake load it
+    const reason = findColdBootReason(warm.meta, deps.readIdentity());
+
+    if (reason !== null) {
+      throw new MoveRequestError(409, `the memory snapshot cannot load here: ${reason}`);
+    }
+
+    writeSnapshotMeta(paths, warm.meta);
+  };
+
+  // A drive lands under its own sha256, which other snapshots trust: what
+  // arrived must hash to the name the snapshot gives it
+  const writeSystemDrive = async (temp: string, meta: Readonly<SnapshotMeta>) => {
+    const path = buildSystemDrivePath(deps.dataDir, meta.systemDrive);
+
+    if (meta.systemDrivePath !== path) {
+      throw new MoveRequestError(400, `the snapshot's drive is not at ${path}`);
+    }
+
+    const sha256 = await readFileSha256(temp);
+
+    if (!isSameHash(sha256, meta.systemDrive)) {
+      throw new MoveRequestError(400, 'the system drive does not match its sha256');
+    }
+
+    if (!existsSync(path)) {
+      mkdirSync(dirname(path), { recursive: true });
+      renameSync(temp, path);
+    }
+  };
+
   // only an imp a move staged here, never a live one of the same name
   const removeStaged = async (name: string, impId: string): Promise<void> => {
     const staged = await findImpById(deps.db, impId);
@@ -615,7 +734,15 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const existing = await findImageByDigest(deps.db, offer.imageDigest);
 
-    return Response.json({ needsImage: existing === undefined, storage: deps.storage.kind });
+    const needsSystemDrive =
+      offer.systemDrive !== undefined &&
+      !existsSync(buildSystemDrivePath(deps.dataDir, offer.systemDrive));
+
+    return Response.json({
+      needsImage: existing === undefined,
+      needsSystemDrive,
+      storage: deps.storage.kind,
+    });
   };
 
   // a failed read fails the pipe, so a part waiting on it answers too
@@ -731,7 +858,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
   // The commit's two writes, the mark and the ticket, as one
   const writeCommit = async (imp: ImpRecord, row: MoveTicketRow): Promise<void> => {
-    await updateImpCommitted(deps.db, imp.id, deps.now());
+    const isWarm = row.slot !== null;
+
+    // a warm imp commits sleeping, only on a snapshot that loads
+    if (isWarm && readSnapshotMeta(deps.storage.resolveImpPaths(imp.id)) === null) {
+      throw new MoveRequestError(409, 'the received memory snapshot is not complete');
+    }
+
+    await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
     deps.onCommitted(row.name);
@@ -849,7 +983,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
   };
 
   return {
-    issueTicket: async (name, bytes) => {
+    issueTicket: async (name, bytes, warm) => {
       const taken = await findImpByName(deps.db, name);
 
       if (taken !== undefined) {
@@ -861,7 +995,28 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
       await deps.diskBudget.requireRoom(2 * bytes);
 
-      return writeTicketRow(name, bytes, {});
+      if (warm === undefined) {
+        return writeTicketRow(name, bytes, {});
+      }
+
+      const mismatches = findWarmMismatches(warm, deps.readWarmHost());
+
+      if (mismatches.length > 0) {
+        throw new ORPCError('PRECONDITION_FAILED', {
+          message: `this host cannot load ${name}'s memory: ${mismatches.join('; ')}`,
+        });
+      }
+
+      // in one transaction, so two tickets never keep the same slot
+      return deps.db.transaction().execute(async (trx) => {
+        if (!(await isSlotFree(trx, warm.slot, deps.now()))) {
+          throw new ORPCError('CONFLICT', {
+            message: `slot ${String(warm.slot)}, which ${name}'s memory needs, is taken here`,
+          });
+        }
+
+        return writeTicketRow(name, bytes, { slot: warm.slot }, trx);
+      });
     },
 
     reissueTicket: async (name) => {
@@ -1113,6 +1268,17 @@ function readStreamFile(
       }
     },
   });
+}
+
+// the sha256 of a whole file, as content-addressed paths name it
+async function readFileSha256(path: string): Promise<string> {
+  const hash = createHash('sha256');
+
+  for await (const chunk of Bun.file(path).stream()) {
+    hash.update(chunk);
+  }
+
+  return hash.digest('hex');
 }
 
 // a received image's digest: its two files' stream sums, as they arrived

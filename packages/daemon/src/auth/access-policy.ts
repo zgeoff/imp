@@ -88,6 +88,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   // on the target a ticket takes in an image and grants, which are
   // host-wide, as images.add and grants.add are
   'moves.prepare': manageImp,
+  'moves.facts': manageHost,
   'moves.receive': manageHost,
   'moves.send': manageImp,
   'moves.status': readImp,

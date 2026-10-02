@@ -10,7 +10,7 @@ import type { CpuIdentity } from './cpu-identity';
 // What a VM booted with. impd writes it at every cold boot; it holds until the
 // next one, across sleeps, wakes and impd restarts, so a sleep records what
 // the VM runs, not what the host would boot now.
-const VmIdentitySchema = z.object({
+export const VmIdentitySchema = z.object({
   firecrackerVersion: z.string(),
   snapshotVersion: z.string(),
   hostKernel: z.string(),

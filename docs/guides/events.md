@@ -83,7 +83,8 @@ reader's imps, not its fields, so it carries no lease owners ([leases](./leases.
   stream that lasted 10 s starts the count again. Each reconnect prints the snapshot again and a
   line on stderr.
 - An imp that [moves](./hosts.md#moves) here comes as `ImpAdded` with `imp.move` set to `receiving`,
-  then `ImpChanged updated` with no `move` at the commit. The source sends `ImpRemoved`.
+  then `ImpChanged updated` with no `move` at the commit: `stopped`, or `sleeping` after a warm
+  move. The source sends `ImpRemoved`.
 - `ImpRemoved` comes with no `ImpChanged stopped` before it when the imp was running, and its
   `imp.state` is the last state written. It means the VM, the disk and the checkpoints are all gone;
   no `CheckpointRemoved` comes for them.

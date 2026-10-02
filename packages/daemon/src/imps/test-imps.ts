@@ -367,6 +367,7 @@ type AppParts = Pick<
   | 'tokens'
   | 'revocations'
   | 'egress'
+  | 'readIdentity'
 >;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
@@ -385,7 +386,7 @@ export function buildTestApp(
 
   // a move test's fetch to the other host, and its hooks
   moveOptions: Partial<
-    Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted' | 'partBytes'>
+    Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost'>
   > = {},
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
@@ -433,6 +434,7 @@ export function buildTestApp(
     imps: impd.imps,
     grants: ctx.broker,
     egress: ctx.egress,
+    readIdentity: ctx.readIdentity,
     readTailnetIp: () => Promise.resolve(null),
     releaseName: () => Promise.resolve(),
     onCommitted: () => {},

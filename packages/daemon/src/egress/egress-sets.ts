@@ -38,6 +38,16 @@ export interface EgressSets {
   readonly prune: (slot: number, keep: (name: string) => boolean) => readonly string[];
   readonly clear: (slot: number) => void;
   readonly listAddresses: (slot: number) => readonly string[];
+
+  // what the slot's set holds, each address with its names and the seconds
+  // it has left: what a warm move carries to the target
+  readonly listAnswers: (slot: number, now: number) => readonly HeldAnswer[];
+}
+
+export interface HeldAnswer {
+  readonly names: readonly string[];
+  readonly address: string;
+  readonly ttlS: number;
 }
 
 interface Entry {
@@ -160,5 +170,14 @@ export function createEgressSets(limits: SetLimits): EgressSets {
     },
 
     listAddresses: (slot) => [...(entries.get(slot)?.keys() ?? [])],
+
+    listAnswers: (slot, now) =>
+      [...(entries.get(slot) ?? [])]
+        .filter(([, entry]) => entry.expiresAt > now)
+        .map(([address, entry]) => ({
+          names: [...entry.names],
+          address,
+          ttlS: Math.ceil((entry.expiresAt - now) / 1000),
+        })),
   };
 }

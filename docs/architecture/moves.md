@@ -6,10 +6,9 @@ page covers the protocol: `packages/daemon/src/moves/`.
 
 ## Scope
 
-The cold move is what ships: a stopped imp moves, and boots cold on the target. Not yet built:
+A stopped imp moves cold, and boots cold on the target. A sleeping imp moves warm, with its memory,
+between hosts that can load it ([warm moves](#warm-moves)). Not yet built:
 
-- A warm move, which would keep the imp's memory across hosts
-  ([#86](https://github.com/zgeoff/imp/issues/86)).
 - The whole `imp move` flow (tickets, receipt, commit) on a real ZFS pool, and between two impds in
   the end-to-end tests. On real ZFS the CI `zfs` job runs the backend's steps (a ZFS-to-ZFS send of
   a restored imp, an XFS-style receive); the full flow runs on a fake ZFS only
@@ -156,7 +155,31 @@ commit window ends.
 ## Warm moves
 
 A warm move (#86) brings a sleeping imp with its memory, into the same slot on the target: the
-snapshot holds the slot's tap, addresses and MAC. Its ticket keeps that slot (`move_tickets.slot`)
-until the commit once its stream started, else until its start window ends. So an `imp new` on the
-target during a long stream takes another. The staged imp is created in exactly that slot, or the
-receive fails with `slot <n> is taken on this host`.
+snapshot holds the slot's tap, addresses and MAC. Each new tap's MAC comes from its slot
+([addressing](./networking.md#addressing)), so the guest's neighbour entry for its gateway holds.
+
+**The facts** ([hosts](../guides/hosts.md#warm-moves) lists them) are checked three times.
+`moves.prepare` compares the snapshot and the source host with the target's `moves.facts`.
+`moves.receive` and the stream's header carry the same claim, and the target checks it against its
+own facts. Last, before it writes `meta.json`, the target runs the wake's own check,
+`findColdBootReason`, on the record. A wake checks the CPU too, so a snapshot that got past every
+check still boots cold, never faults.
+
+**The stream** carries `vmstate` and `mem` after the disk, as files of data blocks, and the system
+drive before them when `/move/offer` finds the target lacks it. The header carries `meta.json`,
+`vm.json` and, for a `box` imp, the addresses its set lets in, with the seconds each has left.
+
+- The target writes `vmstate` and `mem` straight into the imp's snapshot directory (on ZFS,
+  `<data>/mem/<id>`, its own dataset, so no rename crosses datasets). Without `meta.json` they load
+  nothing, and removing the staged imp removes them.
+- The drive lands under its sha256, which other snapshots trust: the target hashes what arrived and
+  refuses a drive whose sum is not its name, or a path that is not its own.
+- `meta.json` goes last. The commit sets the imp `sleeping` in the transaction that takes the mark
+  off, and only when `meta.json` reads whole; else it refuses, and the source keeps its copy.
+- `imps.trust_pending` marks the imp until its first wake here, which installs this host's broker CA
+  in the guest at once.
+
+**The slot.** The ticket keeps the imp's slot (`move_tickets.slot`) until the commit once its stream
+started, else until its start window ends. So an `imp new` on the target during a long stream takes
+another. The staged imp is created in exactly that slot, or the receive fails with
+`slot <n> is taken on this host`.

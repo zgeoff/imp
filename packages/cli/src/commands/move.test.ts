@@ -44,6 +44,7 @@ function createFakeMoves(
   return {
     moves: {
       prepare: buildAnswer('prepare'),
+      facts: buildAnswer('facts'),
       receive: buildAnswer('receive'),
       send: buildAnswer('send'),
       status: buildAnswer('status'),
@@ -88,7 +89,7 @@ test('a move prepares on the source, takes a ticket from the target, then sends'
   const ctx = setupRun(
     'move',
     {
-      prepare: { bytes: 10, checkpoints: 0 },
+      prepare: { bytes: 10, checkpoints: 0, warm: null },
       send: IDLE,
       status: { ...IDLE, isDone: true },
     },
@@ -98,6 +99,7 @@ test('a move prepares on the source, takes a ticket from the target, then sends'
   await runMove(ctx.run);
 
   expect(ctx.calls).toEqual([
+    'b facts undefined',
     'a prepare {"name":"dev","stop":false,"targetStorage":"xfs"}',
     'b receive {"name":"dev","bytes":10}',
     'a send {"name":"dev","to":"http://100.64.0.2:7070","ticket":"t.s"}',
@@ -107,10 +109,38 @@ test('a move prepares on the source, takes a ticket from the target, then sends'
   expect(ctx.printed).toEqual(['dev: moved to b']);
 });
 
+test('a sleeping imp moves warm: the target facts go to prepare, the plan to receive', async () => {
+  const facts = { cpuModel: 'Test CPU' };
+  const warm = { slot: 3 };
+
+  const ctx = setupRun(
+    'move',
+    {
+      prepare: { bytes: 10, checkpoints: 0, warm },
+      send: IDLE,
+      status: { ...IDLE, isDone: true },
+    },
+    {
+      facts,
+      receive: { ticket: 't.s', expiresAt: new Date(0), peerUrl: 'http://100.64.0.2:7070' },
+    },
+  );
+
+  await runMove(ctx.run);
+
+  expect(ctx.calls.slice(0, 3)).toEqual([
+    'b facts undefined',
+    'a prepare {"name":"dev","stop":false,"targetStorage":"xfs","target":{"cpuModel":"Test CPU"}}',
+    'b receive {"name":"dev","bytes":10,"warm":{"slot":3}}',
+  ]);
+
+  expect(ctx.printed).toEqual(['dev: moved to b, asleep with its memory']);
+});
+
 test('a target that refuses the ticket gets the source mark taken off', async () => {
   const ctx = setupRun(
     'move',
-    { prepare: { bytes: 10, checkpoints: 0 }, abort: IDLE },
+    { prepare: { bytes: 10, checkpoints: 0, warm: null }, abort: IDLE },
     { receive: new Error('this host has an imp named dev') },
   );
 
@@ -124,7 +154,7 @@ test('a failed send after the receipt points at --resume', async () => {
   const ctx = setupRun(
     'move',
     {
-      prepare: { bytes: 10, checkpoints: 0 },
+      prepare: { bytes: 10, checkpoints: 0, warm: null },
       send: IDLE,
       status: { ...IDLE, state: 'moved', error: 'commit: the target answered 500' },
     },

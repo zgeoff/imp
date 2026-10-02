@@ -407,6 +407,22 @@ export const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('move_tickets').addColumn('slot', 'integer').execute();
     },
   },
+
+  // warm moves (#86): which sends carry the memory, and an imp whose first
+  // wake on its new host installs this host's broker CA
+  '018_add_warm_moves': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('move_sends')
+        .addColumn('warm', 'integer', (c) => c.notNull().defaultTo(0))
+        .execute();
+
+      await db.schema
+        .alterTable('imps')
+        .addColumn('trust_pending', 'integer', (c) => c.notNull().defaultTo(0))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

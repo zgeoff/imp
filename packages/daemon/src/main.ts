@@ -340,6 +340,7 @@ async function main(): Promise<void> {
     imps,
     grants: broker,
     egress,
+    readIdentity: () => identity,
     readTailnetIp: async () => {
       const status = await readTailscale();
 

@@ -11,7 +11,7 @@ export interface CpuIdentity {
   readonly cpuFlags: string;
 }
 
-const UNKNOWN_CPU = 'unknown';
+export const UNKNOWN_CPU = 'unknown';
 
 // The first processor's model and flags; arm64 names them `CPU part` and
 // `Features`. A CPU it cannot read is `unknown`: a move refuses it.

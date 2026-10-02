@@ -32,7 +32,7 @@ const SnapshotIdentitySchema = z.object({
   cpuFlags: z.string().optional(),
 });
 
-const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
+export const SnapshotMetaSchema = SnapshotIdentitySchema.extend({
   createdAt: z.int(),
   memoryMib: z.int(),
 
