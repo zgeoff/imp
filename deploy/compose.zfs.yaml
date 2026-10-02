@@ -1,0 +1,8 @@
+# With IMP_STORAGE_BACKEND=zfs, on top of deploy/compose.yaml: the container
+# mounts the dataset itself and needs the host's /dev/zfs.
+#
+#   docker compose -f deploy/compose.yaml -f deploy/compose.zfs.yaml up -d
+services:
+  imp-host:
+    devices:
+      - /dev/zfs

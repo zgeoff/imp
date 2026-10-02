@@ -25,6 +25,12 @@ let
   # The docker run arguments, shared with deploy/imp-host.service and
   # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
   # $NAME word is env-file words in the unit, and an option here.
+  hostArgs = lib.importJSON ../imp-host.args.json;
+  # the seccomp profile from the store, not /etc/imp
+  seccomp = "seccomp=${../imp-host.seccomp.json}";
+  privileges = map (
+    word: if word == "seccomp=/etc/imp/imp-host.seccomp.json" then seccomp else word
+  ) (lib.flatten hostArgs.privileges);
   envWords = {
     "$IMP_PUBLIC_PORTS" = lib.concatMap (port: [
       "-p"
@@ -42,7 +48,16 @@ let
         or (throw "services.imp: deploy/imp-host.args.json has ${word}, which the module has no option for")
     else
       [ word ]
-  ) (lib.flatten (lib.importJSON ../imp-host.args.json).lines);
+  ) (lib.flatten hostArgs.lines);
+  # The unit probes for each path; the module knows from its config. A new
+  # probed path fails evaluation here until it gets a condition.
+  probedWhen = {
+    "/dev/zfs" = zfs;
+    "/proc/sys/net/ipv6" = config.networking.enableIPv6;
+  };
+  probedArgs = lib.concatMap (
+    entry: lib.optionals probedWhen.${entry.path} entry.args
+  ) hostArgs.probed;
   stateDir = "/var/lib/imp-host";
   # Secret files outside the store: each is copied before every start to
   # /run/imp-host (0400) and the copy is mounted read-only, so a missing
@@ -94,7 +109,7 @@ let
       stage ${lib.escapeShellArg secret.source} ${stagedPath secret.name} ${lib.escapeShellArg secret.missing}
     '') secrets}
   '';
-  runArgs = sharedArgs ++ secretArgs ++ [ cfg.image ];
+  runArgs = privileges ++ probedArgs ++ sharedArgs ++ secretArgs ++ [ cfg.image ];
 
   # The module's own keys; settings may not set them (an assertion below).
   # No secret goes here: it is in the Nix store.

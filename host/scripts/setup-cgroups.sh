@@ -12,6 +12,15 @@ if [ "$(cat /proc/self/cgroup)" != "0::/" ]; then
   exit 0
 fi
 
+# Docker mounts it read-only without --privileged. The namespace is private,
+# so the remount reaches no cgroup but this container's own (CAP_SYS_ADMIN).
+if [[ ,$(findmnt -n -o OPTIONS --mountpoint "$root"), == *,ro,* ]]; then
+  if ! mount -o remount,rw "$root" 2>/dev/null; then
+    echo "setup-cgroups: cannot remount $root read-write; CPU limits are off" >&2
+    exit 0
+  fi
+fi
+
 # A cgroup that hands controllers to its children may hold no process, so
 # every process here moves to /init first: pid 1 included, which is where
 # docker exec then puts its own.

@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.19@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6
 # imp host container: impd, Firecracker and tailscaled.
-# Run with --privileged --device /dev/kvm and its own network namespace.
+# Run with the privileges of deploy/imp-host.args.json, not --privileged
+# (docs/architecture/host-contract.md#privileges), and its own network namespace.
 #
 # Build from the repo root (.dockerignore keeps outputs and data out):
 #
@@ -88,6 +89,9 @@ COPY host/scripts/ /usr/local/lib/imp/
 # tailscale-up.sh starts tailscaled from saved node state with no key, so
 # deploy/bootstrap.sh may blank a spent key in the env file.
 LABEL imp.tailscale-keyless="1"
+# Runs without --privileged under deploy/imp-host.service's privileges;
+# deploy/upgrade.sh refuses an image without this once the unit drops it.
+LABEL imp.host-contract="unprivileged"
 COPY host/entrypoint /usr/local/bin/imp-entrypoint
 
 EXPOSE 7070 7080
@@ -262,6 +266,9 @@ LABEL org.opencontainers.image.title="imp-host" \
 COPY --from=system-files / /usr/local/share/imp/
 COPY --from=compile /out/impd /out/imp /usr/local/bin/
 COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
+# deploy/bootstrap.sh and deploy/upgrade.sh install the unit and seccomp
+# profile of the image they run
+COPY deploy/imp-host.service deploy/imp-host.seccomp.json /usr/local/share/imp/deploy/
 # the CLI in the container finds impd's token with no IMP_TOKEN
 RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 

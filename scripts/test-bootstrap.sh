@@ -140,6 +140,9 @@ SH
 COPY <<'SH' /usr/local/lib/imp/tailscale-up.sh
 # stand-in: starts tailscaled from the saved node state
 SH
+COPY <<'JSON' /usr/local/share/imp/deploy/imp-host.seccomp.json
+{"defaultAction": "SCMP_ACT_ALLOW"}
+JSON
 CMD ["sh", "-c", "mkdir -p /var/lib/imp/tailscale && echo stub >/var/lib/imp/tailscale/tailscaled.state && exec sleep infinity"]
 EOF
 fi

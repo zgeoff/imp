@@ -60,6 +60,43 @@ if [ "$backend" = zfs ]; then
 fi
 [ "$backend" = xfs ] || die "IMP_STORAGE_BACKEND is $backend; use xfs or zfs"
 
+# make_loop_nodes makes a node for each loop device the kernel has, as
+# --privileged would show them (the container may open b 7:*).
+make_loop_nodes() {
+  local dev n
+  for dev in /sys/block/loop*; do
+    [ -e "$dev" ] || continue
+    n=${dev##*/loop}
+    [ -b "/dev/loop$n" ] || mknod "/dev/loop$n" b 7 "$n"
+  done
+}
+
+# mount_loop FILE DIR mounts FILE through a free loop device. Without
+# --privileged the container's /dev has no loop nodes: loop-control finds a
+# free number and the node is made here (the container may open every loop
+# device, b 7:*). Another container can take the same number between the two,
+# so a busy one is tried again.
+mount_loop() {
+  local file=$1 dir=$2 dev _
+  for _ in 1 2 3 4 5; do
+    # losetup -f prints "/dev/loopN (lost)" while the node is missing
+    dev=$(losetup -f) || die "no free loop device; is /dev/loop-control passed in?"
+    dev=${dev%% *}
+    [ -b "$dev" ] || mknod "$dev" b 7 "${dev#/dev/loop}"
+    if losetup "$dev" "$file" 2>/dev/null; then
+      if ! mount "$dev" "$dir"; then
+        losetup -d "$dev" || true
+        die "cannot mount $dev ($file) on $dir"
+      fi
+      # Detaching a mounted loop device only marks it: the kernel frees it
+      # at umount, as mount -o loop does.
+      losetup -d "$dev"
+      return
+    fi
+  done
+  die "no loop device for $file after 5 tries"
+}
+
 # Something already mounted here (bare metal, or a second run) is used as
 # is; mounting the image on top would hide it. Either way, the check below
 # decides whether the result can reflink.
@@ -86,12 +123,15 @@ else
   fi
   # A killed container can leave its loop device attached for a while; a
   # second mount of the same file would let two kernels write one XFS.
+  # losetup -j matches by inode only through a device node; without one it
+  # matches by path, and another container's /data/imp.xfs has this path.
+  make_loop_nodes
   attached=$(losetup -j "$file" -n -O NAME)
   if [ -n "$attached" ]; then
     echo "setup-storage: $file is still attached to $attached; wait for it to detach, or losetup -d it once nothing uses it" >&2
     exit 1
   fi
-  mount -o loop "$file" "$root"
+  mount_loop "$file" "$root"
   mounted=$file
   echo "setup-storage: mounted $file on $root"
 fi

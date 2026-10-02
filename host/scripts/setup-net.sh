@@ -12,8 +12,11 @@ if ! iptables -t nat -S >/dev/null 2>&1; then
   echo "setup-net: using iptables-legacy"
 fi
 
-# a value already in place (docker run --sysctl) is not written again
-[ "$(sysctl -n net.ipv4.ip_forward)" = 1 ] || sysctl -qw net.ipv4.ip_forward=1
+# --sysctl sets it on docker run: /proc/sys is read-only without --privileged.
+if [ "$(sysctl -n net.ipv4.ip_forward)" != 1 ]; then
+  echo "setup-net: net.ipv4.ip_forward is off; run the container with --sysctl net.ipv4.ip_forward=1" >&2
+  exit 1
+fi
 
 out=$(ip route show default | awk '{print $5; exit}')
 if [ -z "$out" ]; then
@@ -69,10 +72,12 @@ if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
     [ "$(sysctl -n "$1")" = "$2" ] || sysctl -qw "$1=$2"
   }
   # Forwarding stops every interface taking router advertisements, unless
-  # accept_ra=2: the uplink keeps its own. Docker's default route is static,
-  # so failing that is only a warning. Taps take none, and no redirects.
+  # accept_ra=2: the uplink keeps its own. Without --privileged /proc/sys is
+  # read-only and this fails, so a route from adverts is not supported; the
+  # warning says so. Docker's default route is static and needs none. Taps
+  # take none, and no redirects.
   if [ -n "$out6" ] && ! set6 "net.ipv6.conf.$out6.accept_ra" 2 2>/dev/null; then
-    echo "setup-net: cannot set accept_ra=2 on $out6; a route it learns from adverts will lapse" >&2
+    echo "setup-net: cannot set accept_ra=2 on $out6 (read-only /proc/sys); a route it learns from adverts will lapse" >&2
   fi
   set6 net.ipv6.conf.default.accept_ra 0
   set6 net.ipv6.conf.default.accept_redirects 0

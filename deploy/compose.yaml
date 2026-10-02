@@ -2,6 +2,7 @@
 # release image; deploy/imp-host.service is the other. Run one, not both.
 #
 #   docker compose -f deploy/compose.yaml up -d
+#   (with ZFS: docker compose -f deploy/compose.yaml -f deploy/compose.zfs.yaml up -d)
 #   deploy/upgrade.sh --compose deploy/compose.yaml   to a new image
 #
 # /var/lib/imp on the host must be XFS with reflink (docs/guides/install.md),
@@ -17,12 +18,40 @@ services:
     # restic's backup locks name the host: a fixed one lets impd drop a lock
     # its own crashed run left (docs/architecture/backups.md)
     hostname: imp-host
+    # Not privileged: docs/architecture/host-contract.md#privileges. The
+    # seccomp profile is deploy/imp-host.seccomp.json. With
+    # IMP_STORAGE_BACKEND=zfs, add deploy/compose.zfs.yaml for /dev/zfs; on a
+    # host booted with ipv6.disable=1, drop the net.ipv6 sysctls.
+    # privileges: from deploy/imp-host.args.json (bun run render:deploy)
     init: true
-    privileged: true
-    # each imp's Firecracker gets its own cgroup for CPU limits
     cgroup: private
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - MKNOD
+      - CHOWN
+      - SETUID
+      - SETGID
+      - KILL
+      - SYS_PTRACE
+      - DAC_OVERRIDE
+      - FOWNER
+      - FSETID
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=/etc/imp/imp-host.seccomp.json
     devices:
       - /dev/kvm
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv6.conf.default.accept_ra=0
+      - net.ipv6.conf.default.accept_redirects=0
+      - net.ipv6.conf.default.disable_ipv6=0
+    # end of privileges
     env_file:
       - path: ${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
         required: true
