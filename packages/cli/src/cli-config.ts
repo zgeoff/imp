@@ -7,10 +7,14 @@ export interface CliConfig {
   readonly token: string | null;
 }
 
+const DEFAULT_URL = 'http://localhost:7070';
+
 // IMP_TOKEN wins over the token file, so a one-off call can target another
-// impd without touching ~/.config/imp/token.
+// impd without touching ~/.config/imp/token. An empty variable counts as
+// unset, as `IMP_URL= imp ls` means.
 export function loadCliConfig(env: Readonly<Record<string, string | undefined>>): CliConfig {
-  const url = env['IMP_URL'] ?? 'http://localhost:7070';
+  const envUrl = env['IMP_URL'];
+  const url = envUrl === undefined || envUrl === '' ? DEFAULT_URL : envUrl;
   const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
   const tokenPath = join(configHome, 'imp', 'token');
   const envToken = env['IMP_TOKEN'];

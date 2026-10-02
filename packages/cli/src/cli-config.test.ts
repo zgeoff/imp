@@ -24,6 +24,14 @@ test('it defaults to the local impd with no token', () => {
   });
 });
 
+test('it treats an empty IMP_URL as unset', () => {
+  using ctx = setupTest();
+
+  expect(loadCliConfig({ XDG_CONFIG_HOME: ctx.dir, IMP_URL: '' }).url).toBe(
+    'http://localhost:7070',
+  );
+});
+
 test('it reads the token file and lets IMP_TOKEN override it', () => {
   using ctx = setupTest();
 
