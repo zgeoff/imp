@@ -23,10 +23,13 @@ ARG FIRECRACKER_VERSION=v1.17.0
 ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update \
+# zfsutils-linux is in contrib. Only the userland: the module comes from the
+# host kernel through /dev/zfs, and impd refuses a major.minor mismatch.
+RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
-      xfsprogs e2fsprogs squashfs-tools \
+      xfsprogs e2fsprogs squashfs-tools zfsutils-linux \
       iproute2 iptables procps util-linux kmod jq \
  && rm -rf /var/lib/apt/lists/*
 
