@@ -1,4 +1,5 @@
 import { open } from 'node:fs/promises';
+import { findDataBlocks } from './find-data-blocks';
 
 // read in large pieces; compared and written in record-sized ones
 const READ_BYTES = 1024 * 1024;
@@ -22,7 +23,16 @@ export async function writeChangedBlocks(source: string, target: string): Promis
 
     const size = stats.size;
 
-    for (let offset = 0; offset < size; offset += READ_BYTES) {
+    const targetStats = await output.stat();
+
+    // a block that is a hole in both files is zeros in both
+    const blocks = new Set([
+      ...findDataBlocks(input.fd, size, READ_BYTES),
+      ...findDataBlocks(output.fd, Math.min(targetStats.size, size), READ_BYTES),
+    ]);
+
+    for (const block of [...blocks].toSorted((a, b) => a - b)) {
+      const offset = block * READ_BYTES;
       const length = Math.min(READ_BYTES, size - offset);
 
       // past the end of target reads as zeros, like a hole
