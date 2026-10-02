@@ -45,7 +45,7 @@ The [install guide](./docs/guides/install.md) has the details.
 ## Use
 
 ```sh
-scripts/imp image build "$PWD/images/base" --name base
+scripts/imp image build images/base --name base
 scripts/imp new box
 scripts/imp console box
 ```
@@ -90,9 +90,9 @@ covers scopes and tailnet identity. Commands that print imps, images, checkpoint
 `--json`. `scripts/imp` runs the CLI from the repo.
 
 Other commands exit 0, 1 when impd refuses the call, or 2 for a usage error (an unknown flag, a bad
-size, a relative `image build` path, an `IMP_URL` that is not an http URL, an unknown `--host`).
-`imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n ended it,
-and set these codes themselves:
+size, a relative `image build --on-host` path, an `IMP_URL` that is not an http URL, an unknown
+`--host`). `imp exec` and `imp console` exit with the command's own code, or 128 + n when signal n
+ended it, and set these codes themselves:
 
 | Code | When                                                                                 |
 | ---- | ------------------------------------------------------------------------------------ |

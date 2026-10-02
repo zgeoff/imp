@@ -31,6 +31,7 @@ error.
 | `IMP_DEFAULT_MEMORY_MIB`        | `2048`                      | Memory for `imp new` without `--memory`.                                                                                                            |
 | `IMP_DEFAULT_DISK_GIB`          | `32`                        | Disk for `imp new` without `--disk`; never less than the image's filesystem.                                                                        |
 | `IMP_DISK_RESERVE_GIB`          | 5 % of the disk, at least 5 | Free space no write may take: creates, sleeps and image builds past it fail with `DISK_FULL` ([storage](../architecture/storage.md#disk-budget)).   |
+| `IMP_BUILD_CONTEXT_MAX_MIB`     | `1024`                      | The largest build context `imp image build` may upload ([images](./images.md#build-an-image)).                                                      |
 | `IMP_DEFAULT_IMAGE`             | `base`                      | The image for `imp new` without `--image`. `ubuntu` is used until one by this name exists.                                                          |
 | `IMP_STORAGE_BACKEND`           | `xfs`                       | `xfs` or `zfs` ([storage](../architecture/storage.md)). impd refuses a data dir the other backend wrote.                                            |
 | `IMP_ZFS_ROOT`                  | none                        | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                                 |

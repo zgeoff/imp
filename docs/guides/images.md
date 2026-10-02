@@ -13,19 +13,46 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | `examples/hello/` → `imp/hello` | `imp/base` + a tiny HTTP service on :8080 (the bring-your-own example)   |
 
 ```sh
-imp image build "$PWD/images/base" --name base     # tagged imp/base
-imp image build "$PWD/images/dev" --name dev       # FROM imp/base
-imp image build "$PWD/images/examples/hello" --name hello
+imp image build images/base --name base     # tagged imp/base
+imp image build images/dev --name dev       # FROM imp/base
+imp image build images/examples/hello --name hello
 ```
 
-`imp image build` runs `docker build` on the host Docker and tags the result `imp/<name>`, so later
-images can say `FROM imp/base`. The directory is a path on the impd host, not on the machine that
-runs the CLI, so the CLI takes only an absolute path and sends it as it is. impd builds from that
-path, so the directory must exist at that path in the host container. `scripts/dev.sh` mounts the
-repo at its own path for this; the release image has no repo, so build there with the host's Docker
-and add the result ([install](./install.md#images-on-a-server)). An image you built with plain
-`docker build` goes in with `imp image add <ref>`. `images/dev` takes `--build-arg BASE=...` to
-stack on another base; use `docker build` for that.
+## Build an image
+
+`imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
+uploads it to impd, which runs `docker build` on the host Docker and tags the result `imp/<name>`.
+Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the context.
+
+- **What goes up.** The CLI follows `.dockerignore` with Docker's rules, or
+  `<Dockerfile>.dockerignore` when there is one. The Dockerfile and the ignore file always go, as
+  with the docker CLI. Symlinks stay links, and files keep their modes. A progress line shows on a
+  terminal.
+- **The stream.** The tar goes out as it is made, to `POST /images/build`. impd writes it to a temp
+  file under `<IMP_DATA_DIR>/uploads`, never into memory, builds from it, and deletes it. It clears
+  that directory when it starts.
+- **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
+  with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
+  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
+  image ([storage](../architecture/storage.md#disk-budget)).
+- **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
+  build leaves an audit row.
+- **What the build may do.** impd runs one fixed command:
+  `docker build --quiet --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 -t imp/<name> -f <file> -`.
+  The client cannot pass build arguments, secrets, `--network` or `--allow`, and the pinned frontend
+  overrides a `# syntax=` line. The Dockerfile path must stay inside the context.
+
+**CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
+reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
+with that.
+
+`--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
+absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
+An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
+`--build-arg BASE=...` to stack on another base; use `docker build` and `imp image add` for that.
+
+The SDK has the same upload: `client.buildImage(name, context, { dockerfile })`, where `context` is
+a tar as a `Blob`, bytes or a `ReadableStream`. It throws an `ORPCError` as a contract call would.
 
 ## What the guest takes from the image
 

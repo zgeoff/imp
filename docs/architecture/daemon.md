@@ -31,17 +31,18 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, the exec WebSocket at `/exec`, and the tunnel WebSocket at `/tunnel`. Each takes a bearer
-token in an `Authorization` header, or a tailnet identity. A browser cannot set that header on a
-WebSocket, so `/exec` also takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket
-for one existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The
-token itself is never accepted in a URL, where logs and browser history would keep it. impd keeps at
-most 32 live tickets per caller, and 1024 in all. The router maps each procedure of the contract in
-`packages/api` to a service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`,
-`INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
-call outside the caller's scope or imps, and `AGENT_OUTDATED` for a session request to an agent from
-before sessions. `/rpc` takes POST only: a GET is what a link or an image on any page can make a
-browser send.
+`/rpc`, the exec WebSocket at `/exec`, the tunnel WebSocket at `/tunnel`, and `POST /images/build`,
+which takes a build context as a streamed tar ([images](../guides/images.md#build-an-image)). Each
+takes a bearer token in an `Authorization` header, or a tailnet identity. A browser cannot set that
+header on a WebSocket, so `/exec` also takes a `ticket` query parameter: `exec.ticket` gives a
+single-use ticket for one existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the
+CLI opens it. The token itself is never accepted in a URL, where logs and browser history would keep
+it. impd keeps at most 32 live tickets per caller, and 1024 in all. The router maps each procedure
+of the contract in `packages/api` to a service call. Errors come from the contract: `NOT_FOUND`,
+`CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE` while impd stops,
+`FORBIDDEN` for a call outside the caller's scope or imps, and `AGENT_OUTDATED` for a session
+request to an agent from before sessions. `/rpc` takes POST only: a GET is what a link or an image
+on any page can make a browser send.
 
 `/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
 tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes
@@ -335,9 +336,12 @@ a new imp. [Storage](./storage.md#checkpoints-restores-and-forks) covers the fil
 ### images: OCI images to ext4
 
 The image service turns an OCI image into a sparse ext4 rootfs, once per image ID. It runs
-`docker build` for `imp image build`. For `imp image add` it uses the image the host Docker has, and
-pulls it when it is missing. Then it exports the filesystem and writes the image config for the
-agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
+`docker build` for `imp image build`, on a context the client uploaded or a directory on the host.
+The build route streams an upload to a temp file, checks its size as the bytes come, holds disk room
+for it, and lets 4 builds run at once. It checks the caller and writes the audit row itself, as the
+router does for an oRPC call. For `imp image add` it uses the image the host Docker has, and pulls
+it when it is missing. Then it exports the filesystem and writes the image config for the agent.
+When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
 ### storage: the data layout
