@@ -442,6 +442,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         name: imp.name,
         vcpus: imp.vcpus,
         memoryMib: imp.memoryMib,
+        maxMemoryMib: imp.maxMemoryMib,
         httpPort: imp.httpPort,
         diskBytes: imp.diskBytes,
         cpu: imp.cpu,
@@ -546,6 +547,12 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     if (target.mode === 'zfs' && reply.storage !== 'zfs') {
       throw new Error('the target is not on ZFS any more; prepare the move again');
+    }
+
+    if (imp.maxMemoryMib > imp.memoryMib && !reply.keepsMaxMemory) {
+      throw new Error(
+        "the target's impd predates elastic memory and would drop the imp's max memory; upgrade it first",
+      );
     }
 
     const warm = meta === null ? null : { meta, isDriveIncluded: reply.needsSystemDrive };

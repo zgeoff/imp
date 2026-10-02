@@ -10,7 +10,7 @@ import type { StorageBackend } from '../storage/storage-backend';
 import { createFakeZfs } from '../storage/zfs/fake-zfs';
 import type { FakeZfs } from '../storage/zfs/fake-zfs';
 import { createZfsBackend } from '../storage/zfs/zfs-backend';
-import { MOVE_PART_HEADER, MOVE_PATHS } from './move-header';
+import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
 import { ReceiptSchema, buildTicketHeader } from './move-tickets';
 import { SOURCE_PEER, TARGET_URL, createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { FetchHook } from './test-moves';
@@ -413,6 +413,55 @@ test('a template copy keeps its owed identity reset, and its template stays a te
   expect(status).toMatchObject({ isDone: true, error: null });
   expect(image).toMatchObject({ source: 'imp', sourceImp: 'golden' });
   expect(moved?.isIdentityResetPending).toBe(true);
+});
+
+test('an elastic imp keeps its max memory', async () => {
+  await using ctx = await setupMoveTest();
+
+  await ctx.source.db
+    .updateTable('imps')
+    .set({ memory_mib: 256, max_memory_mib: 1024 })
+    .where('id', '=', ctx.impId)
+    .execute();
+
+  const status = await ctx.runMove();
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(moved).toMatchObject({ memoryMib: 256, maxMemoryMib: 1024 });
+});
+
+test('an elastic imp is refused a move to a target that would drop its max memory', async () => {
+  // a target from before elastic memory: its offer reply has no keepsMaxMemory
+  await using ctx = await setupMoveTest(async (request, forward) => {
+    const response = await forward();
+
+    if (!request.url.endsWith(MOVE_PATHS.offer)) {
+      return response;
+    }
+
+    const body: unknown = await response.json();
+
+    const { keepsMaxMemory: _dropped, ...older } = MoveOfferReplySchema.parse(body);
+
+    return Response.json(older);
+  });
+
+  await ctx.source.db
+    .updateTable('imps')
+    .set({ memory_mib: 256, max_memory_mib: 1024 })
+    .where('id', '=', ctx.impId)
+    .execute();
+
+  const status = await ctx.runMove();
+  const landed = await findImpByName(ctx.target.db, 'dev');
+  const source = await findImpByName(ctx.source.db, 'dev');
+
+  // nothing went: the source keeps the imp, unmarked, and the target has none
+  expect(status.error).toContain('predates elastic memory');
+  expect(status.sentBytes).toBe(0);
+  expect(source).toMatchObject({ state: 'stopped', moveState: null, maxMemoryMib: 1024 });
+  expect(landed).toBeUndefined();
 });
 
 test('a GC while the stream goes keeps every file the send reads', async () => {
