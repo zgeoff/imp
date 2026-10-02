@@ -67,6 +67,55 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   `bootstrap.sh`'s `imp_host` table for `services.openssh.ports`, and refuses the build unless
   `networking.firewall.enable = false`. Either way it refuses
   `networking.nftables.flushRuleset = true`, which would flush Docker's rules.
+- **Forwarding:** with `networking.firewall.filterForward = true` (nftables), the firewall drops new
+  forwarded traffic that no rule admits, and so imps' egress. The module adds
+  `iifname { "br-imphost", "docker0" } accept` to `networking.firewall.extraForwardRules` (`docker0`
+  alone without IPv6). It trusts no interface: `trustedInterfaces` would also open every host
+  service, such as the k3s API, to imp traffic. `forwardDeny` drops ranges that imps may not reach
+  through the host ([IPv6 and forwarding](#ipv6)).
+
+## IPv6
+
+`ipv6.enable` runs `imp-host` on the Docker network `imp-host`, with the /64 `ipv6.subnet` and the
+bridge `br-imphost`, as `bootstrap.sh --ipv6 on` does ([IPv6](./install.md#ipv6)). By default
+`ipv6.subnet` is a unique local /64 from a hash of `networking.hostId`. The env file says
+`IMP_HOST_IPV6=on`. Before each start, the module creates the network when it is missing, and
+creates it again when it differs and nothing else is on it. Without IPv6, it removes a network that
+an earlier generation made. Turning IPv6 off cold-boots every imp that has an IPv6 prefix.
+
+```nix
+services.imp = {
+  ipv6.enable = true;
+  # with networkd: the uplink's IPv6AcceptRA = true is enough; else say who keeps router adverts
+  ipv6.uplink = "eth0";
+  ipv6.routerAdverts = "kernel"; # or "handled"
+  forwardDeny = [ "10.42.0.0/16" "10.43.0.0/16" ]; # k3s pods and services
+};
+networking.nftables.enable = true;
+networking.firewall.filterForward = true;
+```
+
+Docker turns on IPv6 forwarding for the network, and with forwarding on, router adverts that set the
+host's IPv6 default route can be dropped ([the caution](./install.md#ipv6)). The module refuses
+`ipv6.enable` unless one of these keeps the route:
+
+- a static `networking.defaultGateway6`;
+- systemd-networkd with `networkConfig.IPv6AcceptRA = true` on the network that matches
+  `ipv6.uplink`;
+- `ipv6.routerAdverts = "kernel"`: the kernel takes them, and the module sets `accept_ra = 2` on
+  `ipv6.uplink`;
+- `ipv6.routerAdverts = "handled"`: a client such as dhcpcd (the NixOS default) or NetworkManager
+  takes them, and you checked that its config keeps them with forwarding on.
+
+Docker also sets the `ip6tables` FORWARD policy to DROP when it turns forwarding on. A host where
+other services forward IPv6, such as dual-stack k3s, needs their own accept rules or
+`virtualisation.docker.daemon.settings.ip-forward-no-drop = true`.
+
+`forwardDeny` takes IPv4 and IPv6 ranges that traffic from `br-imphost` and `docker0` may not reach
+through the host. They drop in the nftables table `imp-forward`, a forward chain that runs before
+`networking.firewall`'s, so ICMPv6, which that chain accepts first, drops too. It needs
+`networking.nftables.enable`. Set it to a k3s cluster's pod and service ranges, for example, instead
+of hand-written `docker0` rules.
 
 ## Reinstall
 
@@ -83,8 +132,9 @@ A reinstall keeps the pool, and the imps and node state in it:
 not the file:
 
 - `settings`: any [variable](./configuration.md) but the module's own keys (`IMP_HOST_IMAGE`,
-  `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT`, `IMP_HOST_FIREWALL`) and `TAILSCALE_AUTHKEY`, which the
-  module refuses there. They are in the Nix store, so never put a secret here.
+  `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT`, `IMP_HOST_FIREWALL`, `IMP_HOST_IPV6`, `IMP_HOST_SUBNET6`),
+  `IMP_HOST_NETWORK` and `TAILSCALE_AUTHKEY`, which the module refuses there. They are in the Nix
+  store, so never put a secret here.
 - `environmentFile`: a file outside the store, such as a sops or agenix secret, copied in at each
   start.
 - `IMP_RAM_BUDGET_MIB`: `ramBudgetMiB`, else measured at each start, as `bootstrap.sh` does, less

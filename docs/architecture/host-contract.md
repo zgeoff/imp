@@ -34,8 +34,11 @@ option (`zfs.arcMaxMiB`) and works out the budget at each start.
 
 ## What both installers set up
 
-- `/etc/imp/imp-host.env` (0600), from the template, with the backend, the budget and
-  `IMP_HOST_FIREWALL`.
+- `/etc/imp/imp-host.env` (0600), from the template, with the backend, the budget,
+  `IMP_HOST_FIREWALL` and `IMP_HOST_IPV6`.
+- With IPv6, the Docker network `imp-host` on the bridge `br-imphost`, and the host's router adverts
+  kept once Docker turns on forwarding ([IPv6](../guides/install.md#ipv6),
+  [on NixOS](../guides/nixos.md#ipv6)).
 - `imp-host.service`, which runs the image with the arguments in
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json). `bun run render:deploy` writes
   them into [`deploy/imp-host.service`](../../deploy/imp-host.service) and `bootstrap.sh`, the NixOS
@@ -73,3 +76,9 @@ Debian's default `/etc/nftables.conf` does, removes the NAT that the container's
 through. With `own`, `bootstrap.sh` refuses an enabled `nftables.service`; with `none`, it warns
 when that service's `/etc/nftables.conf` flushes the ruleset. The NixOS module refuses
 `networking.nftables.flushRuleset = true`.
+
+The firewall must also forward the container's traffic out. Docker admits it in its own chains, but
+a firewall that filters forwarding, such as NixOS with `networking.firewall.filterForward = true`,
+drops it unless a rule admits `docker0`, and `br-imphost` with IPv6. The NixOS module adds that rule
+and trusts no interface for input, so imps reach no host service through the bridges
+([forwarding](../guides/nixos.md#ipv6)).

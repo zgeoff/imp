@@ -39,7 +39,7 @@ error.
 | `IMP_ZFS_ROOT`                  | none                              | With `zfs`: the dataset mounted on `IMP_DATA_DIR`, such as `tank/imp`. Needed then.                                                                         |
 | `IMP_DNS`                       | `1.1.1.1,8.8.8.8`                 | Guest DNS servers, comma-separated IPv4 addresses; also the egress resolver's upstreams.                                                                    |
 | `IMP_SUBNET`                    | `10.66.0.0/16`                    | The pool for guest /30s. The last per-imp port, `IMP_PORT_BASE` plus the slot count minus 1, must not pass 65535. It must not overlap `100.64.0.0/10`.      |
-| `IMP_SUBNET6`                   | `auto`                            | IPv6: `auto`, a /64 or `off` ([IPv6](../architecture/networking.md#ipv6)). `auto` often means off; a /64 needs a route to the host.                         |
+| `IMP_SUBNET6`                   | `auto`                            | IPv6: `auto`, a /64 or `off` ([IPv6](../architecture/networking.md#ipv6)). `auto` needs IPv6 on the container's network ([IPv6](./install.md#ipv6)).        |
 | `IMP_FIRECRACKER_BIN`           | `firecracker`                     | The Firecracker binary.                                                                                                                                     |
 | `IMP_KERNEL`                    | none                              | The guest kernel to copy into `<data>/system/vmlinux` on start. The release image sets its own.                                                             |
 | `IMP_SYSTEM_DRIVE`              | none                              | The system drive to copy into `<data>/system/drives/` on start; without it, `<data>/system/imp-system.squashfs`. The release image sets its own.            |
@@ -252,6 +252,8 @@ Some `IMP_*` variables are internal to the scripts and tests, not settings: `IMP
 `IMP_E2E_*`. `IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` pick the image, the env file
 and the data directory for `deploy/`. `IMP_HOST_FIREWALL` (`own` or `none`) records who owns the
 host's inbound firewall; `deploy/bootstrap.sh` reads it, and impd ignores it
-([host contract](../architecture/host-contract.md#firewall)). `IMP_VERSION` and `IMP_RELEASE_IMAGE`
-name the image `host/build-release.sh` builds. `KVER` and `KSHA256` pick the kernel source for
-`kernel/build.sh` ([kernel README](../../kernel/README.md)).
+([host contract](../architecture/host-contract.md#firewall)). `IMP_HOST_IPV6` (`on` or `off`),
+`IMP_HOST_SUBNET6` and `IMP_HOST_NETWORK` put `imp-host` on a Docker network with IPv6; the unit and
+`bootstrap.sh` read them, and impd ignores them ([IPv6](./install.md#ipv6)). `IMP_VERSION` and
+`IMP_RELEASE_IMAGE` name the image `host/build-release.sh` builds. `KVER` and `KSHA256` pick the
+kernel source for `kernel/build.sh` ([kernel README](../../kernel/README.md)).
