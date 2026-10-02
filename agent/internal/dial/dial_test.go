@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -100,7 +99,10 @@ func TestRelaysWithHalfCloseBothWays(t *testing.T) {
 		t.Run(network, func(t *testing.T) {
 			address := "127.0.0.1:0"
 			if network == "unix" {
-				address = filepath.Join(t.TempDir(), "target.sock")
+				// relative: a unix socket path has a 108-byte limit, which
+				// a long TMPDIR passes
+				t.Chdir(t.TempDir())
+				address = "target.sock"
 			}
 			addr := listen(t, network, address, func(c net.Conn) {
 				got, _ := io.ReadAll(c)
