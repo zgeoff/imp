@@ -24,7 +24,7 @@ import { createQueryHandler, startResolverServer } from './egress-resolver';
 import type { QueryVerdict, ResolverServer } from './egress-resolver';
 import { buildAllowRules, isNameAllowed, isTunnelAllowed, listExactNames } from './egress-rules';
 import type { AllowRules } from './egress-rules';
-import { buildElementChange, buildNat66Ruleset, buildRuleset } from './egress-ruleset';
+import { buildElementChange, buildRuleset } from './egress-ruleset';
 import { createEgressSets } from './egress-sets';
 import type { AddressAnswer } from './egress-sets';
 
@@ -273,10 +273,6 @@ export function createEgressService(deps: EgressDeps): EgressService {
   return {
     start: async () => {
       try {
-        if (ipv6?.nat66 === true && ipv6.uplink !== null) {
-          await write(buildNat66Ruleset(ipv6.prefix.text, ipv6.uplink));
-        }
-
         await applyTable();
       } catch (error) {
         state.unenforced = formatNftError(error);

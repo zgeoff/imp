@@ -84,7 +84,7 @@ export function buildRuleset(input: RulesetInput): string {
     '  }',
     '  chain dns {',
     '    type nat hook prerouting priority dstnat - 1; policy accept;',
-    `    iifname @dns_taps meta l4proto { tcp, udp } th dport 53 redirect to :${String(input.dnsPort)}`,
+    `    iifname @dns_taps meta nfproto ipv4 meta l4proto { tcp, udp } th dport 53 redirect to :${String(input.dnsPort)}`,
     '  }',
     '}',
   ];
@@ -191,6 +191,11 @@ function formatTap(tap: string): string {
 
 // NAT66 for a unique local prefix (docs/architecture/networking.md#ipv6), in
 // a table of its own: written once at start, never with the egress table
+// NAT66 gone, whether it was there or not: IPv6 off, or a routed /64
+export function buildNat66Removal(): string {
+  return `table ${NAT66_TABLE} {}\ndelete table ${NAT66_TABLE}\n`;
+}
+
 export function buildNat66Ruleset(prefix: string, uplink: string): string {
   return [
     `table ${NAT66_TABLE} {}`,

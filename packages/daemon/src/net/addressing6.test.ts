@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import {
   buildUlaPrefix,
   deriveGuestIp6,
+  formatCidr6,
   formatIpv6,
   isInPrefix,
   parseIpv6,
@@ -52,4 +53,11 @@ test("an imp's address carries its IPv4 address as the interface ID", () => {
   expect(address).toBe('fd12:3456:789a::a42:2');
   expect(isInPrefix(prefix, address)).toBeTrue();
   expect(isInPrefix(prefix, 'fd12:3456:789b::a42:2')).toBeFalse();
+});
+
+test('a CIDR is written canonically with its host bits cleared', () => {
+  expect(formatCidr6('2001:0DB8:000A::0001/64')).toBe('2001:db8:a::/64');
+  expect(formatCidr6('2001:db8::1')).toBe('2001:db8::1/128');
+  expect(formatCidr6('2001:db8::/129')).toBeNull();
+  expect(formatCidr6('10.0.0.0/8')).toBeNull();
 });

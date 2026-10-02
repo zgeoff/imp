@@ -54,6 +54,28 @@ export function formatIpv6(address: bigint): string {
   return new URL(`http://[${groups.join(':')}]/`).hostname.slice(1, -1);
 }
 
+// A CIDR in canonical form with its host bits cleared (`2001:DB8::0001/64`
+// is `2001:db8::/64`); an address alone is a /128. Null for anything else.
+export function formatCidr6(text: string): string | null {
+  const [address = '', prefixText = '128', ...rest] = text.split('/');
+  const parsed = parseIpv6(address);
+  const prefix = Number(prefixText);
+
+  if (
+    parsed === null ||
+    rest.length > 0 ||
+    !Number.isInteger(prefix) ||
+    prefix < 0 ||
+    prefix > 128
+  ) {
+    return null;
+  }
+
+  const hostBits = BigInt(128 - prefix);
+
+  return `${formatIpv6((parsed >> hostBits) << hostBits)}/${String(prefix)}`;
+}
+
 // IMP_SUBNET6 as a routed /64, or null when it is not one
 export function parsePrefix64(cidr: string): Prefix64 | null {
   const [address = '', prefixText, ...rest] = cidr.split('/');

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { parsePrefix64 } from '../net/addressing6';
+import { resolveIpv6Plan } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { readRejection } from '../read-rejection';
 
@@ -304,4 +305,41 @@ test("with IPv6, a slot checks its /128, and the imps' /64 and the container's l
   expect(table).toContain(
     'set cidr60 {\n    type ipv6_addr\n    flags interval\n    auto-merge\n    elements = { 2001:db8:c::/48 }',
   );
+});
+
+test('a NAT66 that fails turns IPv6 off and leaves the egress table enforced', async () => {
+  const scripts: string[] = [];
+
+  const runNft = (script: string): Promise<void> => {
+    if (script.includes('masquerade')) {
+      return Promise.reject(new Error('Operation not supported'));
+    }
+
+    scripts.push(script);
+
+    return Promise.resolve();
+  };
+
+  const plan = await resolveIpv6Plan(
+    { kind: 'auto' },
+    {
+      readDefaultRoute: () => Promise.resolve('eth0'),
+      readUlaPrefix: () => parsePrefix64('fd12:3456:789a::/64') ?? { network: 0n, text: '' },
+      checkHostRules: () => Promise.resolve(null),
+      runNft,
+      log: () => {},
+    },
+  );
+
+  expect(plan).toBeNull();
+
+  await using ctx = await setupEgress(runNft);
+
+  await ctx.imps.createImp({ name: 'dev', policy: { mode: 'box', allow: ['github.com'] } });
+
+  const table = scripts.findLast((script) => script.includes('chain slot0')) ?? '';
+
+  expect(ctx.logs.some((line) => line.includes('NO FIREWALL'))).toBeFalse();
+  expect(table).toContain('ip saddr != 10.66.0.2 drop');
+  expect(table).toContain('meta nfproto ipv6 drop');
 });

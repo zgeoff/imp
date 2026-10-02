@@ -124,3 +124,19 @@ test('a name dials IPv4 first, and a mapped answer as the IPv4 address it holds'
 
   expect([dual, six, mapped]).toEqual(['140.82.112.3', '2606:4700::1111', '140.82.112.3']);
 });
+
+test("the host's own addresses match whatever their spelling", () => {
+  const hosts = new Set(['2001:db8:a::2', '10.66.0.1']);
+
+  const checkBlocked6 = createRangeChecker6(BLOCKED_RANGES6);
+
+  const refused = [
+    '2001:DB8:A::2',
+    '2001:0db8:000a:0000:0000:0000:0000:0002',
+    '::ffff:10.66.0.1',
+    '010.066.000.001',
+  ].map((address) => isRefusedAddress(address, hosts, checkBlocked6));
+
+  expect(refused).toEqual([true, true, true, true]);
+  expect(isRefusedAddress('2001:db8:a::3', hosts, checkBlocked6)).toBeFalse();
+});

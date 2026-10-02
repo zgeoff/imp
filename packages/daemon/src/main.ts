@@ -16,6 +16,7 @@ import { subscribeImpWrites } from './db/imp-write-feed';
 import { countImpsByState } from './db/imps';
 import { isImpSetWrite } from './db/is-imp-set-write';
 import { openDatabase } from './db/open-database';
+import { runNft } from './egress/egress-firewall';
 import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
@@ -25,7 +26,12 @@ import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
-import { readIpv6DefaultRoute, readOrCreateUlaPrefix, resolveIpv6Plan } from './net/ipv6-plan';
+import {
+  checkHostRules6,
+  readIpv6DefaultRoute,
+  readOrCreateUlaPrefix,
+  resolveIpv6Plan,
+} from './net/ipv6-plan';
 import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
@@ -143,6 +149,8 @@ async function main(): Promise<void> {
   const ipv6 = await resolveIpv6Plan(config.ipv6, {
     readDefaultRoute: readIpv6DefaultRoute,
     readUlaPrefix: () => readOrCreateUlaPrefix(join(config.dataDir, 'net', 'ipv6-ula')),
+    checkHostRules: () => checkHostRules6(),
+    runNft,
     log: printLog,
   });
 

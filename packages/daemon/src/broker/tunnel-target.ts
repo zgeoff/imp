@@ -1,7 +1,7 @@
 import { lookup } from 'node:dns/promises';
 import { networkInterfaces } from 'node:os';
 import { parseIpv4 } from '../net/addressing';
-import { parseIpv6 } from '../net/addressing6';
+import { formatIpv6, parseIpv6 } from '../net/addressing6';
 import { readMappedIpv4 } from '../net/ranges6';
 
 // Where a plain tunnel may go. It starts in the host container, past the
@@ -50,21 +50,33 @@ export function isRefusedAddress(
   hostAddresses: ReadonlySet<string>,
   isBlocked6: ((address: string) => boolean) | null = null,
 ): boolean {
-  if (hostAddresses.has(address)) {
+  const hostKeys = new Set([...hostAddresses].map((host) => formatAddressKey(host)));
+
+  const mapped = readMappedIpv4(address);
+
+  if (hostKeys.has(formatAddressKey(mapped ?? address))) {
     return true;
   }
 
-  const mapped = readMappedIpv4(address);
   const ip = parseIpv4(mapped ?? address);
 
   if (ip === null) {
     return isBlocked6 === null || parseIpv6(address) === null || isBlocked6(address);
   }
 
-  return (
-    (mapped !== null && hostAddresses.has(mapped)) ||
-    PARSED_RANGES.some((range) => ip >= range.network && ip < range.network + range.size)
-  );
+  return PARSED_RANGES.some((range) => ip >= range.network && ip < range.network + range.size);
+}
+
+// one spelling per address, so a match turns on neither case nor zeros
+function formatAddressKey(address: string): string {
+  const ip4 = parseIpv4(address);
+  const ip6 = parseIpv6(address);
+
+  if (ip4 !== null) {
+    return String(ip4);
+  }
+
+  return ip6 === null ? address.toLowerCase() : formatIpv6(ip6);
 }
 
 // every address on the host's interfaces, read at call time: tailscaled can
