@@ -92,22 +92,29 @@ A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP p
 address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address.
 
 - A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
-  leaves the host. A query with more than one question is refused, and each imp has a rate limit.
-- For an allowed name, impd asks `IMP_DNS`, puts the A records on the CNAME chain from the name into
-  the imp's set, and only then replies. The chain's names count as allowed for their TTL, for a stub
-  resolver that follows the CNAME itself. AAAA gets an empty answer.
+  leaves the host. A query with more than one question is refused. Each imp has a rate limit; a
+  query past it gets plain REFUSED, with no EDE, so the two can be told apart.
+- Over TCP, each imp may hold 16 connections, and one idle for 10 s is closed.
+- For an allowed name, impd asks `IMP_DNS`, under a fresh random query id, puts the A records on the
+  CNAME chain from the name into the imp's set, and only then replies. The chain's names count as
+  allowed for their TTL, for a stub resolver that follows the CNAME itself. AAAA gets an empty
+  answer.
 - Each address expires at its TTL, clamped to between 5 minutes and a day, and a later answer
   extends it. impd keeps the expiry and a sweep every 30 s deletes what is due: nftables does not
-  refresh an element's timeout on a second add before kernel 6.10. Reply TTLs drop to the cap.
+  refresh an element's timeout on a second add before kernel 6.10.
+- A reply's TTLs are at most 5 minutes, the shortest an address stays in the set, so a guest asks
+  again before its address can expire.
 - A set holds 4096 addresses; past that the soonest to expire goes.
-- impd resolves a box's exact names when the table is built, so a guest that cached them before a
-  restart reaches them again.
+- An impd restart starts the sets empty. impd resolves a box's exact names when the table is built,
+  so a guest that cached them reaches them again at once.
 
-A change of policy applies at once, whatever the imp's state: the table is keyed by slot. A box
-keeps the addresses some name on its new list covers. When the new policy is not `open`, impd
-deletes the guest's conntrack entries, so a flow the policy now denies ends on its next packet, and
-the broker closes the imp's plain tunnels to hosts the new policy denies: they are relays in impd,
-which conntrack never sees.
+A change of policy applies at once, whatever the imp's state: the table is keyed by slot. One that
+nft does not take is undone, and the imp keeps its old policy. A box keeps the addresses some name
+on its new list covers. When the new policy is not `open`, impd deletes the guest's conntrack
+entries, so a flow the policy now denies ends on its next packet, and the broker closes the imp's
+plain tunnels to hosts the new policy denies: they are relays in impd, which conntrack never sees. A
+broker connection is tracked from the moment it is accepted, so one whose CONNECT arrives after the
+change is held to the new policy.
 
 Known limits:
 
@@ -115,8 +122,8 @@ Known limits:
   its clamped TTL plus up to 30 s, and with it every other name that address serves.
 - So does DNS over HTTPS through an allowed address. DoT and DoH to public resolvers are refused by
   construction: their addresses are in no set unless the list names them.
-- A guest that cached a wildcard name's address across an impd restart reaches it again only after
-  it asks again.
+- A guest that cached a wildcard name's address before an impd restart reaches it again only after
+  it asks again: at most 5 minutes.
 
 ## The wake proxy
 
