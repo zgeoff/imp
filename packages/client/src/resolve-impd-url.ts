@@ -1,13 +1,9 @@
-// `new URL('/rpc', base)` drops the base's path; impd behind a proxy at
-// https://host/impd/ serves its API at https://host/impd/rpc
+// An impd endpoint under the base URL. `new URL('/rpc', base)` would drop a
+// path prefix such as `https://host/imp`, which a reverse proxy may need.
 export function resolveImpdUrl(base: string, path: string): URL {
   const url = new URL(base);
 
-  const prefix = url.pathname.replace(/\/+$/, '');
-
-  url.pathname = `${prefix}${path}`;
-  url.search = '';
-  url.hash = '';
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
 
   return url;
 }

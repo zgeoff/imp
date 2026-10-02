@@ -59,6 +59,8 @@
             "package": "bun-types"
           },
           { "from": "lib", "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers"] },
+          // an Error: its stack and message are the runtime's to set
+          { "from": "file", "name": "ExecError", "path": "packages/client/src/exec/exec-error.ts" },
           // dependency bags that carry the live db handle
           { "from": "file", "name": ["RouterDeps", "AppDeps"] },
           // already the readonly form, or a value type with no readonly form,
