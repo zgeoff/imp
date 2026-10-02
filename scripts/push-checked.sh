@@ -12,6 +12,10 @@ if ! command -v shellcheck > /dev/null; then
   exit 1
 fi
 cd "$wt"
+# tests put scratch files under TMPDIR; /tmp can be a RAM-backed tmpfs, so
+# keep them on disk, and empty it so each run starts clean
+export TMPDIR="$root/.cache/push-tmp"
+rm -rf "$TMPDIR" && mkdir -p "$TMPDIR"
 bun install --frozen-lockfile > /dev/null
 for gate in format:check lint lint:shell typecheck deadcode test; do
   if ! bun run "$gate" > "$root/.cache/push-$gate.log" 2>&1; then
