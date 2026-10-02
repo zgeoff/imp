@@ -222,9 +222,16 @@ export const impContract = {
   // one host, and the CLI runs them in turn
   moves: {
     // the source: marks the imp `sending` (it must be stopped; `stop` stops
-    // it first) and counts what a send would carry
+    // it first) and counts what a send would carry to a target with
+    // `targetStorage` (xfs when not given)
     prepare: base
-      .input(z.object({ name: NameSchema, stop: z.boolean().optional() }))
+      .input(
+        z.object({
+          name: NameSchema,
+          stop: z.boolean().optional(),
+          targetStorage: z.enum(['xfs', 'zfs']).optional(),
+        }),
+      )
       .output(MovePlanSchema),
 
     // the target: a ticket for one stream of `bytes` bytes into imp `name`

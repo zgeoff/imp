@@ -213,6 +213,9 @@ interface MoveSendsTable {
   peer_url: string | null;
   ticket: string | null;
   total_bytes: number;
+
+  // how the disk goes: `files`, or `zfs` streams to a ZFS target
+  mode: 'files' | 'zfs';
   receipt: string | null;
   error: string | null;
   created_at: number;

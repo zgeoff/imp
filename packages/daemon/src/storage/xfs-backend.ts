@@ -326,7 +326,24 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     },
     dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options)),
     resolveImpPaths,
-    findCheckpointFile: buildCheckpointDisk,
+
+    // the files themselves: the fence keeps every writer off them
+    openMoveSource: (impId, checkpointIds, mode) => {
+      if (mode !== 'files') {
+        return Promise.reject(new Error('xfs: a move from an XFS host sends files'));
+      }
+
+      return Promise.resolve({
+        kind: 'files',
+        checkpointPaths: checkpointIds.map((checkpointId) =>
+          buildCheckpointDisk(impId, checkpointId),
+        ),
+        diskPath: resolveImpPaths(impId).disk,
+        close: () => Promise.resolve(),
+      });
+    },
+    receiveMoveSnapshots: () =>
+      Promise.reject(new Error('xfs: only a ZFS host receives ZFS streams')),
 
     createImage,
 

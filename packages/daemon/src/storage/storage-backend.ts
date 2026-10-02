@@ -1,3 +1,4 @@
+import type { StreamedCommand } from '../process/run-stream';
 import type { ImpPaths } from './data-layout';
 
 export type StorageBackendKind = 'xfs' | 'zfs';
@@ -103,6 +104,54 @@ export interface SweepResult {
   readonly kept: readonly OrphanStorage[];
 }
 
+// How a move carries the disk: as files, or as ZFS send streams between two
+// ZFS hosts
+export type MoveMode = 'files' | 'zfs';
+
+// One snapshot of a ZFS move, in the order the streams go
+export interface SendStep {
+  // the snapshot's own name, after the `@`
+  readonly snapshot: string;
+
+  // null for the disk's own snapshot, which goes last
+  readonly checkpointId: string | null;
+
+  // which of the imp's datasets holds it, from 0
+  readonly dataset: number;
+
+  // the earlier step this one is incremental from; on another dataset, the
+  // dataset is a clone of it
+  readonly base: number | null;
+  readonly estimateBytes: number;
+  readonly open: () => StreamedCommand;
+}
+
+export type MoveSource =
+  | {
+      readonly kind: 'files';
+      readonly checkpointPaths: readonly string[];
+      readonly diskPath: string;
+      readonly close: () => Promise<void>;
+    }
+  | {
+      readonly kind: 'zfs';
+      readonly steps: readonly SendStep[];
+      readonly close: () => Promise<void>;
+    };
+
+// A step as the target receives it, with the source's dataset numbers and
+// bases; the target names each snapshot itself
+export interface ReceiveStep {
+  readonly isCheckpoint: boolean;
+  readonly dataset: number;
+  readonly base: number | null;
+}
+
+export interface ReceivedCheckpoint {
+  readonly id: string;
+  readonly sizeBytes: number;
+}
+
 // The disks, checkpoints and image rootfs files of imps (docs/architecture/storage.md). XFS
 // clones files with reflink; ZFS keeps each disk in a dataset, a checkpoint as a snapshot and
 // a fork as a clone.
@@ -122,9 +171,23 @@ export interface StorageBackend {
   // backend keeps them
   readonly resolveImpPaths: (impId: string) => ImpPaths;
 
-  // a checkpoint's disk as a file a move can read while the imp is marked;
-  // null where a checkpoint is no plain file (ZFS keeps it in a snapshot)
-  readonly findCheckpointFile: (impId: string, checkpointId: string) => string | null;
+  // What a move sends of a stopped, marked imp, until close: `checkpointIds`
+  // oldest first. `zfs` needs a ZFS backend (docs/architecture/moves.md).
+  readonly openMoveSource: (
+    impId: string,
+    checkpointIds: readonly string[],
+    mode: MoveMode,
+  ) => Promise<MoveSource>;
+
+  // ZFS only: receives a ZFS move's streams as the new imp's disk and its
+  // checkpoints. `readStep` gives each step's stream, in order; `buildId`, a
+  // checkpoint id to try. Returns the checkpoints, in step order.
+  readonly receiveMoveSnapshots: (
+    impId: string,
+    steps: readonly ReceiveStep[],
+    readStep: (index: number) => ReadableStream<Uint8Array>,
+    buildId: () => string,
+  ) => Promise<ReceivedCheckpoint[]>;
 
   // `write` puts rootfs.ext4 and config.json in the directory it gets; the
   // backend then makes it the image's directory

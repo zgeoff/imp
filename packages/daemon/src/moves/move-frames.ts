@@ -3,6 +3,7 @@ import type { Hash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import * as z from 'zod';
 import { findDataBlocks } from '../backup/find-data-blocks';
+import type { StreamedCommand } from '../process/run-stream';
 
 // The move stream's frames, as docs/architecture/moves.md#the-stream lays
 // them out: a type byte, a 4-byte big-endian length, the payload.
@@ -17,9 +18,9 @@ const HEADER_BYTES = 5;
 const MAX_PAYLOAD_BYTES = MOVE_BLOCK_BYTES + OFFSET_BYTES;
 
 export const MoveFileSchema = z.object({
-  kind: z.enum(['image-rootfs', 'image-config', 'checkpoint', 'disk']),
+  kind: z.enum(['image-rootfs', 'image-config', 'checkpoint', 'disk', 'zfs-stream']),
 
-  // a checkpoint's place, oldest first
+  // a checkpoint's place, oldest first, or a ZFS stream's
   index: z.int().nonnegative().optional(),
   sizeBytes: z.int().nonnegative(),
 });
@@ -104,6 +105,50 @@ export async function* encodeFile(
   } finally {
     await handle.close();
   }
+}
+
+// The frames of a command's output, such as `zfs send`: FILE, its bytes in
+// DATA frames at running offsets, FILE_END. A command that fails fails the
+// stream before FILE_END, so the target never takes a short stream as whole.
+export async function* encodeCommand(
+  command: StreamedCommand,
+  file: MoveFile,
+  onData: (bytes: number) => void,
+  sums: (sha256: string) => void,
+): AsyncGenerator<Uint8Array, void, undefined> {
+  const hash = createHash('sha256');
+  const state = { offset: 0, isDone: false };
+
+  yield encodeJsonFrame(MOVE_FRAMES.file, file);
+
+  try {
+    for await (const chunk of command.stdout) {
+      for (let at = 0; at < chunk.length; at += MOVE_BLOCK_BYTES) {
+        const piece = chunk.subarray(at, at + MOVE_BLOCK_BYTES);
+        const frame = encodeDataFrame(state.offset, piece);
+
+        hash.update(frame.subarray(HEADER_BYTES));
+
+        state.offset += piece.length;
+
+        onData(piece.length);
+        yield frame;
+      }
+    }
+
+    await command.done;
+
+    state.isDone = true;
+  } finally {
+    if (!state.isDone) {
+      command.stop();
+    }
+  }
+
+  const sha256 = hash.digest('hex');
+
+  sums(sha256);
+  yield encodeJsonFrame(MOVE_FRAMES.fileEnd, { sha256 });
 }
 
 // the bytes of data a file holds, holes left out: what a send carries

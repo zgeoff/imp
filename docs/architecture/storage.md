@@ -191,10 +191,12 @@ On start, impd settles what a crash cut short, then runs the [cleanup](#cleanup)
   `images/` has one.
 - A restore whose swap fails while impd runs is repaired the same way at once: the old disk goes
   back when it is still in place, else the clone takes its name.
-- A `@cp-*` snapshot with no row and every `@fork-*` and `@bk-*` snapshot is marked for destroy,
-  unless it sits on an orphan. A disk or an image with no row is an orphan, and stays
-  ([what a sweep takes](#what-a-sweep-takes)).
+- A `@cp-*` snapshot with no row and every `@fork-*`, `@bk-*` and `@mv-*` snapshot is marked for
+  destroy, unless it sits on an orphan. A GC leaves a `@mv-*` that a running move holds. A disk or
+  an image with no row is an orphan, and stays ([what a sweep takes](#what-a-sweep-takes)).
 - A `staging/bk*` clone is a backup run's: impd unmounts it from the backup tree and destroys it.
+- A `staging/mv-*` clone is a move's to an XFS host, and a `staging/mvin-*` dataset a move's from a
+  ZFS host ([moves](./moves.md#zfs)): impd destroys them, newest first, with their snapshots.
 
 ### Backups
 

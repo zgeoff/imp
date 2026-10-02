@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import type { MovePlan, MoveStatus } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildInvalidStateError, buildNotFoundError } from '../api-errors';
@@ -10,10 +9,17 @@ import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
+import type { StreamedCommand } from '../process/run-stream';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths } from '../storage/data-layout';
-import type { StorageBackend } from '../storage/storage-backend';
-import { MOVE_FRAMES, countDataBytes, encodeFile, encodeJsonFrame } from './move-frames';
+import type { MoveMode, StorageBackend } from '../storage/storage-backend';
+import {
+  MOVE_FRAMES,
+  countDataBytes,
+  encodeCommand,
+  encodeFile,
+  encodeJsonFrame,
+} from './move-frames';
 import type { MoveFile } from './move-frames';
 import {
   MOVE_FINISH_HEADER,
@@ -30,7 +36,7 @@ import { readPeerUrlAddress } from './peer-address';
 import type { PeerRanges } from './peer-address';
 
 export interface MoveSender {
-  readonly prepare: (name: string, stop: boolean) => Promise<MovePlan>;
+  readonly prepare: (name: string, options: PrepareOptions) => Promise<MovePlan>;
   readonly send: (name: string, to: string, ticket: string) => Promise<MoveStatus>;
   readonly readStatus: (name: string) => Promise<MoveStatus>;
   readonly resume: (name: string, ticket: string | undefined) => Promise<MoveStatus>;
@@ -40,10 +46,15 @@ export interface MoveSender {
   readonly recover: () => Promise<void>;
 }
 
+interface PrepareOptions {
+  readonly stop: boolean;
+  readonly targetStorage: 'xfs' | 'zfs';
+}
+
 export interface MoveSenderDeps {
   readonly db: ImpDatabase;
   readonly dataDir: string;
-  readonly storage: Pick<StorageBackend, 'kind' | 'resolveImpPaths' | 'findCheckpointFile'>;
+  readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource'>;
   readonly imps: Pick<Imps, 'lockImp' | 'haltImp' | 'destroyImp'>;
   readonly grants: Pick<Broker, 'listGrants'>;
   readonly egress: Pick<EgressService, 'readPolicy'>;
@@ -74,12 +85,32 @@ interface PeerRequest {
   readonly extraHeaders?: Readonly<Record<string, string>>;
 }
 
-interface SourceFile {
-  readonly path: string;
-  readonly file: MoveFile;
+// One piece of the stream after the header: a file, or a command's output
+type StreamPart =
+  | { readonly kind: 'file'; readonly path: string; readonly file: MoveFile }
+  | { readonly kind: 'command'; readonly open: () => StreamedCommand; readonly file: MoveFile };
+
+interface OpenedParts {
+  readonly parts: readonly StreamPart[];
+  readonly streams: MoveHeader['streams'];
+
+  // what `zfs send` says its streams take; null for files
+  readonly estimateBytes: number | null;
+  readonly close: () => Promise<void>;
 }
 
+// `zfs send -nP` estimates: the ticket allows this much more
+const ESTIMATE_SLACK = 1.1;
+const ESTIMATE_SLACK_BYTES = 64 * 1024 * 1024;
+
 type SentFile = ReceiptBody['files'][number];
+
+// where a send goes, with its ticket, and how it carries the disk
+interface SendTarget {
+  readonly peer: string;
+  readonly ticket: string;
+  readonly mode: MoveMode;
+}
 
 // what a running send reports as it goes
 interface SendProgress {
@@ -137,32 +168,33 @@ function checkReceiptFiles(
 // file's sha256 as it ends, for the receipt to repeat.
 async function* encodeStream(
   header: Readonly<MoveHeader>,
-  files: readonly SourceFile[],
+  parts: readonly StreamPart[],
   onData: (bytes: number) => void,
   onFile: (file: SentFile) => void,
 ): AsyncGenerator<Uint8Array, void, undefined> {
   yield encodeJsonFrame(MOVE_FRAMES.header, header);
 
-  for (const source of files) {
+  for (const part of parts) {
     let bytes = 0;
 
-    yield* encodeFile(
-      source.path,
-      source.file,
-      (count) => {
-        bytes += count;
+    const count = (more: number) => {
+      bytes += more;
 
-        onData(count);
-      },
-      (sha256) => {
-        onFile({
-          kind: source.file.kind,
-          ...(source.file.index !== undefined && { index: source.file.index }),
-          sha256,
-          bytes,
-        });
-      },
-    );
+      onData(more);
+    };
+
+    const onSum = (sha256: string) => {
+      onFile({
+        kind: part.file.kind,
+        ...(part.file.index !== undefined && { index: part.file.index }),
+        sha256,
+        bytes,
+      });
+    };
+
+    yield* part.kind === 'file'
+      ? encodeFile(part.path, part.file, count, onSum)
+      : encodeCommand(part.open(), part.file, count, onSum);
   }
 
   yield encodeJsonFrame(MOVE_FRAMES.end, {});
@@ -189,9 +221,13 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return imp;
   };
 
-  // the files a send carries, in order: the image (when asked), each
-  // checkpoint oldest first, then the disk
-  const listFiles = async (imp: ImpRecord, isImageIncluded: boolean): Promise<SourceFile[]> => {
+  // What a send carries after the header, in order: the image (when asked),
+  // then each checkpoint oldest first and the disk, as files or as streams
+  const openParts = async (
+    imp: ImpRecord,
+    mode: MoveMode,
+    isImageIncluded: boolean,
+  ): Promise<OpenedParts> => {
     const image = await findImageById(deps.db, imp.imageId);
 
     if (image === undefined) {
@@ -203,32 +239,75 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     const checkpoints = listed.toReversed();
     const imagePaths = buildImagePaths(deps.dataDir, image.digest);
 
-    const files: SourceFile[] = isImageIncluded
+    const parts: StreamPart[] = isImageIncluded
       ? [
-          { path: imagePaths.rootfs, file: { kind: 'image-rootfs', sizeBytes: 0 } },
-          { path: imagePaths.config, file: { kind: 'image-config', sizeBytes: 0 } },
+          { kind: 'file', path: imagePaths.rootfs, file: { kind: 'image-rootfs', sizeBytes: 0 } },
+          { kind: 'file', path: imagePaths.config, file: { kind: 'image-config', sizeBytes: 0 } },
         ]
       : [];
 
-    for (const [index, checkpoint] of checkpoints.entries()) {
-      const path = deps.storage.findCheckpointFile(imp.id, checkpoint.id);
+    const ids = checkpoints.map((checkpoint) => checkpoint.id);
 
-      if (path === null || !existsSync(path)) {
-        throw new Error(`checkpoint ${checkpoint.id} has no file to send`);
+    const source = await deps.storage.openMoveSource(imp.id, ids, mode);
+
+    if (source.kind === 'files') {
+      for (const [index, path] of source.checkpointPaths.entries()) {
+        parts.push({ kind: 'file', path, file: { kind: 'checkpoint', index, sizeBytes: 0 } });
       }
 
-      files.push({ path, file: { kind: 'checkpoint', index, sizeBytes: 0 } });
+      parts.push({ kind: 'file', path: source.diskPath, file: { kind: 'disk', sizeBytes: 0 } });
+
+      return { parts, streams: null, estimateBytes: null, close: source.close };
     }
 
-    files.push({
-      path: deps.storage.resolveImpPaths(imp.id).disk,
-      file: { kind: 'disk', sizeBytes: 0 },
-    });
+    const streams = source.steps.map((step) => ({
+      checkpoint: step.checkpointId === null ? null : ids.indexOf(step.checkpointId),
+      dataset: step.dataset,
+      base: step.base,
+    }));
 
-    return files;
+    for (const [index, step] of source.steps.entries()) {
+      parts.push({
+        kind: 'command',
+        open: step.open,
+        file: { kind: 'zfs-stream', index, sizeBytes: 0 },
+      });
+    }
+
+    const estimateBytes = source.steps.reduce((sum, step) => sum + step.estimateBytes, 0);
+
+    return { parts, streams, estimateBytes, close: source.close };
   };
 
-  const buildHeader = async (imp: ImpRecord, isImageIncluded: boolean): Promise<MoveHeader> => {
+  // the bytes a send carries: the files' data, and the streams' estimate
+  // with room to spare
+  const countBytes = async (imp: ImpRecord, mode: MoveMode): Promise<number> => {
+    const opened = await openParts(imp, mode, true);
+
+    try {
+      let bytes = 0;
+
+      for (const part of opened.parts) {
+        if (part.kind === 'file') {
+          bytes += await countDataBytes(part.path);
+        }
+      }
+
+      if (opened.estimateBytes !== null) {
+        bytes += Math.ceil(opened.estimateBytes * ESTIMATE_SLACK) + ESTIMATE_SLACK_BYTES;
+      }
+
+      return bytes;
+    } finally {
+      await opened.close();
+    }
+  };
+
+  const buildHeader = async (
+    imp: ImpRecord,
+    isImageIncluded: boolean,
+    streams: MoveHeader['streams'],
+  ): Promise<MoveHeader> => {
     const image = await findImageById(deps.db, imp.imageId);
 
     if (image === undefined) {
@@ -267,6 +346,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         createdAt: checkpoint.createdAt,
         diskBytes: checkpoint.diskBytes,
       })),
+      streams,
     };
   };
 
@@ -311,7 +391,9 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     deps.log(`impd: move: ${imp.name}: committed on ${peer}; the copy here is gone`);
   };
 
-  const runSend = async (imp: ImpRecord, peer: string, ticket: string, progress: SendProgress) => {
+  const runSend = async (imp: ImpRecord, target: SendTarget, progress: SendProgress) => {
+    const peer = target.peer;
+    const ticket = target.ticket;
     const secret = parseTicket(ticket)?.secret ?? '';
     const signal = progress.signal;
 
@@ -325,27 +407,36 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const offered = await requireOk(offer, 'offer');
 
-    const needsImage = MoveOfferReplySchema.parse(offered).needsImage;
+    const reply = MoveOfferReplySchema.parse(offered);
 
-    const header = await buildHeader(imp, needsImage);
-    const files = await listFiles(imp, needsImage);
+    if (target.mode === 'zfs' && reply.storage !== 'zfs') {
+      throw new Error('the target is not on ZFS any more; prepare the move again');
+    }
+
+    const opened = await openParts(imp, target.mode, reply.needsImage);
 
     const sent: SentFile[] = [];
 
-    const frames = encodeStream(header, files, progress.onData, (file) => {
-      sent.push(file);
-    });
+    try {
+      const header = await buildHeader(imp, reply.needsImage, opened.streams);
 
-    await sendInParts(frames, async (part, body) => {
-      const sentPart = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {
-        body,
-        duplex: 'half',
-        signal,
-        extraHeaders: { [MOVE_PART_HEADER]: String(part) },
+      const frames = encodeStream(header, opened.parts, progress.onData, (file) => {
+        sent.push(file);
       });
 
-      await requireOk(sentPart, `part ${String(part)}`);
-    });
+      await sendInParts(frames, async (part, body) => {
+        const sentPart = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {
+          body,
+          duplex: 'half',
+          signal,
+          extraHeaders: { [MOVE_PART_HEADER]: String(part) },
+        });
+
+        await requireOk(sentPart, `part ${String(part)}`);
+      });
+    } finally {
+      await opened.close();
+    }
 
     const response = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {
       signal,
@@ -396,12 +487,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
   };
 
-  const startSend = (
-    imp: ImpRecord,
-    peer: string,
-    ticket: string,
-    totalBytes: number,
-  ): SendTask => {
+  const startSend = (imp: ImpRecord, target: SendTarget, totalBytes: number): SendTask => {
+    const peer = target.peer;
+    const ticket = target.ticket;
+
     const task: SendTask = {
       abort: new AbortController(),
       done: Promise.resolve(),
@@ -413,7 +502,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const run = async (): Promise<void> => {
       try {
-        await runSend(imp, peer, ticket, {
+        await runSend(imp, target, {
           signal: task.abort.signal,
           onData: (bytes) => {
             task.sentBytes += bytes;
@@ -474,16 +563,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   };
 
   return {
-    prepare: (name, stop) =>
+    prepare: (name, options) =>
       deps.imps.lockImp(name, async (imp) => {
-        if (deps.storage.kind !== 'xfs') {
-          throw new ORPCError('PRECONDITION_FAILED', {
-            message: 'moves from a ZFS host are not built yet',
-          });
-        }
-
         if (imp.state === 'running' || imp.state === 'sleeping') {
-          if (!stop) {
+          if (!options.stop) {
             throw buildInvalidStateError(imp.state, ['stopped'], 'move');
           }
 
@@ -492,11 +575,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
           throw buildInvalidStateError(imp.state, ['stopped'], 'move');
         }
 
-        let bytes = 0;
+        const isZfs = deps.storage.kind === 'zfs' && options.targetStorage === 'zfs';
+        const mode: MoveMode = isZfs ? 'zfs' : 'files';
 
-        for (const source of await listFiles(imp, true)) {
-          bytes += await countDataBytes(source.path);
-        }
+        const bytes = await countBytes(imp, mode);
 
         await deps.db
           .insertInto('move_sends')
@@ -505,6 +587,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
             peer_url: null,
             ticket: null,
             total_bytes: bytes,
+            mode,
             receipt: null,
             error: null,
             created_at: deps.now(),
@@ -539,7 +622,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         .where('imp_id', '=', imp.id)
         .execute();
 
-      startSend(imp, peer, ticket, row.total_bytes);
+      startSend(imp, { peer, ticket, mode: row.mode }, row.total_bytes);
 
       return readStatusOf(imp);
     },
@@ -590,7 +673,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
       // a send a crash cut short starts over, with a new ticket
       if (imp.moveState === 'sending' && !tasks.has(imp.id) && ticket !== undefined) {
-        startSend(imp, row.peer_url, ticket, row.total_bytes);
+        startSend(imp, { peer: row.peer_url, ticket, mode: row.mode }, row.total_bytes);
 
         return readStatusOf(imp);
       }

@@ -42,9 +42,9 @@ does for a backup.
 | The egress policy                                       | Grants of a secret the target has no secret by that name for |
 | Grants, for each secret the target has by the same name | The audit logs and the event history                         |
 
-The image goes by digest. A target with the digest uses its own; one without it gets the image in
-the stream. When the target has an image by that name with another digest, the moved image's name
-gets a `-<8 hex>` suffix.
+The image goes by digest, as files. A target with the digest uses its own; one without it gets the
+image in the stream. When the target has an image by that name with another digest, the moved
+image's name gets a `-<8 hex>` suffix.
 
 ### URLs
 
@@ -98,7 +98,8 @@ A verified copy waits on the target until the source commits or aborts it.
   target refuses a peer that the connected socket does not show on the tailnet. The tailnet ACL must
   let `tag:imp` reach `tag:imp` on the API port ([ACL](#the-acl)).
 - The imp must be stopped. A move with its memory comes later.
-- A source on ZFS refuses: moves from a ZFS host are not built yet. A target on ZFS is fine.
+- Between two ZFS hosts the disk goes as `zfs send` streams; any other pair sends files
+  ([ZFS](../architecture/moves.md#zfs)). Either way the checkpoints get new IDs on the target.
 - Names are unique per host, not across hosts: two hosts can each have a `dev`. A move refuses a
   name the target has, and a per-imp tailnet name on the tailnet is one host's: the second fails
   with `exists and this host does not own it`.

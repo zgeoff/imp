@@ -84,7 +84,12 @@ export interface MoveReceiverDeps {
   readonly dataDir: string;
   readonly storage: Pick<
     StorageBackend,
-    'resolveImpPaths' | 'createImpDisk' | 'createCheckpoint' | 'createImage'
+    | 'kind'
+    | 'resolveImpPaths'
+    | 'createImpDisk'
+    | 'createCheckpoint'
+    | 'createImage'
+    | 'receiveMoveSnapshots'
   >;
   readonly storageGate: Pick<StorageGate, 'join'>;
   readonly diskBudget: Pick<DiskBudget, 'requireRoom' | 'withRoom'>;
@@ -331,6 +336,56 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     return { name, files };
   };
 
+  // ZFS to ZFS: each stream into `zfs recv`, then the checkpoints' rows
+  const writeStreams = async (
+    impId: string,
+    header: MoveHeader,
+    reader: FrameReader,
+    count: ByteCounter,
+    onFile: (file: ReceivedFile) => void,
+  ): Promise<void> => {
+    const streams = checkStreams(header);
+
+    if (deps.storage.kind !== 'zfs') {
+      throw new MoveRequestError(409, 'this host is not on ZFS: it takes a move as files only');
+    }
+
+    const steps = streams.map((stream) => ({
+      isCheckpoint: stream.checkpoint !== null,
+      dataset: stream.dataset,
+      base: stream.base,
+    }));
+
+    const received = await deps.storage.receiveMoveSnapshots(
+      impId,
+      steps,
+      (index) =>
+        readStreamFile(reader, index, count, (got) => {
+          onFile({ kind: 'zfs-stream', index, sha256: got.sha256, bytes: got.bytes });
+        }),
+      buildCheckpointId,
+    );
+
+    const ordered = streams.filter((stream) => stream.checkpoint !== null);
+
+    for (const [index, made] of received.entries()) {
+      const checkpoint = header.checkpoints[ordered[index]?.checkpoint ?? -1];
+
+      if (checkpoint === undefined) {
+        throw new MoveRequestError(400, 'a stream names no checkpoint of the header');
+      }
+
+      await createCheckpoint(deps.db, {
+        id: made.id,
+        impId,
+        label: checkpoint.label,
+        sizeBytes: made.sizeBytes,
+        createdAt: checkpoint.createdAt,
+        diskBytes: checkpoint.diskBytes,
+      });
+    }
+  };
+
   const readStream = async (
     stream: ReadableStream<Uint8Array>,
     row: MoveTicketRow,
@@ -368,6 +423,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     const temp = join(tempDir, `${row.id}.part`);
 
     const writeDisk = async (impId: string): Promise<void> => {
+      if (header.streams !== null) {
+        await writeStreams(impId, header, reader, count, (file) => {
+          files.push(file);
+        });
+
+        return;
+      }
+
       await deps.storage.createImpDisk(impId, { kind: 'empty' });
 
       const disk = deps.storage.resolveImpPaths(impId).disk;
@@ -481,7 +544,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const existing = await findImageByDigest(deps.db, offer.imageDigest);
 
-    return Response.json({ needsImage: existing === undefined });
+    return Response.json({ needsImage: existing === undefined, storage: deps.storage.kind });
   };
 
   // a failed read fails the pipe, so a part waiting on it answers too
@@ -763,4 +826,96 @@ function resolvePolicy(header: MoveHeader, log: (message: string) => void): Egre
   log(`impd: move: ${header.imp.name}: unknown egress policy; received as none`);
 
   return { mode: 'none', allow: [] };
+}
+
+// the header's streams: each checkpoint once, then the disk's last
+function checkStreams(header: MoveHeader): NonNullable<MoveHeader['streams']> {
+  const streams = header.streams ?? [];
+
+  const named = streams.flatMap((stream) =>
+    stream.checkpoint === null ? [] : [stream.checkpoint],
+  );
+
+  const isEach = named.length === header.checkpoints.length && new Set(named).size === named.length;
+  const isDiskLast = streams.at(-1)?.checkpoint === null && named.length === streams.length - 1;
+
+  if (!isEach || !isDiskLast) {
+    throw new MoveRequestError(400, 'the streams do not cover each checkpoint, then the disk');
+  }
+
+  return streams;
+}
+
+interface StreamFile {
+  readonly sha256: string;
+  readonly bytes: number;
+}
+
+// One stream of the move as bytes: FILE, DATA at running offsets, FILE_END.
+// A sum that does not match fails the stream before its end, so `zfs recv`
+// never takes it as whole.
+function readStreamFile(
+  reader: FrameReader,
+  index: number,
+  count: ByteCounter,
+  onEnd: (file: StreamFile) => void,
+): ReadableStream<Uint8Array> {
+  const hash = createDataHash();
+  const state = { isStarted: false, offset: 0 };
+
+  const requireStart = async () => {
+    const start = await reader.readFrame();
+
+    const file =
+      start?.type === MOVE_FRAMES.file
+        ? MoveFileSchema.parse(readJsonPayload(start.payload))
+        : null;
+
+    if (file?.kind !== 'zfs-stream' || file.index !== index) {
+      throw new MoveRequestError(400, `the stream has no ZFS stream ${String(index)}`);
+    }
+
+    state.isStarted = true;
+  };
+
+  return new ReadableStream<Uint8Array>({
+    pull: async (controller) => {
+      if (!state.isStarted) {
+        await requireStart();
+      }
+
+      const frame = await reader.readFrame();
+
+      if (frame?.type === MOVE_FRAMES.fileEnd) {
+        const sha256 = FileEndSchema.parse(readJsonPayload(frame.payload)).sha256;
+
+        if (!isSameHash(sha256, hash.digest('hex'))) {
+          throw new MoveRequestError(400, `ZFS stream ${String(index)}: the sha256 does not match`);
+        }
+
+        onEnd({ sha256, bytes: state.offset });
+
+        controller.close();
+
+        return;
+      }
+
+      if (frame?.type !== MOVE_FRAMES.data) {
+        throw new MoveRequestError(400, `ZFS stream ${String(index)} ended early`);
+      }
+
+      const data = readDataPayload(frame.payload);
+
+      if (data.offset !== state.offset) {
+        throw new MoveRequestError(400, `ZFS stream ${String(index)}: a DATA frame out of order`);
+      }
+
+      hash.update(frame.payload);
+
+      state.offset += data.data.length;
+
+      count.add(data.data.length);
+      controller.enqueue(data.data);
+    },
+  });
 }

@@ -33,6 +33,12 @@ export interface ZfsCommands {
   readonly destroy: (name: string) => Promise<void>;
   readonly destroyDeferred: (snapshot: string) => Promise<void>;
 
+  // a dataset and every snapshot on it; never one with clones
+  readonly destroyRecursive: (name: string) => Promise<void>;
+
+  // what `zfs send` of the snapshot would write, in bytes; an estimate
+  readonly estimateSend: (snapshot: string, base: string | null) => Promise<number>;
+
   // bytes written to the dataset between the previous snapshot and this one
   readonly readWritten: (snapshot: string) => Promise<number>;
   readonly readUsage: (name: string) => Promise<{ used: number; available: number }>;
@@ -111,6 +117,12 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
     promote: (name) => runQuiet(['zfs', 'promote', name]),
     destroy: (name) => runQuiet(['zfs', 'destroy', name]),
     destroyDeferred: (snapshot) => runQuiet(['zfs', 'destroy', '-d', snapshot]),
+    destroyRecursive: (name) => runQuiet(['zfs', 'destroy', '-r', name]),
+    estimateSend: async (snapshot, base) => {
+      const stdout = await runChecked(['zfs', 'send', '-nP', ...buildSendArgs(snapshot, base)]);
+
+      return parseSendSize(stdout);
+    },
     readWritten: async (snapshot) => {
       const stdout = await runChecked(['zfs', 'get', '-Hp', '-o', 'value', 'written', snapshot]);
 
@@ -154,6 +166,33 @@ export function createZfsCommands(run: CommandRunner): ZfsCommands {
       ]),
     unmount: (dir) => runQuiet(['umount', dir]),
   };
+}
+
+// `zfs send`'s arguments: the snapshot, incremental from `base` when given
+function buildSendArgs(snapshot: string, base: string | null): string[] {
+  return base === null ? [snapshot] : ['-i', base, snapshot];
+}
+
+export function buildSendArgv(snapshot: string, base: string | null): string[] {
+  return ['zfs', 'send', ...buildSendArgs(snapshot, base)];
+}
+
+// Unmounted, as impd mounts every dataset itself; a clone stream names its
+// origin, as the source's guid alone could match the source's own snapshot
+// in the same pool
+export function buildReceiveArgv(target: string, origin: string | null): string[] {
+  return ['zfs', 'recv', '-u', ...(origin === null ? [] : ['-o', `origin=${origin}`]), target];
+}
+
+// `zfs send -nP` ends with `size\t<bytes>`
+export function parseSendSize(stdout: string): number {
+  const line = stdout.split('\n').find((row) => row.startsWith('size\t'));
+
+  if (line === undefined) {
+    throw new Error(`zfs send -nP: no size in ${JSON.stringify(stdout.trim())}`);
+  }
+
+  return parseBytes(line.slice('size\t'.length).trim());
 }
 
 export function parseZfsSpace(stdout: string): ZfsSpace[] {
