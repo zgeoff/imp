@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
 import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
+import { eventsCommand } from './commands/events';
 import { hostCommand, hostsCommand, loginCommand } from './commands/hosts';
 import { imageCommand } from './commands/image';
 import {
@@ -65,6 +66,7 @@ export const mainCommand = defineCommand({
     revoke: revokeCommand,
     grants: grantsCommand,
     audit: auditCommand,
+    events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,
     login: loginCommand,

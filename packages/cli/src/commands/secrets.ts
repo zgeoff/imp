@@ -1,7 +1,7 @@
 import { BrokerRuleSchema, SecretKindSchema } from '@imp/api';
 import type { BrokerRule, SecretKind } from '@imp/api';
 import { defineCommand } from '../define-command';
-import { formatAudit, formatOutput, formatSecrets } from '../format-output';
+import { formatApiCalls, formatAudit, formatOutput, formatSecrets } from '../format-output';
 import { readToken } from '../read-token';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
@@ -163,10 +163,14 @@ export const grantsCommand = defineCommand({
 export const auditCommand = defineCommand({
   meta: {
     name: 'audit',
-    description: 'Show requests the broker sent with a credential, newest first',
+    description: 'Show requests the broker sent with a credential, or calls to impd, newest first',
   },
   args: {
     name: { type: 'positional', description: 'imp name (default: every imp)', required: false },
+    kind: {
+      type: 'string',
+      description: 'broker: requests with a credential (default); api: calls that changed impd',
+    },
     limit: { type: 'string', description: 'how many rows (default 100, at most 1000)' },
     json: jsonArg,
   },
@@ -178,10 +182,26 @@ export const auditCommand = defineCommand({
         throw new UsageError('--limit must be a whole number from 1 to 1000');
       }
 
-      const entries = await client.audit.list({
+      const kind = context.args.kind ?? 'broker';
+
+      if (kind !== 'broker' && kind !== 'api') {
+        throw new UsageError('--kind is broker or api');
+      }
+
+      const input = {
         ...(context.args.name !== undefined && { name: context.args.name }),
         ...(limit !== undefined && { limit }),
-      });
+      };
+
+      if (kind === 'api') {
+        const calls = await client.audit.calls(input);
+
+        console.log(formatOutput(calls, context.args.json, formatApiCalls));
+
+        return;
+      }
+
+      const entries = await client.audit.list(input);
 
       console.log(formatOutput(entries, context.args.json, formatAudit));
     }),
