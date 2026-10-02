@@ -374,6 +374,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends zfsutils-linux
+          # zfs.ko sits in linux-modules-extra on some runner kernels
+          modinfo zfs >/dev/null 2>&1 \
+            || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
           sudo modprobe zfs
           zfs version
 

@@ -100,8 +100,9 @@ missing under the root:
   `fallocate --dig-holes` works on ZFS too, and lz4 stores zero blocks as holes anyway.
   `primarycache=metadata` on `<root>/mem` is worth measuring on a host; it is not set.
 - The host container needs `/dev/zfs`: load the module on the host before the container starts. The
-  container has its own zfs userland, and impd refuses to start when its major.minor differs from
-  the module's (`/sys/module/zfs/version`).
+  container has its own zfs userland, OpenZFS 2.3 from Debian trixie, and impd refuses to start when
+  its major.minor differs from the module's (`/sys/module/zfs/version`). The host needs an OpenZFS
+  2.3 module: Debian trixie or Ubuntu 25.04 and later. Ubuntu 24.04 ships 2.2 and is refused.
 - `<root>/reserve` holds 1 GiB back, so a destroy still runs on a full pool. To get out of a full
   pool, run `zfs set refreservation=none <root>/reserve`, destroy imps or checkpoints, then set it
   back.
