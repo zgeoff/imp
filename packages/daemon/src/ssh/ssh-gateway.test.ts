@@ -1004,3 +1004,152 @@ test('a login whose key was removed as it logged in ends at once', async () => {
 
   await waitForClose(client);
 });
+
+// asks for a remote TCP forward, as `ssh -R`; the port the server bound
+function openRemoteForward(client: Client, bindAddr: string, port: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    client.forwardIn(bindAddr, port, (failure, bound) => {
+      if (failure === undefined) {
+        resolve(bound);
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+}
+
+function openSocketForward(client: Client, socketPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.openssh_forwardInStreamLocal(socketPath, (failure) => {
+      if (failure === undefined) {
+        resolve();
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+}
+
+test('ssh -R 0 listens on the guest loopback and relays each client back', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const reached: string[] = [];
+
+  client.on('tcp connection', (info, accept) => {
+    const channel = accept();
+
+    reached.push(`${info.destIP}:${String(info.destPort)}`);
+
+    channel.on('data', (data: Buffer) => {
+      channel.write(`back:${data.toString()}`);
+    });
+  });
+
+  const port = await openRemoteForward(client, '', 0);
+
+  expect(ctx.listeners[0]?.spec).toEqual({ network: 'tcp', port: 0 });
+  expect(port).toBe(40_001);
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts.length === 1);
+
+  ctx.accepts[0]?.send('hello');
+
+  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:hello');
+
+  // the client matches the channel to its forward by the address it asked
+  expect(reached).toEqual([`:${String(port)}`]);
+
+  client.end();
+
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+});
+
+test('ssh -R to a unix socket listens at that path as a streamlocal forward', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const reached: string[] = [];
+
+  client.on('unix connection', (info, accept) => {
+    const channel = accept();
+
+    reached.push(info.socketPath);
+
+    channel.on('data', (data: Buffer) => {
+      channel.write(`back:${data.toString()}`);
+    });
+  });
+
+  await openSocketForward(client, '/home/dev/.atc/atc.sock');
+
+  expect(ctx.listeners[0]?.spec).toEqual({ network: 'unix', path: '/home/dev/.atc/atc.sock' });
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts.length === 1);
+
+  ctx.accepts[0]?.send('report');
+
+  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:report');
+
+  expect(reached).toEqual(['/home/dev/.atc/atc.sock']);
+});
+
+test('ssh -R refuses another bind address and the agent sockets, and binds the rest to loopback', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+  const otherHost = await readRejection(openRemoteForward(client, '10.0.0.5', 8000));
+
+  const agentDir = await readRejection(
+    openSocketForward(client, '/run/imp/ssh-agent/x/agent.sock'),
+  );
+
+  const relative = await readRejection(openSocketForward(client, 'app.sock'));
+
+  for (const bindAddr of ['0.0.0.0', '*', 'localhost', '::']) {
+    await openRemoteForward(client, bindAddr, 9000);
+  }
+
+  expect(otherHost).toBeInstanceOf(Error);
+  expect(agentDir).toBeInstanceOf(Error);
+  expect(relative).toBeInstanceOf(Error);
+
+  expect(ctx.listeners.map((listener) => listener.spec)).toEqual(
+    Array.from({ length: 4 }, () => ({ network: 'tcp', port: 9000 })),
+  );
+});
+
+test('a cancelled remote forward closes its guest listener', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  await openRemoteForward(client, 'localhost', 9000);
+
+  await new Promise<void>((resolve, reject) => {
+    client.unforwardIn('localhost', 9000, (failure) => {
+      if (failure === undefined) {
+        resolve();
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+});
+
+test('a guest client the ssh client refuses is closed at once', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  client.on('tcp connection', (_info, _accept, reject) => {
+    reject();
+  });
+
+  await openRemoteForward(client, '', 9000);
+
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts[0]?.state.closed === true);
+});

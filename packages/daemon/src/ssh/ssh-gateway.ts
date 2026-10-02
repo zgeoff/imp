@@ -9,6 +9,8 @@ import { createAgentForwarding } from './agent-forwarding';
 import { formatFailure } from './channel-io';
 import { handleForward, resolveSocketTarget, resolveTcpTarget } from './forward-channel';
 import type { LoginKeys } from './login-keys';
+import { createRemoteForwarding } from './remote-forwarding';
+import type { RemoteForwardRequest } from './remote-forwarding';
 import { handleSession } from './session-channel';
 import type { SshBackend, SshConnectionContext } from './ssh-connection-context';
 
@@ -308,6 +310,14 @@ function handleLogin(
   void printWakeFailure();
   const agent = createAgentForwarding({ client, impName: imp.name, backend, log: deps.log });
 
+  const remote = createRemoteForwarding({
+    client,
+    impName: imp.name,
+    backend,
+    awake,
+    log: deps.log,
+  });
+
   const context: SshConnectionContext = {
     impName: imp.name,
     actor: { kind: granted.caller.kind, name: granted.caller.name },
@@ -330,6 +340,7 @@ function handleLogin(
     stopWatching();
 
     agent.stop();
+    remote.stop();
     void updateLastActive();
   });
 
@@ -345,10 +356,39 @@ function handleLogin(
     void handleForward(accept, reject, resolveSocketTarget(request.socketPath), context);
   });
 
-  // remote forwards (`ssh -R`) would listen in the host container
-  client.on('request', (_accept, reject) => {
-    reject?.();
+  // Remote forwards (`ssh -R`) listen in the guest, on its loopback. ssh2
+  // types this event for TCP; a unix socket request carries socketPath.
+  client.on('request', (accept, reject, name, info) => {
+    const request = readForwardRequest(name, info);
+
+    if (readIsCancel(name)) {
+      remote.cancel(request, accept, reject);
+    } else {
+      void remote.open(request, accept, reject);
+    }
   });
+}
+
+// a global request as a remote forward: ssh2 passes either kind's fields
+function readForwardRequest(name: string, info: object): RemoteForwardRequest {
+  if (name.includes('streamlocal')) {
+    const socketPath: unknown = Reflect.get(info, 'socketPath');
+
+    return { kind: 'unix', socketPath: typeof socketPath === 'string' ? socketPath : '' };
+  }
+
+  const bindAddr: unknown = Reflect.get(info, 'bindAddr');
+  const bindPort: unknown = Reflect.get(info, 'bindPort');
+
+  return {
+    kind: 'tcp',
+    bindAddr: typeof bindAddr === 'string' ? bindAddr : '',
+    bindPort: typeof bindPort === 'number' ? bindPort : -1,
+  };
+}
+
+function readIsCancel(name: string): boolean {
+  return name.startsWith('cancel-');
 }
 
 // as sshd sets them: the client's address and port, then the server's
