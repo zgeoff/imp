@@ -150,6 +150,57 @@ test('it picks again without a victim that was skipped, and fails once none is l
   expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
 });
 
+test('a rejected admit sleeps no more imps once a victim is skipped', async () => {
+  const awake = new Map([
+    ['old', { pid: 1, lastActiveAt: 100 }],
+    ['mid', { pid: 2, lastActiveAt: 200 }],
+    ['new', { pid: 3, lastActiveAt: 300 }],
+  ]);
+
+  // `mid` turns out locked when its turn comes
+  const tried: string[] = [];
+
+  const governor = createRamGovernor({
+    budgetMib: 1000,
+    listAwake: () =>
+      Promise.resolve(
+        [...awake].map(([id, imp]) => ({
+          id,
+          name: id,
+          pid: imp.pid,
+          apiSocket: '',
+          lastActiveAt: imp.lastActiveAt,
+          holdUntil: null,
+        })),
+      ),
+    readRamMib: () => 300,
+    isBusy: () => false,
+    trySleepImp: buildFakeSleep((id) => {
+      tried.push(id);
+
+      if (id === 'mid') {
+        return Promise.resolve('skipped');
+      }
+
+      awake.delete(id);
+
+      return Promise.resolve('slept');
+    }),
+    log: () => {
+      // quiet
+    },
+  });
+
+  // 800 missing picks all three; once `mid` is skipped, `new` alone cannot
+  // free the 500 still missing, so it stays awake
+  const rejection = await governor
+    .admit({ id: 'x', name: 'x', reserveMib: 900, memoryMib: 900 })
+    .catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(tried).toEqual(['old', 'mid']);
+});
+
 test('a reservation counts until its 20 s run out, and not a moment longer', async () => {
   const clock = { now: 1000 };
 

@@ -205,7 +205,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   };
 }
 
-type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
+export type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 

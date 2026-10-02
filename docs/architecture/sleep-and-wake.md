@@ -154,12 +154,13 @@ impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB` (default 16384).
   owned at sleep and `IMP_WAKE_RESERVE_MIB` (default 256). A reservation counts until the
   measurement passes it, for at most 20 s.
 - **Make room.** If the sum would pass the budget, impd sleeps the least recently active imps that
-  are not held and not busy, until it fits. An imp whose lock is taken by the time its turn comes is
-  skipped, not waited for ([background sleeps](#background-sleeps)), and impd picks again without
-  it. If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
-  with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room:
-  a request that cannot fit does not cost other imps their memory. A sleep already done when a later
-  victim is skipped is kept ([#47](https://github.com/zgeoff/imp/issues/47)).
+  are not held and not busy, until it fits. It sleeps one at a time, and measures and picks again
+  after each. An imp whose lock is taken by the time its turn comes is skipped, not waited for
+  ([background sleeps](#background-sleeps)); it and an imp whose sleep fails are not picked again.
+  If it still cannot fit, or the imp's memory alone is larger than the budget, the request fails
+  with `RAM_BUDGET_EXCEEDED`. impd does not start sleeping imps when together they cannot make room,
+  and it stops at the first skip or failure that leaves too little. A request that fails there loses
+  only the sleeps done before that skip or failure; each of those imps wakes on its next request.
 - **Enforce.** Every 5 s, impd sleeps LRU imps while measured usage is over the budget. When the
   imps it may sleep cannot bring usage under the budget, it sleeps all of them to get as close as it
   can. It logs each pass that sleeps an imp, and once when none is left.

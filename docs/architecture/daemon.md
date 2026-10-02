@@ -113,9 +113,11 @@ The governor keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. Before a bo
 lifecycle asks it for room. It reserves RAM, sleeps the least recently active imps when the sum
 would pass the budget, and fails with `RAM_BUDGET_EXCEEDED` when nothing can make room. An imp with
 a hold, a taken lock, an open exec session or a proxied request is never picked. It never waits for
-an imp's lock: a victim locked by the time its turn comes is skipped. Every 5 s it also sleeps imps
-while the measured use is over the budget, all it may sleep when they cannot bring it under.
-[Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the rules and the numbers.
+an imp's lock: a victim locked by the time its turn comes is skipped. It sleeps one victim at a time
+and picks again after each, so a skip or a failed sleep never leads to more sleeps than the new pick
+needs. Every 5 s it also sleeps imps while the measured use is over the budget, all it may sleep
+when they cannot bring it under. [Sleep and wake](./sleep-and-wake.md#the-ram-governor) has the
+rules and the numbers.
 
 ### idle: the idle loop
 
