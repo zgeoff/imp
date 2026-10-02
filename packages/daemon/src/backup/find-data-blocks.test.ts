@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { closeSync, mkdtempSync, openSync, rmSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { SeekFile } from './find-data-blocks';
 import { findDataBlocks } from './find-data-blocks';
 
 const MIB = 1024 * 1024;
@@ -60,29 +61,48 @@ test('an lseek error other than "no more data" means every block', () => {
 
   expect(sortBlocks(dataFails)).toEqual([0, 1]);
 
-  // a true ENXIO: the offset is in a hole by SEEK_HOLE's own answer
-  const allHoles = findDataBlocks(3, 2 * MIB, MIB, (_fd, offset, whence) =>
-    whence === 3 ? { errno: 6 } : { offset },
+  // a true ENXIO: nothing is allocated past the data found
+  const allHoles = findDataBlocks(
+    3,
+    2 * MIB,
+    MIB,
+    (_fd, offset, whence) => (whence === 3 ? { errno: 6 } : { offset }),
+    () => 0,
   );
 
   expect(allHoles.size).toBe(0);
 });
 
-test('an ENXIO that SEEK_HOLE does not confirm reads every block from there', () => {
-  // data in block 0, then a stale ENXIO at 1 MiB, where data really follows
-  const stale = findDataBlocks(3, 4 * MIB, MIB, (_fd, offset, whence) => {
+test('a stale ENXIO at a hole start, with data after it, reads every block from there', () => {
+  // data in block 0, a hole at 1 MiB, data at 2 MiB; SEEK_DATA at the hole
+  // start answers ENXIO, and SEEK_HOLE agrees it is a hole
+  const runStaleSeek: SeekFile = (_fd, offset, whence) => {
     if (whence === 3) {
       return offset === 0 ? { offset: 0 } : { errno: 6 };
     }
 
-    return offset === 0 ? { offset: MIB } : { offset: 2 * MIB };
-  });
+    return offset === 0 ? { offset: MIB } : { offset };
+  };
 
-  expect(sortBlocks(stale)).toEqual([0, 1, 2, 3]);
+  // fstat counts 3 MiB allocated: 2 MiB more than the scan found
+  expect(sortBlocks(findDataBlocks(3, 4 * MIB, MIB, runStaleSeek, () => 3 * MIB))).toEqual([
+    0, 1, 2, 3,
+  ]);
 
-  const holeFails = findDataBlocks(3, 3 * MIB, MIB, (_fd, _offset, whence) =>
-    whence === 3 ? { errno: 6 } : { errno: 9 },
-  );
+  // within the slack it is file-system metadata, and the scan stands
+  expect(sortBlocks(findDataBlocks(3, 4 * MIB, MIB, runStaleSeek, () => MIB + 4096))).toEqual([0]);
+});
 
-  expect(sortBlocks(holeFails)).toEqual([0, 1, 2]);
+test('on a real sparse file, fstat shows the extent a stale ENXIO hid', () => {
+  using file = setupSparseFile();
+
+  writeSync(file.fd, Buffer.alloc(3 * MIB, 1), 0, 3 * MIB, 0);
+  writeSync(file.fd, Buffer.alloc(2 * MIB, 2), 0, 2 * MIB, 40 * MIB);
+
+  // a stale ENXIO after the first extent: fstat shows the missed one
+  const runStaleAfterFirst: SeekFile = (_fd, offset, whence) =>
+    whence === 3 && offset > 0 ? { errno: 6 } : { offset: whence === 3 ? 0 : 3 * MIB };
+
+  expect(findDataBlocks(file.fd, 42 * MIB, MIB).size).toBe(5);
+  expect(findDataBlocks(file.fd, 42 * MIB, MIB, runStaleAfterFirst).size).toBe(42);
 });

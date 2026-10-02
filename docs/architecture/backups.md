@@ -161,7 +161,10 @@ imp backup restore --all --merge               # add every imp to a host that ha
   checkpoints share blocks as before: reflink clones on XFS, snapshots of the new dataset on ZFS.
   The disk is a plain sparse file from restic either way, so a backup from an XFS host restores onto
   ZFS and back. The writes skip holes with `lseek(SEEK_DATA)`, so a 32 GiB disk with little data
-  restores in seconds: 3.9–4.1 s in the drill for an imp with one checkpoint.
+  restores in seconds: 3.9–4.1 s in the drill for an imp with one checkpoint. When the scan ends,
+  the data it found is checked against the bytes `fstat` says are allocated. More than max(1 MiB,
+  0.1 %) unaccounted for means the scan ended early, and every block from there is read. A file
+  restic restored showed no gap on XFS or ext4.
 - An image with the same digest is reused. Otherwise it is restored too, under its name, or under
   `<name>-<digest prefix>` when another image has that name.
 - A name in use stops the restore with a conflict that names the imp; `--as` picks another name.

@@ -1,15 +1,23 @@
 import { FFIType, dlopen, read } from 'bun:ffi';
+import { fstatSync } from 'node:fs';
 
 // lseek(2) whence values and the one errno that is an answer, on Linux
 const SEEK_DATA = 3;
 const SEEK_HOLE = 4;
 const ENXIO = 6;
+
+// allocated bytes past the found data that are still file-system metadata,
+// not data the scan missed; a file restic restored measured 0 on XFS and ext4
+const SLACK_MIN_BYTES = 1024 * 1024;
+const SLACK_FRACTION = 0.001;
 const libc = loadLibc();
 
 // an lseek result: the offset, or the errno of a -1
 type SeekResult = { readonly offset: number } | { readonly errno: number };
 
 export type SeekFile = (fd: number, offset: number, whence: number) => SeekResult;
+
+export type ReadAllocated = (fd: number) => number;
 
 function loadLibc() {
   try {
@@ -58,12 +66,14 @@ function buildBlocksFrom(
   return blocks;
 }
 
-// ENXIO from SEEK_DATA is trusted only when the offset is in a hole by an
-// answer of its own
-function isHoleAt(fd: number, offset: number, seek: SeekFile): boolean {
-  const hole = seek(fd, offset, SEEK_HOLE);
+function readFileAllocated(fd: number): number {
+  return fstatSync(fd).blocks * 512;
+}
 
-  return !('errno' in hole) && hole.offset === offset;
+// The scan ended early when the file holds more allocated bytes than the
+// data it found, past the slack. This needs no errno, which may be stale.
+function isScanShort(foundBytes: number, allocated: number): boolean {
+  return allocated - foundBytes > Math.max(SLACK_MIN_BYTES, allocated * SLACK_FRACTION);
 }
 
 // The indexes of the `blockBytes` blocks that hold data: SEEK_DATA skips a
@@ -74,23 +84,21 @@ export function findDataBlocks(
   size: number,
   blockBytes: number,
   seek: SeekFile = runLseek,
+  readAllocated: ReadAllocated = readFileAllocated,
 ): Set<number> {
   const blocks = new Set<number>();
 
-  for (let offset = 0; offset < size; ) {
+  let foundBytes = 0;
+  let offset = 0;
+
+  while (offset < size) {
     const data = seek(fd, offset, SEEK_DATA);
 
-    if ('errno' in data) {
-      if (data.errno === ENXIO && isHoleAt(fd, offset, seek)) {
-        break;
-      }
-
-      // errno comes from a second FFI call and may be stale: data left out
-      // would be lost, so every block from here on is read instead
+    if ('errno' in data && data.errno !== ENXIO) {
       return buildBlocksFrom(blocks, offset, size, blockBytes);
     }
 
-    if (data.offset >= size) {
+    if ('errno' in data || data.offset >= size) {
       break;
     }
 
@@ -106,7 +114,12 @@ export function findDataBlocks(
       blocks.add(block);
     }
 
+    foundBytes += end - data.offset;
     offset = end;
+  }
+
+  if (offset < size && isScanShort(foundBytes, readAllocated(fd))) {
+    return buildBlocksFrom(blocks, offset, size, blockBytes);
   }
 
   return blocks;
