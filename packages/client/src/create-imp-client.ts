@@ -86,6 +86,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     secrets: rpc.secrets,
     grants: rpc.grants,
     audit: rpc.audit,
+    events: rpc.events,
     system: rpc.system,
   } satisfies RpcClient;
 

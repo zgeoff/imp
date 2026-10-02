@@ -1,9 +1,13 @@
+import type { ApiActor } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ExecBackend } from './exec-session';
 
 // What an `/exec` socket may start, recorded at the upgrade: any imp for the
-// bearer token, one imp for a ticket. A socket with no grant starts nothing.
-export type ExecGrant = { readonly kind: 'any' } | { readonly kind: 'imp'; readonly name: string };
+// bearer token, one imp for a ticket, with the caller that asked for it. A
+// socket with no grant starts nothing.
+export type ExecGrant =
+  | { readonly kind: 'any' }
+  | { readonly kind: 'imp'; readonly name: string; readonly actor: ApiActor };
 
 export const ANY_IMP_GRANT: ExecGrant = { kind: 'any' };
 

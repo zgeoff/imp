@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createApiAudit } from '../audit/api-audit';
 import { setupTestDatabase } from '../db/test-database';
 import { createFakeSshBackend } from './fake-ssh-backend';
 import { startSsh } from './start-ssh';
@@ -19,12 +20,14 @@ async function startWithSshDir(setup: (sshDir: string) => void) {
 
   try {
     const gateway = await startSsh({
+      audit: createApiAudit({ db: database.db, now: Date.now, log: () => {} }),
       config: { dataDir, sshPort: 0 },
       db: database.db,
       imps: createFakeSshBackend().backend,
       log: (message) => {
         logs.push(message);
       },
+      now: Date.now,
     });
 
     await gateway?.stop();

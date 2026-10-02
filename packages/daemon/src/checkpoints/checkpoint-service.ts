@@ -9,9 +9,10 @@ import {
   findCheckpoint,
   listCheckpoints,
   removeCheckpoint,
+  toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
-import { findImpByName } from '../db/imps';
+import { findImpByName, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { LockedImp } from '../imps/imp-lock';
@@ -75,15 +76,6 @@ export function buildCheckpointId(random: () => number = Math.random): string {
 // A label is looked up the same way as an id, so it must not look like one.
 export function isValidCheckpointLabel(label: string): boolean {
   return !label.startsWith(CHECKPOINT_ID_PREFIX);
-}
-
-function toApiCheckpoint(checkpoint: CheckpointRecord): Checkpoint {
-  return {
-    id: checkpoint.id,
-    createdAt: checkpoint.createdAt,
-    ...(checkpoint.label !== null && { label: checkpoint.label }),
-    ...(checkpoint.sizeBytes !== null && { sizeBytes: checkpoint.sizeBytes }),
-  };
 }
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
@@ -249,8 +241,15 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           return stopped;
         });
 
-        const restored = wasAwake ? await deps.imps.bootImp(halted) : halted;
+        const booted = wasAwake ? await deps.imps.bootImp(halted) : halted;
         const ms = Math.round(performance.now() - started);
+
+        // the state may be what it was, the disk is not: the stream hears of it
+        const restored = await updateImpState(deps.db, booted.id, {
+          reason: 'restored',
+          detail: { durationMs: ms, trigger: checkpoint.id },
+          state: booted.state,
+        });
 
         log(`impd: ${imp.name}: restored ${checkpoint.id} in ${String(ms)}ms`);
 

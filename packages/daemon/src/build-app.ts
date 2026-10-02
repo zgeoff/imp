@@ -3,11 +3,13 @@ import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import { Elysia } from 'elysia';
-import { isAuthenticated } from './auth/authenticate';
+import { readCaller } from './auth/authenticate';
+import { createLogouts } from './auth/logouts';
 import { createSessionRoutes } from './auth/session-routes';
 import { buildRouter } from './build-router';
 import type { RouterDeps } from './build-router';
 import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
+import { buildAuditedBackend } from './exec/audited-backend';
 import { ANY_IMP_GRANT, buildGrantedBackend } from './exec/exec-grant';
 import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
@@ -20,14 +22,12 @@ import { isAuthorized } from './token';
 // go of its session, and of the imp's idle timer, within a minute
 const EXEC_SOCKET_OPTIONS = { idleTimeout: 30, sendPings: true } as const;
 
+// `now` is the clock exec tickets and sessions expire by
 export interface AppDeps extends Omit<RouterDeps, 'execTickets'> {
   readonly token: string;
 
   // false until the default image is seeded; /health reports it
   readonly isReady: () => boolean;
-
-  // the clock exec tickets expire by
-  readonly now: () => number;
 }
 
 export function buildApp(deps: AppDeps) {
@@ -56,7 +56,18 @@ export function buildApp(deps: AppDeps) {
   // each exec socket's grant, by its upgrade request
   const grants = new WeakMap<Request, ExecGrant>();
 
-  const sessionRoutes = createSessionRoutes(deps);
+  const logouts = createLogouts();
+
+  // what an `/exec` socket may open, audited as the bearer token or, with a
+  // ticket, the caller that asked for the ticket
+  const buildExecBackend = (request: Request) => {
+    const grant = grants.get(request);
+    const actor = grant?.kind === 'imp' ? grant.actor : 'token';
+
+    return buildAuditedBackend(buildGrantedBackend(deps.imps, grant), deps.audit, actor, deps.now);
+  };
+
+  const sessionRoutes = createSessionRoutes({ ...deps, onLogout: logouts.logOut });
   const dashboard = createDashboardFiles(deps.config.dashboardDir);
 
   const app = new Elysia({ websocket: EXEC_SOCKET_OPTIONS })
@@ -68,11 +79,18 @@ export function buildApp(deps: AppDeps) {
     .all(
       '/rpc*',
       async (context) => {
-        if (!isAuthenticated(context.request, deps.token, deps.now())) {
+        const caller = readCaller(context.request, deps.token, deps.now());
+
+        if (caller === null) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        const handled = await handler.handle(context.request, { prefix: '/rpc', context: {} });
+        const logout = caller.actor === 'dashboard' ? logouts.readSignal() : null;
+
+        const handled = await handler.handle(context.request, {
+          prefix: '/rpc',
+          context: { caller, logout },
+        });
 
         return handled.matched ? handled.response : new Response('not found', { status: 404 });
       },
@@ -94,13 +112,13 @@ export function buildApp(deps: AppDeps) {
 
         const ticket = new URL(context.request.url).searchParams.get(EXEC_TICKET_PARAM);
 
-        const name = ticket === null ? null : execTickets.redeem(ticket);
+        const holder = ticket === null ? null : execTickets.redeem(ticket);
 
-        if (name === null) {
+        if (holder === null) {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
 
-        grants.set(context.request, { kind: 'imp', name });
+        grants.set(context.request, { kind: 'imp', name: holder.name, actor: holder.actor });
 
         // oxlint-disable-next-line unicorn/no-useless-undefined
         return undefined;
@@ -119,7 +137,7 @@ export function buildApp(deps: AppDeps) {
             },
             readBufferedAmount: () => readBufferedAmount(ws.raw),
           },
-          buildGrantedBackend(deps.imps, grants.get(ws.data.request)),
+          buildExecBackend(ws.data.request),
         );
 
         sessions.set(ws.id, {

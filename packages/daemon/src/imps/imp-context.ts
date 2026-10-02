@@ -1,6 +1,7 @@
 import type { Config } from '../config';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import type { EventBus } from '../events/event-bus';
 import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
 import { deriveSlotAddress } from '../net/addressing';
@@ -34,12 +35,12 @@ export interface ImpServiceDeps {
   readonly readRamMib?: (pid: number, apiSocket: string) => number | null;
   readonly readRssMib?: (pid: number, apiSocket: string) => number | null;
 
-  // after a create or a destroy: the proxy opens or closes the imp's port
-  readonly onImpsChanged?: () => void;
-
   // the host's live tailnet name, null when tailscaled does not answer; the
   // configured name can be taken by an older node (`imp-1`)
   readonly readTailnetHostname?: () => Promise<string | null>;
+
+  // where lifecycle events go; a bus of its own by default
+  readonly events?: EventBus;
 
   // the clock holds and RAM reservations are judged by; Date.now by default,
   // so tests can move it
@@ -67,7 +68,6 @@ export interface ImpContext {
   readonly now: () => number;
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
   readonly identity: HostIdentity;
-  readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
   readonly findPaths: (impId: string) => ImpPaths;
@@ -92,9 +92,6 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     now: deps.now ?? Date.now,
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     identity: deps.identity,
-    emitChanged: () => {
-      deps.onImpsChanged?.();
-    },
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),

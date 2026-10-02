@@ -1,4 +1,6 @@
 import { join } from 'node:path';
+import { withAuditedOpen } from '../audit/api-audit';
+import type { ApiAudit } from '../audit/api-audit';
 import type { Config } from '../config';
 import { findImpByName } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -23,6 +25,8 @@ interface StartSshDeps {
     | 'recordActivity'
   >;
   readonly log: (message: string) => void;
+  readonly audit: ApiAudit;
+  readonly now: () => number;
 }
 
 // every interface of the container's own network namespace: the tailnet
@@ -52,7 +56,14 @@ export async function startSsh(deps: StartSshDeps): Promise<SshGateway | null> {
         backend: {
           requireRunning: imps.requireRunning,
           tracker: imps.tracker,
-          openExec: imps.openExec,
+
+          // each shell, command or sftp an ssh login opens is audited
+          openExec: (name, request, feature) =>
+            withAuditedOpen(
+              deps.audit,
+              { procedure: 'ssh', actor: 'ssh', impName: name, startedAt: deps.now() },
+              () => imps.openExec(name, request, feature),
+            ),
           openDial: imps.openDial,
           openAgentListener: imps.openAgentListener,
           openAgentAccept: imps.openAgentAccept,

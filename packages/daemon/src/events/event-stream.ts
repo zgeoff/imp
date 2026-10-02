@@ -1,0 +1,85 @@
+import type { ImpEvent } from '@imp/api';
+import type { EventBus } from './event-bus';
+
+// events one subscriber may fall behind by before its stream ends
+const QUEUE_LIMIT = 1000;
+
+interface EventStreamOptions {
+  readonly bus: EventBus;
+
+  // every imp as `ImpAdded`, read from the database
+  readonly readSnapshot: () => Promise<readonly ImpEvent[]>;
+  readonly signal?: AbortSignal | undefined;
+
+  // when the stream must end, such as a dashboard session's expiry; null for
+  // never
+  readonly endsAt: number | null;
+  readonly now: () => number;
+  readonly queueLimit?: number;
+}
+
+// The snapshot, then every event behind it (docs/guides/events.md). It
+// subscribes before the snapshot read, so no event falls between the two.
+export async function* openEventStream(options: EventStreamOptions): AsyncGenerator<ImpEvent> {
+  const limit = options.queueLimit ?? QUEUE_LIMIT;
+  const queue: ImpEvent[] = [];
+  const state = { ended: false, wake: (): void => {} };
+
+  const stopStream = (): void => {
+    state.ended = true;
+
+    state.wake();
+  };
+
+  const unsubscribe = options.bus.subscribe((event) => {
+    if (queue.length >= limit) {
+      stopStream();
+
+      return;
+    }
+
+    queue.push(event);
+    state.wake();
+  });
+
+  options.signal?.addEventListener('abort', stopStream);
+
+  const timer =
+    options.endsAt === null
+      ? null
+      : setTimeout(stopStream, Math.max(0, options.endsAt - options.now()));
+
+  try {
+    const snapshot = await options.readSnapshot();
+
+    yield* snapshot;
+
+    for (;;) {
+      const next = queue.shift();
+
+      if (state.ended) {
+        return;
+      }
+
+      if (next !== undefined) {
+        yield next;
+        continue;
+      }
+
+      const waiting = Promise.withResolvers<undefined>();
+
+      state.wake = () => {
+        waiting.resolve(undefined);
+      };
+
+      await waiting.promise;
+    }
+  } finally {
+    unsubscribe();
+    options.signal?.removeEventListener('abort', stopStream);
+
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  }
+}

@@ -306,6 +306,9 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
                 `impd: ${imp.name}: re-adopted firecracker pid ${String(imp.pid)}${note}`,
               );
 
+              // the record does not change; the event stream still hears of it
+              await ops.updateState(imp, { reason: 'adopted', state: 'running' });
+
               return;
             }
 
@@ -324,12 +327,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
               // keeps its pid, so a start or destroy kills it again
               context.log(`impd: ${imp.name}: could not stop: ${readErrorMessage(stopError)}`);
 
-              await ops.updateState(imp, { state: 'error', error });
+              await ops.updateState(imp, { reason: 'failed', state: 'error', error });
 
               return;
             }
 
-            await ops.updateState(imp, { state: 'error', pid: null, error });
+            await ops.updateState(imp, { reason: 'failed', state: 'error', pid: null, error });
           }),
         ),
       );

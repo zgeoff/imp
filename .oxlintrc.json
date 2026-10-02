@@ -93,6 +93,8 @@
             "from": "lib",
             "name": ["ReadonlySet", "ReadonlyMap", "Uint8Array", "Request", "Date", "Promise"]
           },
+          // the abort signal under its Node declaration, which Bun's globals use
+          { "from": "package", "name": "AbortSignal", "package": "@types/node" },
           // DOM values the dashboard reads and never changes: a form's
           // fields, an abort signal, an error, a stream reader
           {

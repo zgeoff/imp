@@ -11,7 +11,7 @@ import { FREEZE_TIMEOUT_MS, buildCheckpointId } from '../checkpoints/checkpoint-
 import type { DiskFreezer } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
-import { findImpByName, listImps } from '../db/imps';
+import { findImpByName, listImps, updateImpEgressPolicy } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
@@ -502,11 +502,11 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
 
       await writeRestoredFile(imp.disk, disk);
 
-      await deps.db
-        .updateTable('imps')
-        .set({ egress_policy: resolveEgressPolicy(target.name, imp.egressPolicy) })
-        .where('id', '=', impId)
-        .execute();
+      await updateImpEgressPolicy(
+        deps.db,
+        impId,
+        resolveEgressPolicy(target.name, imp.egressPolicy),
+      );
     };
 
     try {

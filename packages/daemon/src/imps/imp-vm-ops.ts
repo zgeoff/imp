@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs';
+import type { ImpEventDetail } from '@imp/api';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
 import { updateImpActivity, updateImpState } from '../db/imps';
@@ -38,7 +39,7 @@ const ALWAYS_WAIT: YoungGuestWait = { wait: true, isWanted: () => Promise.resolv
 // holds the imp's lock, and the record it passes is fresh.
 export interface ImpVmOps {
   // moves the record to another state, checked against the lifecycle
-  readonly updateState: (imp: LockedImp, change: ImpStateChange) => Promise<LockedImp>;
+  readonly updateState: (imp: LockedImp, change: Readonly<ImpStateChange>) => Promise<LockedImp>;
 
   // the full text goes to the log, its first line to the record
   readonly writeFailure: (imp: LockedImp, error: unknown) => Promise<void>;
@@ -65,7 +66,10 @@ export interface ImpVmOps {
 export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
   const sleepSlots = createSemaphore(SLEEP_CONCURRENCY);
 
-  const updateState = async (imp: LockedImp, change: ImpStateChange): Promise<LockedImp> => {
+  const updateState = async (
+    imp: LockedImp,
+    change: Readonly<ImpStateChange>,
+  ): Promise<LockedImp> => {
     if (change.state !== imp.state) {
       requireTransition(imp.state, change.state, `move to ${change.state}`);
     }
@@ -84,7 +88,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     context.log(`impd: ${imp.name}: ${message}`);
 
-    await updateState(imp, { state: 'error', pid: null, error: message.split('\n')[0] ?? '' });
+    await updateState(imp, {
+      reason: 'failed',
+      state: 'error',
+      pid: null,
+      error: message.split('\n')[0] ?? '',
+    });
   };
 
   // The identity is advisory: a VM without one sleeps into a snapshot that
@@ -155,6 +164,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       await updateImpActivity(context.db, imp.id, new Date());
 
       return await updateState(imp, {
+        reason: 'booted',
+        detail: {
+          durationMs: countStepsMs(vm.timings),
+          steps: vm.timings,
+          ...(reason !== null && { coldBootReason: reason }),
+        },
         state: 'running',
         pid: vm.pid,
         error: null,
@@ -182,7 +197,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     removeSnapshot(paths);
     context.admission?.release(imp.id);
 
-    return imp.state === 'stopped' ? imp : updateState(imp, { state: 'stopped', pid: null });
+    return imp.state === 'stopped'
+      ? imp
+      : updateState(imp, { reason: 'stopped', state: 'stopped', pid: null });
   };
 
   // the last look before the pause, under the imp's lock; nothing attaches
@@ -230,6 +247,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const started = performance.now();
 
+    // what the event stream reports about this sleep
+    const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
+
     try {
       const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths));
 
@@ -251,6 +271,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const sleepMs = Math.round(performance.now() - started);
       const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
 
+      slept.detail = { trigger: reason, durationMs: sleepMs, steps: timings };
+
       context.log(
         `impd: ${imp.name}: asleep in ${String(sleepMs)}ms (${reason})${waited}, ram ${String(ramMib)} MiB, mem file ${String(readDiskMib(paths.memFile))} MiB on disk, ${formatTimings(timings)}`,
       );
@@ -266,14 +288,25 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       removeSnapshot(paths);
       context.admission?.release(imp.id);
 
-      await updateState(imp, { state: 'stopped', pid: null });
+      await updateState(imp, {
+        reason: 'stopped',
+        detail: { trigger: reason },
+        state: 'stopped',
+        pid: null,
+      });
 
       throw error;
     }
 
     context.admission?.release(imp.id);
 
-    return updateState(imp, { state: 'sleeping', pid: null, sleptAt: new Date() });
+    return updateState(imp, {
+      reason: 'slept',
+      detail: slept.detail,
+      state: 'sleeping',
+      pid: null,
+      sleptAt: new Date(),
+    });
   };
 
   // resumes from the snapshot, or boots cold when there is none, it does not
@@ -332,6 +365,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     await updateImpActivity(context.db, imp.id, new Date());
 
     return updateState(imp, {
+      reason: 'woke',
+      detail: { durationMs: wakeMs, steps: woken.timings },
       state: 'running',
       pid: woken.pid,
       error: null,
@@ -365,7 +400,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       context.admission?.release(imp.id);
       removeSnapshot(paths);
 
-      await updateState(imp, { state: 'error', pid, error: `could not stop: ${message}` });
+      await updateState(imp, {
+        reason: 'failed',
+        state: 'error',
+        pid,
+        error: `could not stop: ${message}`,
+      });
 
       throw error;
     }
@@ -385,7 +425,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     // snapshot no longer matches it, even if the cold boot is turned away
     removeSnapshot(paths);
 
-    const stopped = await updateState(imp, { state: 'stopped', pid: null });
+    const stopped = await updateState(imp, {
+      reason: 'stopped',
+      detail: { trigger: failure },
+      state: 'stopped',
+      pid: null,
+    });
 
     return startColdImpVm(stopped, failure);
   };
@@ -418,6 +463,10 @@ function readDiskMib(path: string): number {
   } catch {
     return 0;
   }
+}
+
+function countStepsMs(timings: Readonly<Record<string, number>>): number {
+  return Object.values(timings).reduce((total, ms) => total + ms, 0);
 }
 
 function formatTimings(timings: Readonly<Record<string, number>>): string {

@@ -1,3 +1,6 @@
+export { ApiActorSchema, ApiCallSchema } from './api-call-schema';
+export type { ApiActor, ApiCall } from './api-call-schema';
+
 export {
   BackupPointSchema,
   BackupRestoreSchema,
@@ -31,6 +34,14 @@ export type {
   ExecServerMessage,
 } from './exec-protocol';
 
+export {
+  EVENT_VERSION,
+  ImpChangeReasonSchema,
+  ImpEventDetailSchema,
+  ImpEventSchema,
+} from './event-schema';
+
+export type { ImpChangeReason, ImpEvent, ImpEventDetail } from './event-schema';
 export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema } from './image-schema';
 export type { Image } from './image-schema';

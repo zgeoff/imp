@@ -1,5 +1,6 @@
-import { oc } from '@orpc/contract';
+import { eventIterator, oc } from '@orpc/contract';
 import * as z from 'zod';
+import { ApiCallSchema } from './api-call-schema';
 import {
   BackupCheckSubsetSchema,
   BackupRestoreSchema,
@@ -7,6 +8,7 @@ import {
   BackupStatusSchema,
 } from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
+import { ImpEventSchema } from './event-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
@@ -216,6 +218,23 @@ export const impContract = {
         }),
       )
       .output(z.array(AuditEntrySchema)),
+
+    // API calls that changed something and sessions opened, newest first;
+    // those that named one imp, or all of them
+    calls: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          limit: z.int().min(1).max(1000).optional(),
+        }),
+      )
+      .output(z.array(ApiCallSchema)),
+  },
+
+  // every lifecycle event (docs/guides/events.md): first each imp as
+  // `ImpAdded`, then each event as it happens
+  events: {
+    stream: base.output(eventIterator(ImpEventSchema)),
   },
 
   system: {

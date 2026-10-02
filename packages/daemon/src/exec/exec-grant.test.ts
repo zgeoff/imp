@@ -35,7 +35,7 @@ test('the bearer grant starts any imp', async () => {
 
 test('a ticket grant starts only its imp', async () => {
   const ctx = buildBackend();
-  const granted = buildGrantedBackend(ctx.backend, { kind: 'imp', name: 'a' });
+  const granted = buildGrantedBackend(ctx.backend, { kind: 'imp', name: 'a', actor: 'dashboard' });
 
   await granted.openExec('a', { argv: ['true'], tty: false }).catch(() => {});
   await granted.openAttach('a', { session: 'main' }).catch(() => {});
