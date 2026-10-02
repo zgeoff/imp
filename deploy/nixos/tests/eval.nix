@@ -45,6 +45,7 @@ let
     };
   };
   xfsNoMount = host { services.imp.storage = "xfs"; };
+  overriding = host { services.imp.settings.IMP_HOST_FIREWALL = "own"; };
   flushing = host {
     networking.nftables.enable = true;
     networking.nftables.flushRuleset = true;
@@ -60,6 +61,9 @@ let
     (expect "xfs with a mount: no failed assertion" (failed xfsHost == [ ]))
     (expect "xfs without a mount is refused" (
       lib.any (lib.hasInfix "declare /var/lib/imp") (failed xfsNoMount)
+    ))
+    (expect "settings may not set the module's keys" (
+      lib.any (lib.hasInfix "sets IMP_HOST_FIREWALL") (failed overriding)
     ))
     (expect "flushRuleset is refused" (lib.any (lib.hasInfix "flushRuleset") (failed flushing)))
     (expect "sysctls" (
