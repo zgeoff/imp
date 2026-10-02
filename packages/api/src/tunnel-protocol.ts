@@ -7,10 +7,21 @@ import { NameSchema } from './name-schema';
 
 export const TUNNEL_PATH = '/tunnel';
 
+// Close codes: both eofs seen; a message that breaks this protocol; impd
+// stopping; the connection in the guest ended without its eof (a reset, a
+// forced sleep), after which the next connection wakes the imp again.
+export const TUNNEL_CLOSE_NORMAL = 1000;
+export const TUNNEL_CLOSE_PROTOCOL = 1002;
+export const TUNNEL_CLOSE_RESTARTING = 1012;
+export const TUNNEL_CLOSE_LOST = 4000;
+
 // Each side acks the bytes it delivered onward, and a sender keeps at most
 // this many unacked: a WebSocket cannot pause reads, so a slow reader would
 // otherwise grow the other side's memory.
 export const TUNNEL_WINDOW_BYTES = 1_048_576;
+
+// the largest binary message the client sends: it may pass the window by one
+export const TUNNEL_MAX_FRAME_BYTES = 65_536;
 const AckSchema = z.object({ type: z.literal('ack'), bytes: z.int().positive() });
 
 export const TunnelClientMessageSchema = z.discriminatedUnion('type', [

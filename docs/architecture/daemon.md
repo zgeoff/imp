@@ -173,10 +173,15 @@ close: `NOT_FOUND`, `DIAL_FAILED`, `AGENT_OUTDATED` for an agent from before `di
   that side, so a client that half-closes still gets its reply.
 - **Flow control.** Neither end of a WebSocket can pause its reads, so each side acks the bytes it
   delivered onward (`{"type":"ack","bytes":n}`), and a sender keeps at most 1 MiB unacked. impd acks
-  once the guest connection took the bytes; the CLI acks once its TCP socket did.
-- **The end.** impd closes with 1000 once both sides sent their eof, with 4000 when the connection
-  in the guest ended without one (a reset, or a forced sleep), and with 1012 when impd stops. The
-  CLI resets the local connection for anything but 1000.
+  once the guest connection took the bytes; the CLI acks once its TCP socket did. The CLI sends at
+  most 64 KiB per message, so it passes the window by one message at most; a client that sends a
+  larger message, or holds more unacked than that, is closed with 1002, so it cannot grow impd's
+  memory.
+- **The end.** The close codes are in `tunnel-protocol.ts`. impd closes with 1000 once both sides
+  sent their eof, with 4000 when the connection in the guest ended without one (a reset, or a forced
+  sleep), with 1002 for a message that breaks the protocol, and with 1012 when impd stops. The CLI
+  resets the local connection for anything but 1000. When impd cannot be reached at all, it prints
+  one notice for a burst of failed connections, not one per connection.
 - **Activity.** An open tunnel counts as a `tunnel` connection from before the wake, so it keeps the
   imp awake, and neither the idle loop nor the governor sleeps the imp under it.
 

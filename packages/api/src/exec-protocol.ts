@@ -18,10 +18,6 @@ export const EXEC_TICKET_PARAM = 'ticket';
 // tunnel sockets too
 export const EXEC_CLOSE_RESTARTING = 1012;
 
-// a tunnel whose agent connection ended: a forced sleep, a stop, a vsock
-// reset. The next connection wakes the imp again.
-export const TUNNEL_CLOSE_LOST = 4000;
-
 export const EXEC_CHANNELS = {
   stdin: 0,
   stdout: 1,

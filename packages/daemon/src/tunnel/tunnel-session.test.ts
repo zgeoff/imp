@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
-import { TUNNEL_CLOSE_LOST, TUNNEL_WINDOW_BYTES } from '@imp/api';
+import {
+  TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_MAX_FRAME_BYTES,
+  TUNNEL_WINDOW_BYTES,
+} from '@imp/api';
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
@@ -238,6 +243,39 @@ test('the client bytes are acked only once the guest connection took them', asyn
   expect(acked).toBe(5);
 });
 
+test('a client that ignores the window is closed before impd holds more than one frame past it', async () => {
+  const opened = await openTunnel();
+
+  const tunnel = opened.tunnel;
+  const dial = opened.dial;
+
+  dial.holdDrain();
+
+  const frame = new Uint8Array(TUNNEL_MAX_FRAME_BYTES);
+
+  const frames = (TUNNEL_WINDOW_BYTES + TUNNEL_MAX_FRAME_BYTES) / TUNNEL_MAX_FRAME_BYTES;
+
+  for (let index = 0; index < frames; index++) {
+    tunnel.session.handleMessage(frame);
+  }
+
+  expect(tunnel.closed.code).toBeNull();
+
+  tunnel.session.handleMessage(new Uint8Array(1));
+
+  expect(tunnel.closed).toEqual({ code: TUNNEL_CLOSE_PROTOCOL, reason: 'past the window' });
+  expect(dial.state.written).toHaveLength(frames);
+});
+
+test('a binary message larger than a frame breaks the protocol', async () => {
+  const opened = await openTunnel();
+
+  opened.tunnel.session.handleMessage(new Uint8Array(TUNNEL_MAX_FRAME_BYTES + 1));
+
+  expect(opened.tunnel.closed.code).toBe(TUNNEL_CLOSE_PROTOCOL);
+  expect(opened.dial.state.written).toEqual([]);
+});
+
 test('the open tunnels of an imp stop at the limit, and a closed one frees its place', async () => {
   const limits = createTunnelLimits(1);
   const dial = createFakeDial();
@@ -303,7 +341,7 @@ test('data before opened, or a second open, breaks the protocol', async () => {
 
   early.session.handleMessage(encoder.encode('too soon'));
 
-  expect(early.closed.code).toBe(1008);
+  expect(early.closed.code).toBe(TUNNEL_CLOSE_PROTOCOL);
 
   const opened = await openTunnel();
 
@@ -311,5 +349,5 @@ test('data before opened, or a second open, breaks the protocol', async () => {
 
   tunnel.session.handleMessage({ type: 'open', name: 'box', port: 80 });
 
-  expect(tunnel.closed.code).toBe(1008);
+  expect(tunnel.closed.code).toBe(TUNNEL_CLOSE_PROTOCOL);
 });

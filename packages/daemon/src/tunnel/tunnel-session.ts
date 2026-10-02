@@ -1,4 +1,11 @@
-import { TUNNEL_CLOSE_LOST, TUNNEL_WINDOW_BYTES, TunnelClientMessageSchema } from '@imp/api';
+import {
+  TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_NORMAL,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_MAX_FRAME_BYTES,
+  TUNNEL_WINDOW_BYTES,
+  TunnelClientMessageSchema,
+} from '@imp/api';
 import type { TunnelServerMessage } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
@@ -9,9 +16,9 @@ import { readErrorMessage } from '../read-error-message';
 // TUNNEL_LIMIT, so a client in a loop cannot pile up agent connections
 const MAX_TUNNELS_PER_IMP = 256;
 
-// WebSocket close codes: a normal end, and a message that breaks the protocol
-const CLOSE_NORMAL = 1000;
-const CLOSE_PROTOCOL = 1008;
+// a client that keeps no window: past this many unacked bytes, impd would
+// hold whatever it sends
+const MAX_PENDING_BYTES = TUNNEL_WINDOW_BYTES + TUNNEL_MAX_FRAME_BYTES;
 
 // The two ends a tunnel bridges: the WebSocket peer and the imp service.
 export interface TunnelPeer {
@@ -143,7 +150,7 @@ export function createTunnelSession(
     }
 
     send(buildErrorMessage(error));
-    stopTunnel(CLOSE_NORMAL, 'tunnel failed');
+    stopTunnel(TUNNEL_CLOSE_NORMAL, 'tunnel failed');
   };
 
   const waitForWindow = async (): Promise<void> => {
@@ -180,7 +187,7 @@ export function createTunnelSession(
     // the agent ends a relay once both sides sent their eof; any other end
     // is a lost connection (a forced sleep, a reset)
     const complete = state.guestEof && state.peerEof;
-    const code = complete ? CLOSE_NORMAL : TUNNEL_CLOSE_LOST;
+    const code = complete ? TUNNEL_CLOSE_NORMAL : TUNNEL_CLOSE_LOST;
     const reason = complete ? 'done' : 'lost';
 
     stopTunnel(code, reason);
@@ -276,7 +283,7 @@ export function createTunnelSession(
     const parsed = TunnelClientMessageSchema.safeParse(message);
 
     if (!parsed.success) {
-      stopTunnel(CLOSE_PROTOCOL, 'bad message');
+      stopTunnel(TUNNEL_CLOSE_PROTOCOL, 'bad message');
 
       return;
     }
@@ -287,7 +294,7 @@ export function createTunnelSession(
       if (state.phase === 'waiting') {
         void openTunnel(control.name, control.port);
       } else {
-        stopTunnel(CLOSE_PROTOCOL, 'open twice');
+        stopTunnel(TUNNEL_CLOSE_PROTOCOL, 'open twice');
       }
 
       return;
@@ -296,7 +303,7 @@ export function createTunnelSession(
     const stream = state.stream;
 
     if (state.phase !== 'open' || stream === null) {
-      stopTunnel(CLOSE_PROTOCOL, `${control.type} before opened`);
+      stopTunnel(TUNNEL_CLOSE_PROTOCOL, `${control.type} before opened`);
 
       return;
     }
@@ -315,14 +322,20 @@ export function createTunnelSession(
     const stream = state.stream;
 
     if (state.phase !== 'open' || stream === null || state.peerEof) {
-      stopTunnel(CLOSE_PROTOCOL, 'data outside an open tunnel');
+      stopTunnel(TUNNEL_CLOSE_PROTOCOL, 'data outside an open tunnel');
+
+      return;
+    }
+
+    state.pendingAck += data.byteLength;
+
+    if (data.byteLength > TUNNEL_MAX_FRAME_BYTES || state.pendingAck > MAX_PENDING_BYTES) {
+      stopTunnel(TUNNEL_CLOSE_PROTOCOL, 'past the window');
 
       return;
     }
 
     stream.write(data);
-
-    state.pendingAck += data.byteLength;
 
     if (!state.acking) {
       void sendPeerAcks(stream);

@@ -15,7 +15,6 @@ export {
   EXEC_CLOSE_RESTARTING,
   EXEC_PATH,
   EXEC_TICKET_PARAM,
-  TUNNEL_CLOSE_LOST,
   ExecAttachMessageSchema,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
@@ -33,6 +32,11 @@ export type {
 } from './exec-protocol';
 
 export {
+  TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_NORMAL,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_CLOSE_RESTARTING,
+  TUNNEL_MAX_FRAME_BYTES,
   TUNNEL_PATH,
   TUNNEL_WINDOW_BYTES,
   TunnelClientMessageSchema,

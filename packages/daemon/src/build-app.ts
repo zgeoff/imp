@@ -1,4 +1,10 @@
-import { EXEC_CLOSE_RESTARTING, EXEC_PATH, EXEC_TICKET_PARAM, TUNNEL_PATH } from '@imp/api';
+import {
+  EXEC_CLOSE_RESTARTING,
+  EXEC_PATH,
+  EXEC_TICKET_PARAM,
+  TUNNEL_CLOSE_RESTARTING,
+  TUNNEL_PATH,
+} from '@imp/api';
 import { ORPCError, onError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
@@ -212,8 +218,12 @@ export function buildApp(deps: AppDeps) {
 
     // the client can tell impd went away on purpose
     closeExecSessions: () => {
-      for (const entry of [...sessions.values(), ...tunnels.values()]) {
+      for (const entry of sessions.values()) {
         entry.close(EXEC_CLOSE_RESTARTING, 'impd is restarting');
+      }
+
+      for (const entry of tunnels.values()) {
+        entry.close(TUNNEL_CLOSE_RESTARTING, 'impd is restarting');
       }
     },
   };
