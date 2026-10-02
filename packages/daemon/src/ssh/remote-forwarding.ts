@@ -18,13 +18,13 @@ type AcceptRequest = ((chosenPort?: number) => void) | undefined;
 
 type RejectRequest = (() => void) | undefined;
 
-export interface TcpForwardRequest {
+interface TcpForwardRequest {
   readonly kind: 'tcp';
   readonly bindAddr: string;
   readonly bindPort: number;
 }
 
-export interface SocketForwardRequest {
+interface SocketForwardRequest {
   readonly kind: 'unix';
   readonly socketPath: string;
 }
@@ -63,7 +63,7 @@ interface OpenForward {
 }
 
 // the listener a request asks for, or null when it is refused
-export function resolveRemoteForward(request: RemoteForwardRequest): ListenSpec | null {
+function resolveRemoteForward(request: RemoteForwardRequest): ListenSpec | null {
   if (request.kind === 'unix') {
     const path = posix.normalize(request.socketPath);
 
