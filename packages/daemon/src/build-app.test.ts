@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
+import packageJson from '../package.json' with { type: 'json' };
 import { findImpByName } from './db/imps';
 import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 
@@ -19,7 +20,7 @@ test('it serves system.info from config and the database', async () => {
   expect(storage.availableBytes).toBeGreaterThan(0);
 
   expect(info).toEqual({
-    version: '0.0.0',
+    version: packageJson.version,
     ramBudgetMib: 16_384,
     ramUsedMib: 0,
     ramReservedMib: 0,
