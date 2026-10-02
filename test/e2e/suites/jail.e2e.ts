@@ -1,4 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
+import { VmIdentitySchema } from '../../../packages/daemon/src/sleep/vm-identity';
+import { buildTemplateKey } from '../../../packages/daemon/src/templates/boot-templates';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, requireImp, runImp, runShellInImp } from '../lib/imp-cli';
 import { createImp, holdImp, waitForExec } from '../lib/imps';
@@ -126,9 +128,28 @@ async function checkNoImpJailMounts(): Promise<void> {
   await checkNoJailMounts(`firecracker/${row.id}/`);
 }
 
-// A cold boot from `since` on started a build, which impd logs the end of:
-// built, refused or failed. A restore of a template made earlier started none.
-async function waitForTemplateBuildEnd(since: Readonly<Date>): Promise<void> {
+// The key of the imp's boot template: its shape, and the host as its last
+// cold boot saw it (vm.json), the way impd keys it
+async function readTemplateKey(): Promise<string> {
+  const row = await requireImp(name);
+  const text = await readContainerFile(`/var/lib/imp/imps/${row.id}/vm.json`);
+
+  const identity = VmIdentitySchema.required({ cpuModel: true, cpuFlags: true }).parse(
+    JSON.parse(text),
+  );
+
+  return buildTemplateKey(identity, { vcpus: row.vcpus, memoryMib: row.memoryMib });
+}
+
+// A cold boot from `since` on started a build of the key, which impd logs the
+// end of: built, refused or failed. A restore of a template made earlier
+// started none.
+async function waitForTemplateBuildEnd(since: Readonly<Date>, key: string): Promise<void> {
+  const ended = new RegExp(
+    `impd: boot template ${key.slice(0, 12)} (?:built in|build refused|build failed)`,
+    'v',
+  );
+
   await waitFor('the boot template build to end', async () => {
     const log = await readImpdLogSince(since);
 
@@ -136,7 +157,7 @@ async function waitForTemplateBuildEnd(since: Readonly<Date>): Promise<void> {
       return;
     }
 
-    expect(log).toMatch(/impd: boot template [0-9a-f]{12} (?:built in|build refused|build failed)/);
+    expect(log).toMatch(ended);
   });
 }
 
@@ -297,10 +318,12 @@ test('a jailed VM starts, stops and is removed cleanly', async () => {
 
   const since = new Date();
 
-  // the second cold boot of the shape since the last reboot: it starts a
+  // the second cold boot of the shape since the last impd start: it starts a
   // jailed boot template build in the background
   await runImp('start', name);
   await waitForExec(name);
+
+  const key = await readTemplateKey();
 
   // a destroy kills the VM outright
   await runImp('rm', name);
@@ -314,6 +337,6 @@ test('a jailed VM starts, stops and is removed cleanly', async () => {
   await checkNoJailMounts(`firecracker/${row.id}/`);
 
   // once the build ends, it leaves no jail mounted either
-  await waitForTemplateBuildEnd(since);
+  await waitForTemplateBuildEnd(since, key);
   await checkNoJailMounts();
 });
