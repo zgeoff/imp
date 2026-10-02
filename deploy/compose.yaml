@@ -52,6 +52,8 @@ services:
     stop_grace_period: 120s
     restart: unless-stopped
 
+# The same network as create_host_network in deploy/bootstrap.sh and the
+# ExecStartPre of deploy/imp-host.service; keep the three equal.
 # networks:
 #   imp-host:
 #     name: imp-host

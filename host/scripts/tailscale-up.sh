@@ -45,6 +45,10 @@ backend() { timeout 5 tailscale --socket="$sock" status --json 2>/dev/null | jq 
 # Docker copies the host's resolv.conf. If the host runs Tailscale with
 # MagicDNS, that is 100.100.100.100, which our own tailscaled captures; with
 # --accept-dns=false it has no upstream, and all lookups (ACME too) fail.
+# On a user-defined network (imp-host's, with IPv6) resolv.conf names
+# Docker's embedded DNS, 127.0.0.11, which forwards from the host's network
+# namespace ("ExtServers: [host(...)]"), so our tailscaled never sees those
+# lookups and nothing needs changing.
 if grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|fd7a:115c:a1e0::53)' /etc/resolv.conf; then
   dns=${IMP_DNS:-1.1.1.1,8.8.8.8}
   # Commas are the impd form; spaces still work.

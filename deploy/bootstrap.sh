@@ -500,6 +500,8 @@ EnvironmentFile=/etc/imp/imp-host.env
 ExecStartPre=-/usr/bin/docker rm -f imp-host
 # With IPv6 (IMP_HOST_NETWORK names it), the network imp-host on its /64,
 # created when it is missing; bootstrap.sh --check reports one that differs.
+# Keep it equal to create_host_network in deploy/bootstrap.sh and the
+# networks block of deploy/compose.yaml.
 ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docker network inspect imp-host >/dev/null 2>&1 || /usr/bin/docker network create --ipv6 --subnet "$$IMP_HOST_SUBNET6" -o com.docker.network.bridge.name=br-imphost imp-host ;; esac'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
@@ -1281,7 +1283,11 @@ ensure_ipv6() {
     existing=1
   fi
   resolve_subnet6 "$inspect"
-  ensure_router_adverts "$existing"
+  if ! ensure_router_adverts "$existing"; then
+    ipv6=off
+    remove_ipv6
+    return
+  fi
 
   if [ -z "$existing" ]; then
     change "create the $HOST_NETWORK network: $ipv6_subnet on the bridge $HOST_BRIDGE" create_host_network
@@ -1367,8 +1373,9 @@ ensure_router_adverts() {
 }
 
 # ra_userspace UPLINK EXISTING: accept_ra is 0, so a client takes the
-# router adverts. Stop unless its config keeps them with forwarding on, or
-# the operator says so (--ra-handled), or IPv6 was on already.
+# router adverts. Go on when its config keeps them with forwarding on, the
+# operator says so (--ra-handled), or IPv6 was on already. Else auto turns
+# IPv6 off with a warning (fails), and on stops.
 ra_userspace() {
   local uplink=$1 owner network_file=""
   network_file=$(networkctl status "$uplink" 2>/dev/null | sed -n 's/^ *Network File: //p' || true)
@@ -1395,7 +1402,10 @@ ra_userspace() {
     log "router adverts: $owner takes them on $uplink; IPv6 was on already"
     return
   fi
-  die "the IPv6 default route on $uplink comes from router adverts that $owner takes. Docker turns on IPv6 forwarding for imp-host's network, and $owner may then drop them, and the route with them. Make it keep router adverts with forwarding on (systemd-networkd: IPv6AcceptRA=yes; netplan: accept-ra: true), then run again with --ra-handled; or give --ipv6 off (docs/guides/install.md#ipv6)"
+  local why="the IPv6 default route on $uplink comes from router adverts that $owner takes. Docker turns on IPv6 forwarding for imp-host's network, and $owner may then drop them, and the route with them. Make it keep router adverts with forwarding on (systemd-networkd: IPv6AcceptRA=yes; netplan: accept-ra: true), then run again with --ipv6 on --ra-handled (docs/guides/install.md#ipv6)"
+  [ -n "$ipv6_auto" ] || die "$why; or give --ipv6 off"
+  warn "$why. ipv6: off"
+  return 1
 }
 
 # network_others: the containers on the network other than imp-host.
@@ -1404,6 +1414,9 @@ network_others() {
     | tr ' ' '\n' | grep -vx -e imp-host -e '' | paste -sd ' ' - || true
 }
 
+# The network's three definitions agree: this one, the unit's ExecStartPre
+# (deploy/imp-host.service) and the networks block of deploy/compose.yaml.
+# deploy/bootstrap.test.ts checks the first two.
 create_host_network() {
   docker network create --ipv6 --subnet "$ipv6_subnet" \
     -o "com.docker.network.bridge.name=$HOST_BRIDGE" "$HOST_NETWORK" >/dev/null
