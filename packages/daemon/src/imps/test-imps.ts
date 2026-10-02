@@ -90,6 +90,10 @@ interface ImpTestOptions {
   // each imp's tailnet name as a URL; none by default
   readonly readServiceUrl?: (name: string) => string | null;
 
+  // the clock's start; it moves only with `advance` then, for a test that
+  // divides by elapsed time
+  readonly frozenClockMs?: number;
+
   // CPU limits: none enforced, and 8 cores, by default
   readonly cgroups?: CpuCgroups;
   readonly hostCpus?: number;
@@ -118,7 +122,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   // the clock for holds and reservations; a test moves it with `advance`
   const clock = { offsetMs: 0 };
-  const readClock = () => Date.now() + clock.offsetMs;
+  const frozenAt = options.frozenClockMs;
+  const readClock = () => (frozenAt ?? Date.now()) + clock.offsetMs;
 
   const cloneDisk =
     options.cloneDisk ??

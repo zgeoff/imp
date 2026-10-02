@@ -202,8 +202,10 @@ test('a running imp shows the sampler cache: RAM, then CPU after a second pass',
   const stat = { usageUsec: 1_000_000, throttledUsec: 0 };
   const recording = buildRecordingCgroups();
 
+  // a frozen clock: the 5 s between the passes is exactly 5 s
   await using ctx = await setupImpTest({
     cgroups: { ...recording.cgroups, readCpuStat: () => ({ ...stat }) },
+    frozenClockMs: Date.parse('2026-10-02T12:00:00Z'),
   });
 
   await ctx.createTestImage('ubuntu');
