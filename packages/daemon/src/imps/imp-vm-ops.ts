@@ -11,6 +11,7 @@ import { buildAgentOutdatedApiError } from '../api-errors';
 import { removeIdentityReset, updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
 import type { SlotAddress } from '../net/addressing';
+import { GATEWAY_IP6 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
 import { waitForGuestAge } from '../sleep/guest-age';
 import {
@@ -164,6 +165,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
             hostname: imp.name,
             ip: `${address.guestIp}/${String(address.prefixLength)}`,
             gw: address.hostIp,
+            ip6: address.guestIp6 === null ? null : `${address.guestIp6}/128`,
+            gw6: address.guestIp6 === null ? null : GATEWAY_IP6,
             dns: context.config.dns,
             mac: address.guestMac,
             seed: randomBytes(CLAIM_SEED_BYTES),

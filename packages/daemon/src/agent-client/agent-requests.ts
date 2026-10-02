@@ -113,6 +113,10 @@ export interface Claim {
   readonly hostname: string;
   readonly ip: string;
   readonly gw: string;
+
+  // the guest's IPv6 /128 and gateway; null when the host gives imps none
+  readonly ip6: string | null;
+  readonly gw6: string | null;
   readonly dns: readonly string[];
   readonly mac: string;
   readonly unixMs: number;
@@ -130,6 +134,8 @@ export async function sendClaim(vsockPath: string, claim: Readonly<Claim>): Prom
         hostname: claim.hostname,
         ip: claim.ip,
         gw: claim.gw,
+        ...(claim.ip6 !== null && { ip6: claim.ip6 }),
+        ...(claim.gw6 !== null && { gw6: claim.gw6 }),
         dns: claim.dns,
         mac: claim.mac,
         unix_ms: claim.unixMs,

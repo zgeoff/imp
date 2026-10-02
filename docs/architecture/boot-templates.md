@@ -66,8 +66,9 @@ next miss builds it again) and boots the kernel.
 
 ## Claim
 
-`claim` carries the imp's id, hostname, address, gateway, DNS servers and MAC, the host's clock, a
-64-byte seed and the identity reset flag. Stage 1 then:
+`claim` carries the imp's id, hostname, address, gateway, IPv6 address and gateway (when the host
+gives imps IPv6), DNS servers and MAC, the host's clock, a 64-byte seed and the identity reset flag.
+Stage 1 then:
 
 1. Sets the clock, so nothing after stamps the template's time.
 2. Credits the seed to the entropy pool (`RNDADDENTROPY`) and reseeds the CRNG at once

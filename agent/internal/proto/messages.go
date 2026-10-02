@@ -163,6 +163,8 @@ type Claim struct {
 	Hostname      string   `json:"hostname"`
 	IP            string   `json:"ip"`
 	GW            string   `json:"gw"`
+	IP6           string   `json:"ip6,omitempty"`
+	GW6           string   `json:"gw6,omitempty"`
 	DNS           []string `json:"dns,omitempty"`
 	MAC           string   `json:"mac"`
 	UnixMs        int64    `json:"unix_ms"`
