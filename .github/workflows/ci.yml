@@ -215,8 +215,133 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: scripts/check-client-package.sh "$TARBALL"
 
-  # Main-only jobs (the release, the KVM end-to-end suite) go below with
-  # `if: github.event_name == 'push'` and `needs:` on the gates above.
+  # Boots real microVMs: the fast end-to-end set (scripts/test-e2e.sh --only
+  # fast) against a dev instance on the runner's own KVM. Not a required
+  # check and not in release-please's needs until it has proven stable on
+  # GitHub's runners; docs/guides/development.md ("CI") says what to flip.
+  e2e:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # a cache miss rebuilds the guest kernel, about 10 minutes on 4 cores
+    timeout-minutes: 25
+    env:
+      # the fast set at reduced size for a 4-core, 16 GB runner
+      E2E_RAM_BUDGET_MIB: 4096
+      IMP_DEFAULT_MEMORY_MIB: 1024
+      IMP_KERNEL: .cache/ci/vmlinux
+      IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
+      # sparse, so only what the imps write takes disk
+      IMP_STORAGE_GIB: 40
+      # PRs read the caches main writes; their own writes would only crowd
+      # the repo's cache quota
+      WRITE_CACHE: ${{ github.event_name == 'push' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # first, so a runner without KVM fails before any build
+      - name: Check KVM
+        run: scripts/check-kvm.sh
+
+      # /mnt is the runner's larger temp disk; the XFS file goes there when
+      # the image has one
+      - name: Pick the data dir
+        run: |
+          df -h / /mnt || true
+          if mountpoint -q /mnt; then
+            data=/mnt/imp-e2e
+          else
+            data=$GITHUB_WORKSPACE/.data/ci
+          fi
+          sudo mkdir -p "$data"
+          sudo chown "$(id -u):$(id -g)" "$data"
+          echo "IMP_DEV_DATA=$data" >> "$GITHUB_ENV"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache Bun Packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # default-load: the builder becomes the default for plain `docker
+      # build` too, and scripts/dev.sh needs that build in the image store
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: default-load=true
+
+      # type=gha cache needs the runtime token and URL in the environment,
+      # which only actions get by default
+      - name: Expose GitHub runtime
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+
+      # The release's cache scope: the kernel layer rebuilds only when
+      # kernel/version or the config files change.
+      - name: Build kernel and system drive
+        run: |
+          cache_to=()
+          if [ "$WRITE_CACHE" = true ]; then
+            cache_to=(--cache-to "type=gha,scope=system-files,mode=max")
+          fi
+          docker buildx build -f host/Dockerfile --target system-files \
+            --output type=local,dest=.cache/ci \
+            --cache-from type=gha,scope=system-files "${cache_to[@]}" .
+
+      # scripts/dev.sh builds the same target again; this build fills the
+      # builder's cache from the GitHub cache, so that one is all hits
+      - name: Build host image
+        run: |
+          cache_to=()
+          if [ "$WRITE_CACHE" = true ]; then
+            cache_to=(--cache-to "type=gha,scope=imp-dev,mode=max")
+          fi
+          docker buildx build -f host/Dockerfile --target dev -t imp-host:dev --load \
+            --cache-from type=gha,scope=imp-dev "${cache_to[@]}" .
+
+      # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
+      # outside acceptance a missed timing limit only warns.
+      - name: End-to-end tests
+        run: scripts/test-e2e.sh --only fast
+
+      # The steps below also run after a failure or a timeout, with or
+      # without a container, so none of them may fail the job.
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p .cache/e2e
+          docker logs imp-dev >.cache/e2e/impd.log 2>&1 || true
+          du -h "$IMP_DEV_DATA/imp.xfs" || true
+          df -h / /mnt || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-results
+          path: .cache/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # the runner is thrown away, so no sleeping imps to keep
+      - name: Remove the dev instance
+        if: always()
+        run: docker rm -f imp-dev || true
+
+  # Main-only jobs go below with `if: github.event_name == 'push'` and
+  # `needs:` on the gates above.
 
   # A release takes two runs of this job (RELEASING.md):
   # - after a releasable commit lands on main, release-please opens or updates

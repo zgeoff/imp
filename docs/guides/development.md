@@ -102,19 +102,48 @@ Lefthook installs the hooks with `bun install`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs the gates on every push to `main` and every pull request, in four
-required jobs:
+`.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | What it runs                                                                  |
-| ------------ | ----------------------------------------------------------------------------- |
-| `gitleaks`   | A secret scan over the history.                                               |
-| `checks`     | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`. |
-| `go`         | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                |
-| `shellcheck` | `bun run lint:shell`.                                                         |
+| Job          | Required | What it runs                                                                      |
+| ------------ | -------- | --------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                   |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.     |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                    |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                             |
+| `cli`        | no       | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64. |
+| `client`     | no       | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.        |
+| `e2e`        | no       | The `fast` end-to-end set on real microVMs (below).                               |
 
-The `cli` job also compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64
-binary. It is not a required check. On `main`, the `release-please` job makes releases
-([RELEASING.md](../../RELEASING.md)).
+On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
+
+### The e2e job
+
+The `e2e` job boots real Firecracker guests on a standard `ubuntu-24.04` runner (4 cores, 16 GB),
+which exposes `/dev/kvm`. `scripts/check-kvm.sh` runs first, so a runner without KVM fails in
+seconds with the reason. The job then:
+
+1. builds the guest kernel and the system drive from the `system-files` stage, with the release's
+   GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
+   the kernel config files change. A cold kernel build takes about 10 minutes, so the job's timeout
+   is 25.
+2. builds the dev host image with a cache of its own (scope `imp-dev`). Only runs on `main` write
+   either cache; pull requests read them.
+3. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
+   `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
+   key in CI, and a missed timing limit only warns.
+
+After a pass, a failure or a timeout, the job saves the `e2e-results` artifact (14 days):
+`results.json`, `metrics.jsonl` and `impd.log`, the dev container's whole log. A failed suite also
+prints the last 40 lines of impd's log inline. Download the artifact with
+`gh run download <run-id> -n e2e-results`.
+
+The job is not a required check, and `release-please` does not wait for it, until it has passed
+reliably on GitHub's runners. To make it a gate, add `{ "context": "e2e" }` to
+`.github/rulesets/main.json` and `e2e` to the `needs` of `release-please`.
+
+If GitHub-hosted runners lose KVM, move the job to an ephemeral, dedicated self-hosted runner and
+run it only on push to `main`, never on pull requests. Never use the deploy box. The repo is public,
+so a pull request from a fork would get a privileged container with `/dev/kvm` on that runner.
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
 
