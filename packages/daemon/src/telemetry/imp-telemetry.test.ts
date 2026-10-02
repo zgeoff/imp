@@ -15,6 +15,7 @@ import {
   SimpleSpanProcessor,
 } from '@opentelemetry/sdk-trace-base';
 import { createEventBus } from '../events/event-bus';
+import type { ResourceDelta } from '../imps/resource-sampler';
 import { startImpTelemetry } from './imp-telemetry';
 
 const AT = new Date('2026-10-02T12:00:00Z');
@@ -185,4 +186,48 @@ test('the gauges read imps by state and the RAM in use against the budget', asyn
   expect(states).toContain('{"state":"running"}=0');
   expect(used).toEqual(['{}=600']);
   expect(budget).toEqual(['{}=4096']);
+});
+
+test('each sampler pass feeds the CPU, network and awake instruments, with no imp name', async () => {
+  await using telemetry = setupInMemoryTelemetry();
+
+  const listeners: ((deltas: readonly ResourceDelta[]) => void)[] = [];
+
+  const stop = startImpTelemetry({
+    bus: createEventBus(),
+    readStateCounts: () => Promise.resolve(new Map()),
+    readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
+    subscribeResources: (listener) => {
+      listeners.push(listener);
+
+      return () => {};
+    },
+  });
+
+  const delta = {
+    intervalMs: 5000,
+    cpuPercent: 50,
+    cpuUsec: 2_500_000,
+    throttledUsec: 500_000,
+    netRxBytes: 1000,
+    netTxBytes: 30,
+  };
+
+  for (const listener of listeners) {
+    listener([delta, { ...delta, cpuPercent: 150 }]);
+  }
+
+  const usage = await telemetry.readPoints('imp.cpu.usage');
+  const utilization = await telemetry.readPoints('imp.cpu.utilization');
+  const throttled = await telemetry.readPoints('imp.cpu.throttled');
+  const network = await telemetry.readPoints('imp.network.io');
+  const awake = await telemetry.readPoints('imp.awake.time');
+
+  stop();
+
+  expect(usage).toEqual(['{}=2']);
+  expect(utilization).toEqual(['{}=count 2']);
+  expect(throttled).toEqual(['{}=1']);
+  expect(network).toEqual(['{"direction":"rx"}=2000', '{"direction":"tx"}=60']);
+  expect(awake).toEqual(['{}=10']);
 });

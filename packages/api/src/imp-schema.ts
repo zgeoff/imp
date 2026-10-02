@@ -18,7 +18,8 @@ const ImpResourcesSchema = z.object({
   awakeMs: z.int().nonnegative(),
 
   // left out while the VM is not running or not sampled yet; the counters
-  // run from `since`, when its Firecracker started
+  // run from `since`, when impd first saw this Firecracker: as its boot or
+  // wake returned, or when impd adopted it
   sample: z
     .object({
       measuredAt: z.date(),

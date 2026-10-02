@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { CpuSettings } from '../db/imps';
-import { findImpByName, updateImpState, updateImpStateIf } from '../db/imps';
+import { findImpByName, updateImpActivity, updateImpState, updateImpStateIf } from '../db/imps';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import { buildTestApp, setupImpTest } from './test-imps';
 
@@ -74,12 +74,11 @@ test('a running imp takes a new limit at once; a sleeping one at its wake', asyn
 
   expect(running.cpu).toEqual({ limit: 0.5, weight: 100 });
 
-  // a sleep and a stop leave no cgroup behind
+  // a sleep keeps the empty cgroup for the wake; a stop removes it
   expect(ctx.calls).toEqual([
     'setup null/100',
     'apply 0.5/100',
     'setup 0.5/100',
-    'remove',
     'setup null/300',
     'remove',
   ]);
@@ -139,21 +138,82 @@ test('wakes and awake time count, and a liveness repair after a crash closes the
 
   expect(adopted?.awakeSince?.getTime()).toBe(since);
 
-  // the VM died meanwhile: the repair closes the span
+  // the VM was last active 2 s into its span, then died; the span ends at
+  // that activity, not at the repair
+  await updateImpActivity(ctx.db, awake?.id ?? '', new Date(since + 2000));
+
+  ctx.fake.alive.delete(awake?.pid ?? 0);
+
   await Bun.sleep(5);
+
+  const api = await ctx.client.imps.get({ name: 'dev' });
+  const repaired = await findImpByName(ctx.db, 'dev');
+
+  expect(api.state).toBe('stopped');
+  expect(ctx.calls.at(-1)).toBe('remove');
+  expect(repaired?.awakeSince).toBeNull();
+  expect(repaired?.awakeMs).toBe(2000 + (awake?.awakeMs ?? 0));
+  expect(api.resources).toMatchObject({ wakeCount: 1, awakeMs: repaired?.awakeMs });
+});
+
+test('a span cannot end before it starts, and a cold boot for a wake counts as a wake', async () => {
+  await using ctx = await setupCpuTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const running = await findImpByName(ctx.db, 'dev');
+
+  const since = running?.awakeSince?.getTime() ?? 0;
 
   const repaired = await updateImpStateIf(
     ctx.db,
-    awake?.id ?? '',
-    { state: 'running', pid: awake?.pid ?? null },
-    { reason: 'repaired', state: 'stopped', pid: null },
+    running?.id ?? '',
+    { state: 'running', pid: running?.pid ?? null },
+    { reason: 'repaired', state: 'stopped', pid: null, awakeUntil: new Date(since - 5000) },
   );
 
-  expect(repaired?.awakeSince).toBeNull();
-  expect(repaired?.awakeMs).toBeGreaterThanOrEqual(Date.now() - since - 1000);
-  expect(repaired?.awakeMs).toBeGreaterThan(0);
+  expect(repaired?.awakeMs).toBe(0);
 
-  const api = await ctx.client.imps.get({ name: 'dev' });
+  await ctx.client.imps.start({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
 
-  expect(api.resources).toMatchObject({ wakeCount: 1, awakeMs: repaired?.awakeMs });
+  ctx.fake.queue('wake', 'fail');
+
+  const cold = await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(cold.state).toBe('running');
+  expect(cold.resources?.wakeCount).toBe(1);
+});
+
+test('a running imp shows the sampler cache: RAM, then CPU after a second pass', async () => {
+  const stat = { usageUsec: 1_000_000, throttledUsec: 0 };
+  const recording = buildRecordingCgroups();
+
+  await using ctx = await setupImpTest({
+    cgroups: { ...recording.cgroups, readCpuStat: () => ({ ...stat }) },
+  });
+
+  await ctx.createTestImage('ubuntu');
+
+  const app = buildTestApp(ctx, ctx);
+
+  await app.client.imps.create({ name: 'dev' });
+
+  const first = await app.client.imps.get({ name: 'dev' });
+
+  expect(first.ramMib).toBeNumber();
+  expect(first.resources?.sample?.cpuPercent).toBeUndefined();
+
+  // half a core for 5 s, 2 s of it held back
+  ctx.advance(5000);
+
+  stat.usageUsec += 2_500_000;
+  stat.throttledUsec += 2_000_000;
+
+  await ctx.imps.sampleResources();
+
+  const second = await app.client.imps.get({ name: 'dev' });
+
+  expect(second.resources?.sample?.cpuPercent).toBe(50);
+  expect(second.resources?.sample?.cpuThrottledMs).toBe(2000);
 });

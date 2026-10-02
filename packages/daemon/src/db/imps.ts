@@ -69,6 +69,13 @@ export interface ImpStateChange {
   readonly pid?: number | null;
   readonly sleptAt?: Date | null;
   readonly firecrackerVersion?: string | null;
+
+  // a cold boot that stands in for a wake counts as one, as a `woke` does
+  readonly countsWake?: boolean;
+
+  // when a running imp's awake span ends; now by default. A repair passes
+  // the last time anything saw the VM alive.
+  readonly awakeUntil?: Date;
 }
 
 // The lowest slot no imp holds. Run it in the same transaction as the insert
@@ -257,14 +264,19 @@ function buildAwakeValues(change: Readonly<ImpStateChange>) {
   const now = Date.now();
 
   if (change.state === 'running') {
+    const isWake = change.reason === 'woke' || change.countsWake === true;
+
     return {
       awake_since: sql<number>`coalesce(awake_since, ${now})`,
-      ...(change.reason === 'woke' && { wake_count: sql<number>`wake_count + 1` }),
+      ...(isWake && { wake_count: sql<number>`wake_count + 1` }),
     };
   }
 
+  const until = change.awakeUntil?.getTime() ?? now;
+
+  // max() is null while no span is open; an end before the start adds nothing
   return {
-    awake_ms: sql<number>`awake_ms + coalesce(${now} - awake_since, 0)`,
+    awake_ms: sql<number>`awake_ms + coalesce(max(0, ${until} - awake_since), 0)`,
     awake_since: null,
   };
 }

@@ -28,7 +28,12 @@ export async function checkLiveness(
     context.db,
     imp.id,
     { state: imp.state, pid: imp.pid },
-    change ?? { reason: 'repaired', state: 'stopped', pid: null },
+    change ?? {
+      reason: 'repaired',
+      state: 'stopped',
+      pid: null,
+      awakeUntil: findLastSeenAlive(context, imp),
+    },
   );
 
   if (repaired === undefined) {
@@ -40,6 +45,11 @@ export async function checkLiveness(
   const what = lostSnapshot ? 'the snapshot is gone' : 'firecracker is gone';
 
   context.log(`impd: ${imp.name}: ${what}; marked it ${repaired.state}`);
+
+  // a stopped imp needs no cgroup; a sleeping one wakes into it
+  if (repaired.state === 'stopped') {
+    await context.cgroups.remove(imp.id);
+  }
 
   return repaired;
 }
@@ -54,5 +64,15 @@ function findSleptChange(imp: ImpRecord, paths: ImpPaths): ImpStateChange | null
     return null;
   }
 
-  return { reason: 'repaired', state: 'sleeping', pid: null, sleptAt: new Date(meta.createdAt) };
+  const sleptAt = new Date(meta.createdAt);
+
+  return { reason: 'repaired', state: 'sleeping', pid: null, sleptAt, awakeUntil: sleptAt };
+}
+
+// A dead VM's awake span ends when anything last saw it alive: impd's last
+// sample or the imp's last activity, not when the repair ran.
+function findLastSeenAlive(context: ImpContext, imp: Readonly<ImpRecord>): Date {
+  const sampled = context.resources.readLastSeenAt(imp.id)?.getTime() ?? 0;
+
+  return new Date(Math.max(sampled, imp.lastActiveAt.getTime()));
 }

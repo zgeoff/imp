@@ -23,6 +23,7 @@ import type { ImpContext } from './imp-context';
 import { toLockedImp } from './imp-lock';
 import type { LockedImp } from './imp-lock';
 import { requireTransition } from './imp-transitions';
+import { startCounting } from './read-running-imp-usage';
 import { createSemaphore } from './semaphore';
 import type { ShutdownGate } from './shutdown-gate';
 
@@ -114,7 +115,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   };
 
   // `reason` says why a wake booted cold instead; null for a create or a start
-  const startColdImpVm = async (imp: LockedImp, reason: string | null): Promise<LockedImp> => {
+  // `isWake` when the boot stands in for a wake, which it counts as
+  const startColdImpVm = async (
+    imp: LockedImp,
+    reason: string | null,
+    isWake = false,
+  ): Promise<LockedImp> => {
     try {
       gate.requireOpen();
     } catch (error) {
@@ -164,6 +170,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
 
+      startCounting(context, imp, vm.pid);
+
       // its sleeps record this, whatever the host boots by then
       writeIdentity(imp, paths, {
         ...context.identity,
@@ -180,6 +188,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
           steps: vm.timings,
           ...(reason !== null && { coldBootReason: reason }),
         },
+        ...(isWake && { countsWake: true }),
         state: 'running',
         pid: vm.pid,
         error: null,
@@ -274,9 +283,6 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup)),
       );
 
-      // the wake makes it again
-      await context.cgroups.remove(imp.id);
-
       const booted = readVmIdentity(paths);
 
       writeSnapshotMeta(paths, {
@@ -349,7 +355,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         `impd: ${imp.name}: cold boot instead of a wake: ${mismatch ?? 'no snapshot it can load'}`,
       );
 
-      return startColdImpVm(imp, mismatch);
+      return startColdImpVm(imp, mismatch, true);
     }
 
     // a woken VM faults its pages back in; it grows toward what it owned
@@ -385,6 +391,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     context.log(
       `impd: ${imp.name}: woke pid ${String(woken.pid)} in ${String(wakeMs)}ms ${formatTimings(woken.timings)}`,
     );
+
+    startCounting(context, imp, woken.pid);
 
     await updateImpActivity(context.db, imp.id, new Date());
 
@@ -502,7 +510,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       pid: null,
     });
 
-    return startColdImpVm(stopped, failure);
+    return startColdImpVm(stopped, failure, true);
   };
 
   const requireRunningImp = async (imp: LockedImp): Promise<LockedImp> => {

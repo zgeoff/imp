@@ -38,6 +38,25 @@ export function readRssMib(pid: number, apiSocket: string): number | null {
   return fields === null ? null : Math.round((fields.get('Rss') ?? 0) / KIB_PER_MIB);
 }
 
+// what the governor counts and the whole resident size, from one read
+export function readVmMemory(
+  pid: number,
+  apiSocket: string,
+): { readonly ramMib: number | null; readonly rssMib: number | null } {
+  const fields = readVmSmaps(pid, apiSocket);
+
+  if (fields === null) {
+    return { ramMib: null, rssMib: null };
+  }
+
+  const anonKb = (fields.get('Pss_Anon') ?? 0) + (fields.get('Pss_Shmem') ?? 0);
+
+  return {
+    ramMib: Math.round(anonKb / KIB_PER_MIB),
+    rssMib: Math.round((fields.get('Rss') ?? 0) / KIB_PER_MIB),
+  };
+}
+
 function readVmSmaps(pid: number, apiSocket: string): ReadonlyMap<string, number> | null {
   if (!isFirecrackerAlive(pid, apiSocket)) {
     return null;

@@ -18,6 +18,8 @@ import { createImpPresenter } from './imp-presenter';
 import { createImpRuntime } from './imp-runtime';
 import type { ImpRuntime } from './imp-runtime';
 import { createImpVmOps } from './imp-vm-ops';
+import { readRunningImpUsage } from './read-running-imp-usage';
+import type { ResourceDelta } from './resource-sampler';
 import { createShutdownGate } from './shutdown-gate';
 
 export type { ImpServiceDeps } from './imp-context';
@@ -35,7 +37,15 @@ export type ImpService = ImpCommands &
 
     // every lifecycle event, as each write to the imps lands
     readonly events: EventBus;
+
+    // one pass of the resource sampler, every 5 s from main; each pass goes
+    // to the subscribers, the metrics
+    readonly sampleResources: () => Promise<void>;
+    readonly subscribeResources: (listener: ResourceListener) => () => void;
+    readonly readCpuHost: () => { readonly hostCpus: number; readonly limitsEnforced: boolean };
   };
+
+type ResourceListener = (deltas: readonly ResourceDelta[]) => void;
 
 // For checkpoints/checkpoint-service.ts. `lockImp` runs `action` under the
 // imp's lifecycle lock with a fresh record; the other hooks take that record.
@@ -69,6 +79,8 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     log: context.log,
   });
 
+  const resourceListeners = new Set<ResourceListener>();
+
   const commands = createImpCommands({ context, lock, ops, presenter });
   const runtime = createImpRuntime({ context, gate, lock, ops });
 
@@ -90,5 +102,23 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     requireRunningImp: ops.requireRunningImp,
     toApi: presenter.toApi,
     events,
+    sampleResources: async () => {
+      const deltas = await readRunningImpUsage(context);
+
+      for (const listener of resourceListeners) {
+        listener(deltas);
+      }
+    },
+    readCpuHost: () => ({
+      hostCpus: context.hostCpus,
+      limitsEnforced: context.cgroups.isEnforced,
+    }),
+    subscribeResources: (listener) => {
+      resourceListeners.add(listener);
+
+      return () => {
+        resourceListeners.delete(listener);
+      };
+    },
   };
 }
