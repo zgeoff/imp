@@ -905,6 +905,9 @@ memtotal_kib() { awk '/^MemTotal:/ { print $2 }' /proc/meminfo; }
 ensure_firewall() {
   phase firewall
   if [ "$host_firewall" = none ]; then
+    if systemctl -q is-enabled nftables 2>/dev/null && grep -qE '^[[:space:]]*flush ruleset' /etc/nftables.conf 2>/dev/null; then
+      warn "nftables.service is enabled and /etc/nftables.conf flushes every ruleset, Docker's too, at each reload"
+    fi
     remove_firewall
     return
   fi
