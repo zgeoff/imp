@@ -3,7 +3,9 @@
 // re-execs itself as "imp-agent stage2". See docs/architecture/agent.md#boot.
 // "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
-// for the agent's dial op, and "imp-agent tar" is the guest end of `imp cp`.
+// for the agent's dial op, "imp-agent listen-as-user" binds a reverse
+// forward's socket as that user, and "imp-agent tar" is the guest end of
+// `imp cp`.
 package main
 
 import (
@@ -41,6 +43,12 @@ func main() {
 	case len(os.Args) == 3 && os.Args[1] == dial.HelperCommand:
 		// not PID 1 either: the agent starts it as the image USER
 		if err := dial.RunHelper(os.Args[2]); err != nil {
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) == 4 && os.Args[1] == dial.ListenCommand:
+		// the same, to bind a reverse forward's socket
+		if err := dial.RunListenHelper(os.Args[2], os.Args[3]); err != nil {
 			os.Exit(1)
 		}
 		return

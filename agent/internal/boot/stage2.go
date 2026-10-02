@@ -21,13 +21,13 @@ import (
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/imagecfg"
 	"github.com/zgeoff/imp/agent/internal/launch"
+	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/netcfg"
 	"github.com/zgeoff/imp/agent/internal/reaper"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
-	"github.com/zgeoff/imp/agent/internal/sshagent"
 )
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
@@ -64,7 +64,7 @@ func Stage2() error {
 		log.Printf("services: %v", err)
 	}
 
-	listen := func() (net.Listener, error) {
+	listenVsock := func() (net.Listener, error) {
 		l, err := vsock.Listen(server.Port, nil)
 		if err != nil {
 			return nil, fmt.Errorf("vsock listen: %w", err)
@@ -73,12 +73,13 @@ func Stage2() error {
 		return l, nil
 	}
 	launcher := launch.New(r, image)
+	dialer := dial.NewDialer(r, image.User, AgentPath)
 	srv := &server.Server{
 		Exec:     exec.NewManager(launcher),
 		Sessions: session.NewManager(launcher),
 		Services: sup,
-		Agents:   sshagent.NewManager(sshagent.Root, image.User),
-		Dial:     dial.NewDialer(r, image.User, AgentPath),
+		Listen:   listen.NewManager(listen.AgentRoot, listen.ForwardRoot, image.User, dialer),
+		Dial:     dialer,
 	}
 	// A shutdown request and a signal can race; only the first powers off.
 	// A panic on the way must still end the guest, so it falls back to a
@@ -106,7 +107,7 @@ func Stage2() error {
 		powerOff()
 	}, nil)
 
-	return srv.Serve(listen)
+	return srv.Serve(listenVsock)
 }
 
 func mountSystem() error {

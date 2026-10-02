@@ -14,11 +14,11 @@ import (
 
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
+	"github.com/zgeoff/imp/agent/internal/listen"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/services"
 	"github.com/zgeoff/imp/agent/internal/session"
-	"github.com/zgeoff/imp/agent/internal/sshagent"
 )
 
 // Port is the vsock port the agent listens on.
@@ -32,7 +32,7 @@ type Server struct {
 	Exec     *exec.Manager
 	Sessions *session.Manager
 	Services *services.Supervisor
-	Agents   *sshagent.Manager
+	Listen   *listen.Manager
 	Dial     *dial.Dialer
 	// Shutdown powers the guest off. It runs after the reply is sent.
 	Shutdown func()
@@ -128,16 +128,22 @@ func (s *Server) handle(c net.Conn) {
 		}
 		return
 	}
-	// agent.listen is long-lived but runs nothing, so it is not an exec in
-	// the activity report
+	// agent.listen and listen are long-lived but run nothing, so they are
+	// not execs in the activity report
 	if req.Op == proto.OpAgentListen {
-		if err := s.Agents.Listen(r, w); err != nil {
+		if err := s.Listen.ServeAgent(r, w); err != nil {
 			log.Printf("agent.listen: %v", err)
 		}
 		return
 	}
+	if req.Op == proto.OpListen {
+		if err := s.Listen.Serve(req, r, w); err != nil {
+			log.Printf("listen %s %s: %v", req.Network, req.Address, err)
+		}
+		return
+	}
 	if req.Op == proto.OpAgentAccept {
-		if err := s.Agents.Accept(req, r, w); err != nil {
+		if err := s.Listen.Accept(req, r, w); err != nil {
 			log.Printf("agent.accept: %v", err)
 		}
 		return
