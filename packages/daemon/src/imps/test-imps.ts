@@ -474,7 +474,7 @@ export function buildTestApp(
     backups: null,
     broker: ctx.broker,
     egress: ctx.egress,
-    networks: createNetworkService({ db: ctx.db, egress: ctx.egress }),
+    networks: createNetworkService({ db: ctx.db, egress: ctx.egress, imps: impd.imps }),
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,
