@@ -8,6 +8,15 @@ export type VmStep = 'boot' | 'wake' | 'sleep' | 'stop' | 'agentReady';
 // then succeeds.
 export type VmOutcome = 'ok' | 'fail' | 'die' | 'hang';
 
+// Every failure the fake makes, so a test can tell it from a real bug.
+export class FakeVmError extends Error {
+  constructor(message: string) {
+    super(message);
+
+    this.name = 'FakeVmError';
+  }
+}
+
 interface Hold {
   // resolves when the first call reaches the hold
   readonly reached: Promise<void>;
@@ -22,6 +31,11 @@ export function buildFakeVmm() {
 
   const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
+
+  // snapshot dirs a wake loaded: the guest ran on them, so they no longer
+  // match the disk, even when the wake then failed
+  const usedSnapshots = new Set<string>();
+
   const counter = { nextPid: 1000, generation: 0 };
 
   const queues = new Map<VmStep, VmOutcome[]>();
@@ -78,7 +92,7 @@ export function buildFakeVmm() {
       const outcome = await pickOutcome(step);
 
       if (outcome === 'fail') {
-        throw new Error(`${step} failed: no agent\nlog tail`);
+        throw new FakeVmError(`${step} failed: no agent\nlog tail`);
       }
 
       const pid = startPid();
@@ -92,13 +106,17 @@ export function buildFakeVmm() {
 
     return {
       startVm: () => runInGeneration(() => startFakeVm('boot')),
-      wakeVm: () =>
+      wakeVm: (plan) =>
         runInGeneration(async () => {
-          const vm = await startFakeVm('wake');
+          try {
+            const vm = await startFakeVm('wake');
 
-          wakes.push(vm.pid);
+            wakes.push(vm.pid);
 
-          return vm;
+            return vm;
+          } finally {
+            usedSnapshots.add(plan.paths.snapshotDir);
+          }
         }),
       sleepVm: (pid, paths) =>
         runInGeneration(async () => {
@@ -106,18 +124,20 @@ export function buildFakeVmm() {
           const outcome = await pickOutcome('sleep');
 
           if (outcome === 'fail') {
-            throw new Error('snapshot failed');
+            throw new FakeVmError('snapshot failed');
           }
 
           alive.delete(pid);
 
           if (outcome === 'die') {
-            throw new Error('snapshot files lost after the kill');
+            throw new FakeVmError('snapshot files lost after the kill');
           }
 
           mkdirSync(paths.snapshotDir, { recursive: true });
           writeFileSync(paths.vmstate, 'vmstate');
           writeFileSync(paths.memFile, 'mem');
+
+          usedSnapshots.delete(paths.snapshotDir);
 
           return {};
         }),
@@ -127,7 +147,7 @@ export function buildFakeVmm() {
           const outcome = await pickOutcome('stop');
 
           if (outcome !== 'ok' && alive.has(pid)) {
-            throw new Error(`firecracker ${String(pid)} survived SIGKILL`);
+            throw new FakeVmError(`firecracker ${String(pid)} survived SIGKILL`);
           }
 
           alive.delete(pid);
@@ -151,6 +171,7 @@ export function buildFakeVmm() {
 
   return {
     alive,
+    usedSnapshots,
     wakes,
     stops,
 

@@ -56,12 +56,14 @@ waiting would deadlock. The type of the governor's sleep admits only a try-lock.
    clock is behind by the time asleep.
 6. It sets the state to `running`. Pages then fault in lazily from the mem file.
 
-If the load or the agent fails, impd kills the new Firecracker and boots the disk cold. The disk is
-always the truth.
+If the load or the agent fails, impd kills the new Firecracker, drops the snapshot and boots the
+disk cold. The loaded guest may have written the disk, so the snapshot no longer matches it. The imp
+counts as stopped until the cold boot succeeds. The disk is always the truth.
 
-Snapshot files stay until the next sleep renames over them, a stop, a restore or a cold boot. A cold
-boot removes them only once the governor admits it, so a sleeping imp that the budget turns away
-keeps its memory.
+Snapshot files stay until the next sleep renames over them, a stop, a restore, a failed wake or a
+cold boot. A cold boot removes them only once the governor admits it. A sleeping imp whose snapshot
+was never loaded, such as one from another Firecracker, keeps its memory when the budget turns its
+cold boot away.
 
 ### Snapshot identity
 

@@ -246,7 +246,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       context.admission?.release(imp.id);
 
-      return startImpVm(imp);
+      // the load may have run the guest, which can write its disk: the
+      // snapshot no longer matches it, even if the cold boot is turned away
+      removeSnapshot(paths);
+
+      const stopped = await updateState(imp, { state: 'stopped', pid: null });
+
+      return startImpVm(stopped);
     }
   };
 

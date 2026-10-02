@@ -190,7 +190,10 @@ export function writeTestSnapshot(
 interface InvariantParts {
   readonly db: ImpDatabase;
   readonly dataDir: string;
-  readonly fake: { readonly alive: ReadonlySet<number> };
+  readonly fake: {
+    readonly alive: ReadonlySet<number>;
+    readonly usedSnapshots: ReadonlySet<string>;
+  };
 }
 
 // What is wrong with the records once all work stopped, read raw: a service
@@ -217,8 +220,14 @@ export async function findBrokenInvariants(
       broken.push(`${where}: keeps pid ${String(imp.pid)}`);
     }
 
-    if (imp.state === 'sleeping' && !hasSnapshot(buildImpPaths(ctx.dataDir, imp.id))) {
+    const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+    if (imp.state === 'sleeping' && !hasSnapshot(paths)) {
       broken.push(`${where}: no snapshot to wake from`);
+    }
+
+    if (imp.state === 'sleeping' && ctx.fake.usedSnapshots.has(paths.snapshotDir)) {
+      broken.push(`${where}: its snapshot was loaded once and no longer matches the disk`);
     }
 
     if (imp.state === 'running') {

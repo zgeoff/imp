@@ -162,6 +162,85 @@ test('a failed wake falls back to a cold boot; a failed cold boot leaves an erro
   expect(broken).toEqual([]);
 });
 
+// a asleep, b and c awake and held. A wake reserves 300 MiB and fits; a
+// cold boot reserves all 512 and does not.
+async function setupFullHost() {
+  const ctx = await setupLifecycleTest({
+    IMP_RAM_BUDGET_MIB: '900',
+    IMP_DEFAULT_MEMORY_MIB: '512',
+    IMP_BOOT_RESERVE_PERCENT: '100',
+  });
+
+  await ctx.client.imps.create({ name: 'a' });
+  await ctx.client.imps.sleep({ name: 'a' });
+  await ctx.client.imps.create({ name: 'b' });
+  await ctx.client.imps.create({ name: 'c' });
+  await ctx.client.imps.hold({ name: 'b', seconds: 600 });
+  await ctx.client.imps.hold({ name: 'c', seconds: 600 });
+
+  // past the boot reservations: b and c count what they measure
+  ctx.advance(30_000);
+
+  return ctx;
+}
+
+test('a failed wake whose cold boot the budget refuses drops the used snapshot', async () => {
+  await using ctx = await setupFullHost();
+
+  // the load ran the guest before the agent check failed
+  ctx.fake.queue('wake', 'fail');
+
+  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
+  const paths = await ctx.findPaths('a');
+  const state = await ctx.readState('a');
+  const broken = await findBrokenInvariants(ctx, false);
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(state).toBe('stopped');
+  expect(existsSync(paths.snapshotDir)).toBeFalse();
+  expect(broken).toEqual([]);
+});
+
+test('a cold boot the budget refuses before anything loaded keeps the snapshot', async () => {
+  await using ctx = await setupFullHost();
+
+  const paths = await ctx.findPaths('a');
+
+  writeTestSnapshot(paths, Date.now(), 'v0.1.0');
+
+  const rejection = await ctx.client.imps.wake({ name: 'a' }).catch((error: unknown) => error);
+  const state = await ctx.readState('a');
+  const broken = await findBrokenInvariants(ctx, false);
+
+  expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
+  expect(state).toBe('sleeping');
+  expect(existsSync(paths.snapshotMeta)).toBeTrue();
+  expect(broken).toEqual([]);
+});
+
+test('a cold boot that fails after its admit releases the reservation', async () => {
+  await using ctx = await setupLifecycleTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.imps.sleep({ name: 'dev' });
+
+  const paths = await ctx.findPaths('dev');
+
+  writeTestSnapshot(paths, Date.now(), 'v0.1.0');
+
+  ctx.fake.queue('boot', 'fail');
+
+  const rejection = await ctx.client.imps.wake({ name: 'dev' }).catch((error: unknown) => error);
+  const state = await ctx.readState('dev');
+  const usage = await ctx.governor.readUsage();
+  const broken = await findBrokenInvariants(ctx, false);
+
+  expect(rejection).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  expect(state).toBe('error');
+  expect(usage).toEqual({ usedMib: 0, reservedMib: 0 });
+  expect(broken).toEqual([]);
+});
+
 test('a snapshot that fails keeps the VM running; one lost after the kill stops the imp', async () => {
   await using ctx = await setupLifecycleTest();
 
