@@ -7,13 +7,20 @@ export interface Revocations {
   readonly revoke: (tokenId: string) => void;
 }
 
+// A removed token's id stays revoked for good: a request authenticated just
+// before the removal asks for its signal after it, and gets an aborted one.
 export function createRevocations(): Revocations {
   const controllers = new Map<string, AbortController>();
+  const revoked = new Set<string>();
 
   return {
     readSignal: (tokenId) => {
       if (tokenId === null) {
         return null;
+      }
+
+      if (revoked.has(tokenId)) {
+        return AbortSignal.abort();
       }
 
       const existing = controllers.get(tokenId);
@@ -29,6 +36,7 @@ export function createRevocations(): Revocations {
       return controller.signal;
     },
     revoke: (tokenId) => {
+      revoked.add(tokenId);
       controllers.get(tokenId)?.abort();
       controllers.delete(tokenId);
     },

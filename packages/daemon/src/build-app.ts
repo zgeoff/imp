@@ -140,6 +140,11 @@ export function buildApp(deps: AppDeps) {
   ): (() => void) => {
     const signal = deps.revocations.readSignal(caller?.tokenId ?? null);
 
+    // removed between the upgrade and the open
+    if (signal?.aborted === true) {
+      close();
+    }
+
     signal?.addEventListener('abort', close);
 
     return () => signal?.removeEventListener('abort', close);
