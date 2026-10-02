@@ -17,6 +17,10 @@ export interface BackupConfig {
   readonly intervalS: number;
   readonly keep: BackupKeep;
 
+  // false leaves forget and prune to one other machine whose key may delete,
+  // for a bucket that denies impd's key deletes
+  readonly forget: boolean;
+
   // restic runs with GOMAXPROCS and GOMEMLIMIT set from these
   readonly cpus: number;
   readonly memoryMib: number;
@@ -30,6 +34,7 @@ const BackupEnvSchema = z.object({
   IMP_BACKUP_PASSWORD_FILE: z.string().optional(),
   IMP_BACKUP_INTERVAL_S: CountSchema.default(21_600),
   IMP_BACKUP_KEEP: z.string().default('hourly=24,daily=7,weekly=4'),
+  IMP_BACKUP_FORGET: z.enum(['true', 'false']).default('true'),
   IMP_BACKUP_CPUS: CountSchema.default(2),
   IMP_BACKUP_MEMORY_MIB: CountSchema.default(512),
 });
@@ -53,6 +58,7 @@ export function loadBackupConfig(
     passwordFile: parsed.IMP_BACKUP_PASSWORD_FILE,
     intervalS: parsed.IMP_BACKUP_INTERVAL_S,
     keep: parseBackupKeep(parsed.IMP_BACKUP_KEEP),
+    forget: parsed.IMP_BACKUP_FORGET === 'true',
     cpus: parsed.IMP_BACKUP_CPUS,
     memoryMib: parsed.IMP_BACKUP_MEMORY_MIB,
   };

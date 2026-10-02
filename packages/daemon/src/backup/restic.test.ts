@@ -8,6 +8,7 @@ const CONFIG: BackupConfig = {
   passwordFile: '/run/secrets/restic',
   intervalS: 21_600,
   keep: { hourly: 24, daily: 7, weekly: 4 },
+  forget: true,
   cpus: 2,
   memoryMib: 512,
 };

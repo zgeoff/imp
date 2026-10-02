@@ -2,6 +2,8 @@ import { impContract } from '@imp/api';
 import type { Image, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
+import { buildBackupsOffError } from './backup/backup-service';
+import type { BackupService } from './backup/backup-service';
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import type { ImageRecord } from './db/images';
@@ -22,6 +24,9 @@ export interface RouterDeps {
   readonly images: ImageService;
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
+
+  // null when no repository is set
+  readonly backups: BackupService | null;
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
@@ -31,6 +36,14 @@ export interface RouterDeps {
 
 export function buildRouter(deps: RouterDeps) {
   const os = implement(impContract);
+
+  const requireBackups = (): BackupService => {
+    if (deps.backups === null) {
+      throw buildBackupsOffError();
+    }
+
+    return deps.backups;
+  };
 
   return os.router({
     imps: {
@@ -66,6 +79,18 @@ export function buildRouter(deps: RouterDeps) {
       ),
       delete: os.checkpoints.delete.handler(async (context) => {
         await deps.checkpoints.deleteCheckpoint(context.input.name, context.input.checkpoint);
+
+        return {};
+      }),
+    },
+    backups: {
+      run: os.backups.run.handler(() => requireBackups().runBackup()),
+      list: os.backups.list.handler(() => requireBackups().readStatus()),
+      restore: os.backups.restore.handler((context) =>
+        requireBackups().restoreBackup(context.input),
+      ),
+      check: os.backups.check.handler(async (context) => {
+        await requireBackups().checkBackups(context.input.subset);
 
         return {};
       }),

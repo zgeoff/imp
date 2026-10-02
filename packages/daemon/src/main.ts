@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
+import { createBackupService } from './backup/backup-service';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
@@ -110,6 +111,12 @@ async function main(): Promise<void> {
   }
 
   const checkpoints = createCheckpointService({ config, db, imps, storage });
+
+  const backups =
+    config.backup === null
+      ? null
+      : createBackupService({ dataDir: config.dataDir, backup: config.backup, db, imps, storage });
+
   const state = { ready: false };
 
   const api = buildApp({
@@ -120,6 +127,7 @@ async function main(): Promise<void> {
     images,
     governor,
     checkpoints,
+    backups,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
@@ -146,6 +154,16 @@ async function main(): Promise<void> {
 
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),
+    ...(backups === null
+      ? []
+      : [
+          startTicker(
+            'backup',
+            (config.backup?.intervalS ?? 0) * 1000,
+            backups.runScheduled,
+            printLog,
+          ),
+        ]),
   ];
 
   // ready either way: a failed seed leaves `imp image add` to the user

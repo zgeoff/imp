@@ -1,7 +1,7 @@
 import type { ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 
-type ResourceKind = 'imp' | 'image' | 'checkpoint' | 'session';
+type ResourceKind = 'imp' | 'image' | 'checkpoint' | 'session' | 'backup';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.

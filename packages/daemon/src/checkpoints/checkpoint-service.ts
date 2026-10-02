@@ -22,7 +22,7 @@ import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 
 // How long the guest stays frozen at most if impd never sends thaw.
-const FREEZE_TIMEOUT_MS = 10_000;
+export const FREEZE_TIMEOUT_MS = 10_000;
 
 // Short, typeable and global, so the existing primary key holds them without
 // a migration, and an id never comes back after a delete (unlike v1, v2…).
@@ -50,7 +50,7 @@ export interface CheckpointService {
 }
 
 // the agent's freeze and thaw, behind an interface for tests
-interface DiskFreezer {
+export interface DiskFreezer {
   readonly freeze: (vsockPath: string, timeoutMs: number) => Promise<void>;
   readonly thaw: (vsockPath: string) => Promise<void>;
 }

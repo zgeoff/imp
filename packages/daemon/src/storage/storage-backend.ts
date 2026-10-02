@@ -17,7 +17,7 @@ interface BackupCopyOptions {
 }
 
 // What one backup run reads, as its database copy names it.
-export interface BackupTreeRequest {
+interface BackupTreeRequest {
   readonly runId: string;
 
   // the imps createBackupCopy copied this run

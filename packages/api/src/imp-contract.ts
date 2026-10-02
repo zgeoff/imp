@@ -1,5 +1,6 @@
 import { oc } from '@orpc/contract';
 import * as z from 'zod';
+import { BackupCheckSubsetSchema, BackupRunSchema, BackupStatusSchema } from './backup-schema';
 import { CheckpointSchema } from './checkpoint-schema';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
@@ -87,6 +88,34 @@ export const impContract = {
     delete: base
       .input(z.object({ name: NameSchema, checkpoint: CheckpointRefSchema }))
       .output(EmptySchema),
+  },
+
+  // off-host backups with restic (docs/architecture/backups.md); every call
+  // fails with PRECONDITION_FAILED when the host has no repository set
+  backups: {
+    run: base.output(BackupRunSchema),
+
+    list: base.output(BackupStatusSchema),
+
+    // One imp by name, or all of them. `at` picks the newest backup at or
+    // before it, in UTC; the newest by default. A restored imp is stopped.
+    restore: base
+      .input(
+        z.object({
+          name: NameSchema.optional(),
+          all: z.boolean().optional(),
+          at: z.date().optional(),
+
+          // the restored imp's name, when one other than its own
+          as: NameSchema.optional(),
+
+          // with `all`, adds the backup's imps to a host that has imps already
+          merge: z.boolean().optional(),
+        }),
+      )
+      .output(z.array(ImpSchema)),
+
+    check: base.input(z.object({ subset: BackupCheckSubsetSchema.optional() })).output(EmptySchema),
   },
 
   images: {

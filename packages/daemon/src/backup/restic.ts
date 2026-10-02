@@ -4,14 +4,14 @@ import type { CommandResult } from '../process/run-command';
 import type { BackupConfig, BackupKeep } from './backup-config';
 
 // runCommand in impd; a fake restic in tests
-export type ResticRunner = (
+type ResticRunner = (
   argv: readonly string[],
   env: Readonly<Record<string, string>>,
 ) => Promise<CommandResult>;
 
 // every impd snapshot carries it, so forget never touches anything else in a
 // shared repository
-export const BACKUP_TAG = 'imp-backup';
+const BACKUP_TAG = 'imp-backup';
 
 // restic's hostname for impd's snapshots: the container's own changes with
 // every container, which would split retention into groups

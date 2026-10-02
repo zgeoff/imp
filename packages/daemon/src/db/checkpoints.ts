@@ -15,6 +15,9 @@ export interface NewCheckpoint {
   readonly impId: string;
   readonly label: string | null;
   readonly sizeBytes: number | null;
+
+  // now by default; a restore from backup keeps the original time
+  readonly createdAt?: Date;
 }
 
 export async function createCheckpoint(
@@ -27,7 +30,7 @@ export async function createCheckpoint(
       id: checkpoint.id,
       imp_id: checkpoint.impId,
       label: checkpoint.label,
-      created_at: Date.now(),
+      created_at: checkpoint.createdAt?.getTime() ?? Date.now(),
       size_bytes: checkpoint.sizeBytes,
     })
     .returningAll()
