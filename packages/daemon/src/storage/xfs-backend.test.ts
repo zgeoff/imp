@@ -221,3 +221,30 @@ test("a running disk's copy goes when the tree closes; a reusable one stays", as
   expect(existsSync(running)).toBeFalse();
   expect(existsSync(stopped)).toBeTrue();
 });
+
+test('start allocates the reserve file once, and again after it was removed', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-xfs-test-`);
+  const reserve = join(dataDir, 'reserve');
+
+  const live = {
+    impIds: new Set<string>(),
+    checkpointIds: new Set<string>(),
+    imageDigests: new Set<string>(),
+  };
+
+  try {
+    const backend = createXfsBackend({ dataDir, reserveFileBytes: 65_536, log: () => {} });
+
+    await backend.start(live);
+
+    expect(statSync(reserve).blocks * 512).toBeGreaterThanOrEqual(65_536);
+
+    rmSync(reserve);
+
+    await backend.start(live);
+
+    expect(existsSync(reserve)).toBeTrue();
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

@@ -259,7 +259,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     const slept: { detail: ImpEventDetail } = { detail: { trigger: reason } };
 
     try {
-      const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths));
+      // the memory file is written in full before its holes are dug: no
+      // pause starts unless the disk has room for it
+      const timings = await context.diskBudget.withRoom(imp.memoryMib * 1024 * 1024, () =>
+        sleepSlots.run(() => context.vms.sleepVm(pid, paths)),
+      );
 
       const booted = readVmIdentity(paths);
 
@@ -482,6 +486,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     if (imp.state === 'running') {
       return imp;
     }
+
+    // a guest writes its disk from the moment it runs
+    await context.diskBudget.requireRoom(0);
 
     if (imp.state === 'sleeping') {
       return wakeImpVm(imp);

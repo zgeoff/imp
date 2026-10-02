@@ -18,6 +18,7 @@ import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths } from '../storage/data-layout';
+import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
@@ -34,7 +35,10 @@ const ROOTFS_SPARE_BYTES = 2 * GIB;
 const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 const SEED_REF = 'ubuntu:24.04';
-const InspectSchema = z.array(z.object({ Id: z.string(), Config: z.unknown() })).length(1);
+
+const InspectSchema = z
+  .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
+  .length(1);
 
 export interface ImageService {
   readonly addImage: (ref: string, name?: string) => Promise<ImageRecord>;
@@ -61,6 +65,9 @@ export interface ImageServiceDeps {
   // a build joins it until the image's row is written, a removal until its
   // rootfs is gone
   readonly storageGate?: StorageGate;
+
+  // a build holds room for the unpacked tree and its ext4 file
+  readonly diskBudget?: Pick<DiskBudget, 'withRoom'>;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
@@ -196,28 +203,34 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       throw new Error(`docker image inspect ${ref}: no result`);
     }
 
-    return storageGate.join(async () => {
-      const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
-      const existing = await findImageByName(deps.db, imageName);
+    // the tree unpacked, and the ext4 file written from it
+    const buildBytes = 2 * (inspect.Size ?? 0);
+    const withRoom = deps.diskBudget?.withRoom ?? ((_bytes, task) => task());
 
-      if (existing === undefined) {
-        return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
-      }
+    return withRoom(buildBytes, () =>
+      storageGate.join(async () => {
+        const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
+        const existing = await findImageByName(deps.db, imageName);
 
-      if (existing.digest === inspect.Id) {
-        return existing;
-      }
+        if (existing === undefined) {
+          return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
+        }
 
-      const updated = await updateImage(deps.db, existing.id, {
-        ref,
-        digest: inspect.Id,
-        sizeBytes,
-      });
+        if (existing.digest === inspect.Id) {
+          return existing;
+        }
 
-      await removeUnusedRootfs(existing.digest);
+        const updated = await updateImage(deps.db, existing.id, {
+          ref,
+          digest: inspect.Id,
+          sizeBytes,
+        });
 
-      return updated;
-    });
+        await removeUnusedRootfs(existing.digest);
+
+        return updated;
+      }),
+    );
   };
 
   const resolveImage = async (name?: string): Promise<ImageRecord> => {

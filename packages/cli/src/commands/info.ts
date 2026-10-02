@@ -33,7 +33,11 @@ export const infoCommand = defineCommand({
         ['agent drive', `sha256 ${info.systemDrive.sha256.slice(0, 12)}`],
         [
           'storage',
-          `${info.storage.backend}, ${formatGib(info.storage.usedBytes)} used, ${formatGib(info.storage.availableBytes)} free`,
+          `${info.storage.backend}, ${formatGib(info.storage.usedBytes)} used, ${formatGib(info.storage.availableBytes)} free, ${formatGib(info.storage.reserveBytes)} reserved${info.storage.isLow ? ' (LOW)' : ''}`,
+        ],
+        [
+          'disks',
+          `${formatGib(info.storage.impDiskBytes)} given to imps, of ${formatGib(info.storage.usedBytes + info.storage.availableBytes)}`,
         ],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
       ];

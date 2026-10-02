@@ -49,6 +49,17 @@ export const IMP_ERRORS = defineErrors({
     }),
   },
 
+  // the data filesystem or pool would drop below its reserve (IMP_DISK_RESERVE_GIB)
+  DISK_FULL: {
+    message: 'Not enough free disk on the host',
+    status: 507,
+    data: z.object({
+      availableBytes: z.int().nonnegative(),
+      reserveBytes: z.int().nonnegative(),
+      requestedBytes: z.int().nonnegative(),
+    }),
+  },
+
   // the imp's agent is from before the feature; a stop and start updates it
   AGENT_OUTDATED: { message: "The imp's agent is too old for this", status: 409 },
 });

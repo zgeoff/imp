@@ -12,6 +12,8 @@ import {
 } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import * as z from 'zod';
+import { printLog } from '../process/print-log';
+import { runChecked } from '../process/run-command';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { createReflinkClone } from './reflink';
 import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from './storage-backend';
@@ -35,12 +37,18 @@ interface XfsBackendDeps {
 
   // a reflink clone by default; tests on a non-XFS tmpdir copy instead
   readonly cloneFile?: (source: string, target: string) => Promise<void>;
+
+  // Space start allocates to <dataDir>/reserve, so a destroy still runs on a
+  // full filesystem; removing the file frees it. None by default.
+  readonly reserveFileBytes?: number;
+  readonly log?: (message: string) => void;
 }
 
 // Every disk, checkpoint and fork is a reflink clone of another file
 // (docs/architecture/storage.md).
 export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
   const cloneFile = deps.cloneFile ?? createReflinkClone;
+  const log = deps.log ?? printLog;
   const resolveImpPaths = (impId: string) => buildImpPaths(deps.dataDir, impId);
 
   const buildCheckpointDisk = (impId: string, checkpointId: string): string =>
@@ -142,6 +150,29 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     }
   };
 
+  // made once, and again at a start after someone removed it to free space,
+  // when twice its size is free
+  const setupReserveFile = async (): Promise<void> => {
+    const bytes = deps.reserveFileBytes ?? 0;
+    const file = join(deps.dataDir, 'reserve');
+
+    if (bytes === 0 || existsSync(file)) {
+      return;
+    }
+
+    const stats = statfsSync(deps.dataDir);
+
+    if (stats.bavail * stats.bsize < 2 * bytes) {
+      log(`impd: xfs: too little free space for the ${String(bytes)}-byte reserve file`);
+
+      return;
+    }
+
+    await runChecked(['fallocate', '-l', String(bytes), `${file}.new`]);
+
+    renameSync(`${file}.new`, file);
+  };
+
   const removeUnnamed = (live: LiveStorage, isDryRun: boolean): DroppedStorage[] => {
     const dropped = planLeftovers(live);
 
@@ -167,7 +198,7 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
 
       removeUnnamed(live, false);
 
-      return Promise.resolve();
+      return setupReserveFile();
     },
     dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options.isDryRun)),
     resolveImpPaths,

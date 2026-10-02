@@ -25,6 +25,7 @@ import type { SnapshotIdentity } from '../sleep/snapshot-meta';
 import type { HostIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath, buildSystemDrivesDir } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
@@ -112,7 +113,17 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
 
   const storage = createXfsBackend({ dataDir, cloneFile: cloneDisk });
   const storageGate = createStorageGate();
-  const images = createImageService({ config, db, storage, storageGate });
+
+  // the host's free space as the budget sees it; a test lowers it
+  const diskUsage = { usedBytes: 0, availableBytes: 1024 ** 4 };
+
+  const diskBudget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ ...diskUsage }) },
+    reserveBytes: null,
+    log: () => {},
+  });
+
+  const images = createImageService({ config, db, storage, storageGate, diskBudget });
 
   const printTestLog = (message: string): void => {
     logs.push(message);
@@ -175,6 +186,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       now: readClock,
       readExecEnv: broker.readExecEnv,
       storageGate,
+      diskBudget,
       growFilesystem: (disk) => {
         filesystemGrows.push(disk);
 
@@ -207,6 +219,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     bundleInstalls,
     storage,
     storageGate,
+    diskBudget,
+    diskUsage,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -232,7 +246,7 @@ type Impd = ReturnType<ImpTest['restartImpd']>;
 
 type AppParts = Pick<
   ImpTest,
-  'config' | 'db' | 'images' | 'storage' | 'storageGate' | 'now' | 'broker'
+  'config' | 'db' | 'images' | 'storage' | 'storageGate' | 'diskBudget' | 'now' | 'broker'
 >;
 
 // The HTTP app over `impd` (the harness's or a restarted one), an oRPC client
@@ -253,6 +267,7 @@ export function buildTestApp(
     db: ctx.db,
     imps: impd.imps,
     storage: ctx.storage,
+    diskBudget: ctx.diskBudget,
     log: () => {},
     freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
   });
@@ -270,6 +285,7 @@ export function buildTestApp(
     firecrackerVersion: 'v1.17.0',
     systemFiles: TEST_SYSTEM_FILES,
     storage: ctx.storage,
+    diskBudget: ctx.diskBudget,
     gc: createStorageGc({
       db: ctx.db,
       storage: ctx.storage,

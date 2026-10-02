@@ -190,3 +190,43 @@ test('a checkpoint keeps its disk size, and a restore or a fork takes it', async
 
   expect(disk5).toEqual({ fileBytes: 2 * 1024 ** 3, isGrowPending: false });
 });
+
+test('past the reserve, creates, resizes and wakes are refused, and a sleep keeps its VM', async () => {
+  await using ctx = await setupDiskTest();
+
+  await ctx.client.imps.create({ name: 'dev', diskMib: 2 * GIB_MIB, memoryMib: 1024 });
+  await ctx.client.imps.create({ name: 'idle', diskMib: 2 * GIB_MIB });
+  await ctx.client.imps.sleep({ name: 'idle' });
+
+  // 100 GiB with 6 GiB free: room for the 5 GiB reserve, not for a 1 GiB memory file too
+  ctx.diskUsage.usedBytes = 94 * 1024 ** 3;
+  ctx.diskUsage.availableBytes = 5.5 * 1024 ** 3;
+
+  const sleep = await ctx.client.imps.sleep({ name: 'dev' }).catch((error: unknown) => error);
+
+  expect(sleep).toMatchObject({ code: 'DISK_FULL' });
+
+  const dev = await ctx.client.imps.get({ name: 'dev' });
+
+  expect(dev.state).toBe('running');
+
+  ctx.diskUsage.availableBytes = 4 * 1024 ** 3;
+
+  const refusals = await Promise.all([
+    ctx.client.imps.create({ name: 'more' }).catch((error: unknown) => error),
+    ctx.client.imps
+      .resizeDisk({ name: 'dev', diskMib: 3 * GIB_MIB })
+      .catch((error: unknown) => error),
+    ctx.client.imps.wake({ name: 'idle' }).catch((error: unknown) => error),
+    ctx.client.checkpoints.create({ name: 'dev' }).catch((error: unknown) => error),
+  ]);
+
+  for (const refusal of refusals) {
+    expect(refusal).toMatchObject({ code: 'DISK_FULL' });
+  }
+
+  const info = await ctx.client.system.info();
+
+  expect(info.storage).toMatchObject({ reserveBytes: 5 * 1024 ** 3, isLow: true });
+  expect(info.storage.impDiskBytes).toBe(4 * 1024 ** 3);
+});

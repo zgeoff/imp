@@ -377,7 +377,15 @@ function buildSystemInfo(): SystemInfo {
     firecrackerVersion: 'v1.17.0',
     guestKernel: { version: null, sha256: '0' },
     systemDrive: { sha256: '0' },
-    storage: { backend: 'xfs', usedBytes: 0, availableBytes: 0 },
+    storage: {
+      backend: 'xfs',
+      usedBytes: 0,
+      availableBytes: 0,
+      reserveBytes: 0,
+      pendingBytes: 0,
+      isLow: false,
+      impDiskBytes: 0,
+    },
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   };
 }

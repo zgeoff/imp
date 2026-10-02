@@ -19,6 +19,7 @@ import { createKeyedMutex } from '../imps/keyed-mutex';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
 import { BACKUP_TREE, buildBackupPaths } from '../storage/data-layout';
+import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { BackupTree, StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
@@ -109,6 +110,9 @@ export interface BackupServiceDeps {
 
   // a run joins it: its copies, snapshots and tree are storage no row names
   readonly storageGate?: StorageGate;
+
+  // a run's copies are thin, but restic's cache grows: none starts past the reserve
+  readonly diskBudget?: Pick<DiskBudget, 'requireRoom'>;
 }
 
 // PRECONDITION_FAILED when impd has no repository set
@@ -251,7 +255,11 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     };
   };
 
-  const runBackup = (): Promise<BackupRun> => storageGate.join(runJoinedBackup);
+  const runBackup = async (): Promise<BackupRun> => {
+    await deps.diskBudget?.requireRoom(0);
+
+    return storageGate.join(runJoinedBackup);
+  };
 
   const runJoinedBackup = async (): Promise<BackupRun> => {
     const started = performance.now();

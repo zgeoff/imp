@@ -21,6 +21,7 @@ import type { ImageService } from './images/image-service';
 import { countBootStatuses } from './imps/boot-status';
 import type { ImpService } from './imps/imp-service';
 import type { TailscaleStatus } from './net/tailscale-status';
+import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
 import type { SystemFileInfo } from './storage/system-file-info';
@@ -43,7 +44,8 @@ export interface RouterDeps {
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly execTickets: ExecTickets;
-  readonly storage: Pick<StorageBackend, 'kind' | 'readUsage'>;
+  readonly storage: Pick<StorageBackend, 'kind'>;
+  readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly audit: ApiAudit;
@@ -264,7 +266,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     listImps(deps.db),
     deps.governor.readUsage(),
     deps.readTailscale(),
-    deps.storage.readUsage(),
+    deps.diskBudget.readStatus(),
   ]);
 
   const running = imps.filter((imp) => imp.state === 'running');
@@ -282,7 +284,11 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     firecrackerVersion: deps.firecrackerVersion,
     guestKernel: deps.systemFiles.guestKernel,
     systemDrive: deps.systemFiles.systemDrive,
-    storage: { backend: deps.storage.kind, ...storage },
+    storage: {
+      backend: deps.storage.kind,
+      ...storage,
+      impDiskBytes: imps.reduce((sum, imp) => sum + imp.diskBytes, 0),
+    },
     tailscale: {
       enabled: deps.config.tailscaleAuthKey !== null,
       ...tailscale,

@@ -20,6 +20,7 @@ import type { LockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
 import { readErrorMessage } from '../read-error-message';
+import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
 
@@ -64,6 +65,9 @@ export interface CheckpointServiceDeps {
   readonly storage: StorageBackend;
   readonly log?: (message: string) => void;
   readonly freezer?: DiskFreezer;
+
+  // a checkpoint is thin, but none is made past the reserve
+  readonly diskBudget?: Pick<DiskBudget, 'requireRoom'>;
 }
 
 export function buildCheckpointId(random: () => number = Math.random): string {
@@ -165,6 +169,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         }
 
         const started = performance.now();
+
+        await deps.diskBudget?.requireRoom(0);
 
         const created = await withConsistentDisk(imp, 'checkpoint', () =>
           createWithFreshId(imp.id),

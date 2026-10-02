@@ -86,6 +86,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       const id = Bun.randomUUIDv7();
       const writeRecord = () => createImpRecord(context, id, { ...input, diskBytes }, image);
 
+      // a thin clone takes next to nothing, but none is made past the reserve
+      await context.diskBudget.requireRoom(0);
+
       return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
         const started = performance.now();
@@ -254,6 +257,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         }
 
         const paths = context.findPaths(imp.id);
+
+        // the file is sparse: room past the reserve is all it needs now
+        await context.diskBudget.requireRoom(0);
 
         growDiskFile(paths.disk, diskBytes);
 

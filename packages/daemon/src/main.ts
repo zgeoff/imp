@@ -27,6 +27,7 @@ import { readErrorMessage } from './read-error-message';
 import { readHostIdentity } from './sleep/vm-identity';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
+import { createDiskBudget } from './storage/disk-budget';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { createStorageGate } from './storage/storage-gate';
@@ -86,7 +87,14 @@ async function main(): Promise<void> {
 
   // every operation that makes storage before its row joins it; the GC waits
   const storageGate = createStorageGate();
-  const images = createImageService({ config, db, storage, storageGate });
+
+  const diskBudget = createDiskBudget({
+    storage,
+    reserveBytes: config.diskReserveBytes,
+    log: printLog,
+  });
+
+  const images = createImageService({ config, db, storage, storageGate, diskBudget });
 
   const broker = await createBroker({ config, db, log: printLog });
 
@@ -104,6 +112,7 @@ async function main(): Promise<void> {
     log: printLog,
     readExecEnv: broker.readExecEnv,
     storageGate,
+    diskBudget,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -146,7 +155,7 @@ async function main(): Promise<void> {
     printLog(`impd: removed system drive ${name}: no imp uses it`);
   }
 
-  const checkpoints = createCheckpointService({ config, db, imps, storage });
+  const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
 
   const backups =
     config.backup === null
@@ -159,6 +168,7 @@ async function main(): Promise<void> {
           storage,
           grants: broker,
           storageGate,
+          diskBudget,
         });
 
   const gc = createStorageGc({ db, storage, storageGate, log: printLog });
@@ -178,6 +188,7 @@ async function main(): Promise<void> {
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
+    diskBudget,
     gc,
     readTailscale,
     isReady: () => state.ready,

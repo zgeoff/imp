@@ -241,6 +241,37 @@ without `--image` uses `IMP_DEFAULT_IMAGE` (default `base`), else `ubuntu`.
 The [images guide](../guides/images.md) covers what an image can contain: services, Docker in the
 guest, and how to make your own.
 
+## Disk budget
+
+Disks are sparse and clones are thin, so the sizes imps are given can add up to more than the host
+has; `imp info` shows the total against the filesystem or pool. What protects the host is a reserve
+of free space no write may take: `IMP_DISK_RESERVE_GIB`, by default max(5 GiB, 5 % of the filesystem
+or pool).
+
+One ledger in impd takes each write's estimate off the free space until the write ends, under a
+lock, so two writes never pass on the same reading. A write that would leave less than the reserve
+fails with `DISK_FULL` (HTTP 507), before it touches anything:
+
+| Write                                         | Estimate                                                        |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| sleep                                         | the imp's memory: the file is full size until its holes are dug |
+| image build                                   | twice the Docker image: the tree, and the ext4 file from it     |
+| create, fork, restore from backup             | 0: a thin clone                                                 |
+| checkpoint, resize, start or wake, backup run | 0: refused only once the reserve is reached                     |
+
+A sleep that is refused leaves its imp running, as any failed sleep does; the governor turns to
+another imp. A wake that is refused leaves the imp asleep with its memory. Below twice the reserve,
+impd logs a warning once and `imp info` marks the storage LOW.
+
+On ZFS, `available` lags a destroy: the pool frees blocks in the background, so space a removal
+gives back shows up over the next seconds. The ledger reads it at each check and never counts space
+before ZFS reports it.
+
+Both backends hold 1 GiB back besides, so a destroy still runs on a full disk: ZFS's
+`<root>/reserve` (above), and on XFS the file `<data>/reserve`, which start allocates with
+`fallocate` when twice its size is free. To get out of a full XFS filesystem, remove the file,
+destroy imps or checkpoints, and restart impd, which allocates it again.
+
 ## Cleanup
 
 A crash, or a removal that failed halfway, can leave storage that no row names: an imp's disk and

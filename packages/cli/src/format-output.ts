@@ -8,8 +8,8 @@ import type {
   Imp,
   Secret,
   Session,
-  SystemInfo,
   StorageGc,
+  SystemInfo,
 } from '@imp/api';
 
 type Row = readonly string[];

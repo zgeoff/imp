@@ -8,12 +8,19 @@ import { createZfsBackend } from './zfs/zfs-backend';
 // names the backend that wrote the data dir; a switch would orphan every disk
 const MARKER_FILE = 'storage-backend';
 
+// as ZFS's <root>/reserve: a destroy still runs on a full filesystem
+const XFS_RESERVE_FILE_BYTES = 1024 ** 3;
+
 // The marker is written once start succeeds: on ZFS, start checks that the
 // dataset is mounted on the data dir, so the marker never lands under it.
-export function createStorageBackend(config: Config): StorageBackend {
+// `xfsReserveFileBytes`: tests on a tmpfs set 0
+export function createStorageBackend(
+  config: Config,
+  xfsReserveFileBytes = XFS_RESERVE_FILE_BYTES,
+): StorageBackend {
   checkStorageMarker(config.dataDir, config.storageBackend);
 
-  const backend = buildBackend(config);
+  const backend = buildBackend(config, xfsReserveFileBytes);
 
   return {
     ...backend,
@@ -25,9 +32,9 @@ export function createStorageBackend(config: Config): StorageBackend {
   };
 }
 
-function buildBackend(config: Config): StorageBackend {
+function buildBackend(config: Config, xfsReserveFileBytes: number): StorageBackend {
   if (config.storageBackend === 'xfs') {
-    return createXfsBackend({ dataDir: config.dataDir });
+    return createXfsBackend({ dataDir: config.dataDir, reserveFileBytes: xfsReserveFileBytes });
   }
 
   if (config.zfsRoot === null) {

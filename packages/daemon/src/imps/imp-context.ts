@@ -12,6 +12,8 @@ import { createSessionCache } from '../sessions/session-cache';
 import type { SessionCache } from '../sessions/session-cache';
 import type { HostIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
+import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import type { StorageGate } from '../storage/storage-gate';
@@ -56,6 +58,10 @@ export interface ImpServiceDeps {
   // every imp operation joins it under the imp's lock (storage-gate.ts)
   readonly storageGate?: StorageGate;
 
+  // creates, resizes, boots and wakes need room past the reserve; a sleep
+  // holds room for its memory file while it writes
+  readonly diskBudget?: DiskBudget;
+
   // grows a disk's filesystem on the host while no VM has it open; false
   // leaves the grow to the guest's next boot (imp-disk.ts)
   readonly growFilesystem?: (disk: string) => Promise<boolean>;
@@ -79,6 +85,7 @@ export interface ImpContext {
   readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly storageGate: StorageGate;
+  readonly diskBudget: DiskBudget;
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
@@ -105,6 +112,13 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
     storageGate: deps.storageGate ?? createStorageGate(),
+    diskBudget:
+      deps.diskBudget ??
+      createDiskBudget({
+        storage: deps.storage,
+        reserveBytes: deps.config.diskReserveBytes,
+        log: deps.log ?? printLog,
+      }),
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
