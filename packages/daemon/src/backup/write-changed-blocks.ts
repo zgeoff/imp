@@ -1,4 +1,5 @@
 import { open } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { findDataBlocks } from './find-data-blocks';
 
 // read in large pieces; compared and written in record-sized ones
@@ -11,14 +12,20 @@ const WRITE_BYTES = 16 * 1024;
 // differ. A zero block over a hole stays a hole, and on ZFS or XFS a block
 // left alone stays shared with the snapshot or clone taken before.
 export async function writeChangedBlocks(source: string, target: string): Promise<number> {
-  const input = await open(source, 'r');
-  const output = await open(target, 'r+');
-
+  const files: { input?: FileHandle; output?: FileHandle } = {};
   const wanted = Buffer.alloc(READ_BYTES);
   const present = Buffer.alloc(READ_BYTES);
   let written = 0;
 
   try {
+    const input = await open(source, 'r');
+
+    files.input = input;
+
+    const output = await open(target, 'r+');
+
+    files.output = output;
+
     const stats = await input.stat();
 
     const size = stats.size;
@@ -61,7 +68,7 @@ export async function writeChangedBlocks(source: string, target: string): Promis
 
     return written;
   } finally {
-    await input.close();
-    await output.close();
+    await files.input?.close();
+    await files.output?.close();
   }
 }

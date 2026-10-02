@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeChangedBlocks } from './write-changed-blocks';
@@ -57,4 +65,23 @@ test('it fills an empty file, leaves zero blocks as holes, and shrinks a longer 
   await writeChangedBlocks(ctx.source, ctx.target);
 
   expect(readFileSync(ctx.target, 'utf8')).toBe('short');
+});
+
+test('a target that will not open still closes the source', async () => {
+  using ctx = setupTest();
+
+  writeFileSync(ctx.source, 'data');
+
+  const failure = await writeChangedBlocks(ctx.source, ctx.target).catch(String);
+
+  const open = readdirSync('/proc/self/fd').map((fd) => {
+    try {
+      return readlinkSync(`/proc/self/fd/${fd}`);
+    } catch {
+      return '';
+    }
+  });
+
+  expect(failure).toContain('ENOENT');
+  expect(open).not.toContain(ctx.source);
 });
