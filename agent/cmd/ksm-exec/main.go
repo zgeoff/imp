@@ -1,11 +1,13 @@
 // Command ksm-exec lets KSM merge the memory of the program it runs. impd
-// starts Firecracker through it when IMP_KSM is on:
+// starts the Firecracker jailer, or Firecracker itself with the jailer off,
+// through it when IMP_KSM is on:
 //
-//	setsid ksm-exec firecracker --api-sock run/api.sock
+//	setsid ksm-exec jailer --id <imp> --exec-file firecracker ...
 //
 // It sets PR_SET_MEMORY_MERGE and execs the program in place. Linux 6.10 or
-// later keeps the flag across the exec, so every anonymous mapping the
-// program makes, guest memory included, is mergeable. Firecracker's seccomp
+// later keeps the flag across each exec, the jailer's into Firecracker too,
+// so every anonymous mapping Firecracker makes, guest memory included, is
+// mergeable. ksm-exec runs outside the jail's chroot. Firecracker's seccomp
 // filter traps prctl, so it cannot set the flag itself
 // (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
 package main
