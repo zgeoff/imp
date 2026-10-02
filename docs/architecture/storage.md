@@ -227,7 +227,8 @@ zeroes: in the background by default, or at once in an online resize with `noini
 is a sparse file, so those tables read as zeros already, and zeroing them only allocates host space:
 about 1.6 % of the new size (1.6 GiB for a 4 GiB image grown to 100 GiB). `resize2fs` on the host
 leaves them as holes, which is why a stopped disk grows there. An online grow, of a running or
-sleeping imp, still pays the 1.6 %.
+sleeping imp, still pays the 1.6 %. So did every disk made before disk sizes: the guest zeroed the
+tables of its 32 GiB filesystem, and each such disk already holds about 0.5 GiB of them.
 
 `mkfs.ext4` keeps `resize_inode`, which lets an online grow add block group descriptors: a 4 GiB
 filesystem grows to well past 1 TiB. The journal keeps the size mkfs gave the image, 64 MiB for a 4

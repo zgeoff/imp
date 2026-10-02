@@ -83,6 +83,14 @@ test('a stopped disk grows at its next boot, and never shrinks', async () => {
 
   expect(String(shrink)).toContain('a disk only grows');
 
+  // a pass ran 10 s after the create; the grown filesystem wrote blocks of its own
+  const found = await requireImp(imp);
+
+  const usage = found.diskUsage;
+
+  expect(usage?.isPartial).toBeFalse();
+  expect(usage?.exclusiveBytes).toBeGreaterThan(0);
+
   await runImp('stop', imp);
   await checkDiskClean(imp);
   await runImp('rm', imp);

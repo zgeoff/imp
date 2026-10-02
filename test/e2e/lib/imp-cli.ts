@@ -22,6 +22,9 @@ const ImpRowSchema = z.object({
   lastActiveAt: z.string(),
   ramMib: z.number().optional(),
   sessions: z.number().optional(),
+  diskUsage: z
+    .object({ exclusiveBytes: z.number(), sharedBytes: z.number(), isPartial: z.boolean() })
+    .optional(),
 });
 
 const SystemInfoSchema = z.object({
