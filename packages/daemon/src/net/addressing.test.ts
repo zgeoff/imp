@@ -16,6 +16,7 @@ test('it addresses slot 0 at the start of the subnet', () => {
     prefixLength: 30,
     netmask: '255.255.255.252',
     guestMac: '06:00:0a:42:00:02',
+    hostMac: '06:01:0a:42:00:01',
     guestIp6: null,
     tailnetPort: 20_000,
   });

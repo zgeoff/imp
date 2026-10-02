@@ -47,6 +47,7 @@ test('it creates the tap with the host end of the slot /30', async () => {
 
   expect(fake.calls).toEqual([
     'ip tuntap add imp1 mode tap',
+    'ip link set imp1 address 06:01:0a:42:00:05',
     'ip addr add 10.66.0.5/30 dev imp1',
     'sysctl -n net.ipv6.conf.imp1.accept_ra',
     'sysctl -qw net.ipv6.conf.imp1.accept_ra=0',
@@ -63,6 +64,7 @@ test('with IPv6, the tap gets fe80::1 without DAD and a route to the /128, RAs o
 
   expect(fake.calls).toEqual([
     'ip tuntap add imp1 mode tap',
+    'ip link set imp1 address 06:01:0a:42:00:05',
     'ip addr add 10.66.0.5/30 dev imp1',
     'sysctl -n net.ipv6.conf.imp1.accept_ra',
     'sysctl -qw net.ipv6.conf.imp1.accept_ra=0',
@@ -97,7 +99,7 @@ test('a key that already holds its value is only read, so a read-only /proc/sys 
   expect(readErrorMessage(error)).toContain('net.ipv6.conf.imp1.accept_ra');
 });
 
-test('it treats an existing tap and address as done', async () => {
+test('it treats an existing tap and address as done, and leaves the MAC its guest knows', async () => {
   const fake = buildFakeIp({
     tuntap: 'ioctl(TUNSETIFF): Device or resource busy',
     addr: 'Error: ipv4: Address already assigned.',
@@ -106,6 +108,7 @@ test('it treats an existing tap and address as done', async () => {
   await createTapDevices(fake.run, () => null).setupTap(ADDRESS);
 
   expect(fake.calls).toHaveLength(7);
+  expect(fake.calls.filter((call) => call.includes(' address '))).toEqual([]);
 });
 
 test('it fails on any other ip error', async () => {
