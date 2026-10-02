@@ -50,9 +50,11 @@ carries a CSP that allows only impd and forbids framing.
 
 The browser never holds the API token. `POST /auth/login` takes the token once and sets the
 `imp_session` cookie: HttpOnly, SameSite=Strict, `Secure` behind TLS, 30 days. Its value is
-`v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>" keyed by the token>`, so it survives an impd
-restart and a new token ends every session. `POST /auth/logout` only clears the cookie in that
-browser; a copied value stays valid until it expires or the token changes.
+`v1.<expiry>.<HMAC-SHA256 of "imp-session-v1.<expiry>">`, keyed by a key derived from the token
+(HMAC-SHA256 of `imp-session-key` under the token). It survives an impd restart, and a new token
+ends every session. The cookie is host-only, with no `Domain`, so it never reaches another host
+name. `POST /auth/logout` only clears the cookie in that browser; a copied value stays valid until
+it expires or the token changes.
 
 `/rpc` takes the cookie only from the dashboard's own origin. Imps serve pages on other ports of the
 same host, and a browser counts those as the same site, so SameSite alone would let an imp's page
@@ -62,8 +64,11 @@ access. The scheme is not compared, so a TLS front such as `tailscale serve` wor
 take the same check. `/exec` never takes the cookie: the dashboard gets an exec ticket over `/rpc`.
 
 Browsers send cookies to every port of a host, so the wake proxy removes `imp_session` from every
-request it forwards to an imp. An imp can still set a cookie of that name for the host and so log
-the dashboard out; that costs a login and nothing more.
+request it forwards to an imp. An imp's server can still set cookies for the host. A planted
+`imp_session` on a longer path, which the browser sends first, does not lock the owner out: impd
+accepts the request when any `imp_session` value in it is valid. An imp's response can overwrite the
+real cookie or flood the cookie jar, and so log the dashboard out while it keeps doing that. It
+cannot read or use the session.
 
 ### imps: the lifecycle
 

@@ -1,5 +1,5 @@
 import { isAuthorized } from '../token';
-import { isValidSession, readSessionCookie } from './session-cookie';
+import { isValidSession, readSessionCookies } from './session-cookie';
 
 // The bearer token, or the dashboard's session cookie from its own page;
 // tailnet identity (#29) slots in here as one more source
@@ -8,9 +8,9 @@ export function isAuthenticated(request: Request, token: string, nowMs: number):
     return true;
   }
 
-  const session = readSessionCookie(request.headers.get('cookie'));
+  const sessions = readSessionCookies(request.headers.get('cookie'));
 
-  return session !== null && isSameOrigin(request) && isValidSession(session, token, nowMs);
+  return isSameOrigin(request) && sessions.some((session) => isValidSession(session, token, nowMs));
 }
 
 // Imps serve pages on other ports of this host, which SameSite counts as the

@@ -61,7 +61,9 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-// a TLS front such as tailscale serve says so in x-forwarded-proto
+// A TLS front such as tailscale serve says so in x-forwarded-proto. Any
+// client can send that header, so it only adds Secure to the cookie and must
+// never decide what a request may do.
 function isSecure(request: Request): boolean {
   return (
     new URL(request.url).protocol === 'https:' ||

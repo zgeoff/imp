@@ -21,6 +21,15 @@ test('it accepts the session from a same-origin request', () => {
   expect(isAuthenticated(request, 'secret', NOW)).toBe(true);
 });
 
+test('a bad session cookie an imp planted first does not hide the real one', () => {
+  const request = buildRequest({
+    cookie: `imp_session=planted; ${SESSION}`,
+    'sec-fetch-site': 'same-origin',
+  });
+
+  expect(isAuthenticated(request, 'secret', NOW)).toBe(true);
+});
+
 test('it refuses the session from another port of the same host', () => {
   const request = buildRequest({ cookie: SESSION, 'sec-fetch-site': 'same-site' });
 

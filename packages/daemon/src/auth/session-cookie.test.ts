@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
+import { createHmac } from 'node:crypto';
 import {
   buildClearedSessionCookie,
   buildSessionCookie,
   buildSessionValue,
   isValidSession,
-  readSessionCookie,
+  readSessionCookies,
   removeSessionCookie,
 } from './session-cookie';
 
@@ -38,10 +39,14 @@ test('it rejects malformed sessions', () => {
   }
 });
 
-test('it reads the session from a cookie header among other cookies', () => {
-  expect(readSessionCookie('a=1; imp_session=v1.2.abc; b=2')).toBe('v1.2.abc');
-  expect(readSessionCookie('a=1')).toBeNull();
-  expect(readSessionCookie(null)).toBeNull();
+test('it reads every session from a cookie header among other cookies', () => {
+  expect(readSessionCookies('a=1; imp_session=x; b=2; imp_session=v1.2.a=b')).toEqual([
+    'x',
+    'v1.2.a=b',
+  ]);
+
+  expect(readSessionCookies('a=1')).toEqual([]);
+  expect(readSessionCookies(null)).toEqual([]);
 });
 
 test('it removes only the session from a cookie header', () => {
@@ -57,4 +62,14 @@ test('it sets an http-only strict cookie, secure behind TLS', () => {
 
   expect(buildSessionCookie('v', true)).toEndWith('; Secure');
   expect(buildClearedSessionCookie(false)).toStartWith('imp_session=; Path=/; Max-Age=0;');
+});
+
+test('the signature keys on a key derived from the token, not the token', () => {
+  const signature = buildSessionValue('secret', NOW).split('.').at(-1);
+
+  const keyedOnToken = createHmac('sha256', 'secret')
+    .update(`imp-session-v1.${String(NOW)}`)
+    .digest('base64url');
+
+  expect(signature).not.toBe(keyedOnToken);
 });

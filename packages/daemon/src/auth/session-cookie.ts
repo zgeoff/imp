@@ -30,21 +30,19 @@ export function isValidSession(value: string, token: string, nowMs: number): boo
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
-// the session cookie's value from a Cookie header, or null
-export function readSessionCookie(header: string | null): string | null {
+// Every session cookie value in a Cookie header. An imp's page can set its
+// own imp_session on a longer path, which the browser sends first, so the
+// caller must try them all.
+export function readSessionCookies(header: string | null): string[] {
   if (header === null) {
-    return null;
+    return [];
   }
 
-  for (const pair of header.split(';')) {
-    const [key, ...value] = pair.trim().split('=');
-
-    if (key === SESSION_COOKIE) {
-      return value.join('=');
-    }
-  }
-
-  return null;
+  return header
+    .split(';')
+    .map((pair) => pair.trim().split('='))
+    .filter(([key]) => key === SESSION_COOKIE)
+    .map(([, ...value]) => value.join('='));
 }
 
 // Every other cookie of a Cookie header, or null when none is left. The wake
@@ -84,5 +82,13 @@ function buildCookie(value: string, maxAgeS: number, secure: boolean): string {
 }
 
 function buildSignature(token: string, expiry: string): string {
-  return createHmac('sha256', token).update(`imp-session-${VERSION}.${expiry}`).digest('base64url');
+  return createHmac('sha256', buildSessionKey(token))
+    .update(`imp-session-${VERSION}.${expiry}`)
+    .digest('base64url');
+}
+
+// a key of its own, derived from the token, so the MAC never keys on the
+// token itself
+function buildSessionKey(token: string): Buffer {
+  return createHmac('sha256', token).update('imp-session-key').digest();
 }
