@@ -55,19 +55,19 @@ test('it leaves out what .dockerignore matches, with docker’s rules', async ()
   ]);
 });
 
-test('the Dockerfile and the ignore file go even when it matches them', async () => {
+test('the Dockerfile goes even when the ignore file matches it', async () => {
   using ctx = createContext({
     'docker/Dockerfile': 'FROM scratch',
     '.dockerignore': '*\n',
     'app.js': '',
   });
 
-  const names = await listNames(ctx.root, 'docker/Dockerfile');
+  const names = await listNames(ctx.root, './docker/Dockerfile');
 
-  expect(names).toEqual(['.dockerignore', 'docker', 'docker/Dockerfile']);
+  expect(names).toEqual(['docker', 'docker/Dockerfile']);
 });
 
-test('<Dockerfile>.dockerignore wins over .dockerignore', async () => {
+test('<Dockerfile>.dockerignore wins, and .dockerignore is then an ordinary file', async () => {
   using ctx = createContext({
     'web.Dockerfile': 'FROM scratch',
     'web.Dockerfile.dockerignore': 'secret\n',
@@ -84,6 +84,12 @@ test('<Dockerfile>.dockerignore wins over .dockerignore', async () => {
     'web.Dockerfile',
     'web.Dockerfile.dockerignore',
   ]);
+
+  writeFileSync(join(ctx.root, 'web.Dockerfile.dockerignore'), '.dockerignore\n*.dockerignore\n');
+
+  const without = await listNames(ctx.root, 'web.Dockerfile');
+
+  expect(without).toEqual(['app.js', 'secret', 'web.Dockerfile']);
 });
 
 test('symlinks stay links and modes keep their exec bits', async () => {

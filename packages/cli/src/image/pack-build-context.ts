@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { lstat, readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import ignore from '@balena/dockerignore';
 import type { LocalEntry } from '../cp/pack-local-path';
 import { UsageError } from '../usage-error';
@@ -11,9 +11,9 @@ const ENTRY_KINDS = [
   ['file', 'isFile'],
 ] as const;
 
-// The context as `docker build` sends it, by path in the context, parents first. The ignore
-// file is `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`; like the docker
-// CLI, the Dockerfile and the ignore file always go.
+// The context as `docker buildx build <dir>` sends it, by path in the context, parents first.
+// The ignore file is `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, and
+// it may leave itself out. The Dockerfile always goes: docker reads it from the tar.
 export async function listContextEntries(
   root: string,
   dockerfile: string,
@@ -32,13 +32,12 @@ export async function listContextEntries(
 
   const matcher = ignore().add(patterns);
 
-  const kept = new Set([dockerfile, ignoreName, '.dockerignore']);
-
   // with no `!` exception, nothing under an ignored directory comes back
   const hasExceptions = patterns.split('\n').some((line) => line.trim().startsWith('!'));
 
-  const isKeptBelow = (dir: string): boolean =>
-    [...kept].some((path) => path.startsWith(`${dir}/`));
+  // `./Dockerfile` names the entry `Dockerfile`
+  const dockerfileName = posix.normalize(dockerfile);
+  const isDockerfileBelow = (dir: string): boolean => dockerfileName.startsWith(`${dir}/`);
 
   const collectEntries = async (dir: string, prefix: string): Promise<LocalEntry[]> => {
     const entries: LocalEntry[] = [];
@@ -51,7 +50,7 @@ export async function listContextEntries(
 
       const stats = await lstat(path);
 
-      const ignored = matcher.ignores(name) && !kept.has(name);
+      const ignored = matcher.ignores(name) && name !== dockerfileName;
 
       const entry: LocalEntry = {
         path,
@@ -76,7 +75,7 @@ export async function listContextEntries(
       }
 
       // an ignored directory goes only as the parent of what comes back
-      if (hasExceptions || isKeptBelow(name)) {
+      if (hasExceptions || isDockerfileBelow(name)) {
         const below = await collectEntries(path, name);
 
         if (below.length > 0) {
