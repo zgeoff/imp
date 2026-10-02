@@ -30,6 +30,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'https',
     'tokens',
     'egress',
+    'cpu',
     'backups',
   ]);
 });
@@ -55,6 +56,7 @@ test('it expands a set and drops duplicates', () => {
     'proxy',
     'dashboard',
     'tokens',
+    'cpu',
   ]);
 });
 
