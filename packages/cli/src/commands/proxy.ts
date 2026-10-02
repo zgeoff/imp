@@ -19,7 +19,7 @@ export const proxyCommand = defineCommand({
     reverse: {
       type: 'string',
       description:
-        'GUEST:LOCAL, each an absolute socket path or a port, to relay clients in the imp to this machine; repeatable',
+        'GUEST:LOCAL, each an absolute socket path or a port, to relay clients in the imp to this machine; repeatable. The first listen wakes the imp. After a sleep the forward waits for something else to wake the imp, never waking it, then listens again; if its listener ended while the imp stayed awake, it listens again after 30 s',
     },
   },
   run: (context) =>
