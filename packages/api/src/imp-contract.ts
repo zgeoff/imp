@@ -96,9 +96,16 @@ export const impContract = {
       .input(z.object({ name: NameSchema, diskMib: z.int().min(1024) }))
       .output(ImpSchema),
 
-    url: base
-      .input(NameInputSchema)
-      .output(z.object({ local: z.url(), https: z.url().nullable(), tailnet: z.url().nullable() })),
+    url: base.input(NameInputSchema).output(
+      z.object({
+        local: z.url(),
+        https: z.url().nullable(),
+
+        // the imp's own name on the tailnet, once impd serves it
+        service: z.url().nullable(),
+        tailnet: z.url().nullable(),
+      }),
+    ),
 
     // the egress policy; a change applies at once, whatever the imp's state
     policy: base.input(NameInputSchema).output(EgressPolicySchema),

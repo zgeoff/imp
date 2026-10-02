@@ -1,6 +1,14 @@
 import * as z from 'zod';
+import { NameSchema } from './name-schema';
 
 const CountSchema = z.int().nonnegative();
+const NameFailureSchema = z.object({ name: NameSchema, error: z.string() });
+
+// per-imp names as Tailscale Services
+const TailnetNamesSchema = z.object({
+  live: CountSchema,
+  failed: z.array(NameFailureSchema).readonly(),
+});
 
 const BootStatusSchema = z.object({
   coldBoots: CountSchema,
@@ -56,6 +64,9 @@ export const SystemInfoSchema = z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),
     ip: z.string().nullable(),
+
+    // null when IMP_TAILNET_NAMES is off
+    names: TailnetNamesSchema.nullable(),
   }),
 });
 

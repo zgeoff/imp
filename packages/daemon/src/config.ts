@@ -9,6 +9,11 @@ import type { HttpsConfig } from './https/https-config';
 import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import type { StorageBackendKind } from './storage/storage-backend';
+import {
+  TailnetNamesEnvSchema,
+  parseTailnetNamesConfig,
+} from './tailnet-names/tailnet-names-config';
+import type { TailnetNamesConfig } from './tailnet-names/tailnet-names-config';
 
 const PortSchema = z.coerce.number().pipe(z.int().min(1).max(65_535));
 const CountSchema = z.coerce.number().pipe(z.int().positive());
@@ -53,6 +58,7 @@ const EnvSchema = z.object({
   IMP_DASHBOARD_DIR: z.string().optional(),
   IMP_TAILNET_IDENTITIES: z.string().optional(),
   ...HttpsEnvSchema.shape,
+  ...TailnetNamesEnvSchema.shape,
 });
 
 export interface Config {
@@ -144,6 +150,10 @@ export interface Config {
   // imps at https://<name>.<domain> (docs/guides/https.md); null without
   // IMP_DOMAIN
   readonly https: HttpsConfig | null;
+
+  // each imp's own name on the tailnet, as a Tailscale Service
+  // (docs/guides/tailscale.md#per-imp-names); null unless IMP_TAILNET_NAMES=1
+  readonly tailnetNames: TailnetNamesConfig | null;
 }
 
 function splitList(value: string): string[] {
@@ -172,6 +182,8 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
       'IMP_STORAGE_BACKEND=zfs needs IMP_ZFS_ROOT, the dataset mounted on IMP_DATA_DIR',
     );
   }
+
+  const isTailnetNode = parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1';
 
   return {
     dataDir: parsed.IMP_DATA_DIR,
@@ -204,12 +216,13 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     defaultImage: parsed.IMP_DEFAULT_IMAGE,
     storageBackend: parsed.IMP_STORAGE_BACKEND,
     zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
-    tailscaleEnabled: parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1',
+    tailscaleEnabled: isTailnetNode,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     tailnetRules: parseTailnetRules(parsed.IMP_TAILNET_IDENTITIES),
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
     backup: loadBackupConfig(present),
     https: parseHttpsConfig(parsed),
+    tailnetNames: parseTailnetNamesConfig(parsed, parsed.IMP_DATA_DIR, isTailnetNode),
   };
 }
 

@@ -1,3 +1,4 @@
+import type { SystemInfo } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatBootStatus, formatJson } from '../format-output';
 import { runAction } from '../run-action';
@@ -40,6 +41,7 @@ export const infoCommand = defineCommand({
           `${formatGib(info.storage.impDiskBytes)} given to imps, of ${formatGib(info.storage.usedBytes + info.storage.availableBytes)}`,
         ],
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
+        ...formatTailnetNames(info.tailscale.names),
       ];
 
       for (const [label = '', value = ''] of lines) {
@@ -50,4 +52,16 @@ export const infoCommand = defineCommand({
 
 function formatGib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+// a line for the per-imp names, then one per name that is not live
+function formatTailnetNames(names: SystemInfo['tailscale']['names']): string[][] {
+  if (names === null) {
+    return [];
+  }
+
+  return [
+    ['names', `${String(names.live)} live, ${String(names.failed.length)} failed`],
+    ...names.failed.map((failure) => ['', `${failure.name}: ${failure.error}`]),
+  ];
 }

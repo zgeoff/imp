@@ -84,6 +84,9 @@ interface ImpTestOptions {
 
   // nft in place of the real one; by default it records each script
   readonly runNft?: (script: string) => Promise<void>;
+
+  // each imp's tailnet name as a URL; none by default
+  readonly readServiceUrl?: (name: string) => string | null;
 }
 
 // The governed imp service over an in-memory database, fake VMs and taps, in
@@ -228,6 +231,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
         return Promise.resolve(true);
       },
       egress,
+      ...(options.readServiceUrl !== undefined && { readServiceUrl: options.readServiceUrl }),
     });
   };
 
@@ -364,6 +368,7 @@ export function buildTestApp(
     }),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
+    readTailnetNames: null,
     isReady: () => true,
     now: ctx.now,
     audit: createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} }),
