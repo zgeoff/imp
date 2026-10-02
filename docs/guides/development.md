@@ -104,15 +104,15 @@ Lefthook installs the hooks with `bun install`.
 
 `.github/workflows/ci.yml` runs these jobs on every push to `main` and every pull request:
 
-| Job          | Required | What it runs                                                                      |
-| ------------ | -------- | --------------------------------------------------------------------------------- |
-| `gitleaks`   | yes      | A secret scan over the history.                                                   |
-| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.     |
-| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                    |
-| `shellcheck` | yes      | `bun run lint:shell`.                                                             |
-| `cli`        | no       | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64. |
-| `client`     | no       | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.        |
-| `e2e`        | no       | The `fast` end-to-end set on real microVMs (below).                               |
+| Job          | Required | What it runs                                                                          |
+| ------------ | -------- | ------------------------------------------------------------------------------------- |
+| `gitleaks`   | yes      | A secret scan over the history.                                                       |
+| `checks`     | yes      | `bun run audit`, `deadcode`, `format:check`, `lint`, `typecheck`, `bun test`.         |
+| `go`         | yes      | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                        |
+| `shellcheck` | yes      | `bun run lint:shell`.                                                                 |
+| `cli`        | no       | Compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64 one. |
+| `client`     | no       | Packs `@zgeoff/imp-client` and installs it on the oldest Node it supports.            |
+| `e2e`        | no       | The `fast` end-to-end set on real microVMs (below).                                   |
 
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 
@@ -126,8 +126,9 @@ seconds with the reason. The job then:
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
    the kernel config files change. A cold kernel build takes about 10 minutes, so the job's timeout
    is 25.
-2. builds the dev host image with a cache of its own (scope `imp-dev`). Only runs on `main` write
-   either cache; pull requests read them.
+2. builds the dev host image with a cache of its own (scope `imp-dev`) and sets
+   `IMP_HOST_IMAGE_READY=1`, so `scripts/dev.sh` uses it instead of building it again. Only runs on
+   `main` write either cache; pull requests read them.
 3. runs `scripts/test-e2e.sh --only fast` with `E2E_RAM_BUDGET_MIB=4096`,
    `IMP_DEFAULT_MEMORY_MIB=1024` and the XFS file on the runner's `/mnt` disk. There is no Tailscale
    key in CI, and a missed timing limit only warns.
