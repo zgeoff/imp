@@ -1,0 +1,13 @@
+# Build context for host/Dockerfile (docker build -f host/Dockerfile .).
+# Everything the image needs is source; outputs and data stay out, or the
+# context upload runs to gigabytes.
+.git
+**/node_modules
+.cache
+.data*
+build
+dist
+kernel/.build
+kernel/out
+.env
+.env.*

@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
 import { findImpByName } from './db/imps';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });
@@ -23,6 +23,7 @@ test('it serves system.info from config and the database', async () => {
     awakeCount: 0,
     impCount: 0,
     firecrackerVersion: 'v1.17.0',
+    ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null },
   });
 });

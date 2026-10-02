@@ -1,6 +1,7 @@
 /.cache/
 /.data*/
 /build/
+/dist/
 node_modules/
 *.img
 *.ext4

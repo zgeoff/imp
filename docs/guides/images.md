@@ -21,9 +21,10 @@ imp image build images/examples/hello --name hello
 `imp image build` runs `docker build` on the host Docker and tags the result `imp/<name>`, so later
 images can say `FROM imp/base`. The CLI sends the absolute path of the directory, and impd builds
 from that path, so the directory must exist at the same path in the host container. `scripts/dev.sh`
-mounts the repo at its own path for this. An image you built with plain `docker build` goes in with
-`imp image add <ref>`. `images/dev` takes `--build-arg BASE=...` to stack on another base; use
-`docker build` for that.
+mounts the repo at its own path for this; the release image has no repo, so build there with the
+host's Docker and add the result ([install](./install.md#images-on-a-server)). An image you built
+with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
+`--build-arg BASE=...` to stack on another base; use `docker build` for that.
 
 ## What the guest takes from the image
 

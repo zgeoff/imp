@@ -8,7 +8,7 @@ How to check a change before you push it, and what CI and the branch rules do wi
 ```sh
 bun run typecheck && bun run lint && bun test
 bun run format:check && bun run deadcode
-bun run lint:shell                # shellcheck over scripts/, host/ and test/
+bun run lint:shell                # shellcheck over scripts/, host/, kernel/ and test/
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/acceptance.sh --clean     # end to end, from a clean state
 ```
@@ -43,7 +43,7 @@ Lefthook installs the hooks with `bun install`.
 ## CI
 
 `.github/workflows/ci.yml` runs the gates on every push to `main` and every pull request, in four
-jobs:
+required jobs:
 
 | Job          | What it runs                                                                  |
 | ------------ | ----------------------------------------------------------------------------- |
@@ -52,7 +52,15 @@ jobs:
 | `go`         | `gofmt`, `go vet ./...` and `go test -race ./...` in `agent/`.                |
 | `shellcheck` | `bun run lint:shell`.                                                         |
 
+The `cli` job also compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64
+binary. It is not a required check. On `main`, the `release-please` job makes releases
+([RELEASING.md](../../RELEASING.md)).
+
 A new push to a pull request cancels its older run. Runs on `main` always finish.
+
+`.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
+system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:
+`gh workflow run reproducible.yml`.
 
 ## Branch rules
 

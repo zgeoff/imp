@@ -21,6 +21,12 @@ import { buildFakeVmm } from './fake-vmm';
 
 export const TEST_TOKEN = 'test-token';
 
+// what system.info reports about the guest kernel and the system drive
+export const TEST_SYSTEM_FILES = {
+  guestKernel: { version: '6.1.188', sha256: 'a'.repeat(64) },
+  systemDrive: { sha256: 'b'.repeat(64) },
+};
+
 // every awake fake VM owns this much, as the governor measures it
 const FAKE_VM_RAM_MIB = 300;
 
@@ -156,6 +162,7 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
     governor: impd.governor,
     checkpoints,
     firecrackerVersion: 'v1.17.0',
+    systemFiles: TEST_SYSTEM_FILES,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
   });
