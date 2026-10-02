@@ -79,6 +79,7 @@ when that service's `/etc/nftables.conf` flushes the ruleset. The NixOS module r
 
 The firewall must also forward the container's traffic out. Docker admits it in its own chains, but
 a firewall that filters forwarding, such as NixOS with `networking.firewall.filterForward = true`,
-drops it unless a rule admits `docker0`, and `br-imphost` with IPv6. The NixOS module adds that rule
-and trusts no interface for input, so imps reach no host service through the bridges
-([forwarding](../guides/nixos.md#ipv6)).
+drops it unless a rule admits imp-host's bridge: `br-imphost` with IPv6, else `docker0`. The NixOS
+module adds that rule and trusts no interface for input. Imps then reach no host service through the
+bridges for as long as the host's input filter drops traffic from them: with `own` the `imp_host`
+table does, and with `none` it is the platform's firewall ([forwarding](../guides/nixos.md#ipv6)).

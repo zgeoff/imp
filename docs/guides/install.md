@@ -270,6 +270,9 @@ admit it; on NixOS the module does ([IPv6 on NixOS](./nixos.md#ipv6)).
   or `off`, and later runs keep it, so a host whose route is down for a moment does not lose imps'
   IPv6. `IMP_HOST_SUBNET6` is a random unique local /64, made once; `IMP_HOST_NETWORK` is
   `--network imp-host`, the words the unit passes to `docker run`.
+- **A host bootstrapped before IPv6:** its env file has no `IMP_HOST_IPV6`, so a re-run resolves
+  `auto`. When that comes out on, the run creates the network and restarts `imp-host` on it. When
+  the host's router adverts need a client's config first (below), `auto` warns and stays off.
 - **Docker:** 27.0 or later, which writes the NAT66 and forward rules for the network itself. An
   older Docker, or `"ip6tables": false` in `/etc/docker/daemon.json`, refuses `on` and turns `auto`
   off with a warning.
@@ -294,15 +297,21 @@ the host's IPv6 with it. The ipv6 phase settles this before it creates the netwo
 - **A client takes them** (`accept_ra` is 0): systemd-networkd (and netplan, which uses it),
   NetworkManager or dhcpcd. networkd keeps them with forwarding on when the uplink's `.network` file
   says `IPv6AcceptRA=yes` (netplan: `accept-ra: true`), and the script reads that. For any other
-  client the script stops, says which client it found, and asks you to check its config. Run again
-  with `--ra-handled` once it keeps router adverts with forwarding on. A later run with the network
-  in place only logs the client.
+  client, `--ipv6 on` stops, says which client it found, and asks you to check its config, and
+  `auto` warns and stays off. Run again with `--ipv6 on --ra-handled` once the client keeps router
+  adverts with forwarding on, and check `ip -6 route show default` half an hour later. A later run
+  with the network in place only logs the client.
 - **A static route,** or no IPv6 default route: nothing to do.
 
 Docker also sets the `ip6tables` FORWARD policy to DROP when it turns forwarding on. Anything else
 on the host that forwards IPv6, such as dual-stack k3s or a VPN, needs its own accept rules, or
 `"ip-forward-no-drop": true` in `/etc/docker/daemon.json`
 ([packet filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/)).
+
+**CAUTION:** With `--host-firewall none`, the platform's input filter alone decides what imp traffic
+on `br-imphost` (or `docker0`) reaches on the host itself. Make sure it drops input from those
+bridges to host services that imps must not reach, such as a k3s API or a database on a host
+address.
 
 A routed /64 instead of NAT66 is not automated: set `IMP_SUBNET6=<prefix>` and route the prefix to
 the container's address on `imp-host` ([IPv6](../architecture/networking.md#ipv6)).
