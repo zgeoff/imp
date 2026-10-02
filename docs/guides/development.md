@@ -41,7 +41,7 @@ required jobs:
 | `shellcheck` | `bun run lint:shell`.                                                         |
 
 The `cli` job also compiles the CLI for every platform (`bun run build:cli`) and runs the linux-x64
-binary. It is not a required check. On `main`, the `release-please` and `release` jobs make releases
+binary. It is not a required check. On `main`, the `release-please` job makes releases
 ([RELEASING.md](../../RELEASING.md)).
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.

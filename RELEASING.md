@@ -1,8 +1,9 @@
 # Releasing
 
 Releases come from `main` through [release-please](https://github.com/googleapis/release-please)
-(manifest mode, one package at the root) and two workflows: the `release-please` and `release` jobs
-in `.github/workflows/ci.yml`, and `.github/workflows/release.yml`.
+(manifest mode, one package at the root) and two workflows: the `release-please` job in
+`.github/workflows/ci.yml`, and `.github/workflows/release.yml`. The changelog starts at
+`bootstrap-sha` in `release-please-config.json`, the `main` commit before release-please arrived.
 
 ## What a release ships
 
@@ -34,18 +35,21 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
    and the formatting on the PR branch. Before 1.0, a `feat:` bumps the minor version and a `fix:`
    the patch.
 2. The release PR merges (see [Tokens](#tokens) for who merges it).
-3. On that merge, `release-please` tags `vX.Y.Z` and creates the GitHub release. The `release` job
-   then runs `release.yml` for the tag:
-   - **build:** checks out the tag, runs `scripts/build-release-assets.sh` and
-     `host/build-release.sh`, and runs `host/check-release-image.sh`, which fails when `impd` or
-     `imp` in the image reports another version, or when the image's kernel or drive differs from
-     `SHA256SUMS`. Then it pushes `imp-host:X.Y.Z` and attests the image and every asset.
+3. On that merge, `release-please` tags `vX.Y.Z`, creates the GitHub release, and starts
+   `release.yml` for the tag (`gh workflow run release.yml --ref main -f tag=vX.Y.Z`). The release
+   is a run of its own, so it never holds up CI on `main`. Its jobs:
+   - **assets:** checks out the tag and runs `scripts/build-release-assets.sh`.
    - **smoke:** runs each CLI binary on its own platform and checks its checksum and version.
+   - **image:** after every smoke check passes, runs `host/build-release.sh` and
+     `host/check-release-image.sh`, which fails when `impd` or `imp` in the image reports another
+     version, or when the image's kernel or drive differs from `SHA256SUMS`. Then it pushes
+     `imp-host:X.Y.Z` and attests the image and every asset.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
 
-The build job keeps the kernel layer in the GitHub Actions cache. Without that cache, the kernel
-build takes about 15 to 25 minutes on a hosted runner.
+The kernel layer stays in the GitHub Actions cache, so the image job and later releases reuse it.
+Without that cache, the kernel build takes about 15 to 25 minutes on a hosted runner. A second run
+for the same tag waits for the first.
 
 ## Tokens
 
@@ -54,17 +58,24 @@ and its merge does not start the run that tags the release.
 
 - **No App (the setup today):** the `release-please` job runs with `GITHUB_TOKEN`. The release PR
   has no checks, so the owner merges it by hand. The merge is a push to `main`, so CI runs, and its
-  `release-please` job tags and publishes. While `.github/rulesets/main.json` is applied, its
-  required checks never report on the release PR, so merging needs the owner's bypass.
+  `release-please` job tags and starts the release. While `.github/rulesets/main.json` is applied,
+  its required checks never report on the release PR, so merging needs the owner's bypass.
 - **With a release App:** the job opens the PR with the App's token, CI runs on it, and the job
-  merges it once it is mergeable. To set it up:
+  turns on auto-merge (`gh pr merge --auto --squash`). With the ruleset applied, GitHub merges the
+  PR once its required checks pass; without it, at once. To set it up:
   1. Create a GitHub App (or reuse `zgeoff-release`) with no webhook, and give it Contents and Pull
      requests read and write. Install it on `zgeoff/imp`.
   2. Add the Actions variable `RELEASE_APP_ID` (the App's client ID) and the Actions secret
      `RELEASE_APP_PRIVATE_KEY` (its private key).
 
-Either way, release-please needs repo Settings → Actions → General → "Allow GitHub Actions to create
-and approve pull requests".
+Two repo settings, either way:
+
+- Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests", for
+  release-please to open the release PR.
+- Settings → General → "Allow auto-merge", for the App path to turn on auto-merge.
+
+The release itself starts with `GITHUB_TOKEN` in both cases: a workflow dispatch is the one
+`GITHUB_TOKEN` event that starts a workflow.
 
 The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
 settings, so a server pulls it without a login.

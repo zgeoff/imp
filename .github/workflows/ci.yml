@@ -190,12 +190,12 @@ jobs:
   #   the release PR (version bump and changelog), and the sync step makes
   #   that PR pass the checks job
   # - after the release PR merges, release-please tags vX.Y.Z and creates the
-  #   GitHub release, and the release job below builds and attaches the rest
+  #   GitHub release, and the job starts release.yml for the tag
   #
   # GITHUB_TOKEN events start no workflows, so a release PR it opens gets no
-  # CI and nobody but the owner can merge it. With a release App configured
+  # CI and the owner merges it by hand. With a release App configured
   # (vars.RELEASE_APP_ID), its token opens the PR, CI runs on it, and the job
-  # merges it.
+  # turns on auto-merge.
   release-please:
     if: github.event_name == 'push'
     needs: [gitleaks, checks, go, shellcheck, cli]
@@ -203,10 +203,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     timeout-minutes: 10
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Mint GitHub App token
         id: app-token
@@ -231,7 +229,7 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          persist-credentials: false
 
       - name: Setup Bun
         if: steps.release.outputs.prs_created == 'true'
@@ -239,10 +237,13 @@ jobs:
         with:
           bun-version-file: .bun-version
 
+      # The token goes in the push URL only, never into .git/config; Actions
+      # masks it in the log.
       - name: Sync lockfile and formatting on release PR
         if: steps.release.outputs.prs_created == 'true'
         env:
           PR: ${{ steps.release.outputs.pr }}
+          TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         run: |
           branch=$(jq -r .headBranchName <<<"$PR")
           git fetch --depth=1 origin "$branch"
@@ -253,47 +254,30 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git commit -am "chore: sync lockfile and format release files"
-            git push origin "$branch"
+            git push "https://x-access-token:$TOKEN@github.com/$GITHUB_REPOSITORY.git" "HEAD:$branch"
           fi
 
       # Reads no release-please outputs: prs_created is false when the open
       # release PR needed no update, for example after a run that failed past
       # creating it. release-please labels its open PR "autorelease: pending".
-      # Mergeability settles some time after the sync push, and a MERGEABLE
-      # read can be stale, so the merge itself retries in the same loop.
+      # GitHub merges the PR once its required checks pass, or at once when
+      # no ruleset requires any.
       - name: Auto-merge release PR
         if: steps.app-token.outputs.token != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           for pr in $(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --label "autorelease: pending" --json number --jq '.[].number'); do
-            merged=''
-            for _ in $(seq 1 12); do
-              state=$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json mergeable --jq .mergeable)
-              if [ "$state" = "CONFLICTING" ]; then
-                echo "release PR #$pr has conflicts" >&2
-                exit 1
-              fi
-              if [ "$state" = "MERGEABLE" ] && gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --squash; then
-                merged=1
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$merged" ]; then
-              echo "release PR #$pr never became mergeable" >&2
-              exit 1
-            fi
+            gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --auto --squash
           done
 
-  release:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
-    permissions:
-      contents: write
-      packages: write
-      attestations: write
-      id-token: write
-    uses: ./.github/workflows/release.yml
-    with:
-      tag: ${{ needs.release-please.outputs.tag_name }}
+      # A run of its own, outside this workflow's concurrency group, so an
+      # hour-long release never holds up CI on main. release.yml comes from
+      # main and checks out the tag. A dispatch is the one GITHUB_TOKEN event
+      # that starts a workflow.
+      - name: Start the release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
