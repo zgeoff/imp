@@ -1,7 +1,16 @@
 import { expect, test } from 'bun:test';
+import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
-import { readState, requireImp, runImp, runInImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import {
+  readInfo,
+  readState,
+  requireImp,
+  runImp,
+  runInImp,
+  runShellInImp,
+  tryImp,
+} from '../lib/imp-cli';
 import { registerImp, removeImps } from '../lib/imps';
 import { runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -22,18 +31,19 @@ test('imp new boots the default image and the first exec answers within the limi
   const ms = Date.now() - started;
 
   writeMetric('newPlusExecMs', ms);
-
-  expect(ms).toBeLessThanOrEqual(config.maxNewMs);
+  checkLimit('imp new + first exec', ms, config.maxNewMs);
 
   const row = await requireImp(name);
   const urls = await runImp('url', name);
   const uname = await runInImp(name, 'uname', '-a');
+  const info = await readInfo();
 
   expect(out.trim()).toBe(`${name} ${row.url}`);
   expect(row.url).toMatch(new RegExp(`^http://${name}\\.imp\\.localhost:\\d+$`));
   expect(row.state).toBe('running');
   expect(urls.split('\n')[0]).toBe(row.url);
   expect(uname).toStartWith(`Linux ${name} `);
+  expect(info.impCount).toBeGreaterThanOrEqual(1);
 });
 
 test('exec passes stdout, stdin, stderr and exit codes through', async () => {

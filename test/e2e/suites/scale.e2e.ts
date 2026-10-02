@@ -196,6 +196,20 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
     expect(lastSlept).toBeLessThanOrEqual(firstAwake);
 
+    // exec wakes the least recently active imp the governor slept, memory
+    // and all: its tmpfs fill is still there, and RAM stays in budget
+    const [lru] = sleeping.toSorted(
+      (a, b) => Date.parse(a.lastActiveAt) - Date.parse(b.lastActiveAt),
+    );
+
+    const fillMib = await runShellInImp(lru?.name ?? '', 'du -m /run/fill/blob | cut -f1');
+
+    expect(Number(fillMib)).toBe(config.scaleFillMib);
+
+    await Bun.sleep(3000);
+
+    expect(findViolations(monitor.samples)).toBeEmpty();
+
     // each request to a sleeping imp must wake it within the budget
     for (let index = 1; index <= config.scaleCount; index++) {
       const name = buildName(index);
@@ -216,11 +230,6 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     console.log(`    woke ${String(wakeMs.length)} sleeping imps by HTTP`);
 
     expect(wakeMs).not.toBeEmpty();
-
-    // the governor slept it with its memory: the tmpfs fill is still there
-    const fillMib = await runShellInImp(buildName(1), 'du -m /run/fill/blob | cut -f1');
-
-    expect(Number(fillMib)).toBe(config.scaleFillMib);
 
     // an imp that cannot fit even after sleeping everything else
     const huge = `${prefix}huge`;

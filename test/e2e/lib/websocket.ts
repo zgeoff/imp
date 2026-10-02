@@ -3,59 +3,113 @@ import { instance } from './instance';
 
 const TIMEOUT_MS = 30_000;
 
-// resolves once the upgrade through the wake proxy completes
-export function openProxySocket(name: string, path = '/'): Promise<WebSocket> {
-  const socket = new WebSocket(`ws://localhost:${String(instance.proxyPort)}${path}`, {
-    headers: { host: buildProxyHost(name) },
+type Message = string | ArrayBuffer;
+
+interface CloseInfo {
+  readonly code: number;
+  readonly reason: string;
+}
+
+// A client socket that queues what arrives, so a message the server sends
+// the moment the socket opens is not lost before a test reads it.
+export interface QueuedSocket {
+  readonly socket: WebSocket;
+  readonly readMessage: () => Promise<Message>;
+  readonly closed: Promise<CloseInfo>;
+}
+
+function openQueuedSocket(
+  url: string,
+  options: Readonly<{ host?: string; protocols?: readonly string[] }>,
+): Promise<QueuedSocket> {
+  const socket = new WebSocket(url, {
+    protocols: [...(options.protocols ?? [])],
+    ...(options.host !== undefined && { headers: { host: options.host } }),
   });
+
+  const queue: Message[] = [];
+
+  // readers waiting for the queue to fill
+  const waiters: (() => void)[] = [];
+
+  socket.binaryType = 'arraybuffer';
+
+  socket.addEventListener('message', (event) => {
+    const data: unknown = event.data;
+
+    if (typeof data === 'string' || data instanceof ArrayBuffer) {
+      queue.push(data);
+      waiters.shift()?.();
+    }
+  });
+
+  const closed = new Promise<CloseInfo>((resolve) => {
+    socket.addEventListener('close', (event) => {
+      resolve({ code: event.code, reason: event.reason });
+    });
+  });
+
+  const readMessage = async (): Promise<Message> => {
+    if (queue.length === 0) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error(`no WebSocket message from ${url} in ${String(TIMEOUT_MS)} ms`));
+        }, TIMEOUT_MS);
+
+        waiters.push(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    }
+
+    const message = queue.shift();
+
+    if (message === undefined) {
+      throw new Error(`the WebSocket queue for ${url} is empty after a message arrived`);
+    }
+
+    return message;
+  };
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.close();
 
-      reject(new Error(`the WebSocket to ${name} did not open in ${String(TIMEOUT_MS)} ms`));
+      reject(new Error(`the WebSocket to ${url} did not open in ${String(TIMEOUT_MS)} ms`));
     }, TIMEOUT_MS);
 
     socket.addEventListener('open', () => {
       clearTimeout(timer);
-      resolve(socket);
+      resolve({ socket, readMessage, closed });
     });
 
     // after open this rejects a settled promise, which is a no-op
     socket.addEventListener('close', (event) => {
       clearTimeout(timer);
-      reject(new Error(`the WebSocket to ${name} closed: ${String(event.code)} ${event.reason}`));
+      reject(new Error(`the WebSocket to ${url} closed: ${String(event.code)} ${event.reason}`));
     });
   });
 }
 
-// resolves with the next message after the one sent
-export function sendAndReceive(socket: WebSocket, message: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`no WebSocket reply to '${message}' in ${String(TIMEOUT_MS)} ms`));
-    }, TIMEOUT_MS);
-
-    socket.addEventListener(
-      'message',
-      (event) => {
-        clearTimeout(timer);
-        resolve(String(event.data));
-      },
-      { once: true },
-    );
-
-    socket.send(message);
+// through the wake proxy's Host routing
+export function openProxySocket(
+  name: string,
+  protocols: readonly string[] = [],
+): Promise<QueuedSocket> {
+  return openQueuedSocket(`ws://localhost:${String(instance.proxyPort)}/`, {
+    host: buildProxyHost(name),
+    protocols,
   });
 }
 
-// resolves once the close handshake finishes
-export function stopSocket(socket: WebSocket): Promise<void> {
-  return new Promise((resolve) => {
-    socket.addEventListener('close', () => {
-      resolve();
-    });
+// through the imp's own published port, 20000 + slot
+export function openImpPortSocket(slot: number): Promise<QueuedSocket> {
+  return openQueuedSocket(`ws://localhost:${String(instance.impPortBase + slot)}/`, {});
+}
 
-    socket.close();
-  });
+export function sendAndRead(queued: QueuedSocket, message: string | Uint8Array): Promise<Message> {
+  queued.socket.send(message);
+
+  return queued.readMessage();
 }

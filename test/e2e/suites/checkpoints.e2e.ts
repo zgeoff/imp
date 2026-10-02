@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { checkLimit } from '../lib/check-limit';
 import { config } from '../lib/config';
 import { listCheckpoints, readState, requireImp, runImp, runInImp, tryImp } from '../lib/imp-cli';
 import {
@@ -60,8 +61,11 @@ test('a checkpoint of a running imp restores its disk', async () => {
   // impd's own timing, without the CLI round trip
   const impdMs = await readImpdLoggedMs(`${source}: checkpoint ${cp1} in`);
 
-  expect(impdMs).not.toBeNull();
-  expect(impdMs).toBeLessThanOrEqual(config.maxCheckpointMs);
+  if (impdMs === null) {
+    throw new Error(`impd logged no checkpoint time for ${source}`);
+  }
+
+  checkLimit('checkpoint (impd)', impdMs, config.maxCheckpointMs);
 
   const row = await requireImp(source);
 

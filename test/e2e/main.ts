@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import type { Subprocess } from 'bun';
 import * as z from 'zod';
 import { config } from './lib/config';
 import { createMissingImages } from './lib/fixtures';
@@ -17,7 +18,7 @@ import {
 import type { HarnessArgs } from './lib/parse-args';
 import { parseArgs } from './lib/parse-args';
 import type { FixtureImage } from './lib/suites';
-import { SUITES } from './lib/suites';
+import { SUITES, buildSuiteArgv } from './lib/suites';
 
 const USAGE = `imp end-to-end harness: every case drives impd through the CLI.
 
@@ -44,9 +45,6 @@ const RESULTS_DIR = join(REPO_ROOT, '.cache', 'e2e');
 const RESULTS_FILE = join(RESULTS_DIR, 'results.json');
 const METRICS_FILE = join(RESULTS_DIR, 'metrics.jsonl');
 
-// generous: a suite's own waits fail long before this
-const SUITE_TIMEOUT_MS = 3_600_000;
-
 interface Section {
   readonly index: number;
   readonly name: string;
@@ -58,10 +56,27 @@ interface Section {
 const MetricSchema = z.record(z.string(), z.unknown());
 let interrupted = false;
 
+// the suite process running now, so a signal can stop it
+let running: Subprocess | null = null;
+
+// The dev instance's data dir, as scripts/dev.sh picks it. The reset deletes
+// it as root, so anything outside the repo is refused.
+function resolveDataDir(): string {
+  const configured = process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev');
+  const data = resolve(REPO_ROOT, configured);
+  const inside = relative(REPO_ROOT, data);
+
+  if (configured.trim() === '' || inside === '' || inside.startsWith('..') || isAbsolute(inside)) {
+    throw new Error(`refusing to wipe ${data}: --clean only wipes a data dir inside ${REPO_ROOT}`);
+  }
+
+  return data;
+}
+
 // tailnet logout, then the container and its data dir go: the run starts
 // from nothing
 async function resetInstance(): Promise<void> {
-  const data = process.env['IMP_DEV_DATA'] ?? join(REPO_ROOT, '.data', 'dev');
+  const data = resolveDataDir();
   const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
 
   console.log(`    clean reset: tailnet logout, remove ${instance.container}, wipe ${data}`);
@@ -160,31 +175,30 @@ async function setupInstance(args: HarnessArgs): Promise<void> {
   await createMissingImages([...images]);
 }
 
+function stopRun(signal: NodeJS.Signals): void {
+  interrupted = true;
+  running?.kill(signal);
+}
+
 async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
-  const proc = Bun.spawn(
-    [
-      process.execPath,
-      'test',
-      '--bail',
-      '--timeout',
-      String(SUITE_TIMEOUT_MS),
-      `./test/e2e/suites/${name}.e2e.ts`,
-    ],
-    {
-      cwd: REPO_ROOT,
-      stdout: 'inherit',
-      stderr: 'inherit',
-      env: {
-        ...process.env,
-        E2E_SUITES: args.suites.join(','),
-        E2E_KEEP: args.keep ? '1' : '0',
-        E2E_ACCEPTANCE: args.acceptance ? '1' : '0',
-        E2E_METRICS_FILE: METRICS_FILE,
-      },
+  const proc = Bun.spawn([...buildSuiteArgv(process.execPath, name)], {
+    cwd: REPO_ROOT,
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env: {
+      ...process.env,
+      E2E_SUITES: args.suites.join(','),
+      E2E_KEEP: args.keep ? '1' : '0',
+      E2E_ACCEPTANCE: args.acceptance ? '1' : '0',
+      E2E_METRICS_FILE: METRICS_FILE,
     },
-  );
+  });
+
+  running = proc;
 
   const exitCode = await proc.exited;
+
+  running = null;
 
   if (exitCode !== 0 && !interrupted) {
     console.log(`== impd log tail\n${await readImpdLogTail(40)}`);
@@ -295,9 +309,13 @@ async function main(): Promise<number> {
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
   process.env['IMP_IDLE_TIMEOUT_S'] = String(config.idleTimeoutS);
 
-  // Ctrl-C reaches the running suite too; stop after it and clean up
+  // stop the running suite, run no more, and clean up
   process.on('SIGINT', () => {
-    interrupted = true;
+    stopRun('SIGINT');
+  });
+
+  process.on('SIGTERM', () => {
+    stopRun('SIGTERM');
   });
 
   mkdirSync(RESULTS_DIR, { recursive: true });

@@ -31,3 +31,20 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
   fast: ['lifecycle', 'checkpoints', 'sleep', 'restart'],
 };
+
+// generous: a suite's own waits fail long before this
+const SUITE_TIMEOUT_MS = 3_600_000;
+
+// Plain `bun test` skips *.e2e.ts; a ./ path runs one anyway, where a bare
+// path is a name filter. --bail ends a suite at its first failure: the steps
+// build on each other.
+export function buildSuiteArgv(bunPath: string, name: string): readonly string[] {
+  return [
+    bunPath,
+    'test',
+    '--bail',
+    '--timeout',
+    String(SUITE_TIMEOUT_MS),
+    `./test/e2e/suites/${name}.e2e.ts`,
+  ];
+}

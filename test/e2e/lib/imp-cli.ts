@@ -27,6 +27,7 @@ const SystemInfoSchema = z.object({
   ramBudgetMib: z.number(),
   ramUsedMib: z.number(),
   awakeCount: z.number(),
+  impCount: z.number(),
   tailscale: z.object({
     state: z.string().nullable(),
     hostname: z.string().nullable(),
