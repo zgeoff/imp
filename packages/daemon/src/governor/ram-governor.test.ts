@@ -362,11 +362,19 @@ test('enforce says once that nothing is left to sleep, until usage is under the 
   ]);
 });
 
-test('an admission that may not sleep imps takes free room only', async () => {
+// a boot template's build: no event, since a GovernorDecision names an imp
+test('an admission that may not sleep imps takes free room only, and one with no name publishes nothing', async () => {
   const slept: string[] = [];
+  const events = createEventBus();
+  const published: string[] = [];
+
+  events.subscribe((event) => {
+    published.push(event.ev);
+  });
 
   const governor = createRamGovernor({
     budgetMib: 1000,
+    events,
     listAwake: () =>
       Promise.resolve([
         { id: 'idle', name: 'idle', pid: 1, apiSocket: '', lastActiveAt: 0, holdUntil: null },
@@ -385,16 +393,17 @@ test('an admission that may not sleep imps takes free room only', async () => {
 
   await governor.admit({
     id: 't1',
-    name: 't',
+    name: null,
     reserveMib: 300,
     memoryMib: 600,
     maySleepImps: false,
   });
 
   const rejection = await governor
-    .admit({ id: 't2', name: 't', reserveMib: 300, memoryMib: 600, maySleepImps: false })
+    .admit({ id: 't2', name: null, reserveMib: 300, memoryMib: 600, maySleepImps: false })
     .catch((error: unknown) => error);
 
   expect(rejection).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
   expect(slept).toEqual([]);
+  expect(published).toEqual([]);
 });
