@@ -2,10 +2,11 @@
 
 ## [0.11.0](https://github.com/zgeoff/imp/compare/v0.10.0...v0.11.0) (2026-10-02)
 
-
 ### Features
 
-* service add --http-port, and recorded in services.list ([15e9635](https://github.com/zgeoff/imp/commit/15e96350c47fa25ca3a47c0f4d4568037f782071)), closes [#23](https://github.com/zgeoff/imp/issues/23)
+- service add --http-port, and recorded in services.list
+  ([15e9635](https://github.com/zgeoff/imp/commit/15e96350c47fa25ca3a47c0f4d4568037f782071)), closes
+  [#23](https://github.com/zgeoff/imp/issues/23)
 
 ## [0.10.0](https://github.com/zgeoff/imp/compare/v0.9.0...v0.10.0) (2026-10-02)
 
