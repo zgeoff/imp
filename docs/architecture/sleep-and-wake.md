@@ -542,10 +542,10 @@ slept, and every 4 KiB page of their mem files hashed.
 
 That is about 80 MiB for each guest after the first, whatever its own data. It is an upper bound,
 and it applies to pages a guest has written since its last boot or wake. KSM merges only anonymous
-pages. A woken guest maps its mem file MAP_PRIVATE, so the pages it has only read stay clean file
-pages, which KSM does not merge. Sharing those across imps of one image is the template approach
-([#34](https://github.com/zgeoff/imp/issues/34)), which comes first: it needs no ksmd and no copy on
-write. KSM adds the pages guests write.
+pages. A woken guest, and a guest restored from a [boot template](./boot-templates.md), maps its mem
+file MAP_PRIVATE, so the pages it has only read stay clean file pages: the page cache already shares
+a template's across the imps restored from it, with no ksmd. KSM merges only the pages a guest
+copies on write.
 
 **The governor.** A merged page's Pss is split across the VMs that map it, so the governor's
 `Pss_Anon` sum falls by what KSM saves, with no change. A write splits a merged page again, at write
@@ -566,6 +566,20 @@ merges a zero-filled page into the kernel's zero page. Such pages leave `Rss` an
 of one, so it carries the merge flag too. Unplugged memory is discarded, and its merged pages are
 unmapped.
 
-**Not measured yet.** ksmd's CPU, and real merges with Pss: both need KSM on for the whole host. CI
-turns it on for its own runner VM, and the `ksm` e2e suite records `ksm_merging_pages`, the Pss
-before and after, and ksmd's CPU in `.cache/e2e/results.json`. It never turns KSM on itself.
+**Measured on CI.** KSM needs to be on for the whole host, so CI turns it on for its own runner VM
+(Linux 6.17, `pages_to_scan=1000`, `use_zero_pages=1`); the `ksm` e2e suite never turns it on
+itself. It records `ksm_merging_pages`, the Pss and ksmd's CPU in `.cache/e2e/results.json`. Two
+jailed 512 MiB guests restored from a boot template, each with the same 96 MiB fill (run
+37072607965):
+
+| Measure                                  | Value                                          |
+| ---------------------------------------- | ---------------------------------------------- |
+| Pages merged in each guest               | 20328 and 20320 (about 79 MiB of each fill)    |
+| Pss of the two, before the fill          | 12 + 12 MiB                                    |
+| Pss of the two, after the merge          | 74 + 73 MiB, against 216 MiB unmerged          |
+| ksmd CPU over the test                   | 1180 ms                                        |
+| `imp info`                               | 80 MiB shared, 157 MiB headroom, 0 unmergeable |
+| Tight budget (512 MiB, 288 MiB own each) | one guest slept; awake Pss 309 MiB             |
+
+The headroom is about twice the saving: it sums each VM's `ksm_process_profit`, and a page two VMs
+share counts in both. That errs on the safe side.
