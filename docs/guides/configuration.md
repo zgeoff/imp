@@ -130,9 +130,22 @@ not pass `IMP_DNS`, so the dev instance uses the defaults.
 | `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                               |
 | `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                        |
 
-`dev.sh` reads `TAILSCALE_AUTHKEY` and `IMP_DNS_API_TOKEN` from `.env` in the repo root and passes
-the file to Docker, so neither is ever printed. It sets `IMP_UPLINK_MTU` from this machine's default
-route.
+`dev.sh` passes `.env` in the repo root to Docker as an env file, so `IMP_DNS_API_TOKEN` and any
+other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first of:
+
+1. `TAILSCALE_AUTHKEY` in your environment.
+2. `op read "$IMP_TAILSCALE_AUTHKEY_REF"` when the 1Password CLI is on `PATH` and the read works.
+   The reference defaults to `op://cloud/imp-tailscale-authkey/credential`. The read gets 20
+   seconds, so a locked 1Password app cannot hang a run. A failed read stays quiet, falls through,
+   and sets `IMP_TAILSCALE_OP_MISSED=1`, so the rest of the run (a reboot, the e2e harness's later
+   steps) skips `op`.
+3. `TAILSCALE_AUTHKEY` in `.env`.
+
+With none of them, the dev instance stays off the tailnet. The key reaches Docker as
+`-e TAILSCALE_AUTHKEY` with no value, so it never shows in argv, and `bash -x` traces never show it.
+`load_tailscale_authkey` in `scripts/lib.sh` holds the order; the e2e harness uses it too.
+
+`dev.sh` sets `IMP_UPLINK_MTU` from this machine's default route.
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,

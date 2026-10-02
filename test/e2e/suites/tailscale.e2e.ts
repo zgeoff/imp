@@ -1,19 +1,20 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import * as z from 'zod';
 import { config } from '../lib/config';
 import { resolveImageName } from '../lib/fixtures';
 import { assertState, readImpUrls, readInfo, requireImp, runImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { REPO_ROOT, runCommand, runDevScript, runInContainer } from '../lib/instance';
+import { runCommand, runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { readTailscaleAuthKey } from '../lib/tailscale-key';
 import { waitFor } from '../lib/wait-for';
 
 const prefix = setupSuite('tailscale');
 const TINY = resolveImageName('e2e-tiny');
 const name = `${prefix}a`;
-const NOT_READY = 'tailscale needs TAILSCALE_AUTHKEY (env or .env) and this machine on the tailnet';
+
+const NOT_READY =
+  'tailscale needs TAILSCALE_AUTHKEY (env, 1Password or .env) and this machine on the tailnet';
 
 const PeerSchema = z.object({
   DNSName: z.string().default(''),
@@ -25,18 +26,6 @@ const TailscaleStatusSchema = z.object({
   BackendState: z.string(),
   Peer: z.record(z.string(), PeerSchema).default({}),
 });
-
-// The key impd joins with comes from the env or .env, which scripts/dev.sh
-// hands to the container. Only its presence is checked, never its value.
-function checkAuthKey(): boolean {
-  if ((process.env['TAILSCALE_AUTHKEY'] ?? '') !== '') {
-    return true;
-  }
-
-  const envFile = join(REPO_ROOT, '.env');
-
-  return existsSync(envFile) && /^TAILSCALE_AUTHKEY=.+/m.test(readFileSync(envFile, 'utf8'));
-}
 
 async function readLocalStatus(): Promise<z.infer<typeof TailscaleStatusSchema> | null> {
   try {
@@ -92,8 +81,9 @@ async function readTailnetBody(url: string, host?: string): Promise<string> {
 }
 
 const localStatus = await readLocalStatus();
+const authKey = await readTailscaleAuthKey();
 
-const ready = checkAuthKey() && localStatus?.BackendState === 'Running';
+const ready = authKey !== null && localStatus?.BackendState === 'Running';
 
 if (!ready && !config.acceptance) {
   console.log(`    ${NOT_READY}; skipped`);
