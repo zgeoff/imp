@@ -71,10 +71,11 @@ export interface DroppedStorage {
   readonly id: string;
 }
 
-// An imp's disk or an image no row names and no crash explains, as a lost
-// database leaves every disk. A sweep keeps it unless asked for orphans.
+// What no row names and no crash provably explains: an imp's disk or
+// directory, its memory snapshot (`memory`, ZFS), or an image, as a lost
+// database leaves them. A sweep keeps it unless asked for orphans.
 export interface OrphanStorage {
-  readonly kind: 'imp' | 'image';
+  readonly kind: 'imp' | 'image' | 'memory';
   readonly id: string;
 
   // the dataset, or the directory on XFS

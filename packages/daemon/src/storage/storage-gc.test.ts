@@ -77,7 +77,7 @@ test('a GC keeps an imp no row names until asked for orphans, and a dry run only
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([dev.id]);
 });
 
-test('the hourly pass keeps every orphan of a lost database and logs each once a pass', async () => {
+test('start, the hourly pass and imp gc keep every orphan of a lost database', async () => {
   await using ctx = await setupImpTest();
 
   const logs: string[] = [];
@@ -91,27 +91,55 @@ test('the hourly pass keeps every orphan of a lost database and logs each once a
     },
   });
 
-  // an empty database over the disks and checkpoints of two imps
+  // an empty database over an image, and the disks, checkpoints and memory
+  // snapshots of two imps
+  await ctx.storage.createImage('sha256:old', async (dir) => {
+    await Bun.write(join(dir, 'rootfs.ext4'), 'rootfs');
+  });
+
   for (const impId of ['a', 'b']) {
+    const paths = ctx.storage.resolveImpPaths(impId);
+
     await ctx.storage.createImpDisk(impId, { kind: 'empty' });
     await ctx.storage.createCheckpoint(impId, `cp-${impId}`);
+    await Bun.write(paths.vmstate, 'vmstate');
+    await Bun.write(paths.snapshotMeta, '{}');
   }
 
+  const live = await readLiveStorage(ctx.db);
+
+  await ctx.storage.start(live);
   await gc.runScheduled();
   await gc.runScheduled();
+
+  const manual = await gc.runGc({ isDryRun: false, isOrphans: false });
 
   for (const impId of ['a', 'b']) {
-    expect(existsSync(ctx.storage.resolveImpPaths(impId).disk)).toBeTrue();
-    expect(readdirSync(ctx.storage.resolveImpPaths(impId).checkpointsDir)).toEqual([`cp-${impId}`]);
+    const paths = ctx.storage.resolveImpPaths(impId);
+
+    expect(existsSync(paths.disk)).toBeTrue();
+    expect(existsSync(paths.vmstate)).toBeTrue();
+    expect(existsSync(paths.snapshotMeta)).toBeTrue();
+    expect(readdirSync(paths.checkpointsDir)).toEqual([`cp-${impId}`]);
   }
 
+  expect(existsSync(join(ctx.dataDir, 'images', 'old', 'rootfs.ext4'))).toBeTrue();
+  expect(manual.dropped).toEqual([]);
+
+  expect(manual.kept?.map((orphan) => `${orphan.kind} ${orphan.id}`)).toEqual([
+    'image old',
+    'imp a',
+    'imp b',
+  ]);
+
+  // once for each hourly pass, never for imp gc, which returns them
   expect(logs.filter((line) => line.includes('kept orphan imp a '))).toHaveLength(2);
-  expect(logs.filter((line) => line.includes('kept orphan imp b '))).toHaveLength(2);
-  expect(logs.filter((line) => line.includes('kept 2 orphans'))).toHaveLength(2);
-  expect(logs).toHaveLength(6);
+  expect(logs.filter((line) => line.includes('kept orphan image old '))).toHaveLength(2);
+  expect(logs.filter((line) => line.includes('kept 3 orphans'))).toHaveLength(2);
+  expect(logs).toHaveLength(8);
 });
 
-test('the hourly pass on ZFS keeps the disks of a lost database, checkpoints and all', async () => {
+test('the hourly pass and imp gc on ZFS keep what a lost database leaves', async () => {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-gc-zfs-`);
   const fake = createFakeZfs({ root: 'tank/imp', rootDir: dataDir });
   const logs: string[] = [];
@@ -131,8 +159,10 @@ test('the hourly pass on ZFS keeps the disks of a lost database, checkpoints and
     const live = await readLiveStorage(db);
 
     await backend.start(live);
+    await backend.createImage('sha256:old', () => Promise.resolve());
     await backend.createImpDisk('a', { kind: 'empty' });
     await backend.createCheckpoint('a', 'cp-1');
+    await Bun.write(backend.resolveImpPaths('a').vmstate, 'vmstate');
 
     const gc = createStorageGc({
       db,
@@ -144,12 +174,18 @@ test('the hourly pass on ZFS keeps the disks of a lost database, checkpoints and
     });
 
     await gc.runScheduled();
+
+    const manual = await gc.runGc({ isDryRun: false, isOrphans: false });
+
     await backend.waitForReclaim();
 
+    expect(manual.dropped).toEqual([]);
     expect(fake.listDatasets()).toContain('tank/imp/disks/a');
-    expect(fake.listSnapshots()).toEqual(['tank/imp/disks/a@cp-1']);
+    expect(fake.listDatasets()).toContain('tank/imp/images/old');
+    expect(fake.listSnapshots()).toEqual(['tank/imp/disks/a@cp-1', 'tank/imp/images/old@base']);
     expect(fake.isDeferred('tank/imp/disks/a@cp-1')).toBeFalse();
-    expect(logs).toHaveLength(2);
+    expect(existsSync(backend.resolveImpPaths('a').vmstate)).toBeTrue();
+    expect(logs).toHaveLength(3);
 
     expect(logs[0]).toMatch(
       /^impd: gc: kept orphan imp a \(tank\/imp\/disks\/a\): .+snapshots: cp-1$/,
@@ -196,4 +232,35 @@ test('a GC waits for a checkpoint whose clone exists before its row', async () =
   const listed = await app.client.checkpoints.list({ name: 'dev' });
 
   expect(listed.map((one) => one.id)).toEqual([made.id]);
+});
+
+test('a GC with orphans waits for an imp whose disk exists before its row', async () => {
+  const gate = Promise.withResolvers<void>();
+  const reached = Promise.withResolvers<void>();
+
+  await using ctx = await setupImpTest({
+    cloneDisk: buildHeldClone('/disk.ext4', gate.promise, reached.resolve),
+  });
+
+  await ctx.createTestImage('ubuntu');
+
+  const app = buildTestApp(ctx, ctx);
+  const created = app.client.imps.create({ name: 'dev' });
+
+  await reached.promise;
+
+  const gc = app.client.system.gc({ orphans: true });
+
+  // the GC waits on the gate while the clone holds
+  await Bun.sleep(20);
+
+  expect(ctx.storageGate.countInFlight()).toBe(1);
+
+  gate.resolve();
+
+  const dev = await created;
+  const swept = await gc;
+
+  expect(swept).toEqual({ dryRun: false, dropped: [], kept: [] });
+  expect(existsSync(buildImpPaths(ctx.dataDir, dev.id).disk)).toBeTrue();
 });

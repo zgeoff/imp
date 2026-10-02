@@ -84,8 +84,9 @@ const NO_ROWS = {
   imageDigests: new Set<string>(),
 };
 
-// images abc and old, imps a (cp-1, cp-2, a memory file) and b, as a
-// lost database leaves them
+// What a lost database leaves: images abc and old, an image with no rootfs,
+// imps a (cp-1, cp-2, a memory file) and b, and the memory snapshot of an
+// imp with no disk
 async function setupSurvivors() {
   const ctx = setupTest();
 
@@ -100,12 +101,18 @@ async function setupSurvivors() {
 
   mkdirSync(dirname(memFile), { recursive: true });
   writeFileSync(memFile, 'memory');
-
-  // crash leftovers: a destroy's empty imp directory and an image directory
-  // with no rootfs
-  mkdirSync(join(ctx.backend.resolveImpPaths('done').runDir), { recursive: true });
   mkdirSync(join(ctx.dataDir, 'images', 'half'), { recursive: true });
   writeFileSync(join(ctx.dataDir, 'images', 'half', 'config.json'), '{}');
+
+  const sleeper = ctx.backend.resolveImpPaths('sleeper');
+
+  mkdirSync(sleeper.snapshotDir, { recursive: true });
+  writeFileSync(sleeper.vmstate, 'vmstate');
+  writeFileSync(sleeper.snapshotMeta, '{}');
+
+  // empty directories: provably nothing
+  mkdirSync(join(ctx.backend.resolveImpPaths('done').runDir), { recursive: true });
+  mkdirSync(join(ctx.dataDir, 'images', 'empty'), { recursive: true });
 
   return ctx;
 }
@@ -119,8 +126,9 @@ test('start keeps every imp and image a lost database leaves, and logs each', as
 
   await ctx.backend.start(NO_ROWS);
 
-  expect(readdirSync(join(ctx.dataDir, 'imps')).toSorted()).toEqual(['a', 'b']);
-  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['abc', 'old']);
+  expect(readdirSync(join(ctx.dataDir, 'imps')).toSorted()).toEqual(['a', 'b', 'sleeper']);
+  expect(readdirSync(join(ctx.dataDir, 'images')).toSorted()).toEqual(['abc', 'half', 'old']);
+  expect(existsSync(ctx.backend.resolveImpPaths('sleeper').vmstate)).toBeTrue();
 
   expect(readdirSync(ctx.backend.resolveImpPaths('a').checkpointsDir).toSorted()).toEqual([
     'cp-1',
@@ -131,15 +139,15 @@ test('start keeps every imp and image a lost database leaves, and logs each', as
 
   const kept = ctx.logs.filter((line) => line.startsWith('impd: storage: kept orphan'));
 
-  expect(kept).toHaveLength(4);
+  expect(kept).toHaveLength(6);
 
   expect(kept.find((line) => line.includes('orphan imp a '))).toMatch(
     /^impd: storage: kept orphan imp a \(.+\/imps\/a\): \d+\.\d MiB, created \d{4}-\d\d-\d\dT.+Z, snapshots: cp-1, cp-2$/,
   );
 
+  expect(ctx.logs).toContain('impd: storage: removed image empty');
   expect(ctx.logs).toContain('impd: storage: removed imp done');
-  expect(ctx.logs).toContain('impd: storage: removed image half');
-  expect(ctx.logs.at(-1)).toContain('kept 4 orphans the database does not name');
+  expect(ctx.logs.at(-1)).toContain('kept 6 orphans the database does not name');
 });
 
 test('a sweep keeps the orphans, a dry run with orphans lists them, and orphans removes them', async () => {
@@ -150,31 +158,35 @@ test('a sweep keeps the orphans, a dry run with orphans lists them, and orphans 
   const swept = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: false, isOrphans: false });
 
   expect(swept.dropped).toEqual([
-    { kind: 'image', id: 'half' },
+    { kind: 'image', id: 'empty' },
     { kind: 'imp', id: 'done' },
   ]);
 
   expect(swept.kept.map((orphan) => [orphan.kind, orphan.id, orphan.snapshots])).toEqual([
     ['image', 'abc', []],
+    ['image', 'half', []],
     ['image', 'old', []],
     ['imp', 'a', ['cp-1', 'cp-2']],
     ['imp', 'b', []],
+    ['imp', 'sleeper', []],
   ]);
 
   expect(swept.kept.every((orphan) => orphan.bytes > 0 && orphan.createdAt !== null)).toBeTrue();
 
   const kept = listTree(ctx.dataDir);
 
-  expect(kept).toEqual(before.filter((path) => !/^(?:imps\/done|images\/half)/.test(path)));
+  expect(kept).toEqual(before.filter((path) => !/^(?:imps\/done|images\/empty)/.test(path)));
 
   const listed = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: true, isOrphans: true });
 
   expect(listed).toEqual({
     dropped: [
       { kind: 'image', id: 'abc' },
+      { kind: 'image', id: 'half' },
       { kind: 'image', id: 'old' },
       { kind: 'imp', id: 'a' },
       { kind: 'imp', id: 'b' },
+      { kind: 'imp', id: 'sleeper' },
     ],
     kept: [],
   });

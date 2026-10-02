@@ -12,14 +12,14 @@ export const DroppedStorageSchema = z
 
 export type DroppedStorage = z.infer<typeof DroppedStorageSchema>;
 
-// An imp's disk or an image no row names and no crash explains, such as
-// every disk after the database is lost. A GC keeps it unless asked for orphans.
+// What no row names and no crash provably explains, such as every disk after
+// the database is lost. A GC keeps it unless asked for orphans.
 export const OrphanStorageSchema = z
   .object({
-    kind: z.enum(['imp', 'image']),
+    kind: z.enum(['imp', 'image', 'memory']),
     id: z.string(),
 
-    // the ZFS dataset, or the XFS directory
+    // the ZFS dataset, or the directory
     location: z.string(),
 
     // its snapshots or checkpoints included
