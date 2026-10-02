@@ -76,6 +76,13 @@ test('it turns off only the XFS features the kernel cannot mount and mkfs.xfs kn
   );
 });
 
+test('it sizes a loop file to leave the larger of 30 GiB and 15 % of / free', () => {
+  // a 240 GB disk with the OS installed has about 220 GiB free
+  expect(runFunction('loop_size_auto_gib', ['220']).trim()).toBe('187');
+  expect(runFunction('loop_size_auto_gib', ['100']).trim()).toBe('70');
+  expect(runFunction('loop_size_auto_gib', ['40']).trim()).toBe('10');
+});
+
 test('it writes the fstab entry by kind', () => {
   expect(runFunction('fstab_line', ['UUID=1234', 'device'])).toBe(
     'UUID=1234 /var/lib/imp xfs defaults,nofail 0 2\n',

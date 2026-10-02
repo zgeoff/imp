@@ -296,6 +296,12 @@ run_device() {
   if bootstrap --check; then fail "[$distro] --check took a mounted device"; fi
   grep -q "is mounted" <<<"$LAST_OUTPUT" || fail "[$distro] no 'is mounted' refusal"
 
+  log "[$distro] --check sizes a loop file from the free space"
+  storage_args=(--loop-file /var/auto.xfs)
+  if bootstrap --check; then fail "[$distro] --check with a loop file found nothing to do"; fi
+  grep -qE "GiB free on /; the loop file gets [0-9]+ GiB" <<<"$LAST_OUTPUT" \
+    || fail "[$distro] --check did not size the loop file"
+
   log "[$distro] --storage zfs --check on an empty device"
   storage_args=(--storage zfs --data-device "$empty")
   if bootstrap --check; then fail "[$distro] --check with zfs found nothing to do"; fi

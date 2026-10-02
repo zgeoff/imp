@@ -3,7 +3,7 @@
 # (docs/guides/install.md, "Bootstrap a server"). Run as root:
 #
 #   bootstrap.sh --yes --data-device /dev/nvme1n1
-#   bootstrap.sh --yes --loop-file /srv/imp.xfs --loop-size 400
+#   bootstrap.sh --yes --loop-file /srv/imp.xfs                # sized from the free space
 #   bootstrap.sh --check --data-device /dev/nvme1n1   # exit 1 if a run would change anything
 #   bootstrap.sh --yes --storage zfs --data-device /dev/nvme1n1
 #
@@ -38,7 +38,8 @@ Storage:
                               refused.
   --loop-file PATH            XFS only: a sparse XFS file on the root
                               filesystem instead of a device
-  --loop-size GIB             its apparent size (default 200)
+  --loop-size GIB|auto        its size (default auto: the free space on /
+                              less what the OS and Docker keep)
   --zfs-pool NAME             ZFS only: the pool (default tank). It is created
                               on --data-device, or must exist already; imp
                               gets the dataset NAME/imp.
@@ -61,8 +62,8 @@ readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:latest
 # The template's IMP_RAM_BUDGET_MIB; a file still holding it gets the
 # computed budget, any other value is the operator's and stays.
 readonly TEMPLATE_BUDGET_MIB=16384
-# Below this much free space on the root filesystem, a loop file is refused.
-readonly LOOP_MIN_FREE_GIB=20
+# A loop file smaller than this is refused.
+readonly LOOP_MIN_GIB=20
 
 mode=
 storage=
@@ -70,7 +71,7 @@ zfs_pool=
 zfs_root=
 data_device=
 loop_file=
-loop_size_gib=200
+loop_size_gib=auto
 image=$DEFAULT_IMAGE
 image_set=
 image_archive=
@@ -176,6 +177,15 @@ mkfs_xfs_opts() {
     opts+=(-n parent=0)
   fi
   echo "${opts[*]}"
+}
+
+# loop_size_auto_gib AVAIL_GIB: the loop file's size from the free space on
+# /. The OS, Docker's images and logs keep the larger of 30 GiB and 15 %;
+# the file is sparse, but it must never grow into that and fill /.
+loop_size_auto_gib() {
+  local keep=$(($1 * 15 / 100))
+  [ "$keep" -lt 30 ] && keep=30
+  echo $(($1 - keep))
 }
 
 # fstab_line SOURCE KIND: the /etc/fstab entry for /var/lib/imp. nofail: a
@@ -422,7 +432,7 @@ parse_args() {
   if [ -n "$data_device" ] && [ -n "$loop_file" ]; then
     die "give --data-device or --loop-file, not both"
   fi
-  [[ $loop_size_gib =~ ^[1-9][0-9]*$ ]] || die "--loop-size must be a whole number of GiB"
+  [[ $loop_size_gib =~ ^([1-9][0-9]*|auto)$ ]] || die "--loop-size must be a whole number of GiB, or auto"
   case ${storage:-xfs} in xfs | zfs) ;; *) die "--storage must be xfs or zfs" ;; esac
   if [ -n "$zfs_pool" ] && ! [[ $zfs_pool =~ ^[A-Za-z][A-Za-z0-9_.:-]*$ ]]; then
     die "--zfs-pool must be a pool name: $zfs_pool"
@@ -729,11 +739,14 @@ prepare_loop_file() {
     return
   fi
   avail_gib=$(($(df --output=avail -k / | tail -n 1) / 1024 / 1024))
-  [ "$avail_gib" -ge "$LOOP_MIN_FREE_GIB" ] \
-    || die "only ${avail_gib} GiB free on /; a loop file needs at least ${LOOP_MIN_FREE_GIB}"
-  if [ "$avail_gib" -lt "$loop_size_gib" ]; then
-    warn "$loop_file is sparse: ${loop_size_gib} GiB apparent, ${avail_gib} GiB free on /"
+  if [ "$loop_size_gib" = auto ]; then
+    loop_size_gib=$(loop_size_auto_gib "$avail_gib")
+    log "${avail_gib} GiB free on /; the loop file gets ${loop_size_gib} GiB"
+  elif [ "$avail_gib" -lt "$loop_size_gib" ]; then
+    warn "$loop_file is sparse: ${loop_size_gib} GiB apparent, ${avail_gib} GiB free on /; imps can fill /"
   fi
+  [ "$loop_size_gib" -ge "$LOOP_MIN_GIB" ] \
+    || die "a ${loop_size_gib} GiB loop file is too small (${avail_gib} GiB free on /); imp needs ${LOOP_MIN_GIB}"
   change "create a ${loop_size_gib} GiB sparse XFS file $loop_file" make_loop_file
 }
 

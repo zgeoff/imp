@@ -154,9 +154,12 @@ array or partition for imp in the installer and give that (`--data-device /dev/m
 does not partition disks. OVH's default template gives the free space to `/home`; the script refuses
 that partition while it is mounted, so pick a layout without it in the installer.
 
-`--loop-file /srv/imp.xfs --loop-size 400` puts a sparse XFS file on the root filesystem instead. It
-needs 20 GiB free and puts a loop device in the I/O path; use it only when no disk or partition is
-free.
+A host with no spare disk, such as a VPS with one virtual disk and no block volumes, takes
+`--loop-file /srv/imp.xfs`: a sparse XFS file on the root filesystem, loop-mounted on
+`/var/lib/imp`. By default it gets the free space on `/` less the larger of 30 GiB and 15 %, which
+the OS, Docker's images and logs keep; `--loop-size GIB` sets the size instead. The file is refused
+below 20 GiB. It puts a loop device in the I/O path, so prefer a disk or partition when there is
+one. ZFS needs a device; the script makes no pool on a file.
 
 ### ZFS
 
@@ -211,11 +214,13 @@ the node offline after the next restart.
 
 ### Firewall
 
-The `inet imp_host` table filters input only: loopback, established connections, ICMP and ICMPv6,
-the DHCP clients, and SSH. Docker keeps the forwarding rules, and a reload replaces this table
-alone. The SSH ports are those `sshd -T`, `ssh.socket` and the live `sshd` listeners report, plus
-`--ssh-port`. The script refuses the run when the current SSH session's port is not among them, and
-warns when `sshd` allows password logins.
+The `inet imp_host` table filters input only, for IPv4 and IPv6 alike: loopback, established
+connections, ICMP and ICMPv6 (neighbour discovery and router adverts), the DHCP and DHCPv6 clients,
+and SSH. Every other port is closed on both, and `imp-host` publishes its ports on `127.0.0.1` only;
+the health phase fails when one is published on `0.0.0.0` or `::`. Docker keeps the forwarding
+rules, and a reload replaces this table alone. The SSH ports are those `sshd -T`, `ssh.socket` and
+the live `sshd` listeners report, plus `--ssh-port`. The script refuses the run when the current SSH
+session's port is not among them, and warns when `sshd` allows password logins.
 
 ### Test it
 
