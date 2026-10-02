@@ -59,7 +59,7 @@ func TestCopyTruncateLog(t *testing.T) {
 	}
 	defer f.Close()
 
-	if err := copyTruncateLog(p); err != nil {
+	if err := newSupervisor(t).copyTruncateLog(p); err != nil {
 		t.Fatal(err)
 	}
 	if size(t, p+".1") != maxLogSize+1 {

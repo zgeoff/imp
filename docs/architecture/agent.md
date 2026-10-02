@@ -46,7 +46,9 @@ The agent is PID 1, so it inherits every orphan in the guest and must reap it. O
 `exec` starts a process with the image's default environment (`/etc/imp/image.json`), on pipes or on
 a new pty. The [protocol](./protocol.md#exec) has the full rules. The service supervisor starts each
 file in `/etc/imp/services.d`, logs to `/var/log/imp/<name>.log`, and restarts a service that exits,
-with backoff.
+with backoff. The services ops add, restart and remove a service and stream its log
+([protocol](./protocol.md#servicesadd-servicesremove-servicesrestart)), behind `imp service` and
+`imp logs` ([services](../guides/services.md)).
 
 ## Sessions
 

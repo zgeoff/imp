@@ -125,6 +125,18 @@ once, also with 128 + n. With `-t`, Ctrl-C is a key the command reads.
 The [dashboard](./docs/guides/dashboard.md) at `http://localhost:7070/ui/` shows the same imps,
 checkpoints, images and RAM in a browser, with a console.
 
+## Services
+
+```sh
+imp service add box web --cmd "node server.js" --env PORT=3000
+imp service ls box
+imp logs box web -f
+```
+
+A service is a process the imp starts at boot and restarts when it exits, kept as a file in
+`/etc/imp/services.d`. `imp service restart` and `imp service rm` restart and remove one, and
+`imp logs box` prints every service's log ([services](./docs/guides/services.md)).
+
 ## SSH
 
 With your public key bound to a token

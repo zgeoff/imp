@@ -33,6 +33,8 @@ interface Hold {
 export function buildFakeVmm() {
   const alive = new Set<number>();
 
+  // the version each boot and wake reports; a test may set it
+  const agent = { version: FAKE_AGENT_VERSION };
   const wakes: number[] = [];
   const stops: { pid: number; graceful: boolean }[] = [];
   const grows: { disk: string; diskBytes: number }[] = [];
@@ -109,7 +111,7 @@ export function buildFakeVmm() {
         alive.add(pid);
       }
 
-      return { pid, firecrackerVersion: 'v1.17.0', agentVersion: FAKE_AGENT_VERSION, timings: {} };
+      return { pid, firecrackerVersion: 'v1.17.0', agentVersion: agent.version, timings: {} };
     };
 
     return {
@@ -196,6 +198,7 @@ export function buildFakeVmm() {
 
   return {
     alive,
+    agent,
     usedSnapshots,
     wakes,
     stops,

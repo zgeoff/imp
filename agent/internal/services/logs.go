@@ -32,7 +32,7 @@ func rotateLog(path string) error {
 // place. The running service keeps its fd; it opened the log O_APPEND, so
 // its next write lands at the new end. Lines written between the copy and
 // the truncate are lost, which is the usual copytruncate trade.
-func copyTruncateLog(path string) error {
+func (s *Supervisor) copyTruncateLog(path string) error {
 	if !oversize(path) {
 		return nil
 	}
@@ -58,7 +58,25 @@ func copyTruncateLog(path string) error {
 	if err := os.Rename(tmp, path+".1"); err != nil {
 		return err
 	}
-	return os.Truncate(path, 0)
+	s.truncMu.Lock()
+	defer s.truncMu.Unlock()
+	if err := os.Truncate(path, 0); err != nil {
+		return err
+	}
+	s.truncs[path]++
+	return nil
+}
+
+// readLogState returns how many times the rotator emptied the log at path,
+// and its size, both read at one point between rotations.
+func (s *Supervisor) readLogState(path string) (uint64, os.FileInfo, error) {
+	s.truncMu.Lock()
+	defer s.truncMu.Unlock()
+	fi, err := os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return s.truncs[path], nil, nil
+	}
+	return s.truncs[path], fi, err
 }
 
 func oversize(path string) bool {
@@ -100,7 +118,7 @@ func (s *Supervisor) rotateAll() {
 		func() {
 			svc.logMu.Lock()
 			defer svc.logMu.Unlock()
-			if err := copyTruncateLog(s.logPath(svc)); err != nil {
+			if err := s.copyTruncateLog(s.logPath(svc)); err != nil {
 				log.Printf("services: %s: rotate log: %v", svc.def.Name, err)
 			}
 		}()

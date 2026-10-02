@@ -63,6 +63,31 @@ export interface ImpRuntime {
   ) => Promise<DialStream>;
   readonly recordActivity: (name: string) => Promise<void>;
 
+  // as openExec, for any other agent connection: `open` gets the vsock
+  // socket once the imp runs, and the connection counts as an exec until
+  // its `close`; `feature` as for openExec
+  readonly openAgentStream: <T extends { readonly close: () => void }>(
+    name: string,
+    open: (vsockPath: string) => Promise<T>,
+    feature?: AgentFeature,
+  ) => Promise<T>;
+
+  // for a watcher that must not wake the imp or keep it awake: the imp as
+  // it is, and its agent's vsock socket when it runs; `feature` as for
+  // openExec, checked only then
+  readonly findAgent: (
+    name: string,
+    feature?: AgentFeature,
+  ) => Promise<{ readonly imp: ImpRecord; readonly vsockPath: string | null }>;
+
+  // as openAgentStream, for one request: it counts as an exec until `send`
+  // settles
+  readonly sendToAgent: <T>(
+    name: string,
+    send: (vsockPath: string) => Promise<T>,
+    feature?: AgentFeature,
+  ) => Promise<T>;
+
   // for the idle loop: the agent's activity, its sessions recorded on the
   // way; null when the agent does not answer
   readonly readActivity: (imp: ImpRecord) => Promise<AgentActivity | null>;
@@ -268,6 +293,47 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       } catch {
         return null;
       }
+    },
+
+    openAgentStream: (name, open, feature) =>
+      openStream(name, 'exec', (paths) => {
+        if (feature !== undefined) {
+          requireFeature(paths, feature);
+        }
+
+        return open(paths.vsockSocket);
+      }),
+
+    findAgent: async (name, feature) => {
+      const imp = await lock.findImp(name);
+
+      if (imp.state !== 'running' || lock.isLocked(imp.id)) {
+        return { imp, vsockPath: null };
+      }
+
+      const paths = context.findPaths(imp.id);
+
+      if (feature !== undefined) {
+        requireFeature(paths, feature);
+      }
+
+      return { imp, vsockPath: paths.vsockSocket };
+    },
+
+    sendToAgent: async (name, send, feature) => {
+      const sent = await openStream(name, 'exec', async (paths) => {
+        if (feature !== undefined) {
+          requireFeature(paths, feature);
+        }
+
+        const value = await send(paths.vsockSocket);
+
+        return { value, close: () => {} };
+      });
+
+      sent.close();
+
+      return sent.value;
     },
 
     recordActivity: async (name) => {

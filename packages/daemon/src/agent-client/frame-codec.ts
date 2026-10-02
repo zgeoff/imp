@@ -19,6 +19,9 @@ export const FRAME_TYPES = {
 
   // agent.listen: a client of the socket waits for an agent.accept
   connection: 13,
+
+  // services.logs: how far the stream has sent
+  cursor: 14,
 } as const;
 
 export type FrameType = (typeof FRAME_TYPES)[keyof typeof FRAME_TYPES];

@@ -9,6 +9,7 @@ import { checkAccess, findAccess, isAuditedProcedure } from './auth/access-polic
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
 import { isImpAllowed } from './auth/imp-patterns';
+import { hasScope } from './auth/scopes';
 import type { TokenStore } from './auth/token-store';
 import { buildBackupsOffError } from './backup/backup-service';
 import type { BackupService } from './backup/backup-service';
@@ -35,6 +36,9 @@ import type { TailnetNamesStatus } from './tailnet-names/tailnet-names';
 
 // audit rows `audit.list` gives when the caller names no limit
 const AUDIT_LIMIT = 100;
+
+// log lines `services.logs` sends first when the caller names no count
+const DEFAULT_LOG_LINES = 100;
 
 export interface RouterDeps {
   readonly config: Config;
@@ -250,6 +254,40 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+    },
+    services: {
+      list: os.services.list.handler((context) => deps.imps.listServices(context.input.name)),
+      add: os.services.add.handler(async (context) => {
+        const input = context.input;
+
+        await deps.imps.addService(input.name, input.service, {
+          canManage: hasScope(context.context.caller.scope, 'manage'),
+          replace: input.replace ?? false,
+        });
+
+        return {};
+      }),
+      remove: os.services.remove.handler(async (context) => {
+        const rights = { canManage: hasScope(context.context.caller.scope, 'manage') };
+
+        await deps.imps.removeService(context.input.name, context.input.service, rights);
+
+        return {};
+      }),
+      restart: os.services.restart.handler(async (context) => {
+        const rights = { canManage: hasScope(context.context.caller.scope, 'manage') };
+
+        await deps.imps.restartService(context.input.name, context.input.service, rights);
+
+        return {};
+      }),
+      logs: os.services.logs.handler((context) =>
+        deps.imps.openServiceLogs(context.input.name, {
+          service: context.input.service,
+          lines: context.input.lines ?? DEFAULT_LOG_LINES,
+          follow: context.input.follow ?? false,
+        }),
+      ),
     },
     secrets: {
       add: os.secrets.add.handler((context) => deps.broker.addSecret(context.input)),

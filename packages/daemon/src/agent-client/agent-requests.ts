@@ -17,7 +17,7 @@ const PingResponseSchema = z.object({
   uptime_ms: z.number().optional(),
 });
 
-const OkResponseSchema = z.object({ ok: z.literal(true) });
+export const OkResponseSchema = z.object({ ok: z.literal(true) });
 
 // the agent's own 10 s wait for the new size, and the resize after it
 const GROW_TIMEOUT_MS = 20_000;
@@ -67,7 +67,7 @@ export function requireNoAgentError(frame: AgentFrame): void {
 }
 
 // One unary request: REQUEST out, one RESPONSE back, then the agent closes.
-async function sendAgentRequest(
+export async function sendAgentRequest(
   vsockPath: string,
   request: Readonly<Record<string, unknown>>,
   timeoutMs = 5000,

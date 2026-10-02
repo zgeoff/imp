@@ -474,6 +474,8 @@ export function buildApp(deps: AppDeps) {
 
     // the client can tell impd went away on purpose
     closeExecSessions: () => {
+      deps.imps.endLogFollows();
+
       for (const entry of sessions.values()) {
         entry.close(EXEC_CLOSE_RESTARTING, 'impd is restarting');
       }

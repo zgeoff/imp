@@ -247,6 +247,23 @@ export function createFakeImpd(): FakeImpd {
       }),
     },
 
+    // the dashboard shows no services yet
+    services: {
+      list: os.services.list.handler(() => []),
+      add: os.services.add.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      remove: os.services.remove.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      restart: os.services.restart.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      logs: os.services.logs.handler(() => {
+        throw new Error('not in the fake');
+      }),
+    },
+
     // the dashboard shows no secrets yet
     secrets: {
       add: os.secrets.add.handler(() => {

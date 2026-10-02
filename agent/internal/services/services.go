@@ -34,22 +34,19 @@ const (
 	stopGrace   = 5 * time.Second
 )
 
-// Def is one services.d file. Name defaults to the file name without .json.
-type Def struct {
-	Name string   `json:"name"`
-	Argv []string `json:"argv"`
-	Env  []string `json:"env"`
-	Cwd  string   `json:"cwd"`
-	User string   `json:"user"`
-	// Restart is "always" (default), "on-failure" or "never".
-	Restart string `json:"restart"`
-}
+// Def is one services.d file.
+type Def = proto.ServiceDef
 
 // Supervisor runs every service.
 type Supervisor struct {
 	reaper *reaper.Reaper
 	image  imagecfg.Config
+	dir    string
 	logDir string
+
+	// opMu serializes Add, Remove and Restart, which stop a service and
+	// touch its file outside mu
+	opMu sync.Mutex
 
 	mu       sync.Mutex
 	services map[string]*service
@@ -57,29 +54,40 @@ type Supervisor struct {
 	wg       sync.WaitGroup
 	// quit stops the log rotator.
 	quit chan struct{}
+
+	// truncMu guards truncs: each log path's copytruncate count, so a
+	// follow knows its file was emptied even when it grew back past the
+	// follow's offset
+	truncMu sync.Mutex
+	truncs  map[string]uint64
 }
 
 type service struct {
-	def      Def
+	def Def
+	// path is the services.d file the definition came from
+	path     string
 	state    string
 	pid      int
 	proc     *proc.Process
 	restarts int
 	lastExit *proto.Exit
 	stop     chan struct{}
+	// done closes when the supervisor loop returns
+	done chan struct{}
 	// logMu serializes rotating the log with opening it for a start.
 	logMu sync.Mutex
 }
 
 func New(r *reaper.Reaper, image imagecfg.Config) *Supervisor {
-	return &Supervisor{reaper: r, image: image, logDir: LogDir,
-		services: make(map[string]*service), quit: make(chan struct{})}
+	return &Supervisor{reaper: r, image: image, dir: Dir, logDir: LogDir,
+		services: make(map[string]*service), quit: make(chan struct{}),
+		truncs: make(map[string]uint64)}
 }
 
 // Load reads Dir and starts every service in it, and the log rotator. A bad
 // file is logged and skipped so one typo cannot keep the rest from starting.
 func (s *Supervisor) Load() error {
-	paths, err := filepath.Glob(filepath.Join(Dir, "*.json"))
+	paths, err := filepath.Glob(filepath.Join(s.dir, "*.json"))
 	if err != nil {
 		return err
 	}
@@ -90,7 +98,7 @@ func (s *Supervisor) Load() error {
 			log.Printf("services: %s: %v", p, err)
 			continue
 		}
-		s.Start(def)
+		s.startAt(def, p)
 	}
 	return nil
 }
@@ -104,30 +112,43 @@ func readDef(path string) (Def, error) {
 	if err := json.Unmarshal(b, &d); err != nil {
 		return d, err
 	}
-	if d.Name == "" {
-		d.Name = strings.TrimSuffix(filepath.Base(path), ".json")
+	// the file name is the name: a name field could claim another service's
+	d.Name = strings.TrimSuffix(filepath.Base(path), ".json")
+	if d.Source != "api" {
+		d.Source = "image"
 	}
+	return d, checkDef(&d)
+}
+
+// checkDef rejects a definition the supervisor cannot run, and fills in the
+// default restart policy.
+func checkDef(d *Def) error {
 	if len(d.Argv) == 0 {
-		return d, fmt.Errorf("argv is empty")
+		return fmt.Errorf("argv is empty")
 	}
 	switch d.Restart {
 	case "":
 		d.Restart = "always"
 	case "always", "on-failure", "never":
 	default:
-		return d, fmt.Errorf("restart %q: want always, on-failure or never", d.Restart)
+		return fmt.Errorf("restart %q: want always, on-failure or never", d.Restart)
 	}
-	return d, nil
+	return nil
 }
 
 // Start supervises def. A service with the same name is left alone.
 func (s *Supervisor) Start(def Def) {
+	s.startAt(def, "")
+}
+
+func (s *Supervisor) startAt(def Def, path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stopping || s.services[def.Name] != nil {
 		return
 	}
-	svc := &service{def: def, state: "starting", stop: make(chan struct{})}
+	svc := &service{def: def, path: path, state: "starting",
+		stop: make(chan struct{}), done: make(chan struct{})}
 	s.services[def.Name] = svc
 	s.wg.Add(1)
 	// A panic in the supervisor loop leaves the service unsupervised, not
@@ -137,6 +158,7 @@ func (s *Supervisor) Start(def Def) {
 
 func (s *Supervisor) run(svc *service) {
 	defer s.wg.Done()
+	defer close(svc.done)
 	backoff := minBackoff
 	for {
 		if isClosed(svc.stop) {
@@ -279,16 +301,35 @@ func (s *Supervisor) setState(svc *service, state string) {
 // List reports every service, sorted by name.
 func (s *Supervisor) List() []proto.ServiceStatus {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	out := make([]proto.ServiceStatus, 0, len(s.services))
 	for _, svc := range s.services {
 		out = append(out, proto.ServiceStatus{
 			Name: svc.def.Name, State: svc.state, Pid: svc.pid,
-			Restarts: svc.restarts, LastExit: svc.lastExit,
+			Restarts: svc.restarts, LastExit: svc.lastExit, Def: svc.def,
 		})
+	}
+	s.mu.Unlock()
+	// /etc/passwd is read outside mu
+	for i := range out {
+		out[i].Root = s.runsAsRoot(out[i].Def.User)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// ImageUser is the user a service without one runs as.
+func (s *Supervisor) ImageUser() string {
+	return s.image.User
+}
+
+// runsAsRoot resolves the user a service runs as; one the guest cannot
+// resolve counts as root, so impd asks for the most it could be.
+func (s *Supervisor) runsAsRoot(user string) bool {
+	if user == "" {
+		user = s.image.User
+	}
+	cred, _, err := proc.LookupUser(user)
+	return err != nil || cred == nil || cred.Uid == 0
 }
 
 // StopAll sends SIGTERM to every service, then SIGKILL to whatever is left

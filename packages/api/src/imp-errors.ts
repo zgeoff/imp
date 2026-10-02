@@ -7,6 +7,7 @@ const ResourceKindSchema = z.enum([
   'image',
   'checkpoint',
   'session',
+  'service',
   'secret',
   'grant',
   'backup',

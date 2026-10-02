@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.9.0"
+const Version = "0.10.0"
 
 // Op names.
 const (
@@ -14,6 +14,14 @@ const (
 	OpShutdown     = "shutdown"
 	OpServicesList = "services.list"
 	OpGrow         = "grow"
+
+	// services: add writes a services.d file and starts it, remove stops
+	// it and deletes the file, restart re-reads the file, and logs streams
+	// the service's log
+	OpServicesAdd     = "services.add"
+	OpServicesRemove  = "services.remove"
+	OpServicesRestart = "services.restart"
+	OpServicesLogs    = "services.logs"
 
 	// sessions: exec with a session name starts or attaches one
 	OpSessionAttach = "session.attach"
@@ -72,6 +80,27 @@ type Request struct {
 
 	// grow: the disk's new size in bytes
 	DiskBytes int64 `json:"disk_bytes,omitempty"`
+
+	// services.remove, services.restart, services.logs: the service name
+	Service string `json:"service,omitempty"`
+
+	// services.add: the definition, and whether it may replace one
+	Def     *ServiceDef `json:"def,omitempty"`
+	Replace bool        `json:"replace,omitempty"`
+
+	// services.logs: how many lines of the log to send first, or with a
+	// cursor everything after it, and whether to keep sending what the
+	// service writes
+	Lines  int        `json:"lines,omitempty"`
+	Follow bool       `json:"follow,omitempty"`
+	Cursor *LogCursor `json:"cursor,omitempty"`
+}
+
+// LogCursor is a place in a service's log: the file, by inode, and the
+// offset after the last byte sent.
+type LogCursor struct {
+	Inode  uint64 `json:"inode"`
+	Offset int64  `json:"offset"`
 }
 
 // Error codes.
@@ -87,6 +116,8 @@ const (
 	ErrDialFailed   = "DIAL_FAILED"
 	ErrNoConnection = "NO_CONNECTION"
 	ErrListenFailed = "LISTEN_FAILED"
+	ErrNoService    = "NO_SERVICE"
+	ErrServiceTaken = "SERVICE_EXISTS"
 )
 
 type Error struct {
@@ -157,16 +188,37 @@ type SessionInfo struct {
 	Exit *Exit `json:"exit,omitempty"`
 }
 
+// ServiceDef is one services.d file. Name is the file name without .json;
+// a name field in the file is ignored. Restart defaults to "always".
+type ServiceDef struct {
+	Name string   `json:"name,omitempty"`
+	Argv []string `json:"argv"`
+	Env  []string `json:"env,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
+	User string   `json:"user,omitempty"`
+	// Restart is "always", "on-failure" or "never".
+	Restart string `json:"restart,omitempty"`
+	// Source is "api" for a file services.add wrote, else "image".
+	Source string `json:"source,omitempty"`
+}
+
 type ServiceStatus struct {
 	Name     string `json:"name"`
-	State    string `json:"state"` // running, backoff, stopped, exited
+	State    string `json:"state"` // starting, running, backoff, stopped, exited
 	Pid      int    `json:"pid,omitempty"`
 	Restarts int    `json:"restarts"`
 	LastExit *Exit  `json:"last_exit,omitempty"`
+	// Def is the definition the service runs, as read from its file.
+	Def ServiceDef `json:"def"`
+	// Root is whether the service runs as uid 0, or as a user the guest
+	// cannot resolve.
+	Root bool `json:"root"`
 }
 
 type ServicesList struct {
 	Services []ServiceStatus `json:"services"`
+	// ImageUser is the image's user, which a service without one runs as.
+	ImageUser string `json:"image_user"`
 }
 
 type Started struct {

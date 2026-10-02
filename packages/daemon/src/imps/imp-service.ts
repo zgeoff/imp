@@ -3,9 +3,12 @@ import type { ImpRecord } from '../db/imps';
 import { createEventBus } from '../events/event-bus';
 import type { EventBus } from '../events/event-bus';
 import { startImpEventPublisher } from '../events/imp-event-publisher';
+import { createServiceApi } from '../services/service-api';
+import type { ServiceApi } from '../services/service-api';
 import { countSessions } from '../sessions/count-sessions';
 import { createSessionService } from '../sessions/session-service';
 import type { SessionService } from '../sessions/session-service';
+import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { readBootStatus } from './boot-status';
 import type { BootStatus } from './boot-status';
 import type { ImpCommands } from './imp-commands';
@@ -27,6 +30,7 @@ export type { ImpServiceDeps } from './imp-context';
 // The imp API: what the router and the exec and tunnel endpoints call.
 export type ImpService = ImpCommands &
   SessionService &
+  ServiceApi &
   Pick<
     ImpRuntime,
     'openExec' | 'openAttach' | 'openDial' | 'openListener' | 'openAccept' | 'recordActivity'
@@ -94,6 +98,11 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     ...commands,
     ...runtime,
     ...sessions,
+    ...createServiceApi({
+      runtime,
+      events,
+      readSleptServices: (imp) => readSnapshotMeta(context.findPaths(imp.id))?.services,
+    }),
     countSessions: (imp) => countSessions(context, imp),
     readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
     lockImp: lock.withImp,

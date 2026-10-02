@@ -97,6 +97,7 @@ export function createImpClient(options: Readonly<ImpClientOptions>): ImpClient 
     images: rpc.images,
     exec: rpc.exec,
     sessions: rpc.sessions,
+    services: rpc.services,
     secrets: rpc.secrets,
     grants: rpc.grants,
     audit: rpc.audit,

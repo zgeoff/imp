@@ -7,10 +7,11 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.9.0`, which adds `listen` for reverse forwards (`0.8.0` kills what is left of a stopped
-exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar` for `imp cp`, `0.6.0` dials a
-unix socket as the image's USER, `0.5.0` added `grow`). The Go side is `agent/internal/proto`; the
-host side is the agent client in impd ([daemon](./daemon.md#agent-client-the-vsock-client)).
+Version `0.10.0`, which adds the services ops (`0.9.0` adds `listen` for reverse forwards, `0.8.0`
+kills what is left of a stopped exec's process group, `kill_grace_ms`; `0.7.0` runs `imp-agent tar`
+for `imp cp`, `0.6.0` dials a unix socket as the image's USER, `0.5.0` added `grow`). The Go side is
+`agent/internal/proto`; the host side is the agent client in impd
+([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
 
@@ -46,21 +47,22 @@ Every message after the handshake is a frame:
   connection. Senders split larger data into several frames.
 - JSON payloads are UTF-8 JSON objects. Raw payloads are opaque bytes.
 
-| Type | Name         | Direction    | Payload                                          |
-| ---: | ------------ | ------------ | ------------------------------------------------ |
-|    1 | `REQUEST`    | host → guest | JSON request; always the first frame             |
-|    2 | `RESPONSE`   | guest → host | JSON; the result of a unary request, or an error |
-|    3 | `STDIN`      | host → guest | raw bytes for the process stdin                  |
-|    4 | `STDIN_EOF`  | host → guest | empty; closes the process stdin                  |
-|    5 | `RESIZE`     | host → guest | JSON `{"cols":n,"rows":n}`                       |
-|    6 | `SIGNAL`     | host → guest | JSON `{"signal":n}` (Linux signal number)        |
-|    7 | `STARTED`    | guest → host | JSON `{"pid":n}`                                 |
-|    8 | `STDOUT`     | guest → host | raw bytes                                        |
-|    9 | `STDERR`     | guest → host | raw bytes                                        |
-|   10 | `EXIT`       | guest → host | JSON `{"code":n,"signal":n}`; the last frame     |
-|   11 | `DETACHED`   | guest → host | JSON `{"reason":s}`; ends a session connection   |
-|   12 | `STDOUT_EOF` | guest → host | empty; a dial target closed its side             |
-|   13 | `CONNECTION` | guest → host | JSON `{"id":n}`; a client of a listener          |
+| Type | Name         | Direction    | Payload                                             |
+| ---: | ------------ | ------------ | --------------------------------------------------- |
+|    1 | `REQUEST`    | host → guest | JSON request; always the first frame                |
+|    2 | `RESPONSE`   | guest → host | JSON; the result of a unary request, or an error    |
+|    3 | `STDIN`      | host → guest | raw bytes for the process stdin                     |
+|    4 | `STDIN_EOF`  | host → guest | empty; closes the process stdin                     |
+|    5 | `RESIZE`     | host → guest | JSON `{"cols":n,"rows":n}`                          |
+|    6 | `SIGNAL`     | host → guest | JSON `{"signal":n}` (Linux signal number)           |
+|    7 | `STARTED`    | guest → host | JSON `{"pid":n}`                                    |
+|    8 | `STDOUT`     | guest → host | raw bytes                                           |
+|    9 | `STDERR`     | guest → host | raw bytes                                           |
+|   10 | `EXIT`       | guest → host | JSON `{"code":n,"signal":n}`; the last frame        |
+|   11 | `DETACHED`   | guest → host | JSON `{"reason":s}`; ends a session connection      |
+|   12 | `STDOUT_EOF` | guest → host | empty; a dial target closed its side                |
+|   13 | `CONNECTION` | guest → host | JSON `{"id":n}`; a client of a listener             |
+|   14 | `CURSOR`     | guest → host | JSON `{"inode":n,"offset":n}`; a log stream's place |
 
 Unknown frame types from the host are ignored.
 
@@ -72,19 +74,21 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 { "error": { "code": "EXEC_FAILED", "message": "start foo: no such file or directory" } }
 ```
 
-| Code            | Meaning                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------- |
-| `BAD_REQUEST`   | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid.    |
-| `UNKNOWN_OP`    | The `op` is not known to this agent.                                                        |
-| `EXEC_FAILED`   | `exec` could not start the process (bad argv, cwd, or user).                                |
-| `NO_SESSION`    | `session.attach` or `session.kill` named no session.                                        |
-| `SESSION_LIMIT` | A new session would be the 17th.                                                            |
-| `DIAL_FAILED`   | `dial` could not connect (refused, timed out, no such socket).                              |
-| `NO_CONNECTION` | `agent.accept` named no waiting client: it closed, timed out, or never was.                 |
-| `LISTEN_FAILED` | `listen` could not bind: a busy or privileged port, no permission, not a socket in the way. |
-| `FROZEN`        | `freeze` found the root filesystem already frozen, or `grow` arrived during a freeze.       |
-| `POWERING_OFF`  | `freeze` arrived after a poweroff started.                                                  |
-| `INTERNAL`      | A system call failed (for example `FIFREEZE`).                                              |
+| Code             | Meaning                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `BAD_REQUEST`    | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid.    |
+| `UNKNOWN_OP`     | The `op` is not known to this agent.                                                        |
+| `EXEC_FAILED`    | `exec` could not start the process (bad argv, cwd, or user).                                |
+| `NO_SESSION`     | `session.attach` or `session.kill` named no session.                                        |
+| `SESSION_LIMIT`  | A new session would be the 17th.                                                            |
+| `DIAL_FAILED`    | `dial` could not connect (refused, timed out, no such socket).                              |
+| `NO_CONNECTION`  | `agent.accept` named no waiting client: it closed, timed out, or never was.                 |
+| `LISTEN_FAILED`  | `listen` could not bind: a busy or privileged port, no permission, not a socket in the way. |
+| `NO_SERVICE`     | A services op named no service (and, for `services.logs`, no log).                          |
+| `SERVICE_EXISTS` | `services.add` without `replace` named a service, or a file, that exists.                   |
+| `FROZEN`         | `freeze` found the root filesystem already frozen, or `grow` arrived during a freeze.       |
+| `POWERING_OFF`   | `freeze` arrived after a poweroff started, or a services op after the services stopped.     |
+| `INTERNAL`       | A system call failed (for example `FIFREEZE`).                                              |
 
 A successful RESPONSE never has an `error` key.
 
@@ -167,11 +171,68 @@ older agent answers `UNKNOWN_OP`, which impd reports as `AGENT_OUTDATED`.
 
 ```json
 → {"op":"services.list"}
-← {"services":[{"name":"dockerd","state":"running","pid":212,"restarts":0}]}
+← {"services":[{"name":"dockerd","state":"running","pid":212,"restarts":0,"root":true}],"image_user":"dev"}
 ```
 
 `state` is `starting`, `running`, `backoff`, `exited` or `stopped`. `last_exit` (an EXIT object) is
-present after the first exit.
+present after the first exit. Since `0.10.0`:
+
+- `def` is the definition the service runs, as read from its file (`name`, `argv`, `env`, `cwd`,
+  `user`, `restart`, `source`). `name` is always the file name; a `name` field in the file is
+  ignored. `source` is `api` for a file `services.add` wrote, else `image`.
+- `root` is true when the service runs as uid 0, or as a user the agent cannot resolve.
+- `image_user` is the image's `user`, empty for root.
+
+impd also asks for the list as an imp goes to sleep, and keeps it in the snapshot's meta: that is
+what `services.list` returns for a sleeping imp.
+
+### `services.add`, `services.remove`, `services.restart`
+
+```json
+→ {"op":"services.add","def":{"name":"web","argv":["busybox","httpd","-f"]},"replace":false}
+← {"ok":true}
+→ {"op":"services.restart","service":"web"}
+← {"ok":true}
+→ {"op":"services.remove","service":"web"}
+← {"ok":true}
+```
+
+`services.add` checks `def` as a services.d file is checked, plus the name rule
+`^[a-z0-9][a-z0-9-]{0,62}$`, writes `/etc/imp/services.d/<name>.json` (a temp file, synced, renamed,
+then the directory synced) and starts the service. The file holds no `name` field and has
+`"source":"api"`. A service or file of that name is `SERVICE_EXISTS`, unless `replace`, which stops
+the old one first. `services.remove` stops the service and deletes its file; the log stays.
+`services.restart` stops it and starts it again from its file, so an edit applies, and a file
+written after boot starts; a service whose file is gone restarts as it was. A stop is SIGTERM, then
+SIGKILL after 5 s, so a reply can take that long. A bad definition is `BAD_REQUEST`. Since `0.10.0`:
+an older agent answers `UNKNOWN_OP`, which impd reports as `AGENT_OUTDATED`.
+
+### `services.logs`
+
+```json
+→ REQUEST {"op":"services.logs","service":"web","lines":100,"follow":true}
+→ REQUEST {"op":"services.logs","service":"web","cursor":{"inode":7,"offset":4096},"follow":true}
+← RESPONSE {"ok":true}
+← STDOUT …log bytes…
+← CURSOR {"inode":7,"offset":4096}
+← STDOUT_EOF            (without follow)
+```
+
+A stream, not a unary request. The RESPONSE comes first, or an error (`NO_SERVICE`, or `BAD_REQUEST`
+for `lines` outside 0–100000). Then STDOUT frames carry the last `lines` lines of
+`/var/log/imp/<service>.log.1` and `<service>.log`. Without `follow`, STDOUT_EOF ends the stream.
+With `follow`, the agent polls the log every 250 ms and sends what was written, until the host
+closes the connection. A rename (at a service start) leaves a new file: the rest of the old one goes
+first. A copytruncate (the 60 s rotator) empties the file: the agent counts each one, and on a new
+count the follow sends the rest of the copy in `<service>.log.1` from its offset, then reads the
+file again from 0. That holds even when the file grew back past the offset before the next poll. A
+removed service's log still streams.
+
+A CURSOR follows each STDOUT: the inode of the file it came from and the offset after it. With
+`cursor` in place of `lines`, the stream starts after that place: in `<service>.log` when the inode
+matches, else in `<service>.log.1` when that matches (the rest of it, then all of `<service>.log`),
+else from the start of `<service>.log`. An offset past the end of its file starts the file from 0.
+impd uses this to go on with a follow after the imp sleeps and wakes, with no line twice.
 
 ### `shutdown`
 

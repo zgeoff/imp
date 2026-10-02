@@ -79,7 +79,8 @@ call would.
 ## Services
 
 The agent starts every file in `/etc/imp/services.d/<name>.json` at boot and restarts each service
-when it exits.
+when it exits. An image ships its services as these files; `imp service` adds, restarts and removes
+them on a running imp, and `imp logs` prints their logs ([services](./services.md)).
 
 ```json
 {
@@ -94,12 +95,14 @@ when it exits.
 | Field     | Default        | Meaning                                                |
 | --------- | -------------- | ------------------------------------------------------ |
 | `argv`    | required       | `argv[0]` is looked up in the `PATH` of the merged env |
-| `name`    | the file name  | the name in `services.list` and the log file name      |
 | `env`     | `[]`           | `KEY=VALUE`, merged over the image env key by key      |
 | `cwd`     | `/`            | working directory                                      |
 | `user`    | the image user | `name`, `uid`, `name:group` or `uid:gid`               |
 | `restart` | `always`       | `always`, `on-failure` or `never`                      |
 
+- The file name, less `.json`, is the service's name, used by `imp service` and for the log file. A
+  `name` field in the file is ignored. Use `^[a-z0-9][a-z0-9-]{0,62}$`: the agent starts a file with
+  another name, but `imp service` cannot name it.
 - Output (stdout and stderr) goes to `/var/log/imp/<name>.log`. stdin is `/dev/null`. The agent
   checks the log every 60 s and at each start; past 10 MiB it moves to `<name>.log.1`, replacing the
   previous one. A log can grow by up to 60 s of output past the cap between checks.
@@ -109,8 +112,8 @@ when it exits.
   retries on its own (or its wrapper waits).
 - A bad file is logged on the console and skipped; the rest still start.
 - A service file you add with `imp exec` lives on the disk, so it survives sleeps, checkpoints,
-  restores and forks. It starts at the next boot. An API to manage services is not there yet
-  ([#23](https://github.com/zgeoff/imp/issues/23)).
+  restores and forks. It starts at the next boot, or at `imp service restart`
+  ([services](./services.md)).
 
 ## Docker in the guest (`imp/base`)
 

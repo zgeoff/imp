@@ -10,6 +10,7 @@ const FEATURES = {
   'unix-dial-as-user': { since: [0, 6], missing: 'no safe unix socket forwarding' },
   cp: { since: [0, 7], missing: 'no imp cp' },
   'reverse-forward': { since: [0, 9], missing: 'no reverse forwards' },
+  services: { since: [0, 10], missing: 'no services API' },
 } as const;
 
 export type AgentFeature = keyof typeof FEATURES;

@@ -98,6 +98,17 @@ export {
 } from './secret-schema';
 
 export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema';
+
+export {
+  ServiceDefSchema,
+  ServiceLogSchema,
+  ServiceNameSchema,
+  ServiceRestartSchema,
+  ServiceSchema,
+  ServiceStateSchema,
+} from './service-schema';
+
+export type { Service, ServiceDef, ServiceLog } from './service-schema';
 export { SessionExitSchema, SessionNameSchema, SessionSchema } from './session-schema';
 export type { Session } from './session-schema';
 export { SystemInfoSchema } from './system-info-schema';

@@ -34,6 +34,7 @@ import {
   revokeCommand,
   secretCommand,
 } from './commands/secrets';
+import { logsCommand, serviceCommand } from './commands/services';
 import { attachCommand, sessionsCommand } from './commands/sessions';
 import { tokenCommand } from './commands/tokens';
 
@@ -58,6 +59,8 @@ export const mainCommand = defineCommand({
     console: consoleCommand,
     attach: attachCommand,
     sessions: sessionsCommand,
+    service: serviceCommand,
+    logs: logsCommand,
     sleep: sleepCommand,
     wake: wakeCommand,
     hold: holdCommand,

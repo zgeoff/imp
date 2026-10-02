@@ -4,6 +4,7 @@ import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity } from '../agent-client/agent-requests';
 import type { AgentSession } from '../agent-client/agent-requests';
+import { sendServicesList } from '../agent-client/service-requests';
 import { buildAgentOutdatedApiError } from '../api-errors';
 import { updateImpActivity, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpStateChange } from '../db/imps';
@@ -30,6 +31,9 @@ import type { ShutdownGate } from './shutdown-gate';
 // snapshot writes put the whole mem file through the page cache
 // (docs/architecture/sleep-and-wake.md#4-gotchas, gotcha 8): a few at a time
 const SLEEP_CONCURRENCY = 2;
+
+// how long a sleep waits for the services list it records
+const SERVICES_FOR_SLEEP_MS = 1000;
 
 // How a sleep treats a guest younger than IMP_SLEEP_MIN_GUEST_UPTIME_MS: wait
 // for it, and give way once `isWanted` turns false, or sleep it at once.
@@ -269,6 +273,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const sessions = await readSessionsForSleep(imp, paths);
 
+    const services = await sendServicesList(paths.vsockSocket, SERVICES_FOR_SLEEP_MS).catch(
+      () => null,
+    );
+
     const started = performance.now();
 
     // what the event stream reports about this sleep
@@ -291,6 +299,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         memoryMib: imp.memoryMib,
         ramMib,
         sessions,
+        ...(services !== null && { services }),
       });
 
       // its next wake restores this memory: the cold boot is news no longer

@@ -298,6 +298,11 @@ more and writes them to `snapshot/meta.json`, so a sleeping imp lists them from 
 has none. `sessions.kill` wakes the imp. `imp ls` and `imp info` count sessions from the same
 copies.
 
+`services.list` reads the guest's services the same way: it never wakes or boots. The sleep asks the
+agent for its services list (1 s at most) next to the sessions and writes it to the same
+`snapshot/meta.json`. A list of a sleeping imp returns that copy, or `[]` when the sleep has none,
+and a stopped imp is `INVALID_STATE`.
+
 ### ssh: the gateway
 
 The SSH gateway is in impd itself, on `ssh2`, so it reaches the lifecycle, the activity tracker and

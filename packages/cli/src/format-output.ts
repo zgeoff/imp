@@ -8,6 +8,7 @@ import type {
   Image,
   Imp,
   Secret,
+  Service,
   Session,
   SshKey,
   StorageGc,
@@ -237,6 +238,28 @@ function formatSessionState(session: Readonly<Session>): string {
   const how = session.exit.signal ?? `code ${String(session.exit.code)}`;
 
   return `exited (${how})`;
+}
+
+export function formatServices(services: readonly Readonly<Service>[]): string {
+  return formatTable(
+    ['NAME', 'STATE', 'PID', 'RESTARTS', 'LAST EXIT', 'COMMAND'],
+    services.map((service) => [
+      service.name,
+      service.state,
+      service.pid === null ? '-' : String(service.pid),
+      String(service.restarts),
+      formatLastExit(service.lastExit),
+      service.argv.join(' '),
+    ]),
+  );
+}
+
+function formatLastExit(exit: Service['lastExit']): string {
+  if (exit === null) {
+    return '-';
+  }
+
+  return exit.signal ?? `code ${String(exit.code)}`;
 }
 
 export function formatImages(images: readonly Image[]): string {

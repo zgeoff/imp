@@ -67,9 +67,10 @@ func TestReadDef(t *testing.T) {
 		want       Def
 		err        bool
 	}{
-		{"web.json", `{"argv":["httpd"]}`, Def{Name: "web", Argv: []string{"httpd"}, Restart: "always"}, false},
-		{"x.json", `{"name":"api","argv":["api"],"restart":"on-failure"}`,
-			Def{Name: "api", Argv: []string{"api"}, Restart: "on-failure"}, false},
+		{"web.json", `{"argv":["httpd"]}`, Def{Name: "web", Argv: []string{"httpd"}, Restart: "always", Source: "image"}, false},
+		// the file name is the name; a name field cannot claim another
+		{"x.json", `{"name":"api","argv":["api"],"restart":"on-failure","source":"api"}`,
+			Def{Name: "x", Argv: []string{"api"}, Restart: "on-failure", Source: "api"}, false},
 		{"empty.json", `{"argv":[]}`, Def{}, true},
 		{"bad.json", `{"argv":["a"],"restart":"sometimes"}`, Def{}, true},
 		{"syntax.json", `{`, Def{}, true},

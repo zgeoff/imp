@@ -93,6 +93,14 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'sessions.list': readImp,
   'sessions.kill': execImp,
 
+  // a service runs a command as an exec does, and its log can hold
+  // anything the command prints
+  'services.list': readImp,
+  'services.add': execImp,
+  'services.remove': execImp,
+  'services.restart': execImp,
+  'services.logs': execImp,
+
   // secrets belong to the host: a grant hands one to an imp, so a token
   // limited to some imps could grant itself any secret
   'secrets.add': manageHost,

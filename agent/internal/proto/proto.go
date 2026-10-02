@@ -30,6 +30,7 @@ const (
 	TypeDetached   Type = 11 // guest→host, JSON Detached; the last frame of a session connection
 	TypeStdoutEOF  Type = 12 // guest→host, empty; a dial target closed its side
 	TypeConnection Type = 13 // guest→host, JSON Connection; a client connected to an agent.listen socket
+	TypeCursor     Type = 14 // guest→host, JSON LogCursor; how far a services.logs stream has sent
 )
 
 func (t Type) String() string {

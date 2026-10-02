@@ -24,6 +24,12 @@ import {
   SecretSchema,
   SecretValueSchema,
 } from './secret-schema';
+import {
+  ServiceDefSchema,
+  ServiceLogSchema,
+  ServiceNameSchema,
+  ServiceSchema,
+} from './service-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
@@ -237,6 +243,48 @@ export const impContract = {
     kill: base
       .input(z.object({ name: NameSchema, session: SessionNameSchema }))
       .output(EmptySchema),
+  },
+
+  // the services the imp's agent supervises (docs/guides/services.md); each
+  // call wakes a sleeping imp and boots a stopped one, as an exec does
+  services: {
+    list: base.input(NameInputSchema).output(z.array(ServiceSchema)),
+
+    // writes /etc/imp/services.d/<service>.json and starts it; CONFLICT
+    // when the service exists, unless `replace`
+    add: base
+      .input(
+        z.object({
+          name: NameSchema,
+          service: ServiceDefSchema,
+          replace: z.boolean().optional(),
+        }),
+      )
+      .output(EmptySchema),
+
+    // stops it and deletes its file; its logs stay
+    remove: base
+      .input(z.object({ name: NameSchema, service: ServiceNameSchema }))
+      .output(EmptySchema),
+
+    // stops it and starts it from its file, so an edit to the file applies
+    restart: base
+      .input(z.object({ name: NameSchema, service: ServiceNameSchema }))
+      .output(EmptySchema),
+
+    // the last `lines` lines (default 100) of a service's log, or of every
+    // service's (10 000 in all); `follow` goes on, never waking the imp or
+    // keeping it awake (docs/guides/services.md#logs)
+    logs: base
+      .input(
+        z.object({
+          name: NameSchema,
+          service: ServiceNameSchema.optional(),
+          lines: z.int().min(0).max(100_000).optional(),
+          follow: z.boolean().optional(),
+        }),
+      )
+      .output(eventIterator(ServiceLogSchema)),
   },
 
   // credentials the broker adds to an imp's requests (docs/guides/connectors.md)

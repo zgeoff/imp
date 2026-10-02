@@ -6,6 +6,7 @@ type ResourceKind =
   | 'image'
   | 'checkpoint'
   | 'session'
+  | 'service'
   | 'secret'
   | 'grant'
   | 'backup'

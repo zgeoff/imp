@@ -148,6 +148,10 @@ func (s *Server) handle(c net.Conn) {
 		}
 		return
 	}
+	if req.Op == proto.OpServicesLogs {
+		s.serveLogs(req, r, w)
+		return
+	}
 	resp, err := s.safeUnary(req)
 	if err != nil {
 		var pe *proto.Error
@@ -194,13 +198,44 @@ func (s *Server) unary(req proto.Request) (any, error) {
 		}
 		return proto.OK{OK: true}, s.grow(req.DiskBytes)
 	case proto.OpServicesList:
-		return proto.ServicesList{Services: s.Services.List()}, nil
+		return proto.ServicesList{Services: s.Services.List(), ImageUser: s.Services.ImageUser()}, nil
+	case proto.OpServicesAdd:
+		if req.Def == nil {
+			return nil, &proto.Error{Code: proto.ErrBadRequest, Message: "def is required"}
+		}
+		return proto.OK{OK: true}, s.Services.Add(*req.Def, req.Replace)
+	case proto.OpServicesRemove:
+		return proto.OK{OK: true}, s.Services.Remove(req.Service)
+	case proto.OpServicesRestart:
+		return proto.OK{OK: true}, s.Services.Restart(req.Service)
 	case proto.OpSessionKill:
 		return proto.OK{OK: true}, s.Sessions.Kill(req.Session)
 	case proto.OpShutdown:
 		return proto.OK{OK: true}, nil
 	default:
 		return nil, &proto.Error{Code: proto.ErrUnknownOp, Message: "unknown op " + req.Op}
+	}
+}
+
+// serveLogs streams a service's log until it ends or the host closes the
+// connection, which the host does to stop a follow.
+func (s *Server) serveLogs(req proto.Request, r *proto.Reader, w *proto.Writer) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if _, err := r.Next(); err != nil {
+				return
+			}
+		}
+	}()
+	logReq := services.LogRequest{Lines: req.Lines, Follow: req.Follow, Cursor: req.Cursor}
+	err := s.Services.Logs(req.Service, logReq, w, done)
+	var pe *proto.Error
+	if errors.As(err, &pe) {
+		w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: pe})
+	} else if err != nil {
+		log.Printf("services.logs %s: %v", req.Service, err)
 	}
 }
 
