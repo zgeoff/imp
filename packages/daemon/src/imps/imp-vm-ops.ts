@@ -267,7 +267,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     try {
       const cgroup = context.cgroups.setup(imp.id, imp.cpu);
 
-      const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup));
+      const timings = await sleepSlots.run(() => context.vms.sleepVm(pid, paths, cgroup, paths));
 
       const booted = readVmIdentity(paths);
 

@@ -101,7 +101,7 @@ test('a sleep whose pause fails resumes the VM and leaves it running, its limit 
   };
 
   const rejection = await createVmRunner()
-    .sleepVm(vm.child.pid, vm.paths, cgroup)
+    .sleepVm(vm.child.pid, vm.paths, cgroup, vm.paths)
     .catch((error: unknown) => error);
 
   expect(rejection).toBeInstanceOf(Error);
@@ -114,7 +114,7 @@ test('a sleep whose pause and resume both fail kills the VM', async () => {
   await using vm = await setupFailingPause(500);
 
   const rejection = await createVmRunner()
-    .sleepVm(vm.child.pid, vm.paths, null)
+    .sleepVm(vm.child.pid, vm.paths, null, vm.paths)
     .catch((error: unknown) => error);
 
   expect(rejection).toBeInstanceOf(Error);
@@ -160,6 +160,45 @@ test('an agent that cannot read its clock gives no guest uptime', async () => {
     expect(uptime).toBeNull();
   } finally {
     agent.close();
+
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the VM state comes from GET /, and a resume patches the VM', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-vm-'));
+  const paths = buildImpPaths(dir, 'vm');
+  const calls: string[] = [];
+
+  mkdirSync(paths.runDir, { recursive: true });
+
+  const server = Bun.serve({
+    unix: paths.apiSocket,
+    fetch: async (request) => {
+      const path = new URL(request.url).pathname;
+
+      calls.push(`${request.method} ${path} ${await request.text()}`);
+
+      const body = path === '/' ? '{"id":"vm","state":"Paused"}' : '';
+
+      return new Response(body, { status: 200 });
+    },
+  });
+
+  try {
+    const runner = createVmRunner();
+
+    const state = await runner.readVmState(paths);
+
+    await runner.resumeVm(paths);
+    await server.stop(true);
+
+    const gone = await runner.readVmState(paths);
+
+    expect([state, gone]).toEqual(['Paused', null]);
+    expect(calls).toEqual(['GET / ', 'PATCH /vm {"state":"Resumed"}']);
+  } finally {
+    await server.stop(true);
 
     rmSync(dir, { recursive: true, force: true });
   }

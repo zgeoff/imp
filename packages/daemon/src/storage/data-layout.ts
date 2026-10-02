@@ -43,6 +43,9 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
   };
 }
 
+// where a snapshot's files go: a sleeping imp's, or the watchdog's slot
+export type SnapshotPaths = Readonly<ReturnType<typeof buildSnapshotPaths>>;
+
 // the memory snapshot's files; ZFS keeps them in a dataset of their own
 export function buildSnapshotPaths(snapshotDir: string) {
   return {

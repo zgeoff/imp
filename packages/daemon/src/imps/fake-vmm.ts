@@ -152,7 +152,7 @@ export function buildFakeVmm() {
             usedSnapshots.add(plan.paths.snapshotDir);
           }
         }),
-      sleepVm: (pid, paths) =>
+      sleepVm: (pid, _paths, _cgroup, target) =>
         runInGeneration(async () => {
           const vm = vms.get(pid);
 
@@ -179,13 +179,13 @@ export function buildFakeVmm() {
           }
 
           // as Firecracker does: new files, renamed over the old ones
-          mkdirSync(paths.snapshotDir, { recursive: true });
-          writeFileSync(`${paths.vmstate}.new`, 'vmstate');
-          writeFileSync(`${paths.memFile}.new`, 'mem');
-          renameSync(`${paths.vmstate}.new`, paths.vmstate);
-          renameSync(`${paths.memFile}.new`, paths.memFile);
+          mkdirSync(target.snapshotDir, { recursive: true });
+          writeFileSync(`${target.vmstate}.new`, 'vmstate');
+          writeFileSync(`${target.memFile}.new`, 'mem');
+          renameSync(`${target.vmstate}.new`, target.vmstate);
+          renameSync(`${target.memFile}.new`, target.memFile);
 
-          usedSnapshots.delete(paths.snapshotDir);
+          usedSnapshots.delete(target.snapshotDir);
 
           return {};
         }),

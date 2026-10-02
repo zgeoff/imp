@@ -4,7 +4,7 @@ import { waitForAgent } from '../agent-client/wait-for-agent';
 import type { SlotAddress } from '../net/addressing';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
-import type { ImpPaths } from '../storage/data-layout';
+import type { ImpPaths, SnapshotPaths } from '../storage/data-layout';
 import type { ImpCgroup } from './cpu-cgroups';
 import { createFirecrackerClient } from './firecracker-client';
 import type { InstanceState } from './firecracker-client';
@@ -75,12 +75,13 @@ interface FinishedWake {
 export interface VmRunner {
   readonly startVm: (plan: VmPlan) => Promise<StartedVm>;
 
-  // pause, snapshot to new files, kill, rename them into place
+  // pause, snapshot to new files in `target`, kill, rename them into place
   // (docs/architecture/sleep-and-wake.md#sleep); a failed snapshot keeps the VM
   readonly sleepVm: (
     pid: number,
     paths: ImpPaths,
     cgroup: ImpCgroup | null,
+    target: SnapshotPaths,
   ) => Promise<Readonly<Record<string, number>>>;
 
   // a new Firecracker that loads the snapshot as its first call; throws, with
@@ -90,7 +91,7 @@ export interface VmRunner {
   // agent shutdown first when `graceful`, SIGKILL after the timeout
   readonly stopVm: (pid: number, paths: ImpPaths, graceful: boolean) => Promise<void>;
   readonly isVmAlive: (pid: number, paths: ImpPaths) => boolean;
-  readonly isAgentReady: (paths: ImpPaths) => Promise<boolean>;
+  readonly isAgentReady: (paths: ImpPaths, deadlineMs?: number) => Promise<boolean>;
 
   // the guest's uptime from the agent's ping, without the time asleep; null
   // when the agent does not answer within 250 ms or cannot read its clock
@@ -241,13 +242,13 @@ export function createVmRunner(): VmRunner {
         });
       }
     },
-    sleepVm: async (pid, paths, cgroup) => {
+    sleepVm: async (pid, paths, cgroup, target) => {
       const timer = createMarks();
       const setMark = timer.setMark;
       const api = createFirecrackerClient(paths.apiSocket);
-      const files = { snapshotPath: `${paths.vmstate}.new`, memFilePath: `${paths.memFile}.new` };
+      const files = { snapshotPath: `${target.vmstate}.new`, memFilePath: `${target.memFile}.new` };
 
-      mkdirSync(paths.snapshotDir, { recursive: true });
+      mkdirSync(target.snapshotDir, { recursive: true });
       rmSync(files.snapshotPath, { force: true });
       rmSync(files.memFilePath, { force: true });
       cgroup?.liftLimit();
@@ -290,14 +291,14 @@ export function createVmRunner(): VmRunner {
       setMark('kill');
 
       // never write into the old mem file: a restored VM mapped it MAP_PRIVATE
-      renameSync(files.snapshotPath, paths.vmstate);
-      renameSync(files.memFilePath, paths.memFile);
+      renameSync(files.snapshotPath, target.vmstate);
+      renameSync(files.memFilePath, target.memFile);
       rmSync(paths.apiSocket, { force: true });
       rmSync(paths.vsockSocket, { force: true });
 
       // zero pages become holes: a 2 GiB file with 300 MiB in use takes 381
       // MiB; the snapshot is good without it, so a failure only costs disk
-      const dug = await runCommand(['fallocate', '--dig-holes', paths.memFile]);
+      const dug = await runCommand(['fallocate', '--dig-holes', target.memFile]);
 
       const digStep = dug.exitCode === 0 ? 'digHoles' : 'digHolesFailed';
 
@@ -365,9 +366,9 @@ export function createVmRunner(): VmRunner {
       await sendGrow(paths.vsockSocket, diskBytes);
     },
     isVmAlive: (pid, paths) => isFirecrackerAlive(pid, paths.apiSocket),
-    isAgentReady: async (paths) => {
+    isAgentReady: async (paths, deadlineMs = 2000) => {
       try {
-        await waitForAgent(paths.vsockSocket, { deadlineMs: 2000 });
+        await waitForAgent(paths.vsockSocket, { deadlineMs });
 
         return true;
       } catch {
