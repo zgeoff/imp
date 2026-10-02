@@ -70,7 +70,7 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: Gate
     rootToken: 'root-secret',
     now: Date.now,
     onRemove: revocations.revoke,
-    isFileKey: (blob) => authorizedKeys.findKey(blob) !== null,
+    isFileKey: authorizedKeys.isListed,
   });
 
   const gateway = await startSshGateway(
@@ -866,14 +866,63 @@ test('a key on a read-only token is refused as an unknown key is, and opens noth
   expect(ctx.tracker.count(FAKE_IMP.id)).toBe(0);
 });
 
-test('a key in authorized_keys does not bind, and an unbound key gets nothing back', async () => {
+test('a key in authorized_keys does not bind, even while the file grants nothing', async () => {
   const ctx = await startTestGateway();
 
   await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
 
   const inFile = await readRejection(ctx.tokens.addKey('ci', USER_KEY.public));
 
+  chmodSync(ctx.keysPath, 0o666);
+
+  const unsafeFile = await readRejection(ctx.tokens.addKey('ci', USER_KEY.public));
+
   expect(inFile).toMatchObject({ code: 'CONFLICT' });
+  expect(unsafeFile).toMatchObject({ code: 'CONFLICT' });
+});
+
+// A binding next to a file line would hand the key every imp once removed:
+// the key must not fall back to the file's access.
+test('a bound key never falls back to its authorized_keys line when the binding goes', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({
+    name: 'dev',
+    scope: 'exec',
+    imps: ['dev-*'],
+    sshKeys: [DEV_KEY.public],
+  });
+
+  const added = ctx.tokens.list()[0]?.sshKeys[0]?.fingerprint ?? '';
+
+  // a new mtime, even on a coarse clock
+  await Bun.sleep(10);
+
+  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n${DEV_KEY.public}\n`, { mode: 0o600 });
+
+  const [unbind, remove] = await Promise.all([
+    readRejection(ctx.tokens.removeKey('dev', added)),
+    readRejection(ctx.tokens.remove('dev')),
+  ]);
+
+  expect(unbind).toMatchObject({ code: 'CONFLICT' });
+  expect(remove).toMatchObject({ code: 'CONFLICT' });
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
+
+  await Bun.sleep(10);
+
+  writeFileSync(ctx.keysPath, `${USER_KEY.public}\n`, { mode: 0o600 });
+
+  await ctx.tokens.removeKey('dev', added);
+
+  await assertRefused(openClient(ctx.gateway, FAKE_IMP.name, DEV_KEY.private));
+});
+
+test('an unbound key gets nothing back', async () => {
+  const ctx = await startTestGateway();
+
+  await ctx.tokens.create({ name: 'ci', scope: 'exec', imps: null });
 
   const added = await ctx.tokens.addKey('ci', BOUND_KEY.public);
 

@@ -79,6 +79,12 @@ test('IMP_SSH_PORT=0 turns the SSH gateway off', () => {
   expect(() => loadConfig({ IMP_SSH_PORT: '-1' })).toThrow();
 });
 
+test('IMP_SSH_AUTHORIZED_KEYS=false turns the authorized_keys file off', () => {
+  expect(loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'false' }).sshAuthorizedKeys).toBeFalse();
+  expect(loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'true' }).sshAuthorizedKeys).toBeTrue();
+  expect(() => loadConfig({ IMP_SSH_AUTHORIZED_KEYS: 'no' })).toThrow();
+});
+
 test('it needs the root dataset with the zfs backend', () => {
   expect(() => loadConfig({ IMP_STORAGE_BACKEND: 'zfs' })).toThrow('needs IMP_ZFS_ROOT');
   expect(() => loadConfig({ IMP_STORAGE_BACKEND: 'btrfs' })).toThrow();

@@ -191,6 +191,33 @@ test('a key binds once: not twice, not to two tokens, and not while authorized_k
   expect(ctx.tokens.list().map((token) => token.name)).toEqual(['a', 'b']);
 });
 
+test('a bound key that authorized_keys lists later stays bound until its line goes', async () => {
+  await using ctx = await setupTest();
+
+  const key = createPublicKey('me@laptop');
+
+  await ctx.tokens.create({ name: 'a', scope: 'exec', imps: ['dev-*'], sshKeys: [key.line] });
+
+  ctx.fileKeys.add(key.blob.toString('base64'));
+
+  const [unbind, remove] = await Promise.all([
+    readRejection(ctx.tokens.removeKey('a', key.fingerprint)),
+    readRejection(ctx.tokens.remove('a')),
+  ]);
+
+  expect(unbind).toMatchObject({ code: 'CONFLICT' });
+  expect(remove).toMatchObject({ code: 'CONFLICT' });
+  expect(String(unbind)).toContain('delete that line, then unbind it');
+  expect(ctx.tokens.findSshKey(key.blob)?.caller.name).toBe('a');
+  expect(ctx.removed).toEqual([]);
+
+  ctx.fileKeys.clear();
+
+  await ctx.tokens.remove('a');
+
+  expect(ctx.tokens.findSshKey(key.blob)).toBeNull();
+});
+
 test('a line that is not a plain public key binds nothing', async () => {
   await using ctx = await setupTest();
 

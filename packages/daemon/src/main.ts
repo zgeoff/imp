@@ -243,7 +243,7 @@ async function main(): Promise<void> {
     rootToken: token,
     now: Date.now,
     onRemove: revocations.revoke,
-    isFileKey: (blob) => authorizedKeys.findKey(blob) !== null,
+    isFileKey: authorizedKeys.isListed,
   });
 
   const peers = createForwardedPeers(Date.now);

@@ -83,11 +83,18 @@ export function formatKeyFingerprint(blob: Buffer): string {
 export interface AuthorizedKeys {
   // the key a client offers, if the file authorizes it
   readonly findKey: (blob: Buffer) => AuthorizedKey | null;
+
+  // whether the file lists the key, even while its mode grants nothing: a
+  // fixed mode would grant it again
+  readonly isListed: (blob: Buffer) => boolean;
 }
 
 interface FileState {
   readonly stamp: string;
+
+  // every key line, and whether the file's mode lets them log in
   readonly keys: readonly AuthorizedKey[];
+  readonly isSafe: boolean;
 }
 
 // Read again whenever it changes, so a key added on the host works on the
@@ -96,22 +103,24 @@ interface FileState {
 export function createAuthorizedKeys(path: string, log: (message: string) => void): AuthorizedKeys {
   const state: { current: FileState | null } = { current: null };
 
-  const load = (): readonly AuthorizedKey[] => {
+  const load = (): FileState => {
     const stamp = readStamp(path);
 
     if (state.current?.stamp === stamp) {
-      return state.current.keys;
+      return state.current;
     }
 
-    const keys = readKeys(path, stamp, log);
+    state.current = readFileState(path, stamp, log);
 
-    state.current = { stamp, keys };
-
-    return keys;
+    return state.current;
   };
 
+  const findListed = (blob: Buffer): AuthorizedKey | null =>
+    load().keys.find((key) => key.blob.equals(blob)) ?? null;
+
   return {
-    findKey: (blob) => load().find((key) => key.blob.equals(blob)) ?? null,
+    findKey: (blob) => (load().isSafe ? findListed(blob) : null),
+    isListed: (blob) => findListed(blob) !== null,
   };
 }
 
@@ -127,19 +136,17 @@ function readStamp(path: string): string {
   }
 }
 
-function readKeys(path: string, stamp: string, log: (message: string) => void) {
+function readFileState(path: string, stamp: string, log: (message: string) => void): FileState {
   if (stamp === 'missing') {
     log(`impd: ssh: no ${path}; no key can log in`);
 
-    return [];
+    return { stamp, keys: [], isSafe: true };
   }
 
   const unsafe = [path, dirname(path)].find((each) => (statSync(each).mode & 0o022) !== 0);
 
   if (unsafe !== undefined) {
     log(`impd: ssh: ${unsafe} is writable by group or others; no key can log in until it is not`);
-
-    return [];
   }
 
   const parsed = parseAuthorizedKeys(readFileSync(path, 'utf8'));
@@ -148,5 +155,5 @@ function readKeys(path: string, stamp: string, log: (message: string) => void) {
     log(`impd: ssh: ${path} ${problem}; skipped`);
   }
 
-  return parsed.keys;
+  return { stamp, keys: parsed.keys, isSafe: unsafe === undefined };
 }

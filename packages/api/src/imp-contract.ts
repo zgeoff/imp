@@ -293,7 +293,8 @@ export const impContract = {
       )
       .output(z.object({ token: TokenSchema, secret: z.string() })),
 
-    // ends its dashboard sessions, event streams, sockets and ssh logins too
+    // ends its dashboard sessions, event streams, sockets and ssh logins too;
+    // CONFLICT while authorized_keys lists one of its keys
     delete: base.input(NameInputSchema).output(EmptySchema),
 
     // binds an SSH key, so a login with it runs as the token; CONFLICT for a
@@ -302,7 +303,8 @@ export const impContract = {
       .input(z.object({ name: NameSchema, key: SshPublicKeySchema }))
       .output(SshKeySchema),
 
-    // ends the ssh logins made with the key
+    // ends the ssh logins made with the key; CONFLICT while authorized_keys
+    // lists it, since unbinding would hand it every imp
     removeKey: base
       .input(z.object({ name: NameSchema, fingerprint: z.string() }))
       .output(EmptySchema),

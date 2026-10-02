@@ -56,13 +56,14 @@ export interface TokenStore {
   // the token, and its secret: the only time impd has it
   readonly create: (token: Readonly<NewToken>) => Promise<{ token: Token; secret: string }>;
 
-  // NOT_FOUND for an unknown name; calls onRemove with the token's id
+  // NOT_FOUND for an unknown name; CONFLICT while authorized_keys lists one
+  // of its keys; calls onRemove with the token's id
   readonly remove: (name: string) => Promise<void>;
 
   // CONFLICT for a key bound to any token or listed in authorized_keys
   readonly addKey: (name: string, line: string) => Promise<SshKey>;
 
-  // calls onRemove with the key's id
+  // CONFLICT while authorized_keys lists the key; calls onRemove with its id
   readonly removeKey: (name: string, fingerprint: string) => Promise<void>;
 
   // the token a key blob is bound to, for an SSH login; null for none
@@ -84,9 +85,9 @@ interface TokenStoreDeps {
   // after a token or a key is removed, by its id: what it opened ends
   readonly onRemove: (id: string) => void;
 
-  // whether authorized_keys lists the key: such a key has every imp, so
-  // binding it would narrow nothing, and removing the binding later would
-  // hand the login back to the file
+  // whether authorized_keys lists the key, whatever the file's mode. A key
+  // there has every imp: a binding next to it would narrow nothing until
+  // it was removed, and then hand the login back to the file.
   readonly isFileKey: (blob: Buffer) => boolean;
 }
 
@@ -137,6 +138,22 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
   const listKeys = (tokenId: string): KeyEntry[] =>
     [...keysByFingerprint.values()].filter((entry) => entry.record.tokenId === tokenId);
+
+  // a key added to the file after it was bound: unbinding it would hand it
+  // every imp, so the line goes first
+  const requireNotInFile = (entries: readonly KeyEntry[]): void => {
+    const listed = entries.find((entry) => deps.isFileKey(entry.key.blob));
+
+    if (listed !== undefined) {
+      const fingerprint = listed.record.fingerprint;
+
+      throw buildConflictError(
+        'ssh-key',
+        fingerprint,
+        `key ${fingerprint} is in authorized_keys too, where it has every imp; delete that line, then unbind it`,
+      );
+    }
+  };
 
   const toFullToken = (record: Readonly<TokenRecord>): Token => ({
     ...toToken(record),
@@ -217,6 +234,8 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     remove: async (name) => {
       const record = requireByName(name);
 
+      requireNotInFile(listKeys(record.id));
+
       await removeTokenRecord(deps.db, record.id);
 
       byId.delete(record.id);
@@ -251,6 +270,8 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       if (entry === undefined || entry.record.tokenId !== record.id) {
         throw buildNotFoundError('ssh-key', fingerprint);
       }
+
+      requireNotInFile([entry]);
 
       await removeTokenSshKeyRecord(deps.db, entry.record.id);
 

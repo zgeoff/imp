@@ -104,7 +104,9 @@ imp token key rm laptop SHA256:...           # unbind one
   `authorized_keys` apply: no options, and no FIDO or DSA keys.
 - impd refuses to bind a key that `authorized_keys` lists, and says to delete the line first. A
   binding that stood next to the line would hand the key back its full access the moment the binding
-  was removed. A bound key added to the file later still logs in only as its token.
+  was removed. It checks the file's lines even while the file's mode grants nothing. A bound key
+  added to the file later still logs in only as its token, and impd then refuses to unbind it or
+  delete its token until the line is gone.
 - Removing the key, or its token, ends the logins made with it at once.
 - A token cannot change once made, so a login keeps the scope it was checked with. Change a key's
   reach by binding it to another token.

@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test';
-import { parseAuthorizedKeys } from './authorized-keys';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { utils } from 'ssh2';
+import { createAuthorizedKeys, parseAuthorizedKeys } from './authorized-keys';
 import { createEd25519Key } from './host-key';
 
 const KEY = createEd25519Key().public;
@@ -36,4 +40,29 @@ test('it refuses key types the gateway cannot verify, and broken keys', () => {
   expect(parsed.problems).toHaveLength(3);
   expect(parsed.problems[0]).toBe('line 1: sk-ssh-ed25519@openssh.com keys are not supported');
   expect(parsed.problems[2]).toStartWith('line 3: ');
+});
+
+test('a file others can write lists its keys but grants none', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-keys-'));
+  const path = join(dir, 'authorized_keys');
+  const parsed = utils.parseKey(KEY);
+
+  if (parsed instanceof Error) {
+    throw parsed;
+  }
+
+  const blob = parsed.getPublicSSH();
+
+  try {
+    chmodSync(dir, 0o700);
+    writeFileSync(path, `${KEY}\n`, { mode: 0o600 });
+    chmodSync(path, 0o666);
+
+    const keys = createAuthorizedKeys(path, () => {});
+
+    expect(keys.findKey(blob)).toBeNull();
+    expect(keys.isListed(blob)).toBeTrue();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
