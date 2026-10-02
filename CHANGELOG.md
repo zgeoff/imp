@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.21.0](https://github.com/zgeoff/imp/compare/v0.20.0...v0.21.0) (2026-10-02)
+
+### Features
+
+- **daemon:** let ksm merge guest memory when the host opts in
+  ([2c488d0](https://github.com/zgeoff/imp/commit/2c488d04071c8b45bc151198d4c9fa9a0c554b77))
+- **daemon:** log an adopted vm that keeps the ksm flag with ksm off
+  ([4399bc6](https://github.com/zgeoff/imp/commit/4399bc6ea8feb33767dd7bc588ef2a086d415b35))
+- **deploy:** add bootstrap --ksm for bare-metal hosts
+  ([3ad5bdc](https://github.com/zgeoff/imp/commit/3ad5bdc916be51156fba1de1f39fb4b9ad631628))
+- **deploy:** add bootstrap --no-ksm
+  ([6162034](https://github.com/zgeoff/imp/commit/61620343e108201418905a325fa1cbf5713039f7))
+- **host:** add ksm-exec to start firecracker mergeable
+  ([e25bc7f](https://github.com/zgeoff/imp/commit/e25bc7ffa3e4ed5a0a0670f6a1617efc7c9cd7c6))
+
+### Bug Fixes
+
+- **daemon:** check a restore's split guest memory whole on 6.10-6.11
+  ([60c9c17](https://github.com/zgeoff/imp/commit/60c9c179c22b3bb30a22850eddb53f9b11423d15))
+- **daemon:** keep ksm headroom from the vms' own profit
+  ([437a723](https://github.com/zgeoff/imp/commit/437a7230c277e5ed0214f04401e27f3b82a96780))
+- **deploy:** unmerge ksm's pages on --no-ksm
+  ([b32b440](https://github.com/zgeoff/imp/commit/b32b44001e344b83e99a5f15ea691fa3bcd20dfc))
+
 ## [0.20.0](https://github.com/zgeoff/imp/compare/v0.19.0...v0.20.0) (2026-10-02)
 
 ### Features
