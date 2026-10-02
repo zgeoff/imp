@@ -68,7 +68,9 @@ export interface ImpCheckpointHooks {
     id: string,
     action: (imp: LockedImp | undefined) => Promise<T>,
   ) => Promise<T>;
-  readonly haltImp: (imp: LockedImp) => Promise<LockedImp>;
+
+  // stops the VM; not `graceful`, it kills it (ImpVmOps.stopImpVm)
+  readonly haltImp: (imp: LockedImp, graceful?: boolean) => Promise<LockedImp>;
 
   // boots a restored imp's disk; the boot records the cause `restore`
   readonly bootImp: (imp: LockedImp) => Promise<LockedImp>;

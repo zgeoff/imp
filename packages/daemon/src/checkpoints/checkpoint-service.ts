@@ -202,12 +202,13 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         const wasAwake = imp.state === 'running' || imp.state === 'sleeping';
         const started = performance.now();
 
-        // The disk is ready before the halt, so a failed clone leaves the imp
-        // as it was. The memory image holds the old disk's page cache: it goes
-        // before the swap, so a crash never pairs it with the new disk.
+        // a failed clone leaves the imp as it was; the halt kills the VM,
+        // whose disk and memory go anyway (docs/architecture/storage.md)
         const halted = await storage.restoreCheckpoint(imp.id, checkpoint.id, async () => {
-          const stopped = await deps.imps.haltImp(imp);
+          const stopped = await deps.imps.haltImp(imp, false);
 
+          // the memory holds the old disk's page cache: never pair it with
+          // the new disk, even after a crash
           rmSync(paths.snapshotDir, { recursive: true, force: true });
 
           return stopped;

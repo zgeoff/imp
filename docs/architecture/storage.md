@@ -73,9 +73,14 @@ These are the same on both backends; only the clone differs.
   clone, or a ZFS snapshot), and the agent thaws. The freeze carries a 10 s timeout, so the agent
   thaws by itself if impd never sends thaw. A sleeping imp wakes first, because its memory holds
   page cache that is not on the disk yet. A stopped imp needs no freeze.
-- **Restore.** impd clones the checkpoint, stops the VM, drops any memory snapshot, puts the clone
+- **Restore.** impd clones the checkpoint, kills the VM, drops any memory snapshot, puts the clone
   in place of the disk, and boots again if the imp was awake. A clone that fails leaves the imp as
-  it was. Memory and disk always belong together: a snapshot never wakes on a different disk.
+  it was. Memory and disk always belong together: a snapshot never wakes on a different disk. The
+  kill is a SIGKILL of Firecracker, not the agent's graceful shutdown: the old disk and memory are
+  thrown away, so services get no SIGTERM and nothing syncs. That saves the shutdown's grace, about
+  1 s of a 1.6 s restore. If the swap fails after the kill, the imp stops on its old disk as after a
+  power cut, and ext4's journal recovers it at the next boot. On ZFS, a swap that fails after the
+  old dataset is gone puts the clone in place instead, so the imp stops on the checkpoint.
 - **Fork.** impd clones a disk, or a checkpoint, into a new imp. A fork is disk only. A memory fork
   would duplicate entropy and IDs across the clones.
 - **Template.** impd clones a disk, frozen as for a checkpoint, into a new image
