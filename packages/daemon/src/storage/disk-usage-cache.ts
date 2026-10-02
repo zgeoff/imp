@@ -18,6 +18,9 @@ export interface DiskUsageCache {
   readonly runPass: () => Promise<void>;
   readonly requestRefresh: () => void;
   readonly read: (impId: string) => CachedDiskUsage | undefined;
+
+  // what the imps take on their own, together: what destroying each frees
+  readonly readExclusiveTotal: () => number;
   readonly stop: () => void;
 }
 
@@ -96,6 +99,8 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
       }, REFRESH_DELAY_MS);
     },
     read: (impId) => state.usage.get(impId),
+    readExclusiveTotal: () =>
+      [...state.usage.values()].reduce((total, usage) => total + usage.exclusiveBytes, 0),
     stop: () => {
       if (state.timer !== null) {
         clearTimeout(state.timer);

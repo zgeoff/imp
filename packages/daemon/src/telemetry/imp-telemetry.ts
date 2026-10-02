@@ -27,6 +27,9 @@ interface TelemetryDeps {
   readonly readStateCounts: () => Promise<ReadonlyMap<ImpState, number>>;
   readonly readRam: () => Promise<RamReading>;
 
+  // the disk-usage pass's exclusive bytes, together; none in a test without
+  readonly readDiskUsedBytes?: () => number;
+
   // each pass of the resource sampler; none in a test that has no sampler
   readonly subscribeResources?: (
     listener: (deltas: readonly ResourceDelta[]) => void,
@@ -65,6 +68,11 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
   const ramBudget = meter.createObservableGauge('imp.ram.budget', {
     description: 'the RAM budget the governor keeps the imps under',
     unit: 'MiBy',
+  });
+
+  const diskUsed = meter.createObservableGauge('imp.disk.used', {
+    description: 'disk the imps take on their own, together, as of the last usage pass',
+    unit: 'By',
   });
 
   const cpuUsage = meter.createObservableGauge('imp.cpu.usage', {
@@ -120,9 +128,13 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
     result.observe(ramUsed, ram.usedMib);
     result.observe(ramBudget, ram.budgetMib);
     result.observe(cpuUsage, lastPass.cores);
+
+    if (deps.readDiskUsedBytes !== undefined) {
+      result.observe(diskUsed, deps.readDiskUsedBytes());
+    }
   };
 
-  const gauges = [states, ramUsed, ramBudget, cpuUsage];
+  const gauges = [states, ramUsed, ramBudget, cpuUsage, diskUsed];
 
   meter.addBatchObservableCallback(readGauges, gauges);
 

@@ -231,3 +231,20 @@ test('each sampler pass feeds the CPU, network and awake instruments, with no im
   expect(network).toEqual(['{"direction":"rx"}=2000', '{"direction":"tx"}=60']);
   expect(awake).toEqual(['{}=10']);
 });
+
+test('the disk gauge reads what the imps take on their own, from the usage pass', async () => {
+  await using telemetry = setupInMemoryTelemetry();
+
+  const stop = startImpTelemetry({
+    bus: createEventBus(),
+    readStateCounts: () => Promise.resolve(new Map()),
+    readRam: () => Promise.resolve({ usedMib: 0, budgetMib: 4096 }),
+    readDiskUsedBytes: () => 3 * 1024 * 1024 * 1024,
+  });
+
+  const used = await telemetry.readPoints('imp.disk.used');
+
+  stop();
+
+  expect(used).toEqual([`{}=${String(3 * 1024 * 1024 * 1024)}`]);
+});
