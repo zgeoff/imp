@@ -95,39 +95,78 @@ async function writeEntryContent(
   await written.promise;
 }
 
+// the entry's tar header; null for `other`, which the tar leaves out
+async function readEntryHeader(entry: LocalEntry): Promise<EntryHeader | null> {
+  const mode = entry.mode;
+
+  const mtime = new Date(entry.mtimeMs);
+
+  if (entry.kind === 'directory') {
+    return { name: `${entry.name}/`, type: 'directory', mode, mtime };
+  }
+
+  if (entry.kind === 'symlink') {
+    const linkname = await readlink(entry.path);
+
+    return { name: entry.name, type: 'symlink', linkname, mode, mtime };
+  }
+
+  if (entry.kind === 'file') {
+    return { name: entry.name, type: 'file', size: entry.size, mode, mtime };
+  }
+
+  return null;
+}
+
 async function writeEntry(
   pack: Pack,
   entry: LocalEntry,
   progress: CopyProgress,
   warn: (text: string) => void,
 ): Promise<void> {
-  const mode = entry.mode;
+  const header = await readEntryHeader(entry);
 
-  const mtime = new Date(entry.mtimeMs);
-
-  if (entry.kind === 'directory') {
-    await writeEntryContent(
-      pack,
-      { name: `${entry.name}/`, type: 'directory', mode, mtime },
-      null,
-      progress,
-    );
-  } else if (entry.kind === 'symlink') {
-    const linkname = await readlink(entry.path);
-
-    await writeEntryContent(
-      pack,
-      { name: entry.name, type: 'symlink', linkname, mode, mtime },
-      null,
-      progress,
-    );
-  } else if (entry.kind === 'file') {
-    const header = { name: entry.name, type: 'file', size: entry.size, mode, mtime } as const;
-
-    await writeEntryContent(pack, header, createReadStream(entry.path), progress);
-  } else {
+  if (header === null) {
     warn(`${entry.path}: not a file, directory or symlink; left out`);
+
+    return;
   }
+
+  const content = entry.kind === 'file' ? createReadStream(entry.path) : null;
+
+  await writeEntryContent(pack, header, content, progress);
+}
+
+// The exact length of the tar writeLocalEntries makes: tar-stream encodes
+// every header (a long name adds a pax header), then each file's data,
+// padded to 512 bytes, and the 1024-byte end are added.
+export async function countTarBytes(entries: readonly LocalEntry[]): Promise<number> {
+  const pack = tar.pack();
+  const padded = { bytes: 0 };
+
+  for (const entry of entries) {
+    const header = await readEntryHeader(entry);
+
+    if (header !== null) {
+      pack.entry({ ...header, size: 0 }, '');
+    }
+
+    if (entry.kind === 'file') {
+      padded.bytes += Math.ceil(entry.size / 512) * 512;
+    }
+  }
+
+  pack.finalize();
+
+  const counted = { bytes: padded.bytes };
+
+  for await (const chunk of pack) {
+    if (chunk instanceof Uint8Array) {
+      counted.bytes += chunk.byteLength;
+    }
+  }
+
+  return counted.bytes;
 }
 
 // Packs entries as a tar and hands each chunk to send, which applies the

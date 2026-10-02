@@ -10,6 +10,10 @@ export type BuildContext = Blob | Uint8Array<ArrayBuffer> | ReadableStream<Uint8
 export interface BuildImageOptions {
   // the Dockerfile's path in the context; `Dockerfile` by default
   readonly dockerfile?: string;
+
+  // the context's exact length in bytes, sent as Content-Length: impd then
+  // holds that much disk for the upload, not its whole limit
+  readonly size?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -39,6 +43,10 @@ export async function buildImage(
 
   if (deps.token !== null) {
     headers['authorization'] = `Bearer ${deps.token}`;
+  }
+
+  if (options.size !== undefined) {
+    headers['content-length'] = String(options.size);
   }
 
   // `duplex` is in the fetch spec, but not yet in every RequestInit type

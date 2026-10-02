@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import type { Image } from '@imp/api';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { CopyProgress } from '../cp/copy-progress';
-import { countFileBytes, writeLocalEntries } from '../cp/pack-local-path';
+import { countFileBytes, countTarBytes, writeLocalEntries } from '../cp/pack-local-path';
 import type { LocalEntry } from '../cp/pack-local-path';
 import type { ImpClient } from '../create-imp-client';
 import { listContextEntries } from './pack-build-context';
@@ -71,6 +71,8 @@ export async function runImageBuild(
     'imp image build',
   );
 
+  const size = await countTarBytes(entries);
+
   progress.setTotal(countFileBytes(entries));
 
   try {
@@ -78,6 +80,7 @@ export async function runImageBuild(
       options.name,
       createContextStream(entries, progress, writeWarning),
       {
+        size,
         ...(options.dockerfile !== undefined && { dockerfile: options.dockerfile }),
       },
     );

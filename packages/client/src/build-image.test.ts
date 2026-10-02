@@ -12,6 +12,9 @@ async function setupBuildTest(token = TEST_TOKEN) {
 
   const received: string[] = [];
 
+  // the Content-Length of every upload
+  const lengths: (string | null)[] = [];
+
   const buildImageFromContext: ImageService['buildImageFromContext'] = (tarPath, name) => {
     received.push(readFileSync(tarPath, 'utf8'));
 
@@ -34,6 +37,8 @@ async function setupBuildTest(token = TEST_TOKEN) {
     fetch: (request) => {
       const url = new URL(request.url);
 
+      lengths.push(request.headers.get('content-length'));
+
       url.pathname = url.pathname.replace(/^\/prefix/u, '');
 
       return app.handle(new Request(url.href, request));
@@ -43,6 +48,7 @@ async function setupBuildTest(token = TEST_TOKEN) {
   return {
     client,
     received,
+    lengths,
     [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
   };
 }
@@ -88,4 +94,15 @@ test('buildImage without a valid token is UNAUTHORIZED', async () => {
     .catch((error: unknown) => error);
 
   expect(failure).toMatchObject({ code: 'UNAUTHORIZED', status: 401 });
+});
+
+test('a stream with its size goes with that Content-Length', async () => {
+  await using ctx = await setupBuildTest();
+
+  const stream = new Blob(['as a stream']).stream();
+
+  await ctx.client.buildImage('sized', stream, { size: 11 });
+
+  expect(ctx.lengths).toEqual(['11']);
+  expect(ctx.received).toEqual(['as a stream']);
 });
