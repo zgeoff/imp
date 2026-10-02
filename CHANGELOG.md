@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/zgeoff/imp/compare/v0.2.2...v0.3.0) (2026-10-02)
+
+### Features
+
+- forward the user's ssh-agent into an imp
+  ([0b299d2](https://github.com/zgeoff/imp/commit/0b299d2ace27554aef1676f8c1a2e9a0e94c546c)), closes
+  [#53](https://github.com/zgeoff/imp/issues/53)
+
+### Bug Fixes
+
+- **backup:** wait for restic locks and list snapshots without one
+  ([6c02a4e](https://github.com/zgeoff/imp/commit/6c02a4e9c2cdcb3f846ce7c15e9c4a1539b49bc0))
+
 ## [0.2.2](https://github.com/zgeoff/imp/compare/v0.2.1...v0.2.2) (2026-10-02)
 
 ### Bug Fixes
