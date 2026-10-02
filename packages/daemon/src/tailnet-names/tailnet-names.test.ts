@@ -273,6 +273,44 @@ test('an API outage fails every name, and the next pass brings them back', async
   expect(ctx.names.readStatus()).toEqual({ live: 1, failed: [] });
 });
 
+test('a name a device holds fails that imp only, and the create stands', async () => {
+  await using ctx = await setupNames();
+
+  const write = ctx.fake.api.writeService;
+
+  ctx.fake.api = {
+    ...ctx.fake.api,
+    writeService: (definition) =>
+      definition.name === 'svc:laptop'
+        ? Promise.reject(
+            new Error(
+              'Tailscale PUT /tailnet/-/services/svc%3Alaptop: 400 name in use by a machine',
+            ),
+          )
+        : write(definition),
+  };
+
+  const laptop = await ctx.imps.createImp({ name: 'laptop' });
+
+  await ctx.imps.createImp({ name: 'box' });
+
+  const names = ctx.buildNames(HOST);
+
+  await names.runSync();
+
+  expect(laptop.state).toBe('running');
+
+  expect(names.readStatus()).toEqual({
+    live: 1,
+    failed: [
+      {
+        name: 'laptop',
+        error: 'Tailscale PUT /tailnet/-/services/svc%3Alaptop: 400 name in use by a machine',
+      },
+    ],
+  });
+});
+
 test('serve config for a service gone from the tailnet is cleared', async () => {
   await using ctx = await setupNames();
 
