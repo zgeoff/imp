@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { loadBackupConfig } from './backup/backup-config';
+import type { BackupConfig } from './backup/backup-config';
 import { countSlots, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import type { StorageBackendKind } from './storage/storage-backend';
@@ -78,6 +80,9 @@ export interface Config {
   // the web dashboard's built files (packages/dashboard/dist), served at /;
   // null serves a note that this impd has none
   readonly dashboardDir: string | null;
+
+  // off-host backups with restic; null when IMP_BACKUP_REPOSITORY is unset
+  readonly backup: BackupConfig | null;
 }
 
 function splitList(value: string): string[] {
@@ -128,5 +133,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
+    backup: loadBackupConfig(present),
   };
 }
