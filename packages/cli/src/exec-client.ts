@@ -5,6 +5,7 @@ import { loadCliConfig } from './cli-config';
 import { openExecSession } from './exec-session';
 import type { ExecOutcome, ExecSessionOptions } from './exec-session';
 import { TOKEN_HINT } from './run-action';
+import { UsageError } from './usage-error';
 
 export interface ExecOptions {
   readonly name: string;
@@ -43,10 +44,28 @@ const PROCESS_IO: ExecIo = {
   },
 };
 
+// Bun's WebSocket takes headers, so the token stays out of the URL
+function openWebSocket(url: string, headers: Readonly<Record<string, string>>): WebSocket {
+  return new WebSocket(url, { headers: { ...headers } });
+}
+
 // Runs one command in an imp, wired to this process's stdio and signals,
 // and resolves with the exit code for this process.
 export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO): Promise<number> {
-  const config = loadCliConfig(io.env);
+  let config: ReturnType<typeof loadCliConfig>;
+
+  try {
+    config = loadCliConfig(io.env);
+  } catch (error) {
+    if (!(error instanceof UsageError)) {
+      throw error;
+    }
+
+    console.error(`imp: ${error.message}`);
+
+    return Promise.resolve(IMP_FAILED_CODE);
+  }
+
   const stdin = io.stdin;
   const isRaw = options.tty && stdin.isTTY === true;
   const done = Promise.withResolvers<number>();
@@ -71,7 +90,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 
       io.writeOutput(fd, data);
     },
-    ...(io.connect !== undefined && { connect: io.connect }),
+    connect: io.connect ?? openWebSocket,
   });
 
   // runs on process.exit too, so no exit path leaves the terminal raw
@@ -198,7 +217,19 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
 function printOutcome(outcome: ExecOutcome, baseUrl: string): number {
   switch (outcome.kind) {
     case 'exit': {
-      return outcome.code ?? 128 + readSignalNumber(outcome.signal);
+      if (outcome.code !== null) {
+        return outcome.code;
+      }
+
+      const signal = readSignalNumber(outcome.signal);
+
+      if (signal === 0) {
+        console.error(`imp: impd reported an exit with no code and no known signal`);
+
+        return IMP_FAILED_CODE;
+      }
+
+      return 128 + signal;
     }
     case 'failed': {
       const prefix = outcome.code === null ? '' : `${outcome.code}: `;
@@ -228,24 +259,20 @@ function printOutcome(outcome: ExecOutcome, baseUrl: string): number {
       return IMP_FAILED_CODE;
     }
     case 'local_error': {
-      // a reader such as `head` went away: quiet, as for a local command
-      if (isBrokenPipe(outcome.error)) {
-        return BROKEN_PIPE_CODE;
-      }
-
-      const message =
-        outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
-
-      console.error(`imp: ${message}`);
-
-      return IMP_FAILED_CODE;
-    }
-    case 'stopped': {
       break;
     }
   }
 
-  // stopped: whoever stopped the session already chose the code
+  // a callback threw; a reader such as `head` that went away is quiet, as
+  // for a local command
+  if (isBrokenPipe(outcome.error)) {
+    return BROKEN_PIPE_CODE;
+  }
+
+  const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+
+  console.error(`imp: ${message}`);
+
   return IMP_FAILED_CODE;
 }
 

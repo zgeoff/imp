@@ -28,7 +28,9 @@ export interface FakeImpd extends AsyncDisposable {
 }
 
 const TOKEN = 'fake-token';
-const WAIT_TIMEOUT_MS = 5000;
+
+// as long as the subprocess tests may take
+const WAIT_TIMEOUT_MS = 20_000;
 
 // An impd that serves only `/exec` (and a 401 or an empty answer on `/rpc`),
 // for tests that drive the real exec client. `onMessage` scripts the replies.

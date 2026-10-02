@@ -33,8 +33,7 @@ export type ExecOutcome =
   | { readonly kind: 'bad_message'; readonly detail: string }
 
   // a callback threw, such as EPIPE on stdout
-  | { readonly kind: 'local_error'; readonly error: unknown }
-  | { readonly kind: 'stopped' };
+  | { readonly kind: 'local_error'; readonly error: unknown };
 
 export interface ExecSessionOptions {
   readonly baseUrl: string;
@@ -42,7 +41,10 @@ export interface ExecSessionOptions {
   readonly start: ExecStart;
   readonly onStarted: (pid: number) => void;
   readonly onOutput: (channel: 'stdout' | 'stderr', data: Uint8Array) => void;
-  readonly connect?: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
+
+  // a browser WebSocket takes no headers (impd also reads ?token=), so the
+  // runtime that opens the socket is the caller's choice
+  readonly connect: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
 }
 
 export interface ExecSession {
@@ -56,7 +58,8 @@ export interface ExecSession {
   readonly resize: (cols: number, rows: number) => void;
   readonly sendSignal: (signal: string) => void;
 
-  // closes the socket; impd then stops the process
+  // closes the socket, and impd then stops the process; `outcome` never
+  // settles after this, so the caller picks its own exit code
   readonly stop: () => void;
 }
 
@@ -73,8 +76,8 @@ class BadMessageError extends Error {
 }
 
 // One command over the `/exec` WebSocket (packages/api exec-protocol), with
-// no stdio of its own: the caller wires output, stdin and signals, and maps
-// the outcome to messages and an exit code.
+// no stdio and nothing Bun-only: the caller wires the socket, output, stdin
+// and signals, and maps the outcome to messages and an exit code.
 export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSession {
   const url = buildImpdUrl(options.baseUrl, EXEC_PATH);
 
@@ -83,25 +86,27 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   const headers: Record<string, string> =
     options.token === null ? {} : { authorization: `Bearer ${options.token}` };
 
-  const connect =
-    options.connect ?? ((href, connectHeaders) => new WebSocket(href, { headers: connectHeaders }));
-
-  const ws = connect(url.href, headers);
+  const ws = options.connect(url.href, headers);
   const outcome = Promise.withResolvers<ExecOutcome>();
   const state = { opened: false, started: false, finished: false };
 
   ws.binaryType = 'arraybuffer';
+
+  const stopSocket = (): void => {
+    state.finished = true;
+
+    clearTimeout(openTimer);
+
+    ws.close();
+  };
 
   const resolveOutcome = (result: ExecOutcome): void => {
     if (state.finished) {
       return;
     }
 
-    state.finished = true;
+    stopSocket();
 
-    clearTimeout(openTimer);
-
-    ws.close();
     outcome.resolve(result);
   };
 
@@ -156,6 +161,11 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     const message = parsed.data;
 
     if (message.type === 'started') {
+      // a repeat would start stdin twice
+      if (state.started) {
+        return;
+      }
+
       state.started = true;
 
       options.onStarted(message.pid);
@@ -231,7 +241,9 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
   const waitForDrain = async (): Promise<void> => {
     while (!state.finished && ws.bufferedAmount > HIGH_WATER_BYTES) {
-      await Bun.sleep(DRAIN_POLL_MS);
+      await new Promise((resolve) => {
+        setTimeout(resolve, DRAIN_POLL_MS);
+      });
     }
   };
 
@@ -256,7 +268,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       sendControl(JSON.stringify({ type: 'signal', signal } satisfies ExecClientMessage));
     },
     stop: () => {
-      resolveOutcome({ kind: 'stopped' });
+      stopSocket();
     },
   };
 }

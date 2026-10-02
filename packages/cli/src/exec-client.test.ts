@@ -100,6 +100,55 @@ test('it exits 128 + n for a signal, a numbered one included', async () => {
   }
 });
 
+test('it exits 255 for an exit with neither a code nor a known signal', async () => {
+  for (const signal of [null, 'SIGNOPE']) {
+    await using impd = startFakeImpd(
+      startThen((peer) => {
+        peer.send({ type: 'exit', code: null, signal });
+      }),
+    );
+
+    const exitCode = await runExec(BOX, setupIo(impd).io);
+
+    expect(exitCode).toBe(255);
+  }
+});
+
+test('it ignores a repeated started, so stdin goes over once', async () => {
+  await using impd = startFakeImpd(
+    startThen((peer, message) => {
+      if (message['type'] === 'start') {
+        peer.send({ type: 'started', pid: 7 });
+      }
+
+      if (message['type'] === 'stdin_eof') {
+        peer.send({ type: 'exit', code: 0, signal: null });
+      }
+    }),
+  );
+
+  const ctx = setupIo(impd);
+  const code = runExec(BOX, ctx.io);
+
+  await impd.waitFor((received) => received.length === 1);
+
+  ctx.stdin.end('typed');
+
+  const exitCode = await code;
+
+  expect(exitCode).toBe(0);
+  expect(impd.received.slice(1)).toEqual([{ stdin: 'typed' }, { type: 'stdin_eof' }]);
+});
+
+test('it exits 255 for an IMP_URL that is not an http URL', async () => {
+  const ctx = setupIo({ url: 'localhost:7070', token: 'x' });
+
+  const exitCode = await runExec(BOX, ctx.io);
+
+  expect(exitCode).toBe(255);
+  expect(ctx.readErrors()).toEqual(['imp: IMP_URL is not an http(s) URL: localhost:7070']);
+});
+
 test('it exits 127 when the command cannot start, and 255 for other refusals', async () => {
   for (const [code, expected] of [
     ['EXEC_FAILED', 127],
