@@ -50,6 +50,8 @@ type message struct {
 	Pid   int  `json:"pid,omitempty"`
 	Sig   int  `json:"sig,omitempty"`
 	Group bool `json:"group,omitempty"`
+	// reply to spawn: the child started in the spec's cgroup
+	InCgroup bool `json:"in_cgroup,omitempty"`
 
 	// reply: an errno travels as a number, so the agent's errors.Is works
 	Errno int    `json:"errno,omitempty"`

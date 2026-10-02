@@ -187,7 +187,9 @@ func (c *client) Start(s proc.Spec) (*proc.Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("start %s: %w", s.Argv[0], err)
 	}
-	return proc.NewProcess(reply.Pid, done, c.signal), nil
+	p := proc.NewProcess(reply.Pid, done, c.signal)
+	p.InCgroup = reply.InCgroup
+	return p, nil
 }
 
 func (c *client) signal(pid int, sig syscall.Signal, group bool) error {
