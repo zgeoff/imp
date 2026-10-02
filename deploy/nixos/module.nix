@@ -16,6 +16,11 @@ let
   docker = "${config.virtualisation.docker.package}/bin/docker";
   zfs = cfg.storage == "zfs";
   ownFirewall = cfg.hostFirewall == "own";
+  ipv6 = cfg.ipv6.enable;
+  # bootstrap.sh's names: the network imp-host runs on with IPv6, and its
+  # bridge, which the forward rules below name.
+  hostNetwork = "imp-host";
+  hostBridge = "br-imphost";
 
   # The docker run arguments, shared with deploy/imp-host.service and
   # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
@@ -25,6 +30,10 @@ let
       "-p"
       port
     ]) cfg.publicPorts;
+    "$IMP_HOST_NETWORK" = lib.optionals ipv6 [
+      "--network"
+      hostNetwork
+    ];
   };
   sharedArgs = lib.concatMap (
     word:
@@ -94,6 +103,8 @@ let
     IMP_STORAGE_BACKEND = cfg.storage;
     IMP_ZFS_ROOT = if zfs then cfg.zfs.root else "";
     IMP_HOST_FIREWALL = cfg.hostFirewall;
+    IMP_HOST_IPV6 = if ipv6 then "on" else "off";
+    IMP_HOST_SUBNET6 = lib.optionalString ipv6 cfg.ipv6.subnet;
   };
   overridden = lib.attrNames (
     lib.intersectAttrs (
@@ -101,6 +112,7 @@ let
       // {
         TAILSCALE_AUTHKEY = "";
         IMP_PUBLIC_PORTS = "";
+        IMP_HOST_NETWORK = "";
         IMP_BACKUP_PASSWORD_FILE = "";
       }
     ) cfg.settings
@@ -159,6 +171,81 @@ let
         ''
     }
   '';
+
+  # The network imp-host runs on with IPv6, made as bootstrap.sh makes it,
+  # and made again when it differs (the options say what it is) and nothing
+  # else is on it. Without IPv6, one an earlier generation made goes.
+  ensureNetwork = pkgs.writeShellScript "imp-host-network" ''
+    set -euo pipefail
+    export PATH=${
+      lib.makeBinPath [
+        config.virtualisation.docker.package
+        pkgs.coreutils
+        pkgs.gawk
+        pkgs.gnugrep
+      ]
+    }
+    source ${../bootstrap.sh}
+    ${
+      if ipv6 then
+        ''
+          ipv6_subnet=$(subnet6 ${lib.escapeShellArg cfg.ipv6.subnet}) \
+            || { echo "imp-host: services.imp.ipv6.subnet is ${cfg.ipv6.subnet}; want an IPv6 /64" >&2; exit 1; }
+          if inspect=$(docker network inspect -f "$NETWORK_FORMAT" "$HOST_NETWORK" 2>/dev/null); then
+            drift=$(network_drift "$ipv6_subnet" "$inspect")
+            [ -n "$drift" ] || exit 0
+            others=$(network_others)
+            if [ -n "$others" ]; then
+              echo "imp-host: the $HOST_NETWORK network differs ($drift), and $others use it; move them off it" >&2
+              exit 1
+            fi
+            echo "imp-host: the $HOST_NETWORK network differs ($drift); making it again"
+            docker network rm "$HOST_NETWORK" >/dev/null
+          fi
+          create_host_network
+        ''
+      else
+        ''
+          if docker network inspect "$HOST_NETWORK" >/dev/null 2>&1 && [ -z "$(network_others)" ]; then
+            docker network rm "$HOST_NETWORK" >/dev/null
+          fi
+        ''
+    }
+  '';
+
+  # How the host keeps its IPv6 default route once Docker turns on
+  # forwarding (bootstrap.sh's ensure_router_adverts): a static route needs
+  # nothing, networkd keeps router adverts with IPv6AcceptRA = true, and
+  # otherwise the owner says (ipv6.routerAdverts).
+  staticRoute6 = config.networking.defaultGateway6 != null;
+  networkdKeepsRa =
+    cfg.ipv6.uplink != null
+    && lib.any (
+      network:
+      (network.matchConfig.Name or null) == cfg.ipv6.uplink
+      && lib.elem (network.networkConfig.IPv6AcceptRA or null) [
+        true
+        "yes"
+      ]
+    ) (lib.attrValues config.systemd.network.networks);
+  raKept = staticRoute6 || networkdKeepsRa || cfg.ipv6.routerAdverts != null;
+
+  # Forwarding from imp-host's bridges. Where networking.firewall filters it,
+  # the module admits it; nothing is trusted for input, so imps reach no host
+  # service through the bridges. The denied ranges drop in a chain of their
+  # own: a drop in any forward chain is final, and NixOS's chain accepts
+  # ICMPv6 before any rule of ours could run.
+  forwardFilter = config.networking.firewall.filterForward && config.networking.nftables.enable;
+  bridgeSet = "{ ${
+    lib.concatMapStringsSep ", " (name: ''"${name}"'') (lib.optional ipv6 hostBridge ++ [ "docker0" ])
+  } }";
+  denied = lib.partition (cidr: lib.hasInfix ":" cidr) cfg.forwardDeny;
+  denyRule =
+    family: cidrs:
+    lib.optional (
+      cidrs != [ ]
+    ) "iifname ${bridgeSet} ${family} daddr { ${lib.concatStringsSep ", " cidrs} } drop";
+  denyRules = denyRule "ip" denied.wrong ++ denyRule "ip6" denied.right;
 
   # bootstrap.sh's ruleset for hostFirewall = "own", for the SSH ports.
   firewallRules = pkgs.runCommand "imp-firewall.nft" { } ''
@@ -308,6 +395,73 @@ in
       '';
     };
 
+    ipv6 = {
+      enable = lib.mkEnableOption ''
+        imps' IPv6: imp-host runs on the Docker network imp-host, with the
+        /64 `ipv6.subnet` and the bridge br-imphost, behind Docker's NAT66,
+        and impd's IMP_SUBNET6=auto gives imps IPv6 behind its own NAT66
+        (docs/guides/nixos.md#ipv6). Docker turns on IPv6 forwarding for it,
+        so the host's IPv6 default route must not depend on router adverts
+        the kernel would then drop: an assertion asks for a static
+        networking.defaultGateway6, networkd with IPv6AcceptRA = true on
+        `ipv6.uplink`, or `ipv6.routerAdverts`. Turning it off again
+        cold-boots every imp that has an IPv6 prefix'';
+
+      subnet = lib.mkOption {
+        type = lib.types.strMatching "[0-9A-Fa-f:]+/64";
+        default =
+          let
+            seed =
+              if config.networking.hostId != null then config.networking.hostId else config.networking.hostName;
+            hash = builtins.hashString "sha256" "imp-host-network:${seed}";
+          in
+          "fd${builtins.substring 0 2 hash}:${builtins.substring 2 4 hash}:${builtins.substring 6 4 hash}::/64";
+        defaultText = lib.literalMD "a unique local /64 from a hash of `networking.hostId` (else `networking.hostName`)";
+        description = "The IPv6 /64 of the imp-host network. Docker's NAT66 hides it; it only has to differ from the host's other networks.";
+      };
+
+      uplink = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "eth0";
+        description = "The interface of the host's IPv6 default route. Needed with routerAdverts = \"kernel\", and to find networkd's IPv6AcceptRA.";
+      };
+
+      routerAdverts = lib.mkOption {
+        type = lib.types.nullOr (
+          lib.types.enum [
+            "kernel"
+            "handled"
+          ]
+        );
+        default = null;
+        description = ''
+          Who keeps the host's router adverts once forwarding is on, when
+          neither a static networking.defaultGateway6 nor networkd's
+          IPv6AcceptRA = true on `uplink` does. kernel: the kernel takes
+          them, and the module sets accept_ra = 2 on `uplink`. handled: a
+          client such as dhcpcd (the NixOS default) or NetworkManager takes
+          them, and its config keeps them with forwarding on.
+        '';
+      };
+    };
+
+    forwardDeny = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "10.42.0.0/16"
+        "10.43.0.0/16"
+      ];
+      description = ''
+        IPv4 and IPv6 ranges that traffic from imp-host's bridges (docker0,
+        and br-imphost with IPv6) may not reach through the host, such as a
+        k3s cluster's pod and service ranges. They drop in the nftables
+        table imp-forward, ahead of networking.firewall's forward chain, so
+        they need networking.nftables.enable.
+      '';
+    };
+
     tailscaleAuthKeyFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -349,6 +503,18 @@ in
         assertion = !(config.networking.nftables.enable && config.networking.nftables.flushRuleset);
         message = "services.imp: networking.nftables.flushRuleset would flush Docker's rules on every reload; leave it false";
       }
+      {
+        assertion = !ipv6 || raKept;
+        message = "services.imp.ipv6: Docker turns on IPv6 forwarding, and with it on, router adverts that set the host's IPv6 default route are dropped unless something keeps them. Set one of: a static networking.defaultGateway6; services.imp.ipv6.uplink with a systemd.network.networks entry for it that sets networkConfig.IPv6AcceptRA = true; services.imp.ipv6.routerAdverts = \"kernel\" (with ipv6.uplink: accept_ra = 2); or services.imp.ipv6.routerAdverts = \"handled\" when your DHCP client keeps them";
+      }
+      {
+        assertion = cfg.ipv6.routerAdverts != "kernel" || cfg.ipv6.uplink != null;
+        message = "services.imp.ipv6.routerAdverts = \"kernel\" needs services.imp.ipv6.uplink, the interface to set accept_ra = 2 on";
+      }
+      {
+        assertion = cfg.forwardDeny == [ ] || config.networking.nftables.enable;
+        message = "services.imp.forwardDeny needs networking.nftables.enable = true, for its table";
+      }
     ];
 
     virtualisation.docker.enable = true;
@@ -367,12 +533,29 @@ in
       "vm.overcommit_memory" = 1;
       # Keep guest memory in RAM; the governor measures RAM per VM.
       "vm.swappiness" = 1;
+    }
+    # the slash form keeps a dotted interface name (eth0.100) whole
+    // lib.optionalAttrs (ipv6 && cfg.ipv6.routerAdverts == "kernel") {
+      "net/ipv6/conf/${cfg.ipv6.uplink}/accept_ra" = 2;
     };
+
     boot.supportedFilesystems.zfs = lib.mkIf zfs true;
     boot.zfs.extraPools = lib.mkIf (zfs && cfg.zfs.importPool) [ cfg.zfs.pool ];
     boot.extraModprobeConfig = lib.mkIf (zfs && cfg.zfs.arcMaxMiB != null) ''
       options zfs zfs_arc_max=${toString (cfg.zfs.arcMaxMiB * 1024 * 1024)}
     '';
+
+    networking.firewall.extraForwardRules = lib.mkIf forwardFilter ''iifname ${bridgeSet} accept comment "imp: imp-host's egress"'';
+    networking.nftables.tables.imp-forward = lib.mkIf (cfg.forwardDeny != [ ]) {
+      family = "inet";
+      content = ''
+        # services.imp.forwardDeny, before networking.firewall's chain
+        chain forward {
+          type filter hook forward priority filter - 1; policy accept;
+          ${lib.concatStringsSep "\n  " denyRules}
+        }
+      '';
+    };
 
     systemd.tmpfiles.rules = [
       "d /etc/imp 0755 root root -"
@@ -446,6 +629,7 @@ in
           ensureImage
           # A container left over from a crash would hold the name.
           "-${docker} rm -f imp-host"
+          ensureNetwork
         ];
         ExecStart = "${docker} run ${lib.escapeShellArgs runArgs}";
         # SIGTERM makes impd sleep every awake imp; it gets up to 120 s.
