@@ -167,6 +167,16 @@ const MIGRATIONS: Record<string, Migration> = {
       await db.schema.alterTable('api_audit').addColumn('actor_name', 'text').execute();
     },
   },
+
+  // the allow-list of a `box` egress policy, as a JSON array
+  '007_add_egress_allow': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('imps')
+        .addColumn('egress_allow', 'text', (c) => c.notNull().defaultTo('[]'))
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

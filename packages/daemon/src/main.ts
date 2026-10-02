@@ -16,6 +16,7 @@ import { subscribeImpWrites } from './db/imp-write-feed';
 import { countImpsByState } from './db/imps';
 import { isImpSetWrite } from './db/is-imp-set-write';
 import { openDatabase } from './db/open-database';
+import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
@@ -132,6 +133,17 @@ async function main(): Promise<void> {
 
   const broker = await createBroker({ config, db, log: printLog });
 
+  // the firewall and its resolver, before any VM is adopted, booted or woken
+  const egress = createEgressService({
+    config,
+    db,
+    log: printLog,
+    isGranted: broker.isGranted,
+    closeTunnels: broker.closeTunnels,
+  });
+
+  await egress.start();
+
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleAuthKey !== null);
 
@@ -148,6 +160,7 @@ async function main(): Promise<void> {
     storageGate,
     diskBudget,
     readDiskUsage: diskUsage.read,
+    egress,
     readTailnetHostname: async () => {
       const status = await readTailscale();
 
@@ -239,6 +252,7 @@ async function main(): Promise<void> {
     checkpoints,
     backups,
     broker,
+    egress,
     firecrackerVersion: readFirecrackerVersion(config.firecrackerBin),
     systemFiles: systemFiles.info,
     storage,
@@ -355,6 +369,8 @@ async function main(): Promise<void> {
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
     await runStopStep('broker', readStepMs(), () => broker.stop());
+
+    egress.stop();
 
     // before the sleep pass, as exec sessions are: a client sees its
     // connection end instead of hanging while its imp sleeps

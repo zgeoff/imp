@@ -28,6 +28,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'dashboard',
     'https',
     'tokens',
+    'egress',
     'backups',
   ]);
 });

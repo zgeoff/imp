@@ -10,7 +10,8 @@ import { TunnelRefusedError } from './tunnel-target';
 async function setupFront(overrides: Partial<BrokerFrontDeps> = {}) {
   const front = await startBrokerFront(0, {
     subnet: parseSubnet('127.0.0.0/16'),
-    findPeer: () => Promise.resolve({ id: 'imp-1', name: 'dev', egressPolicy: 'open' }),
+    findPeer: () =>
+      Promise.resolve({ id: 'imp-1', name: 'dev', egress: { mode: 'open', allow: [] } }),
     isGranted: () => Promise.resolve(false),
     openTerminator: () => Promise.reject(new Error('no terminator in this test')),
     resolveTunnelTarget: () => Promise.reject(new Error('no tunnel in this test')),

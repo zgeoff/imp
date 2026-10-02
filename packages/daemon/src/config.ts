@@ -24,6 +24,7 @@ const EnvSchema = z.object({
   IMP_SSH_PORT: z.coerce.number().pipe(z.int().min(0).max(65_535)).default(22),
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
+  IMP_EGRESS_DNS_PORT: PortSchema.default(7053),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
@@ -60,6 +61,10 @@ export interface Config {
 
   // the credential broker's port on every guest's gateway address
   readonly brokerPort: number;
+
+  // the egress resolver's port on every guest's gateway address; box and
+  // none imps reach it through a redirect of port 53
+  readonly egressDnsPort: number;
 
   // tests only: a file of fake upstreams for granted hosts
   // (broker/test-upstreams.ts)
@@ -162,6 +167,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     portBase: parsed.IMP_PORT_BASE,
     sshPort: parsed.IMP_SSH_PORT === 0 ? null : parsed.IMP_SSH_PORT,
     brokerPort: parsed.IMP_BROKER_PORT,
+    egressDnsPort: parsed.IMP_EGRESS_DNS_PORT,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,

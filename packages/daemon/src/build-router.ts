@@ -19,6 +19,7 @@ import { listApiCalls } from './db/api-audit';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { EgressService } from './egress/egress-service';
 import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
@@ -42,6 +43,7 @@ export interface RouterDeps {
   readonly governor: RamGovernor;
   readonly checkpoints: CheckpointService;
   readonly broker: Broker;
+  readonly egress: Pick<EgressService, 'readPolicy' | 'setPolicy'>;
 
   // null when no repository is set
   readonly backups: BackupService | null;
@@ -158,6 +160,10 @@ export function buildRouter(deps: RouterDeps) {
         deps.imps.resizeDisk(context.input.name, context.input.diskMib),
       ),
       url: os.imps.url.handler((context) => deps.imps.readUrls(context.input.name)),
+      policy: os.imps.policy.handler((context) => deps.egress.readPolicy(context.input.name)),
+      setPolicy: os.imps.setPolicy.handler((context) =>
+        deps.egress.setPolicy(context.input.name, context.input.policy),
+      ),
 
       // a fork gets its source's grants, as it gets its disk
       fork: os.imps.fork.handler(async (context) => {

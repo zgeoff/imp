@@ -54,6 +54,9 @@
           { "from": "package", "name": ["Pack", "Extract", "Sink"], "package": "tar-stream" },
           // a live socket or listener; reading and writing it is the point
           { "from": "package", "name": ["Socket", "Server"], "package": "node:net" },
+          // dns-packet's records carry Buffers; the resolver only reads them
+          // or builds new ones
+          { "from": "package", "name": ["Answer", "DecodedPacket"], "package": "dns-packet" },
           // the SSH gateway's live connections, channels and login requests,
           // ssh2's record of a client, which the gateway only reads, and the
           // client side its tests drive

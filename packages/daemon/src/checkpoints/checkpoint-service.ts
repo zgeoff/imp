@@ -12,6 +12,7 @@ import {
   toApiCheckpoint,
 } from '../db/checkpoints';
 import type { CheckpointRecord } from '../db/checkpoints';
+import { readEgressPolicy } from '../db/egress';
 import { findImpByName, updateImpDisk, updateImpState } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -274,6 +275,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
     forkImp: async (input) => {
       // fail before the new imp exists when the source or checkpoint is wrong
       const source = await deps.imps.lockImp(input.source, async (imp) => {
+        const policy = await readEgressPolicy(deps.db, imp.id);
+
         if (input.checkpoint !== undefined) {
           await findCheckpointOrThrow(imp, input.checkpoint);
         } else if (imp.state === 'creating') {
@@ -284,7 +287,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           );
         }
 
-        return deps.imps.toApi(imp);
+        return { imp: await deps.imps.toApi(imp), policy };
       });
 
       const createForkDisk = (impId: string) =>
@@ -306,11 +309,13 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
           });
         });
 
+      // the source's policy is in the fork's insert: it never runs more open
       return deps.imps.createImp({
         name: input.name,
-        image: source.image,
-        vcpus: source.vcpus,
-        memoryMib: source.memoryMib,
+        image: source.imp.image,
+        vcpus: source.imp.vcpus,
+        memoryMib: source.imp.memoryMib,
+        policy: source.policy,
         prepareDisk: createForkDisk,
       });
     },

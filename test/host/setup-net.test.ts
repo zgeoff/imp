@@ -66,3 +66,23 @@ kill $!
 
   expect(reached.trim().split('\n')).toEqual(['7081 dropped', '7082 open']);
 });
+
+test.skipIf(!canUnshare)(
+  'a resolver port change leaves one UDP and one TCP pair of egress DNS rules',
+  () => {
+    const rules = runInNetns(`${UPLINK}
+IMP_EGRESS_DNS_PORT=7099 bash "$SETUP_NET" >/dev/null
+bash "$SETUP_NET" >/dev/null
+bash "$SETUP_NET" >/dev/null
+iptables -S INPUT | grep imp-egress-dns
+iptables -t raw -S PREROUTING | grep imp-egress-dns
+`);
+
+    expect(rules.trim().split('\n')).toEqual([
+      '-A INPUT -i imp+ -p tcp -m tcp --dport 7053 -m comment --comment imp-egress-dns -j ACCEPT',
+      '-A INPUT -i imp+ -p udp -m udp --dport 7053 -m comment --comment imp-egress-dns -j ACCEPT',
+      '-A PREROUTING ! -i imp+ -p udp -m udp --dport 7053 -m addrtype --dst-type LOCAL -m comment --comment imp-egress-dns -j DROP',
+      '-A PREROUTING ! -i imp+ -p tcp -m tcp --dport 7053 -m addrtype --dst-type LOCAL -m comment --comment imp-egress-dns -j DROP',
+    ]);
+  },
+);

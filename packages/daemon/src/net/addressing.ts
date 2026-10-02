@@ -138,6 +138,23 @@ export function findPeerSlot(peer: string, local: string, subnet: Subnet): numbe
   return localIp === peerIp - 1 ? (offset - 2) / SLOT_SIZE : null;
 }
 
+// The slot whose guest address this is; null for any other address, the
+// other addresses of a slot's /30 included.
+export function findGuestSlot(address: string, subnet: Subnet): number | null {
+  const ip = parseIpv4(address, true);
+  const offset = ip === null ? -1 : ip - subnet.network;
+
+  if (offset < 0 || offset >= 2 ** (32 - subnet.prefixLength) || offset % SLOT_SIZE !== 2) {
+    return null;
+  }
+
+  return (offset - 2) / SLOT_SIZE;
+}
+
+export function formatSubnet(subnet: Subnet): string {
+  return `${formatIpv4(subnet.network)}/${String(subnet.prefixLength)}`;
+}
+
 function isDecimal(text: string): boolean {
   return /^\d{1,3}$/.test(text);
 }

@@ -45,11 +45,12 @@ The paths are the same every run, so restic finds each file it read the run befo
 ### The manifest
 
 `manifest.json` is everything a restore reads: each imp's name, image digest, vCPUs, memory, HTTP
-port, state, egress policy, the names of the secrets granted to it, its checkpoints oldest first
-with labels and times, and each image's name, ref and digest. Each disk and checkpoint has its size
-(`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which a restore holds twice in
-the [disk budget](./storage.md#disk-budget); a manifest from before `usedBytes` falls back to the
-size. It holds no tokens or secret values, and no slots or addresses: a restore takes new ones.
+port, state, egress policy and its allow-list, the names of the secrets granted to it, its
+checkpoints oldest first with labels and times, and each image's name, ref and digest. Each disk and
+checkpoint has its size (`diskBytes`) and the blocks its file held in the tree (`usedBytes`), which
+a restore holds twice in the [disk budget](./storage.md#disk-budget); a manifest from before
+`usedBytes` falls back to the size. It holds no tokens or secret values, and no slots or addresses:
+a restore takes new ones.
 
 The database itself stays on the host. Each run starts with `VACUUM INTO <data>/backup/db.sqlite`,
 one consistent read of the database, and backs up only what that copy names. The copy stays out of
@@ -179,9 +180,10 @@ imp backup restore --all --merge               # add every imp to a host that ha
   first, and a clash names the imp; nothing is restored then.
 - restic fetches one file at a time, a checkpoint or the disk, into `<data>/backup/restore`, and
   impd deletes it once written: a restore needs room for one disk, not one per checkpoint.
-- The egress policy comes back as it was. Each grant comes back when a secret of that name exists on
-  this host and `imp grant` would accept it; the rest are listed, and `imp backup restore` prints
-  them. Secret values are never in a backup: add the secrets first, with `imp secret add`.
+- The egress policy comes back as it was; one this impd cannot read comes back as `none`, with a log
+  line, never more open. Each grant comes back when a secret of that name exists on this host and
+  `imp grant` would accept it; the rest are listed, and `imp backup restore` prints them. Secret
+  values are never in a backup: add the secrets first, with `imp secret add`.
 - A restore that fails part way removes the imp it was making.
 
 ### Whole-host restore

@@ -39,6 +39,9 @@ export type {
   ExecTool,
 } from './exec-protocol';
 
+export { EgressAllowEntrySchema, EgressModeSchema, EgressPolicySchema } from './egress-schema';
+export type { EgressMode, EgressPolicy } from './egress-schema';
+
 export {
   EVENT_VERSION,
   ImpChangeReasonSchema,

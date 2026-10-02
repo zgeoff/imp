@@ -1,7 +1,8 @@
 import { BrokerRuleSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, SecretKind } from '@imp/api';
+import type { BrokerRule, EgressPolicy, SecretKind } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
+import { parseStoredPolicy } from './egress';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
 
@@ -34,7 +35,7 @@ export interface GrantedRule {
 export interface BrokerPeer {
   readonly id: string;
   readonly name: string;
-  readonly egressPolicy: string;
+  readonly egress: EgressPolicy;
 }
 
 const RulesSchema = z.array(BrokerRuleSchema);
@@ -198,13 +199,17 @@ export async function findBrokerPeer(
 ): Promise<BrokerPeer | undefined> {
   const row = await db
     .selectFrom('imps')
-    .select(['id', 'name', 'egress_policy'])
+    .select(['id', 'name', 'egress_policy', 'egress_allow'])
     .where('slot', '=', slot)
     .executeTakeFirst();
 
   return row === undefined
     ? undefined
-    : { id: row.id, name: row.name, egressPolicy: row.egress_policy };
+    : {
+        id: row.id,
+        name: row.name,
+        egress: parseStoredPolicy(row.egress_policy, row.egress_allow),
+      };
 }
 
 function toSecretRecord(row: Readonly<SecretRow>): SecretRecord {

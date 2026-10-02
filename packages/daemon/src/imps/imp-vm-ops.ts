@@ -144,6 +144,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       // keeps its memory.
       removeSnapshot(paths);
 
+      // a box or none imp never runs where nft cannot hold it in
+      await context.egress.requireImp(imp.id);
       await context.taps.setupTap(address);
 
       const vm = await context.vms.startVm({
@@ -434,6 +436,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   const loadSnapshot = async (imp: LockedImp, paths: ImpPaths) => {
     try {
       // a container restart takes the taps with it
+      await context.egress.requireImp(imp.id);
       await context.taps.setupTap(context.findAddress(imp.slot));
 
       return await context.vms.wakeVm({ firecrackerBin: context.config.firecrackerBin, paths });

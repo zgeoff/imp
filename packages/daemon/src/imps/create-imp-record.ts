@@ -1,3 +1,4 @@
+import type { EgressPolicy } from '@imp/api';
 import { buildConflictError } from '../api-errors';
 import type { ImageRecord } from '../db/images';
 import { createImpInFreeSlot, findImpByName } from '../db/imps';
@@ -13,6 +14,7 @@ interface NewImpInput {
   readonly memoryMib?: number | undefined;
   readonly httpPort?: number | undefined;
   readonly diskBytes?: number | undefined;
+  readonly policy?: EgressPolicy | undefined;
 }
 
 // A `creating` record with id `id` and a free slot, under the requested name or a free
@@ -35,6 +37,7 @@ export async function createImpRecord(
         vcpus: input.vcpus ?? context.config.defaultVcpus,
         memoryMib: input.memoryMib ?? context.config.defaultMemoryMib,
         ...(input.httpPort !== undefined && { httpPort: input.httpPort }),
+        ...(input.policy !== undefined && { egress: input.policy }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
       },
       {
