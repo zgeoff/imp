@@ -1,5 +1,8 @@
 import type { CommandResult } from '../../process/run-command';
 
+// the `creation` of txg 0: 2026-10-03T00:00:00Z
+export const FAKE_EPOCH_S = 1_790_985_600;
+
 interface FakeDataset {
   origin: string | null;
   readonly txg: number;
@@ -275,20 +278,25 @@ export function createFakeZfs(options: FakeZfsOptions) {
     return buildSuccess(rows.map((row) => `${row.line}\n`).join(''));
   };
 
-  // every dataset holds 1 MiB of its own and refers to 3; a snapshot holds 64 KiB
+  // every dataset holds 1 MiB of its own and refers to 3; a snapshot holds 64
+  // KiB. Each was created an hour after FAKE_EPOCH_S per txg.
   const listSpace = (root: string): CommandResult => {
     const isInTree = (name: string) => name === root || name.startsWith(`${root}/`);
+    const readCreation = (txg: number) => String(FAKE_EPOCH_S + txg * 3600);
 
     const rows = [
-      ...[...datasets.keys()]
-        .filter((name) => isInTree(name))
-        .map((name) => `${name}\t1048576\t3145728\t1048576\t-`),
-      ...[...snapshots.keys()]
-        .filter((name) => isInTree(name.split('@')[0] ?? ''))
-        .map((name) => {
+      ...[...datasets.entries()]
+        .filter(([name]) => isInTree(name))
+        .map(
+          ([name, dataset]) =>
+            `${name}\t1048576\t3145728\t1048576\t${readCreation(dataset.txg)}\t-`,
+        ),
+      ...[...snapshots.entries()]
+        .filter(([name]) => isInTree(name.split('@')[0] ?? ''))
+        .map(([name, snapshot]) => {
           const clones = findClonesOf(name);
 
-          return `${name}\t65536\t1048576\t-\t${clones.length === 0 ? '-' : clones.join(',')}`;
+          return `${name}\t65536\t1048576\t-\t${readCreation(snapshot.txg)}\t${clones.length === 0 ? '-' : clones.join(',')}`;
         }),
     ];
 
@@ -338,7 +346,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
       );
     }
 
-    if (verb === 'list' && argv.includes('name,used,referenced,usedbydataset,clones')) {
+    if (verb === 'list' && argv.includes('name,used,referenced,usedbydataset,creation,clones')) {
       return listSpace(last);
     }
 
@@ -469,6 +477,7 @@ export function createFakeZfs(options: FakeZfsOptions) {
     listDatasets: () => [...datasets.keys()].toSorted(),
     listSnapshots: () => [...snapshots.keys()].toSorted(),
     readOrigin: (name: string) => datasets.get(name)?.origin ?? null,
+    readTxg: (name: string) => (datasets.get(name) ?? snapshots.get(name))?.txg ?? 0,
     readProperty: (name: string, key: string) => datasets.get(name)?.properties?.[key] ?? null,
     isDeferred: (name: string) => snapshots.get(name)?.deferDestroy ?? false,
     readMountedAt: (dir: string) => mounts.get(dir) ?? null,

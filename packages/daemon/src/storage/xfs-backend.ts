@@ -19,8 +19,16 @@ import type { OwnedFile } from './count-owner-bytes';
 import { BACKUP_TREE, buildBackupPaths, buildImagePaths, buildImpPaths } from './data-layout';
 import { readExtents } from './fiemap';
 import { readLoopHostFreeBytes } from './loop-backing-file';
+import { printSweep } from './print-sweep';
 import { createReflinkClone } from './reflink';
-import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from './storage-backend';
+import type {
+  DiskSource,
+  DroppedStorage,
+  LiveStorage,
+  OrphanStorage,
+  StorageBackend,
+  SweepResult,
+} from './storage-backend';
 
 // The source disk of each copy in the backup tree. A sleeping or stopped
 // imp's disk with the same inode and ctime is unchanged since, so the copy
@@ -38,6 +46,12 @@ const USAGE_DEADLINE_MS = 20_000;
 // an image directory being written, renamed into place once complete; a
 // hidden name, as image-service's `.build-` work directories
 const STAGING_PREFIX = '.new-';
+
+// what a sweep removes, and the orphans it keeps
+interface LeftoverPlan {
+  readonly dropped: DroppedStorage[];
+  readonly orphans: DroppedStorage[];
+}
 
 interface XfsBackendDeps {
   readonly dataDir: string;
@@ -138,29 +152,73 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     return true;
   };
 
-  // Image directories, imp directories and checkpoints the database does not
-  // name. Hidden entries are image builds in flight, which only start drops.
-  const planLeftovers = (live: LiveStorage): DroppedStorage[] => {
+  // What the database does not name: a crash leftover goes, an orphan stays
+  // unless `isOrphans`. A lost database would make every imp an orphan
+  // (docs/architecture/storage.md#what-a-sweep-takes).
+  const planLeftovers = (live: LiveStorage, isOrphans: boolean): LeftoverPlan => {
     const liveDigests = new Set(
       [...live.imageDigests].map((digest) => basename(buildImagePaths(deps.dataDir, digest).dir)),
     );
 
     const impIds = listEntries(join(deps.dataDir, 'imps'));
 
+    // a named imp's checkpoint with no row is a delete cut short
     const checkpoints = impIds
       .filter((impId) => live.impIds.has(impId))
       .flatMap((impId) => listEntries(resolveImpPaths(impId).checkpointsDir))
       .filter((checkpointId) => !live.checkpointIds.has(checkpointId));
 
-    return [
-      ...listEntries(join(deps.dataDir, 'images'))
-        .filter((name) => !name.startsWith('.') && !liveDigests.has(name))
-        .map((name) => ({ kind: 'image' as const, id: name })),
-      ...impIds
-        .filter((impId) => !live.impIds.has(impId))
-        .map((impId) => ({ kind: 'imp' as const, id: impId })),
-      ...checkpoints.map((checkpointId) => ({ kind: 'checkpoint' as const, id: checkpointId })),
-    ];
+    // with no disk, checkpoint or memory file, an imp directory is what a
+    // destroy leaves; with no rootfs, an image directory is a build cut short
+    const isImpHeld = (impId: string) => {
+      const paths = resolveImpPaths(impId);
+
+      return (
+        existsSync(paths.disk) ||
+        existsSync(paths.memFile) ||
+        listEntries(paths.checkpointsDir).length > 0
+      );
+    };
+
+    const isImageHeld = (name: string) =>
+      existsSync(join(deps.dataDir, 'images', name, 'rootfs.ext4'));
+
+    // hidden entries are image builds in flight, which only start drops
+    const unknownImages = listEntries(join(deps.dataDir, 'images'))
+      .filter((name) => !name.startsWith('.') && !liveDigests.has(name))
+      .map((name) => ({ kind: 'image' as const, id: name, isHeld: isImageHeld(name) }));
+
+    const unknownImps = impIds
+      .filter((impId) => !live.impIds.has(impId))
+      .map((impId) => ({ kind: 'imp' as const, id: impId, isHeld: isImpHeld(impId) }));
+
+    const unknown = [...unknownImages, ...unknownImps];
+    const isDropped = (entry: Readonly<{ isHeld: boolean }>) => isOrphans || !entry.isHeld;
+
+    return {
+      dropped: [
+        ...unknown.filter((entry) => isDropped(entry)).map((entry) => toStorage(entry)),
+        ...checkpoints.map((checkpointId) => ({ kind: 'checkpoint' as const, id: checkpointId })),
+      ],
+      orphans: unknown.filter((entry) => !isDropped(entry)).map((entry) => toStorage(entry)),
+    };
+  };
+
+  // the size, age and checkpoints of an orphan, for the log and `imp gc`;
+  // the size counts blocks a reflink shares in full
+  const readOrphan = (orphan: DroppedStorage): OrphanStorage => {
+    const isImp = orphan.kind === 'imp';
+    const dir = isImp ? resolveImpPaths(orphan.id).dir : join(deps.dataDir, 'images', orphan.id);
+    const birth = statSync(dir).birthtimeMs;
+
+    return {
+      kind: isImp ? 'imp' : 'image',
+      id: orphan.id,
+      location: dir,
+      bytes: listFilesUnder(dir).reduce((sum, path) => sum + statSync(path).blocks * 512, 0),
+      createdAt: birth > 0 ? new Date(birth) : null,
+      snapshots: isImp ? listEntries(resolveImpPaths(orphan.id).checkpointsDir) : [],
+    };
   };
 
   const removeLeftover = (dropped: DroppedStorage, live: LiveStorage): void => {
@@ -237,16 +295,20 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
     renameSync(`${file}.new`, file);
   };
 
-  const removeUnnamed = (live: LiveStorage, isDryRun: boolean): DroppedStorage[] => {
-    const dropped = planLeftovers(live);
+  const removeUnnamed = (
+    live: LiveStorage,
+    options: Readonly<{ isDryRun: boolean; isOrphans: boolean }>,
+  ): SweepResult => {
+    const plan = planLeftovers(live, options.isOrphans);
+    const kept = plan.orphans.map((orphan) => readOrphan(orphan));
 
-    if (!isDryRun) {
-      for (const leftover of dropped) {
+    if (!options.isDryRun) {
+      for (const leftover of plan.dropped) {
         removeLeftover(leftover, live);
       }
     }
 
-    return dropped;
+    return { dropped: plan.dropped, kept };
   };
 
   return {
@@ -260,11 +322,13 @@ export function createXfsBackend(deps: XfsBackendDeps): StorageBackend {
         rmSync(join(imagesDir, name), { recursive: true, force: true });
       }
 
-      removeUnnamed(live, false);
+      const swept = removeUnnamed(live, { isDryRun: false, isOrphans: false });
+
+      printSweep(log, 'impd: storage', swept, { isOrphansLogged: true });
 
       return setupReserveFile();
     },
-    dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options.isDryRun)),
+    dropUnnamed: (live, options) => Promise.resolve(removeUnnamed(live, options)),
     resolveImpPaths,
 
     createImage,
@@ -552,8 +616,14 @@ function listFilesUnder(dir: string): string[] {
     .map((entry) => join(entry.parentPath, entry.name));
 }
 
+// a kind and id alone, without what planLeftovers sorted by
+function toStorage(entry: Readonly<DroppedStorage>): DroppedStorage {
+  return { kind: entry.kind, id: entry.id };
+}
+
+// sorted, so a sweep lists the same order on every filesystem
 function listEntries(dir: string): string[] {
-  return existsSync(dir) ? readdirSync(dir) : [];
+  return existsSync(dir) ? readdirSync(dir).toSorted() : [];
 }
 
 // drops each entry of `dir` that `keep` does not name

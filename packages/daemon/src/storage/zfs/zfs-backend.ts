@@ -20,8 +20,16 @@ import {
   buildImpPaths,
   buildSnapshotPaths,
 } from '../data-layout';
+import { printSweep } from '../print-sweep';
 import { CheckpointIdTakenError } from '../storage-backend';
-import type { DiskSource, DroppedStorage, LiveStorage, StorageBackend } from '../storage-backend';
+import type {
+  DiskSource,
+  DroppedStorage,
+  LiveStorage,
+  OrphanStorage,
+  StorageBackend,
+  SweepResult,
+} from '../storage-backend';
 import { createZfsCommands, parseZfsMounts, parseZfsRelease } from './zfs-commands';
 import type { CommandRunner, ZfsEntry } from './zfs-commands';
 import { planReclaimStep } from './zfs-reclaim';
@@ -45,13 +53,14 @@ const FORK_SNAPSHOT = /@fork-[^@]+$/;
 // `@bk-<run>-<imp>`: a backup run's copy of a disk, gone once the run ends
 const BACKUP_SNAPSHOT = /@bk-[^@]+$/;
 
-// what removeLeftovers removes, in this order
+// what removeLeftovers removes, in this order, and the orphans it keeps
 interface LeftoverPlan {
   readonly snapshots: readonly ZfsEntry[];
   readonly disks: readonly ZfsEntry[];
   readonly images: readonly ZfsEntry[];
   readonly impDirs: readonly string[];
   readonly memDirs: readonly string[];
+  readonly orphans: readonly ZfsEntry[];
 }
 
 interface ZfsBackendDeps {
@@ -296,38 +305,78 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
   };
 
-  // What the database no longer names: snapshots not yet marked, disks and
-  // images, and the directories of imps with no row.
-  const planLeftovers = (entries: readonly ZfsEntry[], live: LiveStorage): LeftoverPlan => {
+  // What the database does not name: a crash leftover goes, an orphan stays
+  // with its snapshots unless `isOrphans`. A lost database would make every
+  // disk an orphan (docs/architecture/storage.md#what-a-sweep-takes).
+  const planLeftovers = (
+    entries: readonly ZfsEntry[],
+    live: LiveStorage,
+    isOrphans: boolean,
+  ): LeftoverPlan => {
     const liveDigests = new Set([...live.imageDigests].map((digest) => toDigestHex(digest)));
 
-    const isDead = (snapshot: ZfsEntry) =>
-      FORK_SNAPSHOT.test(snapshot.name) ||
-      BACKUP_SNAPSHOT.test(snapshot.name) ||
-      (CHECKPOINT_SNAPSHOT.test(snapshot.name) &&
-        !live.checkpointIds.has(readSnapshotId(snapshot.name)));
+    const unmarked = new Set(
+      entries
+        .filter((entry) => entry.type === 'snapshot' && !entry.deferDestroy)
+        .map((entry) => entry.name),
+    );
+
+    const unknownDisks = listChildren(entries, datasets.disks).filter(
+      (disk) => !live.impIds.has(readChildId(disk.name, datasets.disks)),
+    );
+
+    const unknownImages = listChildren(entries, datasets.images).filter(
+      (image) => !liveDigests.has(readChildId(image.name, datasets.images)),
+    );
+
+    // with no `@base` to clone, an image is a build cut short before its
+    // snapshot, or a removal cut short after its mark: a crash leftover
+    const isImageWhole = (image: ZfsEntry) => unmarked.has(`${image.name}@base`);
+    const orphans = [...unknownDisks, ...unknownImages.filter((image) => isImageWhole(image))];
+
+    const orphanNames = new Set(orphans.map((orphan) => orphan.name));
+
+    const isLiveCheckpoint = (snapshot: ZfsEntry) =>
+      CHECKPOINT_SNAPSHOT.test(snapshot.name) &&
+      live.checkpointIds.has(readSnapshotId(snapshot.name));
+
+    // A fork, backup or checkpoint snapshot with no row is a crash leftover,
+    // except on an orphan: its snapshots go only with it, before the retire,
+    // so the reclaim can free it. An image's `@base` goes with the image.
+    const isDead = (snapshot: ZfsEntry) => {
+      if (orphanNames.has(readSnapshotDataset(snapshot.name))) {
+        return isOrphans && !snapshot.name.endsWith('@base') && !isLiveCheckpoint(snapshot);
+      }
+
+      return (
+        FORK_SNAPSHOT.test(snapshot.name) ||
+        BACKUP_SNAPSHOT.test(snapshot.name) ||
+        (CHECKPOINT_SNAPSHOT.test(snapshot.name) && !isLiveCheckpoint(snapshot))
+      );
+    };
 
     const snapshots = entries.filter(
       (entry) => entry.type === 'snapshot' && !entry.deferDestroy && isDead(entry),
     );
 
-    const disks = listChildren(entries, datasets.disks).filter(
-      (disk) => !live.impIds.has(disk.name.slice(datasets.disks.length + 1)),
-    );
+    // a directory with no row is a destroy's leftover, unless its disk is
+    // kept: then it holds the mount point, or the memory snapshot
+    const keptDisks = isOrphans ? [] : unknownDisks;
 
-    const images = listChildren(entries, datasets.images).filter(
-      (image) => !liveDigests.has(image.name.slice(datasets.images.length + 1)),
-    );
+    const keptImpIds = new Set(keptDisks.map((disk) => readChildId(disk.name, datasets.disks)));
 
     const listDeadDirs = (dir: string) =>
-      (existsSync(dir) ? readdirSync(dir) : []).filter((id) => !live.impIds.has(id));
+      (existsSync(dir) ? readdirSync(dir) : []).filter(
+        (id) => !live.impIds.has(id) && !keptImpIds.has(id),
+      );
 
     return {
       snapshots,
-      disks,
-      images,
+      disks: isOrphans ? unknownDisks : [],
+      images: isOrphans ? unknownImages : unknownImages.filter((image) => !isImageWhole(image)),
       impDirs: listDeadDirs(join(deps.dataDir, 'imps')),
       memDirs: listDeadDirs(join(deps.dataDir, 'mem')),
+      orphans: isOrphans ? [] : orphans,
     };
   };
 
@@ -339,31 +388,65 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     ),
     ...plan.images.map((image) => ({
       kind: 'image' as const,
-      id: image.name.slice(datasets.images.length + 1),
+      id: readChildId(image.name, datasets.images),
     })),
     ...[
       ...new Set([
-        ...plan.disks.map((disk) => disk.name.slice(datasets.disks.length + 1)),
+        ...plan.disks.map((disk) => readChildId(disk.name, datasets.disks)),
         ...plan.impDirs,
       ]),
     ].map((impId) => ({ kind: 'imp' as const, id: impId })),
     ...plan.memDirs.map((impId) => ({ kind: 'memory' as const, id: impId })),
   ];
 
-  // Drops what the database no longer names. Snapshots go first: a retire
-  // renames the dataset they are on. The caller runs it serially.
+  // the size, age and snapshots of each orphan, for the log and `imp gc`
+  const readOrphans = async (
+    entries: readonly ZfsEntry[],
+    orphans: readonly ZfsEntry[],
+  ): Promise<OrphanStorage[]> => {
+    if (orphans.length === 0) {
+      return [];
+    }
+
+    const listed = await zfs.listSpace(deps.root);
+
+    const space = new Map(listed.map((entry) => [entry.name, entry]));
+
+    return orphans.map((orphan) => {
+      const isDisk = orphan.name.startsWith(`${datasets.disks}/`);
+      const parent = isDisk ? datasets.disks : datasets.images;
+      const found = space.get(orphan.name);
+
+      return {
+        kind: isDisk ? 'imp' : 'image',
+        id: readChildId(orphan.name, parent),
+        location: orphan.name,
+        bytes: found?.used ?? 0,
+        createdAt: found?.createdAt ?? null,
+        snapshots: entries
+          .filter((entry) => entry.type === 'snapshot' && entry.name.startsWith(`${orphan.name}@`))
+          .map((snapshot) => readSnapshotId(snapshot.name)),
+      };
+    });
+  };
+
+  // Drops what the database no longer names and a crash explains, and the
+  // orphans with `isOrphans`. Snapshots go first: a retire renames the
+  // dataset they are on. The caller runs it serially.
   const removeLeftovers = async (
     live: LiveStorage,
-    isDryRun: boolean,
-  ): Promise<DroppedStorage[]> => {
+    options: Readonly<{ isDryRun: boolean; isOrphans: boolean }>,
+  ): Promise<SweepResult> => {
     const entries = await listAll();
 
     const names = new Set(entries.map((entry) => entry.name));
 
-    const plan = planLeftovers(entries, live);
+    const plan = planLeftovers(entries, live, options.isOrphans);
 
-    if (isDryRun) {
-      return toDropped(plan);
+    const kept = await readOrphans(entries, plan.orphans);
+
+    if (options.isDryRun) {
+      return { dropped: toDropped(plan), kept };
     }
 
     for (const snapshot of plan.snapshots) {
@@ -371,12 +454,12 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
     }
 
     for (const disk of plan.disks) {
-      await removeMount(buildDiskDir(disk.name.slice(datasets.disks.length + 1)));
+      await removeMount(buildDiskDir(readChildId(disk.name, datasets.disks)));
       await removeDataset(disk.name);
     }
 
     for (const image of plan.images) {
-      await removeMount(buildImageDir(image.name.slice(datasets.images.length + 1)));
+      await removeMount(buildImageDir(readChildId(image.name, datasets.images)));
 
       // a crash between the rename and the snapshot leaves an image without one
       if (names.has(`${image.name}@base`)) {
@@ -401,18 +484,18 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       rmSync(join(deps.dataDir, 'mem', impId), { recursive: true, force: true });
     }
 
-    return toDropped(plan);
+    return { dropped: toDropped(plan), kept };
   };
 
   const setupMounts = async (): Promise<void> => {
     const entries = await listAll();
 
     for (const disk of listChildren(entries, datasets.disks)) {
-      await setupMount(disk.name, buildDiskDir(disk.name.slice(datasets.disks.length + 1)));
+      await setupMount(disk.name, buildDiskDir(readChildId(disk.name, datasets.disks)));
     }
 
     for (const image of listChildren(entries, datasets.images)) {
-      await setupMount(image.name, buildImageDir(image.name.slice(datasets.images.length + 1)));
+      await setupMount(image.name, buildImageDir(readChildId(image.name, datasets.images)));
     }
   };
 
@@ -491,19 +574,23 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
         await createMissingDatasets();
         await setupMount(datasets.mem, join(deps.dataDir, 'mem'));
         await resolveStaging();
-        await removeLeftovers(live, false);
+
+        const swept = await removeLeftovers(live, { isDryRun: false, isOrphans: false });
+
+        printSweep(log, 'impd: storage', swept, { isOrphansLogged: true });
+
         await runReclaim(runReclaimStep);
         await setupMounts();
       }),
 
     dropUnnamed: async (live, options) => {
-      const dropped = await runSerial(() => removeLeftovers(live, options.isDryRun));
+      const swept = await runSerial(() => removeLeftovers(live, options));
 
       if (!options.isDryRun) {
         startReclaim();
       }
 
-      return dropped;
+      return swept;
     },
 
     resolveImpPaths,
@@ -946,6 +1033,15 @@ function toDigestHex(digest: string): string {
 
 function readSnapshotId(name: string): string {
   return name.slice(name.indexOf('@') + 1);
+}
+
+function readSnapshotDataset(name: string): string {
+  return name.slice(0, name.indexOf('@'));
+}
+
+// `tank/imp/disks/<id>` → `<id>`
+function readChildId(name: string, parent: string): string {
+  return name.slice(parent.length + 1);
 }
 
 // the direct child filesystems of `parent`

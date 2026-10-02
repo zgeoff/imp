@@ -486,7 +486,9 @@ test.skipIf(!isReal)(
     await backend.createImage('sha256:building', async (dir) => {
       writeFileSync(join(dir, 'rootfs.ext4'), 'new image');
 
-      swept.dropped = await backend.dropUnnamed(live, { isDryRun: false });
+      const result = await backend.dropUnnamed(live, { isDryRun: false, isOrphans: false });
+
+      swept.dropped = result.dropped;
     });
 
     const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4');
@@ -515,6 +517,90 @@ test.skipIf(!isReal)(
     expect(readFileSync(join(pool.dataDir, 'images', 'building', 'rootfs.ext4'), 'utf8')).toBe(
       'new image',
     );
+  },
+  REAL_TEST_TIMEOUT_MS,
+);
+
+// A database lost with the pool kept: a new impd keeps every disk, image and
+// checkpoint, and only `imp gc --orphans` retires them, for the reclaim to free
+test.skipIf(!isReal)(
+  'a start after a lost database keeps every dataset, and orphans retires them',
+  async () => {
+    const pool = await setupPool();
+
+    await pool.backend.createImpDisk('a', { kind: 'image', digest: DIGEST });
+
+    writeSyncedFile(pool.backend.resolveImpPaths('a').disk, 'from a');
+
+    await pool.backend.createCheckpoint('a', 'cp-one');
+
+    await pool.backend.createImpDisk('b', {
+      kind: 'checkpoint',
+      impId: 'a',
+      checkpointId: 'cp-one',
+    });
+
+    const noRows = {
+      impIds: new Set<string>(),
+      checkpointIds: new Set<string>(),
+      imageDigests: new Set<string>(),
+    };
+
+    const logs: string[] = [];
+
+    const backend = createZfsBackend({
+      dataDir: pool.dataDir,
+      root: pool.root,
+      log: (message) => {
+        logs.push(message);
+      },
+    });
+
+    await backend.start(noRows);
+
+    const listNames = async () => {
+      const stdout = await runChecked([
+        'zfs',
+        'list',
+        '-H',
+        '-o',
+        'name',
+        '-t',
+        'all',
+        '-r',
+        pool.root,
+      ]);
+
+      return stdout
+        .split('\n')
+        .filter((name) => /\/(?:disks|images|retired)\//.test(name))
+        .toSorted();
+    };
+
+    const survivors = await listNames();
+
+    expect(survivors).toEqual(
+      [
+        `${pool.root}/disks/a`,
+        `${pool.root}/disks/a@cp-one`,
+        `${pool.root}/disks/b`,
+        `${pool.root}/images/real`,
+        `${pool.root}/images/real@base`,
+      ].toSorted(),
+    );
+
+    expect(readFileSync(backend.resolveImpPaths('a').disk, 'utf8')).toBe('from a');
+    expect(logs.filter((line) => line.includes('kept orphan'))).toHaveLength(3);
+
+    const listed = await backend.dropUnnamed(noRows, { isDryRun: true, isOrphans: true });
+    const retired = await backend.dropUnnamed(noRows, { isDryRun: false, isOrphans: true });
+
+    await backend.waitForReclaim();
+
+    const left = await listNames();
+
+    expect(retired).toEqual(listed);
+    expect(left).toEqual([]);
   },
   REAL_TEST_TIMEOUT_MS,
 );

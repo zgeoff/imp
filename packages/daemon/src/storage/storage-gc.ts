@@ -1,6 +1,7 @@
 import type { StorageGc } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ImpDatabase } from '../db/open-database';
+import { printSweep } from './print-sweep';
 import { readLiveStorage } from './read-live-storage';
 import type { StorageBackend } from './storage-backend';
 import type { StorageGate } from './storage-gate';
@@ -17,33 +18,37 @@ interface StorageGcDeps {
   readonly log: (message: string) => void;
 }
 
+interface GcOptions {
+  readonly isDryRun: boolean;
+  readonly isOrphans: boolean;
+}
+
 export interface StorageGcService {
-  readonly runGc: (isDryRun: boolean) => Promise<StorageGc>;
+  readonly runGc: (options: GcOptions) => Promise<StorageGc>;
   readonly runScheduled: () => Promise<void>;
 }
 
 // The GC: the same sweep as start, while nothing that could make storage
 // without its row yet is in flight (docs/architecture/storage.md#cleanup).
+// Only `imp gc --orphans` takes orphans; the hourly pass logs them.
 export function createStorageGc(deps: StorageGcDeps): StorageGcService {
-  const runAlone = async (isDryRun: boolean, waitMs: number) => {
+  const runAlone = async (options: GcOptions, waitMs: number, isOrphansLogged: boolean) => {
     const result = await deps.storageGate.runAlone(async () => {
       const live = await readLiveStorage(deps.db);
 
-      return deps.storage.dropUnnamed(live, { isDryRun });
+      return deps.storage.dropUnnamed(live, options);
     }, waitMs);
 
-    if (result.ran && !isDryRun) {
-      for (const dropped of result.value) {
-        deps.log(`impd: gc: removed ${dropped.kind} ${dropped.id}`);
-      }
+    if (result.ran && !options.isDryRun) {
+      printSweep(deps.log, 'impd: gc', result.value, { isOrphansLogged });
     }
 
     return result;
   };
 
   return {
-    runGc: async (isDryRun) => {
-      const result = await runAlone(isDryRun, MANUAL_WAIT_MS);
+    runGc: async (options) => {
+      const result = await runAlone(options, MANUAL_WAIT_MS, false);
 
       if (!result.ran) {
         throw new ORPCError('PRECONDITION_FAILED', {
@@ -51,10 +56,10 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
         });
       }
 
-      return { dryRun: isDryRun, dropped: result.value };
+      return { dryRun: options.isDryRun, dropped: result.value.dropped, kept: result.value.kept };
     },
     runScheduled: async () => {
-      const result = await runAlone(false, SCHEDULED_WAIT_MS);
+      const result = await runAlone({ isDryRun: false, isOrphans: false }, SCHEDULED_WAIT_MS, true);
 
       if (!result.ran) {
         deps.log('impd: gc: storage stayed busy; the next pass tries again');
