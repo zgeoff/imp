@@ -26,7 +26,11 @@ export interface ImpPresenter {
   readonly readUrls: (imp: ImpRecord) => Promise<ImpUrls>;
 }
 
-export function createImpPresenter(context: ImpContext): ImpPresenter {
+// `readSilentSince` is the watchdog's: when the imp's agent went silent
+export function createImpPresenter(
+  context: ImpContext,
+  readSilentSince: (id: string) => Date | null,
+): ImpPresenter {
   const buildLocalUrl = (name: string): string =>
     `http://${name}.imp.localhost:${String(context.config.proxyPort)}`;
 
@@ -108,6 +112,12 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
 
     if (sessions !== undefined) {
       api.sessions = sessions;
+    }
+
+    const silentSince = imp.state === 'running' ? readSilentSince(imp.id) : null;
+
+    if (silentSince !== null) {
+      api.agentSilentSince = silentSince;
     }
 
     return { ...api, ...readBootStatus(imp, paths, context.identity) };

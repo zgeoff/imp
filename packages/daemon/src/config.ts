@@ -14,6 +14,7 @@ import {
   parseTailnetNamesConfig,
 } from './tailnet-names/tailnet-names-config';
 import type { TailnetNamesConfig } from './tailnet-names/tailnet-names-config';
+import type { WatchdogAction } from './watchdog/agent-watchdog';
 
 const PortSchema = z.coerce.number().pipe(z.int().min(1).max(65_535));
 const CountSchema = z.coerce.number().pipe(z.int().positive());
@@ -63,10 +64,6 @@ const EnvSchema = z.object({
   ...HttpsEnvSchema.shape,
   ...TailnetNamesEnvSchema.shape,
 });
-
-// report: log and show it; restart: kill and boot cold; snapshot: keep the
-// memory in the imp's watchdog slot, then boot cold
-type WatchdogAction = 'report' | 'restart' | 'snapshot';
 
 export interface Config {
   readonly dataDir: string;

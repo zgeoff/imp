@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { updateImpActivity } from '../db/imps';
 import { readErrorMessage } from '../read-error-message';
 import { readSnapshotMeta, removeSnapshot, removeSnapshotMeta } from '../sleep/snapshot-meta';
-import { buildImpPaths } from '../storage/data-layout';
+import { buildImpPaths, buildWatchdogSlot } from '../storage/data-layout';
 import type { ImpPaths } from '../storage/data-layout';
 import type { ImpContext } from './imp-context';
 import type { LockedImp } from './imp-lock';
@@ -196,7 +196,17 @@ export function createVmReconciler(context: ImpContext, ops: ImpVmOps): VmReconc
 // what a crash can leave half written: a sleep's new snapshot files, and the
 // next version of a record that is renamed over the old one
 function removePartialFiles(paths: ImpPaths): void {
-  for (const path of [paths.vmstate, paths.memFile, paths.snapshotMeta, paths.vmIdentity]) {
+  const slot = buildWatchdogSlot(paths.dir);
+
+  for (const path of [
+    paths.vmstate,
+    paths.memFile,
+    paths.snapshotMeta,
+    paths.vmIdentity,
+    slot.vmstate,
+    slot.memFile,
+    slot.snapshotMeta,
+  ]) {
     rmSync(`${path}.new`, { force: true });
   }
 }

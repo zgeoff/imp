@@ -43,6 +43,12 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
   };
 }
 
+// The one memory snapshot the watchdog keeps of an imp whose agent went
+// silent, for a post-mortem: in the imp's directory, which a destroy removes.
+export function buildWatchdogSlot(impDir: string): SnapshotPaths {
+  return buildSnapshotPaths(join(impDir, 'watchdog'));
+}
+
 // where a snapshot's files go: a sleeping imp's, or the watchdog's slot
 export type SnapshotPaths = Readonly<ReturnType<typeof buildSnapshotPaths>>;
 

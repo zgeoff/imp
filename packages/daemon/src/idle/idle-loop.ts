@@ -2,7 +2,7 @@ import type { Config } from '../config';
 import { listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import type { ImpRuntime } from '../imps/imp-runtime';
+import type { Imps } from '../imps/imp-service';
 import { readCpuTicks } from '../vmm/vm-stats';
 import { checkIdle } from './check-idle';
 
@@ -12,7 +12,7 @@ const TICKS_PER_SECOND = 100;
 interface IdleLoopDeps {
   readonly config: Config;
   readonly db: ImpDatabase;
-  readonly imps: Pick<ImpRuntime, 'isImpBusy' | 'readActivity' | 'tracker' | 'trySleepImp'>;
+  readonly imps: Pick<Imps, 'isImpBusy' | 'readActivity' | 'tracker' | 'trySleepImp' | 'watchdog'>;
   readonly log: (message: string) => void;
 }
 
@@ -50,6 +50,8 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
     const pid = imp.pid;
 
     if (imp.state !== 'running' || pid === null || deps.imps.isImpBusy(imp.id)) {
+      deps.imps.watchdog.forget(imp.id);
+
       return;
     }
 
@@ -59,6 +61,8 @@ export function createIdleLoop(deps: IdleLoopDeps): IdleLoop {
     // a busy or wedged agent: the other signals decide; a detached session
     // keeps the imp awake only through its CPU or TCP
     const activity = await deps.imps.readActivity(imp);
+
+    deps.imps.watchdog.observe(imp, activity !== null);
 
     const tcpEstablished = activity?.tcp_established ?? 0;
 

@@ -71,7 +71,10 @@ export function buildSnapshotIdentity(
 
 // meta.json is the snapshot's commit record: written last, and durably, so
 // the files it vouches for are complete
-export function writeSnapshotMeta(paths: Readonly<ImpPaths>, meta: Readonly<SnapshotMeta>): void {
+export function writeSnapshotMeta(
+  paths: Pick<ImpPaths, 'snapshotMeta'>,
+  meta: Readonly<SnapshotMeta>,
+): void {
   writeFileDurably(paths.snapshotMeta, `${JSON.stringify(meta, null, 2)}\n`);
 }
 

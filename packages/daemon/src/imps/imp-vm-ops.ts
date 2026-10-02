@@ -74,6 +74,10 @@ export interface ImpVmOps {
   // a running guest grows its filesystem into a grown disk file; a failure
   // leaves the grow pending for the next wake, and a cold boot grows anyway
   readonly growGuestDisk: (imp: LockedImp) => Promise<LockedImp>;
+
+  // kills the VM without asking its agent, which may not answer, and boots
+  // the disk cold; `reason` says why on the imp
+  readonly startFreshImpVm: (imp: LockedImp, reason: string) => Promise<LockedImp>;
 }
 
 export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOps {
@@ -563,6 +567,23 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     return startImpVm(imp);
   };
 
+  const startFreshImpVm = async (imp: LockedImp, reason: string): Promise<LockedImp> => {
+    if (imp.pid !== null) {
+      await context.vms.stopVm(imp.pid, context.findPaths(imp.id), false);
+    }
+
+    context.admission?.release(imp.id);
+
+    const stopped = await updateState(imp, {
+      reason: 'stopped',
+      detail: { trigger: reason },
+      state: 'stopped',
+      pid: null,
+    });
+
+    return startColdImpVm(stopped, reason);
+  };
+
   return {
     updateState,
     writeFailure,
@@ -571,6 +592,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     sleepImpVm,
     requireRunningImp,
     growGuestDisk,
+    startFreshImpVm,
   };
 }
 

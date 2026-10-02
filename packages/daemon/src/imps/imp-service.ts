@@ -9,6 +9,8 @@ import { countSessions } from '../sessions/count-sessions';
 import { createSessionService } from '../sessions/session-service';
 import type { SessionService } from '../sessions/session-service';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
+import type { AgentWatchdog } from '../watchdog/agent-watchdog';
+import { createImpWatchdog } from '../watchdog/imp-watchdog';
 import { readBootStatus } from './boot-status';
 import type { BootStatus } from './boot-status';
 import type { ImpCommands } from './imp-commands';
@@ -65,14 +67,19 @@ export interface ImpCheckpointHooks {
 }
 
 // Every face of the service: impd's main wires each part to the one it needs.
-export type Imps = ImpService & ImpRuntime & ImpCheckpointHooks;
+export type Imps = ImpService &
+  ImpRuntime &
+  ImpCheckpointHooks & {
+    readonly watchdog: AgentWatchdog;
+  };
 
 export function createImpService(deps: ImpServiceDeps): Imps {
   const context = createImpContext(deps);
   const lock = createImpLock(context);
   const gate = createShutdownGate();
   const ops = createImpVmOps(context, gate);
-  const presenter = createImpPresenter(context);
+  const watchdog = createImpWatchdog(context, lock, ops);
+  const presenter = createImpPresenter(context, watchdog.readSilentSince);
   const events = deps.events ?? createEventBus();
 
   startImpEventPublisher({
@@ -129,5 +136,6 @@ export function createImpService(deps: ImpServiceDeps): Imps {
         resourceListeners.delete(listener);
       };
     },
+    watchdog,
   };
 }

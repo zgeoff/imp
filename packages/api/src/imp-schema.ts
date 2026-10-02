@@ -88,6 +88,10 @@ export const ImpSchema = z.object({
   // sleeping: why the next wake boots cold instead of restoring the memory;
   // awake: why the last boot was cold instead of a wake
   coldBootReason: z.string().optional(),
+
+  // a running imp whose agent stopped answering: since when, once the
+  // watchdog reports it
+  agentSilentSince: z.date().optional(),
   outdated: z.array(OutdatedPartSchema).readonly().optional(),
 
   // cores the VM may use (null: no limit) and its share under contention,

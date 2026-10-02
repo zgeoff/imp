@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { waitWithin } from '../../process/wait-within';
+import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
 import type { LiveStorage } from '../storage-backend';
 import { FakeZfsCrashError, createFakeZfs } from './fake-zfs';
@@ -842,4 +843,26 @@ test('usage counts the retired checkpoints and is an upper bound under a fork', 
 
   expect(after.imps.get('a')?.isUpperBound).toBe(true);
   expect(after.imps.get('c')?.isUpperBound).toBe(false);
+});
+
+test('the watchdog slot sits on the root dataset, so a destroy removes it with the imp', async () => {
+  await using ctx = await setupStarted();
+
+  await ctx.createImp('a');
+
+  const paths = ctx.backend.resolveImpPaths('a');
+  const slot = buildWatchdogSlot(paths.dir);
+
+  mkdirSync(slot.snapshotDir, { recursive: true });
+  writeFileSync(slot.memFile, 'mem');
+
+  const datasetDirs = [ctx.diskDir('a'), dirname(paths.memFile)];
+
+  // as a destroy does: the disk through the backend, then the directory
+  await ctx.backend.removeImpDisk('a', []);
+
+  rmSync(paths.dir, { recursive: true });
+
+  expect(datasetDirs.some((dir) => slot.snapshotDir.startsWith(`${dir}/`))).toBeFalse();
+  expect(existsSync(slot.snapshotDir)).toBeFalse();
 });
