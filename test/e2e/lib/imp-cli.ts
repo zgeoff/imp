@@ -23,6 +23,8 @@ const ImpRowSchema = z.object({
   state: ImpStateSchema,
   vcpus: z.number(),
   memoryMib: z.number(),
+  maxMemoryMib: z.number().optional(),
+  pluggedMib: z.number().optional(),
   slot: z.number(),
   ip: z.string(),
   port: z.number(),

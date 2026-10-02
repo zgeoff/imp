@@ -290,3 +290,34 @@ test.skipIf(!KSM_READY)(
   },
   600_000,
 );
+
+// Plugged memory is guest memory KSM may merge, as its boot memory is
+// (docs/architecture/memory.md#how-the-guest-grows); small enough that a
+// grow fits the suite's budget.
+test.skipIf(!KSM_READY)(
+  'memory an elastic guest grows into is private and mergeable, as its boot memory is',
+  async () => {
+    const name = `${prefix}grow`;
+
+    await createImp(name, '--image', TINY, '--memory', '192m', '--max-memory', '448m');
+    await holdImp(name);
+
+    // 120 MiB in tmpfs, 20 MiB a second: past what the base holds free
+    await runShellInImp(
+      name,
+      'mkdir -p /mnt/fill && mount -t tmpfs -o size=200m tmpfs /mnt/fill && ' +
+        'i=0; while [ $i -lt 6 ]; do dd if=/dev/zero of=/mnt/fill/$i bs=1M count=20 2>/dev/null || exit 1; i=$((i+1)); sleep 1; done',
+    );
+
+    const grown = await requireImp(name);
+    const mappings = await readGuestMappings(name);
+
+    writeMetric('ksm_elastic_mappings', mappings);
+
+    expect(grown.pluggedMib ?? 0).toBeGreaterThanOrEqual(256);
+    expect(new Set(mappings)).toEqual(new Set(['rw-p mg']));
+
+    await runImp('rm', name);
+  },
+  600_000,
+);
