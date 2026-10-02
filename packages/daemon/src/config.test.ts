@@ -27,6 +27,7 @@ test('it fills every setting from its default when the env is empty', () => {
     zfsRoot: null,
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
+    https: null,
   });
 });
 
@@ -70,4 +71,47 @@ test('it needs the root dataset with the zfs backend', () => {
 
 test('it rejects a port base that cannot fit every slot', () => {
   expect(() => loadConfig({ IMP_PORT_BASE: '60000' })).toThrow('IMP_PORT_BASE');
+});
+
+test('it reads the HTTPS settings when IMP_DOMAIN is set', () => {
+  const config = loadConfig({
+    IMP_DOMAIN: 'Imp.Example.com.',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN: 'cf-token',
+    IMP_ACME_EMAIL: 'ops@example.com',
+  });
+
+  expect(config.https).toEqual({
+    domain: 'imp.example.com',
+    httpsPort: 443,
+    httpPort: 80,
+    dns: { provider: 'cloudflare', apiToken: 'cf-token', apiUrl: null },
+    acmeDirectory: 'https://acme-v02.api.letsencrypt.org/directory',
+    acmeEmail: 'ops@example.com',
+    acmeCaFile: null,
+  });
+});
+
+test('it leaves HTTPS off without IMP_DOMAIN, whatever else is set', () => {
+  expect(loadConfig({ IMP_DNS_PROVIDER: 'cloudflare' }).https).toBeNull();
+});
+
+test('it refuses a domain it cannot get a certificate for', () => {
+  expect(() => loadConfig({ IMP_DOMAIN: 'imp.example.com' })).toThrow('IMP_DNS_PROVIDER');
+
+  expect(() =>
+    loadConfig({ IMP_DOMAIN: 'imp.example.com', IMP_DNS_PROVIDER: 'cloudflare' }),
+  ).toThrow('IMP_DNS_API_TOKEN');
+
+  expect(() =>
+    loadConfig({ IMP_DOMAIN: 'imp.example.com', IMP_DNS_PROVIDER: 'challtestsrv' }),
+  ).toThrow('IMP_DNS_API_URL');
+
+  expect(() => loadConfig({ IMP_DOMAIN: '*.example.com', IMP_DNS_PROVIDER: 'cloudflare' })).toThrow(
+    'domain name',
+  );
+
+  expect(() => loadConfig({ IMP_DOMAIN: 'localhost', IMP_DNS_PROVIDER: 'cloudflare' })).toThrow(
+    'domain name',
+  );
 });

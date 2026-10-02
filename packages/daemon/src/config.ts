@@ -1,5 +1,7 @@
 import { join } from 'node:path';
 import * as z from 'zod';
+import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
+import type { HttpsConfig } from './https/https-config';
 import { countSlots, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import type { StorageBackendKind } from './storage/storage-backend';
@@ -30,6 +32,7 @@ const EnvSchema = z.object({
   IMP_ZFS_ROOT: z.string().optional(),
   TAILSCALE_AUTHKEY: z.string().optional(),
   IMP_TAILSCALE_HOSTNAME: z.string().default('imp'),
+  ...HttpsEnvSchema.shape,
 });
 
 export interface Config {
@@ -73,6 +76,10 @@ export interface Config {
   // the tailnet hostname impd asks for; per-imp URLs use the name the node
   // got (http://<name>:<tailnetPort>), which differs while an older node holds it
   readonly tailscaleHostname: string;
+
+  // imps at https://<name>.<domain> (docs/guides/https.md); null without
+  // IMP_DOMAIN
+  readonly https: HttpsConfig | null;
 }
 
 function splitList(value: string): string[] {
@@ -122,5 +129,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     zfsRoot: parsed.IMP_ZFS_ROOT ?? null,
     tailscaleAuthKey: parsed.TAILSCALE_AUTHKEY ?? null,
     tailscaleHostname: parsed.IMP_TAILSCALE_HOSTNAME,
+    https: parseHttpsConfig(parsed),
   };
 }
