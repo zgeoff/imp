@@ -403,9 +403,12 @@ export const impContract = {
   system: {
     info: base.output(SystemInfoSchema),
 
-    // removes the disks, checkpoints, images and snapshots no row names;
-    // PRECONDITION_FAILED while storage operations keep it busy
-    gc: base.input(z.object({ dryRun: z.boolean().optional() })).output(StorageGcSchema),
+    // removes the crash leftovers no row names and lists the orphans it
+    // keeps, or retires them with `orphans`; PRECONDITION_FAILED while
+    // storage operations keep it busy (docs/architecture/storage.md#cleanup)
+    gc: base
+      .input(z.object({ dryRun: z.boolean().optional(), orphans: z.boolean().optional() }))
+      .output(StorageGcSchema),
   },
 
   // named API tokens (docs/guides/tokens.md); the root token in

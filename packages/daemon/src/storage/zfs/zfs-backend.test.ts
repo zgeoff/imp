@@ -6,8 +6,10 @@ import { waitWithin } from '../../process/wait-within';
 import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
 import type { LiveStorage } from '../storage-backend';
-import { FakeZfsCrashError, createFakeZfs } from './fake-zfs';
+import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from './fake-zfs';
 import { createZfsBackend } from './zfs-backend';
+
+type FakeZfs = ReturnType<typeof createFakeZfs>;
 
 const ROOT = 'tank/imp';
 const DIGEST = 'sha256:9f2c';
@@ -85,6 +87,11 @@ async function setupStarted() {
   await ctx.backend.createImage(DIGEST, () => Promise.resolve());
 
   return ctx;
+}
+
+// the creation `zfs list -p` gives `name` in the fake, as an ISO string
+function readFakeCreation(fake: Readonly<Pick<FakeZfs, 'readTxg'>>, name: string): string {
+  return new Date((FAKE_EPOCH_S + fake.readTxg(name) * 3600) * 1000).toISOString();
 }
 
 async function readFailure(promise: Promise<unknown>): Promise<unknown> {
@@ -554,16 +561,18 @@ test('start remounts every disk and image after a container restart', async () =
   expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'images', '9f2c'))).toBe(IMAGE);
 });
 
-test('start drops disks, checkpoints and images the database no longer names', async () => {
+test('start keeps the disks it does not know and drops what a crash explains on those it knows', async () => {
   await using ctx = await setupStarted();
 
   await ctx.createImp('a');
   await ctx.createImp('gone');
   await ctx.createCheckpoint('a', 'cp-kept');
   await ctx.createCheckpoint('a', 'cp-gone');
+  await ctx.createCheckpoint('gone', 'cp-g1');
 
-  // a fork snapshot whose clone never happened
+  // fork snapshots whose clones never happened
   await ctx.fake.run(['zfs', 'snapshot', `${ROOT}/disks/a@fork-left`]);
+  await ctx.fake.run(['zfs', 'snapshot', `${ROOT}/disks/gone@fork-left`]);
 
   await ctx.restartImpd(true, {
     impIds: new Set(['a']),
@@ -571,9 +580,160 @@ test('start drops disks, checkpoints and images the database no longer names', a
     imageDigests: new Set([DIGEST]),
   });
 
-  expect(ctx.fake.listSnapshots()).toEqual([`${ROOT}/disks/a@cp-kept`, `${IMAGE}@base`]);
-  expect(ctx.fake.listDatasets()).not.toContain(`${ROOT}/disks/gone`);
+  expect(ctx.fake.listSnapshots()).toEqual([
+    `${ROOT}/disks/a@cp-kept`,
+    `${ROOT}/disks/gone@cp-g1`,
+    `${ROOT}/disks/gone@fork-left`,
+    `${IMAGE}@base`,
+  ]);
+
+  expect(ctx.fake.isDeferred(`${ROOT}/disks/gone@cp-g1`)).toBeFalse();
+  expect(ctx.fake.readMountedAt(ctx.diskDir('gone'))).toBe(`${ROOT}/disks/gone`);
   expect(ctx.listRetired()).toEqual([]);
+
+  expect(ctx.logs.filter((line) => line.startsWith('impd: storage:'))).toEqual([
+    'impd: storage: removed checkpoint cp-gone',
+    `impd: storage: removed snapshot ${ROOT}/disks/a@fork-left`,
+    `impd: storage: kept orphan imp gone (${ROOT}/disks/gone): 1.0 MiB, created ${readFakeCreation(ctx.fake, `${ROOT}/disks/gone`)}, snapshots: cp-g1, fork-left`,
+    'impd: storage: kept 1 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+  ]);
+});
+
+const NO_ROWS = {
+  impIds: new Set<string>(),
+  checkpointIds: new Set<string>(),
+  imageDigests: new Set<string>(),
+};
+
+// What a lost database leaves on a pool: imps a (cp-1, cp-2, a backup copy
+// and a memory snapshot) and b (a fork of cp-1, with cp-b and a fork
+// snapshot), two images, and the leftovers of four crashes.
+async function setupSurvivors() {
+  const ctx = await setupStarted();
+
+  await ctx.backend.createImage('sha256:7e1d', () => Promise.resolve());
+  await ctx.createImp('a');
+  await ctx.createCheckpoint('a', 'cp-1');
+  await ctx.createCheckpoint('a', 'cp-2');
+  await ctx.backend.createImpDisk('b', { kind: 'checkpoint', impId: 'a', checkpointId: 'cp-1' });
+  await ctx.createCheckpoint('b', 'cp-b');
+  await ctx.fake.run(['zfs', 'snapshot', `${ROOT}/disks/b@fork-left`]);
+  await ctx.backend.createBackupCopy('a', 'r1', { isReusable: true });
+
+  mkdirSync(join(ctx.dataDir, 'mem', 'a'), { recursive: true });
+  writeFileSync(join(ctx.dataDir, 'mem', 'a', 'mem'), 'memory');
+
+  // an image build, an image renamed but never snapshotted, and what two
+  // destroys leave once their disks are retired
+  await ctx.fake.run(['zfs', 'create', `${ROOT}/staging/image-crashed`]);
+  await ctx.fake.run(['zfs', 'create', `${ROOT}/images/half`]);
+
+  mkdirSync(join(ctx.dataDir, 'mem', 'done'), { recursive: true });
+  mkdirSync(join(ctx.dataDir, 'imps', 'done', 'run'), { recursive: true });
+
+  return ctx;
+}
+
+const SURVIVING_SNAPSHOTS = [
+  `${ROOT}/disks/a@bk-r1-a`,
+  `${ROOT}/disks/a@cp-1`,
+  `${ROOT}/disks/a@cp-2`,
+  `${ROOT}/disks/b@cp-b`,
+  `${ROOT}/disks/b@fork-left`,
+  `${ROOT}/images/7e1d@base`,
+  `${IMAGE}@base`,
+];
+
+test('start after a lost database keeps every disk, image and checkpoint, and logs each', async () => {
+  await using ctx = await setupSurvivors();
+
+  await ctx.restartImpd(true, NO_ROWS);
+
+  expect(ctx.fake.listSnapshots()).toEqual(SURVIVING_SNAPSHOTS);
+  expect(SURVIVING_SNAPSHOTS.filter((name) => ctx.fake.isDeferred(name))).toEqual([]);
+
+  expect(
+    ctx.fake.listDatasets().filter((name) => /\/(?:disks|images|staging)\//.test(name)),
+  ).toEqual([`${ROOT}/disks/a`, `${ROOT}/disks/b`, `${ROOT}/images/7e1d`, IMAGE]);
+
+  expect(ctx.listRetired()).toEqual([]);
+
+  // the kept disks are mounted, with their memory snapshots beside them
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.readMountedAt(ctx.diskDir('b'))).toBe(`${ROOT}/disks/b`);
+  expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'images', '7e1d'))).toBe(`${ROOT}/images/7e1d`);
+  expect(existsSync(join(ctx.dataDir, 'mem', 'a', 'mem'))).toBeTrue();
+  expect(existsSync(join(ctx.dataDir, 'mem', 'done'))).toBeFalse();
+  expect(existsSync(join(ctx.dataDir, 'imps', 'done'))).toBeFalse();
+
+  const readCreated = (name: string) => readFakeCreation(ctx.fake, name);
+
+  expect(ctx.logs.filter((line) => line.startsWith('impd: storage:'))).toEqual([
+    'impd: storage: removed image half',
+    'impd: storage: removed imp done',
+    'impd: storage: removed memory done',
+    `impd: storage: kept orphan imp a (${ROOT}/disks/a): 1.0 MiB, created ${readCreated(`${ROOT}/disks/a`)}, snapshots: cp-1, cp-2, bk-r1-a`,
+    `impd: storage: kept orphan imp b (${ROOT}/disks/b): 1.0 MiB, created ${readCreated(`${ROOT}/disks/b`)}, snapshots: cp-b, fork-left`,
+    `impd: storage: kept orphan image 9f2c (${IMAGE}): 1.0 MiB, created ${readCreated(IMAGE)}, snapshots: base`,
+    `impd: storage: kept orphan image 7e1d (${ROOT}/images/7e1d): 1.0 MiB, created ${readCreated(`${ROOT}/images/7e1d`)}, snapshots: base`,
+    'impd: storage: kept 4 orphans the database does not name; `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire',
+  ]);
+});
+
+test('a sweep keeps the orphans; with orphans, a dry run lists what the next sweep retires', async () => {
+  await using ctx = await setupSurvivors();
+
+  await ctx.restartImpd(true, NO_ROWS);
+
+  const before = ctx.fake.commands.length;
+
+  const swept = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: false, isOrphans: false });
+
+  await ctx.backend.waitForReclaim();
+
+  expect(swept.dropped).toEqual([]);
+
+  expect(swept.kept.map((orphan) => `${orphan.kind} ${orphan.id}`)).toEqual([
+    'imp a',
+    'imp b',
+    'image 9f2c',
+    'image 7e1d',
+  ]);
+
+  expect(
+    ctx.fake.commands.slice(before).filter((command) => !command.startsWith('zfs list')),
+  ).toEqual([]);
+
+  const listed = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: true, isOrphans: true });
+
+  expect(listed).toEqual({
+    dropped: [
+      { kind: 'checkpoint', id: 'cp-1' },
+      { kind: 'checkpoint', id: 'cp-2' },
+      { kind: 'checkpoint', id: 'cp-b' },
+      { kind: 'snapshot', id: `${ROOT}/disks/b@fork-left` },
+      { kind: 'snapshot', id: `${ROOT}/disks/a@bk-r1-a` },
+      { kind: 'image', id: '9f2c' },
+      { kind: 'image', id: '7e1d' },
+      { kind: 'imp', id: 'a' },
+      { kind: 'imp', id: 'b' },
+      { kind: 'memory', id: 'a' },
+    ],
+    kept: [],
+  });
+
+  expect(ctx.fake.listSnapshots()).toEqual(SURVIVING_SNAPSHOTS);
+
+  const retired = await ctx.backend.dropUnnamed(NO_ROWS, { isDryRun: false, isOrphans: true });
+
+  await ctx.backend.waitForReclaim();
+
+  expect(retired).toEqual(listed);
+  expect(ctx.listRetired()).toEqual([]);
+  expect(ctx.fake.listSnapshots()).toEqual([]);
+  expect(ctx.fake.listDatasets().filter((name) => /\/(?:disks|images)\//.test(name))).toEqual([]);
+  expect(existsSync(join(ctx.dataDir, 'mem', 'a'))).toBeFalse();
+  expect(existsSync(join(ctx.dataDir, 'imps', 'a'))).toBeFalse();
 });
 
 test('it reads the pool usage of the root dataset', async () => {
@@ -834,7 +994,7 @@ test('an empty disk is a dataset of its own holding a zero-length file', async (
   expect(existsSync(join(diskDir, 'rootfs.ext4'))).toBeTrue();
 });
 
-test('dropUnnamed retires what the database does not name and leaves staging alone', async () => {
+test('dropUnnamed keeps an unnamed disk, drops what a crash left, and leaves staging alone', async () => {
   await using ctx = await setupStarted();
 
   await ctx.createImp('a');
@@ -850,17 +1010,25 @@ test('dropUnnamed retires what the database does not name and leaves staging alo
   ctx.live.impIds.delete('b');
   ctx.live.checkpointIds.delete('cp-lost');
 
-  const listed = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: true });
+  const listed = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: true, isOrphans: false });
 
-  expect(listed).toEqual([
+  expect(listed.dropped).toEqual([
     { kind: 'checkpoint', id: 'cp-lost' },
-    { kind: 'imp', id: 'b' },
     { kind: 'memory', id: 'gone' },
   ]);
 
-  expect(ctx.fake.listDatasets()).toContain(`${ROOT}/disks/b`);
+  expect(listed.kept).toEqual([
+    {
+      kind: 'imp',
+      id: 'b',
+      location: `${ROOT}/disks/b`,
+      bytes: 1_048_576,
+      createdAt: new Date(readFakeCreation(ctx.fake, `${ROOT}/disks/b`)),
+      snapshots: [],
+    },
+  ]);
 
-  const dropped = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false });
+  const dropped = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false, isOrphans: false });
 
   await ctx.backend.waitForReclaim();
 
@@ -868,14 +1036,23 @@ test('dropUnnamed retires what the database does not name and leaves staging alo
 
   const left = ctx.fake.listDatasets();
 
-  expect(left).not.toContain(`${ROOT}/disks/b`);
+  expect(left).toContain(`${ROOT}/disks/b`);
   expect(left).toContain(`${ROOT}/disks/a`);
   expect(left).toContain(`${ROOT}/staging/image-now`);
   expect(existsSync(join(ctx.dataDir, 'mem', 'gone'))).toBeFalse();
-  expect(existsSync(join(ctx.dataDir, 'imps', 'b'))).toBeFalse();
-  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.readMountedAt(ctx.diskDir('b'))).toBe(`${ROOT}/disks/b`);
   expect(ctx.fake.listSnapshots()).toContain(`${ROOT}/disks/a@cp-1`);
   expect(ctx.fake.listSnapshots()).not.toContain(`${ROOT}/disks/a@cp-lost`);
+
+  const retired = await ctx.backend.dropUnnamed(ctx.live, { isDryRun: false, isOrphans: true });
+
+  await ctx.backend.waitForReclaim();
+
+  expect(retired).toEqual({ dropped: [{ kind: 'imp', id: 'b' }], kept: [] });
+  expect(ctx.fake.listDatasets()).not.toContain(`${ROOT}/disks/b`);
+  expect(existsSync(join(ctx.dataDir, 'imps', 'b'))).toBeFalse();
+  expect(ctx.fake.readMountedAt(ctx.diskDir('a'))).toBe(`${ROOT}/disks/a`);
+  expect(ctx.fake.listDatasets()).toContain(`${ROOT}/staging/image-now`);
 });
 
 test('usage counts the retired checkpoints and is an upper bound under a fork', async () => {

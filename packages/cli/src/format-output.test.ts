@@ -231,6 +231,36 @@ test('a gc lists what it removed, and says when a dry run removed nothing', () =
   expect(formatGc({ dryRun: false, dropped: [] })).toBe('nothing to remove');
 });
 
+test('a gc lists the orphans it kept, with their size, age and snapshots', () => {
+  const kept = [
+    {
+      kind: 'imp',
+      id: 'a',
+      location: 'tank/imp/disks/a',
+      bytes: 3_145_728,
+      createdAt: new Date('2026-10-03T00:00:00Z'),
+      snapshots: ['cp-1', 'cp-2'],
+    },
+    {
+      kind: 'image',
+      id: '9f2c',
+      location: '/var/lib/imp/images/9f2c',
+      bytes: 0,
+      createdAt: null,
+      snapshots: [],
+    },
+  ] as const;
+
+  expect(formatGc({ dryRun: false, dropped: [], kept: [...kept] }).split('\n')).toEqual([
+    'nothing to remove',
+    '',
+    'kept 2 orphans the database does not name; `imp gc --orphans` retires them:',
+    'KIND   ID    LOCATION                  SIZE   CREATED                   SNAPSHOTS',
+    'imp    a     tank/imp/disks/a          3 MiB  2026-10-03T00:00:00.000Z  cp-1,cp-2',
+    'image  9f2c  /var/lib/imp/images/9f2c  0 MiB  -                         -',
+  ]);
+});
+
 test('the imp list shows what a destroy frees and what the imp shares', () => {
   const imp = {
     id: 'i1',

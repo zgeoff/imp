@@ -50,7 +50,7 @@ export interface ZfsCommands {
 }
 
 const LIST_COLUMNS = 'name,type,origin,defer_destroy';
-const SPACE_COLUMNS = 'name,used,referenced,usedbydataset,clones';
+const SPACE_COLUMNS = 'name,used,referenced,usedbydataset,creation,clones';
 
 // A dataset's or snapshot's space. `used` of a dataset counts its snapshots;
 // of a snapshot, the blocks only it holds. A snapshot has no usedbydataset.
@@ -59,6 +59,9 @@ export interface ZfsSpace {
   readonly used: number;
   readonly referenced: number;
   readonly usedByDataset: number;
+
+  // `creation`, which `-p` gives in seconds since the epoch
+  readonly createdAt: Date;
 
   // the clones of a snapshot: forks, a restore, a backup tree
   readonly clones: readonly string[];
@@ -158,14 +161,21 @@ export function parseZfsSpace(stdout: string): ZfsSpace[] {
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [name = '', used = '', referenced = '', usedByDataset = '', clones = ''] =
-        line.split('\t');
+      const [
+        name = '',
+        used = '',
+        referenced = '',
+        usedByDataset = '',
+        creation = '',
+        clones = '',
+      ] = line.split('\t');
 
       return {
         name,
         used: parseBytes(used),
         referenced: parseBytes(referenced),
         usedByDataset: usedByDataset === '-' ? 0 : parseBytes(usedByDataset),
+        createdAt: parseEpochSeconds(creation),
         clones: clones === '-' || clones === '' ? [] : clones.split(','),
       };
     });
@@ -246,4 +256,14 @@ function parseBytes(value: string): number {
   }
 
   return bytes;
+}
+
+function parseEpochSeconds(value: string): Date {
+  const seconds = Number(value);
+
+  if (!Number.isSafeInteger(seconds) || seconds < 0) {
+    throw new Error(`zfs: expected seconds since the epoch, got ${JSON.stringify(value)}`);
+  }
+
+  return new Date(seconds * 1000);
 }

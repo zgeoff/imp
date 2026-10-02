@@ -397,17 +397,40 @@ export function formatApiCalls(calls: readonly ApiCall[]): string {
   );
 }
 
+// what went, or would go, then the orphans it kept
 export function formatGc(gc: Readonly<StorageGc>): string {
-  if (gc.dropped.length === 0) {
-    return 'nothing to remove';
+  const kept = gc.kept ?? [];
+
+  const removed =
+    gc.dropped.length === 0
+      ? 'nothing to remove'
+      : formatTable(
+          ['KIND', 'ID'],
+          gc.dropped.map((dropped) => [dropped.kind, dropped.id]),
+        );
+
+  const lines = [
+    gc.dryRun && gc.dropped.length > 0 ? `${removed}\n(dry run: nothing removed)` : removed,
+  ];
+
+  if (kept.length > 0) {
+    lines.push(
+      `\nkept ${String(kept.length)} orphans the database does not name; \`imp gc --orphans\` retires them:`,
+      formatTable(
+        ['KIND', 'ID', 'LOCATION', 'SIZE', 'CREATED', 'SNAPSHOTS'],
+        kept.map((orphan) => [
+          orphan.kind,
+          orphan.id,
+          orphan.location,
+          formatBytesMib(orphan.bytes),
+          orphan.createdAt?.toISOString() ?? '-',
+          orphan.snapshots.length === 0 ? '-' : orphan.snapshots.join(','),
+        ]),
+      ),
+    );
   }
 
-  const table = formatTable(
-    ['KIND', 'ID'],
-    gc.dropped.map((dropped) => [dropped.kind, dropped.id]),
-  );
-
-  return gc.dryRun ? `${table}\n(dry run: nothing removed)` : table;
+  return lines.join('\n');
 }
 
 export function formatJson(value: unknown): string {

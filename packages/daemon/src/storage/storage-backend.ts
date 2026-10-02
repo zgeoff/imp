@@ -54,8 +54,9 @@ export interface DiskUsageReport {
   readonly isPartial: boolean;
 }
 
-// What the database holds when impd starts. Anything else a backend finds is
-// left over from a crash, and start drops it.
+// What the database holds when impd starts. A backend drops what else it
+// finds only when a crash explains it; the rest is an orphan, and stays
+// (docs/architecture/storage.md#cleanup).
 export interface LiveStorage {
   readonly impIds: ReadonlySet<string>;
   readonly checkpointIds: ReadonlySet<string>;
@@ -70,6 +71,37 @@ export interface DroppedStorage {
   readonly id: string;
 }
 
+// An imp's disk or an image no row names and no crash explains, as a lost
+// database leaves every disk. A sweep keeps it unless asked for orphans.
+export interface OrphanStorage {
+  readonly kind: 'imp' | 'image';
+  readonly id: string;
+
+  // the dataset, or the directory on XFS
+  readonly location: string;
+
+  // snapshots and checkpoints included
+  readonly bytes: number;
+  readonly createdAt: Date | null;
+
+  // the names after `@`, or the checkpoint ids on XFS
+  readonly snapshots: readonly string[];
+}
+
+interface SweepOptions {
+  readonly isDryRun: boolean;
+
+  // retire the orphans too: `imp gc --orphans`
+  readonly isOrphans: boolean;
+}
+
+export interface SweepResult {
+  readonly dropped: readonly DroppedStorage[];
+
+  // the orphans the sweep kept; none when it took them
+  readonly kept: readonly OrphanStorage[];
+}
+
 // The disks, checkpoints and image rootfs files of imps (docs/architecture/storage.md). XFS
 // clones files with reflink; ZFS keeps each disk in a dataset, a checkpoint as a snapshot and
 // a fork as a clone.
@@ -77,16 +109,13 @@ export interface StorageBackend {
   readonly kind: StorageBackendKind;
 
   // before any VM is re-adopted or woken: mounts, finishes or undoes a restore
-  // a crash cut short, and drops what `live` does not name
+  // a crash cut short, and runs a sweep, which it logs
   readonly start: (live: LiveStorage) => Promise<void>;
 
-  // Removes what `live` does not name; staging, retired datasets and backup
-  // directories stay. The caller holds the storage gate alone, so nothing is
+  // Removes what `live` does not name and a crash explains, and the orphans
+  // with `isOrphans`. The caller holds the storage gate alone, so nothing is
   // in flight (docs/architecture/storage.md#cleanup).
-  readonly dropUnnamed: (
-    live: LiveStorage,
-    options: Readonly<{ isDryRun: boolean }>,
-  ) => Promise<DroppedStorage[]>;
+  readonly dropUnnamed: (live: LiveStorage, options: SweepOptions) => Promise<SweepResult>;
 
   // the data layout, with the disk and the memory snapshot where this
   // backend keeps them

@@ -326,6 +326,7 @@ export function createFakeImpd(): FakeImpd {
       gc: os.system.gc.handler((context) => ({
         dryRun: context.input.dryRun ?? false,
         dropped: [],
+        kept: [],
       })),
     },
     tokens: {

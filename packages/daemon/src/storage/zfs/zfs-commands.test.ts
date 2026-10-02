@@ -161,18 +161,26 @@ test('it lists the tree oldest first and fails with the stderr of zfs', async ()
 
 test('it parses the space columns, with the clones of a snapshot', () => {
   const stdout = [
-    'tank/imp/disks/a\t2048\t4096\t1024\t-',
-    'tank/imp/disks/a@cp-1\t512\t3072\t-\ttank/imp/disks/b,tank/imp/staging/bk-1',
+    'tank/imp/disks/a\t2048\t4096\t1024\t1790985600\t-',
+    'tank/imp/disks/a@cp-1\t512\t3072\t-\t1790989200\ttank/imp/disks/b,tank/imp/staging/bk-1',
     '',
   ].join('\n');
 
   expect(parseZfsSpace(stdout)).toEqual([
-    { name: 'tank/imp/disks/a', used: 2048, referenced: 4096, usedByDataset: 1024, clones: [] },
+    {
+      name: 'tank/imp/disks/a',
+      used: 2048,
+      referenced: 4096,
+      usedByDataset: 1024,
+      createdAt: new Date('2026-10-03T00:00:00Z'),
+      clones: [],
+    },
     {
       name: 'tank/imp/disks/a@cp-1',
       used: 512,
       referenced: 3072,
       usedByDataset: 0,
+      createdAt: new Date('2026-10-03T01:00:00Z'),
       clones: ['tank/imp/disks/b', 'tank/imp/staging/bk-1'],
     },
   ]);

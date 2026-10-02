@@ -454,7 +454,12 @@ export function buildRouter(deps: RouterDeps) {
     },
     system: {
       info: os.system.info.handler(() => readSystemInfo(deps)),
-      gc: os.system.gc.handler((context) => deps.gc.runGc(context.input.dryRun ?? false)),
+      gc: os.system.gc.handler((context) =>
+        deps.gc.runGc({
+          isDryRun: context.input.dryRun ?? false,
+          isOrphans: context.input.orphans ?? false,
+        }),
+      ),
     },
     tokens: {
       list: os.tokens.list.handler(() => deps.tokens.list()),
