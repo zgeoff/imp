@@ -33,16 +33,17 @@ export const mcpCommand = defineCommand({
         throw error instanceof mcp.GuardError ? new UsageError(error.message) : error;
       }
 
-      const server = mcp.createMcpServer({
-        client,
-        guard,
-        version: packageJson.version,
-        send: (message) => {
+      const server = mcp.createMcpServer({ version: packageJson.version });
+
+      // impd enforces the token's own scope; every tool is listed
+      await mcp.handleLines(Bun.stdin.stream(), server, {
+        reply: (message) => {
           process.stdout.write(`${message}\n`);
         },
+        client,
+        guard,
+        scope: 'manage',
       });
-
-      await mcp.handleLines(Bun.stdin.stream(), server);
     }),
 });
 

@@ -76,6 +76,7 @@
       "version": "0.7.0",
       "dependencies": {
         "@imp/api": "workspace:*",
+        "@imp/mcp": "workspace:*",
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
         "@opentelemetry/exporter-trace-otlp-proto": "catalog:",
@@ -84,6 +85,7 @@
         "@opentelemetry/sdk-trace-base": "catalog:",
         "@orpc/server": "catalog:",
         "@peculiar/x509": "catalog:",
+        "@zgeoff/imp-client": "workspace:*",
         "acme-client": "catalog:",
         "dns-packet": "catalog:",
         "elysia": "catalog:",
@@ -136,9 +138,6 @@
         "@imp/api": "workspace:*",
         "@zgeoff/imp-client": "workspace:*",
         "zod": "catalog:",
-      },
-      "devDependencies": {
-        "@imp/daemon": "workspace:*",
       },
     },
   },

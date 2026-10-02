@@ -11,6 +11,7 @@ const CheckpointRefInput = z
 export const CHECKPOINT_TOOLS: readonly Tool[] = [
   defineTool({
     name: 'imp_checkpoint',
+    scope: 'manage',
     description:
       "Save the imp's disk as a checkpoint, in about 100 ms, without stopping it. Take one before a risky change; imp_restore goes back to it and imp_fork starts a new imp from it.",
     input: z.strictObject({
@@ -41,6 +42,7 @@ export const CHECKPOINT_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_checkpoint_list',
+    scope: 'read',
     description: "List the imp's checkpoints: id, label, time and size.",
     input: z.strictObject({ name: ImpNameInput }),
     annotations: { title: 'List checkpoints', readOnlyHint: true, openWorldHint: false },
@@ -54,6 +56,7 @@ export const CHECKPOINT_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_restore',
+    scope: 'manage',
     cancellable: false,
     description:
       "Put the imp's disk back to a checkpoint. Everything written since the checkpoint is lost, and so is the memory: an awake imp boots fresh, a sleeping or stopped one boots on its next use. A cancel does not stop the restore, and its result still comes back.",
@@ -74,6 +77,7 @@ export const CHECKPOINT_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_checkpoint_delete',
+    scope: 'manage',
     description: "Delete one of the imp's checkpoints for good. The imp itself is not touched.",
     input: z.strictObject({ name: ImpNameInput, checkpoint: CheckpointRefInput }),
     annotations: {

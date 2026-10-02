@@ -5,15 +5,11 @@
   "description": "MCP server for impd: imps, exec, files and checkpoints as tools for coding agents",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./src/test-mcp": "./src/test-mcp.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@imp/api": "workspace:*",
     "@zgeoff/imp-client": "workspace:*",
     "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@imp/daemon": "workspace:*"
   }
 }

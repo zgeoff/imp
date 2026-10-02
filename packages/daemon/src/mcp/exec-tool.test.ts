@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { setupMcpTest } from '../test-mcp';
+import { setupMcpTest } from './test-mcp';
 
 test('imp_exec runs a command line through /bin/sh -c and returns its output', async () => {
   await using ctx = await setupMcpTest();

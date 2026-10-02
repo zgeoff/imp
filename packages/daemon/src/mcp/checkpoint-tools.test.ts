@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { setupMcpTest } from '../test-mcp';
+import { setupMcpTest } from './test-mcp';
 
 test('checkpoint, list, restore and delete work on a running, sleeping and stopped imp', async () => {
   await using ctx = await setupMcpTest();

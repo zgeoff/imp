@@ -1,4 +1,4 @@
-import type { McpServer } from './mcp-server';
+import type { McpServer, MessageContext } from './mcp-server';
 
 // MCP's stdio transport, inbound: one JSON-RPC message per line, each handled
 // as it arrives, so a long tool call never holds up a ping or a cancel. The
@@ -6,6 +6,7 @@ import type { McpServer } from './mcp-server';
 export async function handleLines(
   input: ReadableStream<Uint8Array>,
   server: Readonly<McpServer>,
+  context: Readonly<MessageContext>,
 ): Promise<void> {
   const decoder = new TextDecoder();
 
@@ -13,7 +14,7 @@ export async function handleLines(
 
   const handleLine = (line: string): void => {
     if (line.trim() !== '') {
-      void server.receive(line);
+      void server.receive(line, context);
     }
   };
 
