@@ -39,7 +39,9 @@ func serve(sock int, runner proc.Runner) error {
 		}
 		switch m.Op {
 		case opSpawn:
-			s.spawn(m, fds)
+			// each on its own: a spawn that hangs (a stat on a dead FUSE
+			// mount) must not hold the others, or a signal
+			safe.Go("inner: spawn", func() { s.spawn(m, fds) }, nil)
 		case opSignal:
 			closeAll(fds)
 			s.signal(m)

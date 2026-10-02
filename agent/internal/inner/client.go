@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -18,12 +19,25 @@ import (
 // ErrDown is the error for a spawn or signal when the container is gone.
 var ErrDown = proc.ErrDown
 
+// callTimeout bounds a request to the inner init: one that hangs (a stat on
+// a dead FUSE mount, say) fails instead of holding its caller. A variable
+// for tests.
+var callTimeout = 30 * time.Second
+
+// errNoAnswer is a request the inner init did not answer within callTimeout.
+var errNoAnswer = errors.New("the inner init did not answer")
+
 // pendingCall waits for one reply. register runs in the read loop as the
 // reply arrives, before the loop reads on: a spawn's waiter must exist
 // before its exit can be read.
 type pendingCall struct {
-	ch       chan message
+	ch       chan result
 	register func(reply message)
+}
+
+type result struct {
+	m   message
+	err error
 }
 
 // client is the agent's half of one container's socket. It implements
@@ -66,8 +80,10 @@ func (c *client) waitReady() error {
 }
 
 // run reads replies and exits until the socket closes, then ends every
-// spawn and wait still open: a process in a dead container is dead.
+// spawn and wait still open: a process in a dead container is dead. It owns
+// the socket's fd and closes it last.
 func (c *client) run() {
+	defer unix.Close(c.sock)
 	defer c.shut()
 	buf := newBuffer()
 	for {
@@ -86,12 +102,13 @@ func (c *client) run() {
 			delete(c.pending, m.ID)
 			c.mu.Unlock()
 			if call == nil {
+				c.late(m)
 				continue
 			}
 			if call.register != nil && m.Error == "" && m.Errno == 0 {
 				call.register(m)
 			}
-			call.ch <- m
+			call.ch <- result{m: m}
 		case opExit:
 			c.mu.Lock()
 			ch := c.waiters[m.Pid]
@@ -104,6 +121,16 @@ func (c *client) run() {
 	}
 }
 
+// late handles a reply that came after its call gave up. A spawn that
+// started then has nobody to wait for it, so it goes.
+func (c *client) late(m message) {
+	if m.Pid <= 0 || m.Error != "" || m.Errno != 0 {
+		return
+	}
+	log.Printf("inner: pid %d started after its spawn timed out; killing it", m.Pid)
+	safe.Go("inner: kill late spawn", func() { c.signal(m.Pid, syscall.SIGKILL, false) }, nil)
+}
+
 func statusOf(m message) reaper.Status {
 	if m.Signal != 0 {
 		return reaper.Status{Pid: m.Pid, Code: -1, Signal: syscall.Signal(m.Signal)}
@@ -112,7 +139,8 @@ func statusOf(m message) reaper.Status {
 }
 
 // shut fails every pending request and ends every wait with SIGKILL, which
-// is what the container's end did to them.
+// is what the container's end did to them. It shuts the socket down; run
+// closes the fd.
 func (c *client) shut() {
 	c.mu.Lock()
 	if c.closed {
@@ -124,19 +152,19 @@ func (c *client) shut() {
 	c.pending, c.waiters = map[uint64]*pendingCall{}, map[int]chan reaper.Status{}
 	c.mu.Unlock()
 	for _, call := range pending {
-		call.ch <- message{Op: opReply, Error: ErrDown.Error()}
+		call.ch <- result{err: ErrDown}
 	}
 	for pid, ch := range waiters {
 		ch <- reaper.Status{Pid: pid, Code: -1, Signal: syscall.SIGKILL}
 	}
-	unix.Close(c.sock)
+	unix.Shutdown(c.sock, unix.SHUT_RDWR)
 	close(c.down)
 }
 
-// call sends m and waits for its reply. register, when set, runs in the
-// read loop as a good reply arrives (pendingCall).
+// call sends m and waits for its reply, at most callTimeout. register, when
+// set, runs in the read loop as a good reply arrives (pendingCall).
 func (c *client) call(m message, fds []int, register func(reply message)) (message, error) {
-	ch := make(chan message, 1)
+	ch := make(chan result, 1)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -156,11 +184,29 @@ func (c *client) call(m message, fds []int, register func(reply message)) (messa
 		c.mu.Unlock()
 		return message{}, fmt.Errorf("%w: %v", ErrDown, err)
 	}
-	reply := <-ch
-	if reply.Error == ErrDown.Error() {
-		return reply, ErrDown
+	t := time.NewTimer(callTimeout)
+	defer t.Stop()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return r.m, r.err
+		}
+		return r.m, replyErr(r.m)
+	case <-t.C:
 	}
-	return reply, replyErr(reply)
+	c.mu.Lock()
+	_, waiting := c.pending[m.ID]
+	delete(c.pending, m.ID)
+	c.mu.Unlock()
+	if !waiting {
+		// the reply won the race after all
+		r := <-ch
+		if r.err != nil {
+			return r.m, r.err
+		}
+		return r.m, replyErr(r.m)
+	}
+	return message{}, fmt.Errorf("%s: %w after %s", m.Op, errNoAnswer, callTimeout)
 }
 
 // Start spawns s in the container. Its pid is the container's pid for it.
@@ -207,28 +253,41 @@ func (c *client) Down() <-chan struct{} { return c.down }
 // initProc is a started inner init.
 type initProc struct {
 	pid int
-	// pidfd kills it without a race with the pid's reuse
-	pidfd int
-	died  <-chan reaper.Status
 	// sock is the agent's end of the socket
 	sock int
-	// reaped is set once connect took a status from died
-	reaped bool
-	// gone, once set by watchExit, closes when the init is reaped, with
-	// status
+	// signalKill sends the init SIGKILL; release frees what that needs,
+	// once the init is reaped
+	signalKill func() error
+	release    func()
+	// gone closes once the init is reaped, with status
 	gone     chan struct{}
 	status   reaper.Status
 	killOnce sync.Once
 }
 
-// watchExit takes over died: from now on gone tells the init's end, to any
-// number of waiters.
-func (p *initProc) watchExit() {
-	p.gone = make(chan struct{})
+func newInitProc(pid, sock int, died <-chan reaper.Status, signalKill func() error, release func()) *initProc {
+	p := &initProc{pid: pid, sock: sock, signalKill: signalKill, release: release, gone: make(chan struct{})}
 	safe.Go("inner: reap", func() {
-		p.status = <-p.died
+		p.status = <-died
 		close(p.gone)
 	}, nil)
+	return p
+}
+
+// kill ends the init, and with it every process in its PID namespace, and
+// waits for it to be reaped. Only the first call does anything.
+func (p *initProc) kill() {
+	p.killOnce.Do(func() {
+		select {
+		case <-p.gone:
+		default:
+			if err := p.signalKill(); err != nil && !errors.Is(err, unix.ESRCH) {
+				log.Printf("inner: kill the init: %v", err)
+			}
+			<-p.gone
+		}
+		p.release()
+	})
 }
 
 // startInit forks the inner init from agent, with flags, env and in cgroup.
@@ -265,55 +324,43 @@ func startInit(r *reaper.Reaper, agent string, cloneflags uintptr, cgroup *os.Fi
 		unix.Close(pair[0])
 		return nil, fmt.Errorf("start the inner init: %w", err)
 	}
-	return &initProc{pid: pid, pidfd: pidfd, died: done, sock: pair[0]}, nil
+	return newInitProc(pid, pair[0], done,
+		func() error { return unix.PidfdSendSignal(pidfd, unix.SIGKILL, nil, 0) },
+		func() { unix.Close(pidfd) }), nil
 }
 
-// kill ends the init, and with it every process in its PID namespace, and
-// waits for it to be reaped. Call it once.
-func (p *initProc) kill() {
-	signal := func() {
-		if err := unix.PidfdSendSignal(p.pidfd, unix.SIGKILL, nil, 0); err != nil && !errors.Is(err, unix.ESRCH) {
-			log.Printf("inner: kill the init: %v", err)
-		}
-	}
-	switch {
-	case p.gone != nil:
-		select {
-		case <-p.gone:
-		default:
-			signal()
-			<-p.gone
-		}
-	case !p.reaped:
-		signal()
-		<-p.died
-		p.reaped = true
-	}
-	unix.Close(p.pidfd)
-}
+// readyTimeout bounds the inner init's setup. A variable for tests.
+var readyTimeout = 30 * time.Second
 
-// connect starts a client on p's socket once the inner init is ready, and
-// closes the socket when the init dies first.
+// connect starts a client on p's socket once the inner init is ready. When
+// the init dies first, or takes longer than readyTimeout, it kills the init
+// and closes the socket.
 func connect(p *initProc) (*client, error) {
 	c := newClient(p.sock)
 	ready := make(chan error, 1)
 	safe.Go("inner: ready", func() { ready <- c.waitReady() }, func() { ready <- errors.New("panic") })
+	var err error
+	read := false
 	select {
-	case err := <-ready:
-		if err != nil {
-			unix.Close(p.sock)
-			return nil, err
+	case err = <-ready:
+		if err == nil {
+			safe.Go("inner: socket", c.run, c.shut)
+			return c, nil
 		}
-	case st := <-p.died:
-		p.reaped = true
-		// the socket gets its EOF; the read must end before the fd number
-		// can go to another socket
-		<-ready
-		unix.Close(p.sock)
-		return nil, fmt.Errorf("the inner init exited before it was ready: %s", describe(st))
+		read = true
+	case <-p.gone:
+		err = fmt.Errorf("the inner init exited before it was ready: %s", describe(p.status))
+	case <-time.After(readyTimeout):
+		err = fmt.Errorf("the inner init was not ready after %s", readyTimeout)
 	}
-	safe.Go("inner: socket", c.run, c.shut)
-	return c, nil
+	p.kill()
+	if !read {
+		// the read must end before the fd number can go to another socket
+		unix.Shutdown(p.sock, unix.SHUT_RDWR)
+		<-ready
+	}
+	unix.Close(p.sock)
+	return nil, err
 }
 
 func describe(st reaper.Status) string {

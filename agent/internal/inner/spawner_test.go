@@ -189,3 +189,26 @@ func TestASpawnWhoseCgroupFailsRunsOutsideItAndSaysSo(t *testing.T) {
 		t.Fatal("InCgroup for a spawn that could not use its cgroup")
 	}
 }
+
+func TestACallTheInitNeverAnswersTimesOut(t *testing.T) {
+	old := callTimeout
+	callTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { callTimeout = old })
+	sp, err := newSocketpair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unix.Close(sp[1]) })
+	// a peer that reads nothing and answers nothing
+	c := newClient(sp[0])
+	go c.run()
+	t.Cleanup(c.shut)
+	started := time.Now()
+	_, err = c.call(message{Op: opSignal, Pid: 1}, nil, nil)
+	if !errors.Is(err, errNoAnswer) {
+		t.Fatalf("err = %v, want errNoAnswer", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("the call took %s", time.Since(started))
+	}
+}
