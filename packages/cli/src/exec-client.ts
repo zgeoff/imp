@@ -1,14 +1,10 @@
 import { writeSync } from 'node:fs';
 import { constants } from 'node:os';
-import {
-  EXEC_CHANNELS,
-  EXEC_PATH,
-  ExecServerMessageSchema,
-  decodeExecFrame,
-  encodeExecFrame,
-} from '@imp/api';
-import type { ExecClientMessage } from '@imp/api';
+import type { Readable } from 'node:stream';
 import { loadCliConfig } from './cli-config';
+import { openExecSession } from './exec-session';
+import type { ExecOutcome, ExecSessionOptions } from './exec-session';
+import { TOKEN_HINT } from './run-action';
 
 export interface ExecOptions {
   readonly name: string;
@@ -17,174 +13,240 @@ export interface ExecOptions {
   readonly env?: Readonly<Record<string, string>>;
 }
 
-// the exit code a shell gives a command it could not start
+// what runExec touches besides signals; tests swap it
+export interface ExecIo {
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly stdin: Pick<Readable, 'on' | 'off' | 'pause' | 'resume'> & {
+    readonly isTTY?: boolean;
+    readonly setRawMode?: (mode: boolean) => unknown;
+  };
+  readonly writeOutput: (fd: 1 | 2, data: Uint8Array) => void;
+  readonly connect?: ExecSessionOptions['connect'];
+}
+
+// Exit codes, as ssh and shells use them: the command's own code, 128 + n
+// for a signal, 127 when it could not start, 141 (128 + SIGPIPE) when our
+// output went away, and 255 when imp itself failed.
 const EXEC_FAILED_CODE = 127;
-const CONNECTION_LOST_CODE = 255;
-const FORWARDED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
+const BROKEN_PIPE_CODE = 141;
+const IMP_FAILED_CODE = 255;
 
-// Runs one command over the `/exec` WebSocket, wired to this process's
-// stdio, and resolves with its exit code (128 + n for a signal).
-export function runExec(options: Readonly<ExecOptions>): Promise<number> {
-  const config = loadCliConfig(process.env);
+// the first one goes to the command; a second ends the session, so the CLI
+// still stops when the command ignores it or impd stopped answering
+const HANDLED_SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'] as const;
 
-  const url = new URL(EXEC_PATH, config.url);
+const PROCESS_IO: ExecIo = {
+  env: process.env,
+  stdin: process.stdin,
+  writeOutput: (fd, data) => {
+    writeFully(fd, data);
+  },
+};
 
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+// Runs one command in an imp, wired to this process's stdio and signals,
+// and resolves with the exit code for this process.
+export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO): Promise<number> {
+  const config = loadCliConfig(io.env);
+  const stdin = io.stdin;
+  const isRaw = options.tty && stdin.isTTY === true;
+  const done = Promise.withResolvers<number>();
+  const state = { ended: false, raw: false, signalled: false, draining: false };
+  const size = options.tty ? readTerminalSize() : null;
 
-  const headers: Record<string, string> =
-    config.token === null ? {} : { authorization: `Bearer ${config.token}` };
+  const session = openExecSession({
+    baseUrl: config.url,
+    token: config.token,
+    start: {
+      name: options.name,
+      argv: options.argv,
+      tty: options.tty,
+      ...(options.env !== undefined && { env: { ...options.env } }),
+      ...size,
+    },
+    onStarted: () => {
+      startStdin();
+    },
+    onOutput: (channel, data) => {
+      const fd = channel === 'stderr' ? 2 : 1;
 
-  const ws = new WebSocket(url.href, { headers });
+      io.writeOutput(fd, data);
+    },
+    ...(io.connect !== undefined && { connect: io.connect }),
+  });
 
-  const stdin = process.stdin;
-  const isRaw = options.tty && stdin.isTTY;
-
-  ws.binaryType = 'arraybuffer';
-
-  const sendText = (text: string): void => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(text);
+  // runs on process.exit too, so no exit path leaves the terminal raw
+  const resetTerminal = (): void => {
+    if (state.raw) {
+      state.raw = false;
+      stdin.setRawMode?.(false);
     }
   };
 
   const sendResize = (): void => {
-    const size = readTerminalSize();
+    const current = readTerminalSize();
 
-    if (size !== null) {
-      sendText(JSON.stringify({ type: 'resize', ...size } satisfies ExecClientMessage));
+    if (current !== null) {
+      session.resize(current.cols, current.rows);
     }
   };
 
-  const signalHandlers = FORWARDED_SIGNALS.map((signal) => {
-    const sendSignal = (): void => {
-      sendText(JSON.stringify({ type: 'signal', signal } satisfies ExecClientMessage));
+  const signalHandlers = HANDLED_SIGNALS.map((signal) => {
+    const handleSignal = (): void => {
+      // before `started`, impd would only queue the signal
+      if (!session.isStarted() || state.signalled) {
+        stopSession(128 + readSignalNumber(signal));
+
+        return;
+      }
+
+      state.signalled = true;
+
+      session.sendSignal(signal);
     };
 
-    return [signal, sendSignal] as const;
+    return [signal, handleSignal] as const;
   });
+
+  const sendStdin = (chunk: Uint8Array): void => {
+    if (session.sendStdin(chunk) || state.draining) {
+      return;
+    }
+
+    void waitAndResume();
+  };
+
+  const waitAndResume = async (): Promise<void> => {
+    state.draining = true;
+
+    stdin.pause();
+
+    await session.waitForDrain();
+
+    state.draining = false;
+
+    if (!state.ended) {
+      stdin.resume();
+    }
+  };
+
+  const sendStdinEof = (): void => {
+    session.closeStdin();
+  };
 
   // stdin goes over once the process exists; a terminal on stdin is only
   // read with a tty, as with `docker exec` without -i
   const startStdin = (): void => {
-    if (stdin.isTTY && !options.tty) {
-      sendText(JSON.stringify({ type: 'stdin_eof' } satisfies ExecClientMessage));
+    if (stdin.isTTY === true && !options.tty) {
+      session.closeStdin();
 
       return;
     }
 
     if (isRaw) {
-      stdin.setRawMode(true);
+      stdin.setRawMode?.(true);
+      state.raw = true;
+
       process.on('SIGWINCH', sendResize);
     }
 
-    stdin.on('data', (chunk: Uint8Array) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeExecFrame(EXEC_CHANNELS.stdin, chunk));
-      }
-    });
-
-    stdin.on('end', () => {
-      sendText(JSON.stringify({ type: 'stdin_eof' } satisfies ExecClientMessage));
-    });
-
+    stdin.on('data', sendStdin);
+    stdin.on('end', sendStdinEof);
     stdin.resume();
   };
 
-  const resetTerminal = (): void => {
-    if (isRaw) {
-      stdin.setRawMode(false);
+  const stopSession = (code: number): void => {
+    if (state.ended) {
+      return;
     }
 
+    state.ended = true;
+
+    resetTerminal();
+
+    process.off('exit', resetTerminal);
     process.off('SIGWINCH', sendResize);
 
     for (const [signal, handler] of signalHandlers) {
       process.off(signal, handler);
     }
 
+    stdin.off('data', sendStdin);
+    stdin.off('end', sendStdinEof);
     stdin.pause();
+    session.stop();
+    done.resolve(code);
   };
 
-  return new Promise((resolve) => {
-    let finished = false;
+  process.on('exit', resetTerminal);
 
-    const stopSession = (code: number): void => {
-      if (finished) {
-        return;
+  for (const [signal, handler] of signalHandlers) {
+    process.on(signal, handler);
+  }
+
+  const waitForOutcome = async (): Promise<void> => {
+    const outcome = await session.outcome;
+
+    stopSession(printOutcome(outcome, config.url));
+  };
+
+  void waitForOutcome();
+
+  return done.promise;
+}
+
+// prints a line on stderr for any failure, and returns the exit code
+function printOutcome(outcome: ExecOutcome, baseUrl: string): number {
+  switch (outcome.kind) {
+    case 'exit': {
+      return outcome.code ?? 128 + readSignalNumber(outcome.signal);
+    }
+    case 'failed': {
+      const prefix = outcome.code === null ? '' : `${outcome.code}: `;
+
+      console.error(`imp: ${prefix}${outcome.message}`);
+
+      return outcome.code === 'EXEC_FAILED' ? EXEC_FAILED_CODE : IMP_FAILED_CODE;
+    }
+    case 'unauthorized': {
+      console.error(`imp: ${TOKEN_HINT}`);
+
+      return IMP_FAILED_CODE;
+    }
+    case 'unreachable': {
+      console.error(`imp: cannot reach impd at ${baseUrl} (${outcome.detail})`);
+
+      return IMP_FAILED_CODE;
+    }
+    case 'closed': {
+      console.error(`imp: exec connection closed (${outcome.reason})`);
+
+      return IMP_FAILED_CODE;
+    }
+    case 'bad_message': {
+      console.error(`imp: bad message from impd: ${outcome.detail}`);
+
+      return IMP_FAILED_CODE;
+    }
+    case 'local_error': {
+      // a reader such as `head` went away: quiet, as for a local command
+      if (isBrokenPipe(outcome.error)) {
+        return BROKEN_PIPE_CODE;
       }
 
-      finished = true;
+      const message =
+        outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
 
-      resetTerminal();
+      console.error(`imp: ${message}`);
 
-      ws.close();
+      return IMP_FAILED_CODE;
+    }
+    case 'stopped': {
+      break;
+    }
+  }
 
-      resolve(code);
-    };
-
-    ws.addEventListener('open', () => {
-      const size = options.tty ? readTerminalSize() : null;
-
-      sendText(
-        JSON.stringify({
-          type: 'start',
-          name: options.name,
-          argv: [...options.argv],
-          tty: options.tty,
-          ...(options.env !== undefined && { env: { ...options.env } }),
-          ...size,
-        } satisfies ExecClientMessage),
-      );
-
-      if (!options.tty) {
-        for (const [signal, handler] of signalHandlers) {
-          process.on(signal, handler);
-        }
-      }
-    });
-
-    ws.addEventListener('message', (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        const frame = decodeExecFrame(new Uint8Array(event.data));
-        const fd = frame.channel === EXEC_CHANNELS.stderr ? 2 : 1;
-
-        writeFully(fd, frame.data);
-
-        return;
-      }
-
-      const message = ExecServerMessageSchema.parse(JSON.parse(String(event.data)));
-
-      if (message.type === 'started') {
-        startStdin();
-      } else if (message.type === 'exit') {
-        const code = message.code ?? 128 + readSignalNumber(message.signal);
-
-        stopSession(code);
-      } else {
-        process.stderr.write(`imp: ${message.message}\n`);
-
-        const code = message.code === 'EXEC_FAILED' ? EXEC_FAILED_CODE : 1;
-
-        stopSession(code);
-      }
-    });
-
-    ws.addEventListener('error', () => {
-      process.stderr.write(`imp: cannot reach impd at ${url.origin}\n`);
-
-      stopSession(CONNECTION_LOST_CODE);
-    });
-
-    ws.addEventListener('close', (event) => {
-      if (!finished) {
-        const reason = event.reason === '' ? `code ${String(event.code)}` : event.reason;
-
-        process.stderr.write(`imp: exec connection closed (${reason})\n`);
-
-        stopSession(CONNECTION_LOST_CODE);
-      }
-    });
-  });
+  // stopped: whoever stopped the session already chose the code
+  return IMP_FAILED_CODE;
 }
 
 // null when stdout is no terminal or reports no size (a pty nobody sized)
@@ -212,8 +274,18 @@ function writeFully(fd: number, data: Uint8Array): void {
   }
 }
 
-function readSignalNumber(signal: string | null): number {
-  const signals: Readonly<Record<string, number>> = constants.signals;
+function isBrokenPipe(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EPIPE';
+}
 
-  return signal === null ? 0 : (signals[signal] ?? 0);
+// impd names a signal Node does not know (a real-time one) `SIG<n>`
+function readSignalNumber(signal: string | null): number {
+  if (signal === null) {
+    return 0;
+  }
+
+  const signals: Readonly<Record<string, number>> = constants.signals;
+  const numbered = /^SIG(?<number>\d+)$/.exec(signal)?.groups?.['number'];
+
+  return signals[signal] ?? (numbered === undefined ? 0 : Number(numbered));
 }
