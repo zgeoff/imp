@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import { defineCommand } from '../define-command';
 import { formatImages, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
+import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
 
 const addCommand = defineCommand({
@@ -42,7 +43,7 @@ const buildCommand = defineCommand({
   run: (context) =>
     runAction(async (client) => {
       if (!isAbsolute(context.args.dir)) {
-        throw new Error(
+        throw new UsageError(
           `the build context is a directory on the impd host: give its absolute path, not ${context.args.dir}`,
         );
       }

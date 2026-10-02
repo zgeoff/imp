@@ -1,6 +1,7 @@
 import { defineCommand } from '../define-command';
 import { formatCheckpoints, formatImp, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
+import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
 
 // `imp checkpoint rm <name> <checkpoint>` shares the command with
@@ -24,7 +25,7 @@ export const checkpointCommand = defineCommand({
         const [, name, checkpoint] = positionals;
 
         if (positionals.length !== 3 || name === undefined || checkpoint === undefined) {
-          throw new Error('usage: imp checkpoint rm <name> <checkpoint>');
+          throw new UsageError('usage: imp checkpoint rm <name> <checkpoint>');
         }
 
         await client.checkpoints.delete({ name, checkpoint });

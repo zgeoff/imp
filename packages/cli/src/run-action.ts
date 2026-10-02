@@ -2,6 +2,7 @@ import { ORPCError } from '@orpc/client';
 import * as z from 'zod';
 import { createImpClient } from './create-imp-client';
 import type { ImpClient } from './create-imp-client';
+import { UsageError } from './usage-error';
 
 export const TOKEN_HINT =
   'unauthorized: set IMP_TOKEN or write the token from <IMP_DATA_DIR>/token to ~/.config/imp/token';
@@ -11,15 +12,18 @@ const PathKeySchema = z.union([z.string(), z.number(), z.object({ key: z.unknown
 const IssueSchema = z.object({ message: z.string(), path: z.array(PathKeySchema).optional() });
 const ValidationDataSchema = z.object({ issues: z.array(IssueSchema) });
 
-// One line on stderr and exit code 1 for any failure, instead of citty's
-// stack dump; a 401 gets a hint about where the token comes from.
+// One line on stderr for any failure, instead of citty's stack dump, and
+// exit code 2 for a usage error, else 1; a 401 gets a hint about where the
+// token comes from.
 export async function runAction(action: (client: ImpClient) => Promise<void>): Promise<void> {
   try {
-    await action(createImpClient());
+    const client = createImpClient();
+
+    await action(client);
   } catch (error) {
     console.error(`imp: ${formatError(error)}`);
 
-    process.exitCode = 1;
+    process.exitCode = error instanceof UsageError ? 2 : 1;
   }
 }
 

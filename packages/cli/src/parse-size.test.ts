@@ -11,7 +11,7 @@ test('it reads sizes as MiB', () => {
 });
 
 test('it rejects fractions, zero and other units', () => {
-  for (const text of ['1.5g', '0', '0g', '', 'g', '2t', '-1', 'lots']) {
+  for (const text of ['1.5g', '0', '0g', '', 'g', '2t', '-1', 'lots', '512b', '512ib', '2gb2']) {
     expect(() => parseSize(text)).toThrow(`not a size: ${text}`);
   }
 });

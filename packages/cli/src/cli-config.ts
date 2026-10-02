@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { UsageError } from './usage-error';
 
 export interface CliConfig {
   readonly url: string;
@@ -15,6 +16,11 @@ const DEFAULT_URL = 'http://localhost:7070';
 export function loadCliConfig(env: Readonly<Record<string, string | undefined>>): CliConfig {
   const envUrl = env['IMP_URL'];
   const url = envUrl === undefined || envUrl === '' ? DEFAULT_URL : envUrl;
+
+  if (!/^https?:$/.test(URL.parse(url)?.protocol ?? '')) {
+    throw new UsageError(`IMP_URL is not an http(s) URL: ${url}`);
+  }
+
   const configHome = env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config');
   const tokenPath = join(configHome, 'imp', 'token');
   const envToken = env['IMP_TOKEN'];
