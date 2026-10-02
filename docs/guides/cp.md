@@ -50,6 +50,16 @@ slow disk cannot grow impd's memory. A download runs the other way: the CLI acks
 are written, and impd sends at most 1 MiB past the acks, so a slow disk on this machine cannot grow
 the CLI's memory.
 
+The archive is not compressed. Go's gzip at level 1 does about 180 MB/s on one fast desktop core; a
+guest vCPU is slower and shared with the imp's work, so on a LAN, or with impd on this machine,
+compression would make most copies slower. Much of what people copy (images, binaries, archives, git
+packs) is compressed already. For a large tree of text over a slow link, compress it yourself, as
+the image's USER:
+
+```sh
+imp exec box -- tar czf - -C /srv app | tar xzf -
+```
+
 ## Safety
 
 Each side extracts an archive from the other, and neither trusts it. Both apply these rules, in
@@ -66,5 +76,7 @@ order:
 In the imp, the extract runs as root while guest processes run beside it, so rule 2 has to hold even
 when a process swaps a directory for a symlink mid-copy. Every lookup goes through `openat2` with
 `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` from the directory the copy lands in, so the check and the
-write are one step. On this machine nothing races the extract, so it checks with `lstat` instead. A
-refused entry is reported, the rest still copies, and the command exits 1.
+write are one step. On this machine the extract runs as you, so only your own processes could race
+it, and they can already write wherever you can. The threat there is the archive, which comes from
+the imp, and the rules handle it: the extract checks with `lstat`, with the check and the write as
+two steps. A refused entry is reported, the rest still copies, and the command exits 1.
