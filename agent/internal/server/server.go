@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/exec"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/safe"
@@ -115,6 +116,12 @@ func (s *Server) handle(c net.Conn) {
 	if req.Op == proto.OpExec {
 		if err := s.Exec.Serve(req, r, w); err != nil {
 			log.Printf("exec: %v", err)
+		}
+		return
+	}
+	if req.Op == proto.OpDial {
+		if err := dial.Serve(req, r, w); err != nil {
+			log.Printf("dial %s %s: %v", req.Network, req.Address, err)
 		}
 		return
 	}

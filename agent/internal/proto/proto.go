@@ -17,22 +17,23 @@ import (
 type Type uint8
 
 const (
-	TypeRequest  Type = 1  // host→guest, JSON Request; always the first frame
-	TypeResponse Type = 2  // guest→host, JSON; the reply to a unary request or a failed exec
-	TypeStdin    Type = 3  // host→guest, raw bytes
-	TypeStdinEOF Type = 4  // host→guest, empty
-	TypeResize   Type = 5  // host→guest, JSON Resize
-	TypeSignal   Type = 6  // host→guest, JSON Signal
-	TypeStarted  Type = 7  // guest→host, JSON Started
-	TypeStdout   Type = 8  // guest→host, raw bytes
-	TypeStderr   Type = 9  // guest→host, raw bytes
-	TypeExit     Type = 10 // guest→host, JSON Exit; the last frame
-	TypeDetached Type = 11 // guest→host, JSON Detached; the last frame of a session connection
+	TypeRequest   Type = 1  // host→guest, JSON Request; always the first frame
+	TypeResponse  Type = 2  // guest→host, JSON; the reply to a unary request or a failed exec
+	TypeStdin     Type = 3  // host→guest, raw bytes
+	TypeStdinEOF  Type = 4  // host→guest, empty
+	TypeResize    Type = 5  // host→guest, JSON Resize
+	TypeSignal    Type = 6  // host→guest, JSON Signal
+	TypeStarted   Type = 7  // guest→host, JSON Started
+	TypeStdout    Type = 8  // guest→host, raw bytes
+	TypeStderr    Type = 9  // guest→host, raw bytes
+	TypeExit      Type = 10 // guest→host, JSON Exit; the last frame
+	TypeDetached  Type = 11 // guest→host, JSON Detached; the last frame of a session connection
+	TypeStdoutEOF Type = 12 // guest→host, empty; a dial target closed its side
 )
 
 func (t Type) String() string {
 	names := [...]string{"", "REQUEST", "RESPONSE", "STDIN", "STDIN_EOF", "RESIZE",
-		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT", "DETACHED"}
+		"SIGNAL", "STARTED", "STDOUT", "STDERR", "EXIT", "DETACHED", "STDOUT_EOF"}
 	if int(t) < len(names) && names[t] != "" {
 		return names[t]
 	}
