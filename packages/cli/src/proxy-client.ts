@@ -11,6 +11,7 @@ import {
   TunnelServerMessageSchema,
 } from '@imp/api';
 import type { TunnelClientMessage, TunnelServerMessage } from '@imp/api';
+import { buildWebSocketUrl } from './build-websocket-url';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
@@ -54,17 +55,6 @@ const PROCESS_IO: ProxyIo = {
     await createImpClient(config).imps.get({ name });
   },
 };
-
-// the same join as the client's resolveImpdUrl: a base path such as
-// https://host/imp stays in front of /tunnel
-function buildTunnelUrl(base: string): string {
-  const url = new URL(base);
-
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${TUNNEL_PATH}`;
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-
-  return url.toString();
-}
 
 // null for text that is not JSON, which the schema then refuses
 function parseJson(text: string): unknown {
@@ -343,7 +333,7 @@ export async function startProxy(
   };
 
   const target = {
-    url: buildTunnelUrl(config.url),
+    url: buildWebSocketUrl(config.url, TUNNEL_PATH),
     headers: config.token === null ? {} : { authorization: `Bearer ${config.token}` },
     name,
   };

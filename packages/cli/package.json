@@ -13,6 +13,7 @@
     "@orpc/client": "catalog:",
     "@zgeoff/imp-client": "workspace:*",
     "citty": "catalog:",
+    "tar-stream": "catalog:",
     "zod": "catalog:"
   }
 }

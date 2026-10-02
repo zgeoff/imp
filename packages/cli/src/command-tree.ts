@@ -2,6 +2,7 @@ import { defineCommand } from 'citty';
 import packageJson from '../package.json' with { type: 'json' };
 import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
+import { cpCommand } from './commands/cp';
 import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
 import { gcCommand } from './commands/gc';
@@ -60,6 +61,7 @@ export const mainCommand = defineCommand({
     hold: holdCommand,
     url: urlCommand,
     proxy: proxyCommand,
+    cp: cpCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,
