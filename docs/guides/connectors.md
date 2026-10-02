@@ -87,9 +87,11 @@ sends in the header and sets the real value.
    at `/etc/imp/broker-ca.pem`. Variables the caller sets win. impd adds these on the host side, so
    the agent protocol does not change.
 5. **The CA bundle.** Before the first exec of each boot or wake, impd runs one exec as root that
-   writes the bundle: the usual public roots plus the broker CA. It skips the write when the file
-   already holds that bundle. If the write fails (an image with no `/bin/sh`), execs run without the
-   broker's variables instead of with a CA that nothing trusts, and impd logs why.
+   builds the bundle in the guest: the guest's own root bundle (`/etc/ssl/certs/ca-certificates.crt`
+   or the distro's path, CAs the guest added included) plus the broker CA. A guest with no root
+   bundle gets the host's roots instead. The exec leaves the file alone when it already holds that
+   bundle. If it fails (an image with no `/bin/sh`), that exec runs without the broker's variables
+   instead of with a CA nothing trusts, impd logs why, and the next exec tries again.
 
 ### One CA for the host
 
@@ -120,10 +122,23 @@ Values are not encrypted at rest: the key would sit on the same disk. The audit 
   `NODE_USE_ENV_PROXY=1`, which the exec sets; an older Node ignores it.
 - Tools with their own trust store work only through the variables above. A static binary with
   pinned roots, or a Java keystore, does not trust the broker CA.
-- Services in `/etc/imp/services.d` do not get the variables. Only execs do, because the agent
-  starts services itself.
-- An exec that started before a grant keeps its old environment. Start a new shell after
-  `imp grant`.
+- Only an exec started after the grant gets the variables. impd adds them when it starts an exec, so
+  these processes run without the broker:
+
+  | What                                                                       | How to get the variables                                                                                                                                     |
+  | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | Services in `/etc/imp/services.d`                                          | The agent starts them, not impd. Put the variables in the service's `env` ([images](./images.md#services)); `imp exec box -- env` prints the values to copy. |
+  | A session started before `imp grant`                                       | `imp attach` joins the process as it started. Start a new session, or exit the shell and open `imp console` again.                                           |
+  | An exec started before `imp grant`                                         | The same: start it again.                                                                                                                                    |
+  | SSH sessions ([#14](https://github.com/zgeoff/imp/issues/14), in progress) | sshd starts the shell, not impd. Write the variables to a profile file once, as below; login shells read it.                                                 |
+
+  The variables are not secret: a proxy URL, file paths and placeholders. This writes them where
+  login shells pick them up:
+
+  ```sh
+  imp exec box -- sh -c 'env | grep -E "^(HTTPS_PROXY|https_proxy|NO_PROXY|no_proxy|NODE_USE_ENV_PROXY|SSL_CERT_FILE|NODE_EXTRA_CA_CERTS|GIT_SSL_CAINFO|REQUESTS_CA_BUNDLE|CURL_CA_BUNDLE|GH_TOKEN|GITHUB_TOKEN|ANTHROPIC_API_KEY|NPM_TOKEN)=" | sed "s/^/export /" > /etc/profile.d/imp-broker.sh'
+  ```
+
 - The terminator serves HTTP/1.1 only, so clients fall back from HTTP/2. WebSocket upgrades to a
   granted host are not supported.
 - A host takes exact names: no wildcards, and no IP addresses.

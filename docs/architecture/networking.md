@@ -24,8 +24,12 @@ container's own network namespace and never touch the host's.
 - `INPUT -i imp+` drops everything except replies to connections the container opened (the proxy
   dials into guests), and the credential broker's port, `IMP_BROKER_PORT`. That rule is inserted
   first, above the drop.
-- Strict reverse-path filtering (`rp_filter=1` on `all` and `default`, set before any tap exists): a
-  guest cannot send with another imp's address. The broker names the imp by its address.
+- The broker listens on every address, so `INPUT ! -i imp+` drops its port: only guests reach it.
+  Both broker rules carry the comment `imp-broker`; a start with another port removes the old ones.
+- `raw PREROUTING -i imp+ -m rpfilter --invert -j DROP`: a strict reverse-path check on the taps
+  only, so a guest cannot send with another imp's address. The broker names the imp by its address.
+  A `rp_filter` sysctl would set the floor for `eth0` and `tailscale0` too, and break an exit node,
+  subnet routes, or a container on more than one network.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
   smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
   records stall.
