@@ -3,6 +3,7 @@ import {
   EXEC_CHANNELS,
   EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_STDIN_WINDOW_BYTES,
+  EXEC_STDOUT_WINDOW_BYTES,
   ExecClientMessageSchema,
   decodeExecFrame,
   encodeExecFrame,
@@ -72,6 +73,9 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     tool: boolean;
     unacked: number;
     acking: boolean;
+
+    // a tool's stdout sent to the client and not acked yet
+    outUnacked: number;
   } = {
     stream: null,
     starting: false,
@@ -81,6 +85,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     tool: false,
     unacked: 0,
     acking: false,
+    outUnacked: 0,
   };
 
   const send = (message: ExecServerMessage): void => {
@@ -135,6 +140,20 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     }
   };
 
+  const ackWaiter: { wake: (() => void) | null } = { wake: null };
+
+  // a tool's output waits for the client's acks, as other output waits for
+  // the socket to drain
+  const waitForStdoutAcks = async (): Promise<void> => {
+    while (!state.closed && state.outUnacked > EXEC_STDOUT_WINDOW_BYTES) {
+      await new Promise<void>((resolve) => {
+        ackWaiter.wake = resolve;
+      });
+
+      ackWaiter.wake = null;
+    }
+  };
+
   const drainOutput = async (stream: ExecStream): Promise<void> => {
     try {
       let ended: 'exited' | 'detached' | null = null;
@@ -144,6 +163,12 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
 
         if (event.type === 'exit' || event.type === 'detached') {
           ended = event.type === 'exit' ? 'exited' : 'detached';
+        }
+
+        if (state.tool && event.type === 'stdout') {
+          state.outUnacked += event.data.byteLength;
+
+          await waitForStdoutAcks();
         }
 
         await waitForPeerDrain();
@@ -323,7 +348,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       return;
     }
 
-    if (control.type === 'stdin_eof') {
+    if (control.type === 'stdout_ack') {
+      state.outUnacked = Math.max(0, state.outUnacked - control.bytes);
+      ackWaiter.wake?.();
+    } else if (control.type === 'stdin_eof') {
       stream.closeStdin();
     } else if (control.type === 'resize') {
       stream.resize(control.cols, control.rows);
@@ -369,6 +397,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     handleClose: () => {
       state.closed = true;
       state.stream?.close();
+      ackWaiter.wake?.();
     },
     handleDrain: () => {
       drainWaiter.wake?.();

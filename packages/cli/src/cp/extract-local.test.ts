@@ -85,8 +85,8 @@ async function runExtract(dest: string, entries: readonly Readonly<TestEntry>[])
     warnings.push(text);
   });
 
-  extractor.write(archive.subarray(0, 700));
-  extractor.write(archive.subarray(700));
+  await extractor.write(archive.subarray(0, 700));
+  await extractor.write(archive.subarray(700));
 
   const refused = await extractor.end();
 
@@ -191,4 +191,39 @@ test('a hard link must stay inside the copy; devices are skipped, setuid dropped
   expect(statSync(join(dest, 'src', 'a')).mode & 0o7777).toBe(0o755);
   expect([outsideLink, device]).toEqual([null, null]);
   expect(result.warnings.some((warning) => warning.includes('skipped'))).toBeTrue();
+});
+
+test('a write past the extract buffer resolves once the extract took it', async () => {
+  const dest = createTempDir();
+  const size = 1_048_576;
+
+  const archive = await buildArchive([{ name: 'big.bin', content: 'x'.repeat(size) }]);
+
+  const tested = createTestProgress();
+  const extractor = createLocalExtractor(dest, tested.progress, () => {});
+  const written = extractor.write(archive);
+
+  expect(Bun.peek.status(written)).toBe('pending');
+
+  await written;
+
+  expect(tested.seen.copied).toBeGreaterThan(size - 65_536);
+
+  const refused = await extractor.end();
+
+  expect(refused).toBe(0);
+});
+
+test('a write that waits is woken when the extract fails', async () => {
+  const dest = createTempDir();
+
+  const archive = await buildArchive([{ name: '../big.bin', content: 'x'.repeat(1_048_576) }]);
+
+  const extractor = createLocalExtractor(dest, createTestProgress().progress, () => {});
+
+  await extractor.write(archive);
+
+  const failure = await extractor.end().catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
 });

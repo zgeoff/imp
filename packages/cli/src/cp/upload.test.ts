@@ -33,6 +33,8 @@ interface FakeExec {
   readonly stdin: Uint8Array[];
   readonly received: () => number;
   readonly ack: (bytes: number) => void;
+  readonly stdoutAcks: number[];
+  readonly sendStdout: (bytes: number) => void;
 }
 
 function sendServer(ws: ServerWebSocket, message: ExecServerMessage): void {
@@ -46,6 +48,7 @@ function startFakeExec(fail: ExecServerMessage | null = null): FakeExec {
   const started: unknown[] = [];
   const stdin: Uint8Array[] = [];
   const sockets: ServerWebSocket[] = [];
+  const stdoutAcks: number[] = [];
 
   const server = Bun.serve({
     port: 0,
@@ -82,6 +85,8 @@ function startFakeExec(fail: ExecServerMessage | null = null): FakeExec {
 
             ws.close(1011, 'exec failed');
           }
+        } else if (control.type === 'stdout_ack') {
+          stdoutAcks.push(control.bytes);
         } else if (control.type === 'stdin_eof') {
           ws.send(encodeExecFrame(EXEC_CHANNELS.stderr, new TextEncoder().encode('done\n')));
 
@@ -105,6 +110,12 @@ function startFakeExec(fail: ExecServerMessage | null = null): FakeExec {
     ack: (bytes) => {
       for (const ws of sockets.slice(0, 1)) {
         sendServer(ws, { type: 'stdin_ack', bytes });
+      }
+    },
+    stdoutAcks,
+    sendStdout: (bytes) => {
+      for (const ws of sockets.slice(0, 1)) {
+        ws.send(encodeExecFrame(EXEC_CHANNELS.stdout, new Uint8Array(bytes)));
       }
     },
   };
@@ -158,7 +169,7 @@ test('a large upload stops at the stdin window until impd acks, and arrives whol
     name: 'box',
     tool: 'tar',
     args: ['extract', '/srv/proj'],
-    onStdout: () => {},
+    onStdout: () => Promise.resolve(),
     onStderr: () => {},
   });
 
@@ -208,9 +219,42 @@ test('impd refusing the exec reaches the caller as CODE: message', async () => {
     name: 'box',
     tool: 'tar',
     args: ['create', 'x'],
-    onStdout: () => {},
+    onStdout: () => Promise.resolve(),
     onStderr: () => {},
   }).catch((error: unknown) => error);
 
   expect(String(failure)).toContain("AGENT_OUTDATED: the imp's agent has no imp cp yet");
+});
+
+test('stdout is acked to impd only once the caller wrote it', async () => {
+  const fake = startFakeExec();
+  const written = Promise.withResolvers<void>();
+  const seen: number[] = [];
+
+  await openToolExec({
+    config: fake.config,
+    name: 'box',
+    tool: 'tar',
+    args: ['create', 'x'],
+    onStdout: async (data) => {
+      seen.push(data.byteLength);
+
+      await written.promise;
+    },
+    onStderr: () => {},
+  });
+
+  fake.sendStdout(300);
+  fake.sendStdout(200);
+
+  await Bun.sleep(50);
+
+  expect(seen).toEqual([300, 200]);
+  expect(fake.stdoutAcks).toEqual([]);
+
+  written.resolve();
+
+  await Bun.sleep(50);
+
+  expect(fake.stdoutAcks).toEqual([300, 200]);
 });

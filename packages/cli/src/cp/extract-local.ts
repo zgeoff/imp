@@ -20,7 +20,9 @@ import type { CopyProgress } from './copy-progress';
 // from the imp, which this machine does not trust: the rules, in order, are
 // in docs/guides/cp.md.
 export interface LocalExtractor {
-  readonly write: (chunk: Uint8Array) => void;
+  // resolves once the extract took the chunk: at once while it keeps up,
+  // else when it drains
+  readonly write: (chunk: Uint8Array) => Promise<void>;
 
   // ends the archive; resolves with the count of refused entries
   readonly end: () => Promise<number>;
@@ -146,8 +148,19 @@ export function createLocalExtractor(
     stopped: false,
   };
 
+  // writes that wait for the extract to drain, woken too when it stops
+  const drainWaiters: (() => void)[] = [];
+
+  const wakeDrainWaiters = (): void => {
+    for (const wake of drainWaiters.splice(0)) {
+      wake();
+    }
+  };
+
   // an extract that stopped early (its error comes from end) takes no more
   extract.on('error', () => {});
+  extract.on('drain', wakeDrainWaiters);
+  extract.on('close', wakeDrainWaiters);
 
   const buildTempPath = (path: string): string => {
     state.temps += 1;
@@ -345,6 +358,8 @@ export function createLocalExtractor(
     } catch (error) {
       state.stopped = true;
 
+      wakeDrainWaiters();
+
       return { error: error instanceof Error ? error : new Error(String(error)) };
     }
   };
@@ -352,10 +367,14 @@ export function createLocalExtractor(
   const outcome = runExtract();
 
   return {
-    write: (chunk) => {
-      if (!state.stopped) {
-        extract.write(chunk);
+    write: async (chunk) => {
+      if (state.stopped || extract.write(chunk)) {
+        return;
       }
+
+      await new Promise<void>((resolve) => {
+        drainWaiters.push(resolve);
+      });
     },
     end: async () => {
       extract.end(null);

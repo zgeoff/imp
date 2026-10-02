@@ -184,7 +184,12 @@ A `start` with a `tool` runs a program of the system drive as root instead of `a
 `/run/imp/sys/imp-agent tar <argv>` for `imp cp` ([copying files](../guides/cp.md)), needs the agent
 from `0.7.0`, and is audited as `cp`. impd acks a tool's stdin with `stdin_ack` once it is on its
 way to the guest, and cuts off a client that holds more than 1 MiB plus one 64 KiB frame unacked, so
-a large upload to a slow guest disk cannot grow impd's memory.
+a large upload to a slow guest disk cannot grow impd's memory. The reverse holds for a tool's
+stdout: the client acks it with `stdout_ack` once it is written, and impd stops reading the tool's
+output while more than 1 MiB is unacked, so a slow disk on the client's side cannot grow the
+client's memory. A tool runs as root in the guest, so it needs `manage` scope on the imp
+([tokens](../guides/tokens.md#scopes)); `exec` scope runs only as the image's USER. A ticket socket
+cannot start a tool.
 
 ### tunnel: `imp proxy`
 

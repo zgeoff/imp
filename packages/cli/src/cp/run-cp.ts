@@ -44,7 +44,7 @@ async function runUpload(
     name: plan.name,
     tool: 'tar',
     args: ['extract', ...(owner === undefined ? [] : ['--owner', owner]), plan.guestPath],
-    onStdout: () => {},
+    onStdout: () => Promise.resolve(),
     onStderr: writeGuestStderr,
   });
 

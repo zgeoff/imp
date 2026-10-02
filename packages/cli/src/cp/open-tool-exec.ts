@@ -12,7 +12,8 @@ import { buildWebSocketUrl } from '../build-websocket-url';
 import type { CliConfig } from '../cli-config';
 
 // One tool exec over `/exec` (packages/api exec-protocol): stdin within the
-// ack window, stdout to the caller, stderr straight through.
+// ack window, stdout to the caller and acked once the caller took it, stderr
+// straight through.
 export interface ToolExec {
   // resolves once the chunk is sent and the window has room again
   readonly writeStdin: (data: Uint8Array) => Promise<void>;
@@ -29,7 +30,10 @@ export interface ToolExecOptions {
   readonly name: string;
   readonly tool: ExecTool;
   readonly args: readonly string[];
-  readonly onStdout: (data: Uint8Array) => void;
+
+  // resolves once the data is written, so impd sends no more than the
+  // window past what this machine wrote
+  readonly onStdout: (data: Uint8Array) => Promise<void>;
   readonly onStderr: (data: Uint8Array) => void;
 }
 
@@ -69,6 +73,16 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
   const state = { unacked: 0, done: false };
 
   ws.binaryType = 'arraybuffer';
+
+  const sendStdoutAck = async (data: Uint8Array): Promise<void> => {
+    await options.onStdout(data);
+
+    if (data.byteLength > 0 && ws.readyState === WebSocket.OPEN) {
+      const ack: ExecClientMessage = { type: 'stdout_ack', bytes: data.byteLength };
+
+      ws.send(JSON.stringify(ack));
+    }
+  };
 
   const stopWithError = (error: Error): void => {
     state.done = true;
@@ -111,7 +125,7 @@ export async function openToolExec(options: ToolExecOptions): Promise<ToolExec> 
       const frame = decodeExecFrame(new Uint8Array(event.data));
 
       if (frame.channel === EXEC_CHANNELS.stdout) {
-        options.onStdout(frame.data);
+        void sendStdoutAck(frame.data);
       } else if (frame.channel === EXEC_CHANNELS.stderr) {
         options.onStderr(frame.data);
       }

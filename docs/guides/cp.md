@@ -46,7 +46,9 @@ it ([operations](./operations.md#upgrade)).
 The archive is a tar stream over the exec. Its first entry carries a PAX record, `IMP.total`, with
 the bytes of every file, so a copy out of the imp shows a percent. impd acks the upload's bytes once
 they are on their way to the guest, and the CLI keeps at most 1 MiB unacked, so a large upload to a
-slow disk cannot grow impd's memory.
+slow disk cannot grow impd's memory. A download runs the other way: the CLI acks the bytes once they
+are written, and impd sends at most 1 MiB past the acks, so a slow disk on this machine cannot grow
+the CLI's memory.
 
 ## Safety
 

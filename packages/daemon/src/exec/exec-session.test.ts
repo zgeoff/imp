@@ -3,6 +3,7 @@ import {
   EXEC_CHANNELS,
   EXEC_MAX_STDIN_FRAME_BYTES,
   EXEC_STDIN_WINDOW_BYTES,
+  EXEC_STDOUT_WINDOW_BYTES,
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
@@ -548,4 +549,69 @@ test("a plain exec's stdin is not acked or windowed", async () => {
 
   expect(peer.sent).toEqual([{ type: 'started', pid: 7 }]);
   expect(peer.closes).toEqual([]);
+});
+
+test("a tool's stdout waits for the client's acks past the window", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    tool: 'tar',
+    argv: ['create', 'x'],
+    tty: false,
+  });
+
+  await Bun.sleep(5);
+
+  const chunk = 65_536;
+  const frames = EXEC_STDOUT_WINDOW_BYTES / chunk + 2;
+
+  for (let index = 0; index < frames; index++) {
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(chunk) });
+  }
+
+  await Bun.sleep(5);
+
+  const countStdout = (): number =>
+    peer.sent.filter((message) => Array.isArray(message) && message[0] === EXEC_CHANNELS.stdout)
+      .length;
+
+  expect(countStdout()).toBe(frames - 1);
+
+  session.handleMessage({ type: 'stdout_ack', bytes: chunk * 2 });
+
+  await Bun.sleep(5);
+
+  expect(countStdout()).toBe(frames);
+});
+
+test("a plain exec's stdout does not wait for acks", async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({ openExec: () => Promise.resolve(fake.stream) }),
+  );
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['cat'], tty: false });
+
+  await Bun.sleep(5);
+
+  const frames = EXEC_STDOUT_WINDOW_BYTES / 65_536 + 4;
+
+  for (let index = 0; index < frames; index++) {
+    fake.emitEvent({ type: 'stdout', data: new Uint8Array(65_536) });
+  }
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toHaveLength(frames + 1);
 });

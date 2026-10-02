@@ -45,6 +45,11 @@ export type ExecTool = (typeof EXEC_TOOLS)[number];
 export const EXEC_STDIN_WINDOW_BYTES = 1_048_576;
 export const EXEC_MAX_STDIN_FRAME_BYTES = 65_536;
 
+// the reverse: the client acks a tool's stdout (`stdout_ack`) once it is
+// written, and impd sends at most this many bytes past the acks, so a slow
+// disk on the client's side cannot grow the client's memory
+export const EXEC_STDOUT_WINDOW_BYTES = 1_048_576;
+
 export const ExecStartMessageSchema = z
   .object({
     type: z.literal('start'),
@@ -86,6 +91,9 @@ export const ExecClientMessageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stdin_eof') }),
   z.object({ type: z.literal('resize'), cols: DimensionSchema, rows: DimensionSchema }),
   z.object({ type: z.literal('signal'), signal: z.string().regex(/^SIG[A-Z0-9]+$/) }),
+
+  // a tool's stdout bytes the client wrote; impd ignores it for a plain exec
+  z.object({ type: z.literal('stdout_ack'), bytes: z.int().positive() }),
 ]);
 
 export type ExecClientMessage = z.infer<typeof ExecClientMessageSchema>;
