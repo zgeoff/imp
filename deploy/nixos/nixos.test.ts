@@ -33,6 +33,7 @@ interface WriterInput {
   readonly arcMax?: string;
   readonly liveArcMib?: number;
   readonly secrets?: string;
+  readonly backupPassword?: string;
 }
 
 interface WriterResult {
@@ -65,6 +66,11 @@ function runWriter(input: WriterInput = {}): WriterResult {
         `MemTotal: ${String(input.memTotalKib ?? 64_000 * 1024)} kB\n`,
       ),
       IMP_ARC_PARAM: arcParam,
+      IMP_BACKUP_STAGED:
+        input.backupPassword === undefined
+          ? ''
+          : writeTempFile('backup-password', input.backupPassword),
+      IMP_BACKUP_IN_CONTAINER: '/run/imp/backup-password',
     },
   });
 
@@ -139,12 +145,34 @@ test('a small host is refused unless ramBudgetMiB is set', () => {
   ).toEqual(['1024']);
 });
 
-test('the secrets file is copied in before the budget', () => {
-  const env = runWriter({ secrets: 'IMP_DNS_API_TOKEN=fake-token\nIMP_RAM_BUDGET_MIB=1\n' }).env;
+test('the secrets file is copied in, and a later line replaces an earlier one', () => {
+  const env = runWriter({
+    secrets:
+      'IMP_DNS_API_TOKEN=fake-token\nIMP_TAILSCALE_HOSTNAME=imp-other\nIMP_RAM_BUDGET_MIB=1\n',
+  }).env;
 
   expect(getEnvValues(env, 'IMP_DNS_API_TOKEN')).toEqual(['fake-token']);
-
-  // docker --env-file: the last line wins
-  expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB').at(-1)).toBe('48000');
+  expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB')).toEqual(['48000']);
   expect(env).not.toContain('TAILSCALE_AUTHKEY');
+});
+
+test('a backup password names its file; without one, backups stay off', () => {
+  const secrets = 'IMP_BACKUP_REPOSITORY=s3:https://example.invalid/imp\n';
+  const withPassword = runWriter({ secrets, backupPassword: 'fake-password\n' });
+
+  expect(getEnvValues(withPassword.env, 'IMP_BACKUP_PASSWORD_FILE')).toEqual([
+    '/run/imp/backup-password',
+  ]);
+
+  expect(getEnvValues(withPassword.env, 'IMP_BACKUP_REPOSITORY')).toEqual([
+    's3:https://example.invalid/imp',
+  ]);
+
+  expect(withPassword.env).not.toContain('fake-password');
+
+  const without = runWriter({ secrets, backupPassword: '' });
+
+  expect(getEnvValues(without.env, 'IMP_BACKUP_REPOSITORY')).toEqual(['']);
+  expect(getEnvValues(without.env, 'IMP_BACKUP_PASSWORD_FILE')).toEqual([]);
+  expect(without.output).toContain('backups stay off');
 });

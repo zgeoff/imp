@@ -16,6 +16,8 @@
 #   IMP_ARC_MAX    the ZFS ARC cap in MiB (zfs only), which the budget leaves
 #                  out; empty: keep a cap already set, else bootstrap.sh's
 #   IMP_SECRETS    an env file of secrets, or empty
+#   IMP_BACKUP_STAGED       the host copy of the backup password, or empty
+#   IMP_BACKUP_IN_CONTAINER where the container sees that copy
 #   IMP_ENV_OUT    where to write (default /etc/imp/imp-host.env)
 #   IMP_MEMINFO    default /proc/meminfo
 #   IMP_ARC_PARAM  default /sys/module/zfs/parameters/zfs_arc_max
@@ -66,12 +68,38 @@ if [ -n "${IMP_SECRETS:-}" ]; then
   secrets=$(cat "$IMP_SECRETS")
 fi
 
-# Later lines win in docker --env-file, so the secrets file can set any key
-# but the budget, which comes last.
+# The backup password is a file the module mounts; without one, backups
+# stay off whatever the secrets file says.
+backup=()
+if [ -n "${IMP_BACKUP_STAGED:-}" ]; then
+  if [ -f "$IMP_BACKUP_STAGED" ] && [ -s "$IMP_BACKUP_STAGED" ]; then
+    backup=("IMP_BACKUP_PASSWORD_FILE=$IMP_BACKUP_IN_CONTAINER")
+  else
+    echo "imp-host-env: no backup password; IMP_BACKUP_REPOSITORY is blanked, and backups stay off" >&2
+    backup=("IMP_BACKUP_REPOSITORY=")
+  fi
+fi
+
+# A later line wins, and only it is kept: the secrets file can set any key
+# but the backup ones above and the budget.
 content=$(
-  echo "# Written by imp-host-env.sh (the NixOS module) at each start; edits are lost."
-  cat "$IMP_SETTINGS"
-  [ -z "$secrets" ] || printf '%s\n' "$secrets"
-  echo "IMP_RAM_BUDGET_MIB=$budget"
+  {
+    echo "# Written by imp-host-env.sh (the NixOS module) at each start; edits are lost."
+    cat "$IMP_SETTINGS"
+    [ -z "$secrets" ] || printf '%s\n' "$secrets"
+    [ ${#backup[@]} = 0 ] || printf '%s\n' "${backup[@]}"
+    echo "IMP_RAM_BUDGET_MIB=$budget"
+  } | awk '
+    /^[A-Za-z_][A-Za-z0-9_]*=/ { key = substr($0, 1, index($0, "=") - 1); last[key] = NR }
+    { line[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (line[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+          key = substr(line[i], 1, index(line[i], "=") - 1)
+          if (last[key] != i) continue
+        }
+        print line[i]
+      }
+    }'
 )
 write_file "$out" 600 "$content"

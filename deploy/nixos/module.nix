@@ -18,34 +18,74 @@ let
   ownFirewall = cfg.hostFirewall == "own";
 
   # The docker run arguments, shared with deploy/imp-host.service and
-  # bootstrap.sh (scripts/render-imp-host.ts writes those two from it).
-  sharedArgs = lib.flatten (lib.importJSON ../imp-host.args.json).lines;
+  # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
+  # $NAME word is env-file words in the unit, and an option here.
+  envWords = {
+    "$IMP_PUBLIC_PORTS" = lib.concatMap (port: [
+      "-p"
+      port
+    ]) cfg.publicPorts;
+  };
+  sharedArgs = lib.concatMap (
+    word:
+    if lib.hasPrefix "$" word then
+      envWords.${word}
+        or (throw "services.imp: deploy/imp-host.args.json has ${word}, which the module has no option for")
+    else
+      [ word ]
+  ) (lib.flatten (lib.importJSON ../imp-host.args.json).lines);
   stateDir = "/var/lib/imp-host";
-  # The key file, read by tailscale inside the container and only when the
-  # node has to join (host/scripts/tailscale-up.sh). The container mounts a
-  # copy, empty when the operator's file is gone, so a missing key never
-  # stops the start: the node comes back from its saved state.
-  keyPath = "/run/imp/tailscale-authkey";
-  keyCopy = "/run/imp-host/tailscale-authkey";
-  keyArgs = lib.optionals (cfg.tailscaleAuthKeyFile != null) [
-    "-v"
-    "${keyCopy}:${keyPath}:ro"
-    "-e"
-    "IMP_TAILSCALE_AUTHKEY_FILE=${keyPath}"
+  # Secret files outside the store: each is copied before every start to
+  # /run/imp-host (0400) and the copy is mounted read-only, so a missing
+  # source never stops docker run; the copy is then empty, which the reader
+  # treats as no secret. The Tailscale key is read by tailscale inside the
+  # container only when the node has to join (host/scripts/tailscale-up.sh);
+  # the backup password by restic, through IMP_BACKUP_PASSWORD_FILE, which
+  # imp-host-env.sh sets only when the copy holds one.
+  secrets = lib.filter (secret: secret.source != null) [
+    {
+      name = "tailscale-authkey";
+      source = cfg.tailscaleAuthKeyFile;
+      env = "IMP_TAILSCALE_AUTHKEY_FILE";
+      missing = "the node starts from its saved state and cannot join again without a key";
+    }
+    {
+      name = "backup-password";
+      source = cfg.backupPasswordFile;
+      env = null;
+      missing = "backups stay off";
+    }
   ];
-  stageKey = pkgs.writeShellScript "imp-host-key" ''
+  stagedPath = name: "/run/imp-host/${name}";
+  containerPath = name: "/run/imp/${name}";
+  secretArgs = lib.concatMap (
+    secret:
+    [
+      "-v"
+      "${stagedPath secret.name}:${containerPath secret.name}:ro"
+    ]
+    ++ lib.optionals (secret.env != null) [
+      "-e"
+      "${secret.env}=${containerPath secret.name}"
+    ]
+  ) secrets;
+  stageSecrets = pkgs.writeShellScript "imp-host-secrets" ''
     set -euo pipefail
     export PATH=${lib.makeBinPath [ pkgs.coreutils ]}
-    src=${lib.escapeShellArg (toString cfg.tailscaleAuthKeyFile)}
-    install -d -m 0700 ${dirOf keyCopy}
-    if [ -s "$src" ] && [ -r "$src" ]; then
-      install -m 0400 "$src" ${keyCopy}
-    else
-      install -m 0400 /dev/null ${keyCopy}
-      echo "imp-host: $src is missing or empty; the node starts from its saved state and cannot join again without a key" >&2
-    fi
+    install -d -m 0700 /run/imp-host
+    stage() {
+      if [ -f "$1" ] && [ -s "$1" ] && [ -r "$1" ]; then
+        install -m 0400 "$1" "$2"
+      else
+        install -m 0400 /dev/null "$2"
+        echo "imp-host: $1 is missing or empty; $3" >&2
+      fi
+    }
+    ${lib.concatMapStrings (secret: ''
+      stage ${lib.escapeShellArg secret.source} ${stagedPath secret.name} ${lib.escapeShellArg secret.missing}
+    '') secrets}
   '';
-  runArgs = sharedArgs ++ keyArgs ++ [ cfg.image ];
+  runArgs = sharedArgs ++ secretArgs ++ [ cfg.image ];
 
   # The module's own keys; settings may not set them (an assertion below).
   # No secret goes here: it is in the Nix store.
@@ -56,7 +96,14 @@ let
     IMP_HOST_FIREWALL = cfg.hostFirewall;
   };
   overridden = lib.attrNames (
-    lib.intersectAttrs (moduleSettings // { TAILSCALE_AUTHKEY = ""; }) cfg.settings
+    lib.intersectAttrs (
+      moduleSettings
+      // {
+        TAILSCALE_AUTHKEY = "";
+        IMP_PUBLIC_PORTS = "";
+        IMP_BACKUP_PASSWORD_FILE = "";
+      }
+    ) cfg.settings
   );
   settingsFile = pkgs.writeText "imp-host-settings.env" (
     lib.concatStrings (
@@ -78,6 +125,10 @@ let
     export IMP_RAM_BUDGET=${lib.optionalString (cfg.ramBudgetMiB != null) (toString cfg.ramBudgetMiB)}
     export IMP_ARC_MAX=${lib.optionalString (cfg.zfs.arcMaxMiB != null) (toString cfg.zfs.arcMaxMiB)}
     export IMP_SECRETS=${lib.optionalString (cfg.environmentFile != null) cfg.environmentFile}
+    export IMP_BACKUP_STAGED=${
+      lib.optionalString (cfg.backupPasswordFile != null) (stagedPath "backup-password")
+    }
+    export IMP_BACKUP_IN_CONTAINER=${containerPath "backup-password"}
     exec ${pkgs.bash}/bin/bash ${./imp-host-env.sh} ${../bootstrap.sh}
   '';
 
@@ -184,6 +235,35 @@ in
       '';
     };
 
+    backupPasswordFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/var/lib/imp-host/secrets/backup-password";
+      description = ''
+        The restic repository password for backups
+        (docs/architecture/backups.md), outside the Nix store. A copy is
+        mounted read-only into the container at each start, and
+        IMP_BACKUP_PASSWORD_FILE names it. A missing or empty file only
+        warns, and backups stay off. IMP_BACKUP_REPOSITORY and the AWS_*
+        keys go in environmentFile.
+      '';
+    };
+
+    publicPorts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "443:7443"
+        "80:7480"
+      ];
+      description = ''
+        docker -p specs that publish the public listeners for public imps
+        (docs/guides/https.md#public-imps), as IMP_PUBLIC_PORTS does for
+        deploy/imp-host.service. Set IMP_PUBLIC_IP in settings too, and open
+        the ports in the host's firewall.
+      '';
+    };
+
     hostFirewall = lib.mkOption {
       type = lib.types.enum [
         "own"
@@ -251,7 +331,7 @@ in
       }
       {
         assertion = overridden == [ ];
-        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile) instead";
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, publicPorts) instead";
       }
       {
         assertion = !zfs || config.networking.hostId != null;
@@ -361,11 +441,8 @@ in
       };
       serviceConfig = {
         Type = "exec";
-        ExecStartPre = [
+        ExecStartPre = lib.optional (secrets != [ ]) stageSecrets ++ [
           writeEnv
-        ]
-        ++ lib.optional (cfg.tailscaleAuthKeyFile != null) stageKey
-        ++ [
           ensureImage
           # A container left over from a crash would hold the name.
           "-${docker} rm -f imp-host"
