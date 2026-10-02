@@ -102,6 +102,8 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
   return {
     createImp: async (input) => {
+      const received = performance.now();
+
       const image = await context.images.resolveImage(input.image);
 
       if (input.policy !== undefined) {
@@ -125,6 +127,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
         const started = performance.now();
+        const recordMs = Math.round(started - received);
 
         try {
           // the slot's firewall, fresh, before anything can bring its tap up
@@ -146,6 +149,8 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         const cloneMs = Math.round(performance.now() - started);
 
         context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
+
+        const sizeStarted = performance.now();
 
         // a fork or a restore takes its source's size, an image's disk grows
         // past the image's filesystem, and the filesystem with it
@@ -171,10 +176,25 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return presenter.toApi(stopped);
         }
 
+        const sizeMs = Math.round(performance.now() - sizeStarted);
+
         try {
+          const bootStarted = performance.now();
+
           const running = await ops.startImpVm(toLockedImp(imp, sized));
 
-          return await presenter.toApi(running);
+          const bootMs = Math.round(performance.now() - bootStarted);
+
+          const presented = await presenter.toApi(running);
+
+          const totalMs = Math.round(performance.now() - received);
+
+          // the server's side of `imp new`; the boot's own steps are on its line
+          context.log(
+            `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(cloneMs)}ms size=${String(sizeMs)}ms boot=${String(bootMs)}ms`,
+          );
+
+          return presented;
         } catch (error) {
           // the governor turned the boot away before any tap or VM existed: a
           // create that cannot run leaves no imp behind

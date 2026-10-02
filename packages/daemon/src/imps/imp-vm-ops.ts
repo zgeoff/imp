@@ -144,6 +144,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     imp: LockedImp,
     paths: ImpPaths,
     address: SlotAddress,
+    hostSteps: Readonly<Record<string, number>>,
   ): Promise<StartedVm> => {
     const cgroup = context.cgroups.setup(imp.id, imp.cpu);
     const template = context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
@@ -171,7 +172,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         });
 
         context.log(
-          `impd: ${imp.name}: restored boot template ${template.key.slice(0, 12)} as pid ${String(vm.pid)} ${formatTimings(vm.timings)}`,
+          `impd: ${imp.name}: restored boot template ${template.key.slice(0, 12)} as pid ${String(vm.pid)} ${formatTimings({ ...hostSteps, ...vm.timings })}`,
         );
 
         return vm;
@@ -199,7 +200,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       isIdentityReset: imp.isIdentityResetPending,
     });
 
-    context.log(`impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings(vm.timings)}`);
+    context.log(
+      `impd: ${imp.name}: booted pid ${String(vm.pid)} ${formatTimings({ ...hostSteps, ...vm.timings })}`,
+    );
 
     return vm;
   };
@@ -225,6 +228,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     const paths = context.findPaths(imp.id);
     const address = context.findAddress(imp.slot);
+    const admitStarted = performance.now();
 
     // a fresh guest's RSS starts small and grows; reserve part of its memory
     await context.admission?.admit({
@@ -233,6 +237,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       reserveMib: Math.ceil((imp.memoryMib * context.config.bootReservePercent) / 100),
       memoryMib: imp.memoryMib,
     });
+
+    const setupStarted = performance.now();
 
     try {
       // a memory snapshot is only valid with the disk it was taken with. It
@@ -244,7 +250,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       await context.egress.requireImp(imp.id);
       await context.taps.setupTap(address);
 
-      const vm = await startColdVm(imp, paths, address);
+      // the host's part before the VM, for the boot's log line
+      const hostSteps = {
+        admit: Math.round(setupStarted - admitStarted),
+        setup: Math.round(performance.now() - setupStarted),
+      };
+
+      const vm = await startColdVm(imp, paths, address, hostSteps);
 
       startCounting(context, imp, vm.pid);
 
