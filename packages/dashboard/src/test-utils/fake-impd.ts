@@ -103,6 +103,7 @@ export function createFakeImpd(): FakeImpd {
       hold: os.imps.hold.handler((context) => findImp(context.input.name)),
       url: os.imps.url.handler((context) => ({
         local: findImp(context.input.name).url,
+        https: null,
         tailnet: null,
       })),
       fork: os.imps.fork.handler((context) => {

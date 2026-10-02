@@ -84,10 +84,10 @@ tailscale serve --bg --https=21000 http://127.0.0.1:20000
 - `--tcp=<port> tcp://127.0.0.1:<port>` forwards raw TCP; `--tls-terminated-tcp=<port>` adds TLS in
   front of a raw TCP backend. Both bypass HTTP, so no Host-header routing.
 
-So impd could run `tailscale serve --bg --https=<20000+slot> http://127.0.0.1:<20000+slot>` for each
-slot, and `tailscale serve --https=<port> off` when the imp goes away. It does not do this yet
-([#16](https://github.com/zgeoff/imp/issues/16)). Serve config is part of the node state, so it
-survives restarts with persisted state.
+impd does not use `tailscale serve`. With a domain of your own, impd terminates TLS itself, with a
+wildcard certificate, and every imp gets a name instead of a port ([HTTPS](./https.md)). A serve
+config on 443 or 80 takes that port before impd sees the traffic, so impd warns about one at start.
+Serve config is part of the node state, so it survives restarts with persisted state.
 
 ## DNS
 
@@ -101,8 +101,8 @@ case. `scripts/dev.sh` also starts the host container with `--dns 1.1.1.1 --dns 
 ## Limits
 
 - No wildcard MagicDNS names, so no `<name>.imp.<tailnet>.ts.net`. Per-imp URLs on the tailnet are
-  per-port.
-- One cert, one name: per-imp HTTPS is per port too.
+  per-port, unless you give impd a domain of your own ([HTTPS](./https.md)).
+- One `tailscale serve` cert, one name.
 - The host is one node: one IP, one name for all imps.
 
 ## Verify reachability

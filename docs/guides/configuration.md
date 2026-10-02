@@ -38,6 +38,23 @@ error.
 [Sleep and wake](../architecture/sleep-and-wake.md#the-ram-governor) explains the RAM and idle
 settings.
 
+### HTTPS
+
+With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the tailnet
+([HTTPS](./https.md)). Without it, impd ignores the rest of these.
+
+| Variable             | Default        | Meaning                                                                                      |
+| -------------------- | -------------- | -------------------------------------------------------------------------------------------- |
+| `IMP_DOMAIN`         | none           | The domain: imps at `<name>.<domain>`, impd's API at `<domain>`.                             |
+| `IMP_DNS_PROVIDER`   | none           | `cloudflare`, or `challtestsrv` with `IMP_E2E=1` in tests. Needed with `IMP_DOMAIN`.         |
+| `IMP_DNS_API_TOKEN`  | none           | The provider's API token; a secret ([HTTPS](./https.md#set-it-up)). Needed for Cloudflare.   |
+| `IMP_DNS_API_URL`    | the provider's | The provider's API, https unless on loopback. Needed for `challtestsrv`: its management URL. |
+| `IMP_ACME_DIRECTORY` | Let's Encrypt  | The ACME directory URL. Staging is `https://acme-staging-v02.api.letsencrypt.org/directory`. |
+| `IMP_ACME_EMAIL`     | none           | The contact on the ACME account.                                                             |
+| `IMP_ACME_CA_FILE`   | none           | A PEM file the ACME server's own TLS chains to, for a test CA such as Pebble.                |
+| `IMP_HTTPS_PORT`     | `443`          | The HTTPS port on the tailnet IP and loopback.                                               |
+| `IMP_HTTP_PORT`      | `80`           | The port that redirects to HTTPS.                                                            |
+
 ## Host container
 
 The host container's scripts in `host/` read these before impd starts.
@@ -74,15 +91,19 @@ not pass `IMP_DNS`, so the dev instance uses the defaults.
 | `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                               |
 | `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                        |
 
-`dev.sh` reads `TAILSCALE_AUTHKEY` from `.env` in the repo root and passes the file to Docker, so
-the key is never printed. It sets `IMP_UPLINK_MTU` from this machine's default route.
+`dev.sh` reads `TAILSCALE_AUTHKEY` and `IMP_DNS_API_TOKEN` from `.env` in the repo root and passes
+the file to Docker, so neither is ever printed. It sets `IMP_UPLINK_MTU` from this machine's default
+route.
 
 impd tuning passes through an allowlist. When set on your machine, `dev.sh` passes
 `IMP_IDLE_TIMEOUT_S`, `IMP_IDLE_CPU_PERCENT`, `IMP_RAM_BUDGET_MIB`, `IMP_BOOT_RESERVE_PERCENT`,
 `IMP_WAKE_RESERVE_MIB`, `IMP_DEFAULT_VCPUS`, `IMP_DEFAULT_MEMORY_MIB`, `IMP_TAILSCALE_HOSTNAME`,
-`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd. Other impd variables keep their defaults in the
-dev container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh`
-runs one on a throwaway pool.
+`IMP_STORAGE_BACKEND` and `IMP_ZFS_ROOT` to impd, and the HTTPS settings except the token:
+`IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`,
+`IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path under the repo.
+`IMP_DEV_NETWORK` puts the container on that Docker network. Other impd variables keep their
+defaults in the dev container. A ZFS dev instance needs the zfs module on the machine;
+`scripts/zfs-host-test.sh` runs one on a throwaway pool.
 
 ## CLI
 
