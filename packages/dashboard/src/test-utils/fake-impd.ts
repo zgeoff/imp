@@ -24,6 +24,9 @@ interface FakeImpdState {
 
   // answer every call with impd's 401, as for an ended session
   unauthorized: boolean;
+
+  // calls that named an imp that does not exist
+  notFound: number;
 }
 
 export function createFakeImpd(): FakeImpd {
@@ -34,6 +37,7 @@ export function createFakeImpd(): FakeImpd {
     calls: [],
     info: buildSystemInfo(),
     unauthorized: false,
+    notFound: 0,
   };
 
   const os = implement(impContract);
@@ -46,6 +50,7 @@ export function createFakeImpd(): FakeImpd {
     const imp = fake.imps.find((candidate) => candidate.name === name);
 
     if (imp === undefined) {
+      fake.notFound += 1;
       throw new ORPCError('NOT_FOUND', { message: `there is no imp named ${name}` });
     }
 

@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { createFakeImpd } from '../test-utils/fake-impd';
+import { buildImp, createFakeImpd } from '../test-utils/fake-impd';
 import { renderApp } from '../test-utils/render-app';
 
 afterEach(() => {
@@ -58,4 +58,37 @@ test('a 401 from impd sends the browser to the login page', async () => {
   await screen.findByLabelText('API token');
 
   expect(rendered.router.state.location.pathname).toBe('/login');
+});
+
+test('log out clears what the dashboard knew and opens the login page', async () => {
+  const user = userEvent.setup();
+  const fake = createFakeImpd();
+
+  spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
+
+  fake.state.imps.push(buildImp({ name: 'web' }));
+
+  const rendered = renderApp(fake);
+
+  await screen.findByRole('row', { name: /web/ });
+  await user.click(screen.getByRole('button', { name: 'Log out' }));
+  await screen.findByLabelText('API token');
+
+  expect(rendered.router.state.location.pathname).toBe('/login');
+  expect(rendered.queryClient.getQueryCache().getAll()).toEqual([]);
+});
+
+test('a failed logout says so and stays', async () => {
+  const user = userEvent.setup();
+
+  spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 502 }));
+  renderApp(createFakeImpd());
+
+  const button = await screen.findByRole('button', { name: 'Log out' });
+
+  await user.click(button);
+
+  const alert = await screen.findByRole('alert');
+
+  expect(alert).toHaveTextContent('impd did not log out (HTTP 502)');
 });

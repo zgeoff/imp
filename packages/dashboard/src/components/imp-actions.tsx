@@ -69,11 +69,12 @@ export function ImpActions(props: ImpActionsProps) {
         onConfirm={async () => {
           await impd.client.imps.destroy({ name });
 
-          await refresh();
-
+          // away first, so the page does not ask for the imp it just destroyed
           if (props.afterDestroy !== undefined) {
             await navigate({ to: props.afterDestroy });
           }
+
+          await refresh();
         }}
       />
     </div>

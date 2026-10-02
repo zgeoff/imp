@@ -33,6 +33,7 @@ export function ImpPage(props: ImpPageProps) {
     return (
       <div className={styles['page']}>
         <Link to="/">All imps</Link>
+        {imp.isPending && <p className={styles['empty']}>Loading…</p>}
         <ErrorText error={imp.error} />
       </div>
     );

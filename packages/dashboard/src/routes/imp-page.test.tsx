@@ -94,3 +94,22 @@ test('it says so when the imp does not exist', async () => {
 
   expect(alert).toHaveTextContent('there is no imp named gone');
 });
+
+test('destroying the imp goes back to the list without an error', async () => {
+  const ctx = setupTest();
+  const rendered = renderApp(ctx.fake, '/imps/web');
+
+  const destroy = await screen.findByRole('button', { name: 'Destroy' });
+
+  await ctx.user.click(destroy);
+
+  const dialog = await screen.findByRole('dialog', { name: 'Destroy web?' });
+
+  await ctx.user.click(within(dialog).getByRole('button', { name: 'Destroy' }));
+  await screen.findByRole('heading', { name: 'Imps' });
+
+  expect(rendered.router.state.location.pathname).toBe('/');
+
+  // the page never asked for the imp it had just destroyed
+  expect(ctx.fake.state.notFound).toBe(0);
+});

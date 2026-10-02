@@ -19,7 +19,7 @@ export function buildQueryClient(onUnauthorized: () => void): QueryClient {
   });
 }
 
-function isUnauthorized(error: unknown): boolean {
+export function isUnauthorized(error: unknown): boolean {
   return error instanceof ORPCError && error.status === 401;
 }
 

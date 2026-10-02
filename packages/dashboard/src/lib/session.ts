@@ -18,5 +18,9 @@ export async function sendLogin(token: string): Promise<LoginResult> {
 }
 
 export async function sendLogout(): Promise<void> {
-  await fetch('/auth/logout', { method: 'POST' });
+  const response = await fetch('/auth/logout', { method: 'POST' });
+
+  if (response.status !== 204) {
+    throw new Error(`impd did not log out (HTTP ${String(response.status)})`);
+  }
 }

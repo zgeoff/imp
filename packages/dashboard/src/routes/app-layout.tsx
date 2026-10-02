@@ -1,15 +1,23 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { Button } from '../components/button';
+import { ErrorText } from '../components/error-text';
 import { sendLogout } from '../lib/session';
 import styles from './app-layout.module.css';
 
 export function AppLayout() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  const runLogout = async (): Promise<void> => {
-    await sendLogout();
-    await navigate({ to: '/login' });
-  };
+  // the next person at this browser must not see the last one's imps
+  const logout = useMutation({
+    mutationFn: sendLogout,
+    onSuccess: async () => {
+      await navigate({ to: '/login' });
+
+      queryClient.clear();
+    },
+  });
 
   return (
     <div className={styles['layout']}>
@@ -25,13 +33,15 @@ export function AppLayout() {
           RAM
         </Link>
         <Button
+          disabled={logout.isPending}
           onClick={() => {
-            void runLogout();
+            logout.mutate();
           }}
         >
           Log out
         </Button>
       </nav>
+      <ErrorText error={logout.error} />
       <main className={styles['main']}>
         <Outlet />
       </main>

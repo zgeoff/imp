@@ -1,7 +1,9 @@
 import '@xterm/xterm/css/xterm.css';
+import { useNavigate } from '@tanstack/react-router';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useRef, useState } from 'react';
+import { isUnauthorized } from '../../lib/build-query-client';
 import { Button } from '../button';
 import styles from './console-view.module.css';
 import { setupTerminalBridge } from './setup-terminal-bridge';
@@ -21,6 +23,7 @@ export function ConsoleView(props: ConsoleViewProps) {
   const container = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: 'connecting' });
   const [attempt, setAttempt] = useState(0);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const element = container.current;
@@ -71,6 +74,13 @@ export function ConsoleView(props: ConsoleViewProps) {
           setStatus({ kind: 'ended', end });
         }
       } catch (error) {
+        // the session ended: the ticket call got impd's 401
+        if (isUnauthorized(error)) {
+          await navigate({ to: '/login' });
+
+          return;
+        }
+
         if (!abort.signal.aborted) {
           const message = error instanceof Error ? error.message : String(error);
 
@@ -91,7 +101,7 @@ export function ConsoleView(props: ConsoleViewProps) {
 
       terminal.dispose();
     };
-  }, [props.source, attempt]);
+  }, [props.source, attempt, navigate]);
 
   return (
     <div className={styles['console']}>

@@ -17,7 +17,7 @@ export function ImpNotes(props: ImpNotesProps) {
   return (
     <ul className={styles['notes']}>
       {notes.map((note) => (
-        <li key={note.text} className={styles[note.tone]}>
+        <li key={`${note.tone}:${note.text}`} className={styles[note.tone]}>
           {note.text}
         </li>
       ))}
