@@ -8,10 +8,12 @@
 #   scripts/test-bootstrap.sh --image ... --health     also create and exec an imp (needs KVM)
 #   scripts/test-bootstrap.sh --distro debian ...      one distro only
 #   scripts/test-bootstrap.sh --keep ...               leave a failed container to inspect
+#   scripts/test-bootstrap.sh --zfs ...                also a real ZFS run on Ubuntu (needs
+#                                                      the zfs module loaded on this host)
 #
 # Each distro runs on a loop file. Debian also runs --data-device on a loop
-# device: the refusals first (a device with ext4, a mounted device), then a
-# real run and --check.
+# device: the refusals first (a device with ext4, a mounted device), then
+# --check with --storage zfs, then a real XFS run and --check.
 #
 # HOST SAFETY. The container is privileged and shares the host's kernel, so:
 # - it has its own network namespace (never --network host): the firewall
@@ -22,6 +24,8 @@
 # - storage is a loop file or a loop device in the container, never a disk;
 #   the EXIT trap unmounts them and detaches the loop devices (they are
 #   global);
+# - a ZFS pool is kernel-global too: --zfs makes one with a unique name on a
+#   loop device, and the EXIT trap destroys it;
 # - every run is bracketed by a snapshot of the vm.* and kernel.* sysctls
 #   and the loaded modules, and the test fails on any difference.
 set -euo pipefail
@@ -31,6 +35,7 @@ image=
 stub=
 health=
 keep=
+zfs=
 distros=(debian ubuntu)
 
 while [ $# -gt 0 ]; do
@@ -39,6 +44,7 @@ while [ $# -gt 0 ]; do
     --stub) stub=1 ;;
     --health) health=1 ;;
     --keep) keep=1 ;;
+    --zfs) zfs=1 ;;
     --distro) distros=("${2:?--distro needs debian or ubuntu}") && shift ;;
     *) echo "test-bootstrap: unknown argument: $1" >&2 && exit 2 ;;
   esac
@@ -52,6 +58,10 @@ if [ -n "$stub" ] && [ -n "$health" ]; then
   echo "test-bootstrap: --health needs a real --image" >&2
   exit 2
 fi
+if [ -n "$zfs" ] && [ ! -r /sys/module/zfs/version ]; then
+  echo "test-bootstrap: --zfs needs the zfs module loaded on this host" >&2
+  exit 2
+fi
 
 work=$(mktemp -d)
 container=
@@ -59,6 +69,7 @@ loop_file=/var/imp.xfs
 # backing files for the --data-device leg
 disk_empty=/var/disk-empty.img
 disk_ext4=/var/disk-ext4.img
+zfs_pool=impt$$
 storage_args=()
 
 log() { echo "test-bootstrap: $*"; }
@@ -83,12 +94,15 @@ teardown() {
   [ -n "$container" ] || return 0
   docker exec "$container" bash -c '
     systemctl stop imp-host 2>/dev/null
+    pool=$1
+    shift
+    ! zpool list "$pool" >/dev/null 2>&1 || zpool destroy -f "$pool"
     for dir in /var/lib/imp /mnt/ext4; do ! mountpoint -q "$dir" || umount "$dir"; done
     for file in "$@"; do
       [ -e "$file" ] || continue
       for dev in $(losetup --list -n -O NAME -j "$file"); do losetup -d "$dev"; done
     done
-  ' teardown "$loop_file" "$disk_empty" "$disk_ext4" \
+  ' teardown "$zfs_pool" "$loop_file" "$disk_empty" "$disk_ext4" \
     || echo "test-bootstrap: WARNING: teardown in $container failed; check losetup -l" >&2
   docker rm -f -v "$container" >/dev/null
   container=
@@ -197,11 +211,11 @@ start_container() {
     --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock \
     -v /var/lib/docker -v /var/lib/containerd -v "$work:/mnt/archive:ro" \
     "imp-bootstrap-test:$distro" >/dev/null
-  # The bus is not up for the first moments after the start.
+  # The bus is not up for the first moments, and "offline" comes before init runs.
   local state='' i
   for i in $(seq 60); do
     state=$(in_container systemctl is-system-running --wait 2>/dev/null || true)
-    [ -n "$state" ] && break
+    case $state in running | degraded) break ;; esac
     [ "$i" = 60 ] || sleep 1
   done
   case $state in running | degraded) ;; *) fail "[$distro] systemd did not come up: $state" ;; esac
@@ -281,6 +295,15 @@ run_device() {
   if bootstrap --check; then fail "[$distro] --check took a mounted device"; fi
   grep -q "is mounted" <<<"$LAST_OUTPUT" || fail "[$distro] no 'is mounted' refusal"
 
+  log "[$distro] --storage zfs --check on an empty device"
+  storage_args=(--storage zfs --data-device "$empty")
+  if bootstrap --check; then fail "[$distro] --check with zfs found nothing to do"; fi
+  local want
+  for want in "would: apt-get install linux-headers-" "would: zpool create tank on $empty" \
+    "would: zfs create tank/imp (mountpoint=legacy)" "would: write /etc/modprobe.d/imp-zfs.conf"; do
+    grep -qF "$want" <<<"$LAST_OUTPUT" || fail "[$distro] --check with zfs did not plan: $want"
+  done
+
   log "[$distro] --data-device on an empty device"
   storage_args=(--data-device "$empty")
   bootstrap --yes || fail "[$distro] the --data-device run failed"
@@ -293,8 +316,34 @@ run_device() {
   log "[$distro] --data-device passed"
 }
 
+# run_zfs: --storage zfs on a loop device, for real: a pool, the dataset,
+# imp-host on it, then --check and a second run.
+run_zfs() {
+  local distro=ubuntu dev
+  start_container "$distro"
+  dev=$(in_container bash -c "truncate -s 20G $disk_empty && losetup -f --show $disk_empty")
+  storage_args=(--storage zfs --zfs-pool "$zfs_pool" --data-device "$dev")
+
+  log "[$distro] zfs: first run"
+  bootstrap --yes || fail "[$distro] the zfs run failed"
+  in_container zfs get -H -o value mountpoint "$zfs_pool/imp" | grep -qx legacy \
+    || fail "[$distro] $zfs_pool/imp is not mountpoint=legacy"
+  in_container grep -qx 'IMP_STORAGE_BACKEND=zfs' /etc/imp/imp-host.env || fail "[$distro] the env file is not zfs"
+  in_container grep -qx "IMP_ZFS_ROOT=$zfs_pool/imp" /etc/imp/imp-host.env || fail "[$distro] no IMP_ZFS_ROOT"
+  wait_for_imp_host || fail "[$distro] the imp-host container is not running on zfs"
+
+  log "[$distro] zfs: --check and a second run"
+  bootstrap --check || fail "[$distro] --check found pending changes after the zfs run"
+  bootstrap --yes || fail "[$distro] the second zfs run failed"
+  grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the second zfs run changed something"
+
+  teardown
+  log "[$distro] zfs passed"
+}
+
 for distro in "${distros[@]}"; do
   run_distro "$distro"
   [ "$distro" != debian ] || run_device
 done
+[ -z "$zfs" ] || run_zfs
 log "passed: ${distros[*]}"

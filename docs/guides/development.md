@@ -164,9 +164,9 @@ so a pull request from a fork would get a privileged container with `/dev/kvm` o
 
 A new push to a pull request cancels its older run. Runs on `main` always finish.
 
-`.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub` when a pull request or a
-push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It is not
-a required check.
+`.github/workflows/bootstrap.yml` runs `scripts/test-bootstrap.sh --stub --zfs` when a pull request
+or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It
+is not a required check.
 
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:

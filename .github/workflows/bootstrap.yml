@@ -2,7 +2,7 @@ name: Bootstrap
 
 # Runs deploy/bootstrap.sh twice in a systemd container on Debian 13 and
 # Ubuntu 24.04 (scripts/test-bootstrap.sh) and checks the second run changes
-# nothing. A stand-in image replaces the release image, so the health check,
+# nothing, on XFS and on a ZFS pool. A stand-in image replaces the release image, so the health check,
 # which boots an imp, runs by hand: scripts/test-bootstrap.sh --image
 # imp-host:<tag> --health.
 on:
@@ -41,5 +41,16 @@ jobs:
           ls -l /dev/kvm
           grep -cwE 'vmx|svm' /proc/cpuinfo
 
+      # the ZFS leg makes a pool from the container, with this kernel's
+      # module; zfs.ko sits in linux-modules-extra on some runner kernels
+      - name: Load ZFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zfsutils-linux
+          modinfo zfs >/dev/null 2>&1 \
+            || sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)"
+          sudo modprobe zfs
+          cat /sys/module/zfs/version
+
       - name: Test
-        run: scripts/test-bootstrap.sh --stub
+        run: scripts/test-bootstrap.sh --stub --zfs
