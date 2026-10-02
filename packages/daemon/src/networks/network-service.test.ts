@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { listImps } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
+import { createNetworkService } from './network-service';
 
 // web in slot 0 and db in slot 1, both on lab
 async function setupNetwork(runNft?: (script: string) => Promise<void>) {
@@ -137,4 +138,63 @@ test('a fork is on no network: a join is a choice made for each imp', async () =
   const networks = await ctx.client.networks.list();
 
   expect(networks[0]?.imps).toEqual(['db', 'web']);
+});
+
+test('a join that puts a box imp next to an open one warns, from either side', async () => {
+  await using ctx = await setupNetwork();
+
+  await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'box', allow: [] } });
+  await ctx.client.networks.leave({ network: 'lab', name: 'db' });
+
+  const boxJoins = await ctx.client.networks.join({ network: 'lab', name: 'db' });
+
+  await ctx.client.networks.leave({ network: 'lab', name: 'web' });
+
+  const openJoins = await ctx.client.networks.join({ network: 'lab', name: 'web' });
+
+  await ctx.client.imps.setPolicy({ name: 'web', policy: { mode: 'none', allow: [] } });
+
+  const sameJoins = await ctx.client.networks.join({ network: 'lab', name: 'web' });
+
+  expect(boxJoins.warning).toContain('web on lab is open and can relay for it');
+  expect(openJoins.warning).toContain('web is open, so db on lab can reach anything through it');
+  expect(sameJoins.warning).toBeNull();
+});
+
+test('a net rm that nft refuses puts back every member, the latest join included', async () => {
+  const state = { refuse: false };
+
+  await using ctx = await setupNetwork(() => {
+    const result = state.refuse ? Promise.reject(new Error('nft exited 1')) : Promise.resolve();
+
+    return result;
+  });
+
+  state.refuse = true;
+
+  const error = await readRejection(ctx.client.networks.delete({ name: 'lab' }));
+
+  state.refuse = false;
+
+  const networks = await ctx.client.networks.list();
+
+  expect(error).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  expect(networks.map((network) => [network.name, network.imps])).toEqual([['lab', ['db', 'web']]]);
+});
+
+test('a restore makes its missing networks, and removes them again when it fails', async () => {
+  await using ctx = await setupNetwork();
+
+  const networks = createNetworkService({ db: ctx.db, egress: ctx.egress });
+
+  const written = await networks.writeMissingNetworks(['lab', 'new']);
+  const made = await ctx.client.networks.list();
+
+  await networks.removeEmptyNetworks(written.created);
+
+  const after = await ctx.client.networks.list();
+
+  expect(written.created).toEqual(['new']);
+  expect(made.map((network) => network.name)).toEqual(['lab', 'new']);
+  expect(after.map((network) => network.name)).toEqual(['lab']);
 });

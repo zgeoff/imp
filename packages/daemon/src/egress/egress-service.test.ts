@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test';
 import { findImpByName } from '../db/imps';
+import { removeNetwork, writeNetwork } from '../db/networks';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { parsePrefix64 } from '../net/addressing6';
 import { resolveIpv6Plan } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
+import { findFreePorts } from '../net/test-free-ports';
 import { readRejection } from '../read-rejection';
 
 async function setupEgress(runNft?: (script: string) => Promise<void>, ipv6?: Ipv6Plan) {
@@ -342,4 +344,57 @@ test('a NAT66 that fails turns IPv6 off and leaves the egress table enforced', a
   expect(ctx.logs.some((line) => line.includes('NO FIREWALL'))).toBeFalse();
   expect(table).toContain('ip saddr != 10.66.0.2 drop');
   expect(table).toContain('meta nfproto ipv6 drop');
+});
+
+test('a network change that nft refuses and whose undo throws still leaves the table from the rows', async () => {
+  const state = { refuse: false };
+  const scripts: string[] = [];
+
+  await using ctx = await setupEgress((script) => {
+    if (state.refuse) {
+      state.refuse = false;
+
+      return Promise.reject(new Error('nft exited 1'));
+    }
+
+    scripts.push(script);
+
+    return Promise.resolve();
+  });
+
+  const network = await writeNetwork(ctx.db, 'lab');
+
+  await ctx.imps.createImp({ name: 'web', networkIds: network === null ? [] : [network.id] });
+  await ctx.imps.createImp({ name: 'db', networkIds: network === null ? [] : [network.id] });
+
+  const joined = scripts.at(-1);
+
+  state.refuse = true;
+
+  const error = await readRejection(
+    ctx.egress.changeNetworks({
+      write: () => removeNetwork(ctx.db, network?.id ?? ''),
+      undo: () => Promise.reject(new Error('the database is gone')),
+    }),
+  );
+
+  expect(String(error)).toContain('nft exited 1');
+  expect(joined).toContain('@net0');
+  expect(scripts.at(-1)).not.toContain('@net0');
+  expect(ctx.logs.join('\n')).toContain('the database is gone');
+});
+
+test("a start without setup-net's imp-network ACCEPT says networks cannot work", async () => {
+  const port = findFreePorts(1).take();
+
+  await using ctx = await setupImpTest({
+    env: { IMP_EGRESS_DNS_PORT: String(port) },
+    forwardRules: '-A FORWARD -i imp+ -o imp+ -j DROP\n',
+  });
+
+  await ctx.egress.start();
+
+  ctx.egress.stop();
+
+  expect(ctx.logs.some((line) => line.includes('imp-network ACCEPT is missing'))).toBeTrue();
 });

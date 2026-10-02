@@ -28,25 +28,32 @@ export type LocalAnswer =
 
 const NXDOMAIN: LocalAnswer = { kind: 'nxdomain' };
 
-// impd's answer to a name from the guest in `slot`, or null for a name it
-// passes on. A name of the zone that the guest shares no network with is
-// NXDOMAIN, as a name that does not exist is.
+// what impd knows of the networks: every name, members or not
+export interface NetworkView {
+  readonly names: ReadonlySet<string>;
+  readonly members: readonly NetworkMember[];
+}
+
+// impd's answer to a name from the guest in `slot`, or null for one it passes
+// on, such as metadata.google.internal. Under a network that exists, a name
+// the guest may not see is NXDOMAIN, as one that does not exist is.
 export function resolveNetworkName(
-  members: readonly NetworkMember[],
+  view: Readonly<NetworkView>,
   subnet: Subnet,
   query: Readonly<{ slot: number; name: string; type: string }>,
 ): LocalAnswer | null {
   const networks = new Set(
-    members.filter((member) => member.slot === query.slot).map((member) => member.network),
+    view.members.filter((member) => member.slot === query.slot).map((member) => member.network),
   );
 
-  const peers = members.filter((member) => networks.has(member.network));
+  const peers = view.members.filter((member) => networks.has(member.network));
+  const labels = query.name.split('.');
 
-  if (query.name === INTERNAL || query.name.endsWith(`.${INTERNAL}`)) {
-    const [imp, network, ...rest] = query.name.split('.');
+  if (labels.at(-1) === INTERNAL && view.names.has(labels.at(-2) ?? '')) {
+    const [imp, network] = labels;
 
     const peer =
-      rest.length === 1
+      labels.length === 3
         ? peers.find((each) => each.name === imp && each.network === network)
         : undefined;
 

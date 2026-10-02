@@ -17,8 +17,11 @@ const MEMBERS = [
   buildMember('ops', 'db', 1),
 ];
 
+// empty has no members
+const VIEW = { names: new Set(['lab', 'ops', 'empty']), members: MEMBERS };
+
 function resolveAs(slot: number, name: string, type = 'A') {
-  return resolveNetworkName(MEMBERS, SUBNET, { slot, name, type });
+  return resolveNetworkName(VIEW, SUBNET, { slot, name, type });
 }
 
 test('a peer has an address under its network, and by its bare name', () => {
@@ -48,11 +51,21 @@ test('a name of the zone the guest shares no network with does not exist', () =>
     resolveAs(3, 'db.lab.internal'),
     resolveAs(0, 'nothing.lab.internal'),
     resolveAs(0, 'lab.internal'),
-    resolveAs(0, 'internal'),
     resolveAs(0, 'a.db.lab.internal'),
+    resolveAs(0, 'db.empty.internal'),
   ];
 
   expect(answers).toEqual(Array.from({ length: answers.length }, () => ({ kind: 'nxdomain' })));
+});
+
+test('an internal name under no network of the host goes upstream', () => {
+  const answers = [
+    resolveAs(0, 'metadata.google.internal'),
+    resolveAs(0, 'db.corp.internal'),
+    resolveAs(0, 'internal'),
+  ];
+
+  expect(answers).toEqual([null, null, null]);
 });
 
 test('a bare name that is no peer goes upstream', () => {

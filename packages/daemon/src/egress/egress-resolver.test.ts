@@ -20,6 +20,8 @@ const MEMBERS = [
   { network: 'lab', impId: 'w', name: 'web', slot: 0, guestIp: '10.66.0.2' },
 ];
 
+const VIEW = { names: new Set(['lab']), members: MEMBERS };
+
 function buildQuery(name: string, type: 'A' | 'AAAA' = 'A', edns = true): Uint8Array {
   return dnsPacket.encode({
     type: 'query',
@@ -86,7 +88,7 @@ function setupHandler(overrides: Partial<ResolverDeps> = {}) {
 
   const deps: ResolverDeps = {
     subnet: SUBNET,
-    resolveLocal: (slot, query) => resolveNetworkName(MEMBERS, SUBNET, { slot, ...query }),
+    resolveLocal: (slot, query) => resolveNetworkName(VIEW, SUBNET, { slot, ...query }),
     checkName: (slot, name) => {
       const verdict = slot === 1 ? (verdicts[name] ?? 'refuse') : null;
 
