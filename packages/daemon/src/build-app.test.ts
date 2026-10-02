@@ -1,62 +1,16 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readdirSync } from 'node:fs';
-import type { ImpContract } from '@imp/api';
-import { createORPCClient } from '@orpc/client';
-import { RPCLink } from '@orpc/client/fetch';
-import type { ContractRouterClient } from '@orpc/contract';
-import { buildApp } from './build-app';
-import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { findImpByName } from './db/imps';
-import { setupImpTest } from './imps/test-imps';
-
-const TOKEN = 'test-token';
+import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });
 
-  const built = buildApp({
-    config: harness.config,
-    db: harness.db,
-    token: TOKEN,
-    imps: harness.imps,
-    images: harness.images,
-    governor: harness.governor,
-    checkpoints: createCheckpointService({
-      config: harness.config,
-      db: harness.db,
-      imps: harness.imps,
-    }),
-    firecrackerVersion: 'v1.17.0',
-    readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
-    isReady: () => true,
-  });
-
-  const app = built.app;
-
-  const link = new RPCLink({
-    url: 'http://impd.test/rpc',
-    headers: { authorization: `Bearer ${token}` },
-    fetch: (request) => app.handle(request),
-  });
-
-  const client: ContractRouterClient<ImpContract> = createORPCClient(link);
-
-  return {
-    app,
-    closeExecSessions: built.closeExecSessions,
-    imps: harness.imps,
-    client,
-    db: harness.db,
-    dataDir: harness.dataDir,
-    fake: harness.fake,
-    taps: harness.taps,
-    createTestImage: harness.createTestImage,
-    [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
-  };
+  return { ...harness, ...buildTestApp(harness, harness, token) };
 }
 
 test('it serves system.info from config and the database', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   const info = await ctx.client.system.info();
 
@@ -82,7 +36,7 @@ test('it rejects a request with the wrong token', async () => {
 });
 
 test('it answers /health without a token', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   const response = await ctx.app.handle(new Request('http://impd.test/health'));
   const body: unknown = await response.json();
@@ -91,7 +45,7 @@ test('it answers /health without a token', async () => {
 });
 
 test('it creates, stops, starts and destroys an imp', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
 
@@ -135,7 +89,7 @@ test('it creates, stops, starts and destroys an imp', async () => {
 });
 
 test('it prefers the configured default image and falls back to ubuntu', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
 
@@ -151,7 +105,7 @@ test('it prefers the configured default image and falls back to ubuntu', async (
 });
 
 test('it rejects a duplicate name and an unknown image', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
@@ -167,7 +121,7 @@ test('it rejects a duplicate name and an unknown image', async () => {
 });
 
 test('it marks a running imp stopped when its VM died', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
@@ -180,7 +134,7 @@ test('it marks a running imp stopped when its VM died', async () => {
 });
 
 test('it refuses to remove an image an imp uses', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
@@ -193,7 +147,7 @@ test('it refuses to remove an image an imp uses', async () => {
 });
 
 test('it sleeps, wakes and holds an imp', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
@@ -222,7 +176,7 @@ test('it sleeps, wakes and holds an imp', async () => {
 });
 
 test('it boots cold when the snapshot belongs to another firecracker', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
 
@@ -244,7 +198,7 @@ test('it boots cold when the snapshot belongs to another firecracker', async () 
 
 test('it sleeps the least recently active imp to fit a new one in the budget', async () => {
   // 300 MiB per awake imp, 50% of 512 MiB reserved per boot
-  await using ctx = await setupTest(TOKEN, {
+  await using ctx = await setupTest(TEST_TOKEN, {
     IMP_RAM_BUDGET_MIB: '800',
     IMP_DEFAULT_MEMORY_MIB: '512',
   });
@@ -276,7 +230,7 @@ test('it sleeps the least recently active imp to fit a new one in the budget', a
 });
 
 test('a cold boot the budget turns away keeps the sleeping imp and its snapshot', async () => {
-  await using ctx = await setupTest(TOKEN, {
+  await using ctx = await setupTest(TEST_TOKEN, {
     IMP_RAM_BUDGET_MIB: '800',
     IMP_DEFAULT_MEMORY_MIB: '512',
   });
@@ -309,7 +263,7 @@ test('a cold boot the budget turns away keeps the sleeping imp and its snapshot'
 });
 
 test('it leaves nothing behind when an imp is larger than the RAM budget', async () => {
-  await using ctx = await setupTest(TOKEN, { IMP_RAM_BUDGET_MIB: '800' });
+  await using ctx = await setupTest(TEST_TOKEN, { IMP_RAM_BUDGET_MIB: '800' });
 
   await ctx.createTestImage('ubuntu');
 
@@ -330,11 +284,11 @@ test('it leaves nothing behind when an imp is larger than the RAM budget', async
 });
 
 test('it records a boot failure as the error state with its first line', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
 
-  ctx.fake.control.failBoot = true;
+  ctx.fake.queue('boot', 'fail');
 
   const rejection = await ctx.client.imps.create({ name: 'dev' }).catch((error: unknown) => error);
   const imp = await ctx.client.imps.get({ name: 'dev' });
@@ -348,7 +302,7 @@ test('it records a boot failure as the error state with its first line', async (
 });
 
 test('it re-adopts live VMs on reconcile, even with a silent agent', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'alive' });
@@ -359,8 +313,7 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
   const dead = await ctx.client.imps.get({ name: 'dead' });
 
   ctx.fake.alive.delete(1002);
-
-  ctx.fake.control.agentReady = false;
+  ctx.fake.queue('agentReady', 'fail');
 
   await ctx.imps.reconcileImps();
 
@@ -377,25 +330,22 @@ test('it re-adopts live VMs on reconcile, even with a silent agent', async () =>
 });
 
 test('a read during a lifecycle operation does not mark the imp stopped', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   await ctx.createTestImage('ubuntu');
   await ctx.client.imps.create({ name: 'dev' });
 
-  const gate = Promise.withResolvers<void>();
-
-  ctx.fake.control.sleepGate = gate.promise;
-
+  const gate = ctx.fake.hold('sleep');
   const sleeping = ctx.client.imps.sleep({ name: 'dev' });
 
-  await Bun.sleep(5);
+  await gate.reached;
 
   // the VM looks dead to a reader while the sleep holds the lock
   ctx.fake.alive.clear();
 
   const during = await ctx.client.imps.get({ name: 'dev' });
 
-  gate.resolve();
+  gate.release();
 
   const after = await sleeping;
 
@@ -404,14 +354,14 @@ test('a read during a lifecycle operation does not mark the imp stopped', async 
 });
 
 test('impd stopping closes exec sessions with 1012', async () => {
-  await using ctx = await setupTest(TOKEN);
+  await using ctx = await setupTest(TEST_TOKEN);
 
   const server = ctx.app.listen(0);
 
   try {
     const port = String(server.server?.port);
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TOKEN}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TEST_TOKEN}`);
 
     const opened = Promise.withResolvers<void>();
     const closed = Promise.withResolvers<CloseEvent>();

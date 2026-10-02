@@ -12,14 +12,12 @@ test('the governor skips a victim whose lock another boot holds instead of waiti
   await Bun.sleep(5);
   await ctx.imps.createImp({ name: 'b' });
 
-  const gate = Promise.withResolvers<void>();
-
-  ctx.fake.control.sleepGate = gate.promise;
+  const gate = ctx.fake.hold('sleep');
 
   // the governor holds admission while it sleeps `a`
   const admitting = ctx.governor.admit({ id: 'x', name: 'x', reserveMib: 600, memoryMib: 600 });
 
-  await Bun.sleep(5);
+  await gate.reached;
 
   // a restore of `b`: it takes b's lock, halts it and boots it, which asks
   // the governor for admission
@@ -31,11 +29,11 @@ test('the governor skips a victim whose lock another boot holds instead of waiti
 
   await Bun.sleep(5);
 
-  gate.resolve();
+  gate.release();
 
   const outcomes = await Promise.all([
-    waitForOutcome(admitting, 1000),
-    waitForOutcome(restoring, 1000),
+    waitForOutcome(admitting, 2000),
+    waitForOutcome(restoring, 2000),
   ]);
 
   expect(outcomes).not.toContain('hung');

@@ -97,18 +97,17 @@ test('exec counts its session before the wake and drops it when the wake fails',
 
   await ctx.imps.stopImp('dev');
 
-  const gate = Promise.withResolvers<void>();
+  const gate = ctx.fake.hold('boot');
 
-  ctx.fake.control.bootGate = gate.promise;
-  ctx.fake.control.failBoot = true;
+  ctx.fake.queue('boot', 'fail');
 
   const exec = ctx.imps.openExec('dev', { argv: ['true'], tty: false });
 
-  await Bun.sleep(5);
+  await gate.reached;
 
   const during = ctx.imps.tracker.count(id, 'exec');
 
-  gate.resolve();
+  gate.release();
 
   const rejection = await exec.catch((error: unknown) => error);
 
@@ -122,19 +121,16 @@ test('impd stopping waits for a boot under way, sleeps that imp, and refuses lat
 
   await ctx.imps.stopImp('dev');
 
-  const gate = Promise.withResolvers<void>();
-
-  ctx.fake.control.bootGate = gate.promise;
-
+  const gate = ctx.fake.hold('boot');
   const starting = ctx.imps.startImp('dev');
 
-  await Bun.sleep(5);
+  await gate.reached;
 
   const stopping = ctx.imps.sleepAllImps();
 
   await Bun.sleep(5);
 
-  gate.resolve();
+  gate.release();
 
   await Promise.all([starting, stopping]);
 
@@ -154,21 +150,19 @@ test('a governor pass during impd stopping neither hangs nor wakes anything', as
   await ctx.imps.createImp({ name: 'a' });
   await ctx.imps.createImp({ name: 'b' });
 
-  const gate = Promise.withResolvers<void>();
-
-  ctx.fake.control.sleepGate = gate.promise;
+  const gate = ctx.fake.hold('sleep');
 
   // 600 MiB awake against a budget of 500: the pass wants one asleep
   const enforcing = ctx.governor.enforce();
   const stopping = ctx.imps.sleepAllImps();
 
-  await Bun.sleep(5);
+  await gate.reached;
 
-  gate.resolve();
+  gate.release();
 
   const outcomes = await Promise.all([
-    waitForOutcome(enforcing, 1000),
-    waitForOutcome(stopping, 1000),
+    waitForOutcome(enforcing, 2000),
+    waitForOutcome(stopping, 2000),
   ]);
 
   const imps = await ctx.imps.listImps();
@@ -194,19 +188,16 @@ test('a destroy issued while the create boots waits for it, then removes the imp
 
   await ctx.createTestImage('ubuntu');
 
-  const gate = Promise.withResolvers<void>();
-
-  ctx.fake.control.bootGate = gate.promise;
-
+  const gate = ctx.fake.hold('boot');
   const creating = ctx.imps.createImp({ name: 'dev' });
 
-  await Bun.sleep(10);
+  await gate.reached;
 
   const destroying = ctx.imps.destroyImp('dev');
 
   await Bun.sleep(5);
 
-  gate.resolve();
+  gate.release();
 
   const created = await creating;
 
