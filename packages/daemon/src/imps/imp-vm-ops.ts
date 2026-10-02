@@ -69,6 +69,10 @@ export interface ImpVmOps {
   // boots the imp's disk; a memory snapshot is dropped first
   readonly startImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
+  // a new imp's first boot while its disk is still being sized: a template
+  // restore runs up to the parked guest meanwhile
+  readonly startNewImpVm: (imp: LockedImp, diskReady: Promise<unknown>) => Promise<LockedImp>;
+
   // agent shutdown, then the memory goes too: a stopped imp boots cold
   readonly stopImpVm: (imp: LockedImp) => Promise<LockedImp>;
 
@@ -147,9 +151,29 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     paths: ImpPaths,
     address: SlotAddress,
     hostSteps: Readonly<Record<string, number>>,
+    diskReady: Promise<unknown>,
   ): Promise<StartedVm> => {
     const cgroup = context.cgroups.setup(imp.id, imp.cpu);
     const template = context.templates?.find({ vcpus: imp.vcpus, memoryMib: imp.memoryMib });
+
+    // a disk that fails is the create's failure, not the template's
+    const disk = { isFailed: false };
+
+    const readDiskBytes = async () => {
+      try {
+        await diskReady;
+      } catch (error) {
+        disk.isFailed = true;
+        throw error;
+      }
+
+      return statSync(paths.disk).size;
+    };
+
+    const diskBytes = readDiskBytes();
+
+    // handled now: a restore that fails first never awaits it
+    void Promise.allSettled([diskBytes]);
 
     if (template !== null && template !== undefined) {
       try {
@@ -161,6 +185,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
           diskPath: resolve(paths.disk),
           tap: address.tap,
           cgroup,
+          diskReady: diskBytes,
           claim: {
             id: imp.id,
             hostname: imp.name,
@@ -170,7 +195,6 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
             gw6: address.guestIp6 === null ? null : GATEWAY_IP6,
             dns: context.config.dns,
             mac: address.guestMac,
-            diskBytes: statSync(paths.disk).size,
             seed: randomBytes(CLAIM_SEED_BYTES),
             isIdentityReset: imp.isIdentityResetPending,
           },
@@ -184,6 +208,10 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
         return vm;
       } catch (error) {
+        if (disk.isFailed) {
+          await diskBytes;
+        }
+
         context.log(
           `impd: ${imp.name}: boot template ${template.key.slice(0, 12)} failed, booting the kernel: ${readErrorMessage(error)}`,
         );
@@ -194,6 +222,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         context.templates?.reportFailure(template, isTemplateFault);
       }
     }
+
+    await diskBytes;
 
     const vm = await context.vms.startVm({
       firecrackerBin: context.config.firecrackerBin,
@@ -223,6 +253,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     imp: LockedImp,
     reason: string | null,
     isWake = false,
+    diskReady: Promise<unknown> = Promise.resolve(),
   ): Promise<LockedImp> => {
     try {
       gate.requireOpen();
@@ -266,7 +297,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         setup: Math.round(performance.now() - setupStarted),
       };
 
-      const vm = await startColdVm(imp, paths, address, hostSteps);
+      const vm = await startColdVm(imp, paths, address, hostSteps, diskReady);
 
       startCounting(context, imp, vm.pid);
 
@@ -319,6 +350,9 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   };
 
   const startImpVm = (imp: LockedImp): Promise<LockedImp> => startColdImpVm(imp, null);
+
+  const startNewImpVm = (imp: LockedImp, diskReady: Promise<unknown>): Promise<LockedImp> =>
+    startColdImpVm(imp, null, false, diskReady);
 
   const stopImpVm = async (imp: LockedImp): Promise<LockedImp> => {
     const paths = context.findPaths(imp.id);
@@ -698,6 +732,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     updateState,
     writeFailure,
     startImpVm,
+    startNewImpVm,
     stopImpVm,
     sleepImpVm,
     requireRunningImp,

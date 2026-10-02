@@ -57,10 +57,10 @@ When the shape has a template, a cold boot:
 1. Starts Firecracker in the imp's cgroup.
 2. Loads the snapshot with `resume_vm: false`, `network_overrides` (the imp's tap) and
    `vsock_override` (the imp's socket).
-3. Points `rootfs` at the imp's disk with `PATCH /drives/rootfs` and its absolute path. The config
-   change is how virtio-blk tells the guest the disk's new size.
-4. Resumes the VM, waits for the parked ping, and sends `claim`.
-5. Waits for stage 2's ping, as a cold boot does.
+3. Resumes the VM and waits for the parked ping. A new imp's disk is grown on the host meanwhile.
+4. Points `rootfs` at the imp's disk with `PATCH /drives/rootfs` and its absolute path, once the
+   disk is ready. The config change is how virtio-blk tells the guest the disk's new size.
+5. Sends `claim`, and waits for stage 2's ping, as a cold boot does.
 
 Everything after that is a cold boot's: impd writes the VM identity, so the next sleep, wake, fork
 and checkpoint see a normal imp. If any step fails, impd kills the VM and boots the kernel. A step

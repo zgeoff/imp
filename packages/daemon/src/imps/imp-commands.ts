@@ -151,23 +151,32 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
         context.log(`impd: ${imp.name}: disk cloned in ${String(cloneMs)}ms`);
 
         const sizeStarted = performance.now();
+        const timing = { sizeMs: 0 };
 
         // a fork or a restore takes its source's size, an image's disk grows
         // past the image's filesystem, and the filesystem with it
-        const cloneBytes = readFileBytes(paths.disk);
-        const sizedBytes = growDiskFile(paths.disk, diskBytes ?? 0);
+        const growNewDisk = async () => {
+          const cloneBytes = readFileBytes(paths.disk);
+          const sizedBytes = growDiskFile(paths.disk, diskBytes ?? 0);
 
-        if (sizedBytes > cloneBytes) {
-          await growStoppedFilesystem(context, imp.name, paths.disk);
-        }
+          if (sizedBytes > cloneBytes) {
+            await growStoppedFilesystem(context, imp.name, paths.disk);
+          }
 
-        const sized = await updateImpDisk(context.db, imp.id, {
-          diskBytes: sizedBytes,
-          isGrowPending: false,
-        });
+          const sized = await updateImpDisk(context.db, imp.id, {
+            diskBytes: sizedBytes,
+            isGrowPending: false,
+          });
+
+          timing.sizeMs = Math.round(performance.now() - sizeStarted);
+
+          return sized;
+        };
 
         // past the lifecycle table: no stop ever leaves `creating` otherwise
         if (input.start === false) {
+          await growNewDisk();
+
           const stopped = await updateImpState(context.db, imp.id, {
             reason: 'stopped',
             state: 'stopped',
@@ -176,12 +185,17 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return presenter.toApi(stopped);
         }
 
-        const sizeMs = Math.round(performance.now() - sizeStarted);
+        // the boot starts while the disk is sized: a template restore only
+        // needs the disk once its guest is parked
+        const sizing = growNewDisk();
+
+        // handled now: the boot may fail before it looks at the disk
+        void Promise.allSettled([sizing]);
 
         try {
           const bootStarted = performance.now();
 
-          const running = await ops.startImpVm(toLockedImp(imp, sized));
+          const running = await ops.startNewImpVm(imp, sizing);
 
           const bootMs = Math.round(performance.now() - bootStarted);
 
@@ -189,13 +203,17 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const totalMs = Math.round(performance.now() - received);
 
-          // the server's side of `imp new`; the boot's own steps are on its line
+          // the server's side of `imp new`; size runs inside boot, and the
+          // boot's own steps are on its line
           context.log(
-            `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(cloneMs)}ms size=${String(sizeMs)}ms boot=${String(bootMs)}ms`,
+            `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(cloneMs)}ms size=${String(timing.sizeMs)}ms boot=${String(bootMs)}ms`,
           );
 
           return presented;
         } catch (error) {
+          // a resize still at work keeps its files until it ends
+          await Promise.allSettled([sizing]);
+
           // the governor turned the boot away before any tap or VM existed: a
           // create that cannot run leaves no imp behind
           if (isRamBudgetError(error)) {
