@@ -1,16 +1,18 @@
 import * as z from 'zod';
 
 // one restic snapshot of the host: a point a restore can go back to
-export const BackupPointSchema = z.object({
-  id: z.string(),
-  time: z.date(),
+export const BackupPointSchema = z
+  .object({
+    id: z.string(),
+    time: z.date(),
 
-  // the imps it holds, by name
-  imps: z.array(z.string()),
-});
+    // the imps it holds, by name
+    imps: z.array(z.string()).readonly(),
+  })
+  .readonly();
 
 export const BackupStatusSchema = z.object({
-  points: z.array(BackupPointSchema),
+  points: z.array(BackupPointSchema).readonly(),
   lastRunAt: z.date().nullable(),
   lastPruneAt: z.date().nullable(),
 
@@ -22,10 +24,10 @@ const BackupSkipSchema = z.object({ name: z.string(), reason: z.string() });
 
 export const BackupRunSchema = z.object({
   snapshotId: z.string(),
-  imps: z.array(z.string()),
+  imps: z.array(z.string()).readonly(),
 
   // left out of this run: being created, removed or failing to copy
-  skipped: z.array(BackupSkipSchema),
+  skipped: z.array(BackupSkipSchema).readonly(),
   dataAddedBytes: z.int().nonnegative(),
   durationMs: z.int().nonnegative(),
 });
