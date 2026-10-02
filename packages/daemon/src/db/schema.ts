@@ -1,4 +1,4 @@
-import type { ApiActor, ImpState } from '@imp/api';
+import type { ApiActor, ImpState, Scope } from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -88,10 +88,26 @@ export interface ApiAuditTable {
   procedure: string;
   actor: ApiActor;
 
+  // null on rows from before named tokens
+  actor_name: string | null;
+
   // the name, not a reference: a destroyed imp's rows stay
   imp_name: string | null;
   outcome: string;
   duration_ms: number;
+}
+
+export interface TokensTable {
+  id: string;
+  name: string;
+
+  // SHA-256 of the secret, in hex; the secret itself is never stored
+  secret_hash: string;
+  scope: Scope;
+
+  // a JSON array of imp patterns; null for every imp and the host
+  imps: string | null;
+  created_at: number;
 }
 
 export interface DatabaseSchema {
@@ -102,4 +118,5 @@ export interface DatabaseSchema {
   grants: GrantsTable;
   broker_audit: BrokerAuditTable;
   api_audit: ApiAuditTable;
+  tokens: TokensTable;
 }
