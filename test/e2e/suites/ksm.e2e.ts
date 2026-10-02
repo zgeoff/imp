@@ -97,31 +97,55 @@ async function readMergingPages(name: string): Promise<number> {
   return Number(text);
 }
 
-// the permissions and flags of the VM's guest memory mappings: rw-s (memfd)
-// memory would never merge
+// the permissions and flags of the VM's guest memory mappings of 1 MiB or
+// more, guard regions aside: rw-s (memfd) memory would never merge
 async function readGuestMappings(name: string): Promise<string[]> {
   const pid = await readFirecrackerPid(name);
   const smaps = await readContainerText(['cat', `/proc/${pid}/smaps`]);
 
-  const mappings: string[] = [];
-  const current = { perms: '', large: false };
+  const mappings: { backing: string; mib: number; mapping: string }[] = [];
+  const current = { backing: '', perms: '', mib: 0 };
 
   for (const line of smaps.split('\n')) {
-    const header = /^(?<start>[\da-f]+)-(?<end>[\da-f]+) (?<perms>\S+) /u.exec(line);
+    const header =
+      /^(?<start>[\da-f]+)-(?<end>[\da-f]+) (?<perms>\S+) \S+ \S+ \S+\s*(?<backing>.*)$/u.exec(
+        line,
+      );
 
     if (header?.groups !== undefined) {
       const bytes =
         Number.parseInt(header.groups['end'] ?? '0', 16) -
         Number.parseInt(header.groups['start'] ?? '0', 16);
 
+      current.backing = header.groups['backing'] ?? '';
       current.perms = header.groups['perms'] ?? '';
-      current.large = bytes >= GUEST_MAPPING_MIB * 1024 ** 2;
-    } else if (line.startsWith('VmFlags:') && current.large) {
-      mappings.push(`${current.perms}${line.includes(' mg') ? ' mg' : ''}`);
+      current.mib = bytes / 1024 ** 2;
+    } else if (line.startsWith('VmFlags:') && current.mib >= 1 && current.perms !== '---p') {
+      mappings.push({
+        backing: current.backing,
+        mib: current.mib,
+        mapping: `${current.perms}${line.includes(' mg') ? ' mg' : ''}`,
+      });
     }
   }
 
-  return mappings;
+  // guest memory is GUEST_MAPPING_MIB or more of one backing, the template's
+  // mem file or none, in any number of mappings: CI's kernel splits a restore's
+  const mibByBacking = Map.groupBy(mappings, (entry) => entry.backing);
+
+  const guest = mappings.filter(
+    (entry) =>
+      (mibByBacking.get(entry.backing) ?? []).reduce((sum, other) => sum + other.mib, 0) >=
+      GUEST_MAPPING_MIB,
+  );
+
+  if (guest.length === 0) {
+    const seen = mappings.map((entry) => `${String(Math.round(entry.mib))} MiB ${entry.mapping}`);
+
+    throw new Error(`${name}: no guest memory mapping in pid ${pid}'s smaps: ${seen.join('; ')}`);
+  }
+
+  return guest.map((entry) => entry.mapping);
 }
 
 // the governor's measure for every awake guest of the suite, read from /proc
@@ -184,7 +208,6 @@ test.skipIf(!KSM_READY)(
     const mappings = await Promise.all(names.map((name) => readGuestMappings(name)));
 
     // private and mergeable, so memfd-backed memory would fail here
-    expect(mappings.flat().length).toBeGreaterThan(0);
     expect(new Set(mappings.flat())).toEqual(new Set(['rw-p mg']));
 
     for (const name of names) {
