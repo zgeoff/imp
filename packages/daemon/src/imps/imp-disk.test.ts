@@ -160,7 +160,7 @@ test('a sleeping guest grows when it wakes, and a cold boot needs no grow call',
 
   expect(disk7.isGrowPending).toBeFalse();
 
-  // stage 1 grows a cold boot's filesystem: a pending grow clears
+  // the agent grows a cold boot's filesystem: a pending grow clears
   await ctx.client.imps.sleep({ name: 'dev' });
   await ctx.client.imps.resizeDisk({ name: 'dev', diskMib: 4 * GIB_MIB });
   await ctx.client.imps.stop({ name: 'dev' });

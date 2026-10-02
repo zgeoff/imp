@@ -179,7 +179,7 @@ test('imp new from a template, timed: the wall time and its spans', async () => 
     const restored = readLoggedSteps(log, name, 'restored boot template');
     const vmMs = Object.values(restored).reduce((sum, ms) => sum + ms, 0);
 
-    expect(restored['stage2']).toBeNumber();
+    expect(restored['agent']).toBeNumber();
 
     // the CLI's process and the API round trip, and impd's write-up after the VM
     const found = {

@@ -4,7 +4,8 @@ An imp boots from any OCI image. impd exports the image's filesystem into a spar
 per image ID, and each imp disk is a reflink clone of it
 ([storage](../architecture/storage.md#images-any-oci-image) covers the pipeline). The image needs no
 imp bits and no init system: the guest kernel boots `imp-agent` from the read-only imp system drive
-(`/dev/vdb`), switches root to the image filesystem, and stays PID 1 there.
+(`/dev/vdb`), stays PID 1 there, and runs the image filesystem in an
+[inner container](../architecture/agent.md#the-inner-container).
 
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |

@@ -40,7 +40,7 @@ const (
 	OpListen = "listen"
 
 	// claim gives a guest restored from a boot template its own identity;
-	// only stage 1, parked in a template, answers it
+	// only an agent parked in a boot template answers it
 	OpClaim = "claim"
 )
 
