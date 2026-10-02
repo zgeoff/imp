@@ -14,11 +14,18 @@ function pickPorts() {
   };
 }
 
-async function isListening(port: number): Promise<boolean> {
+// True when this proxy still serves `name` on the port. The answer names the
+// imp: random ports can collide with another process on a busy host, and one
+// that merely listens there must not count.
+async function isServingImp(port: number, name: string): Promise<boolean> {
   try {
-    await fetch(`http://127.0.0.1:${String(port)}/`, { signal: AbortSignal.timeout(500) });
+    const response = await fetch(`http://127.0.0.1:${String(port)}/`, {
+      signal: AbortSignal.timeout(5000),
+    });
 
-    return true;
+    const body = await response.text();
+
+    return body.includes(`There is no imp named ${name}.`);
   } catch {
     return false;
   }
@@ -53,7 +60,7 @@ test('overlapping listener syncs end with the listeners the database holds', asy
 
     await Promise.all([first, second]);
 
-    const listening = await isListening(Number(ports.IMP_PORT_BASE) + fresh.slot);
+    const listening = await isServingImp(Number(ports.IMP_PORT_BASE) + fresh.slot, 'new');
 
     expect(listening).toBe(false);
   } finally {

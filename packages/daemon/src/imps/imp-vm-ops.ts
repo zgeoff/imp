@@ -79,9 +79,6 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     const paths = context.findPaths(imp.id);
     const address = context.findAddress(imp.slot);
 
-    // a memory snapshot is only valid with the disk it was taken with
-    removeSnapshot(paths);
-
     // a fresh guest's RSS starts small and grows; reserve part of its memory
     await context.admission?.admit({
       id: imp.id,
@@ -91,6 +88,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     });
 
     try {
+      // a memory snapshot is only valid with the disk it was taken with. It
+      // goes once the boot is admitted: a sleeping imp the budget turns away
+      // keeps its memory.
+      removeSnapshot(paths);
+
       await context.taps.setupTap(address);
 
       const vm = await context.vms.startVm({
@@ -244,7 +246,13 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
       context.admission?.release(imp.id);
 
-      return startImpVm(imp);
+      // the load may have run the guest, which can write its disk: the
+      // snapshot no longer matches it, even if the cold boot is turned away
+      removeSnapshot(paths);
+
+      const stopped = await updateState(imp, { state: 'stopped', pid: null });
+
+      return startImpVm(stopped);
     }
   };
 

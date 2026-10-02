@@ -62,7 +62,8 @@ lock, so two calls never change one imp at once.
   session before the wake, so no background sleep slips in between.
 - **Recovery.** After a start, impd re-adopts every live VM by its pid and API socket. A running imp
   with no live VM is marked `stopped` (or `sleeping`, see above); an imp that was still `creating`
-  goes to `error`. Sleeping imps stay asleep.
+  goes to `error`, and its VM is killed. If the VM does not die, the record keeps its pid for a
+  later start or destroy, and impd starts anyway. Sleeping imps stay asleep.
 
 [Sleep and wake](./sleep-and-wake.md) describes the sleep and wake steps.
 

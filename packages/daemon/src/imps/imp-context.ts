@@ -40,6 +40,10 @@ export interface ImpServiceDeps {
   // the host's live tailnet name, null when tailscaled does not answer; the
   // configured name can be taken by an older node (`imp-1`)
   readonly readTailnetHostname?: () => Promise<string | null>;
+
+  // the clock holds and RAM reservations are judged by; Date.now by default,
+  // so tests can move it
+  readonly now?: () => number;
 }
 
 // What every part of the imp service shares: the deps with their defaults
@@ -55,6 +59,7 @@ export interface ImpContext {
   readonly admission: RamAdmission | undefined;
   readonly readRamMib: (pid: number, apiSocket: string) => number | null;
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
+  readonly now: () => number;
   readonly readIdentity: () => SnapshotIdentity;
   readonly emitChanged: () => void;
   readonly tracker: ActivityTracker;
@@ -77,6 +82,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readTailnetHostname: deps.readTailnetHostname,
+    now: deps.now ?? Date.now,
     readIdentity: () => {
       identityCache.value ??= readSnapshotIdentity(deps.config);
 

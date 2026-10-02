@@ -187,7 +187,7 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
     holdImp: (name, seconds) =>
       lock.withImp(name, async (imp) => {
-        const until = seconds > 0 ? new Date(Date.now() + seconds * 1000) : null;
+        const until = seconds > 0 ? new Date(context.now() + seconds * 1000) : null;
 
         const updated = await updateImpHold(context.db, imp.id, until);
 
