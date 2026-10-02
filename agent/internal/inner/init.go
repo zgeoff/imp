@@ -56,10 +56,11 @@ func Run() error {
 // ignoreSignals makes the inner init deaf to signals from inside. The kernel
 // spares a namespace's init only the signals it has no handler for, and the
 // Go runtime installs a handler for nearly every one: a `kill -TERM 1` would
-// end it. An ignored signal sent by a process is dropped (the runtime checks
-// for that before it would crash on, say, a SIGSEGV from kill). SIGCHLD
-// stays for the reaper; SIGURG is the runtime's own preemption signal, and
-// harmless.
+// end it. The init takes each signal and drops it; one sent by a process,
+// even a SIGSEGV, never crashes the runtime. Not signal.Ignore: an ignored
+// signal stays ignored across exec, in every process the init starts.
+// SIGCHLD stays for the reaper; SIGURG is the runtime's own preemption
+// signal, and harmless.
 func ignoreSignals() {
 	var sigs []os.Signal
 	for sig := syscall.Signal(1); sig <= 64; sig++ {
@@ -69,7 +70,12 @@ func ignoreSignals() {
 		}
 		sigs = append(sigs, sig)
 	}
-	signal.Ignore(sigs...)
+	ch := make(chan os.Signal, 16)
+	signal.Notify(ch, sigs...)
+	go func() {
+		for range ch {
+		}
+	}()
 }
 
 // setupRoot builds the user's root on UserRoot in this mount namespace and
