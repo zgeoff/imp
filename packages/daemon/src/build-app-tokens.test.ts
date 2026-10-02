@@ -10,6 +10,7 @@ import type { TailnetPeer } from './auth/tailnet-identity';
 import { listApiCalls } from './db/api-audit';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 import type { ImpTest } from './imps/test-imps';
+import type { TailscaleStatus } from './net/tailscale-status';
 import { PEER_HEADER } from './proxy/forwarded-peers';
 import { tryExecSocket, tryTunnelSocket } from './test-sockets';
 
@@ -29,6 +30,10 @@ function readFakeWhois(address: string): Promise<TailnetPeer | null> {
 
 const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
 
+function readNoNode(): Promise<TailscaleStatus> {
+  return Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] });
+}
+
 function buildBearer(secret: string): Record<string, string> {
   return { authorization: `Bearer ${secret}` };
 }
@@ -47,13 +52,12 @@ async function setupTest(options: TestOptions = {}) {
           identities: createTailnetIdentities({
             rules: [{ match: 'user:alice@example.com', scope: 'exec' as const, imps: ['dev-*'] }],
             whois: readFakeWhois,
+            readTailscale: readNoNode,
             now: harness.now,
           }),
           knownHosts: createKnownHosts({
-            readTailscale: () =>
-              Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null }),
+            readTailscale: readNoNode,
             domain: null,
-            now: harness.now,
           }),
         }
       : null;
@@ -368,6 +372,50 @@ test('removing a token closes its open sockets', async () => {
   } finally {
     await server.stop(true);
   }
+});
+
+// A removal that lands after the token passed its check but before the
+// socket opened: the socket must close all the same.
+test('a socket that opens after its token is revoked closes at once', async () => {
+  await using ctx = await setupTest();
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const ci = await ctx.createTokenClient('ci', 'exec');
+
+    const tokenId = /^imp_(?<id>[^.]+)\./v.exec(ci.secret)?.groups?.['id'] ?? '';
+
+    expect(tokenId).not.toBe('');
+
+    ctx.revocations.revoke(tokenId);
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/tunnel`, {
+      headers: { authorization: `Bearer ${ci.secret}` },
+    });
+
+    const closed = Promise.withResolvers<CloseEvent>();
+
+    socket.addEventListener('close', closed.resolve);
+
+    const event = await closed.promise;
+
+    expect(event.code).toBe(1008);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('a token limited to no imps at all is refused', async () => {
+  await using ctx = await setupTest();
+
+  const made = ctx.client.tokens.create({ name: 'none', scope: 'read', imps: [] });
+
+  const code = await readErrorCode(made);
+
+  expect(code).toBe('BAD_REQUEST');
 });
 
 test('a tailnet identity reaches the API only through a peer handle impd made', async () => {

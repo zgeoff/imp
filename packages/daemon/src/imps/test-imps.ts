@@ -324,7 +324,8 @@ export function buildTestApp(
       storageGate: ctx.storageGate,
       log: () => {},
     }),
-    readTailscale: () => Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null }),
+    readTailscale: () =>
+      Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     isReady: () => true,
     now: ctx.now,
     audit: createApiAudit({ db: ctx.db, now: ctx.now, log: () => {} }),

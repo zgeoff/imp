@@ -6,44 +6,29 @@ import type { TailscaleStatus } from '../net/tailscale-status';
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
 
-// how long the tailnet name and address are kept between reads
-const STATUS_TTL_MS = 30_000;
-
 export interface KnownHosts {
   readonly read: () => Promise<ReadonlySet<string>>;
 }
 
 interface KnownHostsDeps {
+  // the node's status, read at most every 30 s (createStatusCache)
   readonly readTailscale: () => Promise<TailscaleStatus>;
 
   // the apex of IMP_DOMAIN, where impd's API answers; null without one
   readonly domain: string | null;
-  readonly now: () => number;
 }
 
 // the names impd answers to: loopback, the tailnet node's names and
-// address, and the domain
+// addresses, and the domain; an address as readHostName spells it
 export function createKnownHosts(deps: Readonly<KnownHostsDeps>): KnownHosts {
-  const state: { hosts: Promise<ReadonlySet<string>> | null; at: number } = { hosts: null, at: 0 };
-
-  const load = async (): Promise<ReadonlySet<string>> => {
-    const status = await deps.readTailscale();
-
-    const names = [...LOOPBACK_HOSTS, status.hostname, status.dnsName, status.ip, deps.domain];
-
-    return new Set(names.filter((name) => name !== null).map((name) => name.toLowerCase()));
-  };
-
   return {
-    read: () => {
-      const at = deps.now();
+    read: async () => {
+      const status = await deps.readTailscale();
 
-      if (state.hosts === null || at - state.at >= STATUS_TTL_MS) {
-        state.hosts = load();
-        state.at = at;
-      }
+      const addresses = status.ips.map(readAddressHost);
+      const names = [...LOOPBACK_HOSTS, status.hostname, status.dnsName, ...addresses, deps.domain];
 
-      return state.hosts;
+      return new Set(names.filter((name) => name !== null).map((name) => name.toLowerCase()));
     },
   };
 }
@@ -74,6 +59,13 @@ export function isAllowedAmbientRequest(request: Request, hosts: ReadonlySet<str
   } catch {
     return false;
   }
+}
+
+// a tailnet address as a Host header names it: IPv6 in brackets
+function readAddressHost(ip: string): string | null {
+  const host = ip.includes(':') ? `[${ip}]` : ip;
+
+  return readHostName(host);
 }
 
 // the Host header without its port, lowercased; null when there is none

@@ -18,6 +18,7 @@ const FAKE_STATUS = {
   hostname: 'imp',
   dnsName: 'imp.tail1234.ts.net',
   ip: '100.64.0.1',
+  ips: ['100.64.0.1'],
 };
 
 // alice's laptop is the one tailnet peer; her rule gives read on dev-*
@@ -28,12 +29,12 @@ function buildTailnet() {
     identities: createTailnetIdentities({
       rules: [{ match: 'user:alice@example.com', scope: 'read', imps: ['dev-*'] }],
       whois: (address) => Promise.resolve(peers.get(address) ?? null),
+      readTailscale: () => Promise.resolve(FAKE_STATUS),
       now: () => NOW,
     }),
     knownHosts: createKnownHosts({
       readTailscale: () => Promise.resolve(FAKE_STATUS),
       domain: 'imp.example.com',
-      now: () => NOW,
     }),
   };
 }

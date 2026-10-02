@@ -11,7 +11,10 @@ export interface TailscaleStatus {
 
   // the full MagicDNS name, without the trailing dot
   readonly dnsName: string | null;
+
+  // the IPv4 address, else the IPv6 one; ips holds every one
   readonly ip: string | null;
+  readonly ips: readonly string[];
 }
 
 const IpListSchema = z.array(z.string()).nullable().optional();
@@ -23,7 +26,10 @@ const StatusSchema = z.object({
     .optional(),
 });
 
-const UNKNOWN: TailscaleStatus = { state: null, hostname: null, dnsName: null, ip: null };
+const UNKNOWN: TailscaleStatus = { state: null, hostname: null, dnsName: null, ip: null, ips: [] };
+
+// how long a status read by createStatusCache counts
+const STATUS_TTL_MS = 30_000;
 
 // `tailscale status --json` in the host container; all null when no node is
 // configured or tailscaled does not answer
@@ -39,6 +45,7 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
       hostname: dnsLabel === '' ? (status.Self?.HostName ?? null) : dnsLabel,
       dnsName: dnsName === '' ? null : dnsName,
       ip: ips.find((ip) => ip.includes('.')) ?? ips[0] ?? null,
+      ips,
     };
   } catch {
     return UNKNOWN;
@@ -57,4 +64,23 @@ export async function readTailscaleStatus(configured: boolean): Promise<Tailscal
   } catch {
     return UNKNOWN;
   }
+}
+
+// `tailscale status` at most every 30 s, for callers on every request
+export function createStatusCache(
+  read: () => Promise<TailscaleStatus>,
+  now: () => number,
+): () => Promise<TailscaleStatus> {
+  const state: { status: Promise<TailscaleStatus> | null; at: number } = { status: null, at: 0 };
+
+  return () => {
+    const at = now();
+
+    if (state.status === null || at - state.at >= STATUS_TTL_MS) {
+      state.status = read();
+      state.at = at;
+    }
+
+    return state.status;
+  };
 }

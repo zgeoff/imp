@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import type { TailscaleStatus } from '../net/tailscale-status';
 import {
   TailnetRulesSchema,
   createTailnetIdentities,
@@ -10,6 +11,19 @@ import type { TailnetPeer } from './tailnet-identity';
 
 const ALICE: TailnetPeer = { login: 'alice@example.com', tags: [], node: 'laptop' };
 const CI: TailnetPeer = { login: null, tags: ['tag:ci'], node: 'runner' };
+
+// the node impd runs on
+const NODE_STATUS: TailscaleStatus = {
+  state: 'Running',
+  hostname: 'imp-1',
+  dnsName: 'imp-1.tail1234.ts.net',
+  ip: '100.64.0.7',
+  ips: ['100.64.0.7', 'fd7a:115c:a1e0::7'],
+};
+
+function readNodeStatus(): Promise<TailscaleStatus> {
+  return Promise.resolve(NODE_STATUS);
+}
 
 // trimmed from `tailscale whois --json` for a user's node and a tagged one
 const USER_WHOIS = JSON.stringify({
@@ -78,6 +92,7 @@ test('whois answers are kept a minute, and never asked for other addresses', asy
 
       return Promise.resolve(ALICE);
     },
+    readTailscale: readNodeStatus,
     now: () => clock.at,
   });
 
@@ -96,10 +111,37 @@ test('a failed whois gives no identity', async () => {
   const identities = createTailnetIdentities({
     rules: [{ match: '*', scope: 'read' }],
     whois: () => Promise.reject(new Error('tailscaled is down')),
+    readTailscale: readNodeStatus,
     now: () => 0,
   });
 
   const caller = await identities.resolve('100.101.102.103');
 
   expect(caller).toBeNull();
+});
+
+test('the node’s own addresses are no peer, whatever whois says', async () => {
+  const asked: string[] = [];
+
+  const identities = createTailnetIdentities({
+    rules: [{ match: '*', scope: 'manage' }],
+    whois: (address) => {
+      asked.push(address);
+
+      return Promise.resolve({ login: null, tags: ['tag:imp'], node: 'imp-1' });
+    },
+    readTailscale: readNodeStatus,
+    now: () => 0,
+  });
+
+  const [ipv4, mapped, ipv6, other] = await Promise.all([
+    identities.resolve('100.64.0.7'),
+    identities.resolve('::ffff:100.64.0.7'),
+    identities.resolve('FD7A:115C:A1E0::7'),
+    identities.resolve('100.101.102.103'),
+  ]);
+
+  expect([ipv4, mapped, ipv6]).toEqual([null, null, null]);
+  expect(other?.name).toBe('imp-1');
+  expect(asked).toEqual(['100.101.102.103']);
 });

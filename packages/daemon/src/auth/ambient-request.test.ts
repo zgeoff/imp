@@ -27,7 +27,7 @@ test('a browser must be on impd’s own origin', () => {
   ).toBeFalse();
 });
 
-test('the known hosts are loopback, the node’s names and address, and the domain', async () => {
+test('the known hosts are loopback, the node’s names and addresses, and the domain', async () => {
   const hosts = createKnownHosts({
     readTailscale: () =>
       Promise.resolve({
@@ -35,15 +35,20 @@ test('the known hosts are loopback, the node’s names and address, and the doma
         hostname: 'imp-1',
         dnsName: 'imp-1.tail1234.ts.net',
         ip: '100.64.0.7',
+        ips: ['100.64.0.7', 'fd7a:115c:a1e0:0::7'],
       }),
     domain: 'imp.example.com',
-    now: () => 0,
   });
 
-  expect([...(await hosts.read())].toSorted()).toEqual(
+  const known = await hosts.read();
+
+  expect(isAllowedAmbientRequest(buildRequest('[FD7A:115C:A1E0::7]:7070'), known)).toBeTrue();
+
+  expect([...known].toSorted()).toEqual(
     [
       '127.0.0.1',
       '100.64.0.7',
+      '[fd7a:115c:a1e0::7]',
       '[::1]',
       'imp-1',
       'imp-1.tail1234.ts.net',

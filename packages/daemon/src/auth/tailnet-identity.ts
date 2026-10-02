@@ -1,5 +1,6 @@
 import { ImpPatternSchema, ScopeSchema } from '@imp/api';
 import * as z from 'zod';
+import type { TailscaleStatus } from '../net/tailscale-status';
 import { runCommand } from '../process/run-command';
 import type { Caller } from './caller';
 
@@ -49,6 +50,9 @@ export interface TailnetIdentities {
 interface TailnetIdentitiesDeps {
   readonly rules: readonly TailnetRule[];
   readonly whois: (address: string) => Promise<TailnetPeer | null>;
+
+  // the node's status, read at most every 30 s (createStatusCache)
+  readonly readTailscale: () => Promise<TailscaleStatus>;
   readonly now: () => number;
 }
 
@@ -92,7 +96,17 @@ export function createTailnetIdentities(deps: Readonly<TailnetIdentitiesDeps>): 
         return null;
       }
 
-      const peer = await readCachedPeer(normalizeAddress(address));
+      const plain = normalizeAddress(address);
+
+      // impd itself, or an imp's traffic leaving through the node: the raw
+      // rule lets local sources pass, and whois names the node's own tags
+      const own = await isOwnAddress(deps.readTailscale, plain);
+
+      if (own) {
+        return null;
+      }
+
+      const peer = await readCachedPeer(plain);
 
       return peer === null ? null : findTailnetCaller(deps.rules, peer);
     },
@@ -153,6 +167,17 @@ async function readWhois(
   } catch {
     return null;
   }
+}
+
+async function isOwnAddress(
+  readTailscale: TailnetIdentitiesDeps['readTailscale'],
+  address: string,
+): Promise<boolean> {
+  const status = await readTailscale();
+
+  const wanted = address.toLowerCase();
+
+  return status.ips.some((ip) => ip.toLowerCase() === wanted);
 }
 
 // Tailscale's ranges: 100.64.0.0/10 and fd7a:115c:a1e0::/48. tailscaled

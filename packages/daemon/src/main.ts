@@ -21,7 +21,7 @@ import { buildHttpsService } from './https/build-https-service';
 import { createIdleLoop } from './idle/idle-loop';
 import { createImageService } from './images/image-service';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
-import { readTailscaleStatus } from './net/tailscale-status';
+import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { printLog } from './process/print-log';
@@ -74,22 +74,25 @@ async function runStopStep(
   }
 }
 
-// tailnet identity, when IMP_TAILNET_IDENTITIES has rules
-function buildTailnetAccess(config: Config, readTailscale: () => Promise<TailscaleStatus>) {
+// tailnet identity, when IMP_TAILNET_IDENTITIES has rules; both ask about
+// the node on every request, so they share one cached status
+function buildTailnetAccess(config: Config, readStatus: () => Promise<TailscaleStatus>) {
   if (config.tailnetRules === null) {
     return null;
   }
+
+  const readTailscale = createStatusCache(readStatus, Date.now);
 
   return {
     identities: createTailnetIdentities({
       rules: config.tailnetRules,
       whois: runWhois,
+      readTailscale,
       now: Date.now,
     }),
     knownHosts: createKnownHosts({
       readTailscale,
       domain: config.https?.domain ?? null,
-      now: Date.now,
     }),
   };
 }

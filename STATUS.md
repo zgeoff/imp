@@ -119,8 +119,7 @@ From the milestone work:
   e2e suite (3.5–4.2 s) checks scopes and imp patterns through the CLI. The `tailscale` suite's
   tailnet identity case passed once on the dev box (suite 31.4 s with it), with a rule for any
   member. SSH logins still go by `authorized_keys` only: every key there has `exec` on every imp,
-  and keys tied to scoped tokens are not built. The node's IPv6 tailnet address is not a known
-  `Host` for a tailnet identity yet.
+  and keys tied to scoped tokens are not built.
 - The base image's dockerd wrapper still clears stale `/run` files, which the agent's `/run` tmpfs
   already prevents ([#5](https://github.com/zgeoff/imp/issues/5) removes it).
 
