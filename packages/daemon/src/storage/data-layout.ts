@@ -28,7 +28,6 @@ export interface ImagePaths {
 export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
   const dir = join(dataDir, 'imps', impId);
   const runDir = join(dir, 'run');
-  const snapshotDir = join(dir, 'snapshot');
 
   return {
     dir,
@@ -38,12 +37,19 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
     vsockSocket: join(runDir, 'vsock.sock'),
     logFile: join(runDir, 'firecracker.log'),
     pidFile: join(runDir, 'pid'),
+    ...buildSnapshotPaths(join(dir, 'snapshot')),
+    vmIdentity: join(dir, 'vm.json'),
+    checkpointsDir: join(dir, 'checkpoints'),
+  };
+}
+
+// the memory snapshot's files; ZFS keeps them in a dataset of their own
+export function buildSnapshotPaths(snapshotDir: string) {
+  return {
     snapshotDir,
     vmstate: join(snapshotDir, 'vmstate'),
     memFile: join(snapshotDir, 'mem'),
     snapshotMeta: join(snapshotDir, 'meta.json'),
-    vmIdentity: join(dir, 'vm.json'),
-    checkpointsDir: join(dir, 'checkpoints'),
   };
 }
 
