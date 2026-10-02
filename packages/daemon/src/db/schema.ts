@@ -152,6 +152,18 @@ export interface TokenSshKeysTable {
   created_at: number;
 }
 
+// a private network between imps (docs/guides/networks.md)
+interface NetworksTable {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+interface NetworkMembersTable {
+  network_id: string;
+  imp_id: string;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -162,4 +174,6 @@ export interface DatabaseSchema {
   api_audit: ApiAuditTable;
   tokens: TokensTable;
   token_ssh_keys: TokenSshKeysTable;
+  networks: NetworksTable;
+  network_members: NetworkMembersTable;
 }

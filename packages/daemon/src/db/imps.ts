@@ -67,6 +67,10 @@ export interface NewImp {
   readonly egress?: EgressPolicy;
   readonly cpu?: CpuSettings;
   readonly isIdentityResetPending?: boolean;
+
+  // the networks it joins, in the insert's transaction: its first firewall
+  // has them
+  readonly networkIds?: readonly string[];
 }
 
 export interface ImpStateChange {
@@ -145,6 +149,13 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  if (imp.networkIds !== undefined && imp.networkIds.length > 0) {
+    await db
+      .insertInto('network_members')
+      .values(imp.networkIds.map((networkId) => ({ network_id: networkId, imp_id: row.id })))
+      .execute();
+  }
 
   return toImpRecord(row);
 }
