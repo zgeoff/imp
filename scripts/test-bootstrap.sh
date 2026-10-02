@@ -222,7 +222,7 @@ expect_exit() {
 wait_for_imp_host() {
   local i
   for i in $(seq 30); do
-    [ "$(in_container docker inspect -f '{{.State.Running}}' imp-host 2>/dev/null)" = true ] && return 0
+    [ "$(in_container docker container inspect -f '{{.State.Running}}' imp-host 2>/dev/null)" = true ] && return 0
     [ "$i" = 30 ] || sleep 1
   done
   in_container journalctl -u imp-host --no-pager -n 20 >&2
@@ -305,12 +305,12 @@ check_host_firewall_none() {
 # stub has no ip.
 imp_host_ip6() {
   local pid
-  pid=$(in_container docker inspect -f '{{.State.Pid}}' imp-host)
+  pid=$(in_container docker container inspect -f '{{.State.Pid}}' imp-host)
   in_container nsenter -t "$pid" -n ip -6 "$@"
 }
 
 # imp_host_networks: the networks imp-host is on, one per line.
-imp_host_networks() { in_container docker inspect -f '{{json .NetworkSettings.Networks}}' imp-host | jq -r 'keys[]'; }
+imp_host_networks() { in_container docker container inspect -f '{{json .NetworkSettings.Networks}}' imp-host | jq -r 'keys[]'; }
 
 env_value() { in_container sed -n "s/^$1=//p" /etc/imp/imp-host.env | tail -n 1; }
 
@@ -498,7 +498,7 @@ run_distro() {
     grep -q 'change: blank TAILSCALE_AUTHKEY' <<<"$LAST_OUTPUT" || fail "[$distro] the key was not blanked"
     in_container grep -qx "TAILSCALE_AUTHKEY=" /etc/imp/imp-host.env \
       || fail "[$distro] imp-host.env still holds a Tailscale key"
-    ! in_container docker inspect -f '{{.Config.Env}}' imp-host | grep -qF "$fake_key" \
+    ! in_container docker container inspect -f '{{.Config.Env}}' imp-host | grep -qF "$fake_key" \
       || fail "[$distro] the running imp-host still has the Tailscale key in its environment"
     grep -q "delete /mnt/archive/authkey now" <<<"$LAST_OUTPUT" || fail "[$distro] no reminder to delete the key file"
   fi
