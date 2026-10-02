@@ -36,6 +36,9 @@ interface HttpsServiceDeps {
   readonly readServePorts: () => Promise<readonly number[]>;
   readonly now: () => number;
   readonly log: (message: string) => void;
+
+  // how often the tailnet IP is read; 30 s unless a test is in a hurry
+  readonly addressIntervalMs?: number;
 }
 
 // HTTPS on the domain (docs/guides/https.md): the certificate, its renewal,
@@ -62,14 +65,15 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
     log,
   });
 
-  // the IP the A records were last set to, the one checked for a
-  // conflicting `tailscale serve`, and whether stop ran: a renewal that
-  // finishes later must not start listeners again
-  const state: { recordsIp: string | null; checkedServeFor: string | null; stopped: boolean } = {
-    recordsIp: null,
-    checkedServeFor: null,
-    stopped: false,
-  };
+  // the last tailnet IP tailscaled reported, the IP the A records were last
+  // set to, the one checked for a conflicting `tailscale serve`, and whether
+  // stop ran: a renewal that finishes later must not start listeners again
+  const state: {
+    tailnetIp: string | null;
+    recordsIp: string | null;
+    checkedServeFor: string | null;
+    stopped: boolean;
+  } = { tailnetIp: null, recordsIp: null, checkedServeFor: null, stopped: false };
 
   const tickers: Ticker[] = [];
 
@@ -112,7 +116,12 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
 
   const updateAddresses = async (): Promise<void> => {
     const status = deps.readTailscale === null ? null : await deps.readTailscale();
-    const ip = status?.ip ?? null;
+
+    // a status call that fails reads as no IP; dropping the listener for it
+    // would cut every open connection, so only a new IP moves them
+    state.tailnetIp = status?.ip ?? state.tailnetIp;
+
+    const ip = state.tailnetIp;
 
     if (state.stopped) {
       return;
@@ -155,7 +164,12 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
 
       tickers.push(
         startTicker('https renewal', RENEW_INTERVAL_MS, runRenewal, log),
-        startTicker('https addresses', ADDRESS_INTERVAL_MS, updateAddresses, log),
+        startTicker(
+          'https addresses',
+          deps.addressIntervalMs ?? ADDRESS_INTERVAL_MS,
+          updateAddresses,
+          log,
+        ),
       );
     },
     stop: async () => {

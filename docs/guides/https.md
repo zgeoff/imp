@@ -86,7 +86,7 @@ start it again.
 impd listens on `IMP_HTTPS_PORT` (443) and `IMP_HTTP_PORT` (80), each on two addresses: the tailnet
 IP and 127.0.0.1. It never listens on 0.0.0.0, so a port that Docker publishes to the internet never
 reaches these listeners. impd checks the tailnet IP every 30 seconds and moves the listeners when it
-changes.
+changes. A failed check keeps them where they are, so it never cuts open connections.
 
 - **443** terminates TLS and hands the request to the
   [wake proxy](../architecture/networking.md#the-wake-proxy). The Host header must be exactly

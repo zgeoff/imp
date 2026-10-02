@@ -141,7 +141,14 @@ test('it finds the zone by walking up the labels, and asks once per name', async
 test('it sets an A record DNS only, and changes it in place', async () => {
   const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
 
+  fake.calls.length = 0;
+
   await provider.setA('*.imp.example.com', '100.64.0.7');
+
+  expect(fake.calls.filter((call) => call.startsWith('GET /zones?'))).toEqual([
+    'GET /zones?name=imp.example.com',
+    'GET /zones?name=example.com',
+  ]);
 
   for (const record of fake.records) {
     if (record.name === '*.imp.example.com') {

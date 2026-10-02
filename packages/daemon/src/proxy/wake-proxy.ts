@@ -67,6 +67,9 @@ interface UpstreamOptions {
   readonly release: () => void;
   readonly wokeMs: number | null;
   readonly formatFailure: (reason: string) => string;
+
+  // impd's own API needs the dashboard's session; an imp must never get it
+  readonly keepSession: boolean;
 }
 
 export interface WakeProxy {
@@ -135,6 +138,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         },
         wokeMs: null,
         formatFailure: (reason) => `impd's API did not answer (${reason}).`,
+        keepSession: true,
       });
     }
 
@@ -178,6 +182,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       wokeMs,
       formatFailure: (reason) =>
         `${name} is awake, but nothing answered on port ${String(imp.httpPort)} (${reason}).`,
+      keepSession: false,
     });
   };
 
@@ -193,15 +198,16 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const url = new URL(request.url);
 
     const target = `${address}${url.pathname}${url.search}`;
+    const upstreamHeaders = buildUpstreamHeaders(request, server, options.keepSession);
 
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-      return handleWebSocket(request, server, `ws://${target}`, release);
+      return handleWebSocket(request, server, `ws://${target}`, upstreamHeaders, release);
     }
 
     try {
       const upstream = await fetch(`http://${target}`, {
         method: request.method,
-        headers: buildUpstreamHeaders(request, server),
+        headers: upstreamHeaders,
         body: request.body,
         redirect: 'manual',
         decompress: false,
@@ -240,6 +246,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     request: Request,
     server: ProxyServer,
     target: string,
+    headers: Readonly<Headers>,
     release: () => void,
   ): Promise<Response | undefined> => {
     const protocols = (request.headers.get('sec-websocket-protocol') ?? '')
@@ -251,7 +258,7 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
     const pending: (string | ArrayBuffer)[] = [];
 
     try {
-      upstream = await openUpstreamSocket(target, protocols, buildUpstreamHeaders(request, server));
+      upstream = await openUpstreamSocket(target, protocols, headers);
     } catch (error) {
       release();
 
@@ -364,7 +371,11 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
   };
 }
 
-function buildUpstreamHeaders(request: Request, server: ProxyServer): Headers {
+function buildUpstreamHeaders(
+  request: Request,
+  server: ProxyServer,
+  keepSession: boolean,
+): Headers {
   const headers = new Headers(request.headers);
 
   for (const header of HOP_HEADERS) {
@@ -381,7 +392,7 @@ function buildUpstreamHeaders(request: Request, server: ProxyServer): Headers {
   // too; an imp must not get it. An imp can still set a cookie by that name
   // and so log the dashboard out, which costs a login and nothing more.
   const cookie = headers.get('cookie');
-  const kept = cookie === null ? null : removeSessionCookie(cookie);
+  const kept = cookie === null || keepSession ? cookie : removeSessionCookie(cookie);
 
   if (kept === null) {
     headers.delete('cookie');

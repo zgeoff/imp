@@ -33,6 +33,7 @@ function startFakeApi(port: number) {
 
         // the dashboard's same-origin check compares the Origin with this
         host: new URL(request.url).host,
+        cookie: request.headers.get('cookie'),
       });
     },
     websocket: {
@@ -68,6 +69,14 @@ async function setup() {
       logs.push(message);
     },
   });
+
+  // an imp whose address is the fake API's, so a request to it shows what
+  // the imp would get
+  await ctx.createTestImage('ubuntu');
+
+  const imp = await ctx.imps.createImp({ name: 'web', httpPort: ports.api });
+
+  await ctx.db.updateTable('imps').set({ ip: '127.0.0.1' }).where('id', '=', imp.id).execute();
 
   return {
     ports,
@@ -128,7 +137,7 @@ test('the bare domain reaches the API over https, and only one label names an im
   const apex = await readTls(ctx.ports.https, DOMAIN, '/health');
   const apexBody: unknown = await apex.json();
 
-  expect(apexBody).toEqual({ path: '/health', proto: 'https', host: DOMAIN });
+  expect(apexBody).toEqual({ path: '/health', proto: 'https', host: DOMAIN, cookie: null });
 
   // `imp.imp.test` is the imp named imp, which does not exist
   const imp = await readTls(ctx.ports.https, `imp.${DOMAIN}`);
@@ -146,6 +155,35 @@ test('the bare domain reaches the API over https, and only one label names an im
   const other = await readTls(ctx.ports.https, 'box.imp.localhost');
 
   expect(other.status).toBe(404);
+});
+
+test('the API on the bare domain gets the dashboard session, and an imp never does', async () => {
+  await using ctx = await setup();
+
+  const certificate = await createTestCertificate({ names: NAMES });
+
+  ctx.listeners.setAddresses(['127.0.0.1']);
+  ctx.listeners.setCertificate(certificate);
+
+  const cookie = 'a=1; __Host-imp_session=v1.2.secret; imp_session=v1.2.plain';
+
+  const send = async (host: string) => {
+    const response = await fetch(`https://127.0.0.1:${String(ctx.ports.https)}/`, {
+      headers: { host, cookie },
+      tls: { rejectUnauthorized: false },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    const body: unknown = await response.json();
+
+    return body;
+  };
+
+  const apex = await send(DOMAIN);
+  const imp = await send(`web.${DOMAIN}`);
+
+  expect(apex).toMatchObject({ cookie });
+  expect(imp).toMatchObject({ host: `web.${DOMAIN}`, cookie: 'a=1' });
 });
 
 test('plain http on the domain redirects to https, and wakes nothing', async () => {

@@ -89,7 +89,10 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
 
     const labels = fqdn.split('.');
 
-    for (let index = 0; index < labels.length - 1; index += 1) {
+    // `*.imp.example.com` is a record in a zone, never a zone's own name
+    const first = labels[0] === '*' ? 1 : 0;
+
+    for (let index = first; index < labels.length - 1; index += 1) {
       const candidate = labels.slice(index).join('.');
 
       const result = await sendRequest('GET', `/zones?name=${encodeURIComponent(candidate)}`);

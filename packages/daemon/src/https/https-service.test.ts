@@ -275,3 +275,60 @@ test('a tailscale serve on the HTTPS port is a warning', async () => {
 
   await waitFor(() => ctx.logs.some((line) => line.includes('tailscale serve holds')));
 });
+
+test('a failed tailscale status keeps the tailnet listener and its connections', async () => {
+  const fresh = await createTestCertificate({ names: NAMES });
+
+  const answers: (string | null)[] = [TAILNET_IP, null, null, TAILNET_IP];
+  const events: string[] = [];
+  const dir = mkdtempSync(join(tmpdir(), 'imp-https-'));
+  const config = buildConfig();
+  const store = createCertStore(dir);
+
+  store.writeCertificate(fresh);
+
+  const service = createHttpsService({
+    config,
+    store,
+    issue: () => Promise.resolve(fresh),
+    dns: createRecordingDns().dns,
+    proxy: {
+      startListener: (options) => {
+        const server = startPlainListener(options);
+
+        events.push(`start ${options.hostname ?? ''}`);
+
+        return {
+          stop: async (closeActiveConnections) => {
+            events.push(`stop ${options.hostname ?? ''}`);
+
+            await server.stop(closeActiveConnections);
+          },
+        };
+      },
+    },
+    readTailscale: () => {
+      const ip = answers.length === 0 ? TAILNET_IP : (answers.shift() ?? null);
+
+      return Promise.resolve({ state: 'Running', hostname: 'imp', ip });
+    },
+    readServePorts: () => Promise.resolve([]),
+    now: Date.now,
+    log: () => {},
+    addressIntervalMs: 5,
+  });
+
+  try {
+    service.start();
+
+    await waitFor(() => answers.length === 0);
+
+    await Bun.sleep(20);
+
+    expect(events.filter((event) => event.endsWith(TAILNET_IP))).toEqual([`start ${TAILNET_IP}`]);
+  } finally {
+    await service.stop();
+
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
