@@ -48,6 +48,20 @@ a new pty. The [protocol](./protocol.md#exec) has the full rules. The service su
 file in `/etc/imp/services.d`, logs to `/var/log/imp/<name>.log`, and restarts a service that exits,
 with backoff.
 
+## Sessions
+
+A session keeps a program on a pty alive without a host connection
+([protocol](./protocol.md#sessions)). One goroutine per session reads the pty into a history buffer
+and into the attached viewer's queue, and never waits for the viewer. The history keeps the last
+256–512 KiB of raw output. A VT parser (`charmbracelet/x/ansi`) reads the output that the history
+drops, so the history knows the terminal modes in effect where its kept output starts, and cuts it
+between escape sequences.
+
+The history sits behind a `Screen` interface. A terminal emulator that keeps the cell grid (such as
+`charmbracelet/x/vt`) could replace it, so that a replay shows the screen as it is instead of raw
+output that the program must redraw over. Sessions live in the agent's memory: they survive a sleep
+and wake, and end with the guest.
+
 ## Shutdown
 
 On `shutdown` the agent stops the services, signals every other process, syncs, remounts `/`

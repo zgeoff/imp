@@ -132,11 +132,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	s.close()
 	writer.Wait()
 
-	exit := proto.Exit{Code: st.Code}
-	if st.Signal != 0 {
-		exit = proto.Exit{Code: 128 + int(st.Signal), Signal: int(st.Signal)}
-	}
-	err = w.WriteJSON(proto.TypeExit, exit)
+	err = w.WriteJSON(proto.TypeExit, proto.ExitOf(st.Code, int(st.Signal)))
 	// The host closes once it has EXIT. Read until then: a host frame that
 	// races the exit (stdin EOF) must not hit a closed socket, or the host
 	// loses the EXIT frame to EPIPE.

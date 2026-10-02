@@ -25,6 +25,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/safe"
 	"github.com/zgeoff/imp/agent/internal/server"
 	"github.com/zgeoff/imp/agent/internal/services"
+	"github.com/zgeoff/imp/agent/internal/session"
 )
 
 // Stage2 runs as PID 1 on the user disk. It finishes the mounts, configures
@@ -72,6 +73,7 @@ func Stage2() error {
 	launcher := launch.New(r, image)
 	srv := &server.Server{
 		Exec:     exec.NewManager(launcher),
+		Sessions: session.NewManager(launcher),
 		Services: sup,
 	}
 	// A shutdown request and a signal can race; only the first powers off.

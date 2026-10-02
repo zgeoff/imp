@@ -5,7 +5,7 @@ as a unix socket; the host connects to it, sends `CONNECT 1024`, and then speaks
 connection carries one request. The first frame is a JSON request; exec connections then carry
 binary frames for stdin, output, resizes, signals and the exit.
 
-Version `0.1.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
+Version `0.2.0`. The Go side is `agent/internal/proto`; the host side is the agent client in impd
 ([daemon](./daemon.md#agent-client-the-vsock-client)).
 
 ## Transport
@@ -54,6 +54,7 @@ Every message after the handshake is a frame:
 |    8 | `STDOUT`    | guest → host | raw bytes                                        |
 |    9 | `STDERR`    | guest → host | raw bytes                                        |
 |   10 | `EXIT`      | guest → host | JSON `{"code":n,"signal":n}`; the last frame     |
+|   11 | `DETACHED`  | guest → host | JSON `{"reason":s}`; ends a session connection   |
 
 Unknown frame types from the host are ignored.
 
@@ -65,14 +66,16 @@ A failed request gets a RESPONSE with an `error` object, then the guest closes t
 { "error": { "code": "EXEC_FAILED", "message": "start foo: no such file or directory" } }
 ```
 
-| Code           | Meaning                                                                       |
-| -------------- | ----------------------------------------------------------------------------- |
-| `BAD_REQUEST`  | The first frame is not a REQUEST, its JSON is invalid, or a field is missing. |
-| `UNKNOWN_OP`   | The `op` is not known to this agent.                                          |
-| `EXEC_FAILED`  | `exec` could not start the process (bad argv, cwd, or user).                  |
-| `FROZEN`       | `freeze` found the root filesystem already frozen.                            |
-| `POWERING_OFF` | `freeze` arrived after a poweroff started.                                    |
-| `INTERNAL`     | A system call failed (for example `FIFREEZE`).                                |
+| Code            | Meaning                                                                                  |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `BAD_REQUEST`   | The first frame is not a REQUEST, its JSON is invalid, or a field is missing or invalid. |
+| `UNKNOWN_OP`    | The `op` is not known to this agent.                                                     |
+| `EXEC_FAILED`   | `exec` could not start the process (bad argv, cwd, or user).                             |
+| `NO_SESSION`    | `session.attach` or `session.kill` named no session.                                     |
+| `SESSION_LIMIT` | A new session would be the 17th.                                                         |
+| `FROZEN`        | `freeze` found the root filesystem already frozen.                                       |
+| `POWERING_OFF`  | `freeze` arrived after a poweroff started.                                               |
+| `INTERNAL`      | A system call failed (for example `FIFREEZE`).                                           |
 
 A successful RESPONSE never has an `error` key.
 
@@ -109,14 +112,21 @@ freeze's auto-thaw as it was. Once `shutdown` (or a signal) starts a poweroff, t
 
 ```json
 → {"op":"activity"}
-← {"tcp_established":1,"exec_sessions":0,"load1":0.08}
+← {"tcp_established":1,"exec_sessions":0,"load1":0.08,"sessions":[
+    {"name":"main","pid":301,"argv":["bash","-l"],"state":"running","attached":false,
+     "cols":120,"rows":40,"started_unix_ms":1790000000000}]}
 ```
 
 - `tcp_established`: ESTABLISHED sockets in `/proc/net/tcp` and `/proc/net/tcp6`, without loopback
   ones (`127.0.0.0/8`, `::1`, `::ffff:127.0.0.0/104`). The agent's own vsock connections are not TCP
   and never count.
-- `exec_sessions`: `exec` connections that are open now.
+- `exec_sessions`: `exec` and `session.attach` connections that are open now. A detached session is
+  not a connection and does not count.
 - `load1`: the 1-minute load average.
+- `sessions`: every [session](#sessions), sorted by name. `state` is `running` or `exited`; an
+  exited session also has `exit` (an EXIT object) until a viewer gets it. `started_unix_ms` is the
+  guest wall clock at the start. The host polls `activity` every 2 s, so it doubles as the session
+  list.
 
 ### `resumed`
 
@@ -201,3 +211,74 @@ Details:
   has not read yet (up to 1024 frames or 4 MiB), and keeps applying RESIZE and SIGNAL frames
   meanwhile. Past that it stops reading the connection until the process reads stdin or exits, so
   later frames of any type wait.
+
+## Sessions
+
+A session is a program on a pty that outlives its connection, for a console you can close and
+reattach to later. The agent keeps up to 16 sessions; an exited session whose EXIT no viewer got yet
+counts too. A name matches `^[a-z0-9][a-z0-9-]{0,31}$`.
+
+### Start or attach
+
+An `exec` request with a `session` name starts the session, or attaches to it if it runs:
+
+```json
+→ REQUEST {"op":"exec","session":"main","argv":["bash","-l"],"tty":true,"cols":120,"rows":40}
+← STARTED {"pid":301,"session":"main","created":true}
+```
+
+`tty` must be true. If the name belongs to a running session, the request attaches and its `argv`,
+`env`, `cwd` and `user` are ignored (`created` is false). If it belongs to an exited session, a new
+session replaces it. `session.attach` only attaches, and fails with `NO_SESSION` if there is no
+session of that name:
+
+```json
+→ REQUEST {"op":"session.attach","session":"main","cols":120,"rows":40}
+← STARTED {"pid":301,"session":"main"}
+```
+
+### The viewer
+
+A session has at most one connection, its viewer. After STARTED the viewer gets:
+
+1. A replay: one or more STDOUT frames with the recent output, about the last 256–512 KiB. It starts
+   with the terminal modes in effect where the kept output starts (alternate screen, mouse modes,
+   bracketed paste, application cursor keys, a hidden cursor, focus events and the kitty keyboard
+   flags), so the viewer's terminal ends in the modes the program set last. The kept output starts
+   between escape sequences and characters, never inside one.
+2. Live output as STDOUT frames.
+3. EXIT when the process exits, or DETACHED when the agent drops the viewer.
+
+The host sends STDIN, RESIZE and SIGNAL as for `exec`. STDIN_EOF is ignored, as with any tty.
+
+The replay is the raw output, written for the terminal size of its time. To redraw a full-screen
+program, an attach to a running session resizes the pty to the viewer's `cols` and `rows`. If the
+size is the same, the agent first sets one row less, so the program always gets SIGWINCH. A program
+that does not redraw on SIGWINCH shows the replay only.
+
+### Detach
+
+- **Host closes the connection.** That is a detach: the process gets no signal and keeps running. A
+  vsock reset on a snapshot restore is a detach too.
+- **Takeover.** A new attach makes the old viewer get `DETACHED {"reason":"taken_over"}`, and the
+  agent closes its connection.
+- **A slow viewer.** The agent never waits for a viewer. A viewer more than 2 MiB behind is dropped
+  with `DETACHED {"reason":"slow"}` and its queued output is discarded. The program keeps writing to
+  the session.
+
+### Exit
+
+When the process exits, the agent forwards the remaining output (for at most 500 ms, as for `exec`)
+and sends EXIT to the viewer, then waits up to 2 s for the host to close. The session is then gone.
+With no viewer attached, the session stays as `exited`; the next attach gets the replay and EXIT,
+and the session is gone after that.
+
+### `session.kill`
+
+```json
+→ {"op":"session.kill","session":"main"}
+← {"ok":true}
+```
+
+The name is free at once. The process group gets SIGHUP, and SIGKILL 2 s later if the process is
+still running. An attached viewer gets the EXIT. `NO_SESSION` if there is no session of that name.
