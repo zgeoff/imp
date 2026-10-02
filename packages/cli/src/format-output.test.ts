@@ -50,6 +50,7 @@ test('it notes why an imp boots cold and what it predates', () => {
     { ...imp, coldBootReason: 'firecrackerVersion changed (v1.17.0 → v1.18.0)' },
     { ...imp, name: 'web', state: 'running', coldBootReason: 'wake failed', outdated: ['agent'] },
     { ...imp, name: 'db', outdated: ['kernel', 'agent'] },
+    { ...imp, name: 'old', state: 'running', outdated: ['impd'] },
   ]).split('\n');
 
   const notes = rows.map((row) => row.slice(rows[0]?.indexOf('NOTE')));
@@ -59,5 +60,6 @@ test('it notes why an imp boots cold and what it predates', () => {
     'boots cold: firecrackerVersion changed (v1.17.0 → v1.18.0)',
     'booted cold: wake failed; outdated: agent',
     'outdated: kernel, agent',
+    'booted by an older impd; its next wake boots cold',
   ]);
 });

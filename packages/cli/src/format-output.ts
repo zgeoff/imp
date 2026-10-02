@@ -44,8 +44,15 @@ function formatNote(imp: Imp): string {
     notes.push(`${when}: ${imp.coldBootReason}`);
   }
 
-  if (imp.outdated !== undefined) {
-    notes.push(`outdated: ${imp.outdated.join(', ')}`);
+  const outdated = imp.outdated ?? [];
+  const parts = outdated.filter((part) => part !== 'impd');
+
+  if (outdated.includes('impd')) {
+    notes.push('booted by an older impd; its next wake boots cold');
+  }
+
+  if (parts.length > 0) {
+    notes.push(`outdated: ${parts.join(', ')}`);
   }
 
   return notes.join('; ');
