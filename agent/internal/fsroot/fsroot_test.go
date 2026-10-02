@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -104,5 +105,29 @@ func TestLstatSeesTheLinkItself(t *testing.T) {
 	}
 	if err := r.Remove("/etc/resolv.conf"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStatSysIsASyscallStatT(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	fi, err := r.Stat("/f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.Stat(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Ino != want.Sys().(*syscall.Stat_t).Ino {
+		t.Fatalf("Sys() = %#v", fi.Sys())
 	}
 }
