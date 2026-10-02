@@ -4,9 +4,10 @@ import { join } from 'node:path';
 const SCRIPT = join(import.meta.dir, '..', '..', 'host', 'scripts', 'setup-net.sh');
 
 // setup-net.sh runs as root in a fresh user and network namespace, with a
-// dummy uplink. Skipped where unprivileged namespaces or iptables are off
-// (Ubuntu 24.04 runners restrict them).
+// dummy uplink. Skipped where unprivileged namespaces or iptables are off,
+// unless IMP_HOST_TESTS=required, as in CI's root step.
 const canUnshare =
+  process.env['IMP_HOST_TESTS'] === 'required' ||
   Bun.spawnSync(['unshare', '-rn', 'iptables', '-t', 'raw', '-S'], {
     stdout: 'ignore',
     stderr: 'ignore',

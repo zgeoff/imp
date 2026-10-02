@@ -9,8 +9,10 @@ import type { FirewallSlot } from '../../packages/daemon/src/egress/egress-rules
 import { BLOCKED_RANGES6 } from '../../packages/daemon/src/net/ranges6';
 
 // impd's table, applied by the real nft in a fresh user and network
-// namespace. Skipped where that is not allowed, or nft is missing.
+// namespace. Skipped where that is not allowed, or nft is missing, unless
+// IMP_HOST_TESTS=required, as in CI's root step.
 const canUnshare =
+  process.env['IMP_HOST_TESTS'] === 'required' ||
   Bun.spawnSync(['unshare', '-rn', 'nft', 'list', 'ruleset'], {
     stdout: 'ignore',
     stderr: 'ignore',
@@ -188,9 +190,9 @@ nft list set inet imp_egress net1 2>&1 | head -1 || true
   ]);
 });
 
-// Three guests in network namespaces behind veth pairs named as taps: g0 on
-// lab, g1 on lab and ops, g2 on ops. g1's own nft counts the pings that
-// reach it from g0's address, so a spoofed one that arrives shows.
+// Three guests behind veth pairs named as taps, and setup-net's two FORWARD
+// rules: g0 on lab, g1 on lab and ops, g2 on ops. g1 counts the pings from
+// g0's address, so a spoofed one that arrives shows.
 const GUESTS = `
 mount -t tmpfs tmpfs /run
 mkdir -p /run/netns
@@ -214,6 +216,8 @@ table inet count {
   counter from_g0 {}
 }
 NFT
+iptables -A FORWARD -i imp+ -o imp+ -m mark --mark 0x1000000/0x1000000 -m comment --comment imp-network -j ACCEPT
+iptables -A FORWARD -i imp+ -o imp+ -j DROP
 printf '%s' "$TABLE" | nft -f -
 reach() { ip netns exec "$1" ping -c 1 -W 1 "$2" >/dev/null 2>&1 && echo "$1>$2 yes" || echo "$1>$2 no"; }
 counted() { ip netns exec g1 nft list counter inet count from_g0 | grep -o 'packets [0-9]*'; }
