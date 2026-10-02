@@ -146,18 +146,35 @@ async function allocateJailUid(db: ImpDatabase): Promise<number> {
   return uid;
 }
 
-// The lowest slot no imp holds. Run it in the same transaction as the insert
-// that takes the slot; the unique index on `slot` backs that up.
-export async function allocateSlot(db: ImpDatabase, slotCount: number): Promise<number> {
-  const rows = await db.selectFrom('imps').select('slot').orderBy('slot').execute();
+// The slots imps hold, and those that a warm move's live ticket keeps for
+// the imp it brings (docs/architecture/moves.md#warm-moves): until the
+// commit, once its stream started, else until the stream's start window ends
+async function listTakenSlots(db: ImpDatabase, now: number): Promise<Set<number>> {
+  const imps = await db.selectFrom('imps').select('slot').execute();
+
+  const held = await db
+    .selectFrom('move_tickets')
+    .select('slot')
+    .where('slot', 'is not', null)
+    .where('committed_at', 'is', null)
+    .where((row) => row.or([row('stream_used_at', 'is not', null), row('stream_by', '>', now)]))
+    .execute();
+
+  return new Set([...imps.map((row) => row.slot), ...held.flatMap((row) => row.slot ?? [])]);
+}
+
+// The lowest slot no imp or ticket holds. Run it in the same transaction as
+// the insert that takes the slot; the unique index on `slot` backs that up.
+export async function allocateSlot(
+  db: ImpDatabase,
+  slotCount: number,
+  now: number = Date.now(),
+): Promise<number> {
+  const taken = await listTakenSlots(db, now);
 
   let slot = 0;
 
-  for (const row of rows) {
-    if (row.slot !== slot) {
-      break;
-    }
-
+  while (taken.has(slot)) {
     slot += 1;
   }
 
@@ -166,6 +183,15 @@ export async function allocateSlot(db: ImpDatabase, slotCount: number): Promise<
   }
 
   return slot;
+}
+
+// A slot a warm move asks for, free of imps; its own ticket holds it
+class SlotTakenError extends Error {
+  override name = 'SlotTakenError';
+
+  constructor(slot: number) {
+    super(`slot ${String(slot)} is taken on this host`);
+  }
 }
 
 export async function createImp(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
@@ -222,19 +248,40 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
 interface FreeSlots {
   readonly count: number;
   readonly findIp: (slot: number) => string;
+
+  // a warm move's: this slot or none
+  readonly slot?: number | undefined;
+
+  // when a ticket's start window ends against
+  readonly now?: () => number;
 }
 
-// A `creating` record in the lowest free slot: the slot and the insert share
-// one transaction, and the write is reported once it commits.
+// A `creating` record in the lowest free slot, or the one asked for: the
+// slot and the insert share one transaction, and the write is reported once
+// it commits.
 export async function createImpInFreeSlot(
   db: ImpDatabase,
   imp: Omit<NewImp, 'slot' | 'ip'>,
   slots: FreeSlots,
 ): Promise<ImpRecord> {
   const created = await db.transaction().execute(async (trx) => {
-    const slot = await allocateSlot(trx, slots.count);
+    if (slots.slot === undefined) {
+      const slot = await allocateSlot(trx, slots.count, (slots.now ?? Date.now)());
 
-    return writeImpRow(trx, { ...imp, slot, ip: slots.findIp(slot) });
+      return writeImpRow(trx, { ...imp, slot, ip: slots.findIp(slot) });
+    }
+
+    const holder = await trx
+      .selectFrom('imps')
+      .select('id')
+      .where('slot', '=', slots.slot)
+      .executeTakeFirst();
+
+    if (holder !== undefined || slots.slot >= slots.count) {
+      throw new SlotTakenError(slots.slot);
+    }
+
+    return writeImpRow(trx, { ...imp, slot: slots.slot, ip: slots.findIp(slots.slot) });
   });
 
   emitImpWrite(db, { kind: 'added', imp: created });
