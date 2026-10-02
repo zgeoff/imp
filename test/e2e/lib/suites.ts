@@ -25,6 +25,9 @@ export const SUITES: readonly Suite[] = [
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
+
+  // last: it reboots the instance with backups on, then off again
+  { name: 'backups', prefix: 'e2e-bk-', images: ['e2e-tiny'] },
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.

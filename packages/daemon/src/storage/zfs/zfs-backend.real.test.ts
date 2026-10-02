@@ -257,3 +257,49 @@ test.skipIf(!isReal)('a backup tree file keeps its metadata from run to run', as
   expect(left).not.toContain('@bk-');
   expect(left).not.toContain('/staging/bk');
 });
+
+test.skipIf(!isReal)(
+  'an imp destroyed while restic reads it goes once the tree closes',
+  async () => {
+    const pool = await setupPool();
+
+    const backend = pool.backend;
+
+    await backend.createImpDisk('b', { kind: 'image', digest: DIGEST });
+    await backend.createCheckpoint('b', 'cp-one');
+    await backend.createBackupCopy('b', 'r1', { isReusable: true });
+
+    const tree = await backend.openBackupTree({
+      runId: 'r1',
+      imps: [{ impId: 'b', checkpointIds: ['cp-one'] }],
+      imageDigests: [DIGEST],
+    });
+
+    const treeDisk = join(pool.dataDir, 'backup', 'tree', 'imps', 'b', 'disk', 'rootfs.ext4');
+
+    await backend.removeImpDisk('b', ['cp-one']);
+    await backend.waitForReclaim();
+
+    // restic still reads the copy of the destroyed disk
+    expect(readFileSync(treeDisk, 'utf8')).toBe('image');
+
+    await tree.close();
+    await backend.waitForReclaim();
+
+    const left = await runChecked([
+      'zfs',
+      'list',
+      '-H',
+      '-t',
+      'all',
+      '-o',
+      'name',
+      '-r',
+      pool.root,
+    ]);
+
+    expect(left).not.toContain('/retired/');
+    expect(left).not.toContain('/staging/');
+    expect(left).not.toContain('@bk-');
+  },
+);
