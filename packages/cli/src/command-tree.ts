@@ -20,6 +20,7 @@ import {
 } from './commands/imps';
 import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
+import { proxyCommand } from './commands/proxy';
 import {
   auditCommand,
   grantCommand,
@@ -54,6 +55,7 @@ export const mainCommand = defineCommand({
     wake: wakeCommand,
     hold: holdCommand,
     url: urlCommand,
+    proxy: proxyCommand,
     checkpoint: checkpointCommand,
     checkpoints: checkpointsCommand,
     restore: restoreCommand,

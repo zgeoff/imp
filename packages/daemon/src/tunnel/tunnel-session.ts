@@ -7,7 +7,7 @@ import { readErrorMessage } from '../read-error-message';
 
 // at most this many tunnels per imp at a time; the next is refused with
 // TUNNEL_LIMIT, so a client in a loop cannot pile up agent connections
-export const MAX_TUNNELS_PER_IMP = 256;
+const MAX_TUNNELS_PER_IMP = 256;
 
 // WebSocket close codes: a normal end, and a message that breaks the protocol
 const CLOSE_NORMAL = 1000;
