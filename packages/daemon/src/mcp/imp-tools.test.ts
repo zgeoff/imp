@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { setupMcpTest } from '../test-mcp';
+import { setupMcpTest } from './test-mcp';
 
 test('imp_create boots an imp and imp_list shows it with its state', async () => {
   await using ctx = await setupMcpTest();

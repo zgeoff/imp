@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { setupMcpTest } from '../test-mcp';
+import { setupMcpTest } from './test-mcp';
 
 test('imp_write_file then imp_read_file round-trips text, the path passed as one argument', async () => {
   await using ctx = await setupMcpTest();

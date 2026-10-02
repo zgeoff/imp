@@ -34,8 +34,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   broker that adds tokens to an imp's requests, and where secrets live.
 - [Dashboard](./guides/dashboard.md): the web dashboard impd serves at `/ui/`: what it shows, the
   login, and how to build, run and test it.
-- [MCP server](./guides/mcp.md): `imp mcp`, the tools a coding agent gets, the guard, and how exec
-  output, timeouts and cancels work.
+- [MCP server](./guides/mcp.md): `imp mcp` and impd's `/mcp` endpoint, the tools a coding agent
+  gets, the guard, and how exec output, timeouts and cancels work.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [Tokens and identities](./guides/tokens.md): scopes, imp patterns, `imp token`, and tailnet

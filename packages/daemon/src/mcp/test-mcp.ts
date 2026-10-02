@@ -1,14 +1,11 @@
-import type {
-  AgentExecRequest,
-  ExecEvent,
-  ExecStream,
-} from '@imp/daemon/src/agent-client/exec-stream';
-import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
+import type { Scope } from '@imp/api';
+import { createImpGuard, createMcpServer } from '@imp/mcp';
+import type { GuardOptions } from '@imp/mcp';
 import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
-import { createImpGuard } from './imp-guard';
-import type { GuardOptions } from './imp-guard';
-import { createMcpServer } from './mcp-server';
+import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import type { AppDeps } from '../build-app';
+import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 
 const SIGKILL = 9;
 const SIGTERM = 15;
@@ -21,6 +18,9 @@ function buildFakeGuest(oldAgent: boolean) {
 
   const requests: AgentExecRequest[] = [];
   const signals: string[] = [];
+
+  // the commands whose stream impd closed, as when its client went away
+  const closed: string[] = [];
 
   const openExec = (_name: string, request: Readonly<AgentExecRequest>): Promise<ExecStream> => {
     requests.push(request);
@@ -48,10 +48,13 @@ function buildFakeGuest(oldAgent: boolean) {
     return Promise.resolve({
       ...stream,
       groupKill: !oldAgent && request.killGraceMs !== undefined,
+      close: () => {
+        closed.push(command);
+      },
     });
   };
 
-  return { files, requests, signals, openExec };
+  return { files, requests, signals, closed, openExec };
 }
 
 function buildReadStream(files: ReadonlyMap<string, Uint8Array>, count: number, path: string) {
@@ -111,6 +114,14 @@ function buildShellStream(command: string, recordSignal: (signal: number) => voi
   if (verb === 'echo') {
     stream.emitText('stdout', `${rest.join(' ')}\n`);
     stream.emit({ type: 'exit', code: 0, signal: 0 });
+  }
+
+  // a command that runs for N ms, longer than any idle timeout on the way
+  if (verb === 'wait') {
+    setTimeout(() => {
+      stream.emitText('stdout', 'waited\n');
+      stream.emit({ type: 'exit', code: 0, signal: 0 });
+    }, Number(rest[0]));
   }
 
   // the sweep that kills what is left of a stopped command's group
@@ -234,8 +245,6 @@ const ResponseSchema = z.object({
   error: z.object({ code: z.number(), message: z.string() }).optional(),
 });
 
-export type Response = z.infer<typeof ResponseSchema>;
-
 const TextContentSchema = z.object({ type: z.literal('text'), text: z.string() });
 
 const ToolResultSchema = z.object({
@@ -246,21 +255,34 @@ const ToolResultSchema = z.object({
 
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 
+interface ImpdTestOptions {
+  readonly tailnet?: AppDeps['tailnet'];
+
+  // the imp's agent predates the group kill (protocol 0.8.0)
+  readonly oldAgent?: boolean;
+}
+
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
-export async function setupImpdTest(oldAgent = false) {
+export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
   const harness = await setupImpTest();
 
-  const guest = buildFakeGuest(oldAgent);
+  const guest = buildFakeGuest(options.oldAgent ?? false);
 
   // the fake guest runs no agent, but the imp wakes or boots as for a real one
-  const built = buildTestApp(harness, harness, TEST_TOKEN, {
-    openExec: async (name, request) => {
-      await harness.imps.requireRunning(name);
+  const built = buildTestApp(
+    harness,
+    harness,
+    TEST_TOKEN,
+    {
+      openExec: async (name, request) => {
+        await harness.imps.requireRunning(name);
 
-      return guest.openExec(name, request);
+        return guest.openExec(name, request);
+      },
     },
-  });
+    options.tailnet ?? null,
+  );
 
   const server = built.app.listen(0);
   const url = `http://127.0.0.1:${String(server.server?.port)}`;
@@ -272,6 +294,8 @@ export async function setupImpdTest(oldAgent = false) {
     ...harness,
     guest,
     client,
+    rootClient: built.client,
+    peers: built.peers,
     url,
     token: TEST_TOKEN,
     async [Symbol.asyncDispose]() {
@@ -283,28 +307,35 @@ export async function setupImpdTest(oldAgent = false) {
 
 interface McpTestOptions {
   readonly guard?: GuardOptions;
+  readonly scope?: Scope;
 
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
 }
 
 // an impd as setupImpdTest makes it, and an MCP server in process over its
-// client; `sent` holds every message the server wrote, parsed
+// client, as stdio runs it; `sent` holds every message it wrote, parsed
 export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
-  const impd = await setupImpdTest(options.oldAgent);
+  const impd = await setupImpdTest({
+    ...(options.oldAgent !== undefined && { oldAgent: options.oldAgent }),
+  });
 
   const sent: unknown[] = [];
+  const server = createMcpServer({ version: '1.2.3', progressIntervalMs: 50, killGraceMs: 50 });
 
-  const mcp = createMcpServer({
-    client: impd.client,
-    guard: createImpGuard(options.guard ?? { all: true }),
-    version: '1.2.3',
-    send: (message) => {
+  const context = {
+    reply: (message: string) => {
       sent.push(JSON.parse(message));
     },
-    progressIntervalMs: 50,
-    killGraceMs: 50,
-  });
+    client: impd.client,
+    guard: createImpGuard(options.guard ?? { all: true }),
+    scope: options.scope ?? 'manage',
+  };
+
+  const mcp = {
+    receive: (line: string) => server.receive(line, context),
+    close: () => server.close(),
+  };
 
   let nextId = 1;
 

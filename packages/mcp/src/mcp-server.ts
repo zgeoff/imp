@@ -1,4 +1,4 @@
-import type { ImpClient } from '@zgeoff/imp-client';
+import type { Scope } from '@imp/api';
 import type { ImpGuard } from './imp-guard';
 import {
   INTERNAL_ERROR,
@@ -11,6 +11,8 @@ import {
 } from './json-rpc';
 import type { RequestId } from './json-rpc';
 import type { Tool } from './tools/define-tool';
+import { hasScope } from './tools/define-tool';
+import type { ToolClient } from './tools/tool-client';
 import { TOOLS } from './tools/tool-list';
 
 // newest first; a client asking for another version gets the newest
@@ -19,24 +21,31 @@ const PROGRESS_INTERVAL_MS = 15_000;
 const KILL_GRACE_MS = 2000;
 
 export interface McpServerOptions {
-  readonly client: ImpClient;
-  readonly guard: ImpGuard;
-
   // the server's version, for serverInfo
   readonly version: string;
-
-  // writes one message; a transport sends it whole, as one line or one body
-  readonly send: (message: string) => void;
 
   // shorter in tests
   readonly progressIntervalMs?: number;
   readonly killGraceMs?: number;
 }
 
+// Who one message comes from, and where its answers go. Over stdio every
+// message has the same; over HTTP each POST has its own stream and its own
+// caller, resolved again for each.
+export interface MessageContext {
+  // writes one message whole: a response, or a progress notification
+  readonly reply: (message: string) => void;
+  readonly client: ToolClient;
+  readonly guard: ImpGuard;
+
+  // the caller's scope: tools/list shows the tools it allows
+  readonly scope: Scope;
+}
+
 export interface McpServer {
   // handles one incoming message; resolves once it is answered (a tool call
   // can take minutes, so a transport does not wait for one before the next)
-  readonly receive: (line: string) => Promise<void>;
+  readonly receive: (line: string, context: Readonly<MessageContext>) => Promise<void>;
 
   // for a client that went away: cancels every call in flight and waits for
   // them to stop (a command in a guest gets SIGTERM, then SIGKILL)
@@ -64,18 +73,19 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
   const runToolCall = async (
     id: RequestId,
     params: Readonly<Record<string, unknown>>,
+    message: Readonly<MessageContext>,
     signal: Readonly<AbortSignal>,
   ): Promise<void> => {
     const name = params['name'];
     const tool = typeof name === 'string' ? tools.get(name) : undefined;
 
     if (tool === undefined) {
-      options.send(formatError(id, INVALID_PARAMS, `unknown tool: ${String(name)}`));
+      message.reply(formatError(id, INVALID_PARAMS, `unknown tool: ${String(name)}`));
 
       return;
     }
 
-    const stopProgress = startProgress(options.send, readProgressToken(params), {
+    const stopProgress = startProgress(message.reply, readProgressToken(params), {
       intervalMs: progressIntervalMs,
       signal,
     });
@@ -84,59 +94,58 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
     const isAnswered = (): boolean => !signal.aborted || !tool.cancellable;
 
     try {
-      const context = { client: options.client, guard: options.guard, signal, killGraceMs };
+      const context = { client: message.client, guard: message.guard, signal, killGraceMs };
 
       const result = await tool.call(params['arguments'], context);
 
       if (isAnswered()) {
-        options.send(formatResult(id, result));
+        message.reply(formatResult(id, result));
       }
     } catch (error) {
       if (isAnswered()) {
-        sendInternalError(id, error);
+        sendInternalError(message.reply, id, error);
       }
     } finally {
       stopProgress();
     }
   };
 
-  const sendInternalError = (id: RequestId, error: unknown): void => {
-    // a bug, not a failed tool call: those come back as isError results
-    console.error('imp mcp: request failed:', error);
-    options.send(formatError(id, INTERNAL_ERROR, 'internal error'));
-  };
-
   const handleRequest = async (
     id: RequestId,
     method: string,
     params: Readonly<Record<string, unknown>>,
+    message: Readonly<MessageContext>,
   ): Promise<void> => {
     switch (method) {
       case 'initialize': {
-        options.send(formatResult(id, buildInitializeResult(params, options)));
+        message.reply(formatResult(id, buildInitializeResult(params, options, message.guard)));
 
         return;
       }
       case 'ping': {
-        options.send(formatResult(id, {}));
+        message.reply(formatResult(id, {}));
 
         return;
       }
       case 'tools/list': {
-        options.send(formatResult(id, { tools: TOOLS.map((tool) => tool.definition) }));
+        const allowed = TOOLS.filter((tool) => hasScope(message.scope, tool.scope));
+
+        message.reply(formatResult(id, { tools: allowed.map((tool) => tool.definition) }));
 
         return;
       }
       case 'tools/call': {
         if (inFlight.has(id)) {
-          options.send(formatError(id, INVALID_PARAMS, `request ${String(id)} is already running`));
+          message.reply(
+            formatError(id, INVALID_PARAMS, `request ${String(id)} is already running`),
+          );
 
           return;
         }
 
         const abort = new AbortController();
 
-        const done = runToolCall(id, params, abort.signal);
+        const done = runToolCall(id, params, message, abort.signal);
 
         inFlight.set(id, { abort, done });
 
@@ -147,7 +156,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
         return;
       }
       default: {
-        options.send(formatError(id, METHOD_NOT_FOUND, `unknown method: ${method}`));
+        message.reply(formatError(id, METHOD_NOT_FOUND, `unknown method: ${method}`));
       }
     }
   };
@@ -165,18 +174,18 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
   };
 
   return {
-    receive: async (line) => {
+    receive: async (line, context) => {
       const message = parseMessage(line);
 
       if (message.kind === 'invalid') {
-        options.send(formatError(null, message.code, message.message));
+        context.reply(formatError(null, message.code, message.message));
       } else if (message.kind === 'notification') {
         handleNotification(message.method, message.params);
       } else if (message.kind === 'request') {
         try {
-          await handleRequest(message.id, message.method, message.params);
+          await handleRequest(message.id, message.method, message.params, context);
         } catch (error) {
-          sendInternalError(message.id, error);
+          sendInternalError(context.reply, message.id, error);
         }
       }
 
@@ -197,6 +206,7 @@ export function createMcpServer(options: Readonly<McpServerOptions>): McpServer 
 function buildInitializeResult(
   params: Readonly<Record<string, unknown>>,
   options: Readonly<McpServerOptions>,
+  guard: Readonly<ImpGuard>,
 ) {
   const requested = params['protocolVersion'];
   const supported: readonly string[] = PROTOCOL_VERSIONS;
@@ -210,7 +220,7 @@ function buildInitializeResult(
     serverInfo: { name: 'imp', title: 'imp', version: options.version },
     instructions: [
       'imp runs persistent Linux microVMs ("imps") that sleep when idle and wake on use.',
-      `This server may touch ${options.guard.summary}.`,
+      `This server may touch ${guard.summary}.`,
       'Create an imp, run commands and read and write files in it, checkpoint before a risky change, fork to try two fixes, and destroy what you no longer need.',
     ].join(' '),
   };
@@ -272,4 +282,11 @@ function startProgress(
   options.signal.addEventListener('abort', stop, { once: true });
 
   return stop;
+}
+
+// a bug, not a failed tool call: those come back as isError results
+function sendInternalError(reply: MessageContext['reply'], id: RequestId, error: unknown): void {
+  console.error('imp mcp: request failed:', error);
+
+  reply(formatError(id, INTERNAL_ERROR, 'internal error'));
 }

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
+import { runImp, tryImp } from '../lib/imp-cli';
 import { registerImp } from '../lib/imps';
-import { startMcpSession } from '../lib/mcp';
+import { startHttpMcpSession, startMcpSession } from '../lib/mcp';
 import type { McpSession, ToolResult } from '../lib/mcp';
 import { setupSuite } from '../lib/setup-suite';
 
@@ -14,6 +15,10 @@ const full = `${prefix}full`;
 
 // a leading dash and spaces in each part, and shell syntax that must stay text
 const ODD_PATH = '/root/-odd dir/-a file $(x).txt';
+
+// the tokens the HTTP tests make, and remove
+const AGENT_TOKEN = `${prefix}agent`;
+const READ_TOKEN = `${prefix}reader`;
 let session: McpSession;
 
 beforeAll(async () => {
@@ -22,7 +27,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await session.close();
+
+  for (const name of [AGENT_TOKEN, READ_TOKEN]) {
+    await tryImp(['token', 'rm', name]);
+  }
 });
+
+// `imp token new`, which prints the secret alone on stdout
+async function makeToken(name: string, ...args: readonly string[]): Promise<string> {
+  await tryImp(['token', 'rm', name]);
+
+  const stdout = await runImp('token', 'new', name, ...args);
+
+  return stdout.trim();
+}
 
 function readData(result: Readonly<ToolResult>): Readonly<Record<string, unknown>> {
   const failure = result.isError ? (result.content[0]?.text ?? '') : null;
@@ -174,6 +192,51 @@ test('a job started with nohup and & outlives the call that started it', async (
   const running = await countSleeps(tiny, '303');
 
   expect(running).toBe(1);
+});
+
+test('over HTTP, a token limited to the prefix runs a 15 s command and is refused outside', async () => {
+  const secret = await makeToken(AGENT_TOKEN, '--scope', 'manage', '--imps', `${prefix}*`);
+  const agent = await startHttpMcpSession(secret);
+
+  // longer than the API server's 10 s idle timeout; the answer comes as SSE,
+  // with a keepalive comment every 5 s
+  const startedAt = performance.now();
+
+  const long = await agent.runTool('imp_exec', {
+    name: tiny,
+    command: 'sleep 15; echo done',
+    timeoutSeconds: 60,
+  });
+
+  const seconds = (performance.now() - startedAt) / 1000;
+
+  console.log(
+    `mcp http: a 15 s exec answered after ${seconds.toFixed(1)} s, ${String(agent.readKeepalives())} keepalives`,
+  );
+
+  expect(readData(long)).toMatchObject({ exitCode: 0, stdout: 'done\n', timedOut: false });
+  expect(agent.readKeepalives()).toBeGreaterThanOrEqual(2);
+
+  const outside = await agent.runTool('imp_create', { name: 'e2e-other' });
+
+  expect(outside.isError).toBe(true);
+  expect(outside.content[0]?.text).toStartWith('FORBIDDEN: ');
+
+  const ended = await agent.close();
+
+  expect(ended).toBe(204);
+}, 60_000);
+
+test('over HTTP, a read token sees only the read tools', async () => {
+  const secret = await makeToken(READ_TOKEN, '--scope', 'read');
+  const reader = await startHttpMcpSession(secret);
+  const tools = await reader.listTools();
+  const refused = await reader.runTool('imp_exec', { name: tiny, command: 'true' });
+
+  expect(tools).toEqual(['imp_list', 'imp_url', 'imp_image_list', 'imp_checkpoint_list']);
+  expect(refused.content[0]?.text).toStartWith('FORBIDDEN: ');
+
+  await reader.close();
 });
 
 test('imp_destroy removes the imps', async () => {

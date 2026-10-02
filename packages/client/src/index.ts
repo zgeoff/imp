@@ -26,6 +26,7 @@ export type {
   ExecOutcome,
   ExecSession,
   ExecSessionOptions,
+  ExecSocket,
   ExecStarted,
 } from './exec/open-exec-session';
 

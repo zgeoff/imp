@@ -1,13 +1,14 @@
-import type { ImpClient } from '@zgeoff/imp-client';
+import type { Scope } from '@imp/api';
 import { ExecError, ORPCError } from '@zgeoff/imp-client';
 import * as z from 'zod';
 import { GuardError } from '../imp-guard';
 import type { ImpGuard } from '../imp-guard';
+import type { ToolClient } from './tool-client';
 
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 
 export interface ToolContext {
-  readonly client: ImpClient;
+  readonly client: ToolClient;
   readonly guard: ImpGuard;
 
   // the tool call's cancel: only imp_exec and the file tools pass it on, to
@@ -44,6 +45,10 @@ interface ToolResult {
 export interface Tool {
   readonly definition: ToolDefinition;
 
+  // the least token scope the calls behind it need; tools/list hides the
+  // tool from a caller with less, and impd refuses the calls all the same
+  readonly scope: Scope;
+
   // false for a call impd finishes once started: its result is still sent
   // after a cancel, so the agent learns the name of what it made
   readonly cancellable: boolean;
@@ -66,6 +71,7 @@ interface ToolSpec<Input extends z.ZodObject> {
   readonly description: string;
   readonly input: Input;
   readonly annotations: ToolAnnotations;
+  readonly scope: Scope;
   readonly cancellable?: false;
   readonly run: (input: z.output<Input>, context: Readonly<ToolContext>) => Promise<ToolOutput>;
 }
@@ -85,6 +91,7 @@ export function defineTool<Input extends z.ZodObject>(spec: Readonly<ToolSpec<In
 
   return {
     definition,
+    scope: spec.scope,
     cancellable,
     call: async (args, context) => {
       const parsed = spec.input.safeParse(args ?? {});
@@ -146,4 +153,11 @@ function formatErrorText(error: unknown): string {
 
 function formatCoded(code: string, message: string): string {
   return `${code}: ${message}`;
+}
+
+// Scopes nest, as impd counts them: manage includes exec, exec includes read
+const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, exec: 1, manage: 2 };
+
+export function hasScope(granted: Scope, needed: Scope): boolean {
+  return SCOPE_RANK[granted] >= SCOPE_RANK[needed];
 }

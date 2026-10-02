@@ -73,6 +73,12 @@ export type ExecOutcome =
   // a callback threw, such as EPIPE on stdout
   | { readonly kind: 'local_error'; readonly error: unknown };
 
+// the part of a WebSocket a session uses, so impd can bridge one in process
+export type ExecSocket = Pick<
+  WebSocket,
+  'binaryType' | 'readyState' | 'bufferedAmount' | 'send' | 'close' | 'addEventListener'
+>;
+
 export interface ExecSessionOptions {
   readonly baseUrl: string;
   readonly token: string | null;
@@ -85,7 +91,7 @@ export interface ExecSessionOptions {
 
   // a browser WebSocket takes no headers (it uses an exec ticket), so the
   // runtime that opens the socket is the caller's choice
-  readonly connect: (url: string, headers: Readonly<Record<string, string>>) => WebSocket;
+  readonly connect: (url: string, headers: Readonly<Record<string, string>>) => ExecSocket;
 
   // for the check that tells a rejected token from an unreachable impd
   readonly fetch?: (request: Request) => Promise<Response>;

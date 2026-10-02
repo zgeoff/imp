@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { GuardError, createImpGuard } from './imp-guard';
+import { GuardError, createImpGuard, createPatternGuard } from './imp-guard';
 
 test('a server needs a guard, and --all excludes the others', () => {
   expect(() => createImpGuard({})).toThrow(
@@ -47,4 +47,26 @@ test('--all allows every imp and lets impd pick new names', () => {
   expect(guard.isAllowed('anything')).toBe(true);
   expect(guard.pickNewName()).toBeNull();
   expect(guard.summary).toBe('every imp');
+});
+
+test('a token with one prefix pattern gets names picked under it', () => {
+  const guard = createPatternGuard(['agent-*']);
+
+  expect(guard.pickNewName()).toMatch(/^agent-[a-z0-9]{8}$/);
+  expect(guard.isAllowed('anything')).toBe(true);
+  expect(guard.summary).toBe('imps matching agent-*');
+});
+
+test('any other set of patterns needs a name, and no patterns lets impd pick', () => {
+  for (const patterns of [['a-*', 'b-*'], ['box'], ['a*b*'], [`${'a'.repeat(24)}*`]]) {
+    const guard = createPatternGuard(patterns);
+
+    expect(() => guard.pickNewName()).toThrow(
+      new GuardError(
+        `this token may touch only imps matching ${patterns.join(', ')}, so give the new imp a name that matches`,
+      ),
+    );
+  }
+
+  expect(createPatternGuard(null).pickNewName()).toBeNull();
 });

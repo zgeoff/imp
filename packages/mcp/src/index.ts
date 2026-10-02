@@ -1,5 +1,8 @@
-export { GuardError, createImpGuard } from './imp-guard';
+export { createHttpTransport } from './http/http-transport';
+export type { HttpTransport, HttpTransportOptions, McpPrincipal } from './http/http-transport';
+export { GuardError, createImpGuard, createPatternGuard } from './imp-guard';
 export type { GuardOptions, ImpGuard } from './imp-guard';
 export { createMcpServer } from './mcp-server';
-export type { McpServer, McpServerOptions } from './mcp-server';
+export type { McpServer, McpServerOptions, MessageContext } from './mcp-server';
+export type { ToolClient } from './tools/tool-client';
 export { handleLines } from './serve-lines';

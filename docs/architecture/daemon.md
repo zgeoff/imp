@@ -43,6 +43,13 @@ call outside the caller's scope or imps, and `AGENT_OUTDATED` for a session requ
 before sessions. `/rpc` takes POST only: a GET is what a link or an image on any page can make a
 browser send.
 
+`/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
+tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes
+through the same `/rpc` handler in process, as that caller, so the router's access map and the audit
+log cover it as they cover the CLI. An exec redeems a ticket and joins an `/exec` session in
+process, with no socket. The API server's idle timeout is off for `/mcp`, and SSE comments every 5 s
+keep a long call open through a proxy.
+
 Every call runs as a caller: the root token in `<dataDir>/token`, a named token with a scope and
 optional imp patterns, the dashboard session made with one, an SSH key, or a tailnet member.
 `auth/authenticate.ts` finds the caller for every route alike. `auth/access-policy.ts` maps every

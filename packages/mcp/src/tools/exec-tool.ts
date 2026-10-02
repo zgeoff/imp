@@ -63,6 +63,7 @@ const ExecInput = z
 
 export const EXEC_TOOL: Tool = defineTool({
   name: 'imp_exec',
+  scope: 'exec',
   description: [
     'Run a command in an imp and wait for it to exit. A sleeping imp wakes and a stopped one boots first.',
     'Returns the exit code, stdout and stderr. A non-zero exit is a normal result, not a tool error.',

@@ -11,6 +11,7 @@ const NameOnly = z.strictObject({ name: ImpNameInput });
 export const IMP_TOOLS: readonly Tool[] = [
   defineTool({
     name: 'imp_list',
+    scope: 'read',
     description:
       'List the imps this server may touch: name, state (running, sleeping, stopped, error), image, memory and URL. A sleeping or stopped imp wakes or boots by itself on the next exec, file or HTTP request.',
     input: z.strictObject({}),
@@ -23,6 +24,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_create',
+    scope: 'manage',
     cancellable: false,
     description:
       'Create an imp, a persistent Linux microVM, and boot it. Its disk survives sleeps and restarts until imp_destroy. Without a name, the server picks one inside its guard. Returns the imp. A cancel does not stop the create, and its result still comes back.',
@@ -74,6 +76,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_destroy',
+    scope: 'manage',
     description:
       'Destroy an imp: its VM, its disk and its checkpoints are deleted for good. Forks of it are separate imps and stay.',
     input: NameOnly,
@@ -93,6 +96,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_sleep',
+    scope: 'exec',
     description:
       'Put a running imp to sleep: its memory goes to disk and it frees its RAM. The next exec, file or HTTP request wakes it where it left off, in about 100 ms.',
     input: NameOnly,
@@ -113,6 +117,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_url',
+    scope: 'read',
     description:
       "The imp's HTTP URLs: `local` on the imp host, `https` when impd has a domain, and `tailnet` when impd is on a tailnet. A request wakes a sleeping imp and goes to its httpPort.",
     input: NameOnly,
@@ -127,6 +132,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_fork',
+    scope: 'manage',
     cancellable: false,
     description:
       'Create a new imp from the disk of another, now or as it was at one of its checkpoints. The fork boots fresh: it has the disk, not the running processes. Use it to try two approaches side by side. A cancel does not stop the fork, and its result still comes back.',
@@ -169,6 +175,7 @@ export const IMP_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_image_list',
+    scope: 'read',
     description: 'List the images an imp can boot from, for imp_create.',
     input: z.strictObject({}),
     annotations: { title: 'List images', readOnlyHint: true, openWorldHint: false },

@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { setupImpdTest } from '@imp/mcp/src/test-mcp';
 import * as z from 'zod';
+import { setupImpdTest } from './test-mcp';
 
 const MessageSchema = z.record(z.string(), z.unknown());
 const ToolNameSchema = z.object({ name: z.string() });
 const ToolNamesSchema = z.object({ tools: z.array(ToolNameSchema) });
-const MAIN = join(import.meta.dir, '..', 'main.ts');
+
+// the CLI's `imp mcp`, against an impd in this process
+const MAIN = join(import.meta.dir, '..', '..', '..', 'cli', 'src', 'main.ts');
 
 // as long as a subprocess test may take
 const WAIT_TIMEOUT_MS = 20_000;

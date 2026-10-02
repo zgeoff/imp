@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import * as z from 'zod';
 import { INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR } from './json-rpc';
 import { PROTOCOL_VERSIONS } from './mcp-server';
-import { setupMcpTest } from './test-mcp';
+import { setupServerTest } from './test-server';
 
 const InitializeResultSchema = z.looseObject({ instructions: z.string() });
 const AnnotationsSchema = z.object({ destructiveHint: z.boolean().optional() });
@@ -20,16 +20,9 @@ const ToolSchema = z.object({
 });
 
 const ToolsListSchema = z.object({ tools: z.array(ToolSchema) });
-const ProgressSchema = z.object({ method: z.literal('notifications/progress') });
-const ImpResultSchema = z.object({ imp: z.object({ name: z.string() }) });
-
-const ToolResultSchema = z.object({
-  isError: z.boolean(),
-  structuredContent: ImpResultSchema,
-});
 
 test('initialize agrees on a version the server supports, else offers the newest', async () => {
-  await using ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
+  const ctx = setupServerTest({ guard: { prefix: 'agent-' } });
 
   for (const version of PROTOCOL_VERSIONS) {
     const response = await ctx.sendRequest('initialize', { protocolVersion: version });
@@ -51,7 +44,7 @@ test('initialize agrees on a version the server supports, else offers the newest
 });
 
 test('tools/list describes every tool, every field and the destructive ones', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = setupServerTest();
 
   const response = await ctx.sendRequest('tools/list');
 
@@ -102,7 +95,7 @@ test('tools/list describes every tool, every field and the destructive ones', as
 });
 
 test('ping answers with an empty result', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = setupServerTest();
 
   const response = await ctx.sendRequest('ping');
 
@@ -110,7 +103,7 @@ test('ping answers with an empty result', async () => {
 });
 
 test('an unknown method and an unknown tool are protocol errors', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = setupServerTest();
 
   const method = await ctx.sendRequest('resources/list');
   const tool = await ctx.sendRequest('tools/call', { name: 'imp_teleport', arguments: {} });
@@ -124,7 +117,7 @@ test('an unknown method and an unknown tool are protocol errors', async () => {
 });
 
 test('broken messages get an error with a null id, and notifications get nothing', async () => {
-  await using ctx = await setupMcpTest();
+  const ctx = setupServerTest();
 
   for (const line of [
     'not json',
@@ -134,7 +127,7 @@ test('broken messages get an error with a null id, and notifications get nothing
     '{"jsonrpc":"2.0","method":"notifications/initialized"}',
     '{"jsonrpc":"2.0","id":5,"result":{}}',
   ]) {
-    await ctx.mcp.receive(line);
+    await ctx.receive(line);
   }
 
   expect(ctx.sent).toEqual([
@@ -144,73 +137,3 @@ test('broken messages get an error with a null id, and notifications get nothing
     { jsonrpc: '2.0', id: null, error: { code: INVALID_REQUEST, message: 'invalid request' } },
   ]);
 });
-
-test('a cancelled create, fork or restore still answers, so the agent learns what it made', async () => {
-  await using ctx = await setupMcpTest({ guard: { prefix: 'agent-' } });
-
-  await ctx.client.imps.create({ name: 'agent-src', image: 'ubuntu' });
-  await ctx.client.checkpoints.create({ name: 'agent-src', label: 'cp' });
-
-  const calls = [
-    { name: 'imp_create', arguments: { image: 'ubuntu' } },
-    { name: 'imp_fork', arguments: { source: 'agent-src' } },
-    { name: 'imp_restore', arguments: { name: 'agent-src', checkpoint: 'cp' } },
-  ];
-
-  for (const [index, params] of calls.entries()) {
-    const id = 100 + index;
-    const call = ctx.sendRequest('tools/call', params, id);
-
-    await ctx.mcp.receive(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/cancelled',
-        params: { requestId: id },
-      }),
-    );
-
-    const response = await call;
-
-    const result = ToolResultSchema.parse(response?.result);
-
-    expect({ tool: params.name, isError: result.isError }).toEqual({
-      tool: params.name,
-      isError: false,
-    });
-
-    expect(result.structuredContent.imp.name).toStartWith('agent-');
-  }
-});
-
-test('a cancelled call stops reporting progress', async () => {
-  await using ctx = await setupMcpTest();
-
-  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
-
-  const call = ctx.sendRequest(
-    'tools/call',
-    {
-      name: 'imp_exec',
-      arguments: { name: 'dev', command: 'stubborn' },
-      _meta: { progressToken: 'p' },
-    },
-    9,
-  );
-
-  await Bun.sleep(120);
-
-  await ctx.mcp.receive(
-    JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 9 } }),
-  );
-
-  const atCancel = countProgress(ctx.sent);
-
-  await call;
-
-  expect(atCancel).toBeGreaterThan(0);
-  expect(countProgress(ctx.sent)).toBe(atCancel);
-});
-
-function countProgress(sent: readonly unknown[]): number {
-  return sent.filter((message) => ProgressSchema.safeParse(message).success).length;
-}

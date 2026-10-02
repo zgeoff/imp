@@ -59,6 +59,7 @@ export const WRITE_SCRIPT = [
 export const FILE_TOOLS: readonly Tool[] = [
   defineTool({
     name: 'imp_read_file',
+    scope: 'exec',
     description: `Read a file in an imp, up to maxBytes. A sleeping imp wakes and a stopped one boots first. Text comes back as utf8; a file that is not valid UTF-8 fails, so read it again with encoding base64.`,
     input: z.strictObject({
       name: ImpNameInput,
@@ -107,6 +108,7 @@ export const FILE_TOOLS: readonly Tool[] = [
   }),
   defineTool({
     name: 'imp_write_file',
+    scope: 'exec',
     description: `Write a file in an imp, replacing it whole, and create its parent directories. The write goes to a temp file that is renamed over the path, so no reader sees half a file; an existing file keeps its mode, a symlink is written through, and a directory is refused. At most ${String(MAX_WRITE_BYTES)} bytes.`,
     input: z.strictObject({
       name: ImpNameInput,
