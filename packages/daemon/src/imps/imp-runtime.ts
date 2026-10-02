@@ -20,6 +20,7 @@ import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
 import { createLockFreeSleep } from './lock-free-sleep';
 import type { LockFreeSleep, SleepOutcome, SleepPolicy } from './lock-free-sleep';
+import { startCounting } from './read-running-imp-usage';
 import type { ShutdownGate } from './shutdown-gate';
 
 // What the wake proxy, the idle loop, the governor and impd's start and stop
@@ -332,6 +333,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
               if (imp.pid !== null) {
                 context.cgroups.adopt(imp.id, imp.pid, imp.cpu);
+
+                startCounting(context, imp, imp.pid);
               }
 
               // the record does not change; the event stream still hears of it

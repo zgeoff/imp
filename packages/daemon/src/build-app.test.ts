@@ -34,6 +34,7 @@ test('it serves system.info from config and the database', async () => {
     firecrackerVersion: 'v1.17.0',
     ...TEST_SYSTEM_FILES,
     tailscale: { enabled: false, state: null, hostname: null, ip: null, names: null },
+    cpu: { hostCpus: 8, limitsEnforced: false },
   });
 });
 

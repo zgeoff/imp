@@ -68,6 +68,10 @@ export const SystemInfoSchema = z.object({
     // null when IMP_TAILNET_NAMES is off
     names: TailnetNamesSchema.nullable(),
   }),
+
+  // the host's cores, the most a CPU limit may be; whether limits hold
+  // (false outside a private cgroup v2 namespace: they are kept, not applied)
+  cpu: z.object({ hostCpus: z.int().positive(), limitsEnforced: z.boolean() }).optional(),
 });
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;

@@ -3,6 +3,7 @@ import type { ImpEvent, ImpState } from '@imp/api';
 import { ROOT_CONTEXT, metrics, trace } from '@opentelemetry/api';
 import type { BatchObservableCallback } from '@opentelemetry/api';
 import type { EventBus } from '../events/event-bus';
+import type { ResourceDelta } from '../imps/resource-sampler';
 
 // impd's instruments (docs/guides/events.md). Every attribute comes from a
 // closed set, never an imp's name, so a series count stays bounded.
@@ -25,6 +26,11 @@ interface TelemetryDeps {
   readonly bus: EventBus;
   readonly readStateCounts: () => Promise<ReadonlyMap<ImpState, number>>;
   readonly readRam: () => Promise<RamReading>;
+
+  // each pass of the resource sampler; none in a test that has no sampler
+  readonly subscribeResources?: (
+    listener: (deltas: readonly ResourceDelta[]) => void,
+  ) => () => void;
 }
 
 // Records from the event bus and two readers. With no SDK registered (no
@@ -61,6 +67,49 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
     unit: 'MiBy',
   });
 
+  const cpuUsage = meter.createObservableGauge('imp.cpu.usage', {
+    description: 'cores the running imps used over the last sample, together',
+  });
+
+  const cpuThrottled = meter.createCounter('imp.cpu.throttled', {
+    description: 'time CPU limits held imps back',
+    unit: 's',
+  });
+
+  const cpuUtilization = meter.createHistogram('imp.cpu.utilization', {
+    description: "each running imp's CPU over a sample, in percent of one core",
+    unit: '%',
+  });
+
+  const networkIo = meter.createCounter('imp.network.io', {
+    description: "bytes through the imps' network, as the guests see it",
+    unit: 'By',
+  });
+
+  const awakeTime = meter.createCounter('imp.awake.time', {
+    description: 'time imps spent running, together',
+    unit: 's',
+  });
+
+  // the last pass's total, for the gauge
+  const lastPass = { cores: 0 };
+
+  const handlePass = (deltas: readonly ResourceDelta[]): void => {
+    let cores = 0;
+
+    for (const delta of deltas) {
+      cores += delta.cpuPercent / 100;
+
+      cpuUtilization.record(delta.cpuPercent);
+      cpuThrottled.add(delta.throttledUsec / 1_000_000);
+      networkIo.add(delta.netRxBytes, { direction: 'rx' });
+      networkIo.add(delta.netTxBytes, { direction: 'tx' });
+      awakeTime.add(delta.intervalMs / 1000);
+    }
+
+    lastPass.cores = cores;
+  };
+
   const readGauges: BatchObservableCallback = async (result) => {
     const [counts, ram] = await Promise.all([deps.readStateCounts(), deps.readRam()]);
 
@@ -70,9 +119,10 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
 
     result.observe(ramUsed, ram.usedMib);
     result.observe(ramBudget, ram.budgetMib);
+    result.observe(cpuUsage, lastPass.cores);
   };
 
-  const gauges = [states, ramUsed, ramBudget];
+  const gauges = [states, ramUsed, ramBudget, cpuUsage];
 
   meter.addBatchObservableCallback(readGauges, gauges);
 
@@ -135,10 +185,11 @@ export function startImpTelemetry(deps: TelemetryDeps): () => void {
   };
 
   const unsubscribe = deps.bus.subscribe(handleEvent);
+  const unsubscribeResources = deps.subscribeResources?.(handlePass);
 
   return () => {
     unsubscribe();
-
+    unsubscribeResources?.();
     meter.removeBatchObservableCallback(readGauges, gauges);
   };
 }

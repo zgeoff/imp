@@ -68,19 +68,6 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
 
     const paths = context.findPaths(imp.id);
 
-    if (imp.state === 'running' && imp.pid !== null) {
-      const ramMib = context.readRamMib(imp.pid, paths.apiSocket);
-      const rssMib = context.readRssMib(imp.pid, paths.apiSocket);
-
-      if (ramMib !== null) {
-        api.ramMib = ramMib;
-      }
-
-      if (rssMib !== null) {
-        api.rssMib = rssMib;
-      }
-    }
-
     api.cpu = imp.cpu;
 
     // a running imp's current span counts too
@@ -89,6 +76,33 @@ export function createImpPresenter(context: ImpContext): ImpPresenter {
       (imp.awakeSince === null ? 0 : Math.max(0, Date.now() - imp.awakeSince.getTime()));
 
     api.resources = { wakeCount: imp.wakeCount, awakeMs };
+
+    // the sampler's cache: a list does not read smaps for every imp
+    if (imp.state === 'running' && imp.pid !== null) {
+      const sample = context.resources.readSample({
+        impId: imp.id,
+        pid: imp.pid,
+        apiSocket: paths.apiSocket,
+        tap: context.findAddress(imp.slot).tap,
+      });
+
+      if (sample.ramMib !== null) {
+        api.ramMib = sample.ramMib;
+      }
+
+      if (sample.rssMib !== null) {
+        api.rssMib = sample.rssMib;
+      }
+
+      api.resources.sample = {
+        measuredAt: sample.measuredAt,
+        since: sample.since,
+        ...(sample.cpuPercent !== undefined && { cpuPercent: sample.cpuPercent }),
+        cpuThrottledMs: sample.cpuThrottledMs,
+        netRxBytes: sample.netRxBytes,
+        netTxBytes: sample.netTxBytes,
+      };
+    }
 
     const sessions = countSessions(context, imp);
 

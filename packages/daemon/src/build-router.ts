@@ -398,6 +398,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
       ip: tailscale.ip,
       names: deps.readTailnetNames?.() ?? null,
     },
+    cpu: deps.imps.readCpuHost(),
   };
 }
 

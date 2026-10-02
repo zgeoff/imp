@@ -49,6 +49,7 @@ import type { TailnetNames } from './tailnet-names/tailnet-names';
 import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
+import { createCpuCgroups } from './vmm/cpu-cgroups';
 import { readFirecrackerVersion } from './vmm/firecracker-process';
 import { createVmRunner } from './vmm/vm-runner';
 
@@ -153,8 +154,14 @@ async function main(): Promise<void> {
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const namesHolder: { names: TailnetNames | null } = { names: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
+  const cgroups = createCpuCgroups({ root: '/sys/fs/cgroup', log: printLog });
+
+  if (!cgroups.isEnforced) {
+    printLog('impd: no cpu controller under /sys/fs/cgroup/imps; CPU limits are kept, not applied');
+  }
 
   const governed = createGovernedImps({
+    cgroups,
     config,
     db,
     images,
@@ -181,6 +188,7 @@ async function main(): Promise<void> {
 
   startImpTelemetry({
     bus: imps.events,
+    subscribeResources: imps.subscribeResources,
     readStateCounts: () => countImpsByState(db),
     readRam: async () => {
       const usage = await governor.readUsage();
@@ -349,6 +357,7 @@ async function main(): Promise<void> {
   const tickers = [
     startTicker('idle', 2000, idle.runCheck, printLog),
     startTicker('governor', 5000, governor.enforce, printLog),
+    startTicker('resources', 5000, imps.sampleResources, printLog),
 
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),

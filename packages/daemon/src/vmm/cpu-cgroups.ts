@@ -52,6 +52,10 @@ export interface CpuCgroups {
   // counts as inside
   readonly remove: (impId: string) => Promise<void>;
 
+  // A sleep, a failed sleep and a repair to sleeping keep it, empty and
+  // harmless: setup reuses it and writes the settings again, the spawn's
+  // baseline hides its old cpu.stat, and a destroy or a stop removes it.
+
   // removes the cgroup of every id not in `impIds`; returns those ids
   readonly removeOrphans: (impIds: ReadonlySet<string>) => string[];
   readonly readCpuStat: (impId: string) => CpuStat | null;

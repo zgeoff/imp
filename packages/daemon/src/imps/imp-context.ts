@@ -8,6 +8,7 @@ import type { RamAdmission } from '../governor/ram-governor';
 import type { ImageService } from '../images/image-service';
 import { deriveSlotAddress } from '../net/addressing';
 import type { SlotAddress } from '../net/addressing';
+import { readGuestNetBytes } from '../net/tap-bytes';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
 import { createSessionCache } from '../sessions/session-cache';
@@ -23,10 +24,12 @@ import type { StorageGate } from '../storage/storage-gate';
 import { createCpuCgroups } from '../vmm/cpu-cgroups';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { VmRunner } from '../vmm/vm-runner';
-import { readOwnedRamMib, readRssMib } from '../vmm/vm-stats';
+import { readCpuTicks, readOwnedRamMib, readRssMib, readVmMemory } from '../vmm/vm-stats';
 import { createActivityTracker } from './activity-tracker';
 import type { ActivityTracker } from './activity-tracker';
 import { growFilesystem } from './imp-disk';
+import { createResourceSampler } from './resource-sampler';
+import type { ResourceSampler } from './resource-sampler';
 
 // The egress firewall's part in an imp's life (egress/egress-service.ts)
 interface ImpEgress {
@@ -130,10 +133,26 @@ export interface ImpContext {
   readonly egress: ImpEgress;
   readonly cgroups: CpuCgroups;
   readonly hostCpus: number;
+
+  // the latest look at each running VM (resource-sampler.ts)
+  readonly resources: ResourceSampler;
 }
 
 export function createImpContext(deps: ImpServiceDeps): ImpContext {
   const slotPlan = { subnet: deps.config.subnet, portBase: deps.config.portBase };
+  const log = deps.log ?? printLog;
+  const cgroups = deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log });
+  const readRam = deps.readRamMib;
+  const readRss = deps.readRssMib;
+
+  // a test's readers stand in for smaps_rollup; impd reads it once for both
+  const readMemory =
+    readRam === undefined && readRss === undefined
+      ? readVmMemory
+      : (pid: number, apiSocket: string) => ({
+          ramMib: (readRam ?? readOwnedRamMib)(pid, apiSocket),
+          rssMib: (readRss ?? readRssMib)(pid, apiSocket),
+        });
 
   return {
     config: deps.config,
@@ -142,7 +161,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     taps: deps.taps,
     vms: deps.vms,
     storage: deps.storage,
-    log: deps.log ?? printLog,
+    log,
     admission: deps.admission,
     readRamMib: deps.readRamMib ?? readOwnedRamMib,
     readRssMib: deps.readRssMib ?? readRssMib,
@@ -166,7 +185,14 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
     egress: deps.egress ?? NO_EGRESS,
-    cgroups: deps.cgroups ?? createCpuCgroups({ root: '/nonexistent', log: deps.log ?? printLog }),
+    cgroups,
     hostCpus: deps.hostCpus ?? availableParallelism(),
+    resources: createResourceSampler({
+      now: deps.now ?? Date.now,
+      readCpuStat: cgroups.readCpuStat,
+      readCpuTicks,
+      readNetBytes: (tap) => readGuestNetBytes(tap),
+      readMemory,
+    }),
   };
 }
