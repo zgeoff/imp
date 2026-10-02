@@ -43,11 +43,13 @@ as it does for a backup.
 | Each checkpoint, its label and time (with a new ID)     | Secret values: they never leave a host                       |
 | The egress policy                                       | Grants of a secret the target has no secret by that name for |
 | Grants, for each secret the target has by the same name | The audit logs and the event history                         |
+| A template copy's owed identity reset                   | Public exposure: a public imp does not move                  |
 
 The image goes by digest, as files. A target with the digest uses its own; one without it gets the
 image in the stream and files it under a digest of what arrived, never the source's claim: the
 source's digest names an OCI config the target cannot check against a built rootfs. When the target
-has an image by that name with another digest, the moved image's name gets a `-<8 hex>` suffix.
+has an image by that name with another digest, the moved image's name gets a `-<8 hex>` suffix. A
+[template](./templates.md) stays a template, with the name of the imp it came from.
 
 ### URLs
 
@@ -103,6 +105,9 @@ A verified copy waits on the target until the source commits or aborts it.
   target refuses a peer that the connected socket does not show on the tailnet. The tailnet ACL must
   let `tag:imp` reach `tag:imp` on the API port ([ACL](#the-acl)).
 - The imp must be stopped. A move with its memory comes later.
+- The imp must be tailnet-only. A [public imp](./https.md#public-imps)'s credential and DNS record
+  belong to the source's domain, so `imp move` refuses it: run `imp unexpose`, move it, then
+  `imp expose` on the target. A marked imp refuses `imp expose` and `imp unexpose` with `MOVING`.
 - Between two ZFS hosts the disk goes as `zfs send` streams; any other pair sends files
   ([ZFS](../architecture/moves.md#zfs)). Either way the checkpoints get new IDs on the target.
 - Names are unique per host, not across hosts: two hosts can each have a `dev`. A move refuses a

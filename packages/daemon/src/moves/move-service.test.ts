@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
-import { createImage } from '../db/images';
-import { findImpByName, updateImpMove } from '../db/imps';
+import { createImage, findImageByName } from '../db/images';
+import { findImpByName, updateImpExposure, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
@@ -175,6 +175,29 @@ test('a marked imp fails fast with MOVING and Retry-After, and an abort before t
   expect(raw.status).toBe(409);
   expect(raw.headers.get('retry-after')).toBe('30');
   expect(started.state).toBe('running');
+});
+
+test('a public imp is refused a move, and a marked imp refuses an exposure change', async () => {
+  await using ctx = await setupMoveTest();
+
+  await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
+
+  const publicPrepare = await readRejection(ctx.sourceApp.client.moves.prepare({ name: 'dev' }));
+
+  await ctx.sourceApp.client.imps.unexpose({ name: 'dev' });
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const unexpose = await readRejection(ctx.sourceApp.client.imps.unexpose({ name: 'dev' }));
+
+  const written = await updateImpExposure(ctx.source.db, ctx.impId, {
+    auth: 'none',
+    user: null,
+    hash: null,
+  });
+
+  expect(publicPrepare).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(unexpose).toMatchObject({ code: 'MOVING' });
+  expect(written).toBeUndefined();
 });
 
 test('a running imp moves only with stop, which stops it first', async () => {
@@ -389,6 +412,30 @@ test('the image goes along when the target lacks it, and only grants of known se
   expect(digest).not.toBe('sha256:ubuntu');
   expect(readFileSync(image.rootfs, 'utf8').startsWith('rootfs')).toBe(true);
   expect(grants).toEqual(['gh']);
+});
+
+test('a template copy keeps its owed identity reset, and its template stays a template', async () => {
+  await using ctx = await setupMoveTest(undefined, { hasImage: false });
+
+  await ctx.source.db
+    .updateTable('images')
+    .set({ source: 'imp', source_imp: 'golden' })
+    .where('name', '=', 'ubuntu')
+    .execute();
+
+  await ctx.source.db
+    .updateTable('imps')
+    .set({ identity_reset_pending: 1 })
+    .where('id', '=', ctx.impId)
+    .execute();
+
+  const status = await ctx.runMove();
+  const image = await findImageByName(ctx.target.db, 'ubuntu');
+  const moved = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+  expect(image).toMatchObject({ source: 'imp', sourceImp: 'golden' });
+  expect(moved?.isIdentityResetPending).toBe(true);
 });
 
 test('a GC while the stream goes keeps every file the send reads', async () => {

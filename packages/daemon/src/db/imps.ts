@@ -460,12 +460,13 @@ export interface StoredPublicAuth {
   readonly hash: string | null;
 }
 
-// public with this auth, or tailnet-only for null
+// public with this auth, or tailnet-only for null; undefined, and no change,
+// for an imp a move marked (docs/guides/hosts.md#moves)
 export async function updateImpExposure(
   db: ImpDatabase,
   id: string,
   exposure: StoredPublicAuth | null,
-): Promise<ImpRecord> {
+): Promise<ImpRecord | undefined> {
   const row = await db
     .updateTable('imps')
     .set({
@@ -475,8 +476,13 @@ export async function updateImpExposure(
       public_hash: exposure?.hash ?? null,
     })
     .where('id', '=', id)
+    .where('move_state', 'is', null)
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirst();
+
+  if (row === undefined) {
+    return undefined;
+  }
 
   const changed = toImpRecord(row);
 
