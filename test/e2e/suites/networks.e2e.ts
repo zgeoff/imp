@@ -20,6 +20,9 @@ const LAB = 'e2e-net-lab';
 const OPS = 'e2e-net-ops';
 const ips = { web: '', db: '', out: '' };
 
+// what `imp net join` said when it put box db next to open web
+const joined = { stderr: '' };
+
 async function removeNetworks(): Promise<void> {
   for (const network of [LAB, OPS]) {
     await tryImp(['net', 'rm', network]);
@@ -49,7 +52,13 @@ beforeAll(async () => {
     await holdImp(name);
   }
 
-  await runImp('net', 'join', LAB, db);
+  const join = await tryImp(['net', 'join', LAB, db]);
+
+  if (join.exitCode !== 0) {
+    throw new Error(`imp net join exited ${String(join.exitCode)}: ${join.stderr}`);
+  }
+
+  joined.stderr = join.stderr;
 
   const rows = [await requireImp(web), await requireImp(db), await requireImp(out)];
 
@@ -110,6 +119,10 @@ test('the imps on a network reach each other, whatever their policies', async ()
 
   expect(reached).toEqual([true, true]);
   expect(got).toBe('hello');
+});
+
+test('a join that puts a box imp next to an open one warns', () => {
+  expect(joined.stderr).toContain(`warning: ${db} is box, but ${web} on ${LAB} is open`);
 });
 
 test('an imp on no network reaches neither, and neither reaches it', async () => {
