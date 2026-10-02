@@ -80,11 +80,13 @@ export interface BootTemplates {
   // starts its build in the background
   readonly find: (shape: Readonly<TemplateShape>) => TemplateFiles | null;
 
-  // the build itself, shared by every miss of one key while it runs
+  // the build itself, shared by every miss of one key while it runs; it
+  // rejects while the key backs off or is off
   readonly buildTemplate: (shape: Readonly<TemplateShape>) => Promise<TemplateFiles>;
 
   // a restore of `files` failed; `isTemplateFault` when it failed before the
-  // claim, where nothing of the imp's own was in play: those files go
+  // claim, where nothing of the imp's own was in play: only then do those
+  // files go and the failure count toward turning the key off
   readonly reportFailure: (files: Readonly<TemplateFiles>, isTemplateFault: boolean) => void;
   readonly reportRestored: (files: Readonly<TemplateFiles>) => void;
 
@@ -110,9 +112,15 @@ export interface BootTemplateDeps {
   readonly buildVm: (plan: Readonly<TemplateBuildPlan>) => Promise<void>;
   readonly taps: TapDevices;
   readonly admission?: RamAdmission | undefined;
-  readonly diskBudget?: Pick<DiskBudget, 'requireRoom'> | undefined;
+  readonly diskBudget?: Pick<DiskBudget, 'withRoom'> | undefined;
   readonly now?: () => number;
   readonly log: (message: string) => void;
+}
+
+// The host had no free RAM or disk room for a build: it backs off, but
+// counts as no failure, since a host near its budget is the normal case.
+class BuildRefusedError extends Error {
+  override name = 'BuildRefusedError';
 }
 
 // what a key has cost: failed builds hold off the next one, and too many
@@ -250,14 +258,13 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
     }
   };
 
-  const runBuild = async (shape: Readonly<TemplateShape>, key: string): Promise<TemplateFiles> => {
-    const work = join(root, `.build-${Bun.randomUUIDv7()}`);
+  const writeTemplate = async (
+    shape: Readonly<TemplateShape>,
+    key: string,
+    work: string,
+    buildId: string,
+  ): Promise<TemplateFiles> => {
     const runDir = join(work, 'run');
-    const id = `template-${key.slice(0, 12)}`;
-    const buildId = Bun.randomUUIDv7();
-
-    // the mem file can be the whole memory; a full disk turns the build away
-    await deps.diskBudget?.requireRoom(shape.memoryMib * MIB);
 
     mkdirSync(runDir, { recursive: true });
 
@@ -266,65 +273,91 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
       truncateSync(placeholder, PLACEHOLDER_BYTES);
     }
 
-    // no user waits on a build: it takes free RAM, never an imp's
-    await deps.admission?.admit({
-      id,
-      name: 'boot template',
-      reserveMib: Math.ceil((shape.memoryMib * deps.bootReservePercent) / 100),
-      memoryMib: shape.memoryMib,
-      maySleepImps: false,
-    });
-
     const started = performance.now();
 
+    await deps.taps.setupTap(TEMPLATE_ADDRESS);
+
+    const snapshotDir = join(work, 'snapshot');
+
+    await deps.buildVm({
+      firecrackerBin: deps.firecrackerBin,
+      kernelPath: deps.kernelPath,
+      systemDrivePath: deps.identity.systemDrivePath,
+      bootArgs: TEMPLATE_BOOT_ARGS,
+      vcpus: shape.vcpus,
+      memoryMib: shape.memoryMib,
+      paths: {
+        apiSocket: join(runDir, 'api.sock'),
+        vsockSocket: join(runDir, 'vsock.sock'),
+        logFile: join(runDir, 'firecracker.log'),
+        pidFile: join(runDir, 'pid'),
+      },
+      placeholderPath: placeholder,
+      tap: TEMPLATE_ADDRESS.tap,
+      guestMac: TEMPLATE_ADDRESS.guestMac,
+      minGuestUptimeMs: deps.minGuestUptimeMs,
+      snapshotDir,
+      vmstate: join(snapshotDir, 'vmstate'),
+      memFile: join(snapshotDir, 'mem'),
+    });
+
+    // zero pages become holes, before any VM maps the file; never after
+    await runCommand(['fallocate', '--dig-holes', join(snapshotDir, 'mem')]);
+
+    const meta: TemplateMeta = {
+      buildId,
+      ...shape,
+      systemDrivePath: deps.identity.systemDrivePath,
+    };
+
+    writeFileSync(join(snapshotDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
+    renameSync(snapshotDir, join(root, key));
+
+    lastUsed.set(key, now());
+
+    removeLeastUsed(key);
+
+    const ms = Math.round(performance.now() - started);
+
+    deps.log(`impd: boot template ${key.slice(0, 12)} built in ${String(ms)}ms`);
+
+    return { key, buildId, vmstate: join(root, key, 'vmstate'), memFile: join(root, key, 'mem') };
+  };
+
+  // A build takes free RAM and holds disk room for its mem file, which can be
+  // the whole memory, until the rename; a refusal of either throws a
+  // BuildRefusedError.
+  const runBuild = async (shape: Readonly<TemplateShape>, key: string): Promise<TemplateFiles> => {
+    const work = join(root, `.build-${Bun.randomUUIDv7()}`);
+    const id = `template-${key.slice(0, 12)}`;
+    const buildId = Bun.randomUUIDv7();
+    const progress = { isBuilding: false };
+
+    const writeAdmitted = (): Promise<TemplateFiles> => {
+      progress.isBuilding = true;
+
+      return writeTemplate(shape, key, work, buildId);
+    };
+
     try {
-      await deps.taps.setupTap(TEMPLATE_ADDRESS);
-
-      const snapshotDir = join(work, 'snapshot');
-
-      await deps.buildVm({
-        firecrackerBin: deps.firecrackerBin,
-        kernelPath: deps.kernelPath,
-        systemDrivePath: deps.identity.systemDrivePath,
-        bootArgs: TEMPLATE_BOOT_ARGS,
-        vcpus: shape.vcpus,
+      // no user waits on a build: it takes free RAM, never an imp's
+      await deps.admission?.admit({
+        id,
+        name: null,
+        reserveMib: Math.ceil((shape.memoryMib * deps.bootReservePercent) / 100),
         memoryMib: shape.memoryMib,
-        paths: {
-          apiSocket: join(runDir, 'api.sock'),
-          vsockSocket: join(runDir, 'vsock.sock'),
-          logFile: join(runDir, 'firecracker.log'),
-          pidFile: join(runDir, 'pid'),
-        },
-        placeholderPath: placeholder,
-        tap: TEMPLATE_ADDRESS.tap,
-        guestMac: TEMPLATE_ADDRESS.guestMac,
-        minGuestUptimeMs: deps.minGuestUptimeMs,
-        snapshotDir,
-        vmstate: join(snapshotDir, 'vmstate'),
-        memFile: join(snapshotDir, 'mem'),
+        maySleepImps: false,
       });
 
-      // zero pages become holes, before any VM maps the file; never after
-      await runCommand(['fallocate', '--dig-holes', join(snapshotDir, 'mem')]);
+      return await (deps.diskBudget === undefined
+        ? writeAdmitted()
+        : deps.diskBudget.withRoom(shape.memoryMib * MIB, writeAdmitted));
+    } catch (error) {
+      if (progress.isBuilding) {
+        throw error;
+      }
 
-      const meta: TemplateMeta = {
-        buildId,
-        ...shape,
-        systemDrivePath: deps.identity.systemDrivePath,
-      };
-
-      writeFileSync(join(snapshotDir, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
-      renameSync(snapshotDir, join(root, key));
-
-      lastUsed.set(key, now());
-
-      removeLeastUsed(key);
-
-      const ms = Math.round(performance.now() - started);
-
-      deps.log(`impd: boot template ${key.slice(0, 12)} built in ${String(ms)}ms`);
-
-      return { key, buildId, vmstate: join(root, key, 'vmstate'), memFile: join(root, key, 'mem') };
+      throw new BuildRefusedError(readErrorMessage(error), { cause: error });
     } finally {
       deps.admission?.release(id);
       rmSync(work, { recursive: true, force: true });
@@ -332,9 +365,20 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
   };
 
   // a failed build holds off the next one, twice as long each time; the
-  // third failure turns the key off
+  // third failure turns the key off. A refused build holds off the next one
+  // as long as a first failure, and is no failure.
   const setBuildFailed = (key: string, error: unknown): void => {
     const record = readRecord(key);
+
+    if (error instanceof BuildRefusedError) {
+      record.retryAt = now() + BUILD_RETRY_MS;
+
+      deps.log(
+        `impd: boot template ${key.slice(0, 12)} build refused (next try in ${String(BUILD_RETRY_MS / 1000)}s): ${error.message}`,
+      );
+
+      return;
+    }
 
     record.buildFailures += 1;
     record.retryAt = now() + BUILD_RETRY_MS * 2 ** (record.buildFailures - 1);
@@ -351,6 +395,12 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
   const buildTemplate = (shape: Readonly<TemplateShape>): Promise<TemplateFiles> => {
     const key = buildTemplateKey(deps.identity, shape);
+    const record = readRecord(key);
+
+    if (record.isOff) {
+      return Promise.reject(new Error('boot templates of this shape are off until impd restarts'));
+    }
+
     const ready = findReady(key);
 
     if (ready !== null) {
@@ -361,6 +411,12 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
 
     if (inFlight !== undefined) {
       return inFlight;
+    }
+
+    if (now() < record.retryAt) {
+      return Promise.reject(
+        new Error('boot template builds of this shape back off; try again later'),
+      );
     }
 
     const runShared = async (): Promise<TemplateFiles> => {
@@ -417,14 +473,18 @@ export function createBootTemplates(deps: BootTemplateDeps): BootTemplates {
     },
     buildTemplate,
     reportFailure: (files, isTemplateFault) => {
+      // Only the template's own fault counts, and only against the build that
+      // failed: an imp's fault (a bad disk, an image that never pings) says
+      // nothing of the template, and an evicted or rebuilt one is gone.
+      if (!isTemplateFault || readMeta(files.key)?.buildId !== files.buildId) {
+        return;
+      }
+
       const record = readRecord(files.key);
 
       record.restoreFailures += 1;
 
-      // only the build that failed: a rebuilt template has another buildId
-      if (isTemplateFault && readMeta(files.key)?.buildId === files.buildId) {
-        removeDir(files.key);
-      }
+      removeDir(files.key);
 
       if (record.restoreFailures >= MAX_RESTORE_FAILURES && !record.isOff) {
         record.isOff = true;

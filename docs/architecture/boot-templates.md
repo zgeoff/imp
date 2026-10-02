@@ -57,17 +57,23 @@ When the shape has a template, a cold boot:
 1. Starts Firecracker in the imp's cgroup.
 2. Loads the snapshot with `resume_vm: false`, `network_overrides` (the imp's tap) and
    `vsock_override` (the imp's socket).
-3. Resumes the VM and waits for the parked ping. A new imp's disk is grown on the host meanwhile.
+3. Resumes the VM and waits for the parked ping. Meanwhile the host prepares the imp's disk: a new
+   imp's is cloned and grown; a restore from a checkpoint or a backup copies or downloads it, and
+   the parked guest waits for it.
 4. Points `rootfs` at the imp's disk with `PATCH /drives/rootfs` and its absolute path, once the
    disk is ready. The config change is how virtio-blk tells the guest the disk's new size.
 5. Sends `claim`, and waits for stage 2's ping, as a cold boot does.
 
 Everything after that is a cold boot's: impd writes the VM identity, so the next sleep, wake, fork
-and checkpoint see a normal imp. If any step fails, impd kills the VM and boots the kernel. A step
-that reads only the template (the load, the resume, the parked ping) also removes it, and the next
-misses build it again. A failure from the patch on is the imp's own (its disk, its claim), and the
-template stays. Only the build that failed is removed: a template rebuilt since has another
-`buildId` in `meta.json`.
+and checkpoint see a normal imp. If a step fails, impd kills the VM:
+
+- A step that reads only the template (the load, the resume, the parked ping) is the template's
+  fault. impd removes the template, boots the kernel, and the next misses build it again. Only the
+  build that failed is removed: a template rebuilt since has another `buildId` in `meta.json`.
+- A failure from the patch on (the claim, stage 2) is the imp's own. impd boots the kernel, and the
+  template stays.
+- A disk that fails to clone, grow or download fails the create, as on a cold boot, and the template
+  stays.
 
 ## Limits
 
@@ -76,12 +82,15 @@ A template costs RAM while it builds and disk for its mem file, up to the whole 
 - **2 misses.** A key builds on its second miss, so a shape booted once costs nothing.
 - **4 templates.** Past 4, the least recently restored goes. Odd `--memory` and `--cpus` values
   cannot fill the disk.
-- **Free room only.** A build needs room on the disk for the whole memory, and free RAM: it never
-  sleeps an imp.
+- **Free room only.** A build holds room on the disk for the whole memory until its rename, and
+  takes free RAM: it never sleeps an imp. A host without the room turns the build away; the next
+  build of the key waits 60 s, and the refusal counts as no failure, since a host near its budget is
+  the normal case.
 - **Failed builds back off.** The next build of a key that failed waits 60 s, then 120 s. The third
   failure turns the key off until impd restarts.
-- **Failed restores.** 3 failed restores of a key in a row turn it off until impd restarts. A good
-  restore resets the count.
+- **Failed restores.** 3 restores of a key in a row that fail in the template turn it off until impd
+  restarts. A good restore resets the count. A failure of the imp's own counts not at all, nor does
+  one of a template that was evicted or rebuilt after the restore found it.
 
 ## Claim
 
@@ -95,9 +104,10 @@ Stage 1 then:
    (`random: crng reseeded due to virtual machine fork`); the seed does not rely on it. Stage 1 logs
    `stage1: claim: crng reseeded from a 64-byte seed` to the console.
 3. Sets `eth0`'s MAC.
-4. Waits, for up to 2 s, until `vda` reports the size in the claim's `disk_bytes`: the size change
-   from the restore's `PATCH` reaches the guest as a config interrupt. Then it drops `vda`'s buffers
-   (`BLKFLSBUF`) and rereads its partition table.
+4. Waits, for up to 2 s, until `vda` reports the size in the claim's `disk_bytes`, rounded down to
+   whole 512-byte sectors: the size change from the restore's `PATCH` reaches the guest as a config
+   interrupt. A disk still at the wrong size after 2 s fails the claim, and impd boots the kernel.
+   Then it drops `vda`'s buffers (`BLKFLSBUF`) and rereads its partition table.
 5. Answers, closes the parked listener, and goes on as a cold boot: it mounts `vda`, grows the
    filesystem, switches root and starts stage 2.
 
@@ -178,3 +188,14 @@ The `boot-templates` e2e suite times 10 `imp new` runs through the CLI and write
 
 impd's own part (`created in`) was 371 ms. impd logs it per create with the step spans on the boot's
 line.
+
+Since then, the disk is cloned and grown while the template restores, and stage 2 runs in the stage
+1 process with the system mounts made before the template parks. impd's part is now 276-300 ms p50.
+`imp new` through the compiled CLI is about 350 ms end to end: the CLI's own start and round trip
+add about 70 ms (about 100 ms for `scripts/imp`, which runs the CLI from source). The e2e `cli` span
+also counts the test process that spawns the CLI, so it reads higher.
+
+The grow of a new disk past the image's filesystem is a known cost: with `--disk 4g`, the image's
+own size, impd's part was 272 ms before the overlap, against 345 ms with the default disk. A default
+disk the image's size would need a grown copy of each image, or a smaller `IMP_DEFAULT_DISK_GIB`;
+both stay as they are.
