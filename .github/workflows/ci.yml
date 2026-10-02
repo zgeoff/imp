@@ -192,12 +192,12 @@ jobs:
   # - after the release PR merges, release-please tags vX.Y.Z and creates the
   #   GitHub release, and the job starts release.yml for the tag
   #
-  # GITHUB_TOKEN events start no workflows, so a release PR it opens gets no
-  # CI and the owner merges it by hand. With a release App configured
-  # (vars.RELEASE_APP_ID), its token opens the PR, CI runs on it, and the job
-  # turns on auto-merge.
+  # The job runs only once a release App is configured (vars.RELEASE_APP_ID),
+  # as in atc: a release PR opened with GITHUB_TOKEN would get no CI, and the
+  # repo would need Actions to be allowed to open PRs. The App's token opens
+  # the PR, CI runs on it, and the job turns on auto-merge.
   release-please:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && vars.RELEASE_APP_ID != ''
     needs: [gitleaks, checks, go, shellcheck, cli]
     runs-on: ubuntu-latest
     permissions:
@@ -208,7 +208,6 @@ jobs:
     steps:
       - name: Mint GitHub App token
         id: app-token
-        if: vars.RELEASE_APP_ID != ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.RELEASE_APP_ID }}
@@ -218,7 +217,7 @@ jobs:
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ steps.app-token.outputs.token || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
       # The release PR bumps package versions that bun.lock records too, and
       # writes a CHANGELOG.md that oxfmt reformats: repair both so the PR
@@ -243,7 +242,7 @@ jobs:
         if: steps.release.outputs.prs_created == 'true'
         env:
           PR: ${{ steps.release.outputs.pr }}
-          TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           branch=$(jq -r .headBranchName <<<"$PR")
           git fetch --depth=1 origin "$branch"
@@ -263,7 +262,6 @@ jobs:
       # GitHub merges the PR once its required checks pass, or at once when
       # no ruleset requires any.
       - name: Auto-merge release PR
-        if: steps.app-token.outputs.token != ''
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |

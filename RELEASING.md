@@ -53,29 +53,22 @@ for the same tag waits for the first.
 
 ## Tokens
 
-`GITHUB_TOKEN` events start no workflows. A release PR opened with `GITHUB_TOKEN` gets no CI run,
-and its merge does not start the run that tags the release.
+Releases need a GitHub App. `GITHUB_TOKEN` events start no workflows, so a release PR opened with it
+would get no CI run. Until the App is configured, the `release-please` job is skipped, as in atc,
+and no release PR opens.
 
-- **No App (the setup today):** the `release-please` job runs with `GITHUB_TOKEN`. The release PR
-  has no checks, so the owner merges it by hand. The merge is a push to `main`, so CI runs, and its
-  `release-please` job tags and starts the release. While `.github/rulesets/main.json` is applied,
-  its required checks never report on the release PR, so merging needs the owner's bypass.
-- **With a release App:** the job opens the PR with the App's token, CI runs on it, and the job
-  turns on auto-merge (`gh pr merge --auto --squash`). With the ruleset applied, GitHub merges the
-  PR once its required checks pass; without it, at once. To set it up:
-  1. Create a GitHub App (or reuse `zgeoff-release`) with no webhook, and give it Contents and Pull
-     requests read and write. Install it on `zgeoff/imp`.
-  2. Add the Actions variable `RELEASE_APP_ID` (the App's client ID) and the Actions secret
-     `RELEASE_APP_PRIVATE_KEY` (its private key).
+With the App, the job opens the release PR with the App's token, CI runs on it, and the job turns on
+auto-merge (`gh pr merge --auto --squash`). With `.github/rulesets/main.json` applied, GitHub merges
+the PR once its required checks pass; without it, at once. To set it up:
 
-Two repo settings, either way:
+1. Create a GitHub App (or reuse `zgeoff-release`) with no webhook, and give it Contents and Pull
+   requests read and write. Install it on `zgeoff/imp`.
+2. Add the Actions variable `RELEASE_APP_ID` (the App's client ID) and the Actions secret
+   `RELEASE_APP_PRIVATE_KEY` (its private key).
+3. Turn on Settings → General → "Allow auto-merge".
 
-- Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests", for
-  release-please to open the release PR.
-- Settings → General → "Allow auto-merge", for the App path to turn on auto-merge.
-
-The release itself starts with `GITHUB_TOKEN` in both cases: a workflow dispatch is the one
-`GITHUB_TOKEN` event that starts a workflow.
+The release itself starts with `GITHUB_TOKEN`: a workflow dispatch is the one `GITHUB_TOKEN` event
+that starts a workflow.
 
 The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
 settings, so a server pulls it without a login.
