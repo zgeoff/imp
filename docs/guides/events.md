@@ -78,8 +78,10 @@ per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
   no `CheckpointRemoved` comes for them.
 - A dashboard stream ends when its session expires and at any logout. The browser reconnects if its
   session is still valid.
-- Through a proxy or `tailscale serve`, oRPC's keep-alive comment every 5 s keeps an idle stream
-  open.
+- oRPC sends a keep-alive comment every 5 s, so an idle stream stays open through a proxy. Measured
+  on 2 October 2026 with two 25 s gaps between events: through the [HTTPS](./https.md) listener,
+  each event came 5–14 ms after its change; over the tailnet to impd's API, 73–91 ms. Neither path
+  buffered or dropped the stream.
 
 ## The API audit log
 
