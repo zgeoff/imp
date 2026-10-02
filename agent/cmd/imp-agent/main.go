@@ -1,9 +1,9 @@
 // Command imp-agent is PID 1 inside every imp guest. The kernel starts it
 // from the system drive (stage 1); it switches root to the user disk and
 // re-execs itself as "imp-agent stage2". See docs/architecture/agent.md ("Boot").
-// "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway, and
+// "imp-agent sftp" is an SFTP server on stdio for impd's SSH gateway,
 // "imp-agent dial-unix <path>" connects to a unix socket as the image USER
-// for the agent's dial op.
+// for the agent's dial op, and "imp-agent tar" is the guest end of `imp cp`.
 package main
 
 import (
@@ -18,6 +18,7 @@ import (
 	"github.com/zgeoff/imp/agent/internal/dial"
 	"github.com/zgeoff/imp/agent/internal/proto"
 	"github.com/zgeoff/imp/agent/internal/sftpserver"
+	"github.com/zgeoff/imp/agent/internal/tartool"
 )
 
 func main() {
@@ -40,6 +41,13 @@ func main() {
 	case len(os.Args) == 3 && os.Args[1] == dial.HelperCommand:
 		// not PID 1 either: the agent starts it as the image USER
 		if err := dial.RunHelper(os.Args[2]); err != nil {
+			os.Exit(1)
+		}
+		return
+	case len(os.Args) > 1 && os.Args[1] == "tar":
+		// not PID 1: impd runs it as root for `imp cp`
+		if err := tartool.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "imp-agent tar: %v\n", err)
 			os.Exit(1)
 		}
 		return
