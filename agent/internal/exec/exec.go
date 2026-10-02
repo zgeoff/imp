@@ -139,7 +139,7 @@ func (m *Manager) Serve(req proto.Request, r *proto.Reader, w *proto.Writer) err
 	// still reaches EOF and the host before EXIT.
 	if deadline, ok := s.stop.due(); ok {
 		if s.group != nil {
-			killCgroup(s.group, deadline)
+			killCgroup(s.group, s.proc.Pid, deadline)
 		} else {
 			killGroup(s.proc.Pid, deadline)
 		}

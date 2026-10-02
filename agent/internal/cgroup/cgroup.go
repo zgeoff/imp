@@ -108,7 +108,16 @@ func (g *Group) Dir() *os.File { return g.dir }
 
 // Kill SIGKILLs every process in the leaf and its descendants.
 func (g *Group) Kill() error {
-	return os.WriteFile(filepath.Join(g.path, "cgroup.kill"), []byte("1"), 0)
+	// no O_CREATE: a leaf without the file is no cgroup to kill
+	f, err := os.OpenFile(filepath.Join(g.path, "cgroup.kill"), os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write([]byte("1"))
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // WaitEmpty polls cgroup.events until it says "populated 0" or deadline

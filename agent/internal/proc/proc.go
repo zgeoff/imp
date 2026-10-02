@@ -91,7 +91,9 @@ func Start(r *reaper.Reaper, s Spec) (*Process, error) {
 			return pid, err
 		}
 		// No clone3, or a cgroup gone from under us: the command still runs,
-		// and a stop falls back to its process group.
+		// and a stop falls back to its process group. An exec error (EACCES,
+		// say) also lands here; its retry fails the same way, which is
+		// harmless.
 		sys.UseCgroupFD = false
 		pid, retryErr := syscall.ForkExec(path, s.Argv, attr)
 		if retryErr == nil {

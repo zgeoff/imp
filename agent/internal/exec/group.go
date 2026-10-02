@@ -93,13 +93,15 @@ func killGroup(pgid int, deadline time.Time) {
 // killCgroup waits for g to empty until deadline, then kills what is left
 // with cgroup.kill and waits up to groupKillWait for that to go. It reaches
 // the members that left the process group (setsid, a double fork); they get
-// no SIGTERM first, only the kill at the deadline.
-func killCgroup(g *cgroup.Group, deadline time.Time) {
+// no SIGTERM first, only the kill at the deadline. If cgroup.kill fails, the
+// process group pgid still gets its SIGKILL.
+func killCgroup(g *cgroup.Group, pgid int, deadline time.Time) {
 	if g.WaitEmpty(deadline) {
 		return
 	}
 	if err := g.Kill(); err != nil {
-		log.Printf("exec: cgroup.kill: %v", err)
+		log.Printf("exec: cgroup.kill: %v; killing the process group instead", err)
+		killGroup(pgid, deadline)
 		return
 	}
 	if !g.WaitEmpty(time.Now().Add(groupKillWait)) {

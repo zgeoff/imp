@@ -310,3 +310,34 @@ func TestCgroupKillsEscapees(t *testing.T) {
 		t.Fatalf("escapee %d survived the stop", escapee)
 	}
 }
+
+// TestCgroupKillFallsBackToGroup: a leaf whose cgroup.kill cannot be
+// written (here a plain directory) still gets its process group killed.
+func TestCgroupKillFallsBackToGroup(t *testing.T) {
+	tree, err := cgroup.NewTree(filepath.Join(t.TempDir(), "imp-exec"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := tree.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tree.Release(g) })
+	events := filepath.Join(g.Dir().Name(), "cgroup.events")
+	if err := os.WriteFile(events, []byte("populated 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(events) })
+
+	pid, err := syscall.ForkExec("/bin/sh", []string{"sh", "-c", `trap "" TERM; exec sleep 300`},
+		&syscall.ProcAttr{Sys: &syscall.SysProcAttr{Setpgid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	killAfter(t, pid)
+
+	killCgroup(g, pid, time.Now())
+	if alive(pid) {
+		t.Fatalf("pid %d survived a failed cgroup.kill", pid)
+	}
+}
