@@ -97,8 +97,9 @@ still accept what it lets through.
 
 A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
 address, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the source address. Only
-IPv4 is redirected: the guest's resolv.conf names IPv4 servers, and DNS over IPv6 from a box or none
-imp is refused as any other IPv6 traffic its policy does not allow.
+IPv4 is redirected: the guest's resolv.conf names IPv4 servers, and port 53 over IPv6 meets the
+policy as any other port does. A none imp sends no DNS over IPv6, and a box imp sends it only to an
+address its list allows. The `ipv6` e2e suite checks that a box imp's query over IPv6 fails.
 
 - A name the policy does not allow gets REFUSED with Extended DNS Error 18 ("Prohibited") and never
   leaves the host. A query with more than one question is refused. Each imp has a rate limit; a

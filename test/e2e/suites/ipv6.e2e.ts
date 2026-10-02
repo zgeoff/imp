@@ -62,6 +62,9 @@ const SERVER_SCRIPT = [
   `ip -6 addr add ${SERVER_OTHER}/64 dev eth0`,
   `ip -6 route add ${NEAR}/64 via ${ROUTER_FAR} ${WIDE_MSS}`,
   `ip -6 route add ${ROUTED}/64 via ${ROUTER_FAR} ${WIDE_MSS}`,
+
+  // port 53 over TCP, where a guest might try DNS
+  'httpd -p [::]:53 -h /www',
   'exec httpd -f -p [::]:80 -h /www',
 ].join(' && ');
 
@@ -299,6 +302,20 @@ test('a box imp reaches the IPv6 addresses it allows, and nothing else', async (
 
   expect(allowed).toBeTrue();
   expect(denied).toEqual([false, false]);
+  expect(control).toBeTrue();
+});
+
+// DNS is redirected to impd's resolver over IPv4 only; a box imp's port 53
+// over IPv6 meets its policy like any other port, so no query leaks out.
+test('a box imp sends no DNS over IPv6', async () => {
+  const query = await tryInImp(box, `nslookup example.com ${SERVER_OTHER}`);
+  const overTcp = await tryGetFromImp(box, `http://[${SERVER_OTHER}]:53/`);
+
+  // the open imp reaches port 53 there, so it is the policy that refuses
+  const control = await tryGetFromImp(open, `http://[${SERVER_OTHER}]:53/`);
+
+  expect(query).toBeFalse();
+  expect(overTcp).toBeFalse();
   expect(control).toBeTrue();
 });
 
