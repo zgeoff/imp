@@ -198,3 +198,22 @@ test('a restore makes its missing networks, and removes them again when it fails
   expect(made.map((network) => network.name)).toEqual(['lab', 'new']);
   expect(after.map((network) => network.name)).toEqual(['lab']);
 });
+
+test("a policy change that mixes a network gets the same warning, for each of the imp's networks", async () => {
+  await using ctx = await setupNetwork();
+
+  const before = await ctx.client.networks.warnings({ name: 'db' });
+
+  await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'none', allow: [] } });
+
+  const after = await ctx.client.networks.warnings({ name: 'db' });
+  const missing = await readRejection(ctx.client.networks.warnings({ name: 'nope' }));
+
+  expect(before).toEqual([]);
+
+  expect(after).toEqual([
+    'db is none, but web on lab is open and can relay for it: a box or none imp trusts its open peers',
+  ]);
+
+  expect(missing).toMatchObject({ code: 'NOT_FOUND' });
+});

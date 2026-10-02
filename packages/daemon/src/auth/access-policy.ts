@@ -120,6 +120,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'networks.delete': manageHost,
   'networks.join': manageHost,
   'networks.leave': manageHost,
+  'networks.warnings': readImp,
 
   'grants.add': manageHost,
   'grants.delete': manageHost,

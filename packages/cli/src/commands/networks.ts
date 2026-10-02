@@ -1,7 +1,18 @@
+import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import { formatNetworks, formatOutput } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg, nameArg } from './common-args';
+
+// what impd says of the imp's networks after a change that can mix open
+// imps with box ones; on stderr, so --json stays one document
+export async function printTrustWarnings(client: ImpClient, name: string): Promise<void> {
+  const warnings = await client.networks.warnings({ name });
+
+  for (const warning of warnings) {
+    console.error(`warning: ${warning}`);
+  }
+}
 
 const networkArg = { type: 'positional', description: 'network name', required: true } as const;
 
