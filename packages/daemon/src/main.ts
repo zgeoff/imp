@@ -109,6 +109,7 @@ async function main(): Promise<void> {
     systemFiles: systemFiles.info,
     readTailscale,
     isReady: () => state.ready,
+    now: Date.now,
   });
 
   const app = api.app.listen(config.apiPort);

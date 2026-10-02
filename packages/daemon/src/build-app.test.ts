@@ -362,7 +362,9 @@ test('impd stopping closes exec sessions with 1012', async () => {
   try {
     const port = String(server.server?.port);
 
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TEST_TOKEN}`);
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec`, {
+      headers: { authorization: `Bearer ${TEST_TOKEN}` },
+    });
 
     const opened = Promise.withResolvers<void>();
     const closed = Promise.withResolvers<CloseEvent>();
@@ -383,4 +385,138 @@ test('impd stopping closes exec sessions with 1012', async () => {
   } finally {
     await server.stop(true);
   }
+});
+
+// opens /exec with `query` and reports whether the upgrade succeeded; a
+// session it opens sends `start` for `name` and reports the first message
+async function tryExecSocket(
+  port: string,
+  query: string,
+  name = 'dev',
+  headers: Readonly<Record<string, string>> = {},
+) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?${query}`, { headers });
+
+  const outcome = Promise.withResolvers<string>();
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify({ type: 'start', name, argv: ['true'], tty: false }));
+  });
+
+  socket.addEventListener('message', (event) => {
+    outcome.resolve(String(event.data));
+  });
+
+  socket.addEventListener('error', () => {
+    outcome.resolve('rejected');
+  });
+
+  try {
+    return await outcome.promise;
+  } finally {
+    socket.close();
+  }
+}
+
+test('an exec ticket opens one socket for its imp, once', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'other' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'other' });
+
+    // accepted at the upgrade, refused at start: the ticket names another imp
+    const first = await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    const forbidden: unknown = JSON.parse(first);
+
+    expect(forbidden).toMatchObject({ type: 'error', code: 'FORBIDDEN' });
+
+    const reused = await tryExecSocket(port, `ticket=${issued.ticket}`);
+
+    expect(reused).toBe('rejected');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('a bearer exec socket may start any imp', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const reply = await tryExecSocket(port, '', 'other', { authorization: `Bearer ${TEST_TOKEN}` });
+
+    const message: unknown = JSON.parse(reply);
+
+    // past the grant: the imp does not exist
+    expect(message).toMatchObject({ type: 'error', code: 'NOT_FOUND' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('/exec rejects an expired ticket and the token in the query', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    await ctx.createTestImage('ubuntu');
+    await ctx.client.imps.create({ name: 'dev' });
+
+    const issued = await ctx.client.exec.ticket({ name: 'dev' });
+
+    ctx.advance(30_000);
+
+    const expired = await tryExecSocket(port, `ticket=${issued.ticket}`);
+    const queryToken = await tryExecSocket(port, `token=${TEST_TOKEN}`);
+
+    expect(expired).toBe('rejected');
+    expect(queryToken).toBe('rejected');
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test('exec.ticket refuses an imp that does not exist', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  const rejection = await ctx.client.exec.ticket({ name: 'nope' }).catch((error: unknown) => error);
+
+  expect(rejection).toMatchObject({ code: 'NOT_FOUND' });
+});
+
+test('wake with restartError false refuses an imp in error', async () => {
+  await using ctx = await setupTest(TEST_TOKEN);
+
+  await ctx.createTestImage('ubuntu');
+
+  ctx.fake.queue('boot', 'fail');
+
+  await ctx.client.imps.create({ name: 'dev' }).catch(() => {});
+
+  const rejection = await ctx.client.imps
+    .wake({ name: 'dev', restartError: false })
+    .catch((error: unknown) => error);
+
+  const restarted = await ctx.client.imps.wake({ name: 'dev' });
+
+  expect(rejection).toMatchObject({
+    code: 'INVALID_STATE',
+    data: { state: 'error', allowed: ['running', 'sleeping', 'stopped'] },
+  });
+
+  expect(restarted.state).toBe('running');
 });

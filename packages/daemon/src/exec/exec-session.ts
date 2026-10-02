@@ -255,8 +255,19 @@ function isStartMessage(message: unknown): boolean {
 }
 
 function buildErrorMessage(error: unknown): ExecServerMessage {
-  if (error instanceof ORPCError || error instanceof AgentError) {
-    return { type: 'error', code: String(error.code), message: error.message };
+  if (error instanceof ORPCError) {
+    const data: unknown = error.data;
+
+    return {
+      type: 'error',
+      code: String(error.code),
+      message: error.message,
+      ...(data !== undefined && { data }),
+    };
+  }
+
+  if (error instanceof AgentError) {
+    return { type: 'error', code: error.code, message: error.message };
   }
 
   return { type: 'error', message: readErrorMessage(error) };

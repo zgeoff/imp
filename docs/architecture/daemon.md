@@ -30,11 +30,15 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 ### API and auth
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
-`/rpc`, and the exec WebSocket at `/exec`. Both need the bearer token in an `Authorization` header
-or a `token` query parameter. The router maps each procedure of the contract in `packages/api` to a
-service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`,
-`RAM_BUDGET_EXCEEDED`, and `SERVICE_UNAVAILABLE` while impd stops. The token is made on first start
-and kept in `<dataDir>/token`, readable by the owner only.
+`/rpc`, and the exec WebSocket at `/exec`. Both take the bearer token in an `Authorization` header.
+A browser cannot set that header on a WebSocket, so `/exec` also takes a `ticket` query parameter:
+`exec.ticket` gives a single-use ticket for one existing imp, valid for 30 s. The token itself is
+never accepted in a URL, where logs and browser history would keep it; no client used the old
+`token` query parameter. impd keeps at most 256 live tickets and drops the oldest past that. The
+router maps each procedure of the contract in `packages/api` to a service call. Errors come from the
+contract: `NOT_FOUND`, `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `SERVICE_UNAVAILABLE`
+while impd stops, and `FORBIDDEN` for an exec ticket used for another imp. The token is made on
+first start and kept in `<dataDir>/token`, readable by the owner only.
 
 ### imps: the lifecycle
 

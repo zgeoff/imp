@@ -3,7 +3,9 @@ export type { Checkpoint } from './checkpoint-schema';
 
 export {
   EXEC_CHANNELS,
+  EXEC_CLOSE_RESTARTING,
   EXEC_PATH,
+  EXEC_TICKET_PARAM,
   ExecClientMessageSchema,
   ExecServerMessageSchema,
   ExecStartMessageSchema,
