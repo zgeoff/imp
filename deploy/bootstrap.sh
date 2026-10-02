@@ -81,6 +81,7 @@ image=$DEFAULT_IMAGE
 image_set=
 image_archive=
 authkey=${TAILSCALE_AUTHKEY:-}
+authkey_file=
 extra_ssh_ports=()
 skip_health=
 changes=0
@@ -431,6 +432,7 @@ parse_args() {
       --tailscale-authkey-file)
         [ -r "${2:-}" ] || die "--tailscale-authkey-file: cannot read ${2:-}"
         authkey=$(tr -d '[:space:]' <"$2")
+        authkey_file=$2
         shift
         ;;
       --ssh-port) extra_ssh_ports+=("${2:?--ssh-port needs a port}") && shift ;;
@@ -1051,12 +1053,15 @@ ensure_tailscale() {
   wait_for "the tailnet node to be Running" 180 tailscale_running
   # An older image skips tailscaled without a key, which would take the
   # node off the tailnet at its next start.
-  if ! docker exec imp-host grep -q 'saved node state' /usr/local/lib/imp/tailscale-up.sh; then
+  if [ "$(docker inspect -f '{{index .Config.Labels "imp.tailscale-keyless"}}' imp-host)" != 1 ]; then
     warn "this imp-host image needs TAILSCALE_AUTHKEY at every start; the key stays in $ENV_FILE"
     return 0
   fi
   change "blank TAILSCALE_AUTHKEY in $ENV_FILE; the node state keeps it joined" \
     write_file "$ENV_FILE" 600 "$(blank_env_key <"$ENV_FILE")"
+  # The running container still holds the key in its environment (docker
+  # inspect, /proc/*/environ); a restart with the blank file drops it.
+  change "restart imp-host without the key" reload_unit imp-host
 }
 
 # blank_env_key: the env file on stdin with TAILSCALE_AUTHKEY emptied.
@@ -1090,6 +1095,9 @@ main() {
   fi
   ensure_tailscale
   log "$changes change(s) made"
+  if [ -n "$authkey_file" ]; then
+    log "delete $authkey_file now; the key is not needed again (docs/guides/install.md#the-tailscale-key)"
+  fi
   [ -n "$skip_health" ] || health
 }
 

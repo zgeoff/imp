@@ -63,6 +63,9 @@ RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/f
  && rm -rf /tmp/release-* /tmp/firecracker.tgz
 
 COPY host/scripts/ /usr/local/lib/imp/
+# tailscale-up.sh starts tailscaled from saved node state with no key, so
+# deploy/bootstrap.sh may blank a spent key in the env file.
+LABEL imp.tailscale-keyless="1"
 COPY host/entrypoint /usr/local/bin/imp-entrypoint
 
 EXPOSE 7070 7080

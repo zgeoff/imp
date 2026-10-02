@@ -106,12 +106,13 @@ bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file 
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 ```
 
-Run it in a root login, or with `sudo --preserve-env=SSH_CONNECTION`: plain `sudo` drops
-`SSH_CONNECTION`, which the firewall phase reads to keep your session's port open, so the script
-refuses it. `sudo -E` is not enough on Ubuntu 26.04, whose `sudo-rs` ignores `-E`. `--dry-run`
-prints every change and makes none. `--check` does the same and exits 2 when a change is pending, 1
-on an error or a refusal, and 0 when nothing is pending. A run changes only what differs from what
-it wants, so a second run changes nothing.
+Log in as root to run it. The firewall phase reads `SSH_CONNECTION` to keep your session's port
+open, and plain `sudo` drops it, so the script refuses a run under `sudo` without it. If you must
+use `sudo`, check first that `sudo --preserve-env=SSH_CONNECTION env | grep SSH_CONNECTION` prints
+the variable, then run the script that way. `sudo -E` is not enough on Ubuntu 26.04, whose `sudo-rs`
+ignores `-E`. `--dry-run` prints every change and makes none. `--check` does the same and exits 2
+when a change is pending, 1 on an error or a refusal, and 0 when nothing is pending. A run changes
+only what differs from what it wants, so a second run changes nothing.
 
 **CAUTION:** `--data-device` formats the device. The script refuses a device that is mounted, has
 partitions, is a RAID or LVM member, holds the root filesystem, or has any signature but XFS (or,
@@ -216,9 +217,16 @@ Use a tagged, non-ephemeral, single-use key ([Tailscale guide](./tailscale.md)).
 `Running`, the script blanks the key in the env file: the node state in `/var/lib/imp/tailscale`
 keeps it joined, and `tailscale-up.sh` starts `tailscaled` from that state when there is no key. A
 later run with `--tailscale-authkey-file` sees the saved state and does not write the key again. An
-older image that still needs the key at every start keeps it, and the script warns. To join again
-(after the node was removed from the tailnet, say), delete `/var/lib/imp/tailscale` and run the
-script with a new key.
+older image that still needs the key at every start keeps it, and the script warns. After the blank,
+the script restarts `imp-host`, so the key leaves the container's environment too.
+
+Delete the `--tailscale-authkey-file` source after the run (the script reminds you); it is the only
+copy left. To join again (after the node was removed from the tailnet, say), delete
+`/var/lib/imp/tailscale` and run the script with a new key.
+
+**CAUTION:** An image older than the key-less start (`imp.tailscale-keyless` label) skips
+`tailscaled` when the key is blank. A rollback to such an image takes the node off the tailnet at
+its next start. Put a new key in `/etc/imp/imp-host.env` before you roll back that far.
 
 ### Firewall
 

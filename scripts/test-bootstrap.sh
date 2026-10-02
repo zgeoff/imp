@@ -126,6 +126,7 @@ if [ -n "$stub" ]; then
   image=imp-host-stub:test
   docker build -q -t "$image" - >/dev/null <<'EOF'
 FROM debian:trixie-slim
+LABEL imp.tailscale-keyless="1"
 COPY --chmod=755 <<'SH' /usr/local/bin/tailscale
 #!/bin/sh
 echo '{"BackendState":"Running"}'
@@ -291,6 +292,9 @@ run_distro() {
     grep -q 'change: blank TAILSCALE_AUTHKEY' <<<"$LAST_OUTPUT" || fail "[$distro] the key was not blanked"
     in_container grep -qx "TAILSCALE_AUTHKEY=" /etc/imp/imp-host.env \
       || fail "[$distro] imp-host.env still holds a Tailscale key"
+    ! in_container docker inspect -f '{{.Config.Env}}' imp-host | grep -qF "$fake_key" \
+      || fail "[$distro] the running imp-host still has the Tailscale key in its environment"
+    grep -q "delete /mnt/archive/authkey now" <<<"$LAST_OUTPUT" || fail "[$distro] no reminder to delete the key file"
   fi
   wait_for_imp_host || fail "[$distro] the imp-host container is not running"
   in_container systemctl -q is-active imp-firewall || fail "[$distro] imp-firewall is not active"

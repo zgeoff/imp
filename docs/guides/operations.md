@@ -68,6 +68,12 @@ in the new snapshot records, and every sleeping imp boots cold once. The same ha
 way: an older impd hashed the drive with another hash and wrote no drive path, so its snapshots boot
 cold with `the snapshot is from an older impd`.
 
+**CAUTION:** `deploy/bootstrap.sh` blanks the spent Tailscale key once the node has joined, and the
+image starts `tailscaled` from its saved state. An image without the `imp.tailscale-keyless` label
+skips `tailscaled` with a blank key, so a rollback to one takes the node off the tailnet at its next
+start. Put a new key in `/etc/imp/imp-host.env` first
+([the Tailscale key](./install.md#the-tailscale-key)).
+
 ## The RAM budget
 
 impd keeps the RAM of awake imps under `IMP_RAM_BUDGET_MIB`. `imp info` shows the budget, the

@@ -114,7 +114,10 @@ impd compares the container's zfs userland with the host's module (`/sys/module/
 different major version stops impd; a different minor version logs a warning that names both, and
 impd starts. The image ships 2.4.4 from trixie-backports, pinned through a dated snapshot
 (`ZFS_SNAPSHOT` and `ZFS_VERSION` in `host/Dockerfile`), to match Ubuntu 26.04's 2.4 module. Ubuntu
-24.04 hosts and the CI runner run 2.2, two minor versions behind: impd warns there and starts.
+24.04 hosts and the CI runner run 2.2, two minor versions behind: impd warns there and starts. The
+pin makes the zfs userland the same on every build, not the whole image: the rest of the runtime
+stage comes from the live Debian archive. snapshot.debian.org can be slow, so a cold build of that
+layer may take minutes.
 
 The `zfs` CI job runs the image's 2.4.4 tools against the runner's 2.2.2 module. A pass covers only
 the commands its suites run (lifecycle, checkpoints, sleep, and the real-pool tests); it does not

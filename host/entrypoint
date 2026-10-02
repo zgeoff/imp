@@ -21,12 +21,16 @@ esac
 "$lib/setup-storage.sh"
 "$lib/setup-net.sh"
 # no-op without TAILSCALE_AUTHKEY or saved node state; a tailnet failure
-# must not keep impd down
-"$lib/tailscale-up.sh" || echo "entrypoint: tailscale-up failed; continuing without the tailnet" >&2
-# A node started from saved state has no key in the env; tell impd it is
-# on the tailnet all the same, for its URLs and imp info.
-if [ -S /var/run/tailscale/tailscaled.sock ]; then
-  export IMP_TAILSCALE_NODE=1
+# must not keep impd down. A node that came up has no key in the env when
+# it started from saved state; tell impd it is on the tailnet all the same,
+# for its URLs and imp info. The skip path exits 0 too, but starts no
+# tailscaled, so it leaves no socket.
+if "$lib/tailscale-up.sh"; then
+  if [ -S /var/run/tailscale/tailscaled.sock ]; then
+    export IMP_TAILSCALE_NODE=1
+  fi
+else
+  echo "entrypoint: tailscale-up failed; continuing without the tailnet" >&2
 fi
 
 child=
