@@ -13,7 +13,7 @@ const TOKEN = 'test-token';
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });
 
-  const app = buildApp({
+  const built = buildApp({
     config: harness.config,
     db: harness.db,
     token: TOKEN,
@@ -30,6 +30,8 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
     isReady: () => true,
   });
 
+  const app = built.app;
+
   const link = new RPCLink({
     url: 'http://impd.test/rpc',
     headers: { authorization: `Bearer ${token}` },
@@ -40,6 +42,7 @@ async function setupTest(token: string, env: Readonly<Record<string, string>> = 
 
   return {
     app,
+    closeExecSessions: built.closeExecSessions,
     imps: harness.imps,
     client,
     db: harness.db,
@@ -364,4 +367,35 @@ test('a read during a lifecycle operation does not mark the imp stopped', async 
 
   expect(during.state).toBe('running');
   expect(after.state).toBe('sleeping');
+});
+
+test('impd stopping closes exec sessions with 1012', async () => {
+  await using ctx = await setupTest(TOKEN);
+
+  const server = ctx.app.listen(0);
+
+  try {
+    const port = String(server.server?.port);
+
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/exec?token=${TOKEN}`);
+
+    const opened = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<CloseEvent>();
+
+    socket.addEventListener('open', () => {
+      opened.resolve();
+    });
+
+    socket.addEventListener('close', closed.resolve);
+
+    await opened.promise;
+
+    ctx.closeExecSessions();
+
+    const event = await closed.promise;
+
+    expect(event.code).toBe(1012);
+  } finally {
+    await server.stop(true);
+  }
 });

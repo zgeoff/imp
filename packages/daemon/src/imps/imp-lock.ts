@@ -32,6 +32,9 @@ export interface ImpLock {
 
   // true while a lifecycle operation runs or waits on the imp
   readonly isLocked: (id: string) => boolean;
+
+  // resolves once no lifecycle operation runs or waits on any imp
+  readonly waitForAll: () => Promise<void>;
 }
 
 // The record an operation under the lock wrote: still under the same lock.
@@ -97,5 +100,6 @@ export function createImpLock(context: ImpContext): ImpLock {
         return action(imp);
       }),
     isLocked: (id) => mutex.isLocked(id),
+    waitForAll: () => mutex.waitForAll(),
   };
 }

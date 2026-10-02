@@ -9,6 +9,9 @@ export interface KeyedMutex {
 
   // true while a task for `key` runs or waits
   readonly isLocked: (key: string) => boolean;
+
+  // resolves once no task runs or waits for any key
+  readonly waitForAll: () => Promise<void>;
 }
 
 export function createKeyedMutex(): KeyedMutex {
@@ -50,5 +53,10 @@ export function createKeyedMutex(): KeyedMutex {
       return { ran: true, value };
     },
     isLocked: (key) => tails.has(key),
+    waitForAll: async () => {
+      while (tails.size > 0) {
+        await Promise.all(tails.values());
+      }
+    },
   };
 }

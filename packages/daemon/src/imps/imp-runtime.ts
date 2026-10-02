@@ -36,6 +36,10 @@ export interface ImpRuntime {
   // already under way finishes first and is put to sleep; later ones fail.
   readonly sleepAllImps: () => Promise<void>;
 
+  // on SIGHUP: impd restarts in place and leaves VMs running, but a wake or
+  // boot under way must finish, or its Firecracker has no record
+  readonly waitForLifecycle: () => Promise<void>;
+
   // after an impd start: re-adopt live VMs, mark the rest stopped; sleeping
   // imps stay asleep until something needs them
   readonly reconcileImps: () => Promise<void>;
@@ -218,6 +222,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
       );
     },
 
+    waitForLifecycle: () => lock.waitForAll(),
     isImpBusy: (id) => lock.isLocked(id),
     tracker: context.tracker,
   };

@@ -93,3 +93,28 @@ test('a task queued behind tryRunExclusive waits for it', async () => {
 
   expect(log).toEqual(['try', 'queued']);
 });
+
+test('waitForAll resolves once every queued task is done', async () => {
+  const mutex = createKeyedMutex();
+  const log: string[] = [];
+
+  const first = mutex.runExclusive('a', async () => {
+    await Bun.sleep(10);
+
+    log.push('a');
+  });
+
+  const second = mutex.runExclusive('b', async () => {
+    await Bun.sleep(20);
+
+    log.push('b');
+  });
+
+  await mutex.waitForAll();
+
+  log.push('all');
+
+  await Promise.all([first, second]);
+
+  expect(log).toEqual(['a', 'b', 'all']);
+});
