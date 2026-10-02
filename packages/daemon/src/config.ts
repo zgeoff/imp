@@ -1,3 +1,4 @@
+import { BlockList } from 'node:net';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { TailnetRulesSchema } from './auth/tailnet-identity';
@@ -6,6 +7,7 @@ import { loadBackupConfig } from './backup/backup-config';
 import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
+import { createPeerRanges, readPeerUrlAddress } from './moves/peer-address';
 import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
 import { parseIpv6Setting } from './net/ipv6-plan';
@@ -207,6 +209,52 @@ function splitList(value: string): string[] {
   return value.split(',').map((item) => item.trim());
 }
 
+// RFC 1918: a test range never opens moves to the internet
+const PRIVATE_V4 = new BlockList();
+
+PRIVATE_V4.addSubnet('10.0.0.0', 8, 'ipv4');
+PRIVATE_V4.addSubnet('172.16.0.0', 12, 'ipv4');
+PRIVATE_V4.addSubnet('192.168.0.0', 16, 'ipv4');
+
+// Neither setting may open moves off the tailnet outside an e2e host: the
+// test range needs IMP_E2E=1, and the peer URL names a literal address in
+// the ranges a source sends to, so a source never refuses it late.
+function checkMoveSettings(
+  testCidr: string | undefined,
+  peerUrl: string | undefined,
+  isE2e: boolean,
+): void {
+  if (testCidr !== undefined) {
+    if (!isE2e) {
+      throw new Error(
+        'IMP_MOVE_TEST_CIDR opens moves off the tailnet, and only an e2e host may set it',
+      );
+    }
+
+    const [address = '', prefix = ''] = testCidr.split('/');
+
+    if (Number(prefix) < 16 || !PRIVATE_V4.check(address, 'ipv4')) {
+      throw new Error(`IMP_MOVE_TEST_CIDR must be a private range of /16 or narrower: ${testCidr}`);
+    }
+  }
+
+  if (peerUrl === undefined) {
+    return;
+  }
+
+  const address = readPeerUrlAddress(peerUrl);
+
+  if (address === null) {
+    throw new Error(`IMP_PEER_URL must name a literal address, not a name: ${peerUrl}`);
+  }
+
+  if (!createPeerRanges(testCidr ?? null).isAllowed(address)) {
+    throw new Error(
+      `IMP_PEER_URL must name a tailnet address${isE2e ? ' or one in IMP_MOVE_TEST_CIDR' : ''}: ${peerUrl}`,
+    );
+  }
+}
+
 export function loadConfig(env: Readonly<Record<string, string | undefined>>): Config {
   // an empty variable (`TAILSCALE_AUTHKEY=` in an env file) means unset
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ''));
@@ -260,11 +308,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
-  if (parsed.IMP_MOVE_TEST_CIDR !== undefined && parsed.IMP_E2E !== '1') {
-    throw new Error(
-      'IMP_MOVE_TEST_CIDR opens moves off the tailnet, and only an e2e host may set it',
-    );
-  }
+  checkMoveSettings(parsed.IMP_MOVE_TEST_CIDR, parsed.IMP_PEER_URL, parsed.IMP_E2E === '1');
 
   return {
     dataDir: parsed.IMP_DATA_DIR,

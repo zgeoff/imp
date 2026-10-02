@@ -59,6 +59,34 @@ test('a move test range off the tailnet needs an e2e host', () => {
   expect(config.moves.testCidr).toBe('172.30.0.0/16');
 });
 
+test('a move test range must be private and no wider than /16', () => {
+  for (const testCidr of ['0.0.0.0/0', '10.0.0.0/8', '8.8.0.0/16']) {
+    expect(() => loadConfig({ IMP_MOVE_TEST_CIDR: testCidr, IMP_E2E: '1' })).toThrow(
+      /private range of \/16 or narrower/,
+    );
+  }
+});
+
+test('a peer URL off the tailnet needs an e2e host and its test range', () => {
+  const offTailnet = 'http://10.70.0.3:7070';
+
+  expect(() => loadConfig({ IMP_PEER_URL: offTailnet })).toThrow(/must name a tailnet address/);
+  expect(() => loadConfig({ IMP_PEER_URL: offTailnet, IMP_E2E: '1' })).toThrow(/tailnet address/);
+  expect(() => loadConfig({ IMP_PEER_URL: 'http://imp-b:7070' })).toThrow(/not a name/);
+
+  expect(loadConfig({ IMP_PEER_URL: 'http://100.80.1.2:7070' }).moves.peerUrl).toBe(
+    'http://100.80.1.2:7070',
+  );
+
+  const e2e = loadConfig({
+    IMP_PEER_URL: offTailnet,
+    IMP_MOVE_TEST_CIDR: '10.70.0.0/24',
+    IMP_E2E: '1',
+  });
+
+  expect(e2e.moves).toEqual({ peerUrl: offTailnet, testCidr: '10.70.0.0/24' });
+});
+
 test('it reads and coerces values from the env', () => {
   const config = loadConfig({
     IMP_DATA_DIR: '/tmp/imp',

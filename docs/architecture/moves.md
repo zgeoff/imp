@@ -32,8 +32,9 @@ secret the target has by that name are made. The source's fetches never follow a
 log has each `/move/*` request as `move.<step>`, by `tailnet` as `move from <peer>`. The `/move/*`
 routes take no token: the ticket is their only credential, and impd answers them only for a peer on
 the tailnet. The peer is the connected socket's address, never a header or a lookup; the source
-sends only to a literal tailnet address. `IMP_MOVE_TEST_CIDR` adds one range for the e2e tests, and
-only with `IMP_E2E=1`; impd logs a warning at start when it is set.
+sends only to a literal tailnet address. `IMP_MOVE_TEST_CIDR` adds one private range for the e2e
+tests, and only with `IMP_E2E=1`; impd logs a warning at start when it is set. Outside that range,
+`IMP_PEER_URL` must name a tailnet address, or impd does not start.
 
 ## The stream
 
