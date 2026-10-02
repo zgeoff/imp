@@ -92,8 +92,8 @@ cold boot away.
 
 A cold boot writes `vm.json` in the imp's directory: what the VM booted with. It holds the
 Firecracker version, the snapshot format, the host kernel (`uname -r`), the sha256 of the guest
-kernel and of the system drive, the drive's path, the agent's protocol version from its first
-`ping`, and why the boot was cold when it replaced a wake (the next sleep clears that). It is
+kernel and of the system drive, the drive's path, the CPU, the agent's protocol version from its
+first `ping`, and why the boot was cold when it replaced a wake (the next sleep clears that). It is
 written next to the old file and renamed over it; a failed write is logged and the boot goes on. The
 file stays through sleeps, wakes and impd restarts, so a re-adopted VM that booted on an older drive
 still says so. Each sleep copies it into `meta.json`, with the imp's memory size and the RAM the VM
@@ -106,6 +106,7 @@ A wake loads the snapshot only when all of these hold. Otherwise it boots the di
 | The Firecracker version          | cold boot                                             |
 | The snapshot format              | cold boot                                             |
 | The host kernel                  | cold boot                                             |
+| The CPU model or its flags       | cold boot ([the CPU](#the-cpu))                       |
 | The system drive (the agent)     | restores while the drive file is kept, else cold boot |
 | The guest kernel                 | restores: the snapshot holds the kernel in memory     |
 | `meta.json` without a drive path | cold boot: the snapshot is from an older impd         |
@@ -114,6 +115,15 @@ The snapshot reopens the system drive by path, and its page cache holds blocks o
 impd keeps every drive a snapshot names ([storage](./storage.md#system-files)). After a load, the
 agent must answer with the protocol version `meta.json` recorded; anything else is not the VM that
 went to sleep, and impd boots cold.
+
+#### The CPU
+
+The guest kernel picks its code paths from the CPUID flags at boot, and a loaded snapshot keeps
+them. On a CPU without one of those features the guest faults later, not at the load. So `vm.json`
+records the first processor's `model name` and a sha256 of its sorted `flags` from `/proc/cpuinfo`
+(`CPU part` and `Features` on arm64), and a wake on another model or other flags boots cold. That
+covers a cloud host whose CPU changes at a reboot, and a [move](./moves.md) to another machine. A
+snapshot from an impd before this has no CPU and loads as before.
 
 A woken imp keeps its old agent and kernel until its next cold boot (`imp stop`, then `imp start`).
 `imp ls` shows both cases in its NOTE column ([operations](../guides/operations.md#upgrade)).

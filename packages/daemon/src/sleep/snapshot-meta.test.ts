@@ -33,6 +33,8 @@ function buildHost(dir: string): HostIdentity {
     guestKernel: 'kernel-sha',
     systemDrive: 'drive-sha',
     systemDrivePath,
+    cpuModel: 'Test CPU',
+    cpuFlags: 'test-flags',
   };
 }
 
@@ -53,7 +55,7 @@ test('a changed guest kernel or drive does not keep a snapshot from loading', ()
   });
 });
 
-test('firecracker, the snapshot format and the host kernel force a cold boot', () => {
+test('firecracker, the snapshot format, the host kernel and the CPU force a cold boot', () => {
   withTempDir((dir) => {
     const host = buildHost(dir);
 
@@ -61,12 +63,16 @@ test('firecracker, the snapshot format and the host kernel force a cold boot', (
       { firecrackerVersion: 'v1.16.0' },
       { snapshotVersion: 'v11.0.0' },
       { hostKernel: '6.1.0' },
+      { cpuModel: 'Other CPU' },
+      { cpuFlags: 'other-flags' },
     ].map((change) => findColdBootReason({ ...host, ...change }, host));
 
     expect(reasons).toEqual([
       'firecrackerVersion changed (v1.16.0 → v1.17.0)',
       'snapshotVersion changed (v11.0.0 → v12.0.0)',
       'hostKernel changed (6.1.0 → 6.6.87)',
+      'the CPU changed (Other CPU → Test CPU)',
+      'the CPU flags changed',
     ]);
   });
 });
