@@ -8,6 +8,11 @@
     },
     "packages/*": {
       "project": ["src/**/*.ts"]
+    },
+    "packages/client": {
+      "project": ["src/**/*.ts"],
+      // the bundled @imp/api declarations import it
+      "ignoreDependencies": ["zod"]
     }
   }
 }

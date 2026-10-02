@@ -1,0 +1,36 @@
+{
+  "name": "@zgeoff/imp-client",
+  "version": "0.0.0",
+  "description": "Typed client for impd, the imp host daemon: imps, checkpoints, images and exec",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zgeoff/imp.git",
+    "directory": "packages/client"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@orpc/client": "catalog:",
+    "@orpc/contract": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@imp/api": "workspace:*",
+    "@imp/daemon": "workspace:*",
+    "tsdown": "catalog:"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  }
+}

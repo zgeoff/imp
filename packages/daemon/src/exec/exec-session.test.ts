@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { EXEC_CHANNELS, decodeExecFrame, encodeExecFrame } from '@imp/api';
+import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { AgentExecRequest, ExecEvent, ExecStream } from '../agent-client/exec-stream';
 import { createExecSession } from './exec-session';
@@ -167,6 +168,25 @@ test('it reports an exec that cannot start and closes the socket', async () => {
   ]);
 
   expect(peer.closes).toEqual([1011]);
+});
+
+test('it passes a contract error on with its data', async () => {
+  const peer = buildFakePeer();
+  const data = { budgetMib: 1024, usedMib: 900, requestedMib: 512 };
+
+  const session = createExecSession(peer.peer, {
+    openExec: () =>
+      Promise.reject(new ORPCError('RAM_BUDGET_EXCEEDED', { message: 'no room', data })),
+    recordActivity: () => Promise.resolve(),
+  });
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: false });
+
+  await Bun.sleep(5);
+
+  expect(peer.sent).toEqual([
+    { type: 'error', code: 'RAM_BUDGET_EXCEEDED', message: 'no room', data },
+  ]);
 });
 
 test('it rejects a control message before start', () => {

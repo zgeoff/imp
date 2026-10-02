@@ -7,6 +7,7 @@ import type { Config } from './config';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
 import type { ImageService } from './images/image-service';
 import type { ImpService } from './imps/imp-service';
@@ -23,6 +24,7 @@ export interface RouterDeps {
   readonly firecrackerVersion: string | null;
   readonly systemFiles: SystemFileInfo;
   readonly readTailscale: () => Promise<TailscaleStatus>;
+  readonly execTickets: ExecTickets;
 }
 
 export function buildRouter(deps: RouterDeps) {
@@ -41,7 +43,9 @@ export function buildRouter(deps: RouterDeps) {
       start: os.imps.start.handler((context) => deps.imps.startImp(context.input.name)),
       stop: os.imps.stop.handler((context) => deps.imps.stopImp(context.input.name)),
       sleep: os.imps.sleep.handler((context) => deps.imps.sleepImp(context.input.name)),
-      wake: os.imps.wake.handler((context) => deps.imps.wakeImp(context.input.name)),
+      wake: os.imps.wake.handler((context) =>
+        deps.imps.wakeImp(context.input.name, context.input.restartError),
+      ),
       hold: os.imps.hold.handler((context) =>
         deps.imps.holdImp(context.input.name, context.input.seconds),
       ),
@@ -88,6 +92,14 @@ export function buildRouter(deps: RouterDeps) {
         await deps.images.removeImage(context.input.name);
 
         return {};
+      }),
+    },
+    exec: {
+      // NOT_FOUND now, rather than at the socket's start
+      ticket: os.exec.ticket.handler(async (context) => {
+        await deps.imps.getImp(context.input.name);
+
+        return deps.execTickets.issue(context.input.name);
       }),
     },
     system: {

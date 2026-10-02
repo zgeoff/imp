@@ -164,7 +164,7 @@ type ImpTest = Awaited<ReturnType<typeof setupImpTest>>;
 
 type Impd = ReturnType<ImpTest['restartImpd']>;
 
-type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'cloneDisk'>;
+type AppParts = Pick<ImpTest, 'config' | 'db' | 'images' | 'cloneDisk' | 'now'>;
 
 // The HTTP app over `impd`, the harness's or one after a restart, and
 // an oRPC client that calls it without a socket. The checkpoint service's
@@ -191,6 +191,7 @@ export function buildTestApp(ctx: Readonly<AppParts>, impd: Readonly<Impd>, toke
     systemFiles: TEST_SYSTEM_FILES,
     readTailscale: () => Promise.resolve({ state: null, hostname: null, ip: null }),
     isReady: () => true,
+    now: ctx.now,
   });
 
   const link = new RPCLink({

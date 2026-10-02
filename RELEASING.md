@@ -14,6 +14,7 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 | GitHub release `vX.Y.Z`: `vmlinux`             | The guest kernel, x86_64.                                                             |
 | GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
 | GitHub release `vX.Y.Z`: `SHA256SUMS`          | The sha256 of every asset above, with a provenance attestation per asset.             |
+| npm: `@zgeoff/imp-client@X.Y.Z`                | The client library, with npm provenance, once [npm](#npm) is turned on.               |
 
 The image, `impd --version`, `imp --version` and every `package.json` carry the same version: the
 tag without the `v`. The host image, the kernel and the drive are x86_64 only, because Firecracker
@@ -46,6 +47,10 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
      `imp-host:X.Y.Z` and attests the image and every asset.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
+   - **npm-pack** and **npm-publish:** after publish, npm-pack packs `@zgeoff/imp-client`, checks
+     the tarball and uploads it; npm-publish, the only job with the OIDC token, publishes it. npm's
+     `latest` moves only when `vX.Y.Z` is the newest release; an older one goes out under
+     `previous`. Both are skipped until [npm](#npm) is turned on, and for a version npm already has.
 
 The kernel layer stays in the GitHub Actions cache, so the image job and later releases reuse it.
 Without that cache, the kernel build takes about 15 to 25 minutes on a hosted runner. A second run
@@ -72,6 +77,28 @@ that starts a workflow.
 
 The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
 settings, so a server pulls it without a login.
+
+## npm
+
+`@zgeoff/imp-client` (`packages/client`) is the one npm package. It carries the release's version,
+so a client and an impd of the same version speak the same API. The bundled `@imp/api` stays
+private. `scripts/pack-client.sh` builds it and packs the tarball into `build/npm/`, with `exports`
+on `dist/` only; in the workspace, `exports` points at `src/`, so nothing in the repo needs a build.
+`scripts/check-client-package.sh <tarball>` installs it into an empty project, imports it under
+plain Node and type-checks the README's examples. The `client` CI job runs both on every change.
+
+npm trusted publishing can only be set up for a package that exists, so the first publish is by
+hand:
+
+```sh
+npm login
+scripts/first-publish-client.sh
+```
+
+The script publishes the current version, then prints the last two steps: add the trusted publisher
+on npmjs.com (repository `zgeoff/imp`, workflow `release.yml`), and set the Actions variable
+`NPM_PUBLISH_ENABLED` to `true`. From then on the release's `npm` job publishes each version with
+OIDC and provenance, and no npm token lives in CI.
 
 ## Dry run
 
@@ -107,5 +134,5 @@ gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 It builds the tag's sources, not `main`'s. It replaces the release assets (`--clobber`) and the
-`X.Y.Z` image tag, and moves `latest` only when `vX.Y.Z` is the newest release. A fix to the sources
-needs a new release, not a republish.
+`X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes the client
+when npm does not have that version yet. A fix to the sources needs a new release, not a republish.
