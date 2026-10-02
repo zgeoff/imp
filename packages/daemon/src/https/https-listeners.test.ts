@@ -12,16 +12,25 @@ const DOMAIN = 'imp.test';
 const NAMES = [DOMAIN, `*.${DOMAIN}`];
 
 // free ports; `slots` is slot 0's, the slot the test's imp takes
-function pickPorts() {
+// the slots of 10.99.0.0/28
+const SLOT_COUNT = 4;
+
+// impd refuses an API or proxy port among the imp ports, so a pick there is
+// made again
+function pickPorts(): Readonly<Record<'api' | 'proxy' | 'https' | 'http' | 'slots', number>> {
   const ports = findFreePorts(5);
 
-  return {
+  const picked = {
     api: ports.take(),
     proxy: ports.take(),
     https: ports.take(),
     http: ports.take(),
     slots: ports.take(),
   };
+
+  const isAmongSlots = (port: number) => port >= picked.slots && port < picked.slots + SLOT_COUNT;
+
+  return isAmongSlots(picked.api) || isAmongSlots(picked.proxy) ? pickPorts() : picked;
 }
 
 // impd's API, as the bare domain reaches it: echoes what it was sent, and

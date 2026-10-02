@@ -6,13 +6,23 @@ import { readRejection } from '../read-rejection';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
-// free ports for the proxy and slot 0, the slot each test's imp takes
-function pickPorts() {
+// the slots of 10.99.0.0/24
+const SLOT_COUNT = 64;
+
+// free ports for the proxy and slot 0, the slot each test's imp takes; impd
+// refuses a proxy port among the imp ports, so a pick there is made again
+function pickPorts(): Readonly<Record<'IMP_PROXY_PORT' | 'IMP_PORT_BASE' | 'IMP_SUBNET', string>> {
   const ports = findFreePorts(2);
+  const proxy = ports.take();
+  const base = ports.take();
+
+  if (proxy >= base && proxy < base + SLOT_COUNT) {
+    return pickPorts();
+  }
 
   return {
-    IMP_PROXY_PORT: String(ports.take()),
-    IMP_PORT_BASE: String(ports.take()),
+    IMP_PROXY_PORT: String(proxy),
+    IMP_PORT_BASE: String(base),
     IMP_SUBNET: '10.99.0.0/24',
   };
 }
