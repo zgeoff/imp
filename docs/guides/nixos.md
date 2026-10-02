@@ -69,10 +69,11 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   `networking.nftables.flushRuleset = true`, which would flush Docker's rules.
 - **Forwarding:** with `networking.firewall.filterForward = true` (nftables), the firewall drops new
   forwarded traffic that no rule admits, and so imps' egress. The module adds
-  `iifname { "br-imphost", "docker0" } accept` to `networking.firewall.extraForwardRules` (`docker0`
-  alone without IPv6). It trusts no interface: `trustedInterfaces` would also open every host
-  service, such as the k3s API, to imp traffic. `forwardDeny` drops ranges that imps may not reach
-  through the host ([IPv6 and forwarding](#ipv6)).
+  `iifname { "br-imphost" } accept` to `networking.firewall.extraForwardRules`, or `docker0` without
+  IPv6: imp-host's bridge alone, so other containers on `docker0` need rules of their own. It trusts
+  no interface: `trustedInterfaces` would also open every host service, such as the k3s API, to imp
+  traffic. `forwardDeny` drops ranges that imps may not reach through the host
+  ([IPv6 and forwarding](#ipv6)).
 
 ## IPv6
 
@@ -103,9 +104,17 @@ host's IPv6 default route can be dropped ([the caution](./install.md#ipv6)). The
 - systemd-networkd with `networkConfig.IPv6AcceptRA = true` on the network that matches
   `ipv6.uplink`;
 - `ipv6.routerAdverts = "kernel"`: the kernel takes them, and the module sets `accept_ra = 2` on
-  `ipv6.uplink`;
+  `ipv6.uplink`. NixOS's dhcpcd solicits router adverts itself and may set `accept_ra` back, so the
+  module refuses `kernel` while dhcpcd runs on the uplink, unless
+  `networking.dhcpcd.IPv6rs = false`;
 - `ipv6.routerAdverts = "handled"`: a client such as dhcpcd (the NixOS default) or NetworkManager
-  takes them, and you checked that its config keeps them with forwarding on.
+  takes them, and you checked that its config keeps them with forwarding on. The module cannot check
+  that: run `ip -6 route show default` half an hour after `imp-host` starts, past a router advert's
+  lifetime, and look for the route.
+
+The module also refuses `ipv6.enable` with a Docker older than 27.0, or with
+`virtualisation.docker.daemon.settings.ip6tables = false`: Docker then writes no NAT66 for the
+network.
 
 Docker also sets the `ip6tables` FORWARD policy to DROP when it turns forwarding on. A host where
 other services forward IPv6, such as dual-stack k3s, needs their own accept rules or
@@ -113,9 +122,10 @@ other services forward IPv6, such as dual-stack k3s, needs their own accept rule
 
 `forwardDeny` takes IPv4 and IPv6 ranges that traffic from `br-imphost` and `docker0` may not reach
 through the host. They drop in the nftables table `imp-forward`, a forward chain that runs before
-`networking.firewall`'s, so ICMPv6, which that chain accepts first, drops too. It needs
-`networking.nftables.enable`. Set it to a k3s cluster's pod and service ranges, for example, instead
-of hand-written `docker0` rules.
+`networking.firewall`'s, so ICMPv6, which that chain accepts first, drops too. Only new flows drop
+(`ct direction original`): the replies of a flow that started in a denied range, such as a k3s pod
+that reaches a public imp, pass. It needs `networking.nftables.enable`. Set it to a k3s cluster's
+pod and service ranges, for example, instead of hand-written `docker0` rules.
 
 ## Reinstall
 
