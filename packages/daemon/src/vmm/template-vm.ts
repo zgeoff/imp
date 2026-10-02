@@ -59,8 +59,12 @@ export interface TemplateRestorePlan {
   readonly tap: string;
   readonly cgroup: ImpCgroup | null;
 
+  // the disk's size once the host has made it: the restore runs up to the
+  // parked guest meanwhile, and points rootfs at the disk only then
+  readonly diskReady: Promise<number>;
+
   // the clock is stamped at the claim, after the load
-  readonly claim: Omit<Claim, 'unixMs'>;
+  readonly claim: Omit<Claim, 'unixMs' | 'diskBytes'>;
 }
 
 // Boots the stub VM, waits for stage 1 to park and the guest to be old
@@ -123,8 +127,8 @@ export async function buildTemplateVm(plan: Readonly<TemplateBuildPlan>): Promis
 }
 
 // A failed restore. `isTemplateFault` when the step that failed reads only
-// the template: the load, the resume and the parked guest's ping. The
-// patch, the claim and stage 2 also touch the imp's disk and values.
+// the template: the load, the resume and the parked guest's ping. The disk,
+// the patch, the claim and stage 2 are the imp's own.
 export class TemplateRestoreError extends Error {
   readonly isTemplateFault: boolean;
 
@@ -136,9 +140,8 @@ export class TemplateRestoreError extends Error {
   }
 }
 
-// Loads the template paused, points its rootfs at the imp's disk (the
-// config change is how the guest learns the disk's size), resumes it and
-// claims it. The process is gone when any step fails.
+// Loads the template, resumes it, and once the imp's disk is ready points
+// rootfs at it and claims the guest. The process is gone when any step fails.
 export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promise<StartedVm> {
   const marks = createMarks();
 
@@ -170,14 +173,6 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
     marks.setMark('load');
 
-    step.isTemplateFault = false;
-
-    await api.patchDrive(VM_DEVICES.drives.rootfs, plan.diskPath);
-
-    marks.setMark('patch');
-
-    step.isTemplateFault = true;
-
     await api.resume();
 
     marks.setMark('resume');
@@ -191,9 +186,20 @@ export async function loadTemplateVm(plan: Readonly<TemplateRestorePlan>): Promi
 
     marks.setMark('parked');
 
+    // from here on the imp's own disk and values are in play
     step.isTemplateFault = false;
 
-    await sendClaim(plan.paths.vsockSocket, { ...plan.claim, unixMs: Date.now() });
+    const diskBytes = await plan.diskReady;
+
+    marks.setMark('disk');
+
+    // the config change is how virtio-blk tells the guest the disk's size;
+    // stage 1 waits for it before it touches the disk
+    await api.patchDrive(VM_DEVICES.drives.rootfs, plan.diskPath);
+
+    marks.setMark('patch');
+
+    await sendClaim(plan.paths.vsockSocket, { ...plan.claim, diskBytes, unixMs: Date.now() });
 
     marks.setMark('claim');
 
