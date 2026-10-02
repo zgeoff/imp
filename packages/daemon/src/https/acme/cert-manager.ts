@@ -92,7 +92,7 @@ export function createCertManager(options: CertManagerOptions): CertManager {
       const tookMs = options.now() - now;
 
       log(
-        `impd: https: got a certificate for ${domain} in ${String(tookMs)}ms; it expires ${info?.notAfter.toISOString() ?? 'at an unknown time'}`,
+        `impd: https: got a certificate for ${domain}, expiring ${info?.notAfter.toISOString() ?? 'at an unknown time'}, in ${String(tookMs)}ms`,
       );
 
       return certificate;
