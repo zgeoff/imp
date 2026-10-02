@@ -22,7 +22,13 @@ fail() {
 command -v zpool >/dev/null || fail "zpool is missing; install zfsutils-linux"
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-work=${IMP_ZFS_TEST_DIR:-$(mktemp -d)}
+made_work=
+if [ -n "${IMP_ZFS_TEST_DIR:-}" ]; then
+  work=$IMP_ZFS_TEST_DIR
+else
+  work=$(mktemp -d)
+  made_work=1
+fi
 gib=${IMP_ZFS_TEST_GIB:-4}
 pool=imptest$$
 mnt=$work/mnt
@@ -30,11 +36,19 @@ mnt=$work/mnt
 echo "test-zfs: zfs $(cat /sys/module/zfs/version) (module), $(zfs version | head -1) (userland)"
 
 # Everything under $mnt is unmounted before the pool goes: the tests mount
-# datasets there, and a test that fails can leave them.
+# datasets there, and a test that fails can leave them. A pool that will not
+# go keeps its file, so it can still be imported and destroyed by hand.
 cleanup() {
   umount -R "$mnt" 2>/dev/null || true
-  zpool destroy "$pool" 2>/dev/null || true
+  if zpool list "$pool" >/dev/null 2>&1 && ! zpool destroy -f "$pool"; then
+    echo "test-zfs: could not destroy $pool; its file stays at $work/pool.img" >&2
+    return
+  fi
   rm -f "$work/pool.img"
+  rmdir "$mnt" 2>/dev/null || true
+  if [ -n "$made_work" ]; then
+    rmdir "$work" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 

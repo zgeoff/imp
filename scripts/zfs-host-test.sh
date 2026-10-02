@@ -29,6 +29,7 @@ gib=${IMP_ZFS_BENCH_GIB:-40}
 echo "zfs-host-test: zfs module $(cat /sys/module/zfs/version); results in $work"
 
 sudo env "PATH=$PATH" IMP_ZFS_TEST_DIR="$work/unit" "$IMP_ROOT/scripts/test-zfs.sh"
+rmdir "$work/unit" 2>/dev/null || true
 
 export IMP_DEV_NAME=imp-zfs
 export IMP_DEV_PORT_OFFSET=${IMP_DEV_PORT_OFFSET:-300}
@@ -36,10 +37,14 @@ export IMP_DEV_DATA=$work/data
 export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
 
+# The results stay in $work; the pool file goes unless the pool will not.
 cleanup() {
   docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
   "$IMP_ROOT/scripts/dev.sh" down || true
-  sudo zpool destroy "$pool" 2>/dev/null || true
+  if sudo zpool list "$pool" >/dev/null 2>&1 && ! sudo zpool destroy -f "$pool"; then
+    echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
+    return
+  fi
   sudo rm -f "$work/bench.img"
 }
 trap cleanup EXIT
