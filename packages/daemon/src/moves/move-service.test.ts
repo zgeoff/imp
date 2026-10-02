@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { MoveStatus } from '@imp/api';
 import { createImage } from '../db/images';
-import { findImpByName } from '../db/imps';
+import { findImpByName, updateImpMove } from '../db/imps';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
@@ -18,11 +18,30 @@ const TARGET_URL = 'http://100.100.0.2:7070';
 // the source's address, as the target's socket sees it
 const SOURCE_PEER = '100.100.0.1';
 
+async function waitUntil(isDone: () => Promise<boolean>): Promise<void> {
+  for (let tries = 0; tries < 500; tries += 1) {
+    const isReady = await isDone();
+
+    if (isReady) {
+      return;
+    }
+
+    await Bun.sleep(10);
+  }
+
+  throw new Error('waited 5 s in vain');
+}
+
 type FetchHook = (request: Request, forward: () => Promise<Response>) => Promise<Response>;
 
 // Two impds in one process: `source` sends to `target` through `fetch`,
 // which hands each request to the target's move routes as from the tailnet.
-async function setupMoveTest(hook?: FetchHook, options: { readonly hasImage?: boolean } = {}) {
+interface MoveTestOptions {
+  readonly hasImage?: boolean;
+  readonly partBytes?: number;
+}
+
+async function setupMoveTest(hook?: FetchHook, options: MoveTestOptions = {}) {
   const source = await setupImpTest();
   const target = await setupImpTest({ env: { IMP_PEER_URL: TARGET_URL } });
 
@@ -32,6 +51,7 @@ async function setupMoveTest(hook?: FetchHook, options: { readonly hasImage?: bo
   const sourceApp = buildTestApp(source, source, undefined, {}, null, {
     fetch: (request) =>
       hook === undefined ? sendToTarget(request) : hook(request, () => sendToTarget(request)),
+    ...(options.partBytes !== undefined && { partBytes: options.partBytes }),
   });
 
   const hosts = options.hasImage === false ? [source] : [source, target];
@@ -345,20 +365,28 @@ test('a peer URL off the tailnet, or a name, is refused before any byte goes', a
   expect(named).toMatchObject({ code: 'BAD_REQUEST' });
 });
 
-test('the image goes along when the target lacks it, and grants of known secrets carry', async () => {
+test('the image goes along when the target lacks it, and only grants of known secrets carry', async () => {
   await using ctx = await setupMoveTest(undefined, { hasImage: false });
 
   await ctx.source.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_real' });
+  await ctx.source.broker.addSecret({ name: 'npm', kind: 'npm', value: 'npm_real' });
   await ctx.source.broker.addGrant('dev', 'gh');
+  await ctx.source.broker.addGrant('dev', 'npm');
   await ctx.target.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_other' });
 
   const status = await ctx.runMove();
+  const images = await ctx.targetApp.client.images.list();
 
-  const image = buildImagePaths(ctx.target.dataDir, 'sha256:ubuntu');
+  const digest = images.find((image) => image.name === 'ubuntu')?.digest ?? '';
+  const image = buildImagePaths(ctx.target.dataDir, digest);
 
   const grants = await ctx.target.broker.listGrants('dev');
 
   expect(status).toMatchObject({ isDone: true, error: null });
+
+  // filed under what arrived, never the source's claim
+  expect(digest).toStartWith('sha256:');
+  expect(digest).not.toBe('sha256:ubuntu');
   expect(readFileSync(image.rootfs, 'utf8').startsWith('rootfs')).toBe(true);
   expect(grants).toEqual(['gh']);
 });
@@ -422,18 +450,23 @@ test('a restart undoes a send cut short, and finishes one the target has verifie
   await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
   await ctx.sourceApp.moves.recover();
 
+  // recovery runs in the background
+  await waitUntil(async () => {
+    const imp = await findImpByName(ctx.source.db, 'dev');
+
+    return imp?.moveState === null;
+  });
+
   const undone = await findImpByName(ctx.source.db, 'dev');
 
   await ctx.runMove();
   await ctx.sourceApp.moves.recover();
 
-  for (
-    let tries = 0;
-    tries < 500 && (await findImpByName(ctx.source.db, 'dev')) !== undefined;
-    tries += 1
-  ) {
-    await Bun.sleep(10);
-  }
+  await waitUntil(async () => {
+    const imp = await findImpByName(ctx.source.db, 'dev');
+
+    return imp === undefined;
+  });
 
   const live = await ctx.targetApp.client.imps.get({ name: 'dev' });
 
@@ -660,4 +693,167 @@ test('an XFS host moves an imp to a ZFS host as files, checkpoints as snapshots'
   expect(target.zfs.listSnapshots()).toContain(
     `${ZFS_ROOT}/disks/${created.id}@${checkpoints[0]?.id ?? ''}`,
   );
+});
+
+test('a stream longer than 10 minutes goes on while its parts keep coming', async () => {
+  const clock: { advance: (ms: number) => void } = { advance: () => {} };
+
+  await using ctx = await setupMoveTest(
+    (request, forward) => {
+      // 50 s between parts, on the target's clock
+      if (request.headers.has(MOVE_PART_HEADER)) {
+        clock.advance(50_000);
+      }
+
+      return forward();
+    },
+    { partBytes: 4096 },
+  );
+
+  clock.advance = ctx.target.advance;
+
+  writeFileSync(ctx.source.storage.resolveImpPaths(ctx.impId).disk, 'x'.repeat(64 * 1024));
+
+  const status = await ctx.runMove();
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+});
+
+test('a part that comes more than 60 s after the last ends the stream', async () => {
+  const clock: { advance: (ms: number) => void } = { advance: () => {} };
+
+  await using ctx = await setupMoveTest(
+    (request, forward) => {
+      if (request.headers.get(MOVE_PART_HEADER) === '1') {
+        clock.advance(61_000);
+      }
+
+      return forward();
+    },
+    { partBytes: 4096 },
+  );
+
+  clock.advance = ctx.target.advance;
+
+  writeFileSync(ctx.source.storage.resolveImpPaths(ctx.impId).disk, 'x'.repeat(64 * 1024));
+
+  const status = await ctx.runMove();
+  const staged = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('came too late');
+  expect(staged).toBeUndefined();
+});
+
+test('a target that holds the imp unmarked counts as committed', async () => {
+  const lost = { commits: 1 };
+
+  await using ctx = await setupMoveTest((request, forward) => {
+    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
+      lost.commits -= 1;
+
+      return Promise.reject(new Error('the network dropped the commit'));
+    }
+
+    return forward();
+  });
+
+  await ctx.runMove();
+
+  // as a crash between the mark and the ticket would have left it
+  await updateImpMove(ctx.target.db, ctx.impId, null);
+
+  const aborted = await ctx.sourceApp.client.moves.abort({ name: 'dev' });
+  const gone = await findImpByName(ctx.source.db, 'dev');
+
+  expect(aborted.isDone).toBe(true);
+  expect(gone).toBeUndefined();
+});
+
+test('a commit with the received copy gone is refused, and the source keeps its copy', async () => {
+  const lost = { commits: 1 };
+
+  await using ctx = await setupMoveTest((request, forward) => {
+    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
+      lost.commits -= 1;
+
+      return Promise.reject(new Error('the network dropped the commit'));
+    }
+
+    return forward();
+  });
+
+  await ctx.runMove();
+  await ctx.target.imps.destroyImp('dev', { isMove: true });
+
+  const refused = await readRejection(ctx.sourceApp.client.moves.resume({ name: 'dev' }));
+  const kept = await findImpByName(ctx.source.db, 'dev');
+
+  expect(String(refused)).toContain('the received copy is gone');
+  expect(kept?.moveState).toBe('moved');
+});
+
+test('a resume and an abort at once leave the imp live on exactly one host', async () => {
+  const lost = { commits: 1 };
+
+  await using ctx = await setupMoveTest((request, forward) => {
+    if (request.url.endsWith(MOVE_PATHS.commit) && lost.commits > 0) {
+      lost.commits -= 1;
+
+      return Promise.reject(new Error('the network dropped the commit'));
+    }
+
+    return forward();
+  });
+
+  await ctx.runMove();
+
+  await Promise.allSettled([
+    ctx.sourceApp.client.moves.resume({ name: 'dev' }),
+    ctx.sourceApp.client.moves.abort({ name: 'dev' }),
+  ]);
+
+  const source = await findImpByName(ctx.source.db, 'dev');
+  const target = await findImpByName(ctx.target.db, 'dev');
+
+  const isMoved = source === undefined && target?.moveState === null;
+  const isKept = source?.moveState === null && target === undefined;
+
+  expect(isMoved || isKept).toBe(true);
+});
+
+test('a receive takes a token with manage on the whole host', async () => {
+  await using ctx = await setupMoveTest();
+
+  const made = await ctx.targetApp.client.tokens.create({
+    name: 'mover',
+    scope: 'manage',
+    imps: ['dev'],
+  });
+
+  const scoped = buildTestApp(ctx.target, ctx.target, made.secret);
+
+  const receive = await readRejection(scoped.client.moves.receive({ name: 'dev', bytes: 1 }));
+  const reissue = await readRejection(scoped.client.moves.reissue({ name: 'dev' }));
+
+  expect(receive).toMatchObject({ code: 'FORBIDDEN' });
+  expect(reissue).toMatchObject({ code: 'FORBIDDEN' });
+});
+
+test('a marked imp refuses an exec, and each /move step is in the audit log', async () => {
+  await using ctx = await setupMoveTest();
+
+  await ctx.sourceApp.client.moves.prepare({ name: 'dev' });
+
+  const exec = await readRejection(ctx.source.imps.openExec('dev', { argv: ['true'], tty: false }));
+
+  await ctx.sourceApp.client.moves.abort({ name: 'dev' });
+  await ctx.runMove();
+
+  const calls = await ctx.targetApp.client.audit.calls({});
+
+  const steps = calls.filter((call) => call.procedure.startsWith('move.'));
+
+  expect(exec).toMatchObject({ code: 'MOVING' });
+  expect(steps.map((call) => call.procedure)).toContain('move.commit');
+  expect(steps.every((call) => call.imp === 'dev' && call.actor === 'tailnet')).toBe(true);
 });

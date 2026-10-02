@@ -16,10 +16,14 @@ page covers the protocol: `packages/daemon/src/moves/`.
 | 6    | `POST /move/commit`                                 | target | Takes the mark off. The source then destroys its copy.                      |
 
 The CLI makes calls 1 to 3 with each host's saved token, so the two impds never share a token. The
-`/move/*` routes take no token: the ticket is their only credential, and impd answers them only for
-a peer on the tailnet. The peer is the connected socket's address, never a header or a lookup; the
-source sends only to a literal tailnet address. `IMP_MOVE_TEST_CIDR` adds one range for the e2e
-tests, and only with `IMP_E2E=1`; impd logs a warning at start when it is set.
+`moves.receive` and `moves.reissue` need `manage` on the whole host: a receive takes in an image and
+grants, which are host-wide. The image goes under the digest of what arrived, and only grants of a
+secret the target has by that name are made. The source's fetches never follow a redirect. The audit
+log has each `/move/*` request as `move.<step>`, by `tailnet` as `move from <peer>`. The `/move/*`
+routes take no token: the ticket is their only credential, and impd answers them only for a peer on
+the tailnet. The peer is the connected socket's address, never a header or a lookup; the source
+sends only to a literal tailnet address. `IMP_MOVE_TEST_CIDR` adds one range for the e2e tests, and
+only with `IMP_E2E=1`; impd logs a warning at start when it is set.
 
 ## The stream
 
@@ -89,13 +93,15 @@ its end, so `zfs recv` never takes it as whole.
 ## Tickets
 
 `moves.receive` returns `<id>.<secret>`. The target stores the id and the secret's sha256, never the
-secret. The ticket goes in `Authorization: ImpMove <ticket>`; one in the URL is refused.
+secret. The ticket goes in `Authorization: ImpMove <ticket>`; one in the URL is ignored, and the
+request gets `401`. The source keeps the whole ticket in `move_sends`: it needs the secret again to
+check the receipt and, after a restart, to commit or abort.
 
-| Window     | Length                    | Then                                                                     |
-| ---------- | ------------------------- | ------------------------------------------------------------------------ |
-| The stream | 10 minutes from the issue | `410`. The first part marks the ticket used; a second stream gets `409`. |
-| A part     | 60 s from the last        | The stream fails, and the target removes the staged imp.                 |
-| The commit | 24 hours from the receipt | `410`. `moves.reissue` gives a new ticket for the commit.                |
+| Window     | Length                        | Then                                                                                                      |
+| ---------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The stream | 10 minutes from the issue     | `410`. The first part marks the ticket used; a second stream gets `409`.                                  |
+| A part     | 60 s from the end of the last | The stream fails, and the target removes the staged imp. A stream lasts as long as its parts keep coming. |
+| The commit | 24 hours from the receipt     | `410`. `moves.reissue` gives a new ticket for the commit.                                                 |
 
 The receipt is `{body, mac}`: `body` is the JSON text of the ticket id, the imp's name and ID, and
 each file's kind, sha256 and byte count; `mac` is HMAC-SHA256 over that text, keyed with the
@@ -118,12 +124,16 @@ every file the send reads.
 
 The commit is idempotent: a target that committed answers a second commit, and an abort, with
 `isCommitted: true`. The source destroys its copy on that answer, whether it comes to the send, to
-`--resume` or to `--abort`.
+`--resume` or to `--abort`. On the target the commit and the abort run under the imp's lock, so they
+never cross. The commit takes the mark off and marks the tickets in one transaction; an imp that is
+here unmarked counts as committed, and a ticket whose copy is gone never does. An abort removes the
+tickets under the lock, so no commit follows it, then the staged imp.
 
 ## Recovery
 
-At start, the source undoes a `sending` imp (an abort to the target, then the mark off) and retries
-the commit of a `moved` one in the background. The target removes the staged imp of a stream with no
-receipt, deletes tickets never used past their window, and clears `<data>/moves`. A staged imp with
-a receipt stays until the source commits or aborts it. A committed ticket goes once its commit
-window ends.
+At start, in the background so impd listens at once, the source undoes a `sending` imp (an abort to
+the target, then the mark off once the target confirms) and retries the commit of a `moved` one. The
+target removes the staged imp of a stream with no receipt, deletes tickets never used past their
+window, and clears `<data>/moves`. A staged imp with a receipt stays until the source commits or
+aborts it; one with no ticket left, which an abort cut short, goes. A committed ticket goes once its
+commit window ends.

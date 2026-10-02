@@ -63,6 +63,9 @@ export interface MoveSenderDeps {
   // after the receipt: the tailnet-names pass, which drops this host's name
   readonly releaseName: () => Promise<void>;
   readonly fetch?: (request: Request) => Promise<Response>;
+
+  // the most a part carries; MOVE_PART_BYTES, but small in tests
+  readonly partBytes?: number;
   readonly now: () => number;
   readonly log: (message: string) => void;
 }
@@ -358,8 +361,10 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
   ): Promise<Response> => {
     const { extraHeaders, ...rest } = init;
 
+    // a redirect could send the ticket somewhere else: it fails instead
     const request = new Request(new URL(path, peer).toString(), {
       method: 'POST',
+      redirect: 'manual',
       ...rest,
       headers: { ...buildTicketHeader(ticket), ...extraHeaders },
     });
@@ -385,7 +390,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       throw new Error('commit: the target did not commit');
     }
 
-    await deps.imps.destroyImp(imp.name, { isMove: true });
+    // a resume and an abort at once can both reach here; one destroys it
+    try {
+      await deps.imps.destroyImp(imp.name, { isMove: true });
+    } catch (error) {
+      if (!(error instanceof ORPCError && error.code === 'NOT_FOUND')) {
+        throw error;
+      }
+    }
+
     await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
 
     deps.log(`impd: move: ${imp.name}: committed on ${peer}; the copy here is gone`);
@@ -424,16 +437,20 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         sent.push(file);
       });
 
-      await sendInParts(frames, async (part, body) => {
-        const sentPart = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {
-          body,
-          duplex: 'half',
-          signal,
-          extraHeaders: { [MOVE_PART_HEADER]: String(part) },
-        });
+      await sendInParts(
+        frames,
+        async (part, body) => {
+          const sentPart = await sendToPeer(peer, MOVE_PATHS.receive, ticket, {
+            body,
+            duplex: 'half',
+            signal,
+            extraHeaders: { [MOVE_PART_HEADER]: String(part) },
+          });
 
-        await requireOk(sentPart, `part ${String(part)}`);
-      });
+          await requireOk(sentPart, `part ${String(part)}`);
+        },
+        deps.partBytes,
+      );
     } finally {
       await opened.close();
     }
@@ -474,17 +491,70 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
   };
 
-  // before a receipt, a failure undoes the move on both hosts
-  const resetSend = async (imp: ImpRecord, peer: string | null, ticket: string | null) => {
-    if (peer !== null && ticket !== null) {
-      await sendToPeer(peer, MOVE_PATHS.abort, ticket).catch((error: unknown) => {
-        deps.log(`impd: move: ${imp.name}: the target's abort failed: ${readErrorMessage(error)}`);
-      });
+  // The target's answer to an abort. Before the receipt it cannot have
+  // committed, so a ticket it no longer knows means it holds nothing.
+  const sendAbort = async (
+    imp: ImpRecord,
+    peer: string,
+    ticket: string,
+  ): Promise<'aborted' | 'committed'> => {
+    const response = await sendToPeer(peer, MOVE_PATHS.abort, ticket);
+    const answer = await readJsonBody(response);
+
+    const reply = MoveCommitReplySchema.safeParse(answer);
+
+    if (reply.success && reply.data.isCommitted) {
+      return 'committed';
     }
 
+    const isForgotten = response.status === 401 && imp.moveState === 'sending';
+
+    if (response.ok || isForgotten) {
+      return 'aborted';
+    }
+
+    throw new Error(`abort: the target answered ${String(response.status)}`);
+  };
+
+  const removeMark = async (imp: ImpRecord): Promise<void> => {
     await updateImpMove(deps.db, imp.id, null);
 
     await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
+  };
+
+  // Before a receipt, a failure undoes the move on both hosts. The mark and
+  // the row stay until the target confirms, so no staged copy is left
+  // behind with nothing here to end it; `imp move --abort` asks again.
+  const resetSend = async (
+    imp: ImpRecord,
+    peer: string | null,
+    ticket: string | null,
+  ): Promise<boolean> => {
+    if (peer === null || ticket === null) {
+      await removeMark(imp);
+
+      return true;
+    }
+
+    try {
+      await sendAbort(imp, peer, ticket);
+    } catch (error) {
+      const message = `the target did not confirm the abort (${readErrorMessage(error)}); run imp move ${imp.name} <host> --abort`;
+
+      await deps.db
+        .updateTable('move_sends')
+        .set({ error: message })
+        .where('imp_id', '=', imp.id)
+        .execute();
+
+      deps.log(`impd: move: ${imp.name}: ${message}`);
+
+      return false;
+    }
+
+    await removeMark(imp);
+
+    return true;
   };
 
   const startSend = (imp: ImpRecord, target: SendTarget, totalBytes: number): SendTask => {
@@ -560,6 +630,33 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     }
 
     return to;
+  };
+
+  const runRecover = async (): Promise<void> => {
+    try {
+      for (const imp of await listImps(deps.db)) {
+        const row = await findSendRow(imp.id);
+
+        if (imp.moveState === 'sending') {
+          const isUndone = await resetSend(imp, row?.peer_url ?? null, row?.ticket ?? null);
+
+          if (isUndone) {
+            deps.log(`impd: move: ${imp.name}: a send cut short by a restart was undone`);
+          }
+        }
+
+        if (
+          imp.moveState === 'moved' &&
+          row !== undefined &&
+          row.peer_url !== null &&
+          row.ticket !== null
+        ) {
+          await runCommitAfterRestart(imp, row.peer_url, row.ticket);
+        }
+      }
+    } catch (error) {
+      deps.log(`impd: move: recovery after a restart failed: ${readErrorMessage(error)}`);
+    }
   };
 
   return {
@@ -659,7 +756,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       }
 
       if (imp.moveState === 'moved') {
-        await runCommit(imp, row.peer_url, useTicket);
+        await withPeerError(() => runCommit(imp, row.peer_url ?? '', useTicket));
 
         return {
           state: null,
@@ -698,40 +795,23 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
       const row = await findSendRow(imp.id);
 
-      if (
-        imp.moveState === 'moved' &&
-        row !== undefined &&
-        row.peer_url !== null &&
-        row.ticket !== null
-      ) {
-        const response = await sendToPeer(row.peer_url, MOVE_PATHS.abort, row.ticket);
-        const answer = await readJsonBody(response);
+      const peer = row?.peer_url ?? null;
+      const ticket = row?.ticket ?? null;
+      const isMarked = imp.moveState === 'sending' || imp.moveState === 'moved';
 
-        const reply = MoveCommitReplySchema.safeParse(answer);
+      if (isMarked && peer !== null && ticket !== null) {
+        const outcome = await withPeerError(() => sendAbort(imp, peer, ticket));
 
         // the target committed: the copy here is the one to go
-        if (reply.success && reply.data.isCommitted) {
-          await runCommit(imp, row.peer_url, row.ticket);
+        if (outcome === 'committed') {
+          await withPeerError(() => runCommit(imp, peer, ticket));
 
-          return {
-            state: null,
-            peer: row.peer_url,
-            sentBytes: 0,
-            totalBytes: 0,
-            isDone: true,
-            error: null,
-          };
-        }
-
-        if (!response.ok) {
-          throw new Error(`abort: the target answered ${String(response.status)}`);
+          return { state: null, peer, sentBytes: 0, totalBytes: 0, isDone: true, error: null };
         }
       }
 
-      if (imp.moveState === 'sending' || imp.moveState === 'moved') {
-        await updateImpMove(deps.db, imp.id, null);
-
-        await deps.db.deleteFrom('move_sends').where('imp_id', '=', imp.id).execute();
+      if (isMarked) {
+        await removeMark(imp);
       }
 
       const after = await findImpById(deps.db, imp.id);
@@ -739,25 +819,25 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       return readStatusOf(after ?? imp);
     },
 
-    recover: async () => {
-      for (const imp of await listImps(deps.db)) {
-        const row = await findSendRow(imp.id);
+    // in the background, so impd listens at once; a target that is down
+    // leaves its imp marked, with the error in its status
+    recover: () => {
+      void runRecover();
 
-        if (imp.moveState === 'sending') {
-          await resetSend(imp, row?.peer_url ?? null, row?.ticket ?? null);
-
-          deps.log(`impd: move: ${imp.name}: a send cut short by a restart was undone`);
-        }
-
-        if (
-          imp.moveState === 'moved' &&
-          row !== undefined &&
-          row.peer_url !== null &&
-          row.ticket !== null
-        ) {
-          void runCommitAfterRestart(imp, row.peer_url, row.ticket);
-        }
-      }
+      return Promise.resolve();
     },
   };
+}
+
+// what the target or the network said, as the caller's error: never a bare 500
+async function withPeerError<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof ORPCError) {
+      throw error;
+    }
+
+    throw new ORPCError('BAD_GATEWAY', { message: readErrorMessage(error), cause: error });
+  }
 }

@@ -376,7 +376,9 @@ export function buildTestApp(
   tailnet: AppDeps['tailnet'] = null,
 
   // a move test's fetch to the other host, and its hooks
-  moveOptions: Partial<Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted'>> = {},
+  moveOptions: Partial<
+    Pick<MoveServiceDeps, 'fetch' | 'releaseName' | 'onCommitted' | 'partBytes'>
+  > = {},
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
 
@@ -413,6 +415,7 @@ export function buildTestApp(
   });
 
   const moves = createMoveService({
+    audit,
     config: ctx.config,
     db: ctx.db,
     dataDir: ctx.config.dataDir,

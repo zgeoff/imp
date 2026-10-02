@@ -61,6 +61,13 @@ type ResourceListener = (deltas: readonly ResourceDelta[]) => void;
 export interface ImpCheckpointHooks {
   readonly createImp: ImpCommands['createImp'];
   readonly lockImp: <T>(name: string, action: (imp: LockedImp) => Promise<T>) => Promise<T>;
+
+  // by id, with no MOVING check: a move's commit and abort, which settle the
+  // mark itself
+  readonly lockImpId: <T>(
+    id: string,
+    action: (imp: LockedImp | undefined) => Promise<T>,
+  ) => Promise<T>;
   readonly haltImp: (imp: LockedImp) => Promise<LockedImp>;
   readonly bootImp: (imp: LockedImp) => Promise<LockedImp>;
 
@@ -118,6 +125,7 @@ export function createImpService(deps: ImpServiceDeps): Imps {
     countSessions: (imp) => countSessions(context, imp),
     readBootStatus: (imp) => readBootStatus(imp, context.findPaths(imp.id), context.identity),
     lockImp: lock.withImp,
+    lockImpId: lock.withImpId,
     haltImp: ops.stopImpVm,
     bootImp: ops.startImpVm,
     requireRunningImp: ops.requireRunningImp,
