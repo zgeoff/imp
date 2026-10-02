@@ -83,16 +83,27 @@ func (d *Dialer) openUnix(address string) (net.Conn, error) {
 // dialAsUser runs the helper with cred, or as the agent's own user for a
 // nil cred (tests).
 func (d *Dialer) dialAsUser(cred *syscall.Credential, address string) (net.Conn, error) {
+	fds, err := d.runHelper(cred, []string{HelperCommand, address}, 1, proto.ErrDialFailed)
+	if err != nil {
+		return nil, err
+	}
+	return fileConn(fds[0], address)
+}
+
+// runHelper starts `imp-agent <args>` as cred and reads its answer: up to
+// max fds, the first a stream socket, or the error it met. A failure is
+// failCode, or BAD_REQUEST when the helper says so.
+func (d *Dialer) runHelper(cred *syscall.Credential, args []string, max int, failCode string) ([]int, error) {
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
-		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: "socketpair: " + err.Error()}
+		return nil, &proto.Error{Code: failCode, Message: "socketpair: " + err.Error()}
 	}
 	parent, child := pair[0], pair[1]
 	defer unix.Close(parent)
 	devNull, err := unix.Open("/dev/null", unix.O_RDWR|unix.O_CLOEXEC, 0)
 	if err != nil {
 		unix.Close(child)
-		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: "open /dev/null: " + err.Error()}
+		return nil, &proto.Error{Code: failCode, Message: "open /dev/null: " + err.Error()}
 	}
 	defer unix.Close(devNull)
 
@@ -106,45 +117,56 @@ func (d *Dialer) dialAsUser(cred *syscall.Credential, address string) (net.Conn,
 		Files: []uintptr{uintptr(child), uintptr(devNull), uintptr(devNull)},
 		Sys:   &syscall.SysProcAttr{Credential: cred, Setpgid: true, PidFD: &pidfd},
 	}
-	argv := []string{d.agentPath, HelperCommand, address}
+	argv := append([]string{d.agentPath}, args...)
 	_, _, err = d.reaper.Start(func() (int, error) {
 		return syscall.ForkExec(d.agentPath, argv, attr)
 	})
 	unix.Close(child)
 	if err != nil {
-		return nil, &proto.Error{Code: proto.ErrDialFailed, Message: "start the dial helper: " + err.Error()}
+		return nil, &proto.Error{Code: failCode, Message: "start the helper: " + err.Error()}
 	}
 	defer unix.Close(pidfd)
 
-	fd, err := receiveSocket(parent, helperTimeout)
+	fds, err := receiveFds(parent, helperTimeout, max, failCode)
 	if err != nil {
-		// A helper that hangs must not outlive its dial; the reaper reaps it.
-		// Through the pidfd: by now the helper may be gone and its pid
+		// A helper that hangs must not outlive its request; the reaper reaps
+		// it. Through the pidfd: by now the helper may be gone and its pid
 		// reused by another process.
 		unix.PidfdSendSignal(pidfd, unix.SIGKILL, nil, 0)
 		return nil, err
 	}
-	return fileConn(fd, address)
+	return fds, nil
 }
 
-// receiveSocket reads the helper's answer: a stream socket, or the error it
-// met. The received fds are close-on-exec from the start (MSG_CMSG_CLOEXEC),
-// so a child forked meanwhile for an exec never inherits them.
+// receiveSocket reads a dial helper's answer: one stream socket, or the
+// error it met.
 func receiveSocket(conn int, timeout time.Duration) (int, error) {
-	if err := waitReadable(conn, timeout); err != nil {
+	fds, err := receiveFds(conn, timeout, 1, proto.ErrDialFailed)
+	if err != nil {
 		return -1, err
+	}
+	return fds[0], nil
+}
+
+// receiveFds reads a helper's answer: up to max fds, the first a stream
+// socket, or the error it met. The received fds are close-on-exec from the
+// start (MSG_CMSG_CLOEXEC), so a child forked meanwhile for an exec never
+// inherits them; fds past max are closed.
+func receiveFds(conn int, timeout time.Duration, max int, failCode string) ([]int, error) {
+	if err := waitReadable(conn, timeout, failCode); err != nil {
+		return nil, err
 	}
 	buf := make([]byte, 4096)
 	oob := make([]byte, unix.CmsgSpace(4*4))
 	n, oobn, _, _, err := unix.Recvmsg(conn, buf, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
-		return -1, helperFailed("read the dial helper's answer: " + err.Error())
+		return nil, &proto.Error{Code: failCode, Message: "read the helper's answer: " + err.Error()}
 	}
 	fds := parseRights(oob[:oobn])
-	keep := -1
+	var keep []int
 	if n >= 1 && buf[0] == answerOK && len(fds) >= 1 {
-		keep = fds[0]
-		fds = fds[1:]
+		keep = fds[:min(max, len(fds))]
+		fds = fds[len(keep):]
 	}
 	for _, fd := range fds {
 		unix.Close(fd)
@@ -152,19 +174,21 @@ func receiveSocket(conn int, timeout time.Duration) (int, error) {
 
 	switch {
 	case n == 0:
-		return -1, helperFailed("the dial helper exited without an answer")
-	case keep >= 0:
-		if !isStreamSocket(keep) {
-			unix.Close(keep)
-			return -1, helperFailed("the dial helper answered with something other than a stream socket")
+		return nil, &proto.Error{Code: failCode, Message: "the helper exited without an answer"}
+	case keep != nil:
+		if !isStreamSocket(keep[0]) {
+			for _, fd := range keep {
+				unix.Close(fd)
+			}
+			return nil, &proto.Error{Code: failCode, Message: "the helper answered with something other than a stream socket"}
 		}
 		return keep, nil
 	case buf[0] == answerBadRequest:
-		return -1, &proto.Error{Code: proto.ErrBadRequest, Message: string(buf[1:n])}
+		return nil, &proto.Error{Code: proto.ErrBadRequest, Message: string(buf[1:n])}
 	case buf[0] == answerFailed:
-		return -1, &proto.Error{Code: proto.ErrDialFailed, Message: string(buf[1:n])}
+		return nil, &proto.Error{Code: failCode, Message: string(buf[1:n])}
 	default:
-		return -1, helperFailed("the dial helper's answer makes no sense")
+		return nil, &proto.Error{Code: failCode, Message: "the helper's answer makes no sense"}
 	}
 }
 
@@ -176,12 +200,12 @@ func helperFailed(message string) error {
 // (the reaper's SIGCHLD) interrupts poll; it goes on with the time left. It
 // holds an OS thread for up to helperTimeout, and the reaper runs one fork at
 // a time: both fine at the rate SSH forwards open.
-func waitReadable(conn int, timeout time.Duration) error {
+func waitReadable(conn int, timeout time.Duration, failCode string) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		left := time.Until(deadline)
 		if left <= 0 {
-			return helperFailed(fmt.Sprintf("the dial helper did not answer within %s", timeout))
+			return &proto.Error{Code: failCode, Message: fmt.Sprintf("the helper did not answer within %s", timeout)}
 		}
 		fds := []unix.PollFd{{Fd: int32(conn), Events: unix.POLLIN}}
 		n, err := unix.Poll(fds, int(left.Milliseconds())+1)
@@ -189,7 +213,7 @@ func waitReadable(conn int, timeout time.Duration) error {
 			continue
 		}
 		if err != nil {
-			return helperFailed("poll the dial helper: " + err.Error())
+			return &proto.Error{Code: failCode, Message: "poll the helper: " + err.Error()}
 		}
 		if n > 0 {
 			return nil
@@ -266,21 +290,26 @@ func connectUnix(address string) (int, error) {
 // RunHelper is `imp-agent dial-unix <path>`: it connects to path as this
 // process's user and answers on fd 0 with the socket or the error.
 func RunHelper(address string) error {
-	var msg, oob []byte
 	fd, err := connectUnix(address)
 	if err != nil {
-		code, text := byte(answerFailed), err.Error()
-		var pe *proto.Error
-		if errors.As(err, &pe) {
-			text = pe.Message
-			if pe.Code == proto.ErrBadRequest {
-				code = answerBadRequest
-			}
-		}
-		msg = append([]byte{code}, text...)
-	} else {
-		msg = []byte{answerOK}
-		oob = unix.UnixRights(fd)
+		return answer(nil, err)
 	}
-	return unix.Sendmsg(0, msg, oob, nil, 0)
+	return answer([]int{fd}, nil)
+}
+
+// answer is a helper's reply on fd 0: the fds, or the error as BAD_REQUEST
+// or a failure.
+func answer(fds []int, err error) error {
+	if err == nil {
+		return unix.Sendmsg(0, []byte{answerOK}, unix.UnixRights(fds...), nil, 0)
+	}
+	code, text := byte(answerFailed), err.Error()
+	var pe *proto.Error
+	if errors.As(err, &pe) {
+		text = pe.Message
+		if pe.Code == proto.ErrBadRequest {
+			code = answerBadRequest
+		}
+	}
+	return unix.Sendmsg(0, append([]byte{code}, text...), nil, nil, 0)
 }

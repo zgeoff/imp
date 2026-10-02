@@ -20,11 +20,18 @@ import (
 
 var testReaper *reaper.Reaper
 
-// The test binary is also the dial helper: the Dialer starts os.Args[0]
-// with `dial-unix <path>`. A few paths make a helper that misbehaves.
+// The test binary is also the dial and listen helper: the Dialer starts
+// os.Args[0] with `dial-unix <path>` or `listen-as-user <network>
+// <address>`. A few dial paths make a helper that misbehaves.
 func TestMain(m *testing.M) {
 	if len(os.Args) == 3 && os.Args[1] == HelperCommand {
 		runTestHelper(os.Args[2])
+		return
+	}
+	if len(os.Args) == 4 && os.Args[1] == ListenCommand {
+		if err := RunListenHelper(os.Args[2], os.Args[3]); err != nil {
+			os.Exit(1)
+		}
 		return
 	}
 	testReaper = reaper.New()

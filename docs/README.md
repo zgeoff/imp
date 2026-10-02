@@ -37,6 +37,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [MCP server](./guides/mcp.md): `imp mcp` and impd's `/mcp` endpoint, the tools a coding agent
   gets, the guard, and how exec output, timeouts and cancels work.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
+- [Reverse forwards](./guides/reverse-forwards.md): `imp proxy --reverse`, a socket or a port in an
+  imp that reaches one on your machine, and how it lives through sleeps.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
 - [Tokens and identities](./guides/tokens.md): scopes, imp patterns, `imp token`, and tailnet
   identity.

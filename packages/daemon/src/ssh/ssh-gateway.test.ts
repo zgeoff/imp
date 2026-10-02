@@ -633,19 +633,19 @@ test('ssh -A gives the command a guest socket that reaches the client agent', as
   expect(findAuthSock(ctx.execs, 0)).toBe(FIRST_SOCKET);
 
   // a guest client's request goes to the client's agent, and the answer back
-  ctx.agentListeners[0]?.connect(1);
+  ctx.listeners[0]?.connect(1);
 
-  await waitUntil(() => ctx.agentAccepts.length === 1);
+  await waitUntil(() => ctx.accepts.length === 1);
 
-  ctx.agentAccepts[0]?.send('list');
+  ctx.accepts[0]?.send('list');
 
-  await waitUntil(() => ctx.agentAccepts[0]?.input.join('') === 'agent:list');
+  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'agent:list');
 
-  expect(ctx.agentAccepts[0]).toMatchObject({ listener: 'fake1', id: 1 });
+  expect(ctx.accepts[0]).toMatchObject({ listener: 'fake1', id: 1 });
 
   ctx.client.end();
 
-  await waitUntil(() => ctx.agentListeners[0]?.state.closed === true);
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
 });
 
 test('a connection without -A gets no socket, and SFTP never does', async () => {
@@ -671,7 +671,7 @@ test('a connection without -A gets no socket, and SFTP never does', async () => 
   await waitUntil(() => ctx.execs.length === 2);
 
   expect(findAuthSock(ctx.execs, 1)).toBeUndefined();
-  expect(ctx.agentListeners).toHaveLength(0);
+  expect(ctx.listeners).toHaveLength(0);
 });
 
 test('sessions that start together share one guest socket', async () => {
@@ -682,7 +682,7 @@ test('sessions that start together share one guest socket', async () => {
 
   const sockets = new Set([0, 1, 2].map((index) => findAuthSock(ctx.execs, index)));
 
-  expect(ctx.agentListeners).toHaveLength(1);
+  expect(ctx.listeners).toHaveLength(1);
   expect(sockets).toEqual(new Set([FIRST_SOCKET]));
 });
 
@@ -692,12 +692,12 @@ test('a guest socket that ended, as after a forced sleep, is made again', async 
 
   await runCommand(ctx.client, 'one');
 
-  ctx.agentListeners[0]?.end();
+  ctx.listeners[0]?.end();
 
-  await waitUntil(() => ctx.agentListeners[0]?.state.closed === true);
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
   await runCommand(ctx.client, 'two');
 
-  expect(ctx.agentListeners).toHaveLength(2);
+  expect(ctx.listeners).toHaveLength(2);
   expect(findAuthSock(ctx.execs, 1)).toBe('SSH_AUTH_SOCK=/run/imp/ssh-agent/fake2/agent.sock');
 });
 
@@ -712,7 +712,7 @@ test('a session in a new VM, after a wake, gets a new socket at once', async () 
 
   await runCommand(ctx.client, 'two');
 
-  expect(ctx.agentListeners.map((listener) => listener.state.closed)).toEqual([true, false]);
+  expect(ctx.listeners.map((listener) => listener.state.closed)).toEqual([true, false]);
   expect(findAuthSock(ctx.execs, 1)).toBe('SSH_AUTH_SOCK=/run/imp/ssh-agent/fake2/agent.sock');
 });
 
@@ -722,11 +722,11 @@ test('a client that refuses the agent channel gets the guest client closed at on
 
   await runCommand(ctx.client, 'ssh-add -l');
 
-  ctx.agentListeners[0]?.connect(1);
+  ctx.listeners[0]?.connect(1);
 
-  await waitUntil(() => ctx.agentAccepts[0]?.state.closed === true);
+  await waitUntil(() => ctx.accepts[0]?.state.closed === true);
 
-  expect(ctx.agentAccepts[0]?.input).toEqual([]);
+  expect(ctx.accepts[0]?.input).toEqual([]);
   expect(ctx.logs.join('\n')).toContain('the client refused the agent channel');
 });
 
@@ -736,21 +736,19 @@ test('agent channels stop at the cap; the guest clients past it are closed', asy
 
   await runCommand(ctx.client, 'flood');
 
-  const [listener] = ctx.agentListeners;
+  const [listener] = ctx.listeners;
 
   for (let id = 1; id <= MAX_AGENT_CHANNELS; id += 1) {
     listener?.connect(id);
   }
 
-  await waitUntil(() => ctx.agentAccepts.length === MAX_AGENT_CHANNELS);
+  await waitUntil(() => ctx.accepts.length === MAX_AGENT_CHANNELS);
 
   listener?.connect(MAX_AGENT_CHANNELS + 1);
 
-  await waitUntil(() => ctx.agentAccepts.length === MAX_AGENT_CHANNELS + 1);
+  await waitUntil(() => ctx.accepts.length === MAX_AGENT_CHANNELS + 1);
 
-  const closed = ctx.agentAccepts
-    .filter((accept) => accept.state.closed)
-    .map((accept) => accept.id);
+  const closed = ctx.accepts.filter((accept) => accept.state.closed).map((accept) => accept.id);
 
   expect(closed).toEqual([MAX_AGENT_CHANNELS + 1]);
 });
@@ -759,7 +757,7 @@ test('a command runs without the socket when the imp cannot make one', async () 
   const agent = await startFakeAgent();
   const ctx = await startForwarding(agent);
 
-  ctx.fake.agentListenError = buildAgentOutdatedError('agent-forwarding');
+  ctx.fake.listenError = buildAgentOutdatedError('agent-forwarding');
 
   const result = await runCommand(ctx.client, 'git push');
 
@@ -772,7 +770,7 @@ test('a command runs without the socket when the imp cannot make one', async () 
   expect(findAuthSock(ctx.execs, 0)).toBeUndefined();
 
   // any failure, and the next session tries again
-  ctx.fake.agentListenError = new AgentError('INTERNAL', 'unknown user "dev"');
+  ctx.fake.listenError = new AgentError('INTERNAL', 'unknown user "dev"');
 
   const again = await runCommand(ctx.client, 'git push');
 
@@ -1005,4 +1003,166 @@ test('a login whose key was removed as it logged in ends at once', async () => {
   const client = await openClient(ctx.gateway, FAKE_IMP.name, BOUND_KEY.private);
 
   await waitForClose(client);
+});
+
+// asks for a remote TCP forward, as `ssh -R`; the port the server bound
+function openRemoteForward(client: Client, bindAddr: string, port: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    client.forwardIn(bindAddr, port, (failure, bound) => {
+      if (failure === undefined) {
+        resolve(bound);
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+}
+
+function openSocketForward(client: Client, socketPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    client.openssh_forwardInStreamLocal(socketPath, (failure) => {
+      if (failure === undefined) {
+        resolve();
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+}
+
+test('ssh -R 0 listens on the guest loopback and relays each client back', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const reached: string[] = [];
+
+  client.on('tcp connection', (info, accept) => {
+    const channel = accept();
+
+    reached.push(`${info.destIP}:${String(info.destPort)}`);
+
+    channel.on('data', (data: Buffer) => {
+      channel.write(`back:${data.toString()}`);
+    });
+  });
+
+  const port = await openRemoteForward(client, '', 0);
+
+  expect(ctx.listeners[0]?.spec).toEqual({ network: 'tcp', port: 0 });
+  expect(port).toBe(40_001);
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts.length === 1);
+
+  ctx.accepts[0]?.send('hello');
+
+  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:hello');
+
+  // the client matches the channel to its forward by the address it asked
+  expect(reached).toEqual([`:${String(port)}`]);
+
+  client.end();
+
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+});
+
+test('ssh -R to a unix socket listens at that path as a streamlocal forward', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const reached: string[] = [];
+
+  client.on('unix connection', (info, accept) => {
+    const channel = accept();
+
+    reached.push(info.socketPath);
+
+    channel.on('data', (data: Buffer) => {
+      channel.write(`back:${data.toString()}`);
+    });
+  });
+
+  await openSocketForward(client, '/home/dev/.atc/atc.sock');
+
+  expect(ctx.listeners[0]?.spec).toEqual({ network: 'unix', path: '/home/dev/.atc/atc.sock' });
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts.length === 1);
+
+  ctx.accepts[0]?.send('report');
+
+  await waitUntil(() => ctx.accepts[0]?.input.join('') === 'back:report');
+
+  expect(reached).toEqual(['/home/dev/.atc/atc.sock']);
+});
+
+test('ssh -R refuses another bind address and the agent sockets, and binds the rest to loopback', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+  const otherHost = await readRejection(openRemoteForward(client, '10.0.0.5', 8000));
+
+  const agentDir = await readRejection(
+    openSocketForward(client, '/run/imp/ssh-agent/x/agent.sock'),
+  );
+
+  const relative = await readRejection(openSocketForward(client, 'app.sock'));
+
+  for (const bindAddr of ['0.0.0.0', '*', 'localhost', '::']) {
+    await openRemoteForward(client, bindAddr, 9000);
+  }
+
+  expect(otherHost).toBeInstanceOf(Error);
+  expect(agentDir).toBeInstanceOf(Error);
+  expect(relative).toBeInstanceOf(Error);
+
+  expect(ctx.listeners.map((listener) => listener.spec)).toEqual(
+    Array.from({ length: 4 }, () => ({ network: 'tcp', port: 9000 })),
+  );
+});
+
+test('two requests for the same remote forward at once listen only once', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  const settled = await Promise.allSettled([
+    openRemoteForward(client, 'localhost', 9000),
+    openRemoteForward(client, 'localhost', 9000),
+  ]);
+
+  expect(settled.map((result) => result.status).toSorted()).toEqual(['fulfilled', 'rejected']);
+  expect(ctx.listeners).toHaveLength(1);
+});
+
+test('a cancelled remote forward closes its guest listener', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  await openRemoteForward(client, 'localhost', 9000);
+
+  await new Promise<void>((resolve, reject) => {
+    client.unforwardIn('localhost', 9000, (failure) => {
+      if (failure === undefined) {
+        resolve();
+      } else {
+        reject(new Error(String(failure)));
+      }
+    });
+  });
+
+  await waitUntil(() => ctx.listeners[0]?.state.closed === true);
+});
+
+test('a guest client the ssh client refuses is closed at once', async () => {
+  const ctx = await startTestGateway();
+  const client = await openClient(ctx.gateway);
+
+  client.on('tcp connection', (_info, _accept, reject) => {
+    reject();
+  });
+
+  await openRemoteForward(client, '', 9000);
+
+  ctx.listeners[0]?.connect(1);
+
+  await waitUntil(() => ctx.accepts[0]?.state.closed === true);
 });

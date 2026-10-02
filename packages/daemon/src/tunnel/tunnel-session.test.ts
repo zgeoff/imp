@@ -8,8 +8,11 @@ import {
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialEvent, DialStream, DialTarget } from '../agent-client/dial-stream';
+import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
+import { createReverseForwards } from '../reverse/reverse-forwards';
+import type { ReverseForwards } from '../reverse/reverse-forwards';
 import { createTunnelLimits, createTunnelSession } from './tunnel-session';
-import type { TunnelLimits } from './tunnel-session';
+import type { TunnelBackend, TunnelLimits } from './tunnel-session';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -81,10 +84,17 @@ function createFakeDial() {
 
 type FakeDial = ReturnType<typeof createFakeDial>;
 
+// what a reverse tunnel test adds: its listener, accepts, owner and forwards
+interface ReverseParts {
+  readonly backend?: Partial<TunnelBackend>;
+  readonly forwards?: ReverseForwards;
+}
+
 function startTunnel(
   open: (target: DialTarget) => Promise<DialStream>,
   limits: TunnelLimits = createTunnelLimits(),
   impId = 'imp-1',
+  reverse: ReverseParts = {},
 ) {
   const sent: unknown[] = [];
   const binary: string[] = [];
@@ -103,8 +113,16 @@ function startTunnel(
         closed.reason = reason;
       },
     },
-    { findImpId: () => Promise.resolve(impId), openDial: (_name, target) => open(target) },
+    {
+      findImpId: () => Promise.resolve(impId),
+      openDial: (_name, target) => open(target),
+      openListener: () => Promise.reject(new Error('no listener')),
+      openAccept: () => Promise.reject(new Error('no accept')),
+      owner: 'token:me:1',
+      ...reverse.backend,
+    },
     limits,
+    reverse.forwards ?? createReverseForwards(),
   );
 
   return { session, sent, binary, closed };
@@ -350,4 +368,253 @@ test('data before opened, or a second open, breaks the protocol', async () => {
   tunnel.session.handleMessage({ type: 'open', name: 'box', port: 80 });
 
   expect(tunnel.closed.code).toBe(TUNNEL_CLOSE_PROTOCOL);
+});
+
+// a guest listener the test drives: it names clients, and ends as after a
+// forced sleep
+function createFakeListener(spec: ListenSpec) {
+  const ids: (number | null)[] = [];
+  const waiter: { wake: (() => void) | null } = { wake: null };
+  const state = { closed: false };
+
+  const emit = (id: number | null): void => {
+    ids.push(id);
+    waiter.wake?.();
+  };
+
+  const listener: GuestListener = {
+    path: spec.network === 'tcp' ? null : '/tmp/app.sock',
+    port: spec.network === 'tcp' ? 41_000 : null,
+    id: 'fwd1',
+    async *connections() {
+      for (;;) {
+        while (ids.length === 0) {
+          await new Promise<void>((resolve) => {
+            waiter.wake = resolve;
+          });
+        }
+
+        const id = ids.shift();
+
+        if (id === null || id === undefined) {
+          return;
+        }
+
+        yield id;
+      }
+    },
+    close: () => {
+      state.closed = true;
+
+      emit(null);
+    },
+  };
+
+  return { listener, state, emit };
+}
+
+// a control socket that listened, and the accepts its backend opened
+async function startReverse(
+  forwards: ReverseForwards = createReverseForwards(),
+  limits: TunnelLimits = createTunnelLimits(),
+) {
+  const specs: ListenSpec[] = [];
+  const fake = { listener: createFakeListener({ network: 'unix', path: '/tmp/app.sock' }) };
+  const accepts: { listener: string; connection: number; dial: FakeDial }[] = [];
+
+  const backend: Partial<TunnelBackend> = {
+    openListener: (_name, spec) => {
+      specs.push(spec);
+
+      return Promise.resolve(fake.listener.listener);
+    },
+    openAccept: (_name, listener, connection) => {
+      const dial = createFakeDial();
+
+      accepts.push({ listener, connection, dial });
+
+      return Promise.resolve(dial.stream);
+    },
+  };
+
+  const control = startTunnel(() => Promise.reject(new Error('no dial')), limits, 'imp-1', {
+    backend,
+    forwards,
+  });
+
+  control.session.handleMessage({
+    type: 'listen',
+    name: 'box',
+    network: 'unix',
+    path: '/tmp/app.sock',
+  });
+
+  await waitUntil(() => control.sent.length === 1);
+
+  return { control, specs, fake, accepts, backend, forwards };
+}
+
+test('a listen answers where it listens, then names each guest client', async () => {
+  const ctx = await startReverse();
+
+  ctx.fake.listener.emit(1);
+  ctx.fake.listener.emit(2);
+
+  await waitUntil(() => ctx.control.sent.length === 3);
+
+  expect(ctx.specs).toEqual([{ network: 'unix', path: '/tmp/app.sock' }]);
+
+  expect(ctx.control.sent).toEqual([
+    { type: 'listening', listener: 'fwd1', path: '/tmp/app.sock', port: null },
+    { type: 'connection', id: 1 },
+    { type: 'connection', id: 2 },
+  ]);
+});
+
+test('an accept from the same caller relays a client, as an open does', async () => {
+  const ctx = await startReverse();
+
+  ctx.fake.listener.emit(1);
+
+  const relay = startTunnel(
+    () => Promise.reject(new Error('no dial')),
+    createTunnelLimits(),
+    'imp-1',
+    {
+      backend: ctx.backend,
+      forwards: ctx.forwards,
+    },
+  );
+
+  relay.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 1 });
+
+  await waitUntil(() => relay.sent.length === 1);
+
+  expect(relay.sent).toEqual([{ type: 'opened' }]);
+
+  relay.session.handleMessage(encoder.encode('hello'));
+  ctx.accepts[0]?.dial.emit({ type: 'data', data: encoder.encode('back') });
+
+  await waitUntil(() => relay.binary.length === 1);
+
+  expect(ctx.accepts[0]?.dial.state.written).toEqual(['hello']);
+  expect(relay.binary).toEqual(['back']);
+});
+
+test('another caller, or another imp, cannot accept the forward', async () => {
+  const ctx = await startReverse();
+
+  const other = startTunnel(
+    () => Promise.reject(new Error('no dial')),
+    createTunnelLimits(),
+    'imp-1',
+    {
+      backend: { ...ctx.backend, owner: 'token:someone-else:2' },
+      forwards: ctx.forwards,
+    },
+  );
+
+  const otherImp = startTunnel(
+    () => Promise.reject(new Error('no dial')),
+    createTunnelLimits(),
+    'imp-2',
+    {
+      backend: ctx.backend,
+      forwards: ctx.forwards,
+    },
+  );
+
+  other.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 1 });
+  otherImp.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 1 });
+
+  await waitUntil(() => other.sent.length === 1 && otherImp.sent.length === 1);
+
+  expect(other.sent).toEqual([expect.objectContaining({ type: 'error', code: 'NOT_FOUND' })]);
+  expect(otherImp.sent).toEqual([expect.objectContaining({ type: 'error', code: 'NOT_FOUND' })]);
+  expect(ctx.accepts).toEqual([]);
+});
+
+test('a forward at its most relays refuses the next guest client at once', async () => {
+  const ctx = await startReverse(createReverseForwards(1));
+
+  const relay = startTunnel(
+    () => Promise.reject(new Error('no dial')),
+    createTunnelLimits(),
+    'imp-1',
+    {
+      backend: ctx.backend,
+      forwards: ctx.forwards,
+    },
+  );
+
+  relay.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 1 });
+
+  await waitUntil(() => relay.sent.length === 1);
+
+  ctx.fake.listener.emit(2);
+
+  await waitUntil(() => ctx.accepts.length === 2);
+
+  expect(ctx.accepts[1]?.connection).toBe(2);
+  expect(ctx.accepts[1]?.dial.state.closed).toBeTrue();
+  expect(ctx.control.sent).toEqual([expect.objectContaining({ type: 'listening' })]);
+});
+
+test('every relay counts against the tunnel limit of its imp', async () => {
+  const limits = createTunnelLimits(1);
+
+  const ctx = await startReverse();
+
+  const first = startTunnel(() => Promise.reject(new Error('no dial')), limits, 'imp-1', {
+    backend: ctx.backend,
+    forwards: ctx.forwards,
+  });
+
+  const second = startTunnel(() => Promise.reject(new Error('no dial')), limits, 'imp-1', {
+    backend: ctx.backend,
+    forwards: ctx.forwards,
+  });
+
+  first.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 1 });
+
+  await waitUntil(() => first.sent.length === 1);
+
+  second.session.handleMessage({ type: 'accept', name: 'box', listener: 'fwd1', connection: 2 });
+
+  await waitUntil(() => second.sent.length === 1);
+
+  expect(second.sent).toEqual([expect.objectContaining({ type: 'error', code: 'TUNNEL_LIMIT' })]);
+});
+
+test('each listener holds a tunnel of its imp, and frees it when it ends', async () => {
+  const limits = createTunnelLimits(1);
+
+  const first = await startReverse(createReverseForwards(), limits);
+  const second = await startReverse(createReverseForwards(), limits);
+
+  expect(second.control.sent).toEqual([
+    expect.objectContaining({ type: 'error', code: 'TUNNEL_LIMIT' }),
+  ]);
+
+  first.control.session.handleClose();
+
+  const third = await startReverse(createReverseForwards(), limits);
+
+  expect(third.control.sent).toEqual([expect.objectContaining({ type: 'listening' })]);
+});
+
+test('the forward ends as lost with its guest listener, and its listener with the socket', async () => {
+  const ctx = await startReverse();
+
+  ctx.fake.listener.emit(null);
+
+  await waitUntil(() => ctx.control.closed.code !== null);
+
+  expect(ctx.control.closed.code).toBe(TUNNEL_CLOSE_LOST);
+
+  const again = await startReverse();
+
+  again.control.session.handleClose();
+
+  expect(again.fake.listener.state.closed).toBeTrue();
 });

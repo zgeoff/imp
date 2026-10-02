@@ -6,11 +6,14 @@ import {
   TUNNEL_WINDOW_BYTES,
   TunnelClientMessageSchema,
 } from '@imp/api';
-import type { TunnelServerMessage } from '@imp/api';
+import type { TunnelClientMessage, TunnelServerMessage } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
+import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
 import { readErrorMessage } from '../read-error-message';
+import type { ReverseForwards } from '../reverse/reverse-forwards';
+import { runGuestListener } from '../reverse/run-guest-listener';
 
 // at most this many tunnels per imp at a time; the next is refused with
 // TUNNEL_LIMIT, so a client in a loop cannot pile up agent connections
@@ -34,6 +37,14 @@ export interface TunnelBackend {
 
   // a connection inside the imp, counted as a tunnel while open
   readonly openDial: (name: string, target: DialTarget) => Promise<DialStream>;
+
+  // a reverse forward's listener, which alone keeps nothing awake, and the
+  // relay for one of its clients, counted as a tunnel while open
+  readonly openListener: (name: string, spec: ListenSpec) => Promise<GuestListener>;
+  readonly openAccept: (name: string, listener: string, connection: number) => Promise<DialStream>;
+
+  // who the socket's caller is: only it may accept its forward's clients
+  readonly owner: string;
 }
 
 export interface TunnelSession {
@@ -42,7 +53,10 @@ export interface TunnelSession {
   readonly handleClose: () => void;
 }
 
-// open tunnels per imp id, shared by every tunnel socket
+type TunnelListen = Extract<TunnelClientMessage, { type: 'listen' }>;
+
+// open tunnels per imp id, shared by every tunnel socket; each reverse
+// forward relay counts as one
 export interface TunnelLimits {
   // a release to call once, or null when the imp is at the limit
   readonly tryOpen: (impId: string) => (() => void) | null;
@@ -101,10 +115,12 @@ export function createTunnelSession(
   peer: TunnelPeer,
   backend: TunnelBackend,
   limits: TunnelLimits,
+  forwards: ReverseForwards,
 ): TunnelSession {
   const state: {
-    phase: 'waiting' | 'opening' | 'open' | 'closed';
+    phase: 'waiting' | 'opening' | 'open' | 'listening' | 'closed';
     stream: DialStream | null;
+    listener: GuestListener | null;
     release: () => void;
 
     // bytes sent to the peer and not acked yet, and a wait for an ack
@@ -119,6 +135,7 @@ export function createTunnelSession(
   } = {
     phase: 'waiting',
     stream: null,
+    listener: null,
     release: () => {},
     unacked: 0,
     ackWaiter: null,
@@ -139,6 +156,7 @@ export function createTunnelSession(
 
     state.phase = 'closed';
     state.stream?.close();
+    state.listener?.close();
     state.release();
     state.ackWaiter?.();
     peer.close(code, reason);
@@ -220,45 +238,44 @@ export function createTunnelSession(
     state.acking = false;
   };
 
-  const openTunnel = async (name: string, port: number): Promise<void> => {
+  // the imp's id, or null once the session failed or the peer left
+  const findOpeningImp = async (name: string): Promise<string | null> => {
     state.phase = 'opening';
 
-    let impId: string;
-
     try {
-      impId = await backend.findImpId(name);
+      const impId = await backend.findImpId(name);
+
+      return state.phase === 'opening' ? impId : null;
     } catch (error) {
       stopWithError(error);
 
+      return null;
+    }
+  };
+
+  const buildLimitError = (name: string): ORPCError<'TUNNEL_LIMIT', unknown> =>
+    new ORPCError('TUNNEL_LIMIT', {
+      message: `${name} has ${String(MAX_TUNNELS_PER_IMP)} tunnels open already`,
+    });
+
+  // `reserve` counts the tunnel, or throws why it may not open
+  const openTunnel = async (
+    name: string,
+    reserve: (impId: string) => () => void,
+    open: () => Promise<DialStream>,
+  ): Promise<void> => {
+    const impId = await findOpeningImp(name);
+
+    if (impId === null) {
       return;
     }
-
-    // the peer went away during the lookup
-    if (state.phase !== 'opening') {
-      return;
-    }
-
-    const release = limits.tryOpen(impId);
-
-    if (release === null) {
-      stopWithError(
-        new ORPCError('TUNNEL_LIMIT', {
-          message: `${name} has ${String(MAX_TUNNELS_PER_IMP)} tunnels open already`,
-        }),
-      );
-
-      return;
-    }
-
-    state.release = release;
 
     let stream: DialStream;
 
     try {
-      stream = await backend.openDial(name, {
-        network: 'tcp',
-        address: `127.0.0.1:${String(port)}`,
-      });
+      state.release = reserve(impId);
+
+      stream = await open();
     } catch (error) {
       stopWithError(error);
 
@@ -279,6 +296,123 @@ export function createTunnelSession(
     void runTunnel(stream);
   };
 
+  const allocateTunnel = (name: string, impId: string): (() => void) => {
+    const release = limits.tryOpen(impId);
+
+    if (release === null) {
+      throw buildLimitError(name);
+    }
+
+    return release;
+  };
+
+  // an accept takes a client of the caller's own forward, within its relays
+  const allocateRelay = (name: string, listener: string, impId: string): (() => void) => {
+    const relay = forwards.tryAccept(listener, impId, backend.owner);
+
+    if ('refused' in relay) {
+      throw relay.refused === 'full'
+        ? new ORPCError('TUNNEL_LIMIT', {
+            message: `the reverse forward has its most relays open already`,
+          })
+        : new ORPCError('NOT_FOUND', {
+            message: `no reverse forward ${listener} of yours on ${name}`,
+          });
+    }
+
+    try {
+      const release = allocateTunnel(name, impId);
+
+      return () => {
+        release();
+
+        relay.release();
+      };
+    } catch (error) {
+      relay.release();
+      throw error;
+    }
+  };
+
+  // a client of the forward that cannot be taken is closed at once
+  const stopGuestClient = async (name: string, listener: string, id: number): Promise<void> => {
+    try {
+      const stream = await backend.openAccept(name, listener, id);
+
+      stream.close();
+    } catch {
+      // the client is gone already, or the agent is
+    }
+  };
+
+  // The forward lives until the peer closes the socket, or the guest
+  // listener ends, as after a forced sleep: the client listens again.
+  const runForward = async (name: string, listener: GuestListener): Promise<void> => {
+    try {
+      await runGuestListener(listener, {
+        deliver: (id) => {
+          send({ type: 'connection', id });
+
+          return Promise.resolve();
+        },
+        refuse: (id) => stopGuestClient(name, listener.id, id),
+        isFull: () => forwards.isFull(listener.id),
+      });
+    } catch {
+      // the agent connection broke; the close below says so
+    }
+
+    stopTunnel(TUNNEL_CLOSE_LOST, 'lost');
+  };
+
+  const openForward = async (control: TunnelListen): Promise<void> => {
+    const impId = await findOpeningImp(control.name);
+
+    if (impId === null) {
+      return;
+    }
+
+    const spec: ListenSpec =
+      control.network === 'tcp'
+        ? { network: 'tcp', port: control.port ?? 0 }
+        : { network: 'unix', path: control.path ?? null };
+
+    let listener: GuestListener;
+
+    // a listener holds a tunnel of its own, so one caller cannot open them
+    // without limit
+    try {
+      state.release = allocateTunnel(control.name, impId);
+
+      listener = await backend.openListener(control.name, spec);
+    } catch (error) {
+      stopWithError(error);
+
+      return;
+    }
+
+    if (state.phase !== 'opening') {
+      listener.close();
+
+      return;
+    }
+
+    const releaseTunnel = state.release;
+    const releaseForward = forwards.register(listener.id, impId, backend.owner);
+
+    state.listener = listener;
+
+    state.release = () => {
+      releaseForward();
+      releaseTunnel();
+    };
+
+    state.phase = 'listening';
+
+    send({ type: 'listening', listener: listener.id, path: listener.path, port: listener.port });
+    void runForward(control.name, listener);
+  };
+
   const handleControl = (message: unknown): void => {
     const parsed = TunnelClientMessageSchema.safeParse(message);
 
@@ -290,11 +424,28 @@ export function createTunnelSession(
 
     const control = parsed.data;
 
-    if (control.type === 'open') {
-      if (state.phase === 'waiting') {
-        void openTunnel(control.name, control.port);
+    if (control.type === 'open' || control.type === 'listen' || control.type === 'accept') {
+      if (state.phase !== 'waiting') {
+        stopTunnel(TUNNEL_CLOSE_PROTOCOL, `${control.type} after the start`);
+      } else if (control.type === 'open') {
+        const name = control.name;
+        const target: DialTarget = { network: 'tcp', address: `127.0.0.1:${String(control.port)}` };
+
+        void openTunnel(
+          name,
+          (impId) => allocateTunnel(name, impId),
+          () => backend.openDial(name, target),
+        );
+      } else if (control.type === 'accept') {
+        const name = control.name;
+
+        void openTunnel(
+          name,
+          (impId) => allocateRelay(name, control.listener, impId),
+          () => backend.openAccept(name, control.listener, control.connection),
+        );
       } else {
-        stopTunnel(TUNNEL_CLOSE_PROTOCOL, 'open twice');
+        void openForward(control);
       }
 
       return;
@@ -361,6 +512,7 @@ export function createTunnelSession(
 
       state.phase = 'closed';
       state.stream?.close();
+      state.listener?.close();
       state.release();
       state.ackWaiter?.();
     },

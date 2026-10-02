@@ -10,6 +10,7 @@ import { RPCHandler } from '@orpc/server/fetch';
 import { StrictGetMethodPlugin } from '@orpc/server/plugins';
 import type { ExecSocket } from '@zgeoff/imp-client';
 import { Elysia } from 'elysia';
+import type { ListenSpec } from './agent-client/listener-stream';
 import { buildForbiddenError } from './api-errors';
 import { withAuditedOpen } from './audit/api-audit';
 import { resolveCaller } from './auth/authenticate';
@@ -32,6 +33,7 @@ import { createInProcessSocket } from './exec/in-process-socket';
 import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
+import { createReverseForwards } from './reverse/reverse-forwards';
 import { createTunnelLimits, createTunnelSession } from './tunnel/tunnel-session';
 import type { TunnelSession } from './tunnel/tunnel-session';
 
@@ -110,6 +112,7 @@ export function buildApp(deps: AppDeps) {
   const tunnels = new Map<string, SocketEntry<TunnelSession>>();
 
   const tunnelLimits = createTunnelLimits();
+  const reverseForwards = createReverseForwards();
 
   // each exec socket's grant and each tunnel socket's caller, by its
   // upgrade request
@@ -391,8 +394,29 @@ export function buildApp(deps: AppDeps) {
                 () => deps.imps.openDial(name, target, 'tunnel'),
               );
             },
+
+            // audited as it opens, with where it listens: `reverse:/tmp/a.sock`
+            openListener: (name, spec) => {
+              const where = 'port' in spec ? String(spec.port) : readListenPath(spec);
+
+              return withAuditedOpen(
+                deps.audit,
+                {
+                  procedure: `reverse:${where}`,
+                  actor: caller ?? { kind: 'token', name: 'unknown' },
+                  impName: name,
+                  startedAt: deps.now(),
+                },
+                () => deps.imps.openListener(name, spec, null),
+              );
+            },
+            openAccept: (name, listener, connection) =>
+              deps.imps.openAccept(name, listener, connection, 'tunnel'),
+            owner:
+              caller === undefined ? '' : `${caller.kind}:${caller.name}:${caller.tokenId ?? ''}`,
           },
           tunnelLimits,
+          reverseForwards,
         );
 
         const forget = handleRevocation(caller, () => {
@@ -432,6 +456,11 @@ export function buildApp(deps: AppDeps) {
       }
     },
   };
+}
+
+// a reverse forward's socket path, for its audit row
+function readListenPath(spec: ListenSpec): string {
+  return spec.network === 'unix' ? (spec.path ?? 'auto') : spec.network;
 }
 
 // Bun's ServerWebSocket has getBufferedAmount; Elysia's type leaves it out

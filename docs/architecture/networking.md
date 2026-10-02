@@ -161,8 +161,8 @@ impd's SSH gateway listens on `IMP_SSH_PORT` (default 22) on IPv4, in the contai
 namespace, like the API. The tailnet reaches it through `tailscale0`, the firewall above keeps the
 guests off it, and only `scripts/dev.sh` publishes it, on `127.0.0.1:2222`. Forwards go through the
 agent's `dial` from inside the guest, never from the host container to the guest's IP, so a forward
-reaches programs that listen on the guest's loopback. The [SSH guide](../guides/ssh.md) has the
-rest.
+reaches programs that listen on the guest's loopback. A remote forward (`ssh -R`) listens in the
+guest through the agent, on its `127.0.0.1` only. The [SSH guide](../guides/ssh.md) has the rest.
 
 ## URLs
 

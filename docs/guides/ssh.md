@@ -134,7 +134,7 @@ bindings, and only bound keys log in.
 | unix socket forward (`-L` to a path) | an absolute socket path the image's USER can open, but not impd's own under `/run/imp/`             |
 | env (`SendEnv`, `SetEnv`)            | `LANG` and `LC_*` only. `SSH_CONNECTION` and `SSH_CLIENT` are set as sshd sets them                 |
 | credential connectors                | an imp with a grant gets the broker's variables, as with `imp exec` ([connectors](./connectors.md)) |
-| remote forward (`-R`)                | refused                                                                                             |
+| remote forward (`-R`)                | a port on the imp's `127.0.0.1`, or a socket path, back to your machine ([below](#remote-forwards)) |
 | agent forwarding (`-A`)              | a socket in the imp for `SSH_AUTH_SOCK` ([below](#agent-forwarding))                                |
 | X11                                  | refused                                                                                             |
 
@@ -149,8 +149,9 @@ root-only socket, such as a `docker.sock` for root and the `docker` group, works
 is in that group. Abstract sockets are not supported.
 
 The SFTP server and TCP forwarding need the agent from protocol `0.3.0`, agent forwarding from
-`0.4.0`, and unix socket forwarding from `0.6.0`. An imp that still runs an older agent answers with
-`AGENT_OUTDATED`; stop and start it to update it ([operations](./operations.md#upgrade)).
+`0.4.0`, unix socket forwarding from `0.6.0`, and remote forwards from `0.9.0`. An imp that still
+runs an older agent answers with `AGENT_OUTDATED`; stop and start it to update it
+([operations](./operations.md#upgrade)).
 
 ## Agent forwarding
 
@@ -181,6 +182,27 @@ git push                      # signed by your agent
 > agent while you are connected, and so can root in the imp: in images that run as root, that is
 > every command. They cannot copy your key, but they can sign with it until you disconnect.
 > `ssh-add -c` makes your agent ask before each use.
+
+## Remote forwards
+
+`ssh -R` lets a program in the imp reach a port or a unix socket on your machine, as
+[`imp proxy --reverse`](./reverse-forwards.md) does without SSH.
+
+```sh
+ssh -N -R 9000:localhost:8080 box@imp              # 127.0.0.1:9000 in the imp
+ssh -N -R 0:localhost:8080 box@imp                 # any free port; ssh prints which
+ssh -N -R /tmp/app.sock:/run/user/1000/app.sock box@imp
+```
+
+- Every bind address (`*`, `0.0.0.0`, `::`, empty, `localhost`) listens on the imp's `127.0.0.1`
+  only, as sshd does with `GatewayPorts no`: no other machine reaches the forward.
+- The forward listens as the image's USER, so a port below 1024 is refused unless that user is root,
+  and a socket path must be one the user may make. A socket path's directory must exist; impd's own
+  `/run/imp/` is refused. A socket left at the path by an earlier forward is replaced.
+- A socket is mode 0600, for the image's user and root. A port is open to every process in the imp.
+- A forward ends with the connection, or with `ssh -O cancel`. A forced sleep (`imp sleep`) ends it
+  too, and the client must connect again; an open connection keeps the imp awake otherwise.
+- Each forward relays at most 64 connections at a time; more are closed.
 
 ## Sleep and wake
 

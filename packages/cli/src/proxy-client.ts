@@ -17,7 +17,11 @@ import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
 import { parseForward } from './parse-forward';
 import type { Forward } from './parse-forward';
+import { parseReverse } from './parse-reverse';
+import { formatGuest, formatLocal, startReverseForward } from './reverse-client';
+import type { ReverseIo } from './reverse-client';
 import { printError } from './run-action';
+import { UsageError } from './usage-error';
 
 // what runProxy touches besides the network; tests swap it
 export interface ProxyIo {
@@ -26,6 +30,9 @@ export interface ProxyIo {
 
   // throws when the imp does not exist; it must not wake the imp
   readonly checkImp: (config: CliConfig, name: string) => Promise<void>;
+
+  // for `--reverse`; undefined for the process's own
+  readonly reverse?: ReverseIo;
 }
 
 export interface Proxy {
@@ -222,11 +229,13 @@ function openTunnel(socket: Socket, target: TunnelTarget, notices: TunnelNotices
       if (state.unacked <= TUNNEL_WINDOW_BYTES && state.opened) {
         socket.resume();
       }
-    } else {
+    } else if (message.type === 'error') {
       state.reported = true;
 
       notices.writeNotice(`${label}: ${message.code ?? 'error'}: ${message.message}`);
       socket.destroy();
+    } else {
+      ws.close(TUNNEL_CLOSE_PROTOCOL, 'bad message');
     }
   };
 
@@ -389,37 +398,107 @@ export interface ProxyOptions {
   readonly host: string | null;
   readonly name: string;
   readonly specs: readonly string[];
+
+  // `--reverse` specs: GUEST:LOCAL
+  readonly reverse: readonly string[];
 }
 
-// `imp proxy`: runs until SIGINT or SIGTERM, then exits 0
+interface RunningProxy {
+  readonly stop: () => void;
+
+  // settles when a reverse forward fails for good
+  readonly failed: Promise<Error>;
+}
+
+// Local forwards first, so a busy port fails before anything listens in the
+// imp; then each reverse forward, which wakes the imp.
+async function startForwards(
+  config: CliConfig,
+  options: ProxyOptions,
+  io: ProxyIo,
+): Promise<RunningProxy> {
+  const forwards = options.specs.map((spec) => parseForward(spec));
+  const reverse = options.reverse.map((spec) => parseReverse(spec));
+
+  if (forwards.length === 0 && reverse.length === 0) {
+    throw new UsageError('name a port to forward, or a --reverse forward');
+  }
+
+  const stops: (() => void)[] = [];
+  const failures: Promise<Error>[] = [];
+
+  const stop = (): void => {
+    for (const stopOne of stops) {
+      stopOne();
+    }
+  };
+
+  try {
+    if (forwards.length > 0) {
+      const proxy = await startProxy(config, options.name, forwards, io);
+
+      stops.push(proxy.stop);
+
+      for (const [index, forward] of forwards.entries()) {
+        console.log(
+          `forwarding localhost:${String(proxy.ports[index])} -> ${options.name}:${String(forward.remote)}`,
+        );
+      }
+    }
+
+    for (const spec of reverse) {
+      const forwarding = await startReverseForward(config, options.name, spec, io.reverse);
+
+      stops.push(forwarding.stop);
+      failures.push(forwarding.failed);
+
+      console.log(
+        `forwarding ${options.name}:${formatGuest(forwarding.listening)} -> ${formatLocal(spec.local)}`,
+      );
+    }
+  } catch (error) {
+    stop();
+    throw error;
+  }
+
+  // never settles without a reverse forward
+  const failed = failures.length === 0 ? new Promise<Error>(() => {}) : Promise.race(failures);
+
+  return { stop, failed };
+}
+
+// `imp proxy`: runs until SIGINT or SIGTERM, then exits 0, or until a reverse
+// forward fails for good
 export async function runProxy(options: ProxyOptions, io: ProxyIo = PROCESS_IO): Promise<void> {
   let config: CliConfig | null = null;
-  let proxy: Proxy;
+  let proxy: RunningProxy;
 
   try {
     config = loadCliConfig(process.env, options.host);
 
-    const forwards = options.specs.map((spec) => parseForward(spec));
-
-    proxy = await startProxy(config, options.name, forwards, io);
-
-    for (const [index, forward] of forwards.entries()) {
-      console.log(
-        `forwarding localhost:${String(proxy.ports[index])} -> ${options.name}:${String(forward.remote)}`,
-      );
-    }
+    proxy = await startForwards(config, options, io);
   } catch (error) {
     printError(error, config);
 
     return;
   }
 
-  const stopped = Promise.withResolvers<void>();
+  const stopped = Promise.withResolvers<Error | null>();
 
-  process.once('SIGINT', stopped.resolve);
-  process.once('SIGTERM', stopped.resolve);
+  const handleSignal = (): void => {
+    stopped.resolve(null);
+  };
 
-  await stopped.promise;
+  process.once('SIGINT', handleSignal);
+  process.once('SIGTERM', handleSignal);
 
+  const failure = await Promise.race([stopped.promise, proxy.failed]);
+
+  process.off('SIGINT', handleSignal);
+  process.off('SIGTERM', handleSignal);
   proxy.stop();
+
+  if (failure !== null) {
+    printError(failure, config);
+  }
 }

@@ -228,6 +228,30 @@ The CLI listens on 127.0.0.1 and ::1 before it calls impd, so a busy port fails 
 the imp exists with `imps.get`, which does not wake it. Each local socket stays paused until
 `opened`.
 
+### Reverse forwards
+
+`imp proxy --reverse` ([guide](../guides/reverse-forwards.md)) uses the same `/tunnel` socket. A
+control socket sends `{"type":"listen","name":"box","network":"unix","path":"/tmp/app.sock"}` (or
+`"path":null`, or `"network":"tcp","port":n`); impd wakes the imp, opens the agent's
+[`listen`](./protocol.md#listen), and answers
+`{"type":"listening","listener":id,"path":p,"port":n}`. Each client in the guest arrives as
+`{"type":"connection","id":n}`, and the caller opens a new socket with
+`{"type":"accept","name":"box","listener":id,"connection":n}`: a relay with the bytes, eofs, acks
+and closes of a tunnel.
+
+- **Owner.** impd keeps each forward with the imp's id and its caller (the token or the tailnet
+  identity). An accept from another caller, or for an imp that was replaced, gets `NOT_FOUND`.
+- **Caps.** At most 64 relays per forward; past that, impd refuses the guest client at once, and an
+  accept gets `TUNNEL_LIMIT`. Each relay, and each forward's control socket, also counts toward the
+  256 tunnels per imp, so one caller cannot open listeners without limit.
+- **Activity.** A relay counts as a `tunnel` connection, so it keeps the imp awake. The control
+  socket does not: a forward with no relays lets the imp sleep.
+- **The end.** The caller closing the control socket closes the listener, and the agent removes its
+  socket. When the listener ends in the guest (a forced sleep, an agent restart), impd closes the
+  control socket with 4000; the CLI waits for the imp's `running` state on the event stream, never
+  waking it, and listens again.
+- **Audit.** A listen is audited as it opens, as `reverse:<path, port or auto>`.
+
 ### sessions: detachable consoles
 
 A session is a program on a pty in the guest that outlives its WebSocket
@@ -290,7 +314,14 @@ patch to `ssh2` (`patches/`): a refused channel open can say why, so a forward t
   client's SSH window instead of growing impd's memory.
 - **Forwards.** `direct-tcpip` to the imp's own loopback and `direct-streamlocal` to a socket path
   use the agent's [`dial`](./protocol.md#dial), which connects from inside the guest. The channel
-  opens only once the dial worked. Remote forwards and X11 are refused.
+  opens only once the dial worked. X11 is refused.
+- **Remote forwards.** A `tcpip-forward` or `streamlocal-forward@openssh.com` listens in the guest
+  through the agent's [`listen`](./protocol.md#listen), as the image's user; every bind address maps
+  to the guest's `127.0.0.1`, and a port 0 request gets the port the agent picked. Each client
+  becomes a `forwarded-tcpip` or `forwarded-streamlocal@openssh.com` channel to the user, relayed
+  through `agent.accept`, at most 64 at a time per forward. The listener alone counts as no
+  activity; the connection keeps the imp awake anyway. A cancel, the connection's end, or a forced
+  sleep closes it, and the client must forward again.
 - **Agent forwarding.** After an `auth-agent-req@openssh.com`, the connection's sessions get
   `SSH_AUTH_SOCK` from one [`agent.listen`](./protocol.md#agentlisten-and-agentaccept) socket in the
   guest, opened on first use and closed with the connection. Each client of the socket becomes an

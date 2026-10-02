@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 // Op names.
 const (
@@ -26,6 +26,10 @@ const (
 	// its connection; agent.accept relays one client of that socket
 	OpAgentListen = "agent.listen"
 	OpAgentAccept = "agent.accept"
+
+	// reverse forwards: listen serves a unix socket or a loopback port, as
+	// agent.listen does; agent.accept relays its clients too
+	OpListen = "listen"
 )
 
 // Request is the first frame on every connection. Fields beyond Op are
@@ -56,7 +60,9 @@ type Request struct {
 	// resumed
 	UnixMs int64 `json:"unix_ms,omitempty"`
 
-	// dial: "tcp" with "host:port", or "unix" with a socket path
+	// dial: "tcp" with "host:port", or "unix" with a socket path; listen:
+	// "tcp" with "127.0.0.1:port", or "unix" with a path or "" for one the
+	// agent makes
 	Network string `json:"network,omitempty"`
 	Address string `json:"address,omitempty"`
 
@@ -80,6 +86,7 @@ const (
 	ErrSessionCap   = "SESSION_LIMIT"
 	ErrDialFailed   = "DIAL_FAILED"
 	ErrNoConnection = "NO_CONNECTION"
+	ErrListenFailed = "LISTEN_FAILED"
 )
 
 type Error struct {
@@ -106,11 +113,13 @@ type OK struct {
 	OK bool `json:"ok"`
 }
 
-// AgentListen is the RESPONSE to agent.listen.
-type AgentListen struct {
+// Listening is the RESPONSE to agent.listen and listen.
+type Listening struct {
 	OK bool `json:"ok"`
-	// Path is the socket for SSH_AUTH_SOCK.
-	Path     string `json:"path"`
+	// Path is the unix socket (for agent.listen, SSH_AUTH_SOCK); Port the
+	// TCP port, which a request for port 0 learns here
+	Path     string `json:"path,omitempty"`
+	Port     int    `json:"port,omitempty"`
 	Listener string `json:"listener"`
 }
 
