@@ -30,6 +30,18 @@ export type {
   ExecStarted,
 } from './exec/open-exec-session';
 
+export { openReverseForward } from './reverse/open-reverse-forward';
+
+export type {
+  ReverseForward,
+  ReverseForwardEnd,
+  ReverseForwardOptions,
+  ReverseGuest,
+  ReverseListening,
+  ReverseRelay,
+  ReverseRelayHandlers,
+} from './reverse/open-reverse-forward';
+
 export { ExecError } from './exec/exec-error';
 export type { ExecClientErrorCode } from './exec/exec-error';
 export { CONSOLE_SHELL } from '@imp/api';
