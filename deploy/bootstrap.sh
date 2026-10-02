@@ -65,9 +65,11 @@ Options:
                               (networkd, NetworkManager, dhcpcd) keeps them
                               with forwarding on; see docs/guides/install.md#ipv6
   --ksm                       let KSM merge identical guest pages: ksmd runs
-                              at boot and IMP_KSM=1. Bare metal with Linux 6.10
-                              or later only. Off by default: merged pages let
+                              at boot and IMP_KSM=1. Linux 6.10 or later, not
+                              in a container. Off by default: merged pages let
                               guests time each other (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
+  --no-ksm                    turn it off again: remove the boot rule, stop
+                              ksmd and set IMP_KSM=0
   --skip-health               skip the closing health check
 EOF
 }
@@ -449,7 +451,8 @@ EOF
 # when it is empty or still the template's, IMP_STORAGE_BACKEND,
 # IMP_HOST_FIREWALL, IMP_HOST_IPV6 and IMP_HOST_NETWORK (from IPV6) always,
 # IMP_ZFS_ROOT and IMP_HOST_SUBNET6 when theirs is non-empty, and IMP_KSM=1
-# when KSM is non-empty (an existing IMP_KSM stays otherwise). TAILSCALE_AUTHKEY comes from the
+# or 0 when KSM is on or off (an existing IMP_KSM stays when it is empty).
+# TAILSCALE_AUTHKEY comes from the
 # environment variable BOOTSTRAP_AUTHKEY, never from argv, and is set when
 # non-empty.
 render_env() {
@@ -467,7 +470,7 @@ render_env() {
       /^IMP_HOST_IPV6=/ { set("IMP_HOST_IPV6", ENVIRON["IPV6"]); next }
       /^IMP_HOST_NETWORK=/ { set("IMP_HOST_NETWORK", ENVIRON["NETWORK"]); next }
       /^IMP_HOST_SUBNET6=/ && ENVIRON["SUBNET6"] != "" { set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"]); next }
-      /^IMP_KSM=/ && ENVIRON["KSM"] != "" { set("IMP_KSM", "1"); next }
+      /^IMP_KSM=/ && ENVIRON["KSM"] != "" { set("IMP_KSM", ENVIRON["KSM"] == "on" ? "1" : "0"); next }
       /^TAILSCALE_AUTHKEY=/ && ENVIRON["BOOTSTRAP_AUTHKEY"] != "" {
         set("TAILSCALE_AUTHKEY", ENVIRON["BOOTSTRAP_AUTHKEY"]); next
       }
@@ -487,7 +490,7 @@ render_env() {
         if (!done["IMP_HOST_IPV6"]) set("IMP_HOST_IPV6", ENVIRON["IPV6"])
         if (!done["IMP_HOST_NETWORK"]) set("IMP_HOST_NETWORK", ENVIRON["NETWORK"])
         if (!done["IMP_HOST_SUBNET6"] && ENVIRON["SUBNET6"] != "") set("IMP_HOST_SUBNET6", ENVIRON["SUBNET6"])
-        if (!done["IMP_KSM"] && ENVIRON["KSM"] != "") set("IMP_KSM", "1")
+        if (!done["IMP_KSM"] && ENVIRON["KSM"] != "") set("IMP_KSM", ENVIRON["KSM"] == "on" ? "1" : "0")
       }
     ' <<<"$base"
 }
@@ -622,7 +625,7 @@ IMP_HOST_NETWORK=
 # KSM merges identical guest pages
 # (docs/architecture/sleep-and-wake.md#8-ksm-sharing-identical-guest-pages).
 # Off by default: merged pages let guests time each other. bootstrap.sh --ksm
-# sets IMP_KSM=1 on a bare-metal host with Linux 6.10 or later. The governor
+# sets IMP_KSM=1 on a host with Linux 6.10 or later, not in a container. The governor
 # keeps this share of KSM's saving free, for pages that writes split again.
 IMP_KSM=
 IMP_KSM_HEADROOM_PERCENT=100
@@ -701,7 +704,8 @@ parse_args() {
       --ipv6) ipv6=${2:?--ipv6 needs auto, on or off} ipv6_set=1 && shift ;;
       --ra-handled) ra_handled=1 ;;
       --skip-health) skip_health=1 ;;
-      --ksm) ksm=1 ;;
+      --ksm) ksm=on ;;
+      --no-ksm) ksm=off ;;
       -h | --help) usage && exit 0 ;;
       *) usage >&2 && die "unknown argument: $1" ;;
     esac
@@ -1165,15 +1169,23 @@ module_present() {
 
 write_param() { echo "$2" >"$1"; }
 
-# ensure_ksm: with --ksm, ksmd runs now and at boot. KSM is global to the
+# ensure_ksm: with --ksm, ksmd runs now and at boot; with --no-ksm, it stops
+# and its boot rule goes. KSM is global to the
 # kernel, so a container refuses it, and so does a kernel older than 6.10.
 ensure_ksm() {
   [ -n "$ksm" ] || return 0
   phase ksm
-  [ -z "$in_container" ] || die "--ksm needs a bare-metal host: KSM is global to the kernel"
+  local rule=/etc/tmpfiles.d/imp-ksm.conf
+  if [ "$ksm" = off ]; then
+    [ ! -f "$rule" ] || change "remove $rule" rm -f "$rule"
+    [ -n "$in_container" ] || [ "$(cat /sys/kernel/mm/ksm/run 2>/dev/null || echo 0)" != 1 ] \
+      || change "stop ksmd" write_param /sys/kernel/mm/ksm/run 0
+    return 0
+  fi
+  [ -z "$in_container" ] || die "--ksm cannot run in a container: KSM is global to the host's kernel"
   kernel_supports_ksm "$(uname -r)" || die "--ksm needs Linux 6.10 or later; this host runs $(uname -r)"
   [ -d /sys/kernel/mm/ksm ] || die "--ksm needs a kernel built with CONFIG_KSM"
-  put_file /etc/tmpfiles.d/imp-ksm.conf 644 "$(ksm_tmpfiles)" || true
+  put_file "$rule" 644 "$(ksm_tmpfiles)" || true
   local key
   for key in use_zero_pages run; do
     [ "$(cat "/sys/kernel/mm/ksm/$key")" = 1 ] || change "set KSM $key=1" write_param "/sys/kernel/mm/ksm/$key" 1
