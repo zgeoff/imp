@@ -225,6 +225,9 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
         redirect: 'manual',
         decompress: false,
         keepalive: false,
+
+        // a client that goes away stops the upstream request too
+        signal: request.signal,
       });
 
       const headers = new Headers(upstream.headers);
@@ -333,6 +336,15 @@ export function startWakeProxy(deps: WakeProxyDeps): WakeProxy {
       const imps = await listImps(deps.db);
 
       const wanted = new Map(imps.map((imp) => [imp.id, imp]));
+
+      // a slot no imp holds any more has nothing left to warn about
+      const slots = new Set(imps.map((imp) => imp.slot));
+
+      for (const slot of failedSlots) {
+        if (!slots.has(slot)) {
+          failedSlots.delete(slot);
+        }
+      }
 
       for (const [id, listener] of listeners) {
         if (wanted.get(id)?.slot !== listener.slot) {

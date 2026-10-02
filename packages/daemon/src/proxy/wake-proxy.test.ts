@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { removeImp } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
+import { readRejection } from '../read-rejection';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
@@ -77,8 +78,11 @@ test('overlapping listener syncs end with the listeners the database holds', asy
 });
 
 // An upstream on 127.0.0.1 that records the Cookie header of each request
-// and WebSocket upgrade, with an imp whose address points at it.
-async function setupCookieTest() {
+// and WebSocket upgrade, with an imp whose address points at it. `respond`
+// answers a plain request; `ok` by default.
+async function setupUpstreamTest(
+  respond: (request: Request) => Response | Promise<Response> = () => new Response('ok'),
+) {
   const cookies: (string | null)[] = [];
 
   const upstream = Bun.serve({
@@ -93,7 +97,7 @@ async function setupCookieTest() {
         return undefined;
       }
 
-      return new Response('ok');
+      return respond(request);
     },
     websocket: {
       message: (ws, message) => {
@@ -133,7 +137,7 @@ async function setupCookieTest() {
 }
 
 test('the proxy keeps the dashboard session cookie from an imp over HTTP', async () => {
-  await using ctx = await setupCookieTest();
+  await using ctx = await setupUpstreamTest();
 
   const response = await fetch(`http://127.0.0.1:${String(ctx.port)}/`, {
     headers: { cookie: 'a=1; imp_session=v1.2.secret; __Host-imp_session=v1.2.secret; b=2' },
@@ -145,7 +149,7 @@ test('the proxy keeps the dashboard session cookie from an imp over HTTP', async
 });
 
 test('the proxy keeps the dashboard session cookie from an imp over a WebSocket', async () => {
-  await using ctx = await setupCookieTest();
+  await using ctx = await setupUpstreamTest();
 
   const socket = new WebSocket(`ws://127.0.0.1:${String(ctx.port)}/`, {
     headers: { cookie: 'a=1; imp_session=v1.2.secret' },
@@ -327,5 +331,91 @@ test('a request on an imp’s port goes to the imp whatever its Host says', asyn
     await proxy.stop();
     await upstream.stop(true);
     await api.stop(true);
+  }
+});
+
+test('a client that goes away stops the request to the imp', async () => {
+  const reached = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+
+  // answers only once the request is aborted
+  await using ctx = await setupUpstreamTest(async (request) => {
+    request.signal.addEventListener('abort', () => {
+      aborted.resolve();
+    });
+
+    reached.resolve();
+
+    await aborted.promise;
+
+    return new Response('late');
+  });
+
+  const client = new AbortController();
+
+  const pending = readRejection(
+    fetch(`http://127.0.0.1:${String(ctx.port)}/slow`, { signal: client.signal }),
+  );
+
+  await reached.promise;
+
+  client.abort();
+
+  const outcome = await Promise.race([
+    aborted.promise.then(() => 'upstream aborted'),
+    Bun.sleep(5000).then(() => 'upstream kept waiting'),
+  ]);
+
+  await pending;
+
+  expect(outcome).toBe('upstream aborted');
+});
+
+test('a slot that could not listen warns again once a new imp holds it', async () => {
+  const ports = pickPorts();
+  const logs: string[] = [];
+
+  await using ctx = await setupImpTest({ env: ports });
+
+  // something else holds the imp port of slot 0
+  const squatter = Bun.serve({
+    port: Number(ports.IMP_PORT_BASE),
+    hostname: '0.0.0.0',
+    fetch: () => new Response('squatter'),
+  });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: (message) => {
+      logs.push(message);
+    },
+    peers: createForwardedPeers(Date.now),
+  });
+
+  try {
+    await ctx.createTestImage('ubuntu');
+
+    const first = await ctx.imps.createImp({ name: 'first' });
+
+    await proxy.syncListeners();
+    await proxy.syncListeners();
+
+    await removeImp(ctx.db, first.id);
+
+    await proxy.syncListeners();
+
+    const second = await ctx.imps.createImp({ name: 'second' });
+
+    await proxy.syncListeners();
+
+    const warnings = logs.filter((line) => line.includes('cannot listen'));
+
+    expect(second.slot).toBe(first.slot);
+    expect(warnings).toHaveLength(2);
+  } finally {
+    await proxy.stop();
+    await squatter.stop(true);
   }
 });
