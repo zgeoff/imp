@@ -34,6 +34,8 @@ container's own network namespace and never touch the host's.
   only, so a guest cannot send with another imp's address. The broker names the imp by its address.
   A `rp_filter` sysctl would set the floor for `eth0` and `tailscale0` too, and break an exit node,
   subnet routes, or a container on more than one network.
+- `ip6tables INPUT -i imp+` drops everything. The taps get IPv6 link-local addresses, and impd's API
+  and proxy listen on IPv6 too; without this rule a guest reaches them over its tap.
 - The TCP MSS of guest connections is clamped to the real uplink MTU (`IMP_UPLINK_MTU`). Behind a
   smaller-MTU uplink (WSL's is 1360), frag-needed ICMP never reaches the guests, and large TLS
   records stall.
@@ -67,6 +69,15 @@ host gets a plain tunnel to a checked public address. A tunnel starts inside the
 past the `INPUT` drop, so it refuses every private, shared, loopback and link-local range, IPv6, and
 the container's own addresses. The broker also drops a guest that dials another imp's gateway. The
 [connectors guide](../guides/connectors.md) has the whole design.
+
+## The SSH gateway
+
+impd's SSH gateway listens on `IMP_SSH_PORT` (default 22) on IPv4, in the container's own network
+namespace, like the API. The tailnet reaches it through `tailscale0`, the firewall above keeps the
+guests off it, and only `scripts/dev.sh` publishes it, on `127.0.0.1:2222`. Forwards go through the
+agent's `dial` from inside the guest, never from the host container to the guest's IP, so a forward
+reaches programs that listen on the guest's loopback. The [SSH guide](../guides/ssh.md) has the
+rest.
 
 ## URLs
 
