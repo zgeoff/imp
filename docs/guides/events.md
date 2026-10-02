@@ -34,7 +34,7 @@ reader skips a kind or a field it does not know.
 | `ev`                | Fields                                                   | When                                                                                 |
 | ------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `ImpAdded`          | `reason` (`snapshot` or `created`), `imp`                | Each imp as the stream opens, then each new imp.                                     |
-| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, hold or error.                          |
+| `ImpChanged`        | `reason`, `imp`, `detail` for a timed change             | A change to an imp's record: its state, pid, leases or error.                        |
 | `ImpRemoved`        | `imp`, as its record was last                            | `imp rm`: the VM, the disk and the checkpoints are gone.                             |
 | `CheckpointAdded`   | `name` (the imp's), `checkpoint`                         | A checkpoint.                                                                        |
 | `CheckpointRemoved` | `name`, `checkpoint`                                     | A checkpoint deleted.                                                                |
@@ -52,14 +52,19 @@ reader skips a kind or a field it does not know.
 | `failed`   | A boot, wake or sleep failed; `imp.error` says why.                                      |
 | `repaired` | impd found the VM or the snapshot gone and corrected the record.                         |
 | `adopted`  | impd started and found the imp's VM still running.                                       |
-| `held`     | A hold was set or cleared.                                                               |
+| `held`     | A hold was set or cleared, or a lease acquired or released (a renew emits nothing).      |
 | `restored` | A checkpoint restore finished.                                                           |
 | `resized`  | `imp disk resize` changed the imp's disk size.                                           |
 | `updated`  | `imp set` changed the imp's CPU limit, weight, vCPUs or HTTP port.                       |
 | `exposed`  | The imp became public or tailnet-only, or got a new credential.                          |
+| `released` | A forced sleep or stop ended the imp's leases; `detail.released` is how many.            |
 
 `detail` comes with `booted`, `woke`, `slept` and `restored`: `durationMs`, `steps` (milliseconds
 per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
+
+An event's `imp.leases` is `{ leases: [], otherCount }`: the stream checks each event against the
+reader's imps, not its fields, so it carries no lease owners ([leases](./leases.md#owners)). A
+`GovernorDecision` `refused` adds `neededMib` and `protectedCount`, never the imps' names.
 
 ### Guarantees
 
