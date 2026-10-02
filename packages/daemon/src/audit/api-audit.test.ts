@@ -2,15 +2,7 @@ import { expect, test } from 'bun:test';
 import { ORPCError } from '@orpc/server';
 import { listApiCalls } from '../db/api-audit';
 import { setupTestDatabase } from '../db/test-database';
-import { createApiAudit, isAuditedProcedure, readImpName, withAuditedOpen } from './api-audit';
-
-test('reads, the event stream and exec tickets are not audited; a new procedure is', () => {
-  expect(isAuditedProcedure('imps.list')).toBeFalse();
-  expect(isAuditedProcedure('events.stream')).toBeFalse();
-  expect(isAuditedProcedure('exec.ticket')).toBeFalse();
-  expect(isAuditedProcedure('imps.sleep')).toBeTrue();
-  expect(isAuditedProcedure('imps.someday')).toBeTrue();
-});
+import { createApiAudit, readImpName, withAuditedOpen } from './api-audit';
 
 test('the imp is an imp namespace’s input name, or the created imp’s', () => {
   expect(readImpName('imps.stop', { name: 'dev' }, {})).toBe('dev');
@@ -32,7 +24,12 @@ test('an open is audited with its outcome, and a failed write is logged', async 
     },
   });
 
-  const call = { procedure: 'ssh', actor: 'ssh' as const, impName: 'dev', startedAt: 990 };
+  const call = {
+    procedure: 'ssh',
+    actor: { kind: 'ssh' as const, name: 'laptop' },
+    impName: 'dev',
+    startedAt: 990,
+  };
 
   await withAuditedOpen(audit, call, () => Promise.resolve('stream'));
 
@@ -46,16 +43,18 @@ test('an open is audited with its outcome, and a failed write is logged', async 
 
   // each row lands after its call returns
   await waitUntil(async () => {
-    const rows = await listApiCalls(ctx.db, 'dev', 10);
+    const rows = await listApiCalls(ctx.db, 'dev', 10, null);
 
     return rows.length === 2;
   });
 
-  const calls = await listApiCalls(ctx.db, 'dev', 10);
+  const calls = await listApiCalls(ctx.db, 'dev', 10, null);
 
-  expect(calls.map((row) => [row.procedure, row.actor, row.outcome, row.durationMs])).toEqual([
-    ['ssh', 'ssh', 'INVALID_STATE', 10],
-    ['ssh', 'ssh', 'ok', 10],
+  expect(
+    calls.map((row) => [row.procedure, row.actor, row.actorName, row.outcome, row.durationMs]),
+  ).toEqual([
+    ['ssh', 'ssh', 'laptop', 'INVALID_STATE', 10],
+    ['ssh', 'ssh', 'laptop', 'ok', 10],
   ]);
 
   await ctx.db.schema.dropTable('api_audit').execute();

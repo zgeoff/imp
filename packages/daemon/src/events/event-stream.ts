@@ -16,6 +16,10 @@ interface EventStreamOptions {
   readonly endsAt: number | null;
   readonly now: () => number;
   readonly queueLimit?: number;
+
+  // the events this subscriber may see, such as those of a token's imps;
+  // the snapshot is filtered by its reader
+  readonly accepts?: (event: ImpEvent) => boolean;
 }
 
 // The snapshot, then every event behind it (docs/guides/events.md). It
@@ -32,6 +36,10 @@ export async function* openEventStream(options: EventStreamOptions): AsyncGenera
   };
 
   const unsubscribe = options.bus.subscribe((event) => {
+    if (options.accepts !== undefined && !options.accepts(event)) {
+      return;
+    }
+
     if (queue.length >= limit) {
       stopStream();
 

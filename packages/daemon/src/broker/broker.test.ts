@@ -177,7 +177,7 @@ test('a granted host gets the real credential in place of the placeholder', asyn
   ]);
 
   const imp = await findImpByName(ctx.db, 'dev');
-  const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10);
+  const audit = await listAuditEntries(ctx.db, imp?.id ?? null, 10, null);
 
   expect(audit).toMatchObject([{ imp: 'dev', secret: 'gh', path: '/user', status: 200 }]);
 });
@@ -197,7 +197,7 @@ test('a large upload streams through and is counted', async () => {
   expect(result.code).toBe(0);
   expect(ctx.seen[0]?.bodyBytes).toBe(size);
 
-  const audit = await listAuditEntries(ctx.db, null, 10);
+  const audit = await listAuditEntries(ctx.db, null, 10, null);
 
   expect(audit[0]?.requestBytes).toBe(size);
 });

@@ -57,11 +57,17 @@ export async function startSsh(deps: StartSshDeps): Promise<SshGateway | null> {
           requireRunning: imps.requireRunning,
           tracker: imps.tracker,
 
-          // each shell, command or sftp an ssh login opens is audited
-          openExec: (name, request, feature) =>
+          // each shell, command or sftp an ssh login opens is audited,
+          // as the key that logged in
+          openExec: (name, request, feature, keyName) =>
             withAuditedOpen(
               deps.audit,
-              { procedure: 'ssh', actor: 'ssh', impName: name, startedAt: deps.now() },
+              {
+                procedure: 'ssh',
+                actor: { kind: 'ssh', name: keyName },
+                impName: name,
+                startedAt: deps.now(),
+              },
               () => imps.openExec(name, request, feature),
             ),
           openDial: imps.openDial,

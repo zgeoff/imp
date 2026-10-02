@@ -1,6 +1,6 @@
-import type { ApiActor } from '@imp/api';
 import { withAuditedOpen } from '../audit/api-audit';
 import type { ApiAudit } from '../audit/api-audit';
+import type { AuditActor } from '../auth/caller';
 import type { ExecBackend } from './exec-session';
 
 // Every exec, console and attach an `/exec` socket opens leaves an audit row:
@@ -8,7 +8,7 @@ import type { ExecBackend } from './exec-session';
 export function buildAuditedBackend(
   backend: ExecBackend,
   audit: ApiAudit,
-  actor: ApiActor,
+  actor: AuditActor,
   now: () => number,
 ): ExecBackend {
   const buildCall = (procedure: string, name: string) => ({

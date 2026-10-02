@@ -87,7 +87,7 @@ test('a login trades the token for a session the API accepts from its own page',
 
   expect(login.response.status).toBe(204);
   expect(login.response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict');
-  expect(login.cookie).toStartWith('imp_session=v1.');
+  expect(login.cookie).toStartWith('imp_session=v2.root.');
 
   const browser = buildBrowserClient(ctx.app, {
     cookie: login.cookie ?? '',
@@ -115,7 +115,7 @@ test('behind TLS the session is a __Host- cookie, and a logout clears both names
 
   const setCookie = login.headers.get('set-cookie') ?? '';
 
-  expect(setCookie).toStartWith('__Host-imp_session=v1.');
+  expect(setCookie).toStartWith('__Host-imp_session=v2.root.');
   expect(setCookie).toEndWith('; Secure');
 
   const browser = buildBrowserClient(ctx.app, {

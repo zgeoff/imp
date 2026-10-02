@@ -33,6 +33,7 @@ test('it fills every setting from its default when the env is empty', () => {
     zfsRoot: null,
     tailscaleAuthKey: null,
     tailscaleHostname: 'imp',
+    tailnetRules: null,
     dashboardDir: null,
     backup: null,
     https: null,
@@ -167,4 +168,23 @@ test('a CA file that does not exist is refused by name', () => {
   expect(() => loadConfig({ ...CLOUDFLARE, IMP_ACME_CA_FILE: '/nonexistent/ca.pem' })).toThrow(
     'IMP_ACME_CA_FILE /nonexistent/ca.pem does not exist',
   );
+});
+
+test('it reads tailnet identity rules and refuses bad ones', () => {
+  const config = loadConfig({
+    IMP_TAILNET_IDENTITIES: '[{"match":"tag:ci","scope":"exec","imps":["ci-*"]}]',
+  });
+
+  expect(config.tailnetRules).toEqual([{ match: 'tag:ci', scope: 'exec', imps: ['ci-*'] }]);
+  expect(() => loadConfig({ IMP_TAILNET_IDENTITIES: 'not json' })).toThrow('is not JSON');
+
+  expect(() => loadConfig({ IMP_TAILNET_IDENTITIES: '[{"match":"x"}]' })).toThrow(
+    'IMP_TAILNET_IDENTITIES',
+  );
+});
+
+test('it refuses an imp subnet that overlaps the tailnet', () => {
+  expect(() => loadConfig({ IMP_SUBNET: '100.100.0.0/16' })).toThrow('overlaps');
+  expect(() => loadConfig({ IMP_SUBNET: '100.127.240.0/20' })).toThrow('overlaps');
+  expect(loadConfig({ IMP_SUBNET: '100.128.0.0/16' }).subnet.prefixLength).toBe(16);
 });

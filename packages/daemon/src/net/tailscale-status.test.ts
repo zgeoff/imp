@@ -15,6 +15,7 @@ test('it reads state, the MagicDNS name and the IPv4 address', () => {
   expect(parseTailscaleStatus(json)).toEqual({
     state: 'Running',
     hostname: 'imp-1',
+    dnsName: 'imp-1.tail1234.ts.net',
     ip: '100.64.0.7',
   });
 });
@@ -25,9 +26,19 @@ test('it falls back to the hostname before MagicDNS names the node', () => {
     Self: { HostName: 'imp', DNSName: '', TailscaleIPs: [] },
   });
 
-  expect(parseTailscaleStatus(json)).toEqual({ state: 'Starting', hostname: 'imp', ip: null });
+  expect(parseTailscaleStatus(json)).toEqual({
+    state: 'Starting',
+    hostname: 'imp',
+    dnsName: null,
+    ip: null,
+  });
 });
 
 test('it gives nulls for output it cannot read', () => {
-  expect(parseTailscaleStatus('')).toEqual({ state: null, hostname: null, ip: null });
+  expect(parseTailscaleStatus('')).toEqual({
+    state: null,
+    hostname: null,
+    dnsName: null,
+    ip: null,
+  });
 });

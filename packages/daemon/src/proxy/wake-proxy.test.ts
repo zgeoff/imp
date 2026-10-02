@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { removeImp } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { findFreePorts } from '../net/test-free-ports';
+import { createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 
 // free ports for the proxy and slot 0, the slot each test's imp takes
@@ -37,7 +38,13 @@ test('overlapping listener syncs end with the listeners the database holds', asy
 
   await using ctx = await setupImpTest({ env: ports });
 
-  const proxy = startWakeProxy({ config: ctx.config, db: ctx.db, imps: ctx.imps, log: () => {} });
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
 
   try {
     await ctx.createTestImage('ubuntu');
@@ -99,7 +106,13 @@ async function setupCookieTest() {
 
   const ctx = await setupImpTest({ env: ports });
 
-  const proxy = startWakeProxy({ config: ctx.config, db: ctx.db, imps: ctx.imps, log: () => {} });
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
 
   await ctx.createTestImage('ubuntu');
 

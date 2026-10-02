@@ -1,4 +1,5 @@
 import type { AuditEntry } from '@imp/api';
+import { toLikePattern } from '../auth/imp-patterns';
 import type { ImpDatabase } from './open-database';
 
 // the newest rows an imp keeps; older ones go as new ones come
@@ -56,10 +57,13 @@ export async function writeAuditEntry(db: ImpDatabase, entry: NewAuditEntry): Pr
 }
 
 // newest first; one imp's when impId is set
+// newest first; one imp's when impId is set, and only imps within the
+// patterns when there are any
 export async function listAuditEntries(
   db: ImpDatabase,
   impId: string | null,
   limit: number,
+  patterns: readonly string[] | null,
 ): Promise<AuditEntry[]> {
   const base = db
     .selectFrom('broker_audit')
@@ -79,8 +83,14 @@ export async function listAuditEntries(
     .orderBy('broker_audit.id', 'desc')
     .limit(limit);
 
+  const named = impId === null ? base : base.where('broker_audit.imp_id', '=', impId);
+
   const rows = await (
-    impId === null ? base : base.where('broker_audit.imp_id', '=', impId)
+    patterns === null
+      ? named
+      : named.where((eb) =>
+          eb.or(patterns.map((pattern) => eb('imps.name', 'like', toLikePattern(pattern)))),
+        )
   ).execute();
 
   return rows.map((row) => ({

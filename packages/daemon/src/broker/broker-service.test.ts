@@ -282,7 +282,7 @@ test('the audit log keeps the newest rows of each imp', async () => {
     });
   }
 
-  const rows = await listAuditEntries(ctx.db, imp.id, 2000);
+  const rows = await listAuditEntries(ctx.db, imp.id, 2000, null);
 
   expect(rows).toHaveLength(AUDIT_ROWS_PER_IMP);
   expect(rows[0]?.path).toBe(`/${String(AUDIT_ROWS_PER_IMP + 4)}`);
@@ -297,7 +297,7 @@ test('the audit log keeps the newest rows of each imp', async () => {
   // the rows go with the imp
   await ctx.client.imps.destroy({ name: 'dev' });
 
-  const afterRm = await listAuditEntries(ctx.db, null, 10);
+  const afterRm = await listAuditEntries(ctx.db, null, 10, null);
 
   expect(afterRm).toEqual([]);
 });

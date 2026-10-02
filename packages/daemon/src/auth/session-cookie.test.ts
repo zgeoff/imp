@@ -4,38 +4,40 @@ import {
   buildClearedSessionCookies,
   buildSessionCookie,
   buildSessionValue,
-  isValidSession,
+  readSession,
   readSessionCookies,
   removeSessionCookie,
 } from './session-cookie';
 
 const NOW = 1_800_000_000_000;
+const CLAIM = { tokenId: 'abcdefghijklmnop', expiresAt: NOW + 1000 };
 
-test('it accepts a session it signed until the session expires', () => {
-  const value = buildSessionValue('secret', NOW + 1000);
+test('it accepts a session it signed, naming its token, until the session expires', () => {
+  const value = buildSessionValue('secret', CLAIM);
 
-  expect(value).toMatch(/^v1\.\d+\.[\w-]{43}$/);
-  expect(isValidSession(value, 'secret', NOW)).toBe(true);
-  expect(isValidSession(value, 'secret', NOW + 1000)).toBe(false);
+  expect(value).toMatch(/^v2\.abcdefghijklmnop\.\d+\.[\w-]{43}$/);
+  expect(readSession(value, 'secret', NOW)).toEqual(CLAIM);
+  expect(readSession(value, 'secret', NOW + 1000)).toBeNull();
 });
 
-test('it rejects a session signed with another token', () => {
-  expect(isValidSession(buildSessionValue('old', NOW + 1000), 'new', NOW)).toBe(false);
+test('it rejects a session signed with another root token', () => {
+  expect(readSession(buildSessionValue('old', CLAIM), 'new', NOW)).toBeNull();
 });
 
-test('it rejects a session whose expiry was changed', () => {
-  const [version, , signature] = buildSessionValue('secret', NOW + 1000).split('.');
+test('it rejects a session whose expiry or token was changed', () => {
+  const [version, tokenId, , signature] = buildSessionValue('secret', CLAIM).split('.');
+  const later = `${version ?? ''}.${tokenId ?? ''}.${String(NOW + 9999)}.${signature ?? ''}`;
+  const root = `${version ?? ''}.root.${String(CLAIM.expiresAt)}.${signature ?? ''}`;
 
-  expect(
-    isValidSession(`${version ?? ''}.${String(NOW + 9999)}.${signature ?? ''}`, 'secret', NOW),
-  ).toBe(false);
+  expect(readSession(later, 'secret', NOW)).toBeNull();
+  expect(readSession(root, 'secret', NOW)).toBeNull();
 });
 
-test('it rejects malformed sessions', () => {
-  const valid = buildSessionValue('secret', NOW + 1000);
+test('it rejects malformed sessions and v1 ones', () => {
+  const valid = buildSessionValue('secret', CLAIM);
 
-  for (const value of ['', 'v1', 'v1.x.y', `v2${valid.slice(2)}`, `${valid}.extra`, `${valid}x`]) {
-    expect(isValidSession(value, 'secret', NOW)).toBe(false);
+  for (const value of ['', 'v2', 'v2.x.y', `v1${valid.slice(2)}`, `${valid}.extra`, `${valid}x`]) {
+    expect(readSession(value, 'secret', NOW)).toBeNull();
   }
 });
 
@@ -81,11 +83,11 @@ test('a logout clears the plain cookie, and over TLS the __Host- one too', () =>
   ]);
 });
 
-test('the signature keys on a key derived from the token, not the token', () => {
-  const signature = buildSessionValue('secret', NOW).split('.').at(-1);
+test('the signature keys on a key derived from the root token, not the token', () => {
+  const signature = buildSessionValue('secret', CLAIM).split('.').at(-1);
 
   const keyedOnToken = createHmac('sha256', 'secret')
-    .update(`imp-session-v1.${String(NOW)}`)
+    .update(`imp-session-v2.${CLAIM.tokenId}.${String(CLAIM.expiresAt)}`)
     .digest('base64url');
 
   expect(signature).not.toBe(keyedOnToken);

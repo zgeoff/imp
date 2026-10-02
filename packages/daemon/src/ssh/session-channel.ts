@@ -163,7 +163,12 @@ export function handleSession(session: Session, context: SshConnectionContext): 
 
       request = buildRequest(program, tty, agentSocket);
 
-      stream = await context.backend.openExec(context.impName, request, program.feature);
+      stream = await context.backend.openExec(
+        context.impName,
+        request,
+        program.feature,
+        context.keyName,
+      );
     } catch (error) {
       channel.stderr.write(`imp: ${formatFailure(error)}${newline}`);
       channel.exit(255);
