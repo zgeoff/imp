@@ -414,7 +414,10 @@ function createFakeListener(spec: ListenSpec) {
 }
 
 // a control socket that listened, and the accepts its backend opened
-async function startReverse(forwards: ReverseForwards = createReverseForwards()) {
+async function startReverse(
+  forwards: ReverseForwards = createReverseForwards(),
+  limits: TunnelLimits = createTunnelLimits(),
+) {
   const specs: ListenSpec[] = [];
   const fake = { listener: createFakeListener({ network: 'unix', path: '/tmp/app.sock' }) };
   const accepts: { listener: string; connection: number; dial: FakeDial }[] = [];
@@ -434,12 +437,10 @@ async function startReverse(forwards: ReverseForwards = createReverseForwards())
     },
   };
 
-  const control = startTunnel(
-    () => Promise.reject(new Error('no dial')),
-    createTunnelLimits(),
-    'imp-1',
-    { backend, forwards },
-  );
+  const control = startTunnel(() => Promise.reject(new Error('no dial')), limits, 'imp-1', {
+    backend,
+    forwards,
+  });
 
   control.session.handleMessage({
     type: 'listen',
@@ -583,6 +584,23 @@ test('every relay counts against the tunnel limit of its imp', async () => {
   await waitUntil(() => second.sent.length === 1);
 
   expect(second.sent).toEqual([expect.objectContaining({ type: 'error', code: 'TUNNEL_LIMIT' })]);
+});
+
+test('each listener holds a tunnel of its imp, and frees it when it ends', async () => {
+  const limits = createTunnelLimits(1);
+
+  const first = await startReverse(createReverseForwards(), limits);
+  const second = await startReverse(createReverseForwards(), limits);
+
+  expect(second.control.sent).toEqual([
+    expect.objectContaining({ type: 'error', code: 'TUNNEL_LIMIT' }),
+  ]);
+
+  first.control.session.handleClose();
+
+  const third = await startReverse(createReverseForwards(), limits);
+
+  expect(third.control.sent).toEqual([expect.objectContaining({ type: 'listening' })]);
 });
 
 test('the forward ends as lost with its guest listener, and its listener with the socket', async () => {

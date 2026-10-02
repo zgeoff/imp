@@ -242,7 +242,8 @@ and closes of a tunnel.
 - **Owner.** impd keeps each forward with the imp's id and its caller (the token or the tailnet
   identity). An accept from another caller, or for an imp that was replaced, gets `NOT_FOUND`.
 - **Caps.** At most 64 relays per forward; past that, impd refuses the guest client at once, and an
-  accept gets `TUNNEL_LIMIT`. Each relay also counts toward the 256 tunnels per imp.
+  accept gets `TUNNEL_LIMIT`. Each relay, and each forward's control socket, also counts toward the
+  256 tunnels per imp, so one caller cannot open listeners without limit.
 - **Activity.** A relay counts as a `tunnel` connection, so it keeps the imp awake. The control
   socket does not: a forward with no relays lets the imp sleep.
 - **The end.** The caller closing the control socket closes the listener, and the agent removes its

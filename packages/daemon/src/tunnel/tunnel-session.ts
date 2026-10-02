@@ -379,7 +379,11 @@ export function createTunnelSession(
 
     let listener: GuestListener;
 
+    // a listener holds a tunnel of its own, so one caller cannot open them
+    // without limit
     try {
+      state.release = allocateTunnel(control.name, impId);
+
       listener = await backend.openListener(control.name, spec);
     } catch (error) {
       stopWithError(error);
@@ -393,8 +397,16 @@ export function createTunnelSession(
       return;
     }
 
+    const releaseTunnel = state.release;
+    const releaseForward = forwards.register(listener.id, impId, backend.owner);
+
     state.listener = listener;
-    state.release = forwards.register(listener.id, impId, backend.owner);
+
+    state.release = () => {
+      releaseForward();
+      releaseTunnel();
+    };
+
     state.phase = 'listening';
 
     send({ type: 'listening', listener: listener.id, path: listener.path, port: listener.port });

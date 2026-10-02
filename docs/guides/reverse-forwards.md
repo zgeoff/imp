@@ -26,8 +26,8 @@ imp's agent makes under `/run/imp/forward/`. The CLI prints one line for each fo
 - A socket is mode 0600, and only the image's user and root get through. A port listens on the imp's
   `127.0.0.1` only, never an address another machine reaches. A port below 1024 is refused unless
   the user is root.
-- A forward relays at most 64 connections at a time; more are closed. They count toward the imp's
-  256 open tunnels.
+- A forward relays at most 64 connections at a time; more are closed. The forward and each of its
+  connections count toward the imp's 256 open tunnels.
 
 > **CAUTION:** A port in the imp is open to every process and every user in the imp, as an `ssh -R`
 > port is with sshd. For a service that acts for you, such as a coding agent's control socket, use a
