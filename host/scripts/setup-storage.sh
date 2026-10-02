@@ -149,9 +149,15 @@ fstype=$(findmnt -n -o FSTYPE --mountpoint "$root")
 if [ "$fstype" != xfs ]; then
   fail "$root is $fstype${mounted:+ (from $mounted)}; imp needs XFS with reflink"
 fi
-# Not xfs_info | grep -q: under pipefail, grep exiting early can fail the pipe.
-if [[ $(xfs_info "$root") != *reflink=1* ]]; then
+# A clone of a probe file, not xfs_info: xfs_info finds the filesystem by
+# its device node, and without --privileged the container has one only for
+# a loop file it mounted itself.
+probe=$(mktemp "$root/.reflink-probe.XXXXXX")
+head -c 4096 /dev/zero >"$probe"
+if ! cp --reflink=always "$probe" "$probe.clone" 2>/dev/null; then
+  rm -f "$probe" "$probe.clone"
   fail "$root is XFS without reflink${mounted:+ (from $mounted)}; recreate it with mkfs.xfs -m reflink=1"
 fi
+rm -f "$probe" "$probe.clone"
 
 mkdir -p "$root"/{db,system,images,imps}
