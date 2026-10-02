@@ -1,7 +1,8 @@
 # @zgeoff/imp-client
 
-A typed client for [impd](https://github.com/zgeoff/imp), the imp host daemon. It runs in a browser,
-in Bun and in Node 22 or later.
+A typed client for [impd](https://github.com/zgeoff/imp), the imp host daemon. It runs in Bun, in
+Node 22 or later, and in browsers with `Promise.withResolvers`: Chrome 119, Firefox 121 and Safari
+17.4 or later.
 
 ```sh
 npm install @zgeoff/imp-client
@@ -48,6 +49,71 @@ because a wake would restart it; pass `{ restartError: true }` to restart it any
 stops, calls fail with `SERVICE_UNAVAILABLE`, and while it restarts, `fetch` cannot connect; pass
 `{ retryUnavailable: { attempts, delayMs } }` to wait for it to come back. `RAM_BUDGET_EXCEEDED` is
 never retried.
+
+## Run commands
+
+`imp.run` runs a command to its exit and collects its output. Without `stdin`, stdin closes at once.
+
+```ts
+const result = await imp.run('dev', ['sh', '-c', 'uname -a; cat'], { stdin: 'hi\n' });
+
+console.log(result.code, new TextDecoder().decode(result.stdout));
+```
+
+`imp.openExec` streams instead. `stdout` and `stderr` are `ReadableStream`s that end with the
+session. `write` takes a string or bytes and waits while the socket's buffer is full, so a writer in
+a loop keeps to the network's pace.
+
+Read or cancel both streams. Output nobody reads waits in memory, and past 8 MiB on one stream
+(`maxUnreadBytes`) the session ends with `OUTPUT_OVERFLOW`. Cancelling both streams ends the session
+and stops the command; so do `close()` and the `signal` option's abort.
+
+```ts
+const tail = await imp.openExec('dev', ['tail', '-f', '/var/log/app.log']);
+
+void tail.stderr.cancel();
+
+try {
+  for await (const chunk of tail.stdout) {
+    if (process.stdout.write(chunk) === false) {
+      break;
+    }
+  }
+} finally {
+  tail.close();
+}
+```
+
+`imp.openConsole` opens the root user's login shell with a tty, as `imp console` does. With
+[xterm.js](https://xtermjs.org):
+
+```ts
+const shell = await imp.openConsole('dev', { cols: term.cols, rows: term.rows });
+
+term.onData((data) => {
+  shell.write(data).catch(() => {});
+});
+term.onResize(({ cols, rows }) => shell.resize(cols, rows));
+
+const reader = shell.stdout.getReader();
+
+for (let read = await reader.read(); !read.done; read = await reader.read()) {
+  term.write(read.value);
+}
+```
+
+With a tty, `sendSignal('SIGINT')` and `sendSignal('SIGQUIT')` send ^C and ^\ as keys, so they reach
+the foreground job; other signals, and every signal without a tty, go to the process. A write after
+the session ended rejects with `CLOSED`.
+
+The socket authenticates with a single-use exec ticket from `exec.ticket`, so the token never goes
+in a URL; a browser behind a proxy that adds the token works the same way.
+
+`exit` resolves with `{ code, signal }`, where `code` is null when a signal ended the command. When
+the command did not run to its exit, `exit` rejects with an `ExecError` whose `code` is impd's (as
+in the table below, plus `EXEC_FAILED` when the command cannot start) or one of `UNAUTHORIZED` (also
+for an exec ticket that expired or was used), `UNREACHABLE`, `RESTARTING`, `CONNECTION_CLOSED`,
+`BAD_MESSAGE`, `CLOSED`, `OUTPUT_OVERFLOW` and `LOCAL_ERROR`. Its `data` is impd's error data.
 
 ## Errors
 

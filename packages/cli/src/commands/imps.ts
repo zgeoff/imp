@@ -1,3 +1,4 @@
+import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import { defineCommand } from '../define-command';
 import { runExec } from '../exec-client';
 import { formatImp, formatImps, formatOutput } from '../format-output';
@@ -176,18 +177,6 @@ export const execCommand = defineCommand({
     process.exit(code);
   },
 });
-
-// The login shell from the image's /etc/passwd, else bash, else sh. Plain
-// sh, because the image may have neither awk nor getent.
-const CONSOLE_SHELL = [
-  'shell=',
-  'while IFS=: read -r user _ _ _ _ _ login; do',
-  '  if [ "$user" = root ]; then shell=$login; break; fi',
-  'done < /etc/passwd',
-  '[ -x "$shell" ] || shell=/bin/bash',
-  '[ -x "$shell" ] || shell=/bin/sh',
-  'exec "$shell" -l',
-].join('\n');
 
 export const consoleCommand = defineCommand({
   meta: { name: 'console', description: 'Open an interactive shell in an imp' },

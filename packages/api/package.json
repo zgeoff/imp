@@ -4,6 +4,7 @@
   "private": true,
   "description": "oRPC contract, schemas and exec stream framing for the imp control API",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts"
   },

@@ -10,7 +10,7 @@
   "dependencies": {
     "@imp/api": "workspace:*",
     "@orpc/client": "catalog:",
-    "@orpc/contract": "catalog:",
+    "@zgeoff/imp-client": "workspace:*",
     "citty": "catalog:",
     "zod": "catalog:"
   }
