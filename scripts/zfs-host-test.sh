@@ -11,9 +11,9 @@
 # Both pools live in sparse files under IMP_ZFS_TEST_DIR (default a new dir
 # in /var/tmp); no disk is touched, and both pools go when it ends. Run it as
 # a user with sudo and docker, on a host with KVM and the zfs module loaded
-# (sudo modprobe zfs). The module must match the host image's zfs userland
-# in major.minor (Debian trixie: 2.3), or impd refuses to start. Needs the
-# guest kernel and system drive that scripts/dev.sh needs.
+# (sudo modprobe zfs). The module must be OpenZFS 2.x, the host image's
+# major version; a minor skew only warns. Needs the guest kernel and system
+# drive that scripts/dev.sh needs.
 #
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file.

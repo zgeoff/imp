@@ -24,7 +24,7 @@ ARG FIRECRACKER_SHA256=06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb
 ARG DEBIAN_FRONTEND=noninteractive
 
 # zfsutils-linux is in contrib. Only the userland: the module comes from the
-# host kernel through /dev/zfs, and impd refuses a major.minor mismatch.
+# host kernel through /dev/zfs, and impd refuses a different major version.
 RUN sed -i 's/^Components: main$/Components: main contrib/' /etc/apt/sources.list.d/debian.sources \
  && apt-get update \
  && apt-get install -y --no-install-recommends \

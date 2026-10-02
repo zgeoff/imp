@@ -3,8 +3,8 @@ import {
   createZfsCommands,
   parseZfsList,
   parseZfsMounts,
+  parseZfsRelease,
   parseZfsVersion,
-  readMajorMinor,
 } from './zfs-commands';
 
 // `zfs list -Hp -r -t filesystem,snapshot -s createtxg -o name,type,origin,defer_destroy`
@@ -51,12 +51,12 @@ test('it refuses a zfs list row of a type impd does not make', () => {
   expect(() => parseZfsList('tank/vol\tvolume\t-\t-\n')).toThrow('unexpected row');
 });
 
-test('it reads the userland version and compares major.minor with the module', () => {
+test('it reads the userland version and splits a release into major and minor', () => {
   const stdout = 'zfs-2.2.2-0ubuntu9\nzfs-kmod-2.2.2-0ubuntu9.1\n';
 
   expect(parseZfsVersion(stdout)).toBe('2.2.2-0ubuntu9');
-  expect(readMajorMinor('2.2.2-0ubuntu9')).toBe('2.2');
-  expect(readMajorMinor('2.3.1-1\n')).toBe('2.3');
+  expect(parseZfsRelease('2.2.2-0ubuntu9')).toEqual({ major: '2', minor: '2' });
+  expect(parseZfsRelease('2.3.1-1\n')).toEqual({ major: '2', minor: '3' });
   expect(() => parseZfsVersion('zfs: command not found')).toThrow('unexpected output');
 });
 

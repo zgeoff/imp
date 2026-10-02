@@ -14,6 +14,7 @@ const VERSION = '2.2.2-0ubuntu9';
 function setupTest(kernel = VERSION) {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-zfs-test-`);
   const fake = createFakeZfs({ root: ROOT, rootDir: dataDir, kernel });
+  const logs: string[] = [];
 
   const live = {
     impIds: new Set<string>(),
@@ -29,7 +30,9 @@ function setupTest(kernel = VERSION) {
       run: fake.run,
       readMounts: fake.readMounts,
       readModuleVersion: () => kernel,
-      log: () => {},
+      log: (message) => {
+        logs.push(message);
+      },
     });
 
   const state = { backend: startBackend() };
@@ -37,6 +40,7 @@ function setupTest(kernel = VERSION) {
   return {
     dataDir,
     fake,
+    logs,
     live,
     get backend() {
       return state.backend;
@@ -86,14 +90,26 @@ async function readFailure(promise: Promise<unknown>): Promise<unknown> {
   throw new Error('expected a failure');
 }
 
-test('start refuses a userland and kernel module of different major.minor', async () => {
-  using ctx = setupTest('2.3.1-1');
+test('start refuses a userland and kernel module of different major versions', async () => {
+  using ctx = setupTest('3.0.0-1');
 
   const failure = await readFailure(ctx.backend.start(ctx.live));
 
   expect(String(failure)).toContain(
-    'the userland is 2.2.2-0ubuntu9 but the kernel module is 2.3.1-1',
+    'the userland is 2.2.2-0ubuntu9 but the kernel module is 3.0.0-1; they must match in major version',
   );
+});
+
+test('start warns about a minor version skew and goes on', async () => {
+  using ctx = setupTest('2.3.1-1');
+
+  await ctx.backend.start(ctx.live);
+
+  expect(ctx.logs).toContain(
+    'impd: zfs: warning: the userland is 2.2.2-0ubuntu9 but the kernel module is 2.3.1-1',
+  );
+
+  expect(ctx.fake.readMountedAt(join(ctx.dataDir, 'mem'))).toBe(`${ROOT}/mem`);
 });
 
 test('start refuses a data dir that is not the root dataset', async () => {

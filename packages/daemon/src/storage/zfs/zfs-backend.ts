@@ -6,7 +6,7 @@ import { runCommand } from '../../process/run-command';
 import { readErrorMessage } from '../../read-error-message';
 import { buildImagePaths, buildImpPaths, buildSnapshotPaths } from '../data-layout';
 import type { DiskSource, LiveStorage, StorageBackend } from '../storage-backend';
-import { createZfsCommands, parseZfsMounts, readMajorMinor } from './zfs-commands';
+import { createZfsCommands, parseZfsMounts, parseZfsRelease } from './zfs-commands';
 import type { CommandRunner, ZfsEntry } from './zfs-commands';
 import { planReclaimStep } from './zfs-reclaim';
 
@@ -158,10 +158,19 @@ export function createZfsBackend(deps: ZfsBackendDeps): StorageBackend {
 
     const userland = await zfs.readVersion();
 
-    if (readMajorMinor(userland) !== readMajorMinor(kernel)) {
+    const userRelease = parseZfsRelease(userland);
+    const kernelRelease = parseZfsRelease(kernel);
+
+    if (userRelease.major !== kernelRelease.major) {
       throw new Error(
-        `zfs: the userland is ${userland} but the kernel module is ${kernel}; they must match in major.minor`,
+        `zfs: the userland is ${userland} but the kernel module is ${kernel}; they must match in major version`,
       );
+    }
+
+    // every command impd runs exists in 2.2 and later (docs/architecture/
+    // storage.md#versions), so a minor skew only warns
+    if (userRelease.minor !== kernelRelease.minor) {
+      log(`impd: zfs: warning: the userland is ${userland} but the kernel module is ${kernel}`);
     }
   };
 

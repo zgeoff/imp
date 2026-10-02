@@ -100,12 +100,31 @@ missing under the root:
   `fallocate --dig-holes` works on ZFS too, and lz4 stores zero blocks as holes anyway.
   `primarycache=metadata` on `<root>/mem` is worth measuring on a host; it is not set.
 - The host container needs `/dev/zfs`: load the module on the host before the container starts. The
-  container has its own zfs userland, OpenZFS 2.3 from Debian trixie, and impd refuses to start when
-  its major.minor differs from the module's (`/sys/module/zfs/version`). The host needs an OpenZFS
-  2.3 module: Debian trixie or Ubuntu 25.04 and later. Ubuntu 24.04 ships 2.2 and is refused.
+  container has its own zfs userland, OpenZFS 2.3 from Debian trixie ([versions](#versions)).
 - `<root>/reserve` holds 1 GiB back, so a destroy still runs on a full pool. To get out of a full
   pool, run `zfs set refreservation=none <root>/reserve`, destroy imps or checkpoints, then set it
   back.
+
+### Versions
+
+impd compares the container's zfs userland with the host's module (`/sys/module/zfs/version`). A
+different major version stops impd; a different minor version logs a warning that names both, and
+impd starts. The image ships 2.3; Ubuntu 24.04 hosts and the CI runner run 2.2.
+
+The backend uses only what OpenZFS 0.8 had already, so every 2.x module works:
+
+| What impd uses                                                    | In OpenZFS since |
+| ----------------------------------------------------------------- | ---------------- |
+| `zfs create`, `snapshot`, `clone`, `rename`, `promote`, `destroy` | the start        |
+| `zfs destroy -d` and the `defer_destroy` property                 | 0.6              |
+| `zfs list -Hp`, sorted by `createtxg`; `zfs get -Hp`              | 0.6              |
+| the `written` property, `refreservation`, `recordsize=16K`        | 0.6              |
+| `compression=lz4`, `xattr=sa`, `atime=off`                        | 0.6              |
+| `mountpoint=legacy` and `mount -t zfs`                            | the start        |
+| `zfs version`                                                     | 0.8              |
+| hole punching (`fallocate --dig-holes` on memory files)           | 0.8              |
+
+A new feature (block cloning, say, from 2.2) needs a check of the module's version first.
 
 ### Operations
 

@@ -144,9 +144,11 @@ export function parseZfsVersion(stdout: string): string {
   return version;
 }
 
-// 2.2.2-0ubuntu9 → 2.2: the userland and the module must agree on it
-export function readMajorMinor(version: string): string {
-  return /^\d+\.\d+/.exec(version.trim())?.[0] ?? version.trim();
+// 2.2.2-0ubuntu9 → { major: '2', minor: '2' }
+export function parseZfsRelease(version: string): { major: string; minor: string } {
+  const found = /^(?<major>\d+)\.(?<minor>\d+)/.exec(version.trim())?.groups;
+
+  return { major: found?.['major'] ?? version.trim(), minor: found?.['minor'] ?? '' };
 }
 
 // /proc/self/mounts → the ZFS dataset mounted on each directory. A space in a
