@@ -236,6 +236,10 @@ next.
 or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It
 is not a required check.
 
+`.github/workflows/nix.yml` checks the format of the `.nix` files and runs `nix flake check` when
+`flake.nix`, `flake.lock` or `deploy/` change: the NixOS module's eval check, and a NixOS VM test
+that needs KVM ([NixOS](./nixos.md#test-it)). It is not a required check.
+
 `.github/workflows/reproducible.yml` runs `host/check-reproducible.sh` (the guest kernel and the
 system drive rebuild to the same bytes). It takes two cold kernel builds, so it runs by hand:
 `gh workflow run reproducible.yml`.
