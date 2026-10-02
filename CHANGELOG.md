@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/zgeoff/imp/compare/v0.5.0...v0.6.0) (2026-10-02)
+
+
+### Features
+
+* **dev:** read the tailscale key from 1password, with .env as fallback ([1ded041](https://github.com/zgeoff/imp/commit/1ded041ac9d2e4baab17c579add161deff20bc64))
+
+
+### Bug Fixes
+
+* **dev:** keep the tailscale key out of traces and ask op once ([bf64471](https://github.com/zgeoff/imp/commit/bf6447198c2eeae4a17569f0521b8bbbd2f7be59))
+
 ## [0.5.0](https://github.com/zgeoff/imp/compare/v0.4.0...v0.5.0) (2026-10-02)
 
 ### Features
