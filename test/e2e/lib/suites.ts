@@ -27,6 +27,8 @@ export const SUITES: readonly Suite[] = [
   { name: 'ssh', prefix: 'e2e-ssh-', images: ['e2e-tiny'] },
   { name: 'ssh-wake', prefix: 'e2e-sshw-', images: ['e2e-tiny'] },
   { name: 'ssh-agent', prefix: 'e2e-ssha-', images: ['e2e-git'] },
+  { name: 'proxy', prefix: 'e2e-px-', images: ['e2e-tiny'] },
+  { name: 'proxy-wake', prefix: 'e2e-pxw-', images: ['e2e-tiny'] },
   { name: 'connectors', prefix: 'e2e-conn-', images: ['base'] },
   { name: 'dashboard', prefix: 'e2e-dash-', images: ['e2e-tiny'] },
   { name: 'https', prefix: 'e2e-tls-', images: ['e2e-tiny'] },
@@ -36,11 +38,21 @@ export const SUITES: readonly Suite[] = [
 ];
 
 // `acceptance` is the definition of done: every suite, tailscale required.
-// `fast` is what CI runs: create, exec, checkpoints, sleep, HTTP wakes,
-// restart, MCP, SSH with agent forwarding, and the dashboard in a browser.
+// `fast` is what CI runs: exec, checkpoints, sleep, HTTP wakes, restart,
+// MCP, SSH with agent forwarding, imp proxy, and the dashboard in a browser.
 export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
   acceptance: SUITES.map((suite) => suite.name),
-  fast: ['lifecycle', 'checkpoints', 'sleep', 'restart', 'mcp', 'ssh', 'ssh-agent', 'dashboard'],
+  fast: [
+    'lifecycle',
+    'checkpoints',
+    'sleep',
+    'restart',
+    'mcp',
+    'ssh',
+    'ssh-agent',
+    'proxy',
+    'dashboard',
+  ],
 };
 
 // generous: a suite's own waits fail long before this

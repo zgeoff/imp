@@ -83,6 +83,19 @@ export async function tryImp(
   return runCommand([IMP_SCRIPT, ...args], { ...options, env });
 }
 
+// Starts the imp CLI for a command that runs until stopped, such as
+// `imp proxy`, with its output piped.
+export async function startImp(args: readonly string[]) {
+  const env = await readImpEnv();
+
+  return Bun.spawn([IMP_SCRIPT, ...args], {
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, ...env },
+  });
+}
+
 // Runs the imp CLI and returns its stdout, or throws with its stderr.
 export async function runImp(...args: readonly string[]): Promise<string> {
   const result = await tryImp(args);

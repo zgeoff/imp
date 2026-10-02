@@ -49,8 +49,8 @@
           { "from": "package", "name": "MigrationResultSet", "package": "kysely" },
           // the Kysely handle above under its schema-bound alias
           { "from": "file", "name": "ImpDatabase" },
-          // a live socket; reading and writing it is the point
-          { "from": "package", "name": "Socket", "package": "node:net" },
+          // a live socket or listener; reading and writing it is the point
+          { "from": "package", "name": ["Socket", "Server"], "package": "node:net" },
           // the SSH gateway's live connections, channels and login requests,
           // ssh2's record of a client, which the gateway only reads, and the
           // client side its tests drive
@@ -74,7 +74,14 @@
           { "from": "file", "name": "ProxyServer" },
           {
             "from": "package",
-            "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers", "Request"],
+            "name": [
+              "WebSocket",
+              "ServerWebSocket",
+              "MessageEvent",
+              "ReadableStream",
+              "Headers",
+              "Request"
+            ],
             "package": "bun-types"
           },
           { "from": "lib", "name": ["WebSocket", "MessageEvent", "ReadableStream", "Headers"] },

@@ -14,7 +14,7 @@ import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
-import type { ActivityTracker } from './activity-tracker';
+import type { ActivityTracker, ConnectionKind } from './activity-tracker';
 import type { ImpContext } from './imp-context';
 import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpVmOps, YoungGuestWait } from './imp-vm-ops';
@@ -38,8 +38,13 @@ export interface ImpRuntime {
   // as openExec, for a session that exists
   readonly openAttach: (name: string, request: AgentAttachRequest) => Promise<ExecStream>;
 
-  // as openExec, for a connection to an address inside the guest
-  readonly openDial: (name: string, target: DialTarget) => Promise<DialStream>;
+  // as openExec, for a connection to an address inside the guest; `kind` is
+  // what it counts as while open: an SSH forward or an `imp proxy` tunnel
+  readonly openDial: (
+    name: string,
+    target: DialTarget,
+    kind: Extract<ConnectionKind, 'ssh' | 'tunnel'>,
+  ) => Promise<DialStream>;
 
   // as openExec, for ssh-agent forwarding: a socket in the guest, and the
   // relay for each of its clients
@@ -122,13 +127,14 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   // no background sleep slips in between the wake and the open.
   const openStream = async <T extends { readonly close: () => void }>(
     name: string,
+    kind: ConnectionKind,
     open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
   ): Promise<T> => {
     const opened = { release: () => {} };
 
     try {
       const running = await requireRunning(name, (found) => {
-        opened.release = context.tracker.open(found.id, 'exec');
+        opened.release = context.tracker.open(found.id, kind);
       });
 
       const imp = running.imp;
@@ -202,7 +208,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
   return {
     openExec: (name, request, feature) =>
-      openStream(name, async (paths, imp) => {
+      openStream(name, 'exec', async (paths, imp) => {
         // an old agent would run a session's command as a plain exec
         if (request.session !== undefined) {
           requireFeature(paths, 'sessions');
@@ -222,21 +228,21 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
         });
       }),
     openAttach: (name, request) =>
-      openStream(name, (paths) => openAttachStream(paths.vsockSocket, request)),
-    openDial: (name, target) =>
-      openStream(name, (paths) => {
+      openStream(name, 'exec', (paths) => openAttachStream(paths.vsockSocket, request)),
+    openDial: (name, target, kind) =>
+      openStream(name, kind, (paths) => {
         requireFeature(paths, 'ssh');
 
         return openDialStream(paths.vsockSocket, target);
       }),
     openAgentListener: (name) =>
-      openStream(name, (paths) => {
+      openStream(name, 'ssh', (paths) => {
         requireFeature(paths, 'agent-forwarding');
 
         return openAgentListener(paths.vsockSocket);
       }),
     openAgentAccept: (name, listener, connection) =>
-      openStream(name, (paths) => openAgentAccept(paths.vsockSocket, listener, connection)),
+      openStream(name, 'ssh', (paths) => openAgentAccept(paths.vsockSocket, listener, connection)),
 
     readActivity: async (imp) => {
       try {

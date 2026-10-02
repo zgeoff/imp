@@ -220,6 +220,34 @@ test('exec counts its session before the wake and drops it when the wake fails',
   expect(ctx.imps.tracker.count(id)).toBe(0);
 });
 
+test('a tunnel counts as a tunnel, not an exec, from before the wake', async () => {
+  await using ctx = await setupRunningImp();
+
+  const id = ctx.impId;
+
+  await ctx.imps.stopImp('dev');
+
+  const gate = ctx.fake.hold('boot');
+
+  ctx.fake.queue('boot', 'fail');
+
+  const dial = ctx.imps.openDial('dev', { network: 'tcp', address: '127.0.0.1:5432' }, 'tunnel');
+
+  await gate.reached;
+
+  const during = {
+    tunnel: ctx.imps.tracker.count(id, 'tunnel'),
+    exec: ctx.imps.tracker.count(id, 'exec'),
+  };
+
+  gate.release();
+
+  await dial.catch(() => null);
+
+  expect(during).toEqual({ tunnel: 1, exec: 0 });
+  expect(ctx.imps.tracker.count(id)).toBe(0);
+});
+
 test('impd stopping waits for a boot under way, sleeps that imp, and refuses later boots', async () => {
   await using ctx = await setupRunningImp();
 

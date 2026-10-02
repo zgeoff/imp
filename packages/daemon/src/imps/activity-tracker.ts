@@ -1,9 +1,10 @@
 // Host-side connections that keep an imp awake: exec sessions, proxied
-// HTTP requests or WebSockets, and SSH connections (DESIGN 2.9).
+// HTTP requests or WebSockets, SSH connections and `imp proxy` tunnels
+// (DESIGN 2.9).
 
-const CONNECTION_KINDS = ['exec', 'proxy', 'ssh'] as const;
+const CONNECTION_KINDS = ['exec', 'proxy', 'ssh', 'tunnel'] as const;
 
-type ConnectionKind = (typeof CONNECTION_KINDS)[number];
+export type ConnectionKind = (typeof CONNECTION_KINDS)[number];
 
 function buildKey(impId: string, kind: ConnectionKind): string {
   return `${impId}:${kind}`;

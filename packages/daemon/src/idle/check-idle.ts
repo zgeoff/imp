@@ -7,6 +7,9 @@ export interface IdleSignals {
 
   // authenticated SSH connections, with or without a channel open
   readonly sshConnections: number;
+
+  // `imp proxy` connections
+  readonly tunnelConnections: number;
   readonly tcpEstablished: number;
 
   // percent of one core since the last sample; null on the first sample
@@ -51,6 +54,10 @@ function findActiveReason(signals: IdleSignals, settings: IdleSettings): string 
 
   if (signals.sshConnections > 0) {
     return 'ssh';
+  }
+
+  if (signals.tunnelConnections > 0) {
+    return 'tunnel';
   }
 
   if (signals.tcpEstablished > 0) {

@@ -31,6 +31,19 @@ export type {
   ExecServerMessage,
 } from './exec-protocol';
 
+export {
+  TUNNEL_CLOSE_LOST,
+  TUNNEL_CLOSE_NORMAL,
+  TUNNEL_CLOSE_PROTOCOL,
+  TUNNEL_CLOSE_RESTARTING,
+  TUNNEL_MAX_FRAME_BYTES,
+  TUNNEL_PATH,
+  TUNNEL_WINDOW_BYTES,
+  TunnelClientMessageSchema,
+  TunnelServerMessageSchema,
+} from './tunnel-protocol';
+
+export type { TunnelClientMessage, TunnelServerMessage } from './tunnel-protocol';
 export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema } from './image-schema';
 export type { Image } from './image-schema';
