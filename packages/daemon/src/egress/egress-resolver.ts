@@ -228,6 +228,10 @@ export async function startResolverServer(
       data: (socket, data, remotePort, address) => {
         void sendUdpReply(handle, { socket, data, remotePort, address });
       },
+
+      // the ICMP error of a reply to a guest that went: an unhandled one
+      // would end impd
+      error: () => {},
     },
   });
 
