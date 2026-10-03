@@ -752,6 +752,52 @@ test('logs that roll past their first segment still keep the imp under its limit
   expect(countDiskBytes()).toBeLessThanOrEqual(limits.impMaxBytes);
 });
 
+test('a log that grows within one segment past the imp limit still keeps the imp under it', async () => {
+  // 1024-byte segments: the growth below never starts a new one
+  const limits = { ...LIMITS, generationMaxBytes: 2048, impMaxBytes: 1000 };
+  const ctx = setupLogs({ limits });
+  const ended = createFakeTap(buildOutput(GEN_A, 0));
+
+  ctx.answers.push(ended);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the first tap', () => ctx.calls.length === 1);
+
+  ended.write('e'.repeat(900));
+  ended.push({ type: 'exit', code: 0, signal: 0 });
+
+  await waitFor('the end', () => findLog(ctx, GEN_A)?.state === 'ended');
+
+  const growing = createFakeTap(buildOutput(GEN_B, 0));
+
+  ctx.answers.push(growing);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_B)]);
+
+  await waitFor('the second tap', () => ctx.calls.length === 2);
+
+  // one byte starts the segment; the rest grows it
+  growing.write('g');
+
+  for (let piece = 0; piece < 10; piece += 1) {
+    growing.write('g'.repeat(30));
+  }
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_B)?.logEnd === 301);
+
+  growing.push({ type: 'exit', code: 0, signal: 0 });
+
+  await waitFor('the end', () => findLog(ctx, GEN_B)?.state === 'ended');
+
+  await ctx.logs.sweep([ctx.imp]);
+
+  const retained = readdirSync(ctx.imp.sessionLogsDir, { recursive: true, encoding: 'utf8' })
+    .filter((path) => path.endsWith('.seg'))
+    .reduce((sum, path) => sum + Bun.file(join(ctx.imp.sessionLogsDir, path)).size, 0);
+
+  expect(retained).toBeLessThanOrEqual(limits.impMaxBytes);
+  expect(findLog(ctx, GEN_A)).toBeUndefined();
+});
+
 test('past the imp limit with only live logs left, the newest stops with imp_limit', async () => {
   const ctx = setupLogs({ limits: { ...LIMITS, generationMaxBytes: 200, impMaxBytes: 150 } });
   const first = createFakeTap(buildOutput(GEN_A, 0));
