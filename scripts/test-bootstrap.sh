@@ -133,6 +133,12 @@ if [ -n "$stub" ]; then
   docker build -q -t "$image" - >/dev/null <<'EOF'
 FROM debian:trixie-slim
 LABEL imp.tailscale-keyless="1"
+LABEL imp.host-contract="socket-proxy"
+# stands in for imp-docker-proxy: a socket where the proxy's would be
+COPY --chmod=755 <<'SH' /usr/local/bin/imp-docker-proxy
+#!/bin/sh
+exec perl -MIO::Socket::UNIX -MSocket -e 'IO::Socket::UNIX->new(Type => SOCK_STREAM, Local => "/run/imp-docker/docker.sock", Listen => 1) or die "listen: $!"; sleep'
+SH
 COPY --chmod=755 <<'SH' /usr/local/bin/tailscale
 #!/bin/sh
 echo '{"BackendState":"Running"}'
@@ -512,6 +518,9 @@ run_distro() {
     grep -q "delete /mnt/archive/authkey now" <<<"$LAST_OUTPUT" || fail "[$distro] no reminder to delete the key file"
   fi
   wait_for_imp_host || fail "[$distro] the imp-host container is not running"
+  in_container systemctl -q is-active imp-docker-proxy || fail "[$distro] imp-docker-proxy is not active"
+  ! in_container docker container inspect -f '{{range .Mounts}}{{.Source}} {{end}}' imp-host | grep -q docker.sock \
+    || fail "[$distro] imp-host mounts the host's docker.sock"
   in_container systemctl -q is-active imp-firewall || fail "[$distro] imp-firewall is not active"
   in_container nft list table inet imp_host >/dev/null || fail "[$distro] the firewall table is missing"
   [ "$(in_container stat -c %a /etc/imp/imp-host.env)" = 600 ] || fail "[$distro] imp-host.env is not 0600"
