@@ -297,6 +297,10 @@ function readInstruction(text: string, escape: string, line: number): Instructio
   const command = commandEnd === null ? trimmed : trimmed.slice(0, commandEnd.index);
   const rest = commandEnd === null ? '' : trimmed.slice(commandEnd.index + commandEnd[0].length);
 
+  if (command === '') {
+    throw new DockerfileError(`line ${String(line)}: an instruction has no name`);
+  }
+
   // Go lowercases a few non-ASCII letters to ASCII ones, which would make
   // a keyword impd does not see
   if (!/^[\u0021-\u007E]+$/v.test(command)) {
@@ -539,6 +543,10 @@ export function parseDockerfile(text: string): ParsedDockerfile {
     }
 
     instructions.push(instruction);
+  }
+
+  if (instructions.length === 0) {
+    throw new DockerfileError('the Dockerfile has no instructions');
   }
 
   return { escape: directives.escape, instructions };

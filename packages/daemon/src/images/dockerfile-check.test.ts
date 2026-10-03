@@ -247,3 +247,8 @@ test('COPY --from and RUN --mount from name an image unless they name a stage', 
     { ref: 'b:1', use: 'FROM' },
   ]);
 });
+
+test('a Dockerfile with no instructions, or an instruction with no name, is refused', () => {
+  expect(readRefusal('# only a comment\n\n')).toContain('has no instructions');
+  expect(readRefusal('FROM a:1\n\\\n')).toContain('an instruction has no name');
+});
