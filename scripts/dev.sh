@@ -12,6 +12,8 @@
 #                            running VMs survive and are re-adopted
 #   scripts/dev.sh shell     open a shell in the container
 #   scripts/dev.sh token     print the API token (for IMP_TOKEN)
+#   scripts/dev.sh prune     remove the dev host images of worktrees that are
+#                            gone, and the untagged images rebuilds leave
 #
 # Env: IMP_DEV_NAME (default imp-dev) names the container; IMP_DEV_PORT_OFFSET
 #      (default 0) shifts every published port, so parallel dev instances (one
@@ -22,6 +24,8 @@
 #      Without it, every up rebuilds the default drive from agent/; the docker
 #      cache makes that a no-op when the agent is unchanged.
 #      Both are repo-relative or absolute paths under the repo.
+#      IMP_HOST_IMAGE (default imp-host:dev-<dir>-<hash>, one per checkout:
+#      dev_image_tag in scripts/lib.sh) tags the host image; down keeps it.
 #      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
 #      it (CI builds and loads it first, with its own cache).
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
@@ -122,13 +126,13 @@ is_running() {
 # own bun, as the release image compiles it (host/Dockerfile), with the
 # deploy's privileges and command, and waits for its socket. It compiles on
 # every call, and replaces a running proxy when its stamp changed: the
-# binary, the privileges, its env and the image. With "keep", as up passes
-# while impd runs, it leaves a changed proxy alone and says so, because a
-# replacement would cut off a build or an export in flight; restart then
-# replaces it before impd comes back. The socket's directory and the proxy's
-# token are volumes of their own, which take the image's directories, owned
-# by the proxy's user (host/Dockerfile); the token outlives a replaced
-# proxy, so containers it made stay its own.
+# binary, the privileges, its env and the image, by tag and by id. With
+# "keep", as up passes while impd runs, it leaves a changed proxy alone and
+# says so, because a replacement would cut off a build or an export in
+# flight; restart then replaces it before impd comes back. The socket's
+# directory and the proxy's token are volumes of their own, which take the
+# image's directories, owned by the proxy's user (host/Dockerfile); the
+# token outlives a replaced proxy, so containers it made stay its own.
 start_proxy() {
   local mode=${1:-replace} privileges context=() stamp
   mkdir -p "$data"
@@ -140,7 +144,7 @@ start_proxy() {
   [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
   stamp=$({
     sha256sum <"$data/imp-docker-proxy.new"
-    printf '%s\n' "${privileges[@]}" "${context[@]}"
+    printf '%s\n' "${privileges[@]}" "${context[@]}" "$IMP_HOST_IMAGE"
     docker image inspect -f '{{.Id}}' "$IMP_HOST_IMAGE"
   } | sha256sum)
 
@@ -202,7 +206,7 @@ up() {
     docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 \
       || { echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2; exit 1; }
   else
-    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+    build_host_image
   fi
   if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null
@@ -295,6 +299,49 @@ down() {
   docker volume rm "$name-docker" "$name-docker-proxy" >/dev/null 2>&1 || true
 }
 
+# prune removes the dev host images that build_host_image labelled on this
+# machine, whose checkout directory is gone and that no container uses. It
+# removes only the checkout's own tag (dev_image_tag), so an override tag or
+# a second tag keeps the image. Then the untagged ones rebuilds leave. Images
+# of live checkouts stay as build caches; only labelled images are touched,
+# never another project's or another machine's.
+prune() {
+  local machine ref id labels dir from
+  machine=$(read_machine_id)
+  if [ -z "$machine" ]; then
+    echo "dev.sh: prune needs a machine id in ${IMP_MACHINE_ID_FILE:-/etc/machine-id}" >&2
+    exit 1
+  fi
+  docker image ls --filter label=imp.worktree --format '{{.Repository}}:{{.Tag}} {{.ID}}' |
+    while read -r ref id; do
+      [[ $ref == *'<none>'* ]] && continue
+      if ! labels=$(docker image inspect \
+        -f '{{index .Config.Labels "imp.worktree"}}{{"\t"}}{{index .Config.Labels "imp.machine"}}' "$id"); then
+        echo "dev.sh: keeping $ref: docker image inspect failed"
+        continue
+      fi
+      dir=${labels%%$'\t'*}
+      from=${labels#*$'\t'}
+      # an empty label names no checkout, so it cannot be gone; an image
+      # without this machine's id belongs to another machine or to none
+      if [ -z "$dir" ] || [ -d "$dir" ] || [ "$from" != "$machine" ]; then continue; fi
+      if [ "$ref" != "$(dev_image_tag "$dir")" ]; then
+        echo "dev.sh: keeping $ref: not the tag of $dir"
+        continue
+      fi
+      if [ -n "$(docker ps -aq --filter "ancestor=$id")" ]; then
+        echo "dev.sh: keeping $ref: a container uses it"
+        continue
+      fi
+      if ! docker image rm "$ref" >/dev/null; then
+        echo "dev.sh: keeping $ref: docker image rm failed"
+        continue
+      fi
+      echo "dev.sh: removed $ref ($dir is gone)"
+    done
+  docker image prune -f --filter label=imp.worktree --filter "label=imp.machine=$machine"
+}
+
 case ${1:-} in
   up) up ;;
   down) down ;;
@@ -323,8 +370,9 @@ case ${1:-} in
     ;;
   shell) docker exec -it "$name" bash ;;
   token) docker exec "$name" cat /var/lib/imp/token ;;
+  prune) prune ;;
   *)
-    echo "usage: $0 up|down|reboot|logs|restart|shell|token" >&2
+    echo "usage: $0 up|down|reboot|logs|restart|shell|token|prune" >&2
     exit 2
     ;;
 esac

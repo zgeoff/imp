@@ -1,15 +1,49 @@
 # shellcheck shell=bash
 # Shared helpers for scripts/*.sh. Source it; do not run it.
 
+# dev_image_tag ROOT prints the dev host image tag for the checkout at ROOT:
+# imp-host:dev-<basename>-<hash>, the basename cut to Docker's tag characters
+# and 40 of them, the hash the first 8 hex of ROOT's sha256. Each worktree
+# gets its own, so one worktree's build never replaces another's image.
+dev_image_tag() {
+  local name hash
+  name=$(basename "$1")
+  name=$(LC_ALL=C; printf '%s' "${name//[^A-Za-z0-9_.-]/-}")
+  hash=$(printf '%s' "$1" | sha256sum)
+  printf 'imp-host:dev-%s-%s\n' "${name:0:40}" "${hash:0:8}"
+}
+
+# read_machine_id prints this machine's id (IMP_MACHINE_ID_FILE, default
+# /etc/machine-id), or nothing: Docker Desktop shares one daemon across WSL
+# distros and devcontainers, whose paths differ.
+read_machine_id() {
+  cat "${IMP_MACHINE_ID_FILE:-/etc/machine-id}" 2>/dev/null || true
+}
+
 IMP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-IMP_HOST_IMAGE=${IMP_HOST_IMAGE:-imp-host:dev}
+# the tag and the label take the path without symlinks, so every way to
+# reach the checkout names one image
+IMP_ROOT_PHYSICAL=$(cd "$IMP_ROOT" && pwd -P)
+IMP_HOST_IMAGE=${IMP_HOST_IMAGE:-$(dev_image_tag "$IMP_ROOT_PHYSICAL")}
 IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
+
+# build_host_image builds the host container image as $IMP_HOST_IMAGE, labelled
+# with this checkout's path and this machine's id, so `scripts/dev.sh prune`
+# can find it once the checkout is gone.
+build_host_image() {
+  local machine labels=(--label "imp.worktree=$IMP_ROOT_PHYSICAL")
+  machine=$(read_machine_id)
+  # without a machine id, no machine label: prune never touches the image
+  [ -n "$machine" ] && labels+=(--label "imp.machine=$machine")
+  # no provenance: its build timestamp gives every rebuild a new image id,
+  # and start_proxy's stamp would then replace the proxy on every up
+  docker build -q --provenance=false -t "$IMP_HOST_IMAGE" "${labels[@]}" \
+    --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+}
 
 # ensure_host_image builds the host container image unless it exists.
 ensure_host_image() {
-  if ! docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1; then
-    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
-  fi
+  docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 || build_host_image
 }
 
 # read_host_privileges prints the imp-host container's privilege arguments

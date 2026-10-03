@@ -166,6 +166,7 @@ without it ([CPU limits](./cpu-limits.md)).
 | `IMP_DEV_IP`          | none                                           | The container's address on `IMP_DEV_NETWORK`.                   |
 | `IMP_DEV_PUBLISH`     | `1`                                            | `0` publishes no ports: impd answers on `IMP_DEV_IP:7070` only. |
 | `IMP_DEV_TAILNET`     | none                                           | `0` keeps the container off the tailnet, whatever key there is. |
+| `IMP_HOST_IMAGE`      | `imp-host:dev-<dir>-<hash>`                    | The host image tag, one per checkout.                           |
 
 `dev.sh` passes `.env` in the repo root to Docker as an env file, so `IMP_DNS_API_TOKEN` and any
 other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first of:
@@ -265,10 +266,10 @@ imp completion fish > ~/.config/fish/completions/imp.fish
 ## Not covered here
 
 Some `IMP_*` variables are internal to the scripts and tests, not settings: `IMP_ROOT`, `IMP_BUILD`,
-`IMP_HOST_IMAGE`, `IMP_DATA`, `IMP_ID`, `IMP_CI_KERNEL`, `IMP_SMOKE_IMAGE`, `IMP_BASE_IMAGE` and
-`IMP_E2E_*`. `IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` pick the image, the env file
-and the data directory for `deploy/`. `IMP_HOST_FIREWALL` (`own` or `none`) records who owns the
-host's inbound firewall; `deploy/bootstrap.sh` reads it, and impd ignores it
+`IMP_DATA`, `IMP_ID`, `IMP_CI_KERNEL`, `IMP_SMOKE_IMAGE`, `IMP_BASE_IMAGE` and `IMP_E2E_*`.
+`IMP_HOST_IMAGE`, `IMP_HOST_ENV_FILE` and `IMP_HOST_DATA` pick the image, the env file and the data
+directory for `deploy/`. `IMP_HOST_FIREWALL` (`own` or `none`) records who owns the host's inbound
+firewall; `deploy/bootstrap.sh` reads it, and impd ignores it
 ([host contract](../architecture/host-contract.md#firewall)). `IMP_HOST_IPV6` (`on` or `off`),
 `IMP_HOST_SUBNET6` and `IMP_HOST_NETWORK` put `imp-host` on a Docker network with IPv6; the unit and
 `bootstrap.sh` read them, and impd ignores them ([IPv6](./install.md#ipv6)). `IMP_VERSION` and

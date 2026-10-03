@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { resolveImageName } from '../lib/fixtures';
 import { runImp, runInImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { instance, runChecked, runCommand, runInContainer } from '../lib/instance';
+import { getHostImage, instance, runChecked, runCommand, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -13,7 +13,7 @@ const prefix = setupSuite('socket');
 const tiny = resolveImageName('e2e-tiny');
 const name = `${prefix}a`;
 const proxy = `${instance.container}-docker-proxy`;
-const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
+const hostImage = getHostImage();
 const hostRepo = hostImage.split(':')[0] ?? hostImage;
 
 // a container the harness makes on the host's own Docker, not through the proxy

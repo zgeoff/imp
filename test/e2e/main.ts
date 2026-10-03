@@ -15,9 +15,12 @@ import { createMissingImages } from './lib/fixtures';
 import { listImageNames, readInfo, runImp } from './lib/imp-cli';
 import { removeImpsWithPrefix } from './lib/imps';
 import {
+  LIB_SCRIPT,
   REPO_ROOT,
   checkHealthReady,
+  getHostImage,
   instance,
+  readHostImage,
   readImpdLogTail,
   readToken,
   runChecked,
@@ -145,16 +148,10 @@ async function resetInstance(): Promise<void> {
 }
 
 async function removeDataFiles(data: string): Promise<void> {
-  const hostImage = process.env['IMP_HOST_IMAGE'] ?? 'imp-host:dev';
+  const hostImage = getHostImage();
 
   // scripts/lib.sh knows how the host image builds
-  await runChecked([
-    'bash',
-    '-c',
-    'source "$1" && ensure_host_image',
-    'bash',
-    join(REPO_ROOT, 'scripts', 'lib.sh'),
-  ]);
+  await runChecked(['bash', '-c', 'source "$1" && ensure_host_image', 'bash', LIB_SCRIPT]);
 
   // imp.xfs is root-owned, and a stale loop device can outlive the container
   await runChecked([
@@ -427,6 +424,9 @@ async function main(): Promise<number> {
 
     return 0;
   }
+
+  // one tag for the whole run: dev.sh, the suites and the clean reset
+  process.env['IMP_HOST_IMAGE'] = await readHostImage();
 
   // scripts/dev.sh passes these to impd
   process.env['IMP_RAM_BUDGET_MIB'] = String(config.ramBudgetMib);
