@@ -8,6 +8,7 @@ import type {
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { AgentBootIdSchema, AgentGenerationSchema, AgentSessionNameSchema } from './agent-ids';
 import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
 import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
@@ -105,7 +106,7 @@ const EXEC_START_TIMEOUT_MS = 10_000;
 const OffsetSchema = z.int().nonnegative();
 
 const AgentPreviousSchema = z.object({
-  execution_generation: z.string(),
+  execution_generation: AgentGenerationSchema,
   end: OffsetSchema,
   exit: AgentExitSchema,
 });
@@ -115,14 +116,14 @@ const AgentResumeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('gap'), from: OffsetSchema, to: OffsetSchema }),
   z.object({
     kind: z.literal('generation_changed'),
-    execution_generation: z.string(),
+    execution_generation: AgentGenerationSchema,
     first_offset: OffsetSchema,
   }),
 ]);
 
 const AgentOutputSchema = z.object({
-  boot_id: z.string(),
-  execution_generation: z.string(),
+  boot_id: AgentBootIdSchema,
+  execution_generation: AgentGenerationSchema,
   buffer_start: OffsetSchema,
   end: OffsetSchema,
   offset: OffsetSchema,
@@ -136,7 +137,7 @@ const AgentOutputSchema = z.object({
 
 const StartedSchema = z.object({
   pid: z.int(),
-  session: z.string().optional(),
+  session: AgentSessionNameSchema.optional(),
   created: z.boolean().optional(),
   kill_grace_ms: z.int().optional(),
 
@@ -145,7 +146,7 @@ const StartedSchema = z.object({
 });
 
 const NoSessionDataSchema = z.object({
-  boot_id: z.string(),
+  boot_id: AgentBootIdSchema,
   previous: AgentPreviousSchema.optional(),
 });
 

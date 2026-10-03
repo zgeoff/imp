@@ -1,9 +1,10 @@
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, rmdirSync } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { SessionLog, SessionLogRead } from '@imp/api';
 import { SESSION_LOG_READ_MAX_BYTES } from '@imp/api';
 import { ORPCError } from '@orpc/server';
+import { writeFileDurably } from '../storage/write-file-durably';
 import {
   countLogBytes,
   findSegmentPath,
@@ -26,9 +27,24 @@ export interface SessionLogReadRequest {
 export type LiveMetaReader = (generation: string) => GenerationMeta | null;
 
 const GENERATION_PATTERN = /^[0-9a-f]{32}$/;
+const TOMBSTONES = '.deleted';
 
+function isGenerationName(name: string): boolean {
+  return GENERATION_PATTERN.test(name);
+}
+
+// The directory of one generation's log. The generation came from the
+// guest, so it is checked here too: nothing but a child of the imp's
+// session-logs directory is ever a log.
 export function findGenerationDir(sessionLogsDir: string, generation: string): string {
-  return join(sessionLogsDir, generation);
+  const root = resolve(sessionLogsDir);
+  const dir = resolve(root, generation);
+
+  if (!isGenerationName(generation) || dirname(dir) !== root) {
+    throw new Error(`session log: ${JSON.stringify(generation)} is not a generation`);
+  }
+
+  return dir;
 }
 
 // every log of the imp, live ones as their writers hold them
@@ -37,12 +53,56 @@ export function readImpMetas(sessionLogsDir: string, readLive: LiveMetaReader): 
     return [];
   }
 
-  return readdirSync(sessionLogsDir).flatMap((generation) => {
-    const meta =
-      readLive(generation) ?? readGenerationMeta(findGenerationDir(sessionLogsDir, generation));
+  return readdirSync(sessionLogsDir)
+    .filter((entry) => isGenerationName(entry))
+    .flatMap((generation) => {
+      const meta =
+        readLive(generation) ?? readGenerationMeta(findGenerationDir(sessionLogsDir, generation));
 
-    return meta === null ? [] : [meta];
-  });
+      // a meta that names another generation is not this directory's
+      return meta?.executionGeneration === generation ? [meta] : [];
+    });
+}
+
+// A deleted live generation leaves a tombstone, `.deleted/<generation>`, so
+// no impd taps it again; it goes once the generation is gone.
+function findTombstonePath(sessionLogsDir: string, generation: string): string {
+  // the same check as a log's directory, one level down
+  const name = basename(findGenerationDir(sessionLogsDir, generation));
+
+  return join(sessionLogsDir, TOMBSTONES, name);
+}
+
+export function writeTombstone(sessionLogsDir: string, generation: string): void {
+  const path = findTombstonePath(sessionLogsDir, generation);
+
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileDurably(path, '');
+}
+
+export function hasTombstone(sessionLogsDir: string, generation: string): boolean {
+  return isGenerationName(generation) && existsSync(findTombstonePath(sessionLogsDir, generation));
+}
+
+export function listTombstones(sessionLogsDir: string): string[] {
+  const dir = join(sessionLogsDir, TOMBSTONES);
+
+  return existsSync(dir) ? readdirSync(dir).filter((entry) => isGenerationName(entry)) : [];
+}
+
+export function removeTombstone(sessionLogsDir: string, generation: string): void {
+  rmSync(findTombstonePath(sessionLogsDir, generation), { force: true });
+}
+
+// what a destroy removed, if a log made it again: each only when empty
+export function removeEmptyDirs(sessionLogsDir: string): void {
+  for (const dir of [sessionLogsDir, dirname(sessionLogsDir)]) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      return;
+    }
+  }
 }
 
 export function removeGenerationDir(sessionLogsDir: string, generation: string): void {
@@ -115,9 +175,30 @@ async function readSegmentBytes(path: string, skip: number, length: number): Pro
   return data;
 }
 
-// A byte range with the ring's rules: a gap for what the log lost, and
-// INVALID_RESUME past its end, which never rewinds.
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+// A byte range with the ring's rules: a gap for lost bytes, INVALID_RESUME
+// past the end. A segment removed between plan and read is planned again
+// once, and then reads as a gap.
 export async function readSessionLogRange(
+  sessionLogsDir: string,
+  readLive: LiveMetaReader,
+  request: SessionLogReadRequest,
+): Promise<SessionLogRead> {
+  try {
+    return await readRangeOnce(sessionLogsDir, readLive, request);
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      throw error;
+    }
+
+    return readRangeOnce(sessionLogsDir, readLive, request);
+  }
+}
+
+async function readRangeOnce(
   sessionLogsDir: string,
   readLive: LiveMetaReader,
   request: SessionLogReadRequest,
