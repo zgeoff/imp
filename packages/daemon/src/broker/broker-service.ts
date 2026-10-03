@@ -20,11 +20,13 @@ import {
   createSecret,
   findBrokerPeer,
   listAllGrantedRules,
+  listFileRemovals,
   listGrantNames,
   listGrantedRules,
   listSecrets,
   listValueFiles,
   removeCheckedGrant,
+  removeFileRemoval,
   removeSecret,
   upsertSecret,
 } from '../db/secrets';
@@ -193,12 +195,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);
 
-  // A value no row names is kept aside, not deleted: it may be a secret
-  // added after the database copy a restore put back. Otherwise, a write
-  // whose row never came, or a file a replace or a delete failed to remove.
   const valueFiles = await listValueFiles(db);
+  const pending = await removeRecordedFiles(db, files, valueFiles, log);
 
-  const orphans = files.keepOrphansExcept(valueFiles, new Date());
+  // A value no row and no record names is kept aside, not deleted: it may be
+  // a secret added after the database copy a restore put back, or a write
+  // whose row never came. A record that failed again keeps its file here.
+  const orphans = files.keepOrphansExcept(new Set([...valueFiles, ...pending]), new Date());
 
   for (const file of orphans.files) {
     log(
@@ -330,11 +333,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   };
 
-  // the exact file the commit displaced; a failure leaves it to the sweep
-  // at the next start
-  const removeDisplacedFile = (file: string): void => {
+  // the exact file the commit displaced, then its record; a failure leaves
+  // both to the next start
+  const removeDisplacedFile = async (file: string): Promise<void> => {
     try {
       files.remove(file);
+
+      await removeFileRemoval(db, file);
     } catch (error) {
       log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
     }
@@ -380,8 +385,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       );
 
       if (saved.oldValueFile !== null) {
-        removeDisplacedFile(saved.oldValueFile);
-
+        await removeDisplacedFile(saved.oldValueFile);
         await applyGrants();
       }
 
@@ -409,8 +413,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildNotFoundError('secret', name);
       }
 
-      removeDisplacedFile(valueFile);
-
+      await removeDisplacedFile(valueFile);
       await applyGrants();
     },
 
@@ -554,6 +557,36 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       await terminators.stop();
     },
   };
+}
+
+// Removes each file a committed delete or replace displaced and impd stopped
+// before removing, then its record; returns the files whose removal failed
+// again, whose records stay for the next start. A file a row names stays.
+async function removeRecordedFiles(
+  db: ImpDatabase,
+  files: Pick<SecretFiles, 'remove'>,
+  valueFiles: ReadonlySet<string>,
+  log: (message: string) => void,
+): Promise<string[]> {
+  const recorded = await listFileRemovals(db);
+
+  const failed: string[] = [];
+
+  for (const file of recorded) {
+    try {
+      if (!valueFiles.has(file)) {
+        files.remove(file);
+      }
+
+      await removeFileRemoval(db, file);
+    } catch (error) {
+      failed.push(file);
+
+      log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
+    }
+  }
+
+  return failed;
 }
 
 function buildClashError(impName: string, secretName: string, clash: Readonly<GrantClash>) {

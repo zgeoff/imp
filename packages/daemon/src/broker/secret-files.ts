@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -8,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // Secret values, one file each in <dataDir>/secrets: the directory 0700, each
 // file 0600, unencrypted, as the key would live on the same disk. A file is
@@ -76,6 +77,10 @@ export function createSecretFiles(dataDir: string): SecretFiles {
       rmSync(join(dir, file), { force: true });
     },
     keepOrphansExcept: (keep, at) => {
+      const stamp = at.toISOString().replaceAll(':', '-');
+
+      checkOrphansDirectory(join(dir, ORPHANED_DIR), `${ORPHANED_DIR}.${stamp}`);
+
       const files = readdirSync(dir)
         .filter((file) => file !== ORPHANED_DIR && !keep.has(file))
         .toSorted();
@@ -85,7 +90,7 @@ export function createSecretFiles(dataDir: string): SecretFiles {
       }
 
       // a time a path can hold: no colons
-      const target = join(dir, ORPHANED_DIR, at.toISOString().replaceAll(':', '-'));
+      const target = join(dir, ORPHANED_DIR, stamp);
 
       mkdirSync(target, { recursive: true, mode: 0o700 });
       chmodSync(join(dir, ORPHANED_DIR), 0o700);
@@ -98,4 +103,23 @@ export function createSecretFiles(dataDir: string): SecretFiles {
       return { dir: target, files };
     },
   };
+}
+
+// A file or a symlink where the orphans' directory goes would fail the start
+// or take the chmod elsewhere: it is renamed to `name` beside it, which no
+// row names, so it is kept aside with the other orphans.
+function checkOrphansDirectory(path: string, name: string): void {
+  try {
+    if (lstatSync(path).isDirectory()) {
+      return;
+    }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  renameSync(path, join(dirname(path), name));
 }

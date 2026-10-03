@@ -1,5 +1,15 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSecretFiles } from './secret-files';
@@ -64,4 +74,32 @@ test('files no row names, temp files included, are moved aside into an owner-onl
 
   expect(again).toEqual({ dir: null, files: [] });
   expect(readdirSync(join(dir, '.orphaned'))).toHaveLength(1);
+});
+
+test('a file or a symlink where the orphans directory goes is kept aside, not followed', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+  const dir = join(tmp.dir, 'secrets');
+  const elsewhere = join(tmp.dir, 'elsewhere');
+
+  mkdirSync(elsewhere, { mode: 0o755 });
+  writeFileSync(join(dir, '.orphaned'), 'not a directory');
+
+  const at = new Date('2026-10-04T05:30:00.000Z');
+
+  const orphans = files.keepOrphansExcept(new Set(), at);
+
+  expect(orphans.files).toEqual(['.orphaned.2026-10-04T05-30-00.000Z']);
+  expect(statSync(join(dir, '.orphaned')).isDirectory()).toBe(true);
+
+  // a symlink goes the same way, and the chmod never reaches its target
+  rmSync(join(dir, '.orphaned'), { recursive: true });
+  symlinkSync(elsewhere, join(dir, '.orphaned'));
+
+  const later = files.keepOrphansExcept(new Set(), new Date('2026-10-04T06:00:00.000Z'));
+
+  expect(later.files).toEqual(['.orphaned.2026-10-04T06-00-00.000Z']);
+  expect(lstatSync(join(dir, '.orphaned')).isDirectory()).toBe(true);
+  expect(statSync(elsewhere).mode & 0o777).toBe(0o755);
 });
