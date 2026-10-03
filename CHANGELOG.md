@@ -2,15 +2,17 @@
 
 ## [0.26.0](https://github.com/zgeoff/imp/compare/v0.25.1...v0.26.0) (2026-10-03)
 
-
 ### Features
 
-* **https:** read the dns api token from a file, and re-read it on use ([#136](https://github.com/zgeoff/imp/issues/136)) ([4601047](https://github.com/zgeoff/imp/commit/46010472ee3ba26965d9ffef6d97bd84be92a6a1))
-
+- **https:** read the dns api token from a file, and re-read it on use
+  ([#136](https://github.com/zgeoff/imp/issues/136))
+  ([4601047](https://github.com/zgeoff/imp/commit/46010472ee3ba26965d9ffef6d97bd84be92a6a1))
 
 ### Bug Fixes
 
-* **moves:** respect leases when a move stops an imp, and carry them to the target ([#137](https://github.com/zgeoff/imp/issues/137)) ([06ae2e9](https://github.com/zgeoff/imp/commit/06ae2e98fdfacb6f09353b75a6c035f2464a62f0))
+- **moves:** respect leases when a move stops an imp, and carry them to the target
+  ([#137](https://github.com/zgeoff/imp/issues/137))
+  ([06ae2e9](https://github.com/zgeoff/imp/commit/06ae2e98fdfacb6f09353b75a6c035f2464a62f0))
 
 ## [0.25.1](https://github.com/zgeoff/imp/compare/v0.25.0...v0.25.1) (2026-10-03)
 
