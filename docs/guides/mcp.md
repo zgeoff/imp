@@ -225,7 +225,8 @@ route, client and grant, never per address. impd logs no code, token or query.
 1. The client opens the sign-in page. It names the client, where it returns, the scope it asks for,
    and a code such as `ABCD-EFGH`.
 2. Approve the code with a named token, over your usual access to impd. The CLI shows the client,
-   its redirect URI and when the sign-in started, then approves it:
+   its redirect URI, when the sign-in started and what the grant gets, and asks before it approves.
+   `--yes` skips the question; without a terminal on stdin, it is required:
 
    ```sh
    imp oauth approve ABCD-EFGH --scope exec --imps 'agent-*'

@@ -1,5 +1,6 @@
 import { ApprovalCodeSchema, GrantPatternSchema, RedirectUriSchema, ScopeSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
+import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import {
   formatOAuthApproval,
@@ -7,6 +8,7 @@ import {
   formatOAuthGrants,
   formatOutput,
 } from '../format-output';
+import { readConfirmation } from '../read-confirmation';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -177,6 +179,65 @@ const grantCommand = defineCommand({
   subCommands: { ls: grantLsCommand, rm: grantRmCommand },
 });
 
+// how approve asks: whether stdin is a terminal, and the question itself
+interface ApprovePrompt {
+  readonly isTerminal: boolean;
+  readonly confirm: (question: string) => Promise<boolean>;
+}
+
+// the calls approve makes, so a test can pass a fake impd
+interface ApprovalsClient {
+  readonly oauth: {
+    readonly approvals: Pick<ImpClient['oauth']['approvals'], 'get' | 'approve'>;
+  };
+}
+
+interface ApproveRequest {
+  readonly code: string;
+  readonly scope: Scope;
+  readonly imps: readonly string[] | undefined;
+  readonly isConfirmed: boolean;
+}
+
+// Shows what the sign-in asks for and what it would get, then asks; --yes
+// skips the question, and with no terminal to ask at, --yes is required
+export async function runApprove(
+  client: Readonly<ApprovalsClient>,
+  request: Readonly<ApproveRequest>,
+  prompt: Readonly<ApprovePrompt>,
+): Promise<void> {
+  if (!request.isConfirmed && !prompt.isTerminal) {
+    throw new UsageError(
+      'imp oauth approve asks before it approves, and stdin is not a terminal; pass --yes to approve without asking',
+    );
+  }
+
+  const approval = await client.oauth.approvals.get({ code: request.code });
+
+  const where = request.imps === undefined ? "the token's imps" : request.imps.join(',');
+
+  console.error(formatOAuthApproval(approval));
+  console.error(`it gets:      ${request.scope} on ${where}`);
+
+  if (!request.isConfirmed) {
+    const isApproved = await prompt.confirm('Approve this sign-in? [y/N] ');
+
+    if (!isApproved) {
+      throw new Error('not approved; nothing changed');
+    }
+  }
+
+  await client.oauth.approvals.approve({
+    code: request.code,
+    scope: request.scope,
+    ...(request.imps !== undefined && { imps: [...request.imps] }),
+  });
+
+  console.error(
+    `imp: approved: ${approval.client} gets ${request.scope} on ${where}; press Continue on the sign-in page`,
+  );
+}
+
 const approveCommand = defineCommand({
   meta: {
     name: 'approve',
@@ -194,25 +255,24 @@ const approveCommand = defineCommand({
       type: 'string',
       description: "limit it to these imps, such as 'dev-*' (comma-separated; default the token's)",
     },
+    yes: {
+      type: 'boolean',
+      description: 'approve without asking; needed when stdin is no terminal',
+    },
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const code = parseApprovalCode(context.args.code);
-      const scope = parseScope(context.args.scope);
-      const imps = parseGrantPatterns(context.args.imps);
+      const request = {
+        code: parseApprovalCode(context.args.code),
+        scope: parseScope(context.args.scope),
+        imps: parseGrantPatterns(context.args.imps),
+        isConfirmed: context.args.yes === true,
+      };
 
-      // what the sign-in asks for shows before it is approved
-      const approval = await client.oauth.approvals.get({ code });
-
-      console.error(formatOAuthApproval(approval));
-
-      await client.oauth.approvals.approve({ code, scope, ...(imps !== undefined && { imps }) });
-
-      const where = imps === undefined ? "the token's imps" : imps.join(',');
-
-      console.error(
-        `imp: approved: ${approval.client} gets ${scope} on ${where}; press Continue on the sign-in page`,
-      );
+      await runApprove(client, request, {
+        isTerminal: process.stdin.isTTY,
+        confirm: (question) => readConfirmation(question),
+      });
     }),
 });
 
