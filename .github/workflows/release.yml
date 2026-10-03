@@ -263,9 +263,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # deploy/compose.yaml runs `latest`, so a republish of an older release
-      # must not move it back. Last, so `latest` never names an image whose
-      # release has no assets yet.
+      # An operator may pin `latest` on purpose, so a republish of an older
+      # release must not move it back. Last, so `latest` never names an image
+      # whose release has no assets yet.
       - name: Tag latest
         env:
           GH_TOKEN: ${{ github.token }}

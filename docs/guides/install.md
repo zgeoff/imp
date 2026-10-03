@@ -153,10 +153,10 @@ The phases run in order:
 - **ipv6:** With IPv6 on, keeps the host's router adverts, then creates the `imp-host` Docker
   network ([IPv6](#ipv6)). With `--ipv6 off`, removes what an earlier run made.
 - **imp:** Writes `/etc/imp/imp-host.env` (0600), `/etc/systemd/system/imp-host.service` and
-  `imp-docker-proxy.service`, pulls the image (or loads `--image-archive`), and refuses an image
-  whose `imp.host-contract` label is not `socket-proxy`. It starts the proxy, then imp-host. The
-  proxy is the only Docker socket imp-host sees, and closes that path only: `SYS_ADMIN` still lets
-  root out of the container
+  `imp-docker-proxy.service`, pulls the image of the script's release, or the `--image` it pins in
+  the env file (or loads `--image-archive`), and refuses an image whose `imp.host-contract` label is
+  not `socket-proxy`. It starts the proxy, then imp-host. The proxy is the only Docker socket
+  imp-host sees, and closes that path only: `SYS_ADMIN` still lets root out of the container
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The unit has
   `RequiresMountsFor=/var/lib/imp`, so it never starts before the XFS mount. With ZFS, a drop-in
   orders it after `zfs.target`.
@@ -401,13 +401,29 @@ drive `imp-system.squashfs`, both x86_64 and the same bytes as in the image, and
 all of them. [RELEASING.md](../../RELEASING.md) shows how to check the checksums and the provenance
 attestations.
 
+<!-- x-release-please-start-version -->
+
 ```sh
-docker pull ghcr.io/zgeoff/imp-host:latest
+docker pull ghcr.io/zgeoff/imp-host:0.26.0
 gh release download -R zgeoff/imp -p 'imp-linux-x64' -p SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS && install -m 0755 imp-linux-x64 ~/.local/bin/imp
 ```
 
-Both deploy files run `latest`; set `IMP_HOST_IMAGE` to pin a version.
+<!-- x-release-please-end -->
+
+The deploy files run the image of their own release: `deploy/bootstrap.sh`, both units and
+`deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in imp's `package.json`, and
+`deploy/upgrade.sh` moves the host to the release it comes from
+([upgrade](./operations.md#upgrade)). On `main`, `package.json` holds the last release until the
+next one, so the files there, such as the `bootstrap.sh` that
+[bootstrap a server](#bootstrap-a-server) fetches, can name an image older than their own code.
+Files from a release tag name that release's image. A release tag's image appears on ghcr.io when
+`release.yml` pushes it, about 30 to 60 minutes after the tag.
+
+To run another image, set `IMP_HOST_IMAGE`: in `/etc/imp/imp-host.env` for the systemd units, in the
+shell or the `.env` next to the compose file for compose, or with `bootstrap.sh --image`. Each
+release also moves the `latest` tag; pin it on purpose with
+`IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host`.
 
 ### Build it
 
