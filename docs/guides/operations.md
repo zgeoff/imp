@@ -14,8 +14,10 @@ dev instance from the [install guide](./install.md). On a server running the rel
 | `scripts/dev.sh reboot`  | `down`, then `up`. Imps come back asleep and wake on demand.                      |
 
 `up` and `restart` also compile the Docker socket proxy from the repo with the image's own `bun`,
-and replace the running proxy when the binary changed. The proxy's token survives the replacement,
-so the containers it made stay its own.
+and replace the running proxy when its binary, privileges, env or image changed. `up` leaves a
+changed proxy running while impd runs, so a build in flight is not cut off; `restart` replaces it
+before impd comes back. The proxy's token survives the replacement, so the containers it made stay
+its own.
 
 Use `restart` after a change to impd's code: the entrypoint restarts impd, and nothing in the guests
 notices. Use `reboot` after a change to `host/`. Data stays in `.data/dev` across all three.
