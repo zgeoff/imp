@@ -66,19 +66,39 @@ const SEED_REF = 'ubuntu:24.04';
 export const HOST_BUILD_WARNING =
   'impd: WARNING: IMP_BUILD_ISOLATION=host: image builds run on the host engine, whose RUN steps can reach the host and its private networks; for a trusted operator only, and gone in the next release (docs/guides/images.md#isolated-builds)';
 
+const RepoDigestsSchema = z.array(z.string()).nullish();
+
 const InspectSchema = z
   .array(
     z.object({
       Id: z.string(),
       Config: z.unknown(),
       Size: z.number().optional(),
+      RepoDigests: RepoDigestsSchema,
     }),
   )
   .length(1);
 
+interface AddImageOptions {
+  // a client that goes ends the pull, and the builder with it
+  readonly signal?: AbortSignal | undefined;
+
+  // the reference the pull resolved, by digest, once it is known
+  readonly onResolved?: (reference: string) => void;
+}
+
+// an add's options once its signal is settled
+interface AddFromRefOptions extends AddImageOptions {
+  readonly signal: AbortSignal;
+}
+
 export interface ImageService {
   // `signal` aborts when the client goes, and ends the add and its builder
-  readonly addImage: (ref: string, name?: string, signal?: AbortSignal) => Promise<ImageRecord>;
+  readonly addImage: (
+    ref: string,
+    name?: string,
+    options?: Readonly<AddImageOptions>,
+  ) => Promise<ImageRecord>;
   readonly buildImage: (
     contextDir: string,
     name: string,
@@ -378,11 +398,21 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // An image of the host's engine, pulled there when it lacks it: the
   // builders' own image, and every add and build under
   // IMP_BUILD_ISOLATION=host
-  const createImageOnHost = async (ref: string, imageName: string): Promise<ImageRecord> => {
+  const createImageOnHost = async (
+    ref: string,
+    imageName: string,
+    onResolved?: (reference: string) => void,
+  ): Promise<ImageRecord> => {
     const inspect = await readInspect(ref);
 
     if (inspect === undefined) {
       throw new Error(`docker image inspect ${ref}: no result`);
+    }
+
+    const resolved = pickRepoDigest(ref, inspect.RepoDigests ?? []);
+
+    if (resolved !== null) {
+      onResolved?.(resolved);
     }
 
     // the tree unpacked, and the ext4 file written from it
@@ -406,8 +436,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   const createImageInBuilder = (
     ref: string,
     imageName: string,
-    signal: AbortSignal,
+    options: Readonly<AddFromRefOptions>,
   ): Promise<ImageRecord> => {
+    const signal = options.signal;
     const builders = deps.readBuilders();
 
     if (builders === null) {
@@ -421,6 +452,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       const platform = await createBuildEngine(toEngineRun(exec)).readPlatform(signal);
       const pulled = await loadGuestImage(exec, { ref: explicitRef, platform, signal });
+
+      if (pulled !== null) {
+        options.onResolved?.(pulled);
+      }
 
       const pullMs = Math.round(performance.now() - started);
 
@@ -441,7 +476,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     ref: string,
     name: string | undefined,
     isImpds: boolean,
-    signal: AbortSignal,
+    options: Readonly<AddFromRefOptions>,
   ): Promise<ImageRecord> => {
     assertImageRef(ref);
 
@@ -453,10 +488,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     requireDockerImage(taken);
 
     if (deps.config.build.isolation === 'host') {
-      return createImageOnHost(ref, imageName);
+      return createImageOnHost(ref, imageName, options.onResolved);
     }
 
-    return createImageInBuilder(ref, imageName, signal);
+    return createImageInBuilder(ref, imageName, options);
   };
 
   // the builders' image, at most one add of it at a time
@@ -757,8 +792,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   return {
-    addImage: (ref, name, signal) =>
-      createImageFromRef(ref, name, false, signal ?? new AbortController().signal),
+    addImage: (ref, name, options) =>
+      createImageFromRef(ref, name, false, {
+        ...options,
+        signal: options?.signal ?? new AbortController().signal,
+      }),
     buildImage: async (contextDir, name, dockerfile) => {
       if (!contextDir.startsWith('/')) {
         throw new ORPCError('BAD_REQUEST', {
@@ -840,12 +878,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       const images = await listImages(deps.db);
 
       if (images.length === 0) {
-        await createImageFromRef(
-          SEED_REF,
-          FALLBACK_DEFAULT_IMAGE,
-          true,
-          new AbortController().signal,
-        );
+        await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE, true, {
+          signal: new AbortController().signal,
+        });
       }
     },
   };

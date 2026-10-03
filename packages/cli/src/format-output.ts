@@ -465,7 +465,7 @@ export function formatAudit(entries: readonly AuditEntry[]): string {
 
 export function formatApiCalls(calls: readonly ApiCall[]): string {
   return formatTable(
-    ['TIME', 'IMP', 'PROCEDURE', 'ACTOR', 'OUTCOME', 'MS'],
+    ['TIME', 'IMP', 'PROCEDURE', 'ACTOR', 'OUTCOME', 'MS', 'DETAIL'],
     calls.map((call) => [
       call.at.toISOString(),
       call.imp ?? '-',
@@ -473,6 +473,7 @@ export function formatApiCalls(calls: readonly ApiCall[]): string {
       call.actorName === undefined ? call.actor : `${call.actor} ${call.actorName}`,
       call.outcome,
       String(call.durationMs),
+      call.detail ?? '-',
     ]),
   );
 }

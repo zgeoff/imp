@@ -215,7 +215,18 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
 test('an add pulls and exports in a builder for one platform, and the host engine sees none of it', async () => {
   await using ctx = await setupAdd();
 
-  const image = await ctx.withHostDocker(() => ctx.addImages.addImage('busybox', 'box'));
+  const resolved: string[] = [];
+
+  const image = await ctx.withHostDocker(() =>
+    ctx.addImages.addImage('busybox', 'box', {
+      onResolved: (reference) => {
+        resolved.push(reference);
+      },
+    }),
+  );
+
+  // the reference the pull resolved, for the audit row
+  expect(resolved).toEqual([`busybox@${REPO_DIGEST}`]);
 
   // keyed as a build is, by impd's own hash of what the builder sent
   expect(image).toMatchObject({ name: 'box', ref: 'busybox' });
@@ -331,7 +342,9 @@ test('a client that goes ends the pull in the builder, and the builder with it',
   const controller = new AbortController();
 
   const adding = readFailure(
-    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box', controller.signal)),
+    ctx.withHostDocker(() =>
+      ctx.addImages.addImage('busybox:1.37', 'box', { signal: controller.signal }),
+    ),
   );
 
   await pulling.promise;

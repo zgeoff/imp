@@ -25,6 +25,10 @@ export const ApiCallSchema = z.object({
   // `ok`, or the error code the caller got
   outcome: z.string(),
   durationMs: z.int().nonnegative(),
+
+  // what the call resolved that its name does not show: for `images.add`,
+  // the pulled reference by digest, so a `:latest` add is traceable
+  detail: z.string().optional(),
 });
 
 export type ApiCall = z.infer<typeof ApiCallSchema>;

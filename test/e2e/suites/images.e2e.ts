@@ -650,6 +650,17 @@ test('an added image comes from a builder: the host engine gains no image, and t
     expect(after).toEqual(before);
     expect(inspected.exitCode).not.toBe(0);
 
+    // the audit row, written after the answer, names the bytes the pull took
+    await waitFor('the add in the audit log', async () => {
+      const auditJson = await runImp('audit', '--kind', 'api', '--json', '--limit', '20');
+
+      const audit: unknown = JSON.parse(auditJson);
+      const calls = z.array(z.object({ procedure: z.string(), detail: z.string().optional() }));
+      const add = calls.parse(audit).find((call) => call.procedure === 'images.add');
+
+      expect(add?.detail).toMatch(/^busybox@sha256:[a-f0-9]{64}$/v);
+    });
+
     await createImp(name, '--image', name);
 
     const banner = await runInImp(name, 'busybox');

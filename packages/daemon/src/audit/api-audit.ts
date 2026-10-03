@@ -18,6 +18,9 @@ export interface AuditedCall {
   readonly actor: AuditActor;
   readonly impName: string | null;
   readonly startedAt: number;
+
+  // what the call resolved that its name does not show, set by its handler
+  readonly detail?: string | null;
 }
 
 export interface ApiAudit {
@@ -107,6 +110,7 @@ async function writeCall(deps: ApiAuditDeps, call: AuditedCall, failure: unknown
       impName: call.impName,
       outcome: readOutcome(failure),
       durationMs: Math.max(0, Math.round(now - call.startedAt)),
+      detail: call.detail ?? null,
     });
   } catch (error) {
     deps.log(`impd: audit: ${call.procedure}: ${readErrorMessage(error)}`);
