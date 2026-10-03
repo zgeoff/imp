@@ -19,6 +19,11 @@ const READER = `${prefix}reader`;
 const DEV_EXEC = `${prefix}dev-exec`;
 const SSH_DEV = `${prefix}ssh-dev`;
 const SSH_READER = `${prefix}ssh-reader`;
+const GRANTER = `${prefix}granter`;
+
+// a secret the granter may grant, with a synthetic value
+const GH = `${prefix}gh`;
+const GH_VALUE = 'ghp_synthetic126e2e0123456789';
 
 // ssh Host aliases, one key each, that authorized_keys does not list
 const DEV_KEY_HOST = 'imp-e2e-dev-key';
@@ -61,6 +66,8 @@ afterAll(async () => {
   for (const name of secrets.keys()) {
     await tryImp(['token', 'rm', name]);
   }
+
+  await tryImp(['secret', 'rm', GH]);
 
   await keys.cleanup();
 });
@@ -122,6 +129,52 @@ test('an exec token limited to dev-* runs in its imp and cannot touch another', 
 
   expect(listed.stdout).toContain(dev);
   expect(listed.stdout).not.toContain(other);
+});
+
+test('a token for dev-* that may grant one secret grants it there, and nothing more', async () => {
+  await tryImp(['secret', 'rm', GH]);
+
+  const added = await tryImp(['secret', 'add', GH, '--kind', 'github'], {
+    stdin: `${GH_VALUE}\n`,
+  });
+
+  expect(added.exitCode).toBe(0);
+
+  const secret = await makeToken(
+    GRANTER,
+    '--scope',
+    'manage',
+    '--imps',
+    `${prefix}dev*`,
+    '--grantable',
+    GH,
+  );
+
+  const granted = await tryImp(['grant', dev, GH], { token: secret });
+  const otherImp = await tryImp(['grant', other, GH], { token: secret });
+  const fork = await tryImp(['fork', dev, `${prefix}dev-copy`], { token: secret });
+  const whoami = await tryImp(['token', 'whoami'], { token: secret });
+
+  expect(granted.exitCode).toBe(0);
+  expect(whoami.stdout.trim()).toBe(`token ${GRANTER}: manage on ${prefix}dev*; may grant ${GH}`);
+
+  for (const refused of [otherImp, fork]) {
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('FORBIDDEN');
+  }
+
+  // the grant stays through a sleep and a wake
+  await runImp('sleep', dev);
+  await runImp('wake', dev);
+
+  const kept = await tryImp(['grants', dev], { token: secret });
+  const revoked = await tryImp(['revoke', dev, GH], { token: secret });
+  const listed = await runImp('token', 'ls');
+
+  expect(kept.stdout).toContain(GH);
+  expect(revoked.exitCode).toBe(0);
+  expect(listed).toContain(GH);
+  expect([added.stdout, kept.stdout, listed, whoami.stdout].join('\n')).not.toContain(GH_VALUE);
 });
 
 test('the audit log names the token behind each call', async () => {
