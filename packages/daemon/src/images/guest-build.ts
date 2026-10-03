@@ -66,6 +66,8 @@ export interface ExportedImage {
 }
 
 export interface ExportLimits {
+  // the archive's bytes, and the disk its entries take: their logical sizes,
+  // so sparse files count in full, in whole blocks
   readonly maxBytes: number;
 
   // tar's own count of what it unpacked, so a stream cannot hide entries
@@ -89,33 +91,52 @@ function createImageHash(configText: string): Bun.CryptoHasher {
   return hash;
 }
 
-// tar -v prints one line per entry it unpacks, names escaped; past maxFiles
-// it is killed
+// a filesystem block; every entry is counted as at least one
+const BLOCK_BYTES = 4096;
+
+// An entry's share of the disk from its `tar -vv` line: the third field is
+// its logical size, a sparse file's full length. Links, devices and empty
+// files still take a block.
+function readAllocatedBytes(line: string): number {
+  const size = line.trim().split(/\s+/v)[2] ?? '';
+  const bytes = /^\d+$/v.test(size) ? Number(size) : 0;
+
+  return Math.max(1, Math.ceil(bytes / BLOCK_BYTES)) * BLOCK_BYTES;
+}
+
+// tar -vv prints one line per entry it unpacks, names escaped; past either
+// limit it is killed
 async function countUnpacked(
   stdout: ReadableStream<Uint8Array>,
-  maxFiles: number,
-  onOver: () => void,
+  limits: Readonly<ExportLimits>,
+  onOver: (limit: 'bytes' | 'files') => void,
 ): Promise<void> {
-  const counted = { lines: 0 };
+  const decoder = new TextDecoder();
+
+  const counted = { lines: 0, bytes: 0, rest: '' };
 
   for await (const chunk of stdout as AsyncIterable<Uint8Array>) {
-    for (const byte of chunk) {
-      counted.lines += byte === 10 ? 1 : 0;
+    const lines = `${counted.rest}${decoder.decode(chunk, { stream: true })}`.split('\n');
+
+    counted.rest = lines.pop() ?? '';
+
+    for (const line of lines) {
+      counted.lines += 1;
+      counted.bytes += readAllocatedBytes(line);
     }
 
-    if (counted.lines > maxFiles) {
-      onOver();
+    if (counted.bytes > limits.maxBytes) {
+      onOver('bytes');
+
+      return;
+    }
+
+    if (counted.lines > limits.maxFiles) {
+      onOver('files');
 
       return;
     }
   }
-}
-
-export interface ExportedImage {
-  // sha256 of the Config's JSON and then the export, as impd read them: the
-  // builder names nothing on the host
-  readonly digest: string;
-  readonly config: z.infer<typeof OciConfigSchema>;
 }
 
 // The built image's filesystem, streamed out of the builder into root by
@@ -149,7 +170,7 @@ export async function writeGuestTree(
 
   const containerId = ContainerIdSchema.parse(created.stdout.trim());
 
-  const tar = Bun.spawn([...UNPACK_TAR_ARGS, '-v', '--quoting-style=escape', '-C', root], {
+  const tar = Bun.spawn([...UNPACK_TAR_ARGS, '-vv', '--quoting-style=escape', '-C', root], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -158,13 +179,23 @@ export async function writeGuestTree(
 
   const hash = createImageHash(configText);
   const sent = { bytes: 0 };
-  const files = { over: false };
+  const unpacked: { over?: 'bytes' | 'files' } = {};
 
-  const counting = countUnpacked(tar.stdout, limits.maxFiles, () => {
-    files.over = true;
+  const counting = countUnpacked(tar.stdout, limits, (limit) => {
+    unpacked.over = limit;
 
     tar.kill();
   });
+
+  const assertWithinLimits = () => {
+    const over = unpacked.over;
+
+    if (over !== undefined) {
+      const max = over === 'bytes' ? maxBytes : limits.maxFiles;
+
+      throw new ImageLimitError(over, max);
+    }
+  };
 
   const stderrText = new Response(tar.stderr).text();
 
@@ -178,9 +209,7 @@ export async function writeGuestTree(
           throw new ImageLimitError('bytes', maxBytes);
         }
 
-        if (files.over) {
-          throw new ImageLimitError('files', limits.maxFiles);
-        }
+        assertWithinLimits();
 
         hash.update(chunk);
 
@@ -197,19 +226,13 @@ export async function writeGuestTree(
 
     const [exitCode, stderr] = await Promise.all([tar.exited, stderrText, counting]);
 
-    if (files.over) {
-      throw new ImageLimitError('files', limits.maxFiles);
-    }
-
+    assertWithinLimits();
     assertUnpacked({ exitCode, stdout: '', stderr });
   } catch (error) {
     tar.kill();
 
     // a write to the tar it killed fails first
-    if (files.over) {
-      throw new ImageLimitError('files', limits.maxFiles);
-    }
-
+    assertWithinLimits();
     throw error;
   }
 

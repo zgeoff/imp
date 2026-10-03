@@ -148,6 +148,58 @@ test('an export of more entries than the file cap is refused as tar counts them'
   expect(String(failure)).toContain('is over 10 files (IMP_BUILD_IMAGE_MAX_FILES)');
 });
 
+// the export of a tree, refused under a 1 MiB cap its archive is well inside
+async function readMiBRefusal(tree: string, tarArgs: readonly string[]): Promise<unknown> {
+  const exported = [Bun.spawnSync(['tar', ...tarArgs, '-C', tree, '-c', '.']).stdout];
+  const guest = createFakeGuest(createExportAnswer(exported));
+  const root = join(dir, 'root');
+
+  expect(exported[0]?.byteLength).toBeLessThan(1024 ** 2 / 2);
+
+  mkdirSync(root);
+
+  try {
+    await writeGuestTree(
+      createGuestExec(guest.open),
+      root,
+      { maxBytes: 1024 ** 2, maxFiles: 1000 },
+      new AbortController().signal,
+    );
+  } catch (error) {
+    return error;
+  }
+
+  return undefined;
+}
+
+test('a sparse file counts at its full size against the cap', async () => {
+  const tree = join(dir, 'sparse');
+
+  mkdirSync(tree);
+
+  Bun.spawnSync(['truncate', '-s', '16M', join(tree, 'holes')]);
+
+  const failure = await readMiBRefusal(tree, ['-S']);
+
+  expect(failure).toBeInstanceOf(ImageLimitError);
+  expect(String(failure)).toContain('is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)');
+});
+
+test('small files count a block each against the cap', async () => {
+  const tree = join(dir, 'small');
+
+  mkdirSync(tree);
+
+  for (let n = 0; n < 300; n += 1) {
+    writeFileSync(join(tree, `f${String(n)}`), 'x');
+  }
+
+  const failure = await readMiBRefusal(tree, []);
+
+  expect(failure).toBeInstanceOf(ImageLimitError);
+  expect(String(failure)).toContain('is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)');
+});
+
 test("a builder's config that is not one JSON object is refused", async () => {
   const guest = createFakeGuest(() => ({ stdout: '["not", "a", "config"]\n' }));
 

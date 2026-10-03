@@ -171,8 +171,11 @@ A build goes:
    `imp image add` uses, as root, and computes the image's digest itself: `imp-build-` and a sha256
    over a fixed domain string, the config with its length, and the export, so it never equals a
    Docker image ID or a template's. No host engine reads what the build made, and no Docker tag on
-   the host changes. An export over `IMP_BUILD_IMAGE_MAX_MIB` (8192), or with more entries than
-   `IMP_BUILD_IMAGE_MAX_FILES` (1,000,000) as `tar` counts them, fails with `BAD_REQUEST`.
+   the host changes. An export fails with `BAD_REQUEST` when its stream, or the disk its entries
+   take, is over `IMP_BUILD_IMAGE_MAX_MIB` (8192). The disk counts each entry, as `tar` lists it, at
+   its full logical size in whole 4 KiB blocks, so a sparse file or many small files cannot pass a
+   small archive off as a small image. An export with more entries than `IMP_BUILD_IMAGE_MAX_FILES`
+   (1,000,000) also fails.
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
    finds at start, which a stop cut short.
 
