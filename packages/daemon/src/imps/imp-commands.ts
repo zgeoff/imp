@@ -253,8 +253,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const totalMs = Math.round(performance.now() - received);
 
-          // the server's side of `imp new`; clone and size run inside boot,
-          // and the boot's own steps are on its line
+          // the server's side of `imp new`: clone= is the time from the start
+          // to the cloned disk, before the boot; size= runs inside boot=, which
+          // waits on it, and the boot's own steps are on its line
           context.log(
             `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(timing.cloneMs)}ms size=${String(timing.sizeMs)}ms boot=${String(bootMs)}ms`,
           );
