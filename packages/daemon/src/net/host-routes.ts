@@ -1,9 +1,10 @@
-import { runCommand } from '../process/run-command';
+import { existsSync } from 'node:fs';
+import { runChecked } from '../process/run-command';
 import { formatCidr4 } from './addressing';
 
 // The host container's IPv4 networks and default-route interfaces, for the
 // public egress chain; read at each table build, as a Docker network or
-// tailscaled can add a route after impd starts.
+// tailscaled can add a route after impd starts. A failed read throws.
 
 // route types that carry no traffic to a host on the link
 const NON_UNICAST = new Set([
@@ -19,13 +20,10 @@ const NON_UNICAST = new Set([
 ]);
 
 export async function readConnectedPrefixes4(): Promise<readonly string[]> {
-  const routes = await runCommand(['ip', '-4', 'route', 'show']);
-  const addresses = await runCommand(['ip', '-4', '-o', 'addr', 'show']);
+  const routes = await runChecked(['ip', '-4', 'route', 'show']);
+  const addresses = await runChecked(['ip', '-4', '-o', 'addr', 'show']);
 
-  const routeText = routes.exitCode === 0 ? routes.stdout : '';
-  const addressText = addresses.exitCode === 0 ? addresses.stdout : '';
-
-  return parseConnectedPrefixes4(routeText, addressText);
+  return parseConnectedPrefixes4(routes, addresses);
 }
 
 // On-link routes of any origin, and every address off the taps, with its
@@ -62,18 +60,21 @@ export function parseConnectedPrefixes4(routes: string, addresses: string): read
   return [...prefixes];
 }
 
-// The interfaces of the IPv4 and IPv6 default routes: the only ones a
-// `public` imp's traffic may leave by.
-export async function readUplinks(): Promise<readonly string[]> {
-  const ipv4 = await runCommand(['ip', '-4', 'route', 'show', 'default']);
-  const ipv6 = await runCommand(['ip', '-6', 'route', 'show', 'default']);
+// The interfaces of the default routes, by family: the only ones a public
+// imp's traffic may leave by. A kernel without IPv6 has none for it.
+export interface Uplinks {
+  readonly ipv4: readonly string[];
+  readonly ipv6: readonly string[];
+}
 
-  return parseUplinks(
-    [ipv4, ipv6]
-      .filter((result) => result.exitCode === 0)
-      .map((result) => result.stdout)
-      .join('\n'),
-  );
+export async function readUplinks(procNet = '/proc/sys/net/ipv6'): Promise<Uplinks> {
+  const ipv4 = await runChecked(['ip', '-4', 'route', 'show', 'default']);
+
+  const ipv6 = existsSync(procNet)
+    ? await runChecked(['ip', '-6', 'route', 'show', 'default'])
+    : '';
+
+  return { ipv4: parseUplinks(ipv4), ipv6: parseUplinks(ipv6) };
 }
 
 export function parseUplinks(routes: string): readonly string[] {
@@ -84,4 +85,23 @@ export function parseUplinks(routes: string): readonly string[] {
   });
 
   return [...new Set(devs)];
+}
+
+// The interface the host container would send to `address` by, as `ip
+// route get` reads every rule and table; the broker dials from the same
+// namespace, so this is the route its tunnel takes.
+export async function readRouteDevice(address: string): Promise<string> {
+  const route = await runChecked(['ip', 'route', 'get', address]);
+
+  return parseRouteDevice(route, address);
+}
+
+export function parseRouteDevice(route: string, address: string): string {
+  const dev = /\bdev (?<dev>\S+)/v.exec(route)?.groups?.['dev'];
+
+  if (dev === undefined) {
+    throw new Error(`ip route get ${address} named no interface: ${route.trim()}`);
+  }
+
+  return dev;
 }

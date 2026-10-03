@@ -232,10 +232,26 @@ test('IMP_EGRESS_DENY takes addresses and CIDRs of both families, with IMP_PUBLI
   expect(withPublic.egressDeny).toEqual(['203.0.113.7/32']);
 
   expect(() => loadConfig({ IMP_EGRESS_DENY: 'host.example.com' })).toThrow(
-    'IMP_EGRESS_DENY: host.example.com is not an IPv4 or IPv6 address or CIDR',
+    'IMP_EGRESS_DENY or IMP_HOST_ADDRESSES: host.example.com is not an IPv4 or IPv6 address or CIDR',
   );
 
   expect(() => loadConfig({ IMP_EGRESS_DENY: '10.0.0.0/33' })).toThrow('IMP_EGRESS_DENY');
+});
+
+test("IMP_HOST_ADDRESSES adds the host's own addresses, never the networks they are on", () => {
+  const config = loadConfig({
+    IMP_EGRESS_DENY: '198.51.100.7',
+    IMP_HOST_ADDRESSES: '203.0.113.9/24,172.17.0.1/16,2a01:4f8::7/64,198.51.100.7/32',
+  });
+
+  expect(config.egressDeny).toEqual([
+    '198.51.100.7/32',
+    '203.0.113.9/32',
+    '172.17.0.1/32',
+    '2a01:4f8::7/128',
+  ]);
+
+  expect(() => loadConfig({ IMP_HOST_ADDRESSES: 'inet6' })).toThrow('IMP_HOST_ADDRESSES');
 });
 
 test('it leaves HTTPS off without IMP_DOMAIN, whatever else is set', () => {

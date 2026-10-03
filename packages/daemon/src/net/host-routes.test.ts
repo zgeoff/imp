@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseConnectedPrefixes4, parseUplinks } from './host-routes';
+import { parseConnectedPrefixes4, parseRouteDevice, parseUplinks } from './host-routes';
 
 test('the IPv4 networks on the links, and every address, off the taps', () => {
   const routes = [
@@ -44,4 +44,19 @@ test('the uplinks are the default routes’ interfaces, in each family, never a 
 
   expect(parseUplinks(routes)).toEqual(['eth0', 'wg0']);
   expect(parseUplinks('')).toEqual([]);
+});
+
+test('the interface a route leaves by, and an error for a route with none', () => {
+  expect(
+    parseRouteDevice(
+      '93.184.216.34 via 172.17.0.1 dev eth0 src 172.17.0.2 uid 0\n    cache\n',
+      'x',
+    ),
+  ).toBe('eth0');
+
+  expect(parseRouteDevice('local 172.17.0.2 dev lo table local src 172.17.0.2', 'x')).toBe('lo');
+
+  expect(() => parseRouteDevice('unreachable 203.0.113.9 table main', '203.0.113.9')).toThrow(
+    'ip route get 203.0.113.9 named no interface: unreachable 203.0.113.9 table main',
+  );
 });

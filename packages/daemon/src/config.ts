@@ -43,8 +43,10 @@ const EnvSchema = z.object({
   IMP_EGRESS_DNS_PORT: PortSchema.default(7053),
 
   // more addresses no public imp reaches: the Docker host's own, which impd
-  // cannot see from the host container
+  // cannot see from the host container. The unit and the NixOS module fill
+  // IMP_HOST_ADDRESSES at each start, as `ip -o addr` prints them.
   IMP_EGRESS_DENY: z.string().default(''),
+  IMP_HOST_ADDRESSES: z.string().default(''),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
@@ -116,8 +118,8 @@ export interface Config {
   readonly egressDnsPort: number;
 
   // what a public imp never reaches besides the private ranges and the host
-  // container's networks: IMP_EGRESS_DENY and IMP_PUBLIC_IP, canonical CIDRs
-  // of both families
+  // container's networks: IMP_EGRESS_DENY, IMP_HOST_ADDRESSES and
+  // IMP_PUBLIC_IP, canonical CIDRs of both families
   readonly egressDeny: readonly string[];
 
   // tests only: a file of fake upstreams for granted hosts
@@ -236,10 +238,16 @@ export interface Config {
   readonly warnings: readonly string[];
 }
 
-// IMP_EGRESS_DENY's addresses and CIDRs, IPv4 or IPv6, and IMP_PUBLIC_IP:
-// the host's own public address is never a public imp's to reach
-function parseEgressDeny(value: string, publicIp: string | null): readonly string[] {
-  const entries = [...splitList(value).filter((entry) => entry !== ''), publicIp ?? ''];
+// IMP_EGRESS_DENY's addresses and CIDRs, IPv4 or IPv6, IMP_HOST_ADDRESSES as
+// addresses (its prefixes are the networks the host is on, not its own), and
+// IMP_PUBLIC_IP: the host's own addresses are never a public imp's to reach
+function parseEgressDeny(
+  value: string,
+  hostAddresses: string,
+  publicIp: string | null,
+): readonly string[] {
+  const hosts = splitList(hostAddresses).map((entry) => entry.split('/')[0] ?? '');
+  const entries = [...splitList(value), ...hosts, publicIp ?? ''];
 
   return [
     ...new Set(
@@ -249,7 +257,9 @@ function parseEgressDeny(value: string, publicIp: string | null): readonly strin
           const cidr = formatCidr4(entry) ?? formatCidr6(entry);
 
           if (cidr === null) {
-            throw new Error(`IMP_EGRESS_DENY: ${entry} is not an IPv4 or IPv6 address or CIDR`);
+            throw new Error(
+              `IMP_EGRESS_DENY or IMP_HOST_ADDRESSES: ${entry} is not an IPv4 or IPv6 address or CIDR`,
+            );
           }
 
           return cidr;
@@ -372,7 +382,11 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     sshAuthorizedKeys: parsed.IMP_SSH_AUTHORIZED_KEYS === 'true',
     brokerPort: parsed.IMP_BROKER_PORT,
     egressDnsPort: parsed.IMP_EGRESS_DNS_PORT,
-    egressDeny: parseEgressDeny(parsed.IMP_EGRESS_DENY, https?.public?.ip ?? null),
+    egressDeny: parseEgressDeny(
+      parsed.IMP_EGRESS_DENY,
+      parsed.IMP_HOST_ADDRESSES,
+      https?.public?.ip ?? null,
+    ),
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,

@@ -3,6 +3,7 @@ import { networkInterfaces } from 'node:os';
 import { parseIpv4 } from '../net/addressing';
 import { formatIpv6, parseIpv6 } from '../net/addressing6';
 import { readMappedIpv4 } from '../net/ranges6';
+import { readErrorMessage } from '../read-error-message';
 
 // Where a plain tunnel may go. It starts in the host container, past the
 // `INPUT -i imp+ DROP` rule: unchecked, a guest could reach impd's API, the
@@ -137,6 +138,32 @@ export async function resolveTunnelTarget(
   }
 
   return first;
+}
+
+// A public imp's tunnel leaves by a default route's interface only, as its
+// firewall's traffic does; a route that cannot be read refuses it too.
+export async function requireUplinkRoute(
+  host: string,
+  address: string,
+  uplinks: Readonly<{ ipv4: readonly string[]; ipv6: readonly string[] }>,
+  readRouteDevice: (address: string) => Promise<string>,
+): Promise<void> {
+  const allowed = parseIpv4(address) === null ? uplinks.ipv6 : uplinks.ipv4;
+  let dev: string;
+
+  try {
+    dev = await readRouteDevice(address);
+  } catch (error) {
+    throw new TunnelRefusedError(`${host}: no route to ${address}: ${readErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+
+  if (!allowed.includes(dev)) {
+    throw new TunnelRefusedError(
+      `${host} resolves to ${address}, which the host reaches by ${dev}, not by a default route`,
+    );
+  }
 }
 
 async function resolveAddresses(host: string, ipv6: boolean): Promise<readonly string[]> {

@@ -36,7 +36,8 @@ import type {
   SecretRecord,
 } from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
-import { readConnectedPrefixes4 } from '../net/host-routes';
+import { readConnectedPrefixes4, readRouteDevice, readUplinks } from '../net/host-routes';
+import type { Uplinks } from '../net/host-routes';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
@@ -65,7 +66,7 @@ import { buildValueFile, createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
 import { createUpstreamResolver } from './test-upstreams';
-import { resolveTunnelTarget } from './tunnel-target';
+import { requireUplinkRoute, resolveTunnelTarget } from './tunnel-target';
 
 // The credential broker (docs/guides/connectors.md): secrets and grants for
 // the API, the front port guests reach on their gateway, and the exec
@@ -187,8 +188,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     return blocked6.check;
   };
 
-  const publicRefused: { check: (address: string) => boolean; readAt: number } = {
+  const publicRefused: { check: (address: string) => boolean; uplinks: Uplinks; readAt: number } = {
     check: () => true,
+    uplinks: { ipv4: [], ipv6: [] },
     readAt: 0,
   };
 
@@ -198,6 +200,8 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   const readPublicRefused = async (): Promise<(address: string) => boolean> => {
     if (publicRefused.readAt === 0 || Date.now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
       const connected = await readConnectedPrefixes4();
+
+      publicRefused.uplinks = await readUplinks();
 
       const deny = config.egressDeny;
 
@@ -219,7 +223,14 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return resolveTunnelTarget(host, { isBlocked6 });
     }
 
-    return resolveTunnelTarget(host, { isBlocked6, isRefusedMore: await readPublicRefused() });
+    const isRefusedMore = await readPublicRefused();
+    const address = await resolveTunnelTarget(host, { isBlocked6, isRefusedMore });
+
+    // as the firewall's uplink rule: a route by another interface reaches
+    // a private service whatever the address
+    await requireUplinkRoute(host, address, publicRefused.uplinks, readRouteDevice);
+
+    return address;
   };
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);

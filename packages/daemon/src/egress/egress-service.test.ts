@@ -186,10 +186,10 @@ test('a public imp leaves only by the uplinks, and is refused the private ranges
   const table = ctx.nftScripts.at(-1) ?? '';
 
   expect(table).toContain(
-    '    oifname != @uplinks goto deny\n    ip daddr @public4 goto deny\n    ip6 daddr @public6 goto deny\n    accept\n',
+    '    ct state invalid drop\n    meta nfproto ipv4 oifname != @uplinks4 goto deny\n    meta nfproto ipv6 oifname != @uplinks6 goto deny\n    ip daddr @public4 goto deny\n    ip6 daddr @public6 goto deny\n    accept\n',
   );
 
-  expect(table).toContain('set uplinks {\n    type ifname\n    elements = { "eth0" }');
+  expect(table).toContain('set uplinks4 {\n    type ifname\n    elements = { "eth0" }');
 
   // the private ranges, IMP_SUBNET, the host's networks and IMP_EGRESS_DENY
   expect(table).toMatch(
@@ -232,6 +232,64 @@ test('a change to public ends every plain tunnel, and one that stays public keep
   readKeep();
 
   expect(kept).toEqual([false, true]);
+});
+
+test('a public policy whose routes cannot be read is refused, and leaves the imp as it was', async () => {
+  const routes = { fail: false };
+
+  await using ctx = await setupImpTest({
+    readUplinks: () =>
+      routes.fail
+        ? Promise.reject(new Error('ip -4 route show default exited 1'))
+        : Promise.resolve({ ipv4: ['eth0'], ipv6: [] }),
+  });
+
+  await ctx.createTestImage('base');
+  await ctx.imps.createImp({ name: 'dev' });
+  await ctx.imps.createImp({ name: 'pub', policy: { mode: 'public', allow: [] } });
+
+  routes.fail = true;
+
+  const refused = await readRejection(ctx.egress.setPolicy('dev', { mode: 'public', allow: [] }));
+  const policy = await ctx.egress.readPolicy('dev');
+
+  const table = ctx.nftScripts.at(-1) ?? '';
+
+  expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(String(refused)).toContain('ip -4 route show default exited 1');
+  expect(policy).toEqual({ mode: 'open', allow: [] });
+
+  // the public imp that runs reaches nothing: its uplink sets are empty
+  expect(table).toContain('  set uplinks4 {\n    type ifname\n  }');
+
+  expect(() => {
+    ctx.egress.requirePolicy({ mode: 'public', allow: [] });
+  }).toThrow('cannot read');
+
+  // the routes come back, and so do public imps
+  routes.fail = false;
+
+  await ctx.egress.setPolicy('dev', { mode: 'public', allow: [] });
+
+  expect(ctx.nftScripts.at(-1)).toContain('elements = { "eth0" }');
+});
+
+function countDenyWarnings(logs: readonly string[]): number {
+  return logs.filter((line) => line.includes('IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty'))
+    .length;
+}
+
+test('a public imp with no deny list logs a warning once, and none with one', async () => {
+  await using bare = await setupImpTest();
+  await using listed = await setupImpTest({ env: { IMP_HOST_ADDRESSES: '203.0.113.9/24' } });
+
+  for (const ctx of [bare, listed]) {
+    await ctx.createTestImage('base');
+    await ctx.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
+    await ctx.imps.createImp({ name: 'b', policy: { mode: 'public', allow: [] } });
+  }
+
+  expect([countDenyWarnings(bare.logs), countDenyWarnings(listed.logs)]).toEqual([1, 0]);
 });
 
 test('a policy change nft does not take leaves the old policy in place', async () => {

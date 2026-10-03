@@ -14,6 +14,7 @@ import { createKeyedMutex } from '../imps/keyed-mutex';
 import { formatSubnet, parseIpv4 } from '../net/addressing';
 import { deriveGuestIp6 } from '../net/addressing6';
 import { readConnectedPrefixes4, readUplinks } from '../net/host-routes';
+import type { Uplinks } from '../net/host-routes';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
@@ -63,7 +64,7 @@ export interface EgressDeps {
   readonly runNft?: NftRunner;
   readonly readConnected6?: () => Promise<readonly string[]>;
   readonly readConnected4?: () => Promise<readonly string[]>;
-  readonly readUplinks?: () => Promise<readonly string[]>;
+  readonly readUplinks?: () => Promise<Uplinks>;
   readonly flushConnections?: (guestIp: string) => Promise<void>;
   readonly flushPair?: (first: string, second: string) => Promise<void>;
   readonly readForwardRules?: () => Promise<string>;
@@ -120,10 +121,17 @@ interface SlotView {
 }
 
 // the host container's networks and default routes, read for a table build
+// No interface: a public imp's traffic leaves by none
+const NO_UPLINKS: Uplinks = { ipv4: [], ipv6: [] };
+
 interface HostNetwork {
   readonly connected4: readonly string[];
   readonly connected6: readonly string[];
-  readonly uplinks: readonly string[];
+  readonly uplinks: Uplinks;
+
+  // a read that failed while some imp is public; its imps then reach
+  // nothing, and none starts
+  readonly error: string | null;
 }
 
 export function createEgressService(deps: EgressDeps): EgressService {
@@ -167,6 +175,10 @@ export function createEgressService(deps: EgressDeps): EgressService {
 
     // what a public imp's DNS answers leave out, as of the last table
     isScreened: (address: string) => boolean;
+
+    // why the last table could not read the routes a public imp needs
+    publicUnenforced: string | null;
+    denyListMissing: boolean;
   } = {
     slots: new Map(),
     members: [],
@@ -177,6 +189,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
     server: null,
     sweep: null,
     isScreened: createRangeChecker(privateRanges, [...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6]),
+    publicUnenforced: null,
+    denyListMissing: false,
   };
 
   // an imp's /128, from its IPv4 address as its tap derives it
@@ -214,7 +228,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
       blocked6: listBlocked6(host),
       public4,
       public6,
-      uplinks: host.uplinks,
+      uplinks4: host.uplinks.ipv4,
+      uplinks6: host.uplinks.ipv6,
       dnsPort: deps.config.egressDnsPort,
       setSize: SET_SIZE,
       slots: [...views.values()].map((view) => ({
@@ -230,15 +245,45 @@ export function createEgressService(deps: EgressDeps): EgressService {
   };
 
   // The container's own links, read now: a network can join it later. The
-  // IPv4 side and the uplinks only matter while some imp is public.
+  // IPv4 side and the uplinks only matter while some imp is public. A read
+  // that fails then leaves public imps no uplink: the table refuses them all.
   const readHostNetwork = async (views: ReadonlyMap<number, SlotView>): Promise<HostNetwork> => {
     const hasPublic = [...views.values()].some((view) => view.entry.policy.mode === 'public');
 
-    return {
-      connected6: ipv6 === null ? [] : await readConnected6(),
-      connected4: hasPublic ? await readConnected4() : [],
-      uplinks: hasPublic ? await readHostUplinks() : [],
-    };
+    try {
+      return {
+        connected6: ipv6 === null ? [] : await readConnected6(),
+        connected4: hasPublic ? await readConnected4() : [],
+        uplinks: hasPublic ? await readHostUplinks() : NO_UPLINKS,
+        error: null,
+      };
+    } catch (error) {
+      const message = readErrorMessage(error);
+
+      deps.log(`impd: egress: reading the host container's routes: ${message}`);
+
+      return {
+        connected6: [],
+        connected4: [],
+        uplinks: NO_UPLINKS,
+        error: hasPublic ? message : null,
+      };
+    }
+  };
+
+  // the deny list a public imp needs for the Docker host's own addresses,
+  // missing: logged once each time a public imp appears without it
+  const checkDenyList = (views: ReadonlyMap<number, SlotView>): void => {
+    const hasPublic = [...views.values()].some((view) => view.entry.policy.mode === 'public');
+    const isMissing = hasPublic && deps.config.egressDeny.length === 0;
+
+    if (isMissing && !state.denyListMissing) {
+      deps.log(
+        "impd: egress: WARNING: a public imp exists and IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty, so it can reach the Docker host's own public addresses; set them (docs/architecture/networking.md#public)",
+      );
+    }
+
+    state.denyListMissing = isMissing;
   };
 
   // Setup-net.sh's ACCEPT for marked traffic between imps, checked after each
@@ -290,6 +335,9 @@ export function createEgressService(deps: EgressDeps): EgressService {
         const [public4, public6] = listPublicRanges(host);
 
         state.isScreened = createRangeChecker(public4, public6);
+        state.publicUnenforced = host.error;
+
+        checkDenyList(slots);
       }
 
       for (const slot of state.slots.keys()) {
@@ -425,10 +473,20 @@ export function createEgressService(deps: EgressDeps): EgressService {
     return false;
   };
 
-  const requirePolicy = (policy: EgressPolicy): void => {
+  const requireFirewall = (policy: EgressPolicy): void => {
     if (policy.mode !== 'open' && state.unenforced !== null) {
       throw new ORPCError('PRECONDITION_FAILED', {
         message: `impd cannot enforce a ${policy.mode} egress policy here: ${state.unenforced}`,
+      });
+    }
+  };
+
+  const requirePolicy = (policy: EgressPolicy): void => {
+    requireFirewall(policy);
+
+    if (policy.mode === 'public' && state.publicUnenforced !== null) {
+      throw new ORPCError('PRECONDITION_FAILED', {
+        message: `impd cannot read the routes a public egress policy needs: ${state.publicUnenforced}`,
       });
     }
   };
@@ -498,8 +556,14 @@ export function createEgressService(deps: EgressDeps): EgressService {
     requirePolicy,
     isEnforced: () => state.unenforced === null,
 
+    // a public imp after a failed route read builds the table again first:
+    // the routes may be back
     requireImp: async (impId) => {
       const policy = await readEgressPolicy(deps.db, impId);
+
+      if (policy?.mode === 'public' && state.publicUnenforced !== null) {
+        await mutex.runExclusive('policy', tryApplyTable);
+      }
 
       if (policy !== undefined) {
         requirePolicy(policy);
@@ -586,7 +650,8 @@ export function createEgressService(deps: EgressDeps): EgressService {
     // later change
     setPolicy: (name, policy) =>
       mutex.runExclusive('policy', async () => {
-        requirePolicy(policy);
+        // the routes a public policy needs are read with the table, below
+        requireFirewall(policy);
 
         const imp = await findImpByName(deps.db, name);
 
@@ -612,9 +677,12 @@ export function createEgressService(deps: EgressDeps): EgressService {
         }
 
         // the row goes back, and the table is built again from it, so nft
-        // and the database agree whichever table nft last took
+        // and the database agree whichever table nft last took; a public
+        // policy whose routes could not be read goes back too
         try {
           await applyTable();
+
+          requirePolicy(policy);
         } catch (error) {
           await writeEgressPolicy(deps.db, imp.id, previous);
           await tryApplyTable();

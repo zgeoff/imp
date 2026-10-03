@@ -63,10 +63,11 @@ export interface RulesetInput {
 
   // what no public imp reaches: the private ranges, the host container's
   // networks and IMP_EGRESS_DENY in each family, and the interfaces its
-  // traffic may leave by, the default routes'
+  // traffic may leave by, each family's default routes'
   readonly public4: readonly string[];
   readonly public6: readonly string[];
-  readonly uplinks: readonly string[];
+  readonly uplinks4: readonly string[];
+  readonly uplinks6: readonly string[];
   readonly dnsPort: number;
   readonly setSize: number;
 }
@@ -183,9 +184,15 @@ function buildPublicSets(input: RulesetInput): readonly string[] {
     ...buildSet('public4', 'ipv4_addr', input.public4, interval),
     ...buildSet('public6', 'ipv6_addr', input.public6, interval),
     ...buildSet(
-      'uplinks',
+      'uplinks4',
       'ifname',
-      input.uplinks.map((uplink) => formatTap(uplink)),
+      input.uplinks4.map((uplink) => formatTap(uplink)),
+      [],
+    ),
+    ...buildSet(
+      'uplinks6',
+      'ifname',
+      input.uplinks6.map((uplink) => formatTap(uplink)),
       [],
     ),
   ];
@@ -231,7 +238,9 @@ function buildSlotChain(slot: FirewallSlot): readonly string[] {
     // Tailscale subnet route or another Docker network leaves by another,
     // whatever address it carries. Then by address, in each family.
     public: [
-      'oifname != @uplinks goto deny',
+      'ct state invalid drop',
+      'meta nfproto ipv4 oifname != @uplinks4 goto deny',
+      'meta nfproto ipv6 oifname != @uplinks6 goto deny',
       'ip daddr @public4 goto deny',
       'ip6 daddr @public6 goto deny',
       'accept',

@@ -30,6 +30,7 @@ import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
 import { createMoveService } from '../moves/move-service';
 import type { MoveServiceDeps } from '../moves/move-service';
+import type { Uplinks } from '../net/host-routes';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createNetworkService } from '../networks/network-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
@@ -128,6 +129,10 @@ export interface ImpTestOptions {
 
   // IPv6 for imps, as impd resolved it; none by default
   readonly ipv6?: Ipv6Plan;
+
+  // the host container's default-route interfaces; eth0 in each family by
+  // default
+  readonly readUplinks?: () => Promise<Uplinks>;
 
   // IMP_KSM's readers: the unshared size a sleep records, the merge flag, and
   // the host counters
@@ -265,7 +270,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     ipv6: options.ipv6 ?? null,
     readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
     readConnected4: () => Promise.resolve(['172.17.0.0/16', '172.17.0.2/32', '44.0.0.0/24']),
-    readUplinks: () => Promise.resolve(['eth0']),
+    readUplinks: options.readUplinks ?? (() => Promise.resolve({ ipv4: ['eth0'], ipv6: ['eth0'] })),
   });
 
   // a system drive file, as setupSystemFiles installs it

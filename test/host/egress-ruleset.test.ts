@@ -64,7 +64,8 @@ const BASE = {
   blocked6: BLOCKED6,
   public4: PRIVATE,
   public6: [...BLOCKED6, ...DOCUMENTATION_RANGES6],
-  uplinks: ['eth0'],
+  uplinks4: ['eth0'],
+  uplinks6: ['eth0'],
   dnsPort: 7053,
   setSize: 4096,
 };
@@ -356,7 +357,8 @@ test.skipIf(!canUnshare)('packets: a public imp reaches the internet only, in ea
     blocked6: [...BLOCKED6, '2a00:44::/64'],
     public4: [...PRIVATE, '44.0.0.0/24', '44.0.0.1/32', '100.90.0.0/24', '8.8.4.4/32'],
     public6: [...BLOCKED6, '2a00:44::/64', ...DOCUMENTATION_RANGES6, '2a01:4f8::7/128'],
-    uplinks: ['up0'],
+    uplinks4: ['up0'],
+    uplinks6: ['up0'],
   });
 
   const targets = [
@@ -420,7 +422,8 @@ test.skipIf(!canUnshare)('packets: with no default route, a public imp reaches n
         addresses: [],
       },
     ],
-    uplinks: [],
+    uplinks4: [],
+    uplinks6: [],
   });
 
   const result = Bun.spawnSync(
