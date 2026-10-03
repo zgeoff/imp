@@ -532,6 +532,38 @@ test('a flood of sign-ins drops unapproved ones before an approved one', async (
   expect(ctx.oauth.finish(view.id, view.signature, 'allow').kind).toBe('redirect');
 });
 
+test('a flood under other clients drops no waiting sign-in, and past the total it waits', async () => {
+  await using ctx = await setupTest();
+
+  const started = await ctx.startSignIn();
+
+  const waiting = readView(started);
+  const flooders: string[] = [];
+
+  for (let index = 0; index < 6; index += 1) {
+    const added = await ctx.oauth.addClient(`flood-${String(index)}`, [REDIRECT]);
+
+    flooders.push(added.clientId);
+  }
+
+  const kinds: string[] = [];
+
+  for (const clientId of flooders) {
+    for (let index = 0; index < 4; index += 1) {
+      const outcome = await ctx.startSignIn({ clientId });
+
+      kinds.push(outcome.kind);
+    }
+  }
+
+  // 16 in all: the waiting one, then 3 for each flooder until room runs out
+  expect(kinds.filter((kind) => kind === 'too-many').length).toBeGreaterThan(0);
+
+  const still = ctx.oauth.finish(waiting.id, waiting.signature, 'continue');
+
+  expect(still.kind).toBe('page');
+});
+
 test('a code exchanges only with its client, redirect, verifier and resource', async () => {
   await using ctx = await setupTest();
 

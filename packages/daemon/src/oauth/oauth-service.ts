@@ -56,7 +56,8 @@ export const REFRESH_TOKEN_MS = 30 * DAY_MS;
 const CODE_MS = 10 * MINUTE_MS;
 const APPROVAL_MS = 10 * MINUTE_MS;
 
-// sign-ins waiting at once, in all and per client; a new one drops the oldest
+// sign-ins waiting at once, per client and in all. A new one drops the
+// oldest of its own client's; one past the total waits for room.
 const MAX_PENDING = 16;
 const MAX_PENDING_PER_CLIENT = 3;
 
@@ -348,9 +349,10 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
       entry.approval === null ? null : { scope: entry.approval.scope, imps: entry.approval.imps },
   });
 
-  // A new sign-in makes room by dropping the oldest unapproved one, of its
-  // client's or of all, so a flood of page loads spares an approved one
-  const registerPending = (entry: Readonly<Pending>): void => {
+  // A new sign-in makes room by dropping the oldest unapproved one of its
+  // own client's, so a flood under other clients drops nothing of this one.
+  // False when every room is taken by other clients.
+  const registerPending = (entry: Readonly<Pending>): boolean => {
     const ofClient = [...pending.values()].filter((other) => other.client.id === entry.client.id);
 
     if (ofClient.length >= MAX_PENDING_PER_CLIENT) {
@@ -362,15 +364,13 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
     }
 
     if (pending.size >= MAX_PENDING) {
-      const evicted = pickEvicted([...pending.values()]);
-
-      if (evicted !== undefined) {
-        removePending(evicted);
-      }
+      return false;
     }
 
     pending.set(entry.id, entry);
     byApprovalCode.set(entry.approvalCode, entry.id);
+
+    return true;
   };
 
   // the sign-in an approver names by its code; a miss counts against the
@@ -808,7 +808,9 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         approval: null,
       };
 
-      registerPending(entry);
+      if (!registerPending(entry)) {
+        return { kind: 'too-many', retryS: APPROVAL_MS / 1000 };
+      }
 
       deps.log(`impd: oauth: ${client.name} asks to sign in; it waits for imp oauth approve`);
 

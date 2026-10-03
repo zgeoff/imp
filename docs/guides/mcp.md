@@ -261,7 +261,7 @@ approve: neither can be removed on its own, so neither could end its grants.
 | access token  | 15 minutes                                                                       |
 | refresh token | rotates on each use; a 30-day inactivity timeout, not an absolute grant lifetime |
 | code          | 10 minutes, once                                                                 |
-| sign-in       | 10 minutes; at most 16 wait, and 3 for each client                               |
+| sign-in       | 10 minutes; 3 wait for each client, and 16 in all                                |
 
 Tokens are opaque (`impat_…`, `imprt_…`); impd keeps only their SHA-256. A refresh answers with the
 scope the grant holds, for the same resource.
@@ -281,7 +281,10 @@ A restart ends the sign-ins in progress and their codes, not the grants.
 
 ### Limits
 
-- 64 open requests; a tool call's stream counts until it ends.
+- 64 open requests. A tool call counts until its tool ends, even when its client goes: a dropped
+  stream is no cancel. Send `notifications/cancelled` to stop a call.
+- A new sign-in drops the oldest unapproved one of its own client's, never another client's. Past 16
+  in all, a new one gets 429 until one ends.
 - 10 sign-ins per client in a burst, then one every 6 s.
 - 30 failed token requests per client, then one every 2 s; past them a failure answers `slow_down`.
   A valid code exchange or refresh never counts. Requests that name no known client share one such
