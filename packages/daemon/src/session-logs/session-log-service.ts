@@ -313,6 +313,11 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   // oldest segment; when every live log is down to one, the newest still
   // written stops, and stays as it is until its generation ends
   const applyImpLimit = async (imp: SessionLogImp, life: number): Promise<void> => {
+    // work from an earlier life of the imp: the logs on disk are a later one's
+    if (isForgotten(imp.id, life)) {
+      return;
+    }
+
     const countImpBytes = () =>
       readImpMetas(imp.sessionLogsDir, readLive(imp.id)).reduce(
         (sum, meta) => sum + countLogBytes(meta),
@@ -554,13 +559,23 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     taps.set(key, tap);
 
-    const next = await createLiveLog(
-      imp,
-      output.executionGeneration,
-      entry.session,
-      output.bootId,
-      life,
-    );
+    let next: LiveLog | null;
+
+    try {
+      next = await createLiveLog(
+        imp,
+        output.executionGeneration,
+        entry.session,
+        output.bootId,
+        life,
+      );
+    } catch (error) {
+      // nobody reads the tap now: the next look taps the generation again
+      removeSlot(key, tap);
+
+      tap.close();
+      throw error;
+    }
 
     if (next === null || taps.get(key) !== tap) {
       removeSlot(key, tap);
