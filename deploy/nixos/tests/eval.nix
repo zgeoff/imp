@@ -142,6 +142,8 @@ let
   proxyUnit = zfsCfg.systemd.services.imp-docker-proxy;
   ownCfg = ownFirewall.config;
   hostArgs = lib.importJSON ../../imp-host.args.json;
+  # the image release.yml pushes for this checkout's version
+  releaseImage = "ghcr.io/zgeoff/imp-host:${(lib.importJSON (self + "/package.json")).version}";
   # the env words ($IMP_PUBLIC_PORTS) are options, empty here
   sharedArgs = lib.escapeShellArgs (
     lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten hostArgs.lines)
@@ -210,9 +212,9 @@ let
       && lib.elem "imp-host-image.service" proxyUnit.requires
       && lib.elem "imp-host-image.service" proxyUnit.after
     ))
+    (expect "the default image is the module's own release" (zfsCfg.services.imp.image == releaseImage))
     (expect "the proxy gets the host image and restarts always" (
-      proxyUnit.environment.IMP_HOST_IMAGE == "ghcr.io/zgeoff/imp-host:latest"
-      && proxyUnit.serviceConfig.Restart == "always"
+      proxyUnit.environment.IMP_HOST_IMAGE == releaseImage && proxyUnit.serviceConfig.Restart == "always"
     ))
     (expect "imp-host binds no docker.sock" (
       !(lib.hasInfix "/var/run/docker.sock" unit.serviceConfig.ExecStart)
@@ -239,7 +241,7 @@ let
       !(lib.hasInfix "/dev/zfs" xfsCfg.systemd.services.imp-host.serviceConfig.ExecStart)
     ))
     (expect "publicPorts publish before the image" (
-      lib.hasSuffix "-p 443:7443 -p 80:7480 ghcr.io/zgeoff/imp-host:latest" publicHost.config.systemd.services.imp-host.serviceConfig.ExecStart
+      lib.hasSuffix "-p 443:7443 -p 80:7480 ${releaseImage}" publicHost.config.systemd.services.imp-host.serviceConfig.ExecStart
     ))
     (expect "the backup password is mounted read-only, by path" (
       lib.hasInfix "-v /run/imp-host/backup-password:/run/imp/backup-password:ro" unit.serviceConfig.ExecStart
@@ -370,7 +372,7 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   grep -qF -- '--group-add "$gid"' ${proxyUnit.serviceConfig.ExecStart}
   grep -qF -- "--cap-drop ALL --security-opt no-new-privileges --read-only" ${proxyUnit.serviceConfig.ExecStart}
   grep -qF -- "-v /var/run/docker.sock:/var/run/docker.sock" ${proxyUnit.serviceConfig.ExecStart}
-  grep -qF -- "ghcr.io/zgeoff/imp-host:latest /usr/local/bin/imp-docker-proxy" ${proxyUnit.serviceConfig.ExecStart}
+  grep -qF -- "${releaseImage} /usr/local/bin/imp-docker-proxy" ${proxyUnit.serviceConfig.ExecStart}
   if grep -q -- --env-file ${proxyUnit.serviceConfig.ExecStart}; then exit 1; fi
   grep -q 'subnet6 ${ipv6Cfg.services.imp.ipv6.subnet}' ${ipv6Network}
   printf '%s\n' ${lib.escapeShellArgs checks} > $out

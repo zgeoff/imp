@@ -21,6 +21,9 @@ let
   # bridge, which the forward rules below name.
   hostNetwork = "imp-host";
   hostBridge = "br-imphost";
+  # The module's own release: release-please bumps package.json, and
+  # release.yml pushes imp-host:X.Y.Z (the tag without its v) for it.
+  version = (lib.importJSON ../../package.json).version;
 
   # The docker run arguments, shared with deploy/imp-host.service and
   # bootstrap.sh (scripts/render-imp-host.ts writes those two from it). A
@@ -331,8 +334,8 @@ in
 
     image = lib.mkOption {
       type = lib.types.str;
-      default = "ghcr.io/zgeoff/imp-host:latest";
-      description = "The imp-host image to run.";
+      default = "ghcr.io/zgeoff/imp-host:${version}";
+      description = "The imp-host image to run. The default is the module's own release, so a pinned `inputs.imp` pins the image too; pin a digest with `ghcr.io/zgeoff/imp-host:X.Y.Z@sha256:...`.";
     };
 
     imageArchive = lib.mkOption {
