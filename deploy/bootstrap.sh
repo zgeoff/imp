@@ -270,11 +270,12 @@ loop_reserve_gib() {
 
 # fstab_line SOURCE KIND: the /etc/fstab entry for /var/lib/imp. nofail: a
 # missing disk must not stop the boot; the host container then refuses to
-# start, because nothing is mounted.
+# start, because nothing is mounted. nosuid: the host never honors a setuid
+# bit or a file capability from an image's files.
 fstab_line() {
   case $2 in
-    device) printf '%s %s xfs defaults,nofail 0 2\n' "$1" "$DATA_DIR" ;;
-    loop) printf '%s %s xfs loop,nofail 0 0\n' "$1" "$DATA_DIR" ;;
+    device) printf '%s %s xfs defaults,nosuid,nofail 0 2\n' "$1" "$DATA_DIR" ;;
+    loop) printf '%s %s xfs loop,nosuid,nofail 0 0\n' "$1" "$DATA_DIR" ;;
   esac
 }
 
@@ -1044,6 +1045,8 @@ storage_xfs() {
     check_xfs_reflink
     grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab \
       || warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
+    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid \
+      || warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
   else
     local source
     if [ -n "$data_device" ]; then

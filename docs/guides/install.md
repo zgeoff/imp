@@ -134,8 +134,9 @@ The phases run in order:
   that is already installed stays. With ZFS, also `zfsutils-linux`; on Debian, `zfs-dkms` and the
   kernel headers from `contrib`, which the script adds.
 - **storage:** Makes `--data-device` XFS with reflink (fstab by UUID), or creates the `--loop-file`
-  on the root filesystem (fstab `loop`). Mounts it on `/var/lib/imp`. With `/var/lib/imp` already
-  mounted, it only checks it is XFS with reflink. With ZFS, see [ZFS](#zfs).
+  on the root filesystem (fstab `loop`). Mounts it on `/var/lib/imp` with `nosuid`. With
+  `/var/lib/imp` already mounted, it only checks it is XFS with reflink, and warns when it lacks
+  `nosuid`. With ZFS, see [ZFS](#zfs).
 - **kernel:** Writes `vm.overcommit_memory = 1` and `vm.swappiness = 1` to
   `/etc/sysctl.d/90-imp.conf`, and `kvm`, `tun` and `loop` to `/etc/modules-load.d/imp.conf`, and
   applies both. Swap stays as the installer made it. With ZFS, also `zfs`, and the ARC cap in
@@ -439,7 +440,7 @@ hand.
 
    ```sh
    mkfs.xfs -m reflink=1 /dev/<partition>
-   echo '/dev/<partition> /var/lib/imp xfs defaults 0 2' >> /etc/fstab
+   echo '/dev/<partition> /var/lib/imp xfs defaults,nosuid 0 2' >> /etc/fstab
    mkdir -p /var/lib/imp && mount /var/lib/imp
    ```
 

@@ -98,11 +98,11 @@ test('it sizes a loop file to leave the larger of 30 GiB and 15 % of / free', ()
 
 test('it writes the fstab entry by kind', () => {
   expect(runFunction('fstab_line', ['UUID=1234', 'device'])).toBe(
-    'UUID=1234 /var/lib/imp xfs defaults,nofail 0 2\n',
+    'UUID=1234 /var/lib/imp xfs defaults,nosuid,nofail 0 2\n',
   );
 
   expect(runFunction('fstab_line', ['/srv/imp.xfs', 'loop'])).toBe(
-    '/srv/imp.xfs /var/lib/imp xfs loop,nofail 0 0\n',
+    '/srv/imp.xfs /var/lib/imp xfs loop,nosuid,nofail 0 0\n',
   );
 });
 

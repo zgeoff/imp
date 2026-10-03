@@ -93,10 +93,13 @@ warning at start. What it adds: root in imp-host can write a file capability, an
 onto a file it can write. `DAC_OVERRIDE` already lets it write every file on its mounts, so it can
 stamp, for instance, `cap_sys_admin+ep` on a binary under `/var/lib/imp`. A process that runs that
 file gets those capabilities within its bounding set. In imp-host that set is the list above, so it
-gains nothing root there lacks. On the host it is the full set, unless the mount is `nosuid`: the
-host must never run a file from `/var/lib/imp` or the container's other writable mounts. imp-host is
+gains nothing root there lacks. On the host it is the full set, so the host keeps such files inert:
+bootstrap mounts `/var/lib/imp` with `nosuid`, which ignores setuid bits and file capabilities, and
+warns when an existing mount lacks it; the NixOS guide asks for the same option. On ZFS, the
+datasets are mounted inside the container, where the host's mount table does not see them. impd
+unpacks an image in a 0700 directory, so no host user reaches its files during a build. imp-host is
 not a security boundary against its own root; `SETFCAP` adds one more way for that root to leave the
-host a file that runs with privileges, next to the setuid files it can already write.
+host a privileged file, next to the setuid files it can already write.
 
 The rest of the list:
 
