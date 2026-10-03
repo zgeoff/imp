@@ -18,7 +18,7 @@
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
 #      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites (CI adds
-#      lifecycle and backups);
+#      lifecycle, disks, backups and boot-templates);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
 set -euo pipefail
