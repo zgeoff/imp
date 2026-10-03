@@ -7,7 +7,13 @@ import { join } from 'node:path';
 const REPO_ROOT = join(import.meta.dir, '..');
 const PINNED_BASE = /^FROM ghcr\.io\/zgeoff\/imp-base:[\w.\-]+@sha256:[0-9a-f]{64}$/v;
 
-for (const path of ['images/dev/Dockerfile', 'images/examples/hello/Dockerfile']) {
+const PINNED = [
+  'images/coder/Dockerfile',
+  'images/dev/Dockerfile',
+  'images/examples/hello/Dockerfile',
+];
+
+for (const path of PINNED) {
   test(`${path} starts FROM the published base, pinned by digest`, () => {
     const froms = readFileSync(join(REPO_ROOT, path), 'utf8')
       .split('\n')
@@ -18,11 +24,12 @@ for (const path of ['images/dev/Dockerfile', 'images/examples/hello/Dockerfile']
   });
 }
 
-test('dev and hello pin the same base', () => {
-  const read = (path: string) =>
+test('every image on the published base pins the same one', () => {
+  const froms = PINNED.map((path) =>
     readFileSync(join(REPO_ROOT, path), 'utf8')
       .split('\n')
-      .find((line) => line.startsWith('FROM '));
+      .find((line) => line.startsWith('FROM ')),
+  );
 
-  expect(read('images/dev/Dockerfile')).toBe(read('images/examples/hello/Dockerfile'));
+  expect(new Set(froms).size).toBe(1);
 });

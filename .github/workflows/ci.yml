@@ -214,6 +214,14 @@ jobs:
       - name: Build the release compile stage
         run: docker build --target compile -f host/Dockerfile .
 
+      # Each release publishes images/coder: build and check it here, so a
+      # broken Dockerfile or a wrong Claude Code pin fails before a release.
+      - name: Build the coder image
+        run: docker build --platform linux/amd64 -t imp-coder:ci images/coder
+
+      - name: Check the coder image
+        run: host/check-coder-image.sh imp-coder:ci
+
   # Packs @zgeoff/imp-client as the release publishes it, then installs the
   # tarball into an empty project on the oldest Node it supports, and smokes
   # it against impd's app under Node, Bun and a compiled Bun binary.
