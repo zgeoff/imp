@@ -3,13 +3,18 @@ import * as z from 'zod';
 import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import type { InstallBundle } from '../broker/guest-trust';
+import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
 import { setupImpTest } from './test-imps';
 
 // An exec with `require: ['broker']` starts only once impd set the broker's
 // variables and the CA bundle for the boot it starts in.
 
-const ExecFrameSchema = z.looseObject({ op: z.string(), env: z.array(z.string()).optional() });
+const ExecFrameSchema = z.looseObject({
+  op: z.string(),
+  env: z.array(z.string()).optional(),
+  session: z.string().optional(),
+});
 
 const RefusalSchema = z.object({
   code: z.literal('PRECONDITION_FAILED'),
@@ -38,9 +43,19 @@ async function setupRequireTest(installBundle?: InstallBundle) {
 
   const imp = await ctx.imps.createImp({ name: 'dev' });
 
-  // every exec the agent got, which answers each with STARTED
-  const agent = await startFakeAgent(buildImpPaths(ctx.dataDir, imp.id).vsockSocket, (socket) => {
-    socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
+  const paths = buildImpPaths(ctx.dataDir, imp.id);
+
+  // every exec the agent got, which answers each with STARTED, a session's
+  // as one that already ran
+  const agent = await startFakeAgent(paths.vsockSocket, (socket, request) => {
+    const session = ExecFrameSchema.parse(decodeJsonPayload(request)).session;
+
+    socket.write(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 9,
+        ...(session !== undefined && { session, created: false }),
+      }),
+    );
   });
 
   const createGrant = async () => {
@@ -53,6 +68,7 @@ async function setupRequireTest(installBundle?: InstallBundle) {
 
   return {
     ...ctx,
+    paths,
     createGrant,
     readExecs,
     async [Symbol.asyncDispose]() {
@@ -218,4 +234,59 @@ test('no lifecycle operation runs between the bundle step and the start', async 
   await Promise.all([exec, locked]);
 
   expect(order).toEqual(['exec started (1 sent)', 'lifecycle']);
+});
+
+test('a stop that takes the lock first leaves the exec to boot the imp and check again', async () => {
+  await using ctx = await setupRequireTest();
+
+  await ctx.createGrant();
+
+  const order: string[] = [];
+
+  // the exec finds the imp running, then the stop takes the lock before
+  // the exec's bundle step does
+  const opening = ctx.imps.openExec('dev', REQUIRED);
+
+  const stopping = ctx.imps.lockImp('dev', async (imp) => {
+    await ctx.imps.haltImp(imp, false);
+
+    order.push('stopped');
+  });
+
+  const stream = await opening;
+
+  stream.close();
+
+  await stopping;
+
+  expect(order).toEqual(['stopped']);
+  expect(ctx.bundleInstalls).toHaveLength(1);
+  expect(ctx.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
+});
+
+test('a session start that requires the broker is checked even when it attaches', async () => {
+  await using ctx = await setupRequireTest();
+
+  const identity = readVmIdentity(ctx.paths);
+
+  if (identity === null) {
+    throw new Error('no vm identity');
+  }
+
+  writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.16.0' });
+
+  const session = { argv: ['sh'], tty: true, session: 'main', require: ['broker'] } as const;
+
+  const refused = await readRefusal(ctx.imps.openExec('dev', session));
+
+  expect(refused).toContain('no grant');
+  expect(ctx.readExecs()).toEqual([]);
+
+  await ctx.createGrant();
+
+  const stream = await ctx.imps.openExec('dev', session);
+
+  stream.close();
+
+  expect(ctx.readExecs()[0]).toMatchObject({ session: 'main' });
 });
