@@ -154,6 +154,12 @@ describe('a build query', () => {
       expect(checkBuild(`${BUILD_FROM_DIR}&${extra}`)).toContain('is not allowed');
     }
   });
+
+  test('fails with a refused param given twice', () => {
+    expect(checkBuild(`${BUILD_FROM_DIR}&networkmode=host&networkmode=host`)).toBe(
+      'param networkmode is not allowed',
+    );
+  });
 });
 
 describe('an image reference', () => {
@@ -226,6 +232,7 @@ describe('a pull query', () => {
     );
 
     expect(checkPull('tag=latest')).toBe('param fromImage is missing');
+    expect(checkPull('fromImage=busybox')).toBe('param tag is missing');
   });
 });
 
@@ -233,6 +240,8 @@ describe('a remove query', () => {
   test('takes force only', () => {
     expect(checkRemoveQuery(parseQuery('force=1')).isOk).toBe(true);
     expect(checkRemoveQuery(parseQuery('force=1&link=1')).isOk).toBe(false);
+    expect(checkRemoveQuery(parseQuery('force=1&v=1')).isOk).toBe(false);
+    expect(checkRemoveQuery(parseQuery('link=1')).isOk).toBe(false);
   });
 });
 
@@ -271,6 +280,10 @@ describe('a create body', () => {
       ['Runtime', 'runc'],
       ['CgroupParent', '/'],
       ['PortBindings', { '22/tcp': [{ HostPort: '22' }] }],
+      ['Sysctls', { 'kernel.core_pattern': '|/x' }],
+      ['DeviceRequests', [{ Driver: 'nvidia', Count: -1 }]],
+      ['DeviceCgroupRules', ['b 7:* rmw']],
+      ['PidMode', 'container:imp-host'],
     ];
 
     for (const [key, value] of cases) {
