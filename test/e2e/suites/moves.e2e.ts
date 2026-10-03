@@ -39,6 +39,7 @@ const secret = `${prefix}gh`;
 const filler = `${prefix}filler`;
 const placed = `${prefix}placed`;
 const seen = `${prefix}seen`;
+const leased = `${prefix}leased`;
 
 // A's saved name beside B's, for the commands that reach every saved host
 const HOST_A = 'a';
@@ -89,6 +90,42 @@ async function startSend(name: string): Promise<void> {
   });
 
   expect(prepared.status).toBe(200);
+}
+
+const LeaseSchema = z.object({
+  owner: z.object({ principal: z.string(), label: z.string() }),
+  until: z.iso.datetime().nullable(),
+});
+
+interface RpcAnswer {
+  readonly ok: boolean;
+  readonly body: unknown;
+}
+
+// a call to a host's API as `token`: the answer's `json`, or its error
+async function sendRpc(
+  target: DevInstance,
+  token: string,
+  path: string,
+  input: unknown,
+): Promise<RpcAnswer> {
+  const response = await fetch(`${target.apiUrl}/rpc/${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ json: input }),
+    signal: AbortSignal.timeout(60_000),
+  });
+
+  const raw: unknown = await response.json();
+
+  return { ok: response.ok, body: z.object({ json: z.unknown() }).parse(raw).json };
+}
+
+async function listLeasesOn(target: DevInstance, name: string) {
+  const token = await readToken(target);
+  const answer = await sendRpc(target, token, 'leases/list', { name });
+
+  return z.array(LeaseSchema).parse(answer.body);
 }
 
 // both hosts saved in a CLI config of their own, so the move tests' config
@@ -167,10 +204,11 @@ beforeAll(async () => {
 }, 1_800_000);
 
 afterAll(async () => {
-  for (const name of [cold, kept, open, box, placed, seen]) {
+  for (const name of [cold, kept, open, box, placed, seen, leased]) {
     await tryImp(['rm', name], onB());
   }
 
+  await tryImp(['rm', leased]);
   await tryImp(['rm', filler]);
 
   rmSync(bothEnv['XDG_CONFIG_HOME'] ?? '', { recursive: true, force: true });
@@ -211,6 +249,59 @@ test('a stopped imp moves cold with its disk and checkpoint, and boots on the ta
 
   // room for the warm moves' guests in B's budget
   await runOnB('rm', cold);
+});
+
+test('a stop move ends the leases a client took, and the hold arrives with its time left', async () => {
+  await createImp(leased, '--image', TINY, '--memory', '256');
+
+  const token = await readToken(hosts.a);
+
+  const acquired = await sendRpc(hosts.a, token, 'leases/acquire', {
+    name: leased,
+    label: 'job',
+    ttlSeconds: 600,
+  });
+
+  await runImp('hold', leased, '30m');
+
+  const refused = await sendRpc(hosts.a, token, 'moves/prepare', {
+    name: leased,
+    stop: true,
+    targetStorage: 'xfs',
+  });
+
+  expect(acquired.ok).toBeTrue();
+  expect(refused.ok).toBeFalse();
+  expect(refused.body).toMatchObject({ code: 'LEASED' });
+
+  const before = Date.now();
+
+  const out = await runMoveToB(leased, '--stop');
+
+  const after = Date.now();
+
+  const leases = await listLeasesOn(hosts.b, leased);
+
+  expect(out).toContain(`${leased}: moved to ${HOST_B}`);
+
+  expect(leases.map((lease) => [lease.owner.principal, lease.owner.label])).toEqual([
+    ['root', 'hold'],
+  ]);
+
+  // the hold ends 30 minutes after the hold, as B's clock counts it
+  const until = Date.parse(leases[0]?.until ?? '');
+
+  expect(until).toBeGreaterThan(before + 29 * 60_000);
+  expect(until).toBeLessThanOrEqual(after + 30 * 60_000);
+
+  // B's root is the hold's owner: its `hold 0` releases it
+  await runOnB('hold', leased, '0');
+
+  const released = await listLeasesOn(hosts.b, leased);
+
+  expect(released).toEqual([]);
+
+  await runOnB('rm', leased);
 });
 
 test('an abort after the source marked the imp leaves it where it was', async () => {
