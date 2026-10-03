@@ -80,8 +80,16 @@ if [ -n "${IMP_BACKUP_STAGED:-}" ]; then
   fi
 fi
 
+# The host's own global addresses, both families, which impd keeps public
+# imps from (docs/architecture/networking.md#public); read at each start,
+# as deploy/imp-host.service does, so a new DHCP lease gets in.
+addresses=$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,) || {
+  echo "imp-host-env: cannot read the host's addresses; public imps can reach them unless IMP_EGRESS_DENY lists them" >&2
+  addresses=
+}
+
 # A later line wins, and only it is kept: the secrets file can set any key
-# but the backup ones above and the budget.
+# but the backup ones above, the budget and the host's addresses.
 content=$(
   {
     echo "# Written by imp-host-env.sh (the NixOS module) at each start; edits are lost."
@@ -89,6 +97,7 @@ content=$(
     [ -z "$secrets" ] || printf '%s\n' "$secrets"
     [ ${#backup[@]} = 0 ] || printf '%s\n' "${backup[@]}"
     echo "IMP_RAM_BUDGET_MIB=$budget"
+    echo "IMP_HOST_ADDRESSES=$addresses"
   } | awk '
     /^[A-Za-z_][A-Za-z0-9_]*=/ { key = substr($0, 1, index($0, "=") - 1); last[key] = NR }
     { line[NR] = $0 }

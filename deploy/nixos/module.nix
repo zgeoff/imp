@@ -210,6 +210,7 @@ let
         pkgs.gawk
         pkgs.gnused
         pkgs.gnugrep
+        pkgs.iproute2
       ]
     }
     export IMP_SETTINGS=${settingsFile}
@@ -573,9 +574,9 @@ in
       ];
       description = ''
         IMP_EGRESS_DENY: IPv4 and IPv6 addresses and CIDRs no public imp
-        reaches (docs/architecture/networking.md#public). List every address
-        this host owns, public ones above all: impd, inside the container,
-        cannot see them. IMP_PUBLIC_IP is always in it.
+        reaches (docs/architecture/networking.md#public). The module writes
+        this host's global addresses into IMP_HOST_ADDRESSES at each start;
+        list what that misses. IMP_PUBLIC_IP is always in it.
       '';
     };
 

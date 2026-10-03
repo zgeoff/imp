@@ -140,8 +140,9 @@ sends in the header and sets the real value.
    would start inside the host container and reach impd's API, the wake proxy and other imps' ports.
    The imp's [egress policy](../architecture/networking.md#egress) decides which hosts get a tunnel:
    `open` and `public` any, `box` those its list allows, `none` none. A `public` imp's tunnel is
-   also refused what its firewall refuses: the container's IPv4 networks, `IMP_EGRESS_DENY` and the
-   IPv6 documentation ranges. A tighter policy closes the tunnels it denies.
+   also refused what its firewall refuses: the container's IPv4 networks, `IMP_EGRESS_DENY`,
+   `IMP_HOST_ADDRESSES`, the IPv6 documentation ranges, and an address the host container routes out
+   by another interface than a default route's. A tighter policy closes the tunnels it denies.
 4. **The guest's variables.** Every exec in an imp with a grant, and every command, shell and SFTP
    server that the [SSH gateway](./ssh.md) starts, gets `HTTPS_PROXY` and `https_proxy`, `NO_PROXY`
    for loopback, `NODE_USE_ENV_PROXY=1`, and `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`,

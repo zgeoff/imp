@@ -570,7 +570,7 @@ ExecStartPre=/bin/sh -c 'case "$$IMP_HOST_NETWORK" in *imp-host*) /usr/bin/docke
 # IMP_HOST_PROBED; systemd reads the file again for ExecStart.
 RuntimeDirectory=imp-host
 EnvironmentFile=-/run/imp-host/probed.env
-ExecStartPre=/bin/sh -c 'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; [ -e /proc/sys/net/ipv6 ] && a="$$a --sysctl net.ipv6.conf.all.forwarding=1 --sysctl net.ipv6.conf.default.accept_ra=0 --sysctl net.ipv6.conf.default.accept_redirects=0 --sysctl net.ipv6.conf.default.disable_ipv6=0"; echo "IMP_HOST_PROBED=$$a" >/run/imp-host/probed.env'
+ExecStartPre=/bin/sh -c 'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; [ -e /proc/sys/net/ipv6 ] && a="$$a --sysctl net.ipv6.conf.all.forwarding=1 --sysctl net.ipv6.conf.default.accept_ra=0 --sysctl net.ipv6.conf.default.accept_redirects=0 --sysctl net.ipv6.conf.default.disable_ipv6=0"; { echo "IMP_HOST_PROBED=$$a"; echo "IMP_HOST_ADDRESSES=$$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,)"; } >/run/imp-host/probed.env'
 # In the foreground and without a docker restart policy: systemd supervises
 # it and restarts it on failure.
 # --hostname: restic's backup locks name the host (docs/architecture/backups.md)
@@ -594,6 +594,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   -v /var/lib/imp:/var/lib/imp \
   -v /run/imp-docker:/run/imp-docker:ro \
   -e DOCKER_HOST=unix:///run/imp-docker/docker.sock \
+  -e IMP_HOST_ADDRESSES \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   $IMP_PUBLIC_PORTS \
@@ -721,9 +722,11 @@ IMP_ACME_EMAIL=
 IMP_PUBLIC_IP=
 IMP_PUBLIC_PORTS=
 
-# The public egress policy (docs/architecture/networking.md#public): every
-# address this host owns, IPv4 and IPv6, comma-separated, as no public imp
-# may reach them. impd cannot see them from inside the container.
+# The public egress policy (docs/architecture/networking.md#public): more
+# addresses no public imp may reach, IPv4 and IPv6, comma-separated. The
+# systemd unit writes this host's global addresses into IMP_HOST_ADDRESSES at
+# each start; list what that misses. With deploy/compose.yaml, list every
+# address this host owns: impd cannot see them from inside the container.
 # IMP_PUBLIC_IP is always in it.
 IMP_EGRESS_DENY=
 

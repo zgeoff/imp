@@ -1,5 +1,5 @@
 {
-  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/module.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host-contract.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md). proxy is the imp-docker-proxy container (deploy/imp-docker-proxy.service): imp-host reaches Docker through its socket only, never the host's.",
+  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/module.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host-contract.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md). -e IMP_HOST_ADDRESSES: the unit writes the host's own addresses at each start, beside the probed args; without it in the environment, docker takes the env file's. proxy is the imp-docker-proxy container (deploy/imp-docker-proxy.service): imp-host reaches Docker through its socket only, never the host's.",
   "privileges": [
     ["--init", "--cgroupns=private", "--cap-drop", "ALL"],
     ["--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "--cap-add", "MKNOD"],
@@ -37,6 +37,7 @@
     ["-v", "/var/lib/imp:/var/lib/imp"],
     ["-v", "/run/imp-docker:/run/imp-docker:ro"],
     ["-e", "DOCKER_HOST=unix:///run/imp-docker/docker.sock"],
+    ["-e", "IMP_HOST_ADDRESSES"],
     ["-v", "/etc/imp:/etc/imp:ro"],
     ["-p", "127.0.0.1:7070:7070", "-p", "127.0.0.1:7080:7080"],
     ["$IMP_PUBLIC_PORTS"]

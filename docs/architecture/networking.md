@@ -98,8 +98,9 @@ still accept what it lets through.
   ranges, refuses every range the broker refuses (`REFUSED_RANGES`) and `IMP_SUBNET`, and accepts
   the addresses in its set. Anything else is refused. IPv6 follows the same order: the list's
   ranges, then the blocked IPv6 ranges, then the addresses in its IPv6 set.
-- A `public` chain refuses a packet that would leave by any interface but a default route's, then
-  the addresses in its `public4` and `public6` sets, and accepts the rest ([Public](#public)).
+- A `public` chain drops `ct state invalid`, refuses a packet that would leave by any interface but
+  a default route's of its family, then the addresses in its `public4` and `public6` sets, and
+  accepts the rest ([Public](#public)).
 - A refusal is a TCP reset, or ICMP admin-prohibited for anything else. A reset ends a live
   connection at once; ICMP alone leaves it retrying.
 - impd writes a new imp's chain in the same step as its insert, before its tap comes up, and takes a
@@ -165,43 +166,52 @@ loopback.
 
 Its slot chain checks, in order:
 
-1. The interface: a packet that would leave by anything but a default route's interface
-   (`ip route show default`, both families) is refused. `tailscale0`, a Tailscale subnet route and a
-   second Docker network are refused whatever address they carry. With no default route, everything
-   is.
-2. `public4`: every range the broker refuses (`REFUSED_RANGES`), `IMP_SUBNET`, the container's IPv4
-   networks (each on-link route, and each address as its prefix and as a /32), and the IPv4 entries
-   of `IMP_EGRESS_DENY`.
-3. `public6`: the [blocked IPv6 ranges](#blocked-ranges), the imps' prefix, the container's IPv6
-   prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, and the IPv6 entries of
-   `IMP_EGRESS_DENY`. An imp with no IPv6 address drops all IPv6.
+1. `ct state invalid` is dropped.
+2. The interface: a packet that would leave by anything but a default route's interface of its own
+   family (`ip route show default`, and `ip -6 route show default`) is refused. `tailscale0`, a
+   Tailscale subnet route and a second Docker network are refused whatever address they carry. With
+   no default route, everything is.
+3. `public4`: every range the broker refuses (`REFUSED_RANGES`), `IMP_SUBNET`, the container's IPv4
+   networks (each on-link route, and each address as its prefix and as a /32), the IPv4 entries of
+   `IMP_EGRESS_DENY`, and each IPv4 address of `IMP_HOST_ADDRESSES` as a /32.
+4. `public6`: the [blocked IPv6 ranges](#blocked-ranges), the imps' prefix, the container's IPv6
+   prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, the IPv6 entries of
+   `IMP_EGRESS_DENY`, and each IPv6 address of `IMP_HOST_ADDRESSES` as a /128. An imp with no IPv6
+   address drops all IPv6.
 
 impd writes these sets only while some imp is public, and reads the container's routes for them at
-each table build. `REFUSED_RANGES` and the blocked IPv6 ranges hold every block that the IANA
-special-purpose registries (2025-10-09) mark not globally reachable, and multicast; a unit test
-checks each block. The anycast services in `2001::/23` that are globally reachable stay reachable.
+each table build. A read that fails fails closed: impd logs
+`impd: egress: reading the host container's routes: …`, writes no uplink, so a public chain refuses
+everything, and refuses to start a public imp or set the policy until a later build reads them.
+`REFUSED_RANGES` and the blocked IPv6 ranges hold every block that the IANA special-purpose
+registries (2025-10-09) mark not globally reachable, and multicast; a unit test checks each block.
+The anycast services in `2001::/23` that are globally reachable stay reachable.
 
 The host container itself is never reached from a tap: `INPUT -i imp+` drops everything but the
 broker's and the resolver's ports, under every policy ([iptables](#iptables)). The public chain
 covers what the container forwards: the Docker host behind the bridge gateway, the networks past it,
 and the tailnet.
 
-| Path                                                                | How it closes                                                                                                                                                                     |
-| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| NAT64 and DNS64                                                     | `64:ff9b::/96` and `64:ff9b:1::/48` are refused, and the resolver removes a DNS64 answer in them.                                                                                 |
-| 6to4 and Teredo                                                     | `2002::/16`, `2001::/32` and the old relay anycast `192.88.99.0/24` are refused.                                                                                                  |
-| IPv4-mapped, IPv4-compatible and IPv4-translated IPv6               | `::ffff:0:0/96`, `::/96` and `::ffff:0:0:0/96` are refused. The broker dials a mapped answer as the IPv4 address it holds, under the IPv4 checks.                                 |
-| A global address routed to a private service: a subnet route, a VPN | It leaves by another interface than the default route's.                                                                                                                          |
-| A global address on the container's own network                     | `public4` and `public6` hold the container's networks.                                                                                                                            |
-| The Docker host's own public address                                | `IMP_EGRESS_DENY`, which always holds `IMP_PUBLIC_IP`. A packet to it leaves by the uplink and reaches the host from the container's address, which a host firewall may trust.    |
-| DNS rebinding                                                       | Nothing opens: the firewall refuses by address, whatever a name resolved to. The resolver removes inside answers, so a guest tries the next address at once.                      |
-| The credential broker                                               | It dials from the host container, which this firewall does not filter, as for every policy. A plain tunnel is refused every range above, and every address of the host container. |
+| Path                                                                | How it closes                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NAT64 and DNS64                                                     | `64:ff9b::/96` and `64:ff9b:1::/48` are refused, and the resolver removes a DNS64 answer in them.                                                                                                                                                                                      |
+| 6to4 and Teredo                                                     | `2002::/16`, `2001::/32` and the old relay anycast `192.88.99.0/24` are refused.                                                                                                                                                                                                       |
+| IPv4-mapped, IPv4-compatible and IPv4-translated IPv6               | `::ffff:0:0/96`, `::/96` and `::ffff:0:0:0/96` are refused. The broker dials a mapped answer as the IPv4 address it holds, under the IPv4 checks.                                                                                                                                      |
+| A global address routed to a private service: a subnet route, a VPN | It leaves by another interface than the default route's.                                                                                                                                                                                                                               |
+| A global address on the container's own network                     | `public4` and `public6` hold the container's networks.                                                                                                                                                                                                                                 |
+| The Docker host's own public address                                | `IMP_HOST_ADDRESSES` and `IMP_EGRESS_DENY`, which always holds `IMP_PUBLIC_IP` (see the limits below). A packet to it leaves by the uplink and reaches the host from the container's address, which a host firewall may trust.                                                         |
+| DNS rebinding                                                       | Nothing opens: the firewall refuses by address, whatever a name resolved to. The resolver removes inside answers, so a guest tries the next address at once.                                                                                                                           |
+| The credential broker                                               | It dials from the host container, which this firewall does not filter, as for every policy. A plain tunnel is refused every range above, every address of the host container, and an address that `ip route get` sends out by an interface other than a default route's of its family. |
 
 Known limits:
 
-- impd cannot see the Docker host's addresses from inside the container. List every address the
-  Docker host owns in `IMP_EGRESS_DENY`, IPv4 and IPv6: its public addresses and any global address
-  on its other interfaces. An address the list misses is reachable.
+- impd cannot see the Docker host's addresses from inside the container. `deploy/imp-host.service`
+  (which `bootstrap.sh` installs) and the NixOS module read them at each start into
+  `IMP_HOST_ADDRESSES`: every global-scope address, IPv4 and IPv6 (`ip -o addr show scope global`).
+  `deploy/compose.yaml` does not; there, list them in `IMP_EGRESS_DENY`. An address that neither
+  holds is reachable, such as one the host gains after the start. While a public imp exists and both
+  are empty, impd logs
+  `impd: egress: WARNING: a public imp exists and IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty`.
 - A route on the Docker host that sends a global address to a private service is outside impd's
   view. Only `IMP_EGRESS_DENY` closes it.
 - A host a [grant](../guides/connectors.md) covers is reached through the broker, whatever its
