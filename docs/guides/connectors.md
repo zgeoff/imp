@@ -67,9 +67,11 @@ Each grant records the secret's generation, and the broker uses a grant only whi
 A preset's hosts are part of its binding. If a later impd changes the hosts of a preset such as
 `github`, a plain `--replace` of a secret of that kind fails with `binding_changed`; add `--rebind`.
 
-The split between rotation and rebind needs impd 0.27.0 or later. An older impd takes a changed
-binding with a plain `--replace` and keeps every grant; the CLI warns when the answer shows it
-talked to one.
+The split between rotation and rebind needs impd 0.27.0 or later. An older impd drops `rebind`
+unread, takes a changed binding with a plain replace, and keeps every grant. Before a client sends
+`replace` or `rebind`, it checks that `system.info()` has `features.secretRebind`.
+`imp secret add --replace` does that check, with or without `--rebind`, and against an older impd it
+fails before it stores anything.
 
 ### Value files
 

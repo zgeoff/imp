@@ -699,7 +699,12 @@ export function buildRouter(deps: RouterDeps) {
 
 // what this impd can do; each session's `continuity` still decides whether
 // its imp's agent counts output
-const SYSTEM_FEATURES = { sessionOffsets: true, leases: true } as const;
+const SYSTEM_FEATURES = {
+  sessionOffsets: true,
+  leases: true,
+  grantableTokens: true,
+  secretRebind: true,
+} as const;
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given

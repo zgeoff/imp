@@ -3,6 +3,7 @@ import { ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
+import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -59,6 +60,14 @@ function parseGrantable(text: string | undefined): string[] | undefined {
   }
 
   return names;
+}
+
+// a list makes sense only on a manage token for some imps; an impd refuses
+// it otherwise, but an older one would not see the list at all
+function requireGrantScope(scope: Scope, imps: readonly string[] | undefined): void {
+  if (scope !== 'manage' || imps === undefined) {
+    throw new UsageError('--grantable needs --scope manage and --imps');
+  }
 }
 
 // The key lines of a public key file, such as ~/.ssh/id_ed25519.pub. A
@@ -122,6 +131,17 @@ const newCommand = defineCommand({
       const scope = parseScope(context.args.scope);
       const imps = parseImpPatterns(context.args.imps);
       const grantable = parseGrantable(context.args.grantable);
+
+      if (grantable !== undefined) {
+        requireGrantScope(scope, imps);
+
+        await requireFeature(
+          client,
+          'grantableTokens',
+          'drop --grantable and make the token without that limit',
+        );
+      }
+
       const keyFile = context.args['ssh-key'];
       const sshKeys = keyFile === undefined ? undefined : readKeyFile(keyFile);
 

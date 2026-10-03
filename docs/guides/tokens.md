@@ -120,6 +120,11 @@ a checkpoint restore and a restart of impd. A destroyed imp takes its grants wit
 made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
 dashboard sessions and the SSH keys bound to it too. `backups.restore` stays host-wide.
 
+An impd older than 0.27.0 drops `grantable` unread and makes a token with no list. Before a client
+sends `grantable`, it checks that `system.info()` has `features.grantableTokens`.
+`imp token new --grantable` does that check, and against an older impd it fails before it makes the
+token.
+
 ## Each way in
 
 | Way in                   | Runs as                                                                                |
