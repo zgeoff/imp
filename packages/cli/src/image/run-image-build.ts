@@ -95,9 +95,9 @@ export async function runImageBuild(
 
         // the upload's line ends where the build's starts
         onProgress: (event) => {
-          if (event.phase === 'build') {
+          if (event.phase !== 'upload') {
             progress.finish();
-            status.show(event.elapsedMs);
+            status.show(event);
           }
         },
       },

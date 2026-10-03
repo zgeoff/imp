@@ -4,6 +4,7 @@ import type { ImpClient } from '../create-imp-client';
 import { defineCommand } from '../define-command';
 import { formatImages, formatOutput } from '../format-output';
 import { runImageBuild } from '../image/run-image-build';
+import { runImageAdd, runOnHostBuild } from '../image/run-image-op';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg } from './common-args';
@@ -17,10 +18,14 @@ const addCommand = defineCommand({
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const image = await client.images.add({
-        ref: context.args.ref,
-        ...(context.args.name !== undefined && { name: context.args.name }),
-      });
+      const image = await runImageAdd(
+        client,
+        {
+          ref: context.args.ref,
+          ...(context.args.name !== undefined && { name: context.args.name }),
+        },
+        'imp image add',
+      );
 
       console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
     }),
@@ -71,7 +76,7 @@ function buildImage(client: ImpClient, args: Readonly<BuildArgs>): Promise<Image
     throw new UsageError(`--on-host takes an absolute path on the impd host, not ${args.dir}`);
   }
 
-  return client.images.build({
+  return runOnHostBuild(client, {
     contextDir: args.dir,
     name: args.name,
     ...(args.dockerfile !== undefined && { dockerfile: args.dockerfile }),
@@ -118,7 +123,11 @@ const templateCreateCommand = defineCommand({
   },
   run: (context) =>
     runAction(context.host, async (client) => {
-      const image = await client.images.add({ imp: context.args.imp, name: context.args.name });
+      const image = await runImageAdd(
+        client,
+        { imp: context.args.imp, name: context.args.name },
+        'imp template create',
+      );
 
       console.log(formatOutput(image, context.args.json, (one) => formatImages([one])));
     }),
