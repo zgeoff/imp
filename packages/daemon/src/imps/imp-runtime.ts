@@ -18,6 +18,7 @@ import { buildInvalidStateError, isDiskFullError } from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { createBrokerSessions } from '../exec/broker-sessions';
 import { buildBrokerNotReadyError, checkBrokerReady, isBrokerRequired } from '../exec/exec-require';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
@@ -157,6 +158,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const ops = parts.ops;
   const reconciler = createVmReconciler(context, ops);
   const lastDiskFull: { error: Error | null } = { error: null };
+  const brokerSessions = createBrokerSessions();
 
   // An elastic guest may hold more than its memory, and a new impd's cgroup
   // writer knows nothing of it: the limit covers what the guest holds, or the
@@ -364,7 +366,29 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
             ...(env.length > 0 && { env }),
           });
 
-          return request.session === undefined ? opening : withColdBoots(context, target, opening);
+          const session = request.session;
+
+          if (session === undefined) {
+            return opening;
+          }
+
+          // the boot a session that requires the broker started in
+          const boot = requiresBroker && broker.kind === 'ready' ? broker.boot : null;
+
+          const openNoted = async (): Promise<ExecStream> => {
+            const stream = await opening;
+
+            const refused = brokerSessions.note(target.id, session, stream.created, boot);
+
+            if (refused !== null) {
+              stream.close();
+              throw refused;
+            }
+
+            return stream;
+          };
+
+          return withColdBoots(context, target, openNoted());
         };
 
         if (!requiresBroker) {
