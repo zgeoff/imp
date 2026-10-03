@@ -39,16 +39,40 @@ classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
   `.dockerignore` is an ordinary file, and the ignore file can leave itself out. The Dockerfile
   always goes, because docker reads it from the context, so `COPY .` copies it even when the ignore
-  file matches it. Symlinks stay links, and files keep their modes. A progress line shows on a
-  terminal.
+  file matches it. Symlinks stay links, and files keep their modes. On a terminal, a progress line
+  shows the upload, then how long impd has built.
 - **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
   the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
   under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
   starts. When the client goes, impd ends the build request, which stops the build on the engine,
   and frees its slot and its disk room.
+- **The answer.** A client that sends `Accept: application/x-ndjson` gets the answer as a stream,
+  one JSON event per line. impd sends the headers and a first event as soon as it takes the build,
+  and a progress event every 15 s and at each new phase. The last event holds the image or the
+  error:
+
+  ```json
+  {"type":"progress","phase":"upload","elapsedMs":0}
+  {"type":"progress","phase":"build","elapsedMs":15000}
+  {"type":"image","image":{"name":"dev","ref":"imp/dev:latest","...":"..."}}
+  ```
+
+  An error ends the stream as `{"type":"error","code":"...","message":"..."}`, with the code an oRPC
+  call would give. A client skips an event type it does not know. The stream exists because a
+  client's fetch gives up on a response that stays silent: Bun's fetch (1.4.2) after 360 s without a
+  byte, before the headers or between two chunks, and `timeout: false` does not lift that. Node's
+  fetch (undici) waits 300 s for the headers (`headersTimeout`) and 300 s between two chunks of the
+  body (`bodyTimeout`). A build can take longer than that. A client that sends no such `Accept`, as
+  an older CLI, gets the image or the error as JSON when the build ends, and still fails on a build
+  longer than its fetch waits. `system.info` lists `imageBuildStream` among the features of an impd
+  that streams. The CLI asks for the stream and reads JSON from an impd that answers JSON.
+
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
-  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
+  `TOO_MANY_REQUESTS`. impd refuses the build with its real HTTP status when it can tell before it
+  answers: auth, the query, a Content-Length over the limit, and a fifth build. A stream answers 200
+  first, so a context that grows past the limit as it uploads, or a failed build, ends the stream
+  with an error event. The disk budget holds room for the tar, for Docker's copy of it, and for the
   image ([storage](../architecture/storage.md#disk-budget)).
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
@@ -135,10 +159,12 @@ plain `docker build` goes in with `imp image add <ref>`. `images/dev` and `image
 start FROM the published base by digest; to stack them on another base, edit that FROM line. An
 imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
 
-The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
-`context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
-only that much disk; without it, impd holds the whole limit. It throws an `ORPCError` as a contract
-call would.
+The SDK has the same upload:
+`client.buildImage(name, context, { dockerfile, size, signal, onProgress })`, where `context` is a
+tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds only that much
+disk; without it, impd holds the whole limit. It reads the answer as a stream and calls `onProgress`
+with each progress event; an impd from before the stream answers JSON at the end, and sends no
+progress. It throws an `ORPCError` as a contract call would.
 
 ## What the guest takes from the image
 
