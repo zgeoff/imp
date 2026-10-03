@@ -1,6 +1,7 @@
+import { isDeepStrictEqual } from 'node:util';
 import { DockerfileError } from './dockerfile-error';
-import { parseDockerfile } from './dockerfile-parse';
-import type { Instruction } from './dockerfile-parse';
+import { parseDockerfile, splitDockerfileLines } from './dockerfile-parse';
+import type { Instruction, ParsedDockerfile } from './dockerfile-parse';
 
 // where a Dockerfile names an image the engine would pull on its own
 type ImageUse = 'FROM' | 'COPY --from' | 'RUN --mount from';
@@ -33,13 +34,47 @@ function checkPlain(text: string, escape: string, what: string, line: number): v
   }
 }
 
-// The one place FROM --platform is decided. impd sends no platform, so the
-// build runs for the host's, which is the platform impd inspects.
-function checkPlatform(value: string, line: number): void {
+// the variables the frontend sets to the build's platforms
+const PLATFORM_ARGS = new Set([
+  'BUILDPLATFORM',
+  'BUILDOS',
+  'BUILDARCH',
+  'BUILDVARIANT',
+  'TARGETPLATFORM',
+  'TARGETOS',
+  'TARGETARCH',
+  'TARGETVARIANT',
+]);
+
+// The one place FROM --platform is decided. impd sends no platform, so both
+// variables are the host's, the platform impd inspects; the pinned copy
+// names it outright (platform), and impd refuses every other value.
+function resolvePlatform(value: string, platform: string | null, line: number): string {
+  if (value === '$BUILDPLATFORM' || value === '$TARGETPLATFORM') {
+    return platform ?? value;
+  }
+
   throw buildRefusal(
     line,
-    `FROM --platform=${value} is refused: impd checks a base image for the host's platform only`,
+    `FROM --platform=${value} is refused: impd builds for the host's platform only; use $BUILDPLATFORM or $TARGETPLATFORM, or leave it out`,
   );
+}
+
+// An ARG of a platform variable would change what --platform reads. Quotes
+// and the escape character are dropped first, so a name hides behind none.
+function checkArg(instruction: Readonly<Instruction>, escape: string): void {
+  const plain = instruction.args.replaceAll(/["']/gv, '').replaceAll(escape, '');
+
+  for (const word of plain.split(/[\s\u0085]+/v)) {
+    const name = word.split('=')[0] ?? '';
+
+    if (PLATFORM_ARGS.has(name.toUpperCase())) {
+      throw buildRefusal(
+        instruction.line,
+        `ARG ${name} is refused: the build's platform variables are the host's, and impd checks images for that platform`,
+      );
+    }
+  }
 }
 
 // the value of each `--name=value` flag called name
@@ -47,18 +82,6 @@ function readFlagValues(instruction: Readonly<Instruction>, name: string): strin
   return instruction.flags
     .filter((flag) => flag === `--${name}` || flag.startsWith(`--${name}=`))
     .map((flag) => flag.slice(name.length + 3));
-}
-
-// the `from` of each --mount; the frontend reads the mount as CSV, which
-// holds no quote here
-function readMountFroms(instruction: Readonly<Instruction>): string[] {
-  return readFlagValues(instruction, 'mount').flatMap((mount) =>
-    mount
-      .split(',')
-      .map((field) => field.split('='))
-      .filter(([key]) => key?.toLowerCase() === 'from')
-      .map((parts) => parts.slice(1).join('=')),
-  );
 }
 
 function checkWords(instruction: Readonly<Instruction>, escape: string): void {
@@ -80,7 +103,7 @@ function checkWords(instruction: Readonly<Instruction>, escape: string): void {
     }
 
     for (const platform of readFlagValues(instruction, 'platform')) {
-      checkPlatform(platform, line);
+      resolvePlatform(platform, null, line);
     }
   }
 
@@ -122,17 +145,137 @@ function listStageNames(instructions: readonly Instruction[]): Set<string> {
   return names;
 }
 
+// what the walk turns each image the build names into: the ref as
+// written, or the ref pinned
+type PickImage = (ref: string, use: ImageUse, line: number) => string;
+
+// an instruction as the pinned copy writes it
+interface PinnedInstruction {
+  readonly instruction: Instruction;
+  readonly flags: readonly string[];
+  readonly words: readonly string[];
+}
+
+// the instructions whose flags or words name an image or a platform, with
+// the images given by pickImage and the platform given
+function pickInstruction(
+  instruction: Readonly<Instruction>,
+  earlierStages: ReadonlySet<string>,
+  allStages: ReadonlySet<string>,
+  pickImage: PickImage,
+  platform: string | null,
+): PinnedInstruction {
+  const line = instruction.line;
+
+  if (instruction.keyword === 'from') {
+    const [image = '', ...rest] = instruction.words;
+
+    // a base matches an earlier stage as written
+    const isExternal = image !== '' && image !== 'scratch' && !earlierStages.has(image);
+    const base = isExternal ? pickImage(image, 'FROM', line) : image;
+
+    const flags = instruction.flags.map((flag) =>
+      flag.startsWith('--platform=')
+        ? `--platform=${resolvePlatform(flag.slice('--platform='.length), platform, line)}`
+        : flag,
+    );
+
+    const words = instruction.words.length === 0 ? [] : [base, ...rest];
+
+    return { instruction, flags, words };
+  }
+
+  if (instruction.keyword === 'copy') {
+    const flags = instruction.flags.map((flag) => {
+      const from = flag.startsWith('--from=') ? flag.slice('--from='.length) : null;
+
+      const isExternal =
+        from !== null &&
+        !/^\d+$/v.test(from) &&
+        from !== 'scratch' &&
+        !allStages.has(from.toLowerCase());
+
+      return isExternal ? `--from=${pickImage(from, 'COPY --from', line)}` : flag;
+    });
+
+    return { instruction, flags, words: instruction.words };
+  }
+
+  if (instruction.keyword === 'run') {
+    const flags = instruction.flags.map((flag) => {
+      if (!flag.startsWith('--mount=')) {
+        return flag;
+      }
+
+      const fields = flag.slice('--mount='.length).split(',');
+
+      const pinned = fields.map((field) => {
+        const [key = '', ...value] = field.split('=');
+        const from = value.join('=');
+
+        const isExternal =
+          key.toLowerCase() === 'from' &&
+          from !== '' &&
+          from !== 'scratch' &&
+          !allStages.has(from.toLowerCase());
+
+        return isExternal ? `${key}=${pickImage(from, 'RUN --mount from', line)}` : field;
+      });
+
+      return `--mount=${pinned.join(',')}`;
+    });
+
+    return { instruction, flags, words: instruction.words };
+  }
+
+  return { instruction, flags: instruction.flags, words: instruction.words };
+}
+
 // Refuses what impd cannot check or would let the engine fetch on its own,
-// and returns the images the build names outside its stages, each once.
-export function checkDockerfile(dockerfile: string): ExternalImage[] {
-  const parsed = parseDockerfile(dockerfile);
+// and gives each instruction with its images as pickImage picks them.
+function resolveInstructions(
+  parsed: Readonly<ParsedDockerfile>,
+  pickImage: PickImage,
+  platform: string | null,
+): PinnedInstruction[] {
   const allStages = listStageNames(parsed.instructions);
 
   const earlierStages = new Set<string>();
 
+  return parsed.instructions.map((instruction) => {
+    // a trigger runs in a later build, from this image or a later stage
+    if (instruction.keyword === 'onbuild') {
+      throw buildRefusal(
+        instruction.line,
+        'ONBUILD is refused: impd checks only the instructions this build runs',
+      );
+    }
+
+    if (instruction.keyword === 'arg') {
+      checkArg(instruction, parsed.escape);
+    }
+
+    if (['from', 'add', 'copy', 'run'].includes(instruction.keyword)) {
+      checkWords(instruction, parsed.escape);
+    }
+
+    const pinned = pickInstruction(instruction, earlierStages, allStages, pickImage, platform);
+    const [, as, stage] = instruction.words;
+
+    if (instruction.keyword === 'from' && as?.toLowerCase() === 'as' && stage !== undefined) {
+      earlierStages.add(stage.toLowerCase());
+    }
+
+    return pinned;
+  });
+}
+
+// Refuses what impd cannot check or would let the engine fetch on its own,
+// and returns the images the build names outside its stages, each once.
+export function checkDockerfile(dockerfile: string): ExternalImage[] {
   const images: ExternalImage[] = [];
 
-  const collectImage = (ref: string, use: ImageUse, line: number): void => {
+  const collectImage: PickImage = (ref, use, line) => {
     if (ref.includes('$')) {
       throw buildRefusal(
         line,
@@ -143,52 +286,89 @@ export function checkDockerfile(dockerfile: string): ExternalImage[] {
     if (!images.some((image) => image.ref === ref && image.use === use)) {
       images.push({ ref, use });
     }
+
+    return ref;
   };
 
-  for (const instruction of parsed.instructions) {
-    const line = instruction.line;
+  resolveInstructions(parseDockerfile(dockerfile), collectImage, null);
 
-    // a trigger runs in a later build, from this image or a later stage
-    if (instruction.keyword === 'onbuild') {
-      throw buildRefusal(
-        line,
-        'ONBUILD is refused: impd checks only the instructions this build runs',
-      );
+  return images;
+}
+
+// the instruction on one line, as the pinned copy writes it
+function formatInstruction(pinned: Readonly<PinnedInstruction>): string {
+  const instruction = pinned.instruction;
+  const args = instruction.keyword === 'from' ? pinned.words.join(' ') : instruction.args;
+
+  return [instruction.command, ...pinned.flags, args].filter((part) => part !== '').join(' ');
+}
+
+// what the pinned copy must parse back to: the same instructions, with
+// only the flags and words the pin changed
+function listShapes(instructions: readonly Instruction[], pinned?: readonly PinnedInstruction[]) {
+  return instructions.map((instruction, index) => {
+    const changed = pinned?.[index];
+    const words = changed?.words ?? instruction.words;
+
+    return {
+      keyword: instruction.keyword,
+      flags: changed?.flags ?? instruction.flags,
+      args: instruction.keyword === 'from' ? words.join(' ') : instruction.args,
+      words,
+      isJson: instruction.isJson,
+    };
+  });
+}
+
+// The Dockerfile with each image outside its stages replaced by its pin and
+// FROM --platform's variable by platform. A changed instruction is written
+// on one line, as the frontend joins it, and must parse back the same.
+export function renderPinnedDockerfile(
+  dockerfile: string,
+  pins: ReadonlyMap<string, string>,
+  platform: string,
+): string {
+  const parsed = parseDockerfile(dockerfile);
+
+  const findPin: PickImage = (ref, use, line) => {
+    const pin = pins.get(ref);
+
+    if (pin === undefined) {
+      throw buildRefusal(line, `${use} ${ref} has no pin`);
     }
 
-    if (['from', 'add', 'copy', 'run'].includes(instruction.keyword)) {
-      checkWords(instruction, parsed.escape);
-    }
+    return pin;
+  };
 
-    if (instruction.keyword === 'from') {
-      const [image = '', as, stage] = instruction.words;
+  const pinned = resolveInstructions(parsed, findPin, platform);
+  const lines = splitDockerfileLines(dockerfile);
 
-      // a base matches an earlier stage as written
-      if (image !== '' && image !== 'scratch' && !earlierStages.has(image)) {
-        collectImage(image, 'FROM', line);
-      }
+  // from the last, so each instruction's lines are where it read them
+  for (const entry of pinned.toReversed()) {
+    const instruction = entry.instruction;
 
-      if (as?.toLowerCase() === 'as' && stage !== undefined) {
-        earlierStages.add(stage.toLowerCase());
-      }
-    }
+    const isChanged =
+      !isDeepStrictEqual(entry.flags, instruction.flags) ||
+      !isDeepStrictEqual(entry.words, instruction.words);
 
-    if (instruction.keyword === 'copy') {
-      for (const from of readFlagValues(instruction, 'from')) {
-        if (!/^\d+$/v.test(from) && from !== 'scratch' && !allStages.has(from.toLowerCase())) {
-          collectImage(from, 'COPY --from', line);
-        }
-      }
-    }
+    if (isChanged) {
+      const ending = /\r?\n$/v.exec(lines[instruction.endLine - 1] ?? '')?.[0] ?? '';
+      const span = instruction.endLine - instruction.line + 1;
 
-    if (instruction.keyword === 'run') {
-      for (const from of readMountFroms(instruction)) {
-        if (from !== '' && from !== 'scratch' && !allStages.has(from.toLowerCase())) {
-          collectImage(from, 'RUN --mount from', line);
-        }
-      }
+      lines.splice(instruction.line - 1, span, `${formatInstruction(entry)}${ending}`);
     }
   }
 
-  return images;
+  const text = lines.join('');
+  const reparsed = parseDockerfile(text);
+
+  const isSame =
+    reparsed.escape === parsed.escape &&
+    isDeepStrictEqual(listShapes(reparsed.instructions), listShapes(parsed.instructions, pinned));
+
+  if (!isSame) {
+    throw new DockerfileError('impd could not pin the images this Dockerfile names');
+  }
+
+  return text;
 }

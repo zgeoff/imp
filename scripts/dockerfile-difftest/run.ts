@@ -6,6 +6,10 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as z from 'zod';
+import {
+  checkDockerfile,
+  renderPinnedDockerfile,
+} from '../../packages/daemon/src/images/dockerfile-check';
 import { parseDockerfile } from '../../packages/daemon/src/images/dockerfile-parse';
 import type { Instruction } from '../../packages/daemon/src/images/dockerfile-parse';
 
@@ -48,6 +52,8 @@ const PIECES = [
   'FROM a:1',
   'from c',
   'FROM --platform=x b:2 AS s',
+  'FROM --platform=$BUILDPLATFORM a:1 AS p',
+  'FROM --platform=$TARGETPLATFORM \\',
   'FROM h:1 AS \\',
   'FROM d \\',
   '  e:1',
@@ -77,11 +83,17 @@ const PIECES = [
   'COPY --from=x`y a b',
   'COPY --from=a\u00A0--chown=1 x y',
   'COPY --link --from=s a b',
+  'COPY --from=img:1 \\',
+  '  /a /b',
+  'COPY --from=img:3 <<EOF /x',
+  'COPY --from=p ["a", "b"]',
   'COPY ["a b", "c"]',
   'COPY <<EOF /x',
   'COPY <<EOF <<-EOF2 /d',
   'RUN --mount=type=bind,from=x true',
   'RUN --mount=type=cache,from=c,target=/x true',
+  'RUN --mount=from=img:2,target=/i \\',
+  'RUN --mount=from=img:4,target=/i cat <<EOF',
   'RUN --x="a b" c',
   'RUN -- --x',
   'RUN cat <<EOF',
@@ -211,6 +223,28 @@ function formatErrorClass(error: string): string {
   return error.replaceAll(/line \d+/gv, 'line N').replaceAll(/"[^"]*"/gv, '"…"');
 }
 
+// The pinned copy impd builds of a Dockerfile it accepts; null when impd
+// refuses the file, and an error when impd accepts it but cannot pin it
+function renderPinned(dockerfile: string): string | null | Error {
+  let images: ReturnType<typeof checkDockerfile>;
+
+  try {
+    images = checkDockerfile(dockerfile);
+  } catch {
+    return null;
+  }
+
+  const digest = `sha256:${'a'.repeat(64)}`;
+
+  const pins = new Map(images.map((image, index) => [image.ref, `pin${String(index)}@${digest}`]));
+
+  try {
+    return renderPinnedDockerfile(dockerfile, pins, 'linux/amd64');
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 function runGo(binary: string, dockerfiles: readonly string[]): GoResult[] {
   const child = Bun.spawnSync([binary], { stdin: Buffer.from(JSON.stringify(dockerfiles)) });
 
@@ -254,7 +288,8 @@ function main(): number {
   const values = args.values;
   const random = makeRandom(Number(values.seed));
   const dockerfiles = Array.from({ length: Number(values.count) }, () => buildDockerfile(random));
-  const theirs = runGo(buildGo(), dockerfiles);
+  const binary = buildGo();
+  const theirs = runGo(binary, dockerfiles);
 
   const counts = {
     both: 0,
@@ -263,7 +298,13 @@ function main(): number {
     oursOnlyRefuse: 0,
     goOnlyRefuse: 0,
     unexplained: 0,
+    pinned: 0,
+    pinMismatches: 0,
+    pinFailures: 0,
   };
+
+  // the files both parsers read, which the pin round trip uses
+  const accepted: string[] = [];
 
   const oursOnly = new Map<string, number>();
   const goOnly = new Map<string, number>();
@@ -305,6 +346,8 @@ function main(): number {
 
     counts.both += 1;
 
+    accepted.push(dockerfile);
+
     const goView = JSON.stringify({
       escape: go.escape,
       instructions: (go.instructions ?? []).map((instruction) => toGoComparable(instruction)),
@@ -319,11 +362,53 @@ function main(): number {
     }
   });
 
+  // the pinned copies must read the same to the Go parser as to impd's
+  const pinned: string[] = [];
+
+  for (const dockerfile of accepted) {
+    const rendered = renderPinned(dockerfile);
+
+    if (rendered instanceof Error) {
+      counts.pinFailures += 1;
+
+      console.log(`impd cannot pin: ${JSON.stringify(dockerfile)}\n  ${rendered.message}`);
+    } else if (rendered !== null) {
+      pinned.push(rendered);
+    }
+  }
+
+  const pinnedTheirs = runGo(binary, pinned);
+
+  pinned.forEach((dockerfile, index) => {
+    const ours = readOurs(dockerfile);
+    const go = pinnedTheirs[index] ?? { error: 'no result' };
+
+    counts.pinned += 1;
+
+    const goView = JSON.stringify({
+      error: go.error ?? null,
+      escape: go.escape ?? '',
+      instructions: (go.instructions ?? []).map((instruction) => toGoComparable(instruction)),
+    });
+
+    const ourView = JSON.stringify(ours);
+
+    if (goView !== ourView) {
+      counts.pinMismatches += 1;
+
+      console.log(
+        `pinned differs: ${JSON.stringify(dockerfile)}\n  impd ${ourView}\n  go   ${goView}`,
+      );
+    }
+  });
+
   console.log(JSON.stringify({ seed: values.seed, files: dockerfiles.length, ...counts }, null, 2));
   console.log('impd refuses, go accepts:', Object.fromEntries(oursOnly));
   console.log('go refuses, impd accepts:', Object.fromEntries(goOnly));
 
-  return counts.mismatches + counts.unexplained === 0 ? 0 : 1;
+  return counts.mismatches + counts.unexplained + counts.pinMismatches + counts.pinFailures === 0
+    ? 0
+    : 1;
 }
 
 process.exit(main());

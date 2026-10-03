@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { checkDockerfile } from './dockerfile-check';
+import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
 
 function listBaseImages(dockerfile: string): string[] {
@@ -217,13 +217,101 @@ test('ONBUILD is refused, in the Dockerfile and in a stage a later FROM uses', (
   }
 });
 
-test('FROM --platform is refused, so the platform impd inspects is the one built', () => {
-  expect(readRefusal('FROM --platform=$BUILDPLATFORM a:1')).toContain(
-    'FROM --platform=$BUILDPLATFORM is refused',
-  );
+test('FROM --platform may name only the build or target platform variable, as written', () => {
+  expect(
+    checkDockerfile('FROM --platform=$BUILDPLATFORM a:1\nFROM --platform=$TARGETPLATFORM b:1'),
+  ).toEqual([
+    { ref: 'a:1', use: 'FROM' },
+    { ref: 'b:1', use: 'FROM' },
+  ]);
 
-  expect(readRefusal('FROM --platform=linux/arm64 a:1')).toContain(
-    'FROM --platform=linux/arm64 is refused',
+  for (const value of [
+    'linux/arm64',
+    ['$', '{BUILDPLATFORM}'].join(''),
+    '$BUILDPLATFORM/v8',
+    '$BUILDOS/amd64',
+  ]) {
+    expect(readRefusal(`FROM --platform=${value} a:1`)).toContain(
+      `FROM --platform=${value} is refused`,
+    );
+  }
+});
+
+test('an ARG of a platform variable is refused, in any stage and behind quotes', () => {
+  const global = readRefusal('ARG BUILDPLATFORM=linux/arm64\nFROM --platform=$BUILDPLATFORM a:1');
+  const staged = readRefusal('FROM a:1\nARG TARGETPLATFORM');
+  const quoted = readRefusal('ARG A=1 "targetarch"=arm64\nFROM a:1');
+
+  const escaped = readRefusal(String.raw`ARG BUILD\OS=x
+FROM a:1`);
+
+  expect(global).toContain('line 1: ARG BUILDPLATFORM is refused');
+  expect(staged).toContain('line 2: ARG TARGETPLATFORM is refused');
+  expect(quoted).toContain('ARG targetarch is refused');
+  expect(escaped).toContain('ARG BUILDOS is refused');
+  expect(checkDockerfile('ARG VERSION="1.2" PLATFORM_NOTE\nFROM a:1')).toBeDefined();
+});
+
+const PINS = new Map([
+  ['a:1', 'a@sha256:1111'],
+  ['b:2', 'b@sha256:2222'],
+  ['c:3', 'c@sha256:3333'],
+]);
+
+test('the pinned copy names each image by its pin and the platform outright', () => {
+  const dockerfile = [
+    '# escape=\\',
+    'FROM --platform=$BUILDPLATFORM a:1 AS build',
+    'COPY --from=b:2 /x /x',
+    'RUN --mount=type=bind,from=c:3,target=/c --mount=from=build,target=/b true',
+    'FROM build',
+    'COPY --from=build /x /y',
+    'FROM a:1',
+    '',
+  ].join('\n');
+
+  expect(renderPinnedDockerfile(dockerfile, PINS, 'linux/amd64')).toBe(
+    [
+      '# escape=\\',
+      'FROM --platform=linux/amd64 a@sha256:1111 AS build',
+      'COPY --from=b@sha256:2222 /x /x',
+      'RUN --mount=type=bind,from=c@sha256:3333,target=/c --mount=from=build,target=/b true',
+      'FROM build',
+      'COPY --from=build /x /y',
+      'FROM a@sha256:1111',
+      '',
+    ].join('\n'),
+  );
+});
+
+// the frontend joins a continuation without its newline, and a heredoc's
+// body is read after the instruction's own lines
+test('a pinned instruction is joined onto one line, and a heredoc body is kept as it is', () => {
+  const body = ['  echo "$HOME" \\', '# not a comment here', 'EOF'];
+
+  const dockerfile = [
+    'from a:1',
+    'RUN --mount=from=c:3,target=/c \\',
+    '# a comment in the continuation',
+    '    sh <<EOF',
+    ...body,
+    'COPY \\',
+    '  --from=b:2 ["/x", "/y"]',
+  ].join('\r\n');
+
+  expect(renderPinnedDockerfile(dockerfile, PINS, 'linux/amd64')).toBe(
+    [
+      'from a@sha256:1111',
+      'RUN --mount=from=c@sha256:3333,target=/c sh <<EOF',
+      ...body,
+      'COPY --from=b@sha256:2222 ["/x", "/y"]',
+    ].join('\r\n'),
+  );
+});
+
+test('the pinned copy needs a pin for every image the build names', () => {
+  expect(() => renderPinnedDockerfile('FROM d:4', PINS, 'linux/amd64')).toThrow(
+    'line 1: FROM d:4 has no pin',
   );
 });
 

@@ -5,8 +5,9 @@
 import { DockerfileError } from './dockerfile-error';
 
 export interface Instruction {
-  // the keyword, lowercased; only ASCII keywords are read
+  // the keyword, lowercased, and as written; only ASCII keywords are read
   readonly keyword: string;
+  readonly command: string;
 
   // the builder flags, such as `--from=build`, and the text they came from
   readonly flags: readonly string[];
@@ -22,8 +23,10 @@ export interface Instruction {
   // ONBUILD's own instruction
   readonly trigger: Instruction | null;
 
-  // the 1-based line the instruction starts on
+  // the 1-based lines the instruction starts and ends on, before any
+  // heredoc's body
   readonly line: number;
+  readonly endLine: number;
 }
 
 export interface ParsedDockerfile {
@@ -68,9 +71,10 @@ function isComment(line: string): boolean {
   return line.replace(LEADING_SPACE, '').startsWith('#');
 }
 
-// the lines with their endings, as the parser's scanLines gives them
-function splitLines(text: string): string[] {
-  const lines = text.match(/[^\n]*\n|[^\n]+$/gv) ?? [];
+// the lines with their endings, as the parser's scanLines gives them,
+// after the byte order mark it drops
+export function splitDockerfileLines(text: string): string[] {
+  const lines = text.replace(/^\uFEFF/v, '').match(/[^\n]*\n|[^\n]+$/gv) ?? [];
 
   return lines;
 }
@@ -291,7 +295,7 @@ function readWords(keyword: string, args: string): { words: string[]; isJson: bo
 }
 
 // newNodeFromLine: the keyword, its flags and its arguments
-function readInstruction(text: string, escape: string, line: number): Instruction {
+function readInstruction(text: string, escape: string, line: number, endLine: number): Instruction {
   const trimmed = removeGoSpace(text);
   const commandEnd = WORD_SPACE.exec(trimmed);
   const command = commandEnd === null ? trimmed : trimmed.slice(0, commandEnd.index);
@@ -312,11 +316,15 @@ function readInstruction(text: string, escape: string, line: number): Instructio
   const keyword = command.toLowerCase();
   const split = splitFlags(rest, escape);
   const args = removeGoSpace(split.args);
-  const trigger = keyword === 'onbuild' && args !== '' ? readInstruction(args, escape, line) : null;
+
+  const trigger =
+    keyword === 'onbuild' && args !== '' ? readInstruction(args, escape, line, endLine) : null;
+
   const read = keyword === 'onbuild' ? { words: [], isJson: false } : readWords(keyword, args);
 
   return {
     keyword,
+    command,
     flags: split.flags,
     rawFlags: split.raw,
     args,
@@ -324,6 +332,7 @@ function readInstruction(text: string, escape: string, line: number): Instructio
     isJson: read.isJson,
     trigger,
     line,
+    endLine,
   };
 }
 
@@ -476,7 +485,7 @@ function findHeredocs(text: string, line: number): Heredoc[] {
 
 // Splits the Dockerfile as the frontend's parser.Parse does.
 export function parseDockerfile(text: string): ParsedDockerfile {
-  const lines = splitLines(text.replace(/^﻿/v, ''));
+  const lines = splitDockerfileLines(text);
 
   const directives = new DirectiveReader();
 
@@ -520,7 +529,7 @@ export function parseDockerfile(text: string): ParsedDockerfile {
       isEnd = ended;
     }
 
-    const instruction = readInstruction(joined, directives.escape, startLine);
+    const instruction = readInstruction(joined, directives.escape, startLine, index);
 
     if (canHoldHeredoc(instruction) && joined.includes('<<')) {
       for (const heredoc of findHeredocs(joined, startLine)) {
