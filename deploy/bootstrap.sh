@@ -48,7 +48,8 @@ Storage:
                               gets the dataset NAME/imp.
 
 Options:
-  --image REF                 host image (default ghcr.io/zgeoff/imp-host:latest)
+  --image REF                 host image, pinned in the env file (default: the
+                              image of this script's release)
   --image-archive FILE        docker load FILE when REF is missing, instead of a pull
   --tailscale-authkey-file F  a tagged auth key for the host container's node
                               (or TAILSCALE_AUTHKEY in the environment)
@@ -82,7 +83,13 @@ readonly FIREWALL_FILE=$IMP_DIR/firewall.nft
 readonly SECCOMP_FILE=$IMP_DIR/imp-host.seccomp.json
 readonly SECCOMP_IN_IMAGE=/usr/local/share/imp/deploy/imp-host.seccomp.json
 readonly DATA_DIR=/var/lib/imp
-readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# The image of this script's release, as the units name it; release-please
+# bumps it.
+readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:0.26.2 # x-release-please-version
+# The image line every env file had before the units named their release.
+# A file still holding it gets the commented pin; any other value is the
+# operator's pin and stays.
+readonly LEGACY_IMAGE_LINE=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
 # Docker's apt signing key (https://docs.docker.com/engine/install/ubuntu/).
 readonly DOCKER_KEY_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 # The template's IMP_RAM_BUDGET_MIB; a file still holding it gets the
@@ -467,8 +474,10 @@ EOF
 # render_env EXISTING TEMPLATE BUDGET IMAGE IMAGE_SET STORAGE ZFS_ROOT
 # HOST_FIREWALL IPV6 SUBNET6 [KSM]: imp-host.env with bootstrap's keys set. EXISTING (empty when there is no
 # file) wins over TEMPLATE; the operator's other lines stay. IMP_HOST_IMAGE
-# is set when IMAGE_SET is non-empty or the file is new, IMP_RAM_BUDGET_MIB
-# when it is empty or still the template's, IMP_STORAGE_BACKEND,
+# is set when IMAGE_SET is non-empty, and a LEGACY_IMAGE_LINE becomes the
+# commented pin of IMAGE otherwise (the units run their release's image).
+# IMP_RAM_BUDGET_MIB is set when it is empty or still the template's,
+# IMP_STORAGE_BACKEND,
 # IMP_HOST_FIREWALL, IMP_HOST_IPV6 and IMP_HOST_NETWORK (from IPV6) always,
 # IMP_ZFS_ROOT and IMP_HOST_SUBNET6 when theirs is non-empty, and IMP_KSM=1
 # or 0 when KSM is on or off (an existing IMP_KSM stays when it is empty).
@@ -477,13 +486,16 @@ EOF
 # non-empty.
 render_env() {
   local base=$1 template=$2 budget=$3 img=$4 img_set=$5
-  [ -z "$base" ] && base=$template && img_set=1
+  [ -z "$base" ] && base=$template
   BUDGET=$budget IMG=$img IMG_SET=$img_set TEMPLATE_BUDGET=$TEMPLATE_BUDGET_MIB \
+    LEGACY_IMAGE=$LEGACY_IMAGE_LINE \
     STORAGE=$6 ZFS_ROOT=$7 HOST_FIREWALL=$8 IPV6=$9 SUBNET6=${10} KSM=${11:-} \
     NETWORK=$([ "$9" != on ] || echo "--network $HOST_NETWORK") \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
+      function trim(s) { sub(/\r$/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
       /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
+      trim($0) == ENVIRON["LEGACY_IMAGE"] { print "# IMP_HOST_IMAGE=" ENVIRON["IMG"]; next }
       /^IMP_STORAGE_BACKEND=/ { set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"]); next }
       /^IMP_ZFS_ROOT=/ && ENVIRON["ZFS_ROOT"] != "" { set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"]); next }
       /^IMP_HOST_FIREWALL=/ { set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"]); next }
@@ -541,7 +553,11 @@ RequiresMountsFor=/var/lib/imp
 
 [Service]
 Type=exec
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
+# read after it, pins another. release-please bumps the version.
+# x-release-please-start-version
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.26.2
+# x-release-please-end
 EnvironmentFile=/etc/imp/imp-host.env
 # A container left over from a crash would hold the name.
 ExecStartPre=-/usr/bin/docker rm -f imp-host
@@ -616,7 +632,11 @@ After=docker.service
 
 [Service]
 Type=exec
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
+# read after it, pins another. release-please bumps the version.
+# x-release-please-start-version
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.26.2
+# x-release-please-end
 # IMP_HOST_IMAGE, whose repository a pull may not move, and
 # IMP_BUILD_CONTEXT_MAX_MIB. Only those two reach the container (-e NAME);
 # it never sees the rest of the file, such as TAILSCALE_AUTHKEY.
@@ -667,9 +687,13 @@ env_template() {
 # docker --env-file format: KEY=value, one per line, no quotes, no
 # expansion. An empty value counts as unset.
 
-# The image to run. The systemd unit reads it; compose reads it from the
-# shell or a .env next to compose.yaml.
-IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# The image to run. Unset, the systemd units run the image of their own
+# release, and deploy/upgrade.sh moves them to its own. Set it to pin
+# another; to follow latest, leave the tag off: ghcr.io/zgeoff/imp-host.
+# Compose reads it from the shell or a .env next to compose.yaml instead.
+# x-release-please-start-version
+# IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.26.2
+# x-release-please-end
 
 # A tagged, non-ephemeral auth key (docs/guides/tailscale.md). Without one
 # the host is local-only: the API listens on 127.0.0.1:7070 and no imp is
@@ -859,6 +883,11 @@ preflight() {
   resolve_storage
   resolve_host_firewall
   resolve_ipv6
+  # --image writes the line again; without it the units would run no image
+  if [ -z "$image_set" ]; then
+    local refusal
+    refusal=$(check_env_image "$ENV_FILE" 2>&1) || die "$refusal; or pass --image"
+  fi
   if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
@@ -901,6 +930,24 @@ resolve_storage() {
   if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
     die "/etc/fstab has an entry for $DATA_DIR (XFS imps); ZFS would leave them behind"
   fi
+}
+
+# trim_lines: stdin without a trailing \r or the blanks around each line, as
+# an env file edited on another system may have them
+trim_lines() { awk '{ sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print }'; }
+
+# strip_markers: stdin without the release-please marker lines, which only
+# the repo's copies need
+strip_markers() { grep -vE '^# x-release-please-(start-[a-z]+|end)$' || true; }
+
+# check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
+# is empty: systemd passes it over the units' own image, and docker run gets
+# none. Keep it equal to check_env_image in deploy/upgrade.sh.
+check_env_image() {
+  [ -f "$1" ] || return 0
+  [ "$(trim_lines <"$1" | grep '^IMP_HOST_IMAGE=' | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
+  echo "$1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image" >&2
+  return 1
 }
 
 # resolve_host_firewall: the flag, else the env file, else own.
@@ -1668,7 +1715,7 @@ ensure_imp() {
   fi
 
   local env changed=
-  env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
+  env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template | strip_markers)" "$budget" "$image" "$image_set" \
     "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet" "$ksm")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
@@ -1676,21 +1723,25 @@ ensure_imp() {
     && ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
     die "$refusal"
   fi
-  # The image the units run: the env file's, which an operator may pin.
+  # The image the units run: the env file's pin, else their own release's.
   # Checked before anything is written: the units run imp-docker-proxy from
   # the image and give imp-host no docker.sock, and an older image, such as
-  # a stale :latest that ensure_image keeps, has neither.
+  # a stale pin that ensure_image keeps, has neither.
+  if trim_lines <<<"$existing" | grep -qxF "$LEGACY_IMAGE_LINE" && [ -z "$image_set" ]; then
+    log "$ENV_FILE: $LEGACY_IMAGE_LINE was the old template's line, not a pin; it becomes a comment"
+  fi
   local run_image
   run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
-  ensure_image "${run_image:-$DEFAULT_IMAGE}"
-  if ! dry || docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
-    refusal=$(check_image_contract "${run_image:-$DEFAULT_IMAGE}" 2>&1) || die "$refusal"
+  run_image=${run_image:-$DEFAULT_IMAGE}
+  ensure_image "$run_image"
+  if ! dry || docker image inspect "$run_image" >/dev/null 2>&1; then
+    refusal=$(check_image_contract "$run_image" 2>&1) || die "$refusal"
   fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
-  put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
+  put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host | strip_markers)" && changed=1
   # imp-host reaches Docker through this proxy only (docs/architecture/host-contract.md#the-docker-socket)
   local proxy_changed=
-  put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy)" && proxy_changed=1
+  put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy | strip_markers)" && proxy_changed=1
   if [ "$storage" = zfs ]; then
     put_file /etc/systemd/system/imp-host.service.d/zfs.conf 644 "$(unit_imp_host_zfs)" && changed=1
   fi
@@ -1699,11 +1750,11 @@ ensure_imp() {
   # pivot_root for the jailer (docs/architecture/host-contract.md#privileges).
   # A dry run pulls nothing, so it may have no image to read.
   local seccomp
-  if dry && ! docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
+  if dry && ! docker image inspect "$run_image" >/dev/null 2>&1; then
     change "write $SECCOMP_FILE from the image" true
   else
-    seccomp=$(docker run --rm "${run_image:-$DEFAULT_IMAGE}" cat "$SECCOMP_IN_IMAGE") \
-      || die "${run_image:-$DEFAULT_IMAGE} has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
+    seccomp=$(docker run --rm "$run_image" cat "$SECCOMP_IN_IMAGE") \
+      || die "$run_image has no $SECCOMP_IN_IMAGE; it predates the unprivileged host"
     put_file "$SECCOMP_FILE" 644 "$seccomp" && changed=1
   fi
 

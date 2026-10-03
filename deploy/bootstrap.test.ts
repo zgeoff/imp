@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import * as z from 'zod';
 
 // The pure functions of bootstrap.sh, called from bash. The script runs main
 // only when executed, so sourcing it defines the functions and nothing else.
@@ -32,6 +33,12 @@ function runFunction(fn: string, args: readonly string[] = [], options: RunOptio
 function readDeployFile(name: string): string {
   return readFileSync(path.join(import.meta.dir, name), 'utf8');
 }
+
+// the image of this release, which the units and the commented pin name
+const packageJson = readFileSync(path.join(import.meta.dir, '..', 'package.json'), 'utf8');
+const version = z.object({ version: z.string() }).parse(JSON.parse(packageJson)).version;
+const releaseImage = `ghcr.io/zgeoff/imp-host:${version}`;
+const legacyImageLine = 'IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest';
 
 test('it embeds both units and the env template unchanged', () => {
   expect(runFunction('unit_imp_host')).toBe(readDeployFile('imp-host.service'));
@@ -197,7 +204,7 @@ function renderEnv(input: EnvInput): string {
     normalizeTrailingNewlines(input.existing),
     normalizeTrailingNewlines(template),
     '54400',
-    input.image ?? 'ghcr.io/zgeoff/imp-host:latest',
+    input.image ?? releaseImage,
     input.imageSet === true ? '1' : '',
     input.storage ?? 'xfs',
     input.zfsRoot ?? '',
@@ -217,11 +224,12 @@ function getEnvValues(env: string, key: string): string[] {
     .map((line) => line.slice(key.length + 1));
 }
 
-test('a new env file is the template with the budget, the image and the key', () => {
-  const env = renderEnv({ existing: '', image: 'imp-host:1.2.3', key: 'fake-key-for-tests' });
+test('a new env file is the template with the budget and the key, and pins no image', () => {
+  const env = renderEnv({ existing: '', key: 'fake-key-for-tests' });
 
   expect(getEnvValues(env, 'IMP_RAM_BUDGET_MIB')).toEqual(['54400']);
-  expect(getEnvValues(env, 'IMP_HOST_IMAGE')).toEqual(['imp-host:1.2.3']);
+  expect(getEnvValues(env, 'IMP_HOST_IMAGE')).toEqual([]);
+  expect(env).toContain(`\n# IMP_HOST_IMAGE=${releaseImage}\n`);
   expect(getEnvValues(env, 'TAILSCALE_AUTHKEY')).toEqual(['fake-key-for-tests']);
   expect(getEnvValues(env, 'IMP_STORAGE_BACKEND')).toEqual(['xfs']);
   expect(getEnvValues(env, 'IMP_ZFS_ROOT')).toEqual(['']);
@@ -229,14 +237,32 @@ test('a new env file is the template with the budget, the image and the key', ()
   expect(getEnvValues(env, 'IMP_IDLE_TIMEOUT_S')).toEqual(['60']);
 });
 
+test('--image pins the image in a new env file', () => {
+  const env = renderEnv({ existing: '', image: 'imp-host:1.2.3', imageSet: true });
+
+  expect(getEnvValues(env, 'IMP_HOST_IMAGE')).toEqual(['imp-host:1.2.3']);
+});
+
+test('the old template image line becomes the commented pin; --image replaces it', () => {
+  const existing = template.replace(`# IMP_HOST_IMAGE=${releaseImage}`, legacyImageLine);
+
+  expect(existing).toContain(`\n${legacyImageLine}\n`);
+  expect(renderEnv({ existing })).toBe(renderEnv({ existing: template }));
+
+  const pinned = renderEnv({ existing, image: 'imp-host:2.0.0', imageSet: true });
+
+  expect(getEnvValues(pinned, 'IMP_HOST_IMAGE')).toEqual(['imp-host:2.0.0']);
+});
+
 test('an existing env file keeps the operator values', () => {
   const existing = template
     .replace('IMP_RAM_BUDGET_MIB=16384', 'IMP_RAM_BUDGET_MIB=30000')
-    .replace('IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest', 'IMP_HOST_IMAGE=imp-host:pinned')
+    .replace(`# IMP_HOST_IMAGE=${releaseImage}`, 'IMP_HOST_IMAGE=imp-host:pinned')
     .replace('TAILSCALE_AUTHKEY=', 'TAILSCALE_AUTHKEY=fake-old-key')
     .replace('IMP_IDLE_TIMEOUT_S=60', 'IMP_IDLE_TIMEOUT_S=300')
     .replace('IMP_HOST_IPV6=', 'IMP_HOST_IPV6=off');
 
+  expect(getEnvValues(existing, 'IMP_HOST_IMAGE')).toEqual(['imp-host:pinned']);
   expect(renderEnv({ existing })).toBe(existing);
 });
 
@@ -477,13 +503,7 @@ function runContractCheck(label: string) {
 
   try {
     return Bun.spawnSync(
-      [
-        'bash',
-        '-c',
-        'source "$1"; check_image_contract ghcr.io/zgeoff/imp-host:latest',
-        'x',
-        script,
-      ],
+      ['bash', '-c', 'source "$1"; check_image_contract "$2"', 'x', script, releaseImage],
       { env: { PATH: `${bin}:${process.env['PATH'] ?? ''}` } },
     );
   } finally {
@@ -495,11 +515,47 @@ test('a stale image, from before the proxy, is refused with how to get the new o
   const stale = runContractCheck('unprivileged');
 
   expect(stale.exitCode).toBe(1);
-
-  expect(stale.stderr.toString()).toContain(
-    'pull the new image (docker pull ghcr.io/zgeoff/imp-host:latest)',
-  );
-
+  expect(stale.stderr.toString()).toContain(`pull the new image (docker pull ${releaseImage})`);
   expect(runContractCheck('').exitCode).toBe(1);
   expect(runContractCheck('socket-proxy').exitCode).toBe(0);
+});
+
+function runEnvImageCheck(env: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'imp-env-image-'));
+  const file = path.join(dir, 'imp-host.env');
+
+  writeFileSync(file, env);
+
+  try {
+    return Bun.spawnSync(['bash', '-c', 'source "$1"; check_env_image "$2"', 'x', script, file]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('an env file whose last IMP_HOST_IMAGE is empty is refused, naming the file', () => {
+  const empty = runEnvImageCheck('IMP_PORT=7070\nIMP_HOST_IMAGE=\n');
+
+  expect(empty.exitCode).toBe(1);
+  expect(empty.stderr.toString()).toMatch(/imp-host\.env sets IMP_HOST_IMAGE= empty/v);
+  expect(runEnvImageCheck('IMP_HOST_IMAGE=\nIMP_HOST_IMAGE=imp-host:1\n').exitCode).toBe(0);
+  expect(runEnvImageCheck(`# IMP_HOST_IMAGE=${releaseImage}\n`).exitCode).toBe(0);
+});
+
+test('the old template line is migrated with a CR and blanks around it', () => {
+  const existing = template.replace(`# IMP_HOST_IMAGE=${releaseImage}`, `  ${legacyImageLine}\r`);
+
+  expect(renderEnv({ existing })).toBe(renderEnv({ existing: template }));
+  expect(runEnvImageCheck('IMP_HOST_IMAGE= \r\n').exitCode).toBe(1);
+});
+
+test('the installed units and env file carry no release-please markers', () => {
+  for (const fn of ['unit_imp_host', 'unit_imp_docker_proxy', 'env_template']) {
+    const raw = runFunction(fn);
+    const installed = runFunction('strip_markers', [], { stdin: raw });
+
+    expect(raw).toContain('x-release-please-start-version');
+    expect(installed).not.toContain('x-release-please');
+    expect(installed).toContain(releaseImage);
+  }
 });
