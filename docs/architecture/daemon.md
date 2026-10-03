@@ -60,11 +60,11 @@ call outside the caller's scope or imps (a grant or a revoke says why in `data.r
 [granting secrets](../guides/tokens.md#granting-secrets)), `PRECONDITION_FAILED` when the host is
 not set up for the call (backups with no repository, say), `AGENT_OUTDATED` for a request the imp's
 agent is too old for, `LEASED` for a sleep or stop without `force` of a leased imp, `LEASE_NOT_HELD`
-for a renew of a lease the caller does not hold ([leases](../guides/leases.md)), and
-`INVALID_RESUME` for a session resume past the end of its output
-([output offsets](#output-offsets)). `LEASED` and `RAM_BUDGET_EXCEEDED` show only what the caller
-may see. `/rpc` takes POST only: a GET is what a link or an image on any page can make a browser
-send.
+for a renew of a lease the caller does not hold ([leases](../guides/leases.md)), `INVALID_RESUME`
+for a session resume past the end of its output ([output offsets](#output-offsets)), and `MOVING`
+for a call on an imp that is moving between hosts, with `data.retryAfterS` ([moves](./moves.md)).
+`LEASED` and `RAM_BUDGET_EXCEEDED` show only what the caller may see. `/rpc` takes POST only: a GET
+is what a link or an image on any page can make a browser send.
 
 `/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
 tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes
