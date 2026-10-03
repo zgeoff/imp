@@ -781,13 +781,20 @@ in
         "docker.service"
         "imp-host-image.service"
       ];
-      # IMP_HOST_IMAGE, whose repository a pull may not move; -e NAME passes
-      # these two, and nothing else, to the container
+      # IMP_HOST_IMAGE, whose repository a pull may not move, and the build
+      # settings the proxy reads (under imp isolation it pulls only
+      # IMP_BUILD_IMAGE); -e NAME passes these, and nothing else, to the container
       environment = {
         IMP_HOST_IMAGE = cfg.image;
       }
       // lib.optionalAttrs (cfg.settings ? IMP_BUILD_CONTEXT_MAX_MIB) {
         IMP_BUILD_CONTEXT_MAX_MIB = toString cfg.settings.IMP_BUILD_CONTEXT_MAX_MIB;
+      }
+      // lib.optionalAttrs (cfg.settings ? IMP_BUILD_ISOLATION) {
+        IMP_BUILD_ISOLATION = toString cfg.settings.IMP_BUILD_ISOLATION;
+      }
+      // lib.optionalAttrs (cfg.settings ? IMP_BUILD_IMAGE) {
+        IMP_BUILD_IMAGE = toString cfg.settings.IMP_BUILD_IMAGE;
       };
       serviceConfig = {
         Type = "exec";

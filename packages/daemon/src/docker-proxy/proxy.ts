@@ -46,6 +46,10 @@ export interface DockerProxyOptions {
 
   // the image imp-host runs from, whose repository a pull may not move
   readonly hostImage: string;
+
+  // under IMP_BUILD_ISOLATION=imp, IMP_BUILD_IMAGE: the one image a pull may
+  // fetch, by its digest, and no build passes; null under host isolation
+  readonly builderImage: string | null;
   readonly buildContextMaxBytes: number;
   readonly log: (message: string) => void;
 }
@@ -348,12 +352,20 @@ export function createDockerProxy(
   const checkRouteQuery = (routed: RoutedRequest): Check => {
     const kind = routed.route.kind;
 
+    // impd builds in builder imps then, never on this engine
+    if (kind === 'build' && options.builderImage !== null) {
+      return {
+        isOk: false,
+        reason: 'a build is refused: under IMP_BUILD_ISOLATION=imp impd builds in builder imps',
+      };
+    }
+
     if (kind === 'build') {
       return checkBuildQuery(routed.query);
     }
 
     if (kind === 'pull') {
-      return checkPullQuery(routed.query, options.hostImage);
+      return checkPullQuery(routed.query, options.hostImage, options.builderImage);
     }
 
     if (kind === 'remove') {
