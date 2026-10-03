@@ -28,8 +28,9 @@ from ([releasing](../../RELEASING.md#what-a-release-ships)).
 ## Build an image
 
 `imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
-uploads it to impd, which runs `docker build` on the host Docker and tags the result `imp/<name>`.
-Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the context.
+uploads it to impd, which builds it with BuildKit on the host Docker and tags the result
+`imp/<name>`. Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the
+context.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -40,19 +41,22 @@ Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside 
 - **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
   the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
   under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
-  starts. When the client goes, impd kills the build and frees its slot and its disk room.
+  starts. When the client goes, impd ends the build request, which stops the build on the engine,
+  and frees its slot and its disk room.
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
   `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
   image ([storage](../architecture/storage.md#disk-budget)).
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
-- **What the build may do.** impd runs one fixed command:
-  `docker build --quiet --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 -t imp/<name> -f <file> -`.
-  The client cannot pass build arguments, secrets, `--network` or `--allow`. The Dockerfile path
-  must stay inside the context. The image has no buildx, so the build runs on Docker's classic
-  builder, which ignores `BUILDKIT_SYNTAX` and a `# syntax=` line, and has no `RUN --mount`.
-  `imp-docker-proxy` allows only that builder
+- **What the build may do.** impd sends one fixed BuildKit build, `POST /build?version=2`, with the
+  tar as the body and no session. The client gives only the name and the Dockerfile path, which must
+  stay inside the context; it cannot pass build arguments, secrets, SSH agents, `--network` or
+  `--allow`. `BUILDKIT_SYNTAX` pins the Dockerfile frontend by digest (`docker/dockerfile:1.19`, as
+  in `host/Dockerfile`), so a `# syntax=` line is ignored. `RUN --mount=type=cache` works;
+  `RUN --network=host` and `RUN --security=insecure` fail the build. A failed build shows BuildKit's
+  error, without the `RUN` step's output. The host pulls the frontend from Docker Hub on its first
+  build. `imp-docker-proxy` allows only this build
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
   Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
 
@@ -62,6 +66,7 @@ with that.
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
+impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`.
 An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` and
 `images/examples/hello` start FROM the published base by digest; to stack them on another base, edit
 that FROM line. An imp's own disk can be an image too: a [template](./templates.md) copies a set-up
