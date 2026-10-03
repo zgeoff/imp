@@ -309,6 +309,7 @@ export function createForkGrants(
     const names = await listGrantNames(trx, fromImpId);
 
     // an empty list copies nothing whatever the token, so it needs no read
+    // and never reports no-token: each grant is not-grantable instead
     if (
       authority !== null &&
       authority.grantable.length > 0 &&
