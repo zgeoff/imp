@@ -241,15 +241,16 @@ deletes the secret's value, and it cannot be recovered from the host. Copy `<dat
 before you restore, and expect each secret added after the copy to be lost until you add it again
 with `imp secret add`.
 
-1. Copy `<data>/secrets` aside, and keep the current `<data>/db/imp.sqlite` with its `-wal` and
-   `-shm` files, in case you need to go back.
+1. Copy `<data>/secrets` aside.
 2. Stop impd with a full stop that sleeps the imps (`systemctl stop imp-host`, or
    `docker compose stop`), not a restart: a restart leaves the VMs running for the new impd to
    adopt.
-3. Remove `<data>/db/imp.sqlite-wal` and `<data>/db/imp.sqlite-shm`. A WAL file left beside a
+3. Copy `<data>/db/imp.sqlite` with its `-wal` and `-shm` files to a directory outside `<data>/db`,
+   in case you need to go back. With impd stopped, the three files agree.
+4. Remove `<data>/db/imp.sqlite-wal` and `<data>/db/imp.sqlite-shm`. A WAL file left beside a
    different database can be replayed into it, and corrupt it.
-4. Put the copy in place as `<data>/db/imp.sqlite`, owned and moded as the file it replaces.
-5. Start impd, and read its log.
+5. Put the copy in place as `<data>/db/imp.sqlite`, owned and moded as the file it replaces.
+6. Start impd, and read its log.
 
 What the restored database means at start:
 
