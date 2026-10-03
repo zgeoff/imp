@@ -181,8 +181,8 @@ leases while the imp is `receiving`, and its idle loop and governor respect them
   live lease to it, a hold or a legacy hold too, before any byte goes: upgrade the target, or
   release the leases. A source from before moving leases sends none, and the target logs that the
   imp arrives unleased: upgrade the source too.
-- A running imp that `--stop` stopped runs again after such a refusal. A sleeping imp that `--stop`
-  stopped stays stopped: its memory is gone.
+- A running imp that `--stop` stopped runs again after such a refusal, without the leases its stop
+  ended. A sleeping imp that `--stop` stopped stays stopped: its memory is gone.
 
 ### Warm moves
 
