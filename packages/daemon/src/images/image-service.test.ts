@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { checkBuildQuery } from '../docker-proxy/rules';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { createImageService, planRootfs } from './image-service';
+import { createImageService, normalizeDockerfilePath, planRootfs } from './image-service';
 
 // These all fail before any docker command runs, so no docker is needed.
 test('it refuses refs and build contexts that docker could read as flags', async () => {
@@ -124,5 +126,32 @@ test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused
     expect(String(failure)).toContain('over the limit of 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)');
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('a Dockerfile path is sent in one spelling, the one the proxy lets through', () => {
+  for (const [given, normalized] of [
+    [undefined, 'Dockerfile'],
+    ['./Dockerfile', 'Dockerfile'],
+    ['sub//./web.Dockerfile', 'sub/web.Dockerfile'],
+    ['a/../Dockerfile', 'Dockerfile'],
+  ] as const) {
+    const path = normalizeDockerfilePath(given);
+
+    const query = new Map([
+      ['t', ['imp/x:latest']],
+      ['version', ['2']],
+      ['buildargs', [JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })]],
+      ['dockerfile', [path]],
+    ]);
+
+    expect(path).toBe(normalized);
+    expect(checkBuildQuery(query)).toEqual({ isOk: true });
+  }
+});
+
+test('a Dockerfile path that leaves the context, or names it, is refused', () => {
+  for (const path of ['../Dockerfile', 'a/../../Dockerfile', '/etc/passwd', '.', 'sub/']) {
+    expect(() => normalizeDockerfilePath(path)).toThrow('not a file inside the build context');
   }
 });
