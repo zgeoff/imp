@@ -42,6 +42,7 @@ export const infoCommand = defineCommand({
         ],
         ...formatDefaults(info.defaults),
         ...formatEgress(info.egress),
+        ...formatLimits(info.cpu),
         ...formatKsm(info.ksm),
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
@@ -101,6 +102,24 @@ function formatEgress(egress: SystemInfo['egress']): string[][] {
     [
       'egress',
       egress.isEnforced ? 'box and none policies enforced' : 'box and none policies not enforced',
+    ],
+  ];
+}
+
+// Off when setup-cgroups.sh could not delegate the controllers, such as a
+// failed remount of the container's cgroupfs: limits are kept, not applied,
+// and jailed VMs cannot start. No line from an impd before it.
+function formatLimits(cpu: SystemInfo['cpu']): string[][] {
+  if (cpu === undefined) {
+    return [];
+  }
+
+  return [
+    [
+      'limits',
+      cpu.limitsEnforced
+        ? 'cpu limits enforced'
+        : 'OFF: no delegated cgroup (setup-cgroups.sh in the container log); jailed VMs cannot start',
     ],
   ];
 }

@@ -33,8 +33,9 @@ error `its memory limit killed firecracker`. See [cgroups](../architecture/daemo
 
 **NOTE:** impd enforces limits only when the host container runs in a private cgroup v2 namespace
 (`--cgroupns=private`, which `scripts/dev.sh`, `deploy/imp-host.service` and `deploy/compose.yaml`
-pass). Without it, impd logs `CPU limits are kept, not applied`, stores the settings, and
-`imp info --json` shows `cpu.limitsEnforced: false`.
+pass) and `setup-cgroups.sh` can remount its cgroupfs read-write. Without either, impd logs
+`CPU limits are kept, not applied`, stores the settings, `imp info` shows `limits OFF`, and
+`imp info --json` shows `cpu.limitsEnforced: false`. Jailed VMs cannot start then.
 
 ## Resource use
 
