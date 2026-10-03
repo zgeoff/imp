@@ -126,7 +126,8 @@ snapshot took 2.3 s and 4.3 GiB of page cache; after an unplug, it took 720 ms.
   the imp, so it gets the same refusal.
 - **Max is fixed.** It is set at create, and a fork, a backup restore and a move keep it. The source
   refuses to move an elastic imp to a target whose impd predates elastic memory: its offer reply has
-  no `keepsMaxMemory`, and it would land the imp at a fixed size. The offer comes after
+  no `keepsMaxMemory`, and it would land the imp at a fixed size (the reply's other fields,
+  `keepsLeases` and `keepsPublicEgress`, are in [moves](./moves.md)). The offer comes after
   `imp move --stop` halted the imp, so a running imp the refusal turns away starts again.
 - **Templates.** An elastic imp always boots the kernel, never a
   [boot template](./boot-templates.md). A template's snapshot has no hot-plug region and no

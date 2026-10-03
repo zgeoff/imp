@@ -161,6 +161,31 @@ test('a join that puts a box imp next to an open one warns, from either side', a
   expect(sameJoins.warning).toBeNull();
 });
 
+test('a public imp next to a box or none one warns, from either side; next to an open one it is warned', async () => {
+  await using ctx = await setupNetwork();
+
+  await ctx.client.imps.setPolicy({ name: 'web', policy: { mode: 'public', allow: [] } });
+
+  const besideOpen = await ctx.client.networks.warnings({ name: 'web' });
+
+  await ctx.client.imps.setPolicy({ name: 'db', policy: { mode: 'none', allow: [] } });
+
+  const fromNone = await ctx.client.networks.warnings({ name: 'db' });
+  const fromPublic = await ctx.client.networks.warnings({ name: 'web' });
+
+  expect(besideOpen).toEqual([
+    'web is public, but db on lab is open and can relay for it: a public, box or none imp trusts its open peers',
+  ]);
+
+  expect(fromNone).toEqual([
+    'db is none, but web on lab is public and can relay for it to the internet: a box or none imp trusts its public peers',
+  ]);
+
+  expect(fromPublic).toEqual([
+    'web is public, so db on lab can reach the internet through it: a box or none imp trusts its public peers',
+  ]);
+});
+
 test('a net rm that nft refuses puts back every member, the latest join included', async () => {
   const state = { refuse: false };
 
@@ -212,7 +237,7 @@ test("a policy change that mixes a network gets the same warning, for each of th
   expect(before).toEqual([]);
 
   expect(after).toEqual([
-    'db is none, but web on lab is open and can relay for it: a box or none imp trusts its open peers',
+    'db is none, but web on lab is open and can relay for it: a public, box or none imp trusts its open peers',
   ]);
 
   expect(missing).toMatchObject({ code: 'NOT_FOUND' });

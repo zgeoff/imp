@@ -102,7 +102,9 @@ function formatEgress(egress: SystemInfo['egress']): string[][] {
   return [
     [
       'egress',
-      egress.isEnforced ? 'box and none policies enforced' : 'box and none policies not enforced',
+      egress.isEnforced
+        ? 'public, box and none policies enforced'
+        : 'public, box and none policies not enforced',
     ],
   ];
 }

@@ -55,6 +55,10 @@ let
   ownWithNixosFirewall = host { services.imp.hostFirewall = "own"; };
   ownFirewall = host {
     services.imp.hostFirewall = "own";
+    services.imp.egressDeny = [
+      "203.0.113.7"
+      "2001:db8:1::7/128"
+    ];
     networking.firewall.enable = false;
     services.openssh.ports = [
       22
@@ -69,6 +73,7 @@ let
   };
   backupInSettings = host { services.imp.settings.IMP_BACKUP_PASSWORD_FILE = "/x"; };
   publicPortsInSettings = host { services.imp.settings.IMP_PUBLIC_PORTS = "-p 443:7443"; };
+  denyInSettings = host { services.imp.settings.IMP_EGRESS_DENY = "203.0.113.7"; };
   poolElsewhere = host { services.imp.zfs.importPool = false; };
   noArcCap = host { services.imp.zfs.arcMaxMiB = lib.mkForce null; };
   flushing = host {
@@ -151,9 +156,15 @@ let
   # release chain makes that image exist (release-please bumps package.json,
   # release.yml pushes the tag, host/check-release-image.sh checks it).
   releaseImage = "ghcr.io/zgeoff/imp-host:${(lib.importJSON (self + "/package.json")).version}";
-  # the env words ($IMP_PUBLIC_PORTS) are options, empty here
+  # the env words ($IMP_PUBLIC_PORTS) are options, empty here; the env file
+  # carries IMP_HOST_ADDRESSES, so the module leaves out the unit's -e
+  addressesLine = [
+    "-e"
+    "IMP_HOST_ADDRESSES"
+  ];
+  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
   sharedArgs = lib.escapeShellArgs (
-    lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten hostArgs.lines)
+    lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten sharedLines)
   );
 
   expect = name: cond: if cond then name else throw "eval check failed: ${name}";
@@ -234,6 +245,9 @@ let
       && lib.hasInfix " ${sharedArgs} " unit.serviceConfig.ExecStart
     ))
     (expect "no --privileged" (!(lib.hasInfix "--privileged" unit.serviceConfig.ExecStart)))
+    (expect "the env file, not -e, carries IMP_HOST_ADDRESSES" (
+      !(lib.hasInfix "-e IMP_HOST_ADDRESSES" unit.serviceConfig.ExecStart)
+    ))
     (expect "the privileges come from deploy/imp-host.args.json" (
       lib.hasInfix "--cap-drop ALL --cap-add SYS_ADMIN" unit.serviceConfig.ExecStart
     ))
@@ -258,6 +272,9 @@ let
     ))
     (expect "IMP_PUBLIC_PORTS goes in publicPorts, not settings" (
       lib.any (lib.hasInfix "sets IMP_PUBLIC_PORTS") (failed publicPortsInSettings)
+    ))
+    (expect "IMP_EGRESS_DENY goes in egressDeny, not settings" (
+      lib.any (lib.hasInfix "sets IMP_EGRESS_DENY") (failed denyInSettings)
     ))
     (expect "the key file is mounted read-only, by path" (
       lib.hasInfix "-v /run/imp-host/tailscale-authkey:/run/imp/tailscale-authkey:ro -e 'IMP_TAILSCALE_AUTHKEY_FILE=/run/imp/tailscale-authkey'" unit.serviceConfig.ExecStart
@@ -396,6 +413,8 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   grep -qx '		tcp dport { 22, 2222 } accept comment "SSH"' "$rules"
   grep -q 'hook input priority filter; policy drop;' "$rules"
   grep -qx IMP_HOST_FIREWALL=own "$(settings ${ownPre})"
+  grep -qx 'IMP_EGRESS_DENY=203.0.113.7,2001:db8:1::7/128' "$(settings ${ownPre})"
+  grep -qx IMP_EGRESS_DENY= "$zfs"
   # ipv6: the env file says so, and the network script makes bootstrap.sh's network
   grep -qx IMP_HOST_IPV6=on "$(settings ${ipv6Pre})"
   grep -qx 'IMP_HOST_SUBNET6=${ipv6Cfg.services.imp.ipv6.subnet}' "$(settings ${ipv6Pre})"

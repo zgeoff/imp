@@ -1,9 +1,9 @@
 import { BlockList } from 'node:net';
 import { parseIpv6 } from './addressing6';
 
-// What no imp reaches over IPv6, under `open` and `box`, and what a broker
-// tunnel never dials; docs/architecture/networking.md#ipv6 says why each
-// range is here.
+// What no open, public or box imp reaches over IPv6, and no broker tunnel
+// dials; docs/architecture/networking.md#blocked-ranges says why, and
+// special-ranges.test.ts checks them against the IANA registry.
 export const BLOCKED_RANGES6: readonly string[] = [
   'fc00::/7',
   'fe80::/10',
@@ -14,11 +14,19 @@ export const BLOCKED_RANGES6: readonly string[] = [
   '::ffff:0:0/96',
   '::ffff:0:0:0/96',
   '100::/64',
+  '100:0:0:1::/64',
   '64:ff9b::/96',
   '64:ff9b:1::/48',
   '2002::/16',
   '2001::/32',
+  '2001:2::/48',
+  '2001:10::/28',
+  '5f00::/16',
 ];
+
+// The documentation ranges, refused to public imps only: test networks use
+// them, as the ipv6 e2e suite's open and box imps do.
+export const DOCUMENTATION_RANGES6: readonly string[] = ['2001:db8::/32', '3fff::/20'];
 
 // A checker for IPv6 CIDRs; anything that is not an IPv6 address counts as
 // blocked.

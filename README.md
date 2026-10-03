@@ -85,7 +85,7 @@ imp fork box box-2                # a second copy to try something else in
 | `url <name>`                              | print the imp's local and tailnet URLs, and its own tailnet name       |
 | `proxy <name> <port>...`                  | reach ports in the imp from this machine (`--reverse` the other way)   |
 | `cp <src> <dest>`                         | copy files and directories into or out of an imp                       |
-| `policy <name> [open\|box\|none]`         | show or set what the imp may reach (`--allow` for box)                 |
+| `policy <name> [open\|public\|box\|none]` | show or set what the imp may reach (`--allow` for box)                 |
 | `net create`, `ls`, `rm`, `join`, `leave` | private networks between imps (`imp new --net`)                        |
 | `expose <name>`, `unexpose <name>`        | serve the imp to the internet on your domain (`--auth token\|basic`)   |
 | `image build`, `add`, `ls`, `rm`          | manage images                                                          |

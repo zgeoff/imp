@@ -8,8 +8,9 @@ import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, listHttpsWarnings, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
 import { createPeerRanges, readPeerUrlAddress } from './moves/peer-address';
-import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
+import { countSlots, formatCidr4, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
+import { formatCidr6 } from './net/addressing6';
 import { parseIpv6Setting } from './net/ipv6-plan';
 import type { Ipv6Setting } from './net/ipv6-plan';
 import type { StorageBackendKind } from './storage/storage-backend';
@@ -40,6 +41,12 @@ const EnvSchema = z.object({
   IMP_BROKER_PORT: PortSchema.default(7081),
   IMP_BROKER_TEST_UPSTREAMS: z.string().optional(),
   IMP_EGRESS_DNS_PORT: PortSchema.default(7053),
+
+  // more ranges no public imp reaches. The unit and the NixOS module fill
+  // IMP_HOST_ADDRESSES at each start from `ip -o addr`, prefixes kept: the
+  // Docker host's networks, which impd cannot see from its container.
+  IMP_EGRESS_DENY: z.string().default(''),
+  IMP_HOST_ADDRESSES: z.string().default(''),
   IMP_RAM_BUDGET_MIB: CountSchema.default(16_384),
   IMP_IDLE_TIMEOUT_S: CountSchema.default(60),
   IMP_IDLE_CPU_PERCENT: z.coerce.number().nonnegative().default(10),
@@ -109,6 +116,14 @@ export interface Config {
   // the egress resolver's port on every guest's gateway address; box and
   // none imps reach it through a redirect of port 53
   readonly egressDnsPort: number;
+
+  // what a public imp never reaches besides the private ranges and the host
+  // container's networks: IMP_EGRESS_DENY, IMP_HOST_ADDRESSES and
+  // IMP_PUBLIC_IP, canonical CIDRs of both families
+  readonly egressDeny: readonly string[];
+
+  // IMP_HOST_ADDRESSES's networks alone, empty where nothing filled it
+  readonly hostAddresses: readonly string[];
 
   // tests only: a file of fake upstreams for granted hosts
   // (broker/test-upstreams.ts)
@@ -226,6 +241,25 @@ export interface Config {
   readonly warnings: readonly string[];
 }
 
+// IPv4 and IPv6 addresses and CIDRs, each as its canonical CIDR. A host
+// address keeps its prefix: the host's LAN (a global /64, a VPS's public
+// subnet) is in none of imp-host's own netns's connected prefixes.
+function parseCidrList(value: string): string[] {
+  return splitList(value)
+    .filter((entry) => entry !== '')
+    .map((entry) => {
+      const cidr = formatCidr4(entry) ?? formatCidr6(entry);
+
+      if (cidr === null) {
+        throw new Error(
+          `IMP_EGRESS_DENY or IMP_HOST_ADDRESSES: ${entry} is not an IPv4 or IPv6 address or CIDR`,
+        );
+      }
+
+      return cidr;
+    });
+}
+
 function splitList(value: string): string[] {
   return value.split(',').map((item) => item.trim());
 }
@@ -310,6 +344,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
+  const hostAddresses = [...new Set(parseCidrList(parsed.IMP_HOST_ADDRESSES))];
   const isTailnetNode = parsed.TAILSCALE_AUTHKEY !== undefined || parsed.IMP_TAILSCALE_NODE === '1';
   const https = parseHttpsConfig(parsed);
 
@@ -340,6 +375,14 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     sshAuthorizedKeys: parsed.IMP_SSH_AUTHORIZED_KEYS === 'true',
     brokerPort: parsed.IMP_BROKER_PORT,
     egressDnsPort: parsed.IMP_EGRESS_DNS_PORT,
+    egressDeny: [
+      ...new Set([
+        ...parseCidrList(parsed.IMP_EGRESS_DENY),
+        ...hostAddresses,
+        ...parseCidrList(https?.public?.ip ?? ''),
+      ]),
+    ],
+    hostAddresses,
     brokerTestUpstreams: parsed.IMP_BROKER_TEST_UPSTREAMS ?? null,
     ramBudgetMib: parsed.IMP_RAM_BUDGET_MIB,
     idleTimeoutS: parsed.IMP_IDLE_TIMEOUT_S,

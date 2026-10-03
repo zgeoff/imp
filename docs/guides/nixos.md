@@ -75,6 +75,11 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
   ([public imps](./https.md#public-imps)). Set `IMP_PUBLIC_IP` in `settings`, and open the ports in
   `networking.firewall`. The module refuses `IMP_PUBLIC_PORTS` in `settings`.
+- **The public egress policy:** `egressDeny` lists the addresses no `public` imp reaches beyond the
+  private ranges, as `IMP_EGRESS_DENY` ([public](../architecture/networking.md#public)). The module
+  writes this host's own global addresses into `IMP_HOST_ADDRESSES` at each start, so list only what
+  that misses, such as an address the host gains later. The module refuses `IMP_EGRESS_DENY` in
+  `settings`.
 - **Firewall:** `hostFirewall`, by default `none`. The env file says `IMP_HOST_FIREWALL=none`,
   `networking.firewall` stays the host's firewall, and imp adds no host rules; it needs no inbound
   port ([Firewall](../architecture/host-contract.md#firewall)). With `own`, the module loads

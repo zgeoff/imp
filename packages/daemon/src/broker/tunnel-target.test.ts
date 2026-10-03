@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test';
 import { BLOCKED_RANGES6, createRangeChecker6 } from '../net/ranges6';
-import { TunnelRefusedError, isRefusedAddress, resolveTunnelTarget } from './tunnel-target';
+import {
+  TunnelRefusedError,
+  isRefusedAddress,
+  requireUplinkRoute,
+  resolveTunnelTarget,
+} from './tunnel-target';
 
 const HOST_ADDRESSES = new Set(['203.0.114.7', '10.66.0.1']);
 
@@ -86,6 +91,33 @@ test('IP literals and the host itself are checked without DNS', async () => {
   expect(literal).toBe('140.82.112.3');
 });
 
+test("a public imp's tunnel is refused its own ranges too, whichever answer holds one", async () => {
+  const answers: Record<string, readonly string[]> = {
+    'public.test': ['140.82.112.3'],
+    'host.test': ['140.82.112.3', '8.8.4.4'],
+    'mapped.test': ['::ffff:8.8.4.4'],
+  };
+
+  const deps = {
+    resolve: (host: string) => Promise.resolve(answers[host] ?? []),
+    readHostAddresses: () => HOST_ADDRESSES,
+    isRefusedMore: (address: string) => address === '8.8.4.4',
+  };
+
+  const target = await resolveTunnelTarget('public.test', deps);
+
+  expect(target).toBe('140.82.112.3');
+
+  for (const host of ['host.test', 'mapped.test', '8.8.4.4']) {
+    const failure = await resolveTunnelTarget(host, deps).catch((error: unknown) => error);
+
+    expect({ host, refused: failure instanceof TunnelRefusedError }).toEqual({
+      host,
+      refused: true,
+    });
+  }
+});
+
 const isBlocked6 = createRangeChecker6([...BLOCKED_RANGES6, 'fd12:3456:789a::/64']);
 
 test('with IPv6, a public IPv6 address passes and the blocked ranges and host do not', () => {
@@ -139,4 +171,53 @@ test("the host's own addresses match whatever their spelling", () => {
 
   expect(refused).toEqual([true, true, true, true]);
   expect(isRefusedAddress('2001:db8:a::3', hosts, checkBlocked6)).toBeFalse();
+});
+
+test("a public imp's tunnel leaves by an uplink of its family, or is refused", async () => {
+  const uplinks = { ipv4: ['eth0'], ipv6: ['eth1'] };
+
+  const routes = new Map([
+    ['93.184.216.34', 'eth0'],
+    ['44.0.0.9', 'wg0'],
+    ['2606:4700::1', 'eth1'],
+    ['2606:4700::2', 'eth0'],
+  ]);
+
+  const readRouteDevice = (address: string): Promise<string> => {
+    const dev = routes.get(address);
+
+    return dev === undefined
+      ? Promise.reject(new Error('RTNETLINK answers: Network is unreachable'))
+      : Promise.resolve(dev);
+  };
+
+  const cases = [
+    ['a.example', '93.184.216.34'],
+    ['a.example', '2606:4700::1'],
+    ['b.example', '44.0.0.9'],
+    ['c.example', '2606:4700::2'],
+    ['d.example', '203.0.113.9'],
+  ] as const;
+
+  // undefined where the route is an uplink's
+  const results: unknown[] = [];
+
+  for (const [host, address] of cases) {
+    const result = await requireUplinkRoute(host, address, uplinks, readRouteDevice).catch(
+      (error: unknown) => error,
+    );
+
+    results.push(result);
+  }
+
+  const failures = results.slice(2);
+
+  expect(results.slice(0, 2)).toEqual([undefined, undefined]);
+  expect(failures.every((failure) => failure instanceof TunnelRefusedError)).toBe(true);
+
+  expect(failures.map(String)).toEqual([
+    'TunnelRefusedError: b.example resolves to 44.0.0.9, which the host reaches by wg0, not by a default route',
+    'TunnelRefusedError: c.example resolves to 2606:4700::2, which the host reaches by eth0, not by a default route',
+    'TunnelRefusedError: d.example: no route to 203.0.113.9: RTNETLINK answers: Network is unreachable',
+  ]);
 });

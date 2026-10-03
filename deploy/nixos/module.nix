@@ -44,6 +44,13 @@ let
       hostNetwork
     ];
   };
+  # The unit passes IMP_HOST_ADDRESSES from its probe file with a bare -e;
+  # here imp-host-env.sh writes it into the env file, which docker reads.
+  addressesLine = [
+    "-e"
+    "IMP_HOST_ADDRESSES"
+  ];
+  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
   sharedArgs = lib.concatMap (
     word:
     if lib.hasPrefix "$" word then
@@ -51,7 +58,7 @@ let
         or (throw "services.imp: deploy/imp-host.args.json has ${word}, which the module has no option for")
     else
       [ word ]
-  ) (lib.flatten hostArgs.lines);
+  ) (lib.flatten sharedLines);
   # The unit probes for each path; the module knows from its config. A new
   # probed path fails evaluation here until it gets a condition.
   probedWhen = {
@@ -183,6 +190,7 @@ let
     IMP_HOST_FIREWALL = cfg.hostFirewall;
     IMP_HOST_IPV6 = if ipv6 then "on" else "off";
     IMP_HOST_SUBNET6 = lib.optionalString ipv6 cfg.ipv6.subnet;
+    IMP_EGRESS_DENY = lib.concatStringsSep "," cfg.egressDeny;
   };
   overridden = lib.attrNames (
     lib.intersectAttrs (
@@ -209,6 +217,7 @@ let
         pkgs.gawk
         pkgs.gnused
         pkgs.gnugrep
+        pkgs.iproute2
       ]
     }
     export IMP_SETTINGS=${settingsFile}
@@ -563,6 +572,21 @@ in
       '';
     };
 
+    egressDeny = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "203.0.113.7"
+        "2001:db8:1::7/128"
+      ];
+      description = ''
+        IMP_EGRESS_DENY: IPv4 and IPv6 addresses and CIDRs no public imp
+        reaches (docs/architecture/networking.md#public). The module writes
+        this host's global addresses into IMP_HOST_ADDRESSES at each start;
+        list what that misses. IMP_PUBLIC_IP is always in it.
+      '';
+    };
+
     dnsApiTokenFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -601,7 +625,7 @@ in
       }
       {
         assertion = overridden == [ ];
-        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts) instead";
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts, egressDeny) instead";
       }
       {
         assertion = !zfs || config.networking.hostId != null;

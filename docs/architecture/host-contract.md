@@ -35,7 +35,12 @@ option (`zfs.arcMaxMiB`) and works out the budget at each start.
 ## What both installers set up
 
 - `/etc/imp/imp-host.env` (0600), from the template, with the backend, the budget,
-  `IMP_HOST_FIREWALL` and `IMP_HOST_IPV6`.
+  `IMP_HOST_FIREWALL` and `IMP_HOST_IPV6`. `IMP_EGRESS_DENY` in it lists more ranges no `public` imp
+  reaches.
+- `IMP_HOST_ADDRESSES`, the host's global addresses with their prefixes, read at each start of
+  imp-host: the unit's `ExecStartPre` writes it to `/run/imp-host/probed.env` and passes it with
+  `-e`, and the NixOS module writes it into the env file. impd cannot see these addresses from its
+  container, and no `public` imp reaches their networks ([public](./networking.md#public)).
 - With IPv6, the Docker network `imp-host` on the bridge `br-imphost`, and the host's router adverts
   kept once Docker turns on forwarding ([IPv6](../guides/install.md#ipv6),
   [on NixOS](../guides/nixos.md#ipv6)).
