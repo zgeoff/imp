@@ -250,13 +250,15 @@ test('an exec gets the broker variables only once the CA is in that boot', async
   const imp = await requireImp(ctx.db, 'dev');
   const ungranted = await ctx.broker.readExecEnv(imp, '/vsock');
 
-  expect(ungranted).toEqual([]);
+  expect(ungranted).toEqual({ kind: 'ungranted' });
   expect(installs).toEqual([]);
 
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  const env = await ctx.broker.readExecEnv(imp, '/vsock');
+  const ready = await ctx.broker.readExecEnv(imp, '/vsock');
+
+  const env = ready.kind === 'ready' ? ready.env : [];
 
   expect(env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
   expect(env).toContain('https_proxy=http://10.66.0.1:7081');
@@ -278,9 +280,35 @@ test('an exec gets the broker variables only once the CA is in that boot', async
 
   const failed = await ctx.broker.readExecEnv(rebooted, '/vsock');
 
-  expect(failed).toEqual([]);
+  expect(failed).toEqual({ kind: 'untrusted', detail: 'no /bin/sh' });
   expect(installs).toHaveLength(2);
   expect(ctx.logs.join('\n')).toContain('broker CA not installed');
+});
+
+test('a stop ends the boot, so the same pid back again installs again', async () => {
+  const installs: string[] = [];
+
+  await using ctx = await setupTest({
+    installBundle: (vsockPath) => {
+      installs.push(vsockPath);
+
+      return Promise.resolve();
+    },
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+
+  const imp = await requireImp(ctx.db, 'dev');
+
+  await ctx.broker.readExecEnv(imp, '/vsock');
+  await ctx.client.imps.stop({ name: 'dev' });
+
+  // the record as it was before the stop: the pid a new boot could get
+  await ctx.broker.readExecEnv(imp, '/vsock');
+
+  expect(installs).toHaveLength(2);
 });
 
 test('the audit log keeps the newest rows of each imp', async () => {

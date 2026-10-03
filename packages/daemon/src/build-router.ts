@@ -704,6 +704,7 @@ const SYSTEM_FEATURES = {
   leases: true,
   grantableTokens: true,
   secretRebind: true,
+  execRequire: true,
 } as const;
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory

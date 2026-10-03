@@ -2,7 +2,12 @@ import { writeSync } from 'node:fs';
 import { constants } from 'node:os';
 import type { Readable } from 'node:stream';
 import { openExecSession } from '@zgeoff/imp-client';
-import type { ExecOutcome, ExecSession, ExecSessionOptions } from '@zgeoff/imp-client';
+import type {
+  ExecOutcome,
+  ExecRequirement,
+  ExecSession,
+  ExecSessionOptions,
+} from '@zgeoff/imp-client';
 import { loadCliConfig } from './cli-config';
 import type { CliConfig } from './cli-config';
 import { createImpClient } from './create-imp-client';
@@ -25,6 +30,9 @@ export interface ExecOptions {
   // The SDK passes the start through as it is, and leaves the field out of
   // its types on purpose.
   readonly outer?: boolean;
+
+  // what impd must ensure before it starts the command: `imp exec --require`
+  readonly require?: readonly ExecRequirement[];
 }
 
 interface SessionOptions {
@@ -160,6 +168,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
             ...(options.env !== undefined && { env: { ...options.env } }),
             ...(session !== null && { session: session.name }),
             ...(options.outer === true && { outer: true }),
+            ...(options.require !== undefined && { require: options.require }),
             ...size,
           };
 

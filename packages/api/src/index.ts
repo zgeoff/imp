@@ -40,6 +40,7 @@ export {
   EXEC_PATH,
   EXEC_STDIN_WINDOW_BYTES,
   EXEC_STDOUT_WINDOW_BYTES,
+  EXEC_REQUIREMENTS,
   EXEC_TICKET_PARAM,
   EXEC_TOOLS,
   ExecAttachMessageSchema,
@@ -55,6 +56,7 @@ export type {
   ExecChannel,
   ExecClientMessage,
   ExecFrame,
+  ExecRequirement,
   ExecServerMessage,
   ExecTool,
 } from './exec-protocol';
