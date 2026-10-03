@@ -38,12 +38,13 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
 `imp-base` is the base that other images build `FROM`. Consumers pin it by digest
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`), so a published tag never moves: the release does
 not overwrite one and has no `latest` for it. Its own base, `ubuntu:24.04`, is pinned by digest in
-`images/base/Dockerfile`; bumping that digest is a reviewed dependency change. Docker's packages
-ship no copyright file, so the image build copies upstream's `LICENSE` and `NOTICE` from the source
-tag of each installed version into `/usr/share/doc/<package>/`, checked against sums in the
-Dockerfile. When upstream changes one, the `base` job fails with the new sum and the rest of the
-release goes out. Review the new text and update the sum on `main`. A republish builds the tag's
-sources with the old sum, so that release has no `imp-base`, and the next release publishes one.
+`images/base/Dockerfile`; bumping that digest is a reviewed dependency change. The Docker packages
+(`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`) are pinned to apt's exact
+versions there too, and `host/check-base-image.sh` checks the image against them. They ship no
+copyright file, so the build copies upstream's `LICENSE` and `NOTICE` from the source tag of each
+version into `/usr/share/doc/<package>/`, checked against sums in the Dockerfile. A Docker bump
+updates the versions and the sums in one reviewed change; when a file changed upstream, the build
+fails and prints the new sum to review.
 
 ## Flow
 

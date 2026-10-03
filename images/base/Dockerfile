@@ -4,6 +4,14 @@
 # base. Bumping it is a dependency change: review it like one.
 FROM ubuntu:24.04@sha256:a853f94d226358a79c740cfc7bce0c289748f3fe3488d921d038ccd752c61b60
 
+# Docker's packages, at apt's exact versions. A bump is a reviewed dependency
+# change: update these versions, the licence tags they imply and the licence
+# sums below together. host/check-base-image.sh checks the image against them.
+ARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble
+ARG DOCKER_CE_CLI_VERSION=5:29.8.2-1~ubuntu.24.04~noble
+ARG CONTAINERD_VERSION=2.3.6-1~ubuntu.24.04~noble
+ARG BUILDX_VERSION=0.37.1-1~ubuntu.24.04~noble
+
 ARG DEBIAN_FRONTEND=noninteractive
 
 # git stays: coding agents clone and commit, and it costs about 20 MB.
@@ -17,15 +25,16 @@ RUN apt-get update \
       > /etc/apt/sources.list.d/docker.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      docker-ce docker-ce-cli containerd.io docker-buildx-plugin \
+      "docker-ce=$DOCKER_CE_VERSION" "docker-ce-cli=$DOCKER_CE_CLI_VERSION" \
+      "containerd.io=$CONTAINERD_VERSION" "docker-buildx-plugin=$BUILDX_VERSION" \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/*.bin /var/log/apt /var/log/dpkg.log \
       /var/log/alternatives.log /var/cache/debconf/*-old /var/lib/dpkg/*-old
 
 # Docker's packages ship no copyright file, so copy the upstream LICENSE and
 # NOTICE from the source tag of each installed version. The sums pin the
-# text: when upstream changes a file, the build fails until a reviewer reads
-# the new text and updates its sum here.
+# text: a version bump that changes a file fails here and names the new sum,
+# for the reviewer to read the text and update the sum.
 RUN set -eu; \
     notice() { \
       version=$(dpkg-query -W -f '${Version}' "$1" | sed 's/^[0-9]*://; s/-.*//'); \

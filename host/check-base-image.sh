@@ -46,6 +46,19 @@ for file in "${files[@]}"; do
   in_image "test -f $file" || fail "$file is missing"
 done
 
+# The Docker packages must be the versions images/base/Dockerfile pins, so
+# the licence notices it fetched match them.
+dockerfile=$(dirname "$0")/../images/base/Dockerfile
+for pin in docker-ce=DOCKER_CE_VERSION docker-ce-cli=DOCKER_CE_CLI_VERSION \
+  containerd.io=CONTAINERD_VERSION docker-buildx-plugin=BUILDX_VERSION; do
+  package=${pin%%=*} arg=${pin#*=}
+  want=$(sed -n "s/^ARG $arg=//p" "$dockerfile")
+  got=$(in_image "dpkg-query -W -f '\${Version}' $package" 2> /dev/null || true)
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    fail "$package is ${got:-not installed}, want ${want:-the ARG $arg in $dockerfile}"
+  fi
+done
+
 # the docker CLI prints its version without a daemon
 for tool in docker git curl; do
   in_image "$tool --version > /dev/null" || fail "$tool --version fails"
