@@ -102,9 +102,12 @@ grant, `CONFLICT` when another grant already covers one of the secret's hosts
 only `read` on the imp, as before.
 
 The list names each secret as it was when the token was made. Every secret has a random generation,
-set when it is created and kept by `imp secret add --replace`. A secret deleted and made again under
-the name has another one, so the list no longer covers it: the host owner makes a new token to hand
-it out. impd reads the secret's generation at each call, never from the token's cache.
+set when it is created and kept by a rotation. A rebind, or a secret deleted and made again under
+the name, gives it another ([rotate or rebind](./connectors.md#rotate-or-rebind)), so the list no
+longer covers it: the host owner makes a new token to hand it out. impd reads the secret's
+generation at each call, never from the token's cache, and reads it again, with the token, in the
+transaction that makes or removes the grant. A token removed between the check and the transaction
+fails with `UNAUTHORIZED`; a secret changed in between fails with `not_grantable`.
 
 The token may not grant a secret's value or change its hosts: secrets, and tokens, stay host-wide.
 
@@ -114,7 +117,8 @@ source's grants, and a move carries them to the target, so either could hand an 
 list does not name. `moves.abort` stays open to it. The list never changes after the token is made,
 so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep, wake,
 a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an imp
-made from a [template](./templates.md) gets none.
+made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
+dashboard sessions and the SSH keys bound to it too. `backups.restore` stays host-wide.
 
 ## Each way in
 
