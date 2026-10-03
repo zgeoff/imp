@@ -150,6 +150,7 @@ func (m *Manager) serveTap(req proto.Request, conn net.Conn, r *proto.Reader, w 
 		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: m.noSession(req.Session)})
 	}
 	t := newViewer(conn, w)
+	t.progress = s.tapProgress
 	safe.Go("session "+req.Session+" tap", t.run, func() { conn.Close() })
 	if perr := s.tap(t, req.ResumeFrom); perr != nil {
 		t.stop(nil, false)

@@ -68,7 +68,8 @@ segment, its newest live log stops the same way: `stopped: 'imp_limit'`.
 
 A logged session's program waits for impd, as on a slow terminal, rather than lose bytes: the agent
 holds its output while its 256 KiB ring could drop bytes impd has not read, for at most 5 s at a
-time. Past that, as when impd is down, the session runs on and the log gets a hole.
+time. Past that, as when impd is down, the session runs on and the log gets a hole. After one such 5
+s stall with no tap, the output runs on unheld until a tap attaches again.
 
 A host crash loses at most the last second of output, and the log never returns bytes that did not
 reach the disk ([daemon](../architecture/daemon.md#session-logs)).

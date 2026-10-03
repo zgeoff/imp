@@ -53,6 +53,8 @@ type viewer struct {
 
 	// written counts the STDOUT bytes written out: how far a tap has read
 	written atomic.Uint64
+	// progress, set before run for a tap, is signalled after each STDOUT write
+	progress chan struct{}
 }
 
 func newViewer(conn net.Conn, w *proto.Writer) *viewer {
@@ -104,6 +106,16 @@ func (v *viewer) stop(last *frame, drop bool) bool {
 	return true
 }
 
+func (v *viewer) signalProgress() {
+	if v.progress == nil {
+		return
+	}
+	select {
+	case v.progress <- struct{}{}:
+	default:
+	}
+}
+
 func (v *viewer) signal() {
 	select {
 	case v.wake <- struct{}{}:
@@ -128,6 +140,7 @@ func (v *viewer) run() {
 			}
 			if f.typ == proto.TypeStdout {
 				v.written.Add(uint64(len(f.payload)))
+				v.signalProgress()
 			}
 			v.mu.Lock()
 			v.queued -= len(f.payload)

@@ -28,9 +28,6 @@ const drainGrace = 500 * time.Millisecond
 // can shorten it.
 var tapWait = 5 * time.Second
 
-// tapPoll is how often a waiting pump looks at its taps again.
-const tapPoll = 5 * time.Millisecond
-
 // readSize is one read of the pty.
 const readSize = 32 << 10
 
@@ -78,6 +75,8 @@ type session struct {
 	tapped   uint64
 	// tapless is set once a pump gave up waiting for a tap, until one attaches
 	tapless bool
+	// tapProgress wakes a waiting pump when a tap wrote output out
+	tapProgress chan struct{}
 	// tapWait is the package's, as the session started
 	tapWait    time.Duration
 	cols, rows uint16
@@ -105,24 +104,25 @@ func newSession(name string, req proto.Request, r run) *session {
 		cols, rows = 80, 24
 	}
 	return &session{
-		name:       name,
-		argv:       req.Argv,
-		started:    time.Now(),
-		proc:       r.proc,
-		master:     r.master,
-		generation: r.generation,
-		seq:        r.seq,
-		bootID:     r.bootID,
-		log:        req.Log,
-		stdin:      make(chan []byte, stdinQueue),
-		done:       make(chan struct{}),
-		screen:     newHistory(historyLimit),
-		raw:        newRing(ringSize),
-		taps:       make(map[*viewer]struct{}),
-		tapStart:   make(map[*viewer]uint64),
-		tapWait:    tapWait,
-		cols:       cols,
-		rows:       rows,
+		name:        name,
+		argv:        req.Argv,
+		started:     time.Now(),
+		proc:        r.proc,
+		master:      r.master,
+		generation:  r.generation,
+		seq:         r.seq,
+		bootID:      r.bootID,
+		log:         req.Log,
+		stdin:       make(chan []byte, stdinQueue),
+		done:        make(chan struct{}),
+		screen:      newHistory(historyLimit),
+		raw:         newRing(ringSize),
+		taps:        make(map[*viewer]struct{}),
+		tapStart:    make(map[*viewer]uint64),
+		tapWait:     tapWait,
+		tapProgress: make(chan struct{}, 1),
+		cols:        cols,
+		rows:        rows,
 	}
 }
 
@@ -197,27 +197,33 @@ func (s *session) output(p []byte) {
 
 // waitForTap holds a logged session's next read while it could overwrite
 // ring bytes that no tap wrote out, so impd's log misses nothing it taps in
-// time: the program waits on the pty as on a slow terminal. After tapWait
-// with no progress it reads on, untapped, until a tap attaches.
+// time: the program waits on the pty as on a slow terminal. Each call waits
+// at most tapWait from its start, and tap progress does not extend it. Once
+// a call runs out, the session reads on, unheld, until a tap attaches.
 func (s *session) waitForTap() {
 	if !s.log {
 		return
 	}
-	deadline := time.Now().Add(s.tapWait)
+	deadline := time.NewTimer(s.tapWait)
+	defer deadline.Stop()
+	expired := false
 	for {
 		s.mu.Lock()
-		behind := s.untapped()
-		if behind+readSize <= ringSize || s.tapless {
+		if s.untapped()+readSize <= ringSize || s.tapless {
 			s.mu.Unlock()
 			return
 		}
-		if time.Now().After(deadline) {
+		if expired {
 			s.tapless = true
 			s.mu.Unlock()
 			return
 		}
 		s.mu.Unlock()
-		time.Sleep(tapPoll)
+		select {
+		case <-s.tapProgress:
+		case <-deadline.C:
+			expired = true
+		}
 	}
 }
 
