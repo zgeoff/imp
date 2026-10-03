@@ -147,8 +147,9 @@ namespace, which the jailer's mounts need today.
 ## The Docker socket
 
 impd pulls and exports images with the `docker` CLI, and sends its image builds to the socket
-itself. imp-host does not mount the host's `/var/run/docker.sock`. A second container from the same
-image, `imp-docker-proxy`, holds it and serves `/run/imp-docker/docker.sock`. imp-host mounts
+itself, so `DOCKER_HOST` must be `unix:///<path>`; any other value fails a build, not impd's start.
+imp-host does not mount the host's `/var/run/docker.sock`. A second container from the same image,
+`imp-docker-proxy`, holds it and serves `/run/imp-docker/docker.sock`. imp-host mounts
 `/run/imp-docker` read-only and sets `DOCKER_HOST` to that socket.
 
 **CAUTION:** The proxy closes the Docker socket path only. imp-host keeps `SYS_ADMIN`, and root in
@@ -170,7 +171,8 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 - **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
   that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
   engine a new request with that same path and the checked query. Of the client's headers, a pull
-  keeps only `X-Registry-Auth` and a build only `X-Registry-Config`; no other header passes.
+  keeps only `X-Registry-Auth`, and a build keeps none. A client that goes ends a build, a pull or
+  an export upstream.
 - **Headers:** the engine reads a build's params from `r.Form`, where Go puts an urlencoded body
   ahead of the query and appends a multipart body after it, so a form body would replace or add
   params the checked query does not allow, such as `networkmode`, `remote` and `t`. A build whose
@@ -180,10 +182,17 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach or exec.
 - **No BuildKit session:** `/session` and `/grpc` are refused, and so are the build params that need
   a session or move the build: `session`, `remote`, `outputs`, `cachefrom`, `pull`, `platform`,
-  `buildid` and `networkmode`. Without `networkmode=host` a build has no `network.host` entitlement,
-  and this route never grants `security.insecure`, so `RUN --network=host` and
-  `RUN --security=insecure` fail. Without a session, the engine does not apply `.dockerignore`: impd
-  and the CLI leave its matches out when they pack the context.
+  `buildid` and `networkmode`. Without the session the engine does not apply `.dockerignore`, so
+  impd and the CLI leave its matches out when they pack the context.
+- **Entitlements:** `RUN --network=host` fails in the engine: on the `/build` route a build gets
+  `network.host` only from `networkmode=host` (moby `daemon/internal/builder-next/builder.go`,
+  docker-v29.8.2), which the proxy refuses, so BuildKit answers `network.host is not allowed`.
+  `RUN --security=insecure` never reaches the engine: the pinned frontend is a stable channel, which
+  has no `--security` flag, and fails with `unknown flag: --security`. The engine would refuse it
+  too, since dockerd grants `security.insecure` only when `daemon.json` sets
+  `builder.entitlements.security-insecure` (`daemon/internal/builder-next/controller.go`), but no
+  e2e case shows that refusal. A frontend bump that parses `--security` must keep the e2e case
+  green.
 - **The frontend:** `BUILDKIT_SYNTAX` must name
   [`DOCKERFILE_FRONTEND`](../../packages/daemon/src/docker-proxy/dockerfile-frontend.ts) by digest,
   the same pin as `host/Dockerfile`'s first line. It wins over a `# syntax=` line, so a Dockerfile
@@ -209,9 +218,10 @@ What stays open through the proxy, by design or until later work:
   through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
   because BuildKit pulls it itself. BuildKit also pulls the pinned frontend from Docker Hub on a
   host's first build, so a host with no route to Docker Hub cannot build.
-- `ADD http://...` and `ADD <git url>` in a Dockerfile make dockerd download in the host's own
-  network, so a build can reach a service on the host's `127.0.0.1`, impd's published loopback port
-  among them, and a link-local address ([#145](https://github.com/zgeoff/imp/issues/145)).
+- `ADD http://...` and `ADD <git url>` are fetched by dockerd itself, in the host's network
+  namespace, as with the classic builder: they reach services on the host's `127.0.0.1`, impd's
+  published loopback port among them, and link-local addresses such as `169.254.169.254`
+  ([#145](https://github.com/zgeoff/imp/issues/145)).
 - The pull rule reads the registry's name, not its address. The engine resolves a hostname that
   points into `127.0.0.0/8` and treats that registry as insecure, so a pull from such a name reaches
   a registry on the host's loopback.
