@@ -35,9 +35,24 @@ put secrets into the sandbox as environment variables.
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same
 host conflict. impd checks for the clash and makes the grant in one transaction, so two grants at
-once cannot both pass. A fork gets the grants of its source, as it gets the disk, less any that
-would clash with a grant the fork has by then; impd logs each one it skips. `imp rm` takes the imp's
-grants and audit rows with it.
+once cannot both pass. `imp rm` takes the imp's grants and audit rows with it.
+
+A fork copies the grants of its source, as it copies the disk, from the live disk or from a
+checkpoint alike. What it copies depends on who forks:
+
+- A host-wide caller (the root token, or a token with no imp patterns) copies every grant of the
+  source.
+- A token with imp patterns copies only the grants it could make itself: the secrets on its
+  grantable list, at the generation the list holds, while the token still exists
+  ([granting secrets](./tokens.md#granting-secrets)). A token with a grantable list may not fork
+  today, so every scoped token that forks has an empty list, and its fork copies no grant.
+
+impd checks each grant, and the clash with what the fork holds by then, in the one transaction that
+copies them. The fork's answer names each grant it did not get in `grantsNotCopied`, with the reason
+`not-grantable`, `clash` or `no-secret`. When the copy fails as a whole, the fork still exists with
+none of the grants, and `grantsError` says so; impd logs the cause. `imp fork` prints each one as a
+warning and exits 0, as the fork exists. A copied grant is the fork's own: a revoke on the source
+does not reach its forks, so revoke the secret from each fork too (`imp grants <fork>` lists them).
 
 Grants are host-wide: only a `manage` token with no imp patterns makes them, unless the token was
 given a list of secrets to grant to its imps ([granting secrets](./tokens.md#granting-secrets)).
