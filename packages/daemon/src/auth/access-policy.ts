@@ -1,5 +1,6 @@
 import { SecretNameSchema, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
+import type { GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
 import { hasScope } from './scopes';
@@ -256,9 +257,13 @@ export async function checkAccess(
   return refusal;
 }
 
-// The generation a grant or a revoke must find the secret at: null for a
-// host-wide caller, which grants any secret, else the one its list names
-export function findGrantedGeneration(caller: Readonly<Caller>, secret: string): string | null {
+// What a grant or a revoke checks again in its transaction: null for a
+// host-wide caller, which grants any secret; else the token and the secret's
+// generation its list names
+export function findGrantAuthority(
+  caller: Readonly<Caller>,
+  secret: string,
+): GrantAuthority | null {
   if (caller.imps === null) {
     return null;
   }
@@ -266,11 +271,11 @@ export function findGrantedGeneration(caller: Readonly<Caller>, secret: string):
   const entry = caller.grantable.find((each) => each.name === secret);
 
   // the access check refused the call before it got here
-  if (entry === undefined) {
+  if (entry === undefined || caller.tokenId === null) {
     throw new Error(`${formatCaller(caller)} reached a grant of ${secret} it may not make`);
   }
 
-  return entry.generation;
+  return { tokenId: caller.tokenId, generation: entry.generation };
 }
 
 function findOutsideImp(

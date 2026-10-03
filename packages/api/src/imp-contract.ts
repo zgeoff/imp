@@ -30,6 +30,7 @@ import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
+  SecretAddedSchema,
   SecretKindSchema,
   SecretNameSchema,
   SecretSchema,
@@ -424,7 +425,8 @@ export const impContract = {
 
   // credentials the broker adds to an imp's requests (docs/guides/connectors.md)
   secrets: {
-    // `replace` swaps the value and rules of a secret that exists; `rules`
+    // `replace` swaps the value; other kind or rules is CONFLICT unless
+    // `rebind`, which drops its grants (docs/guides/connectors.md). `rules`
     // is for kind `custom` only, where it is required
     add: base
       .input(
@@ -434,9 +436,10 @@ export const impContract = {
           value: SecretValueSchema,
           rules: z.array(BrokerRuleSchema).min(1).max(16).optional(),
           replace: z.boolean().optional(),
+          rebind: z.boolean().optional(),
         }),
       )
-      .output(SecretSchema),
+      .output(SecretAddedSchema),
 
     list: base.output(z.array(SecretSchema)),
 

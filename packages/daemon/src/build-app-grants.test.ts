@@ -3,9 +3,15 @@ import type { ImpContract, Scope } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import { utils } from 'ssh2';
+import { checkAccess, findAccess } from './auth/access-policy';
+import { buildTestCaller } from './auth/test-callers';
 import { loadTokenStore } from './auth/token-store';
+import type { Broker } from './broker/broker-service';
 import { listApiCalls } from './db/api-audit';
+import { findImpByName } from './db/imps';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
+import { createEd25519Key } from './ssh/host-key';
 
 // Scoped tokens that may grant selected secrets (docs/guides/tokens.md#granting-secrets),
 // through the API as a client calls it.
@@ -91,7 +97,32 @@ async function setupTest() {
     return buildTestApp({ ...harness, tokens }, harness.restartImpd());
   };
 
-  return { ...harness, ...root, createToken, createSession, startAgain };
+  // an app whose grants and revokes run `between` after the access check
+  // and before their transaction
+  const buildAppWithGap = (between: () => Promise<void>) => {
+    const broker: Broker = {
+      ...harness.broker,
+      addGrant: async (...args) => {
+        await between();
+
+        return harness.broker.addGrant(...args);
+      },
+      removeGrant: async (...args) => {
+        await between();
+
+        return harness.broker.removeGrant(...args);
+      },
+    };
+
+    return buildTestApp({ ...harness, broker }, harness);
+  };
+
+  return { ...harness, ...root, createToken, createSession, startAgain, buildAppWithGap };
+}
+
+// no secret exists
+function readNoGeneration(): Promise<null> {
+  return Promise.resolve(null);
 }
 
 // the code and reason of a failed call, or 'ok'
@@ -503,4 +534,182 @@ test('no answer, error, log line or audit row holds a secret value', async () =>
 
   expect(everything).toContain('gh-api');
   expect(everything).not.toContain(VALUE);
+});
+
+test('a secret deleted and made again after the access check is refused in the transaction', async () => {
+  await using ctx = await setupTest();
+
+  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
+
+  const gapped = ctx.buildAppWithGap(async () => {
+    await ctx.client.secrets.delete({ name: 'gh' });
+    await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${agent.secret}` });
+
+  const added = await readFailure(client.grants.add({ name: 'dev-a', secret: 'gh' }));
+  const left = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(added).toBe('FORBIDDEN not_grantable');
+  expect(left).toEqual([]);
+});
+
+test('a token removed after the access check makes no grant and revokes none', async () => {
+  await using ctx = await setupTest();
+
+  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const state = { removed: false };
+
+  const gapped = ctx.buildAppWithGap(async () => {
+    if (!state.removed) {
+      state.removed = true;
+
+      await ctx.client.tokens.delete({ name: 'agent' });
+    }
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${agent.secret}` });
+
+  const added = await readFailure(client.grants.add({ name: 'dev-a', secret: 'gh' }));
+  const left = await ctx.client.grants.list({ name: 'dev-a' });
+
+  expect(added).toBe('UNAUTHORIZED');
+  expect(left).toEqual(['npm']);
+});
+
+test('a list entry from before a rebind is refused', async () => {
+  await using ctx = await setupTest();
+
+  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
+
+  await agent.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const rebound = await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: VALUE,
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  const outcomes = await Promise.all([
+    readFailure(agent.client.grants.add({ name: 'dev-a', secret: 'gh' })),
+    readFailure(agent.client.grants.delete({ name: 'dev-a', secret: 'gh' })),
+  ]);
+
+  expect(rebound.droppedGrants).toBe(1);
+  expect(outcomes).toEqual(['FORBIDDEN not_grantable', 'FORBIDDEN not_grantable']);
+});
+
+test('a checkpoint restore keeps the host’s grants now: a revoke or a rebind stays', async () => {
+  await using ctx = await setupTest();
+
+  const imp = await findImpByName(ctx.db, 'dev-a');
+
+  const isGranted = (host: string) => ctx.broker.isGranted(imp?.id ?? '', host);
+
+  const runRestore = async () => {
+    const [checkpoint] = await ctx.client.checkpoints.list({ name: 'dev-a' });
+
+    await ctx.client.checkpoints.restore({ name: 'dev-a', checkpoint: checkpoint?.id ?? '' });
+  };
+
+  // an unchanged grant stays usable through sleep, wake and a restore
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.checkpoints.create({ name: 'dev-a' });
+  await ctx.client.imps.sleep({ name: 'dev-a' });
+  await ctx.client.imps.wake({ name: 'dev-a' });
+
+  await runRestore();
+
+  const kept = await isGranted('registry.npmjs.org');
+
+  // revoked, or rebound, after the checkpoint
+  await ctx.client.grants.delete({ name: 'dev-a', secret: 'gh' });
+
+  await ctx.client.secrets.add({
+    name: 'npm',
+    kind: 'custom',
+    value: VALUE,
+    rules: [{ host: 'registry.npmjs.org', header: 'x-token', scheme: 'raw' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await runRestore();
+
+  const after = await Promise.all([isGranted('api.github.com'), isGranted('registry.npmjs.org')]);
+
+  expect(kept).toBeTrue();
+  expect(after).toEqual([false, false]);
+});
+
+test('a token that may grant restores no backup, before anything happens', async () => {
+  await using ctx = await setupTest();
+
+  const agent = await ctx.createToken('agent', { grantable: ['gh'] });
+  const refused = await readFailure(agent.client.backups.restore({ name: 'dev-a', as: 'dev-b' }));
+  const after = await ctx.client.imps.list();
+
+  expect(refused).toBe('FORBIDDEN');
+  expect(after.map((imp) => imp.name)).toEqual(['dev-a', 'prod']);
+});
+
+test('its ssh keys and dashboard sessions may not fork or move, even with every entry stale', async () => {
+  await using ctx = await setupTest();
+
+  const key = createEd25519Key().public;
+  const parsed = utils.parseKey(key);
+
+  if (parsed instanceof Error) {
+    throw parsed;
+  }
+
+  const agent = await ctx.client.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: ['gh'],
+    sshKeys: [key],
+  });
+
+  // every entry stale
+  await ctx.client.secrets.delete({ name: 'gh' });
+
+  const browser = await ctx.createSession(agent.secret);
+
+  const sshCaller = ctx.tokens.findSshKey(parsed.getPublicSSH())?.caller;
+
+  const sshRefusals = await Promise.all(
+    ['imps.fork', 'moves.prepare', 'moves.send', 'moves.resume'].map((path) =>
+      checkAccess(
+        findAccess(path),
+        sshCaller ?? buildTestCaller(),
+        { source: 'dev-a', name: 'dev-a' },
+        readNoGeneration,
+      ),
+    ),
+  );
+
+  const browserRefusals = await Promise.all([
+    readFailure(browser.imps.fork({ source: 'dev-a', name: 'dev-b' })),
+    readFailure(browser.moves.prepare({ name: 'dev-a' })),
+  ]);
+
+  expect(sshCaller?.kind).toBe('ssh');
+
+  expect(sshRefusals.map((refusal) => refusal?.message.includes('may not fork'))).toEqual([
+    true,
+    true,
+    true,
+    true,
+  ]);
+
+  expect(browserRefusals).toEqual(['FORBIDDEN', 'FORBIDDEN']);
 });

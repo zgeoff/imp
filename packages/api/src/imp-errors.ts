@@ -22,6 +22,9 @@ const ResourceKindSchema = z.enum([
 const ResourceDataSchema = z.object({
   kind: ResourceKindSchema,
   name: z.string(),
+
+  // a secrets.add replace whose kind or rules changed, without rebind
+  reason: z.enum(['binding_changed']).optional(),
 });
 
 // why a grant or a revoke was refused: the imp is outside the caller's

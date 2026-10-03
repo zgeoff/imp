@@ -539,7 +539,7 @@ test('a revoke lets the request under way finish, and the next gets no credentia
   expect(ctx.tunnelled).toHaveLength(0);
 });
 
-test('a replace that moves a secret to another host never sends the new value to the old', async () => {
+test('a rebind to another host never sends the new value to the old', async () => {
   const held = { armed: false, reached: Promise.withResolvers<void>() };
   const release = Promise.withResolvers<void>();
 
@@ -576,6 +576,7 @@ test('a replace that moves a secret to another host never sends the new value to
     value: 'new-value',
     rules: buildBearerRules('other.example.com'),
     replace: true,
+    rebind: true,
   });
 
   // the row has switched and the old file is gone; the replace itself then
@@ -594,4 +595,23 @@ test('a replace that moves a secret to another host never sends the new value to
 
   expect(result.stdout).toBe('no credential is granted for api.github.com\n');
   expect(ctx.seen).toEqual([]);
+});
+
+test('a rotation sends the new value on the next request, with the grant kept', async () => {
+  await using ctx = await setupBroker();
+
+  await createGithubGrant(ctx.broker);
+
+  const first = await ctx.runCurl('https://api.github.com/one');
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_rotated', replace: true });
+
+  const second = await ctx.runCurl('https://api.github.com/two');
+
+  expect([first.code, second.code]).toEqual([0, 0]);
+
+  expect(ctx.seen.map((entry) => `${entry.path} ${String(entry.authorization)}`)).toEqual([
+    '/one Bearer ghp_real',
+    '/two Bearer ghp_rotated',
+  ]);
 });

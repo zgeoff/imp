@@ -29,7 +29,31 @@ async function setupTest() {
     rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
   });
 
-  return ctx;
+  // other, granted to dev, on its own host; then rebound onto gh's host
+  const setupOther = async (): Promise<void> => {
+    await ctx.client.secrets.add({
+      name: 'other',
+      kind: 'custom',
+      value: VALUE,
+      rules: [{ host: 'other.example.com', header: 'authorization', scheme: 'bearer' }],
+    });
+
+    await ctx.client.grants.add({ name: 'dev', secret: 'other' });
+  };
+
+  const updateOtherHost = () =>
+    readCode(
+      ctx.client.secrets.add({
+        name: 'other',
+        kind: 'custom',
+        value: `${VALUE}-2`,
+        rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+        replace: true,
+        rebind: true,
+      }),
+    );
+
+  return { ...ctx, setupOther, updateOtherHost };
 }
 
 // each imp whose grants cover one host twice
@@ -131,36 +155,52 @@ test('a grant on a fork while its source’s grants are copied skips the clashin
   expect([['gh'], ['gh', 'npm'], ['gh-api'], ['gh-api', 'npm']]).toContainEqual(copy);
 });
 
-test('a secret replace that races a grant ends in exactly one CONFLICT', async () => {
+test('a rebind onto a granted host, before or after that grant, never doubles the host', async () => {
+  const outcomes: string[] = [];
+
+  for (const order of ['grant first', 'rebind first']) {
+    await using ctx = await setupTest();
+
+    await ctx.setupOther();
+
+    const steps =
+      order === 'grant first'
+        ? [
+            await readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
+            await ctx.updateOtherHost(),
+          ]
+        : [
+            await ctx.updateOtherHost(),
+            await readCode(ctx.client.grants.add({ name: 'dev', secret: 'gh' })),
+          ];
+
+    const left = await ctx.client.grants.list({ name: 'dev' });
+    const doubled = await findDoubleHosts(ctx.db);
+
+    outcomes.push(`${order}: ${steps.join(' ')} -> ${left.join(',')} ${String(doubled.length)}`);
+  }
+
+  // the rebind drops other's grant, so neither order clashes
+  expect(outcomes).toEqual(['grant first: ok ok -> gh 0', 'rebind first: ok ok -> gh 0']);
+});
+
+test('a rebind and a revoke at once end as one of the two orders', async () => {
   await using ctx = await setupTest();
 
-  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+  await ctx.setupOther();
 
-  await ctx.client.secrets.add({
-    name: 'other',
-    kind: 'custom',
-    value: VALUE,
-    rules: [{ host: 'other.example.com', header: 'authorization', scheme: 'bearer' }],
-  });
-
-  // other moves onto the host gh holds while it is granted to dev
-  const codes = await Promise.all([
-    readCode(
-      ctx.client.secrets.add({
-        name: 'other',
-        kind: 'custom',
-        value: `${VALUE}-2`,
-        rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
-        replace: true,
-      }),
-    ),
-    readCode(ctx.client.grants.add({ name: 'dev', secret: 'other' })),
+  const [rebound, revoked] = await Promise.all([
+    ctx.updateOtherHost(),
+    readCode(ctx.client.grants.delete({ name: 'dev', secret: 'other' })),
   ]);
 
-  const doubled = await findDoubleHosts(ctx.db);
+  const left = await ctx.client.grants.list({ name: 'dev' });
 
-  expect(codes.toSorted()).toEqual(['CONFLICT', 'ok']);
-  expect(doubled).toEqual([]);
+  // revoke first, then a rebind with nothing to drop; or the rebind drops
+  // the grant and the revoke finds none
+  expect(left).toEqual([]);
+  expect(rebound).toBe('ok');
+  expect(['ok', 'NOT_FOUND']).toContain(revoked);
 });
 
 test('a refused or clashing grant leaves what was there, and a retry makes one row', async () => {

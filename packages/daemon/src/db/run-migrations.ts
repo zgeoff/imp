@@ -434,8 +434,8 @@ export const MIGRATIONS: Record<string, Migration> = {
   },
 
   // tokens that may grant (#126): the secrets, each by name and generation;
-  // and the file with each value, so a replace switches rules and value in
-  // one write. Existing values are in files named after their secrets.
+  // each grant's generation; and the file with each value. Existing values
+  // are in files named after their secrets.
   '020_add_grantable_secrets': {
     async up(db: Kysely<DatabaseSchema>) {
       await db.schema
@@ -453,10 +453,26 @@ export const MIGRATIONS: Record<string, Migration> = {
         .addColumn('value_file', 'text', (c) => c.notNull().defaultTo(''))
         .execute();
 
+      await db.schema
+        .alterTable('grants')
+        .addColumn('secret_generation', 'text', (c) => c.notNull().defaultTo(''))
+        .execute();
+
       // randomblob runs once per row
       await db
         .updateTable('secrets')
-        .set({ generation: sql`lower(hex(randomblob(12)))`, value_file: sql.ref('name') })
+        .set({ generation: sql`lower(hex(randomblob(16)))`, value_file: sql.ref('name') })
+        .execute();
+
+      await db
+        .updateTable('grants')
+        .set({
+          secret_generation: (eb) =>
+            eb
+              .selectFrom('secrets')
+              .select('secrets.generation')
+              .whereRef('secrets.name', '=', 'grants.secret_name'),
+        })
         .execute();
     },
   },

@@ -1,6 +1,6 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
-import type { AuditEntry, BrokerRule, Secret, SecretKind } from '@imp/api';
+import type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import {
   buildConflictError,
@@ -23,11 +23,18 @@ import {
   listGrantNames,
   listGrantedRules,
   listSecrets,
+  listValueFiles,
   removeCheckedGrant,
   removeSecret,
   upsertSecret,
 } from '../db/secrets';
-import type { GrantClash, GrantedRule, NewSecret, SecretRecord } from '../db/secrets';
+import type {
+  GrantAuthority,
+  GrantClash,
+  GrantedRule,
+  NewSecret,
+  SecretRecord,
+} from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
@@ -67,24 +74,25 @@ interface AddSecretInput {
   readonly value: string;
   readonly rules?: readonly BrokerRule[] | undefined;
   readonly replace?: boolean | undefined;
+  readonly rebind?: boolean | undefined;
 }
 
 export interface Broker {
-  readonly addSecret: (input: AddSecretInput) => Promise<Secret>;
+  readonly addSecret: (input: AddSecretInput) => Promise<SecretAdded>;
   readonly listSecrets: () => Promise<Secret[]>;
   readonly deleteSecret: (name: string) => Promise<void>;
 
-  // with a generation, the secret must still be the one a grantable list
-  // named; FORBIDDEN otherwise (docs/guides/tokens.md#granting-secrets)
+  // with an authority, the token must still exist and the secret still be
+  // the one its list named (docs/guides/tokens.md#granting-secrets)
   readonly addGrant: (
     impName: string,
     secretName: string,
-    generation?: string | null,
+    authority?: Readonly<GrantAuthority> | null,
   ) => Promise<void>;
   readonly removeGrant: (
     impName: string,
     secretName: string,
-    generation?: string | null,
+    authority?: Readonly<GrantAuthority> | null,
   ) => Promise<void>;
   readonly listGrants: (impName: string) => Promise<string[]>;
 
@@ -181,6 +189,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   };
 
   const files = createSecretFiles(config.dataDir);
+
+  // a value no row names: a write whose row never came, or a file a replace
+  // or a delete displaced and impd stopped before removing
+  const valueFiles = await listValueFiles(db);
+
+  files.removeExcept(valueFiles);
+
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
 
   const trust = createGuestTrust(
@@ -272,32 +287,46 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   };
 
   // The row for a value just written to its file, which goes again when no
-  // row names it. With replace, the file the row named before.
+  // row names it; with replace, the file the row named before.
   const writeSecretRow = async (
     secret: Readonly<NewSecret>,
-    replace: boolean,
-  ): Promise<{ readonly secret: SecretRecord; readonly oldValueFile: string | null }> => {
+    input: Readonly<AddSecretInput>,
+  ): Promise<{
+    readonly secret: SecretRecord;
+    readonly oldValueFile: string | null;
+    readonly droppedGrants: number;
+  }> => {
     try {
-      if (!replace) {
+      if (input.replace !== true) {
         const made = await createSecret(db, secret);
 
         if (made === null) {
           throw buildConflictError('secret', secret.name);
         }
 
-        return { secret: made, oldValueFile: null };
+        return { secret: made, oldValueFile: null, droppedGrants: 0 };
       }
 
-      const outcome = await upsertSecret(db, secret);
+      const outcome = await upsertSecret(db, secret, input.rebind === true);
 
-      if (outcome.kind === 'clash') {
-        throw buildClashError(outcome.impName, secret.name, outcome.clash);
+      if (outcome.kind === 'binding-changed') {
+        throw buildBindingChangedError(secret.name);
       }
 
       return outcome;
     } catch (error) {
       files.remove(secret.valueFile);
       throw error;
+    }
+  };
+
+  // the exact file the commit displaced; a failure leaves it to the sweep
+  // at the next start
+  const removeDisplacedFile = (file: string): void => {
+    try {
+      files.remove(file);
+    } catch (error) {
+      log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
     }
   };
 
@@ -337,16 +366,18 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
       const saved = await writeSecretRow(
         { name: input.name, kind: input.kind, rules, valueFile },
-        input.replace === true,
+        input,
       );
 
       if (saved.oldValueFile !== null) {
-        files.remove(saved.oldValueFile);
+        removeDisplacedFile(saved.oldValueFile);
 
         await applyGrants();
       }
 
-      return toApiSecret(saved.secret);
+      const shown = await toApiSecret(saved.secret);
+
+      return { ...shown, droppedGrants: saved.droppedGrants };
     },
 
     listSecrets: async () => {
@@ -368,12 +399,12 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildNotFoundError('secret', name);
       }
 
-      files.remove(valueFile);
+      removeDisplacedFile(valueFile);
 
       await applyGrants();
     },
 
-    addGrant: async (impName, secretName, generation = null) => {
+    addGrant: async (impName, secretName, authority = null) => {
       const imp = await requireImp(impName);
 
       // a send carries the grants it read at its start; a target's staged
@@ -382,7 +413,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildMovingError(impName);
       }
 
-      const outcome = await createCheckedGrant(db, imp.id, secretName, generation);
+      const outcome = await createCheckedGrant(db, imp.id, secretName, authority);
 
       switch (outcome.kind) {
         case 'granted': {
@@ -390,6 +421,9 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         }
         case 'no-secret': {
           throw buildNotFoundError('secret', secretName);
+        }
+        case 'no-token': {
+          throw buildTokenGoneError();
         }
         case 'not-grantable': {
           throw buildStaleError(secretName);
@@ -400,14 +434,18 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       }
     },
 
-    removeGrant: async (impName, secretName, generation = null) => {
+    removeGrant: async (impName, secretName, authority = null) => {
       const imp = await requireImp(impName);
 
       if (imp.moveState !== null) {
         throw buildMovingError(impName);
       }
 
-      const outcome = await removeCheckedGrant(db, imp.id, secretName, generation);
+      const outcome = await removeCheckedGrant(db, imp.id, secretName, authority);
+
+      if (outcome.kind === 'no-token') {
+        throw buildTokenGoneError();
+      }
 
       if (outcome.kind === 'not-grantable') {
         throw buildStaleError(secretName);
@@ -514,6 +552,19 @@ function buildClashError(impName: string, secretName: string, clash: Readonly<Gr
     `${impName}/${secretName}`,
     `secret ${clash.secretName} already gives ${impName} a credential for ${clash.host}`,
   );
+}
+
+// a replace with another kind or rules, without rebind
+function buildBindingChangedError(name: string) {
+  return new ORPCError('CONFLICT', {
+    message: `secret ${name} would get other hosts or headers; a rebind (--rebind) drops its grants`,
+    data: { kind: 'secret', name, reason: 'binding_changed' },
+  });
+}
+
+// the token behind the call was removed after its access check
+function buildTokenGoneError() {
+  return new ORPCError('UNAUTHORIZED', { message: 'the token behind this call was removed' });
 }
 
 // the call came through a grantable list whose entry is stale: the secret

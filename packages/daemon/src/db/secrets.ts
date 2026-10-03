@@ -50,23 +50,37 @@ export interface GrantClash {
   readonly host: string;
 }
 
+// A grant or revoke through a token's grantable list: the token must still
+// exist, and the secret must still be the one its list named
+export interface GrantAuthority {
+  readonly tokenId: string;
+  readonly generation: string;
+}
+
 // what a checked grant did: made it (or found it made), or why not
 export type GrantOutcome =
   | { readonly kind: 'granted' }
   | { readonly kind: 'no-secret' }
+  | { readonly kind: 'no-token' }
   | { readonly kind: 'not-grantable' }
   | { readonly kind: 'clash'; readonly clash: GrantClash };
 
 export type RevokeOutcome =
   | { readonly kind: 'revoked' }
   | { readonly kind: 'no-grant' }
+  | { readonly kind: 'no-token' }
   | { readonly kind: 'not-grantable' };
 
-// what a replace did: the record and the file it no longer names, or the
-// first grant whose imp the new rules would give two credentials for a host
+// What a replace did: the record, the file it no longer names, and the
+// grants a rebind dropped; or a changed binding without rebind
 export type ReplaceOutcome =
-  | { readonly kind: 'saved'; readonly secret: SecretRecord; readonly oldValueFile: string | null }
-  | { readonly kind: 'clash'; readonly impName: string; readonly clash: GrantClash };
+  | {
+      readonly kind: 'saved';
+      readonly secret: SecretRecord;
+      readonly oldValueFile: string | null;
+      readonly droppedGrants: number;
+    }
+  | { readonly kind: 'binding-changed' };
 
 // the imp behind a broker connection
 export interface BrokerPeer {
@@ -99,12 +113,13 @@ export async function createSecret(
   return row === undefined ? null : toSecretRecord(row);
 }
 
-// The kind, rules and value file in one write: a request reads the old host
-// with the old value, or the new with the new. Checked in the transaction
-// against every imp it is granted to; a secret that does not exist is made.
+// The value file, and with rebind the kind and rules, in one write: a
+// request reads the old binding with the old value, or the new with the new.
+// The same binding is a rotation: generation and grants stay.
 export function upsertSecret(
   db: ImpDatabase,
   secret: Readonly<NewSecret>,
+  rebind: boolean,
 ): Promise<ReplaceOutcome> {
   return db.transaction().execute(async (trx) => {
     const existing = await findSecret(trx, secret.name);
@@ -116,24 +131,19 @@ export function upsertSecret(
         throw new Error(`secret ${secret.name} was not saved`);
       }
 
-      return { kind: 'saved', secret: made, oldValueFile: null };
+      return { kind: 'saved', secret: made, oldValueFile: null, droppedGrants: 0 };
     }
 
-    const grantedTo = await trx
-      .selectFrom('grants')
-      .innerJoin('imps', 'imps.id', 'grants.imp_id')
-      .select(['imps.id', 'imps.name'])
-      .where('grants.secret_name', '=', secret.name)
-      .orderBy('imps.name')
-      .execute();
+    const isRotation = isSameBinding(existing, secret);
 
-    for (const imp of grantedTo) {
-      const clash = await findClash(trx, imp.id, secret.name, secret.rules);
-
-      if (clash !== null) {
-        return { kind: 'clash', impName: imp.name, clash };
-      }
+    if (!isRotation && !rebind) {
+      return { kind: 'binding-changed' };
     }
+
+    // a rebind is another secret to every grant and grantable list
+    const dropped = isRotation
+      ? null
+      : await trx.deleteFrom('grants').where('secret_name', '=', secret.name).executeTakeFirst();
 
     const row = await trx
       .updateTable('secrets')
@@ -141,12 +151,18 @@ export function upsertSecret(
         kind: secret.kind,
         rules: JSON.stringify(secret.rules),
         value_file: secret.valueFile,
+        ...(!isRotation && { generation: createGeneration() }),
       })
       .where('name', '=', secret.name)
       .returningAll()
       .executeTakeFirstOrThrow();
 
-    return { kind: 'saved', secret: toSecretRecord(row), oldValueFile: existing.valueFile };
+    return {
+      kind: 'saved',
+      secret: toSecretRecord(row),
+      oldValueFile: existing.valueFile,
+      droppedGrants: Number(dropped?.numDeletedRows ?? 0n),
+    };
   });
 }
 
@@ -166,8 +182,7 @@ export async function listSecrets(
 ): Promise<{ readonly secret: SecretRecord; readonly imps: readonly string[] }[]> {
   const rows = await db.selectFrom('secrets').selectAll().orderBy('name').execute();
 
-  const grants = await db
-    .selectFrom('grants')
+  const grants = await useLiveGrants(db)
     .innerJoin('imps', 'imps.id', 'grants.imp_id')
     .select(['grants.secret_name', 'imps.name'])
     .orderBy('imps.name')
@@ -192,23 +207,24 @@ export async function removeSecret(db: ImpDatabase, name: string): Promise<strin
 }
 
 // A no-op when the grant exists. The clash check and the insert are one
-// transaction, so two clashing grants cannot both pass. With a generation,
-// the secret must still be the one a grantable list named.
+// transaction, so two clashing grants cannot both pass. The grant carries
+// the secret's generation now.
 export function createCheckedGrant(
   db: ImpDatabase,
   impId: string,
   secretName: string,
-  generation: string | null,
+  authority: Readonly<GrantAuthority> | null,
 ): Promise<GrantOutcome> {
   return db.transaction().execute(async (trx) => {
     const secret = await findSecret(trx, secretName);
+    const refusal = await checkAuthority(trx, authority, secret);
+
+    if (refusal !== null) {
+      return { kind: refusal };
+    }
 
     if (secret === undefined) {
       return { kind: 'no-secret' };
-    }
-
-    if (generation !== null && secret.generation !== generation) {
-      return { kind: 'not-grantable' };
     }
 
     const clash = await findClash(trx, impId, secret.name, secret.rules);
@@ -217,26 +233,25 @@ export function createCheckedGrant(
       return { kind: 'clash', clash };
     }
 
-    await writeGrant(trx, impId, secret.name);
+    await writeGrant(trx, impId, secret);
 
     return { kind: 'granted' };
   });
 }
 
-// with a generation, as createCheckedGrant
+// with an authority, as createCheckedGrant
 export function removeCheckedGrant(
   db: ImpDatabase,
   impId: string,
   secretName: string,
-  generation: string | null,
+  authority: Readonly<GrantAuthority> | null,
 ): Promise<RevokeOutcome> {
   return db.transaction().execute(async (trx) => {
-    if (generation !== null) {
-      const secret = await findSecret(trx, secretName);
+    const secret = await findSecret(trx, secretName);
+    const refusal = await checkAuthority(trx, authority, secret);
 
-      if (secret?.generation !== generation) {
-        return { kind: 'not-grantable' };
-      }
+    if (refusal !== null) {
+      return { kind: refusal };
     }
 
     const result = await trx
@@ -250,14 +265,20 @@ export function removeCheckedGrant(
 }
 
 export async function listGrantNames(db: ImpDatabase, impId: string): Promise<string[]> {
-  const rows = await db
-    .selectFrom('grants')
-    .select('secret_name')
-    .where('imp_id', '=', impId)
-    .orderBy('secret_name')
+  const rows = await useLiveGrants(db)
+    .select('grants.secret_name')
+    .where('grants.imp_id', '=', impId)
+    .orderBy('grants.secret_name')
     .execute();
 
   return rows.map((row) => row.secret_name);
+}
+
+// every file a secret's row names, for impd to remove the rest at start
+export async function listValueFiles(db: ImpDatabase): Promise<Set<string>> {
+  const rows = await db.selectFrom('secrets').select('value_file').execute();
+
+  return new Set(rows.map((row) => row.value_file));
 }
 
 // A fork gets its source's grants, checked in one transaction against what
@@ -281,7 +302,7 @@ export function createForkGrants(
       }
 
       if ((await findClash(trx, toImpId, name, secret.rules)) === null) {
-        await writeGrant(trx, toImpId, name);
+        await writeGrant(trx, toImpId, secret);
       } else {
         skipped.push(name);
       }
@@ -293,9 +314,7 @@ export function createForkGrants(
 
 // every rule of every secret granted to the imp
 export async function listGrantedRules(db: ImpDatabase, impId: string): Promise<GrantedRule[]> {
-  const rows = await db
-    .selectFrom('grants')
-    .innerJoin('secrets', 'secrets.name', 'grants.secret_name')
+  const rows = await useLiveGrants(db)
     .select(['secrets.name', 'secrets.kind', 'secrets.rules', 'secrets.value_file'])
     .where('grants.imp_id', '=', impId)
     .orderBy('secrets.name')
@@ -316,11 +335,7 @@ export async function listGrantedRules(db: ImpDatabase, impId: string): Promise<
 export async function listAllGrantedRules(
   db: ImpDatabase,
 ): Promise<{ readonly impId: string; readonly rule: BrokerRule }[]> {
-  const rows = await db
-    .selectFrom('grants')
-    .innerJoin('secrets', 'secrets.name', 'grants.secret_name')
-    .select(['grants.imp_id', 'secrets.rules'])
-    .execute();
+  const rows = await useLiveGrants(db).select(['grants.imp_id', 'secrets.rules']).execute();
 
   return rows.flatMap((row) => parseRules(row.rules).map((rule) => ({ impId: row.imp_id, rule })));
 }
@@ -362,16 +377,79 @@ async function findClash(
   return clash === undefined ? null : { secretName: clash.secretName, host: clash.rule.host };
 }
 
-async function writeGrant(db: ImpDatabase, impId: string, secretName: string): Promise<void> {
+// Grants whose generation is the secret's now: only these give a credential.
+// A rebind drops the others in its transaction, so none should be left.
+function useLiveGrants(db: ImpDatabase) {
+  return db
+    .selectFrom('grants')
+    .innerJoin('secrets', (join) =>
+      join
+        .onRef('secrets.name', '=', 'grants.secret_name')
+        .onRef('secrets.generation', '=', 'grants.secret_generation'),
+    );
+}
+
+// Read in the grant's transaction: the token may have been removed, or the
+// secret deleted or rebound, since the access check
+async function checkAuthority(
+  db: ImpDatabase,
+  authority: Readonly<GrantAuthority> | null,
+  secret: Readonly<SecretRecord> | undefined,
+): Promise<'no-token' | 'not-grantable' | null> {
+  if (authority === null) {
+    return null;
+  }
+
+  const token = await db
+    .selectFrom('tokens')
+    .select('id')
+    .where('id', '=', authority.tokenId)
+    .executeTakeFirst();
+
+  if (token === undefined) {
+    return 'no-token';
+  }
+
+  return secret?.generation === authority.generation ? null : 'not-grantable';
+}
+
+// a grant made again takes the secret's generation now
+async function writeGrant(
+  db: ImpDatabase,
+  impId: string,
+  secret: Readonly<SecretRecord>,
+): Promise<void> {
   await db
     .insertInto('grants')
-    .values({ imp_id: impId, secret_name: secretName })
-    .onConflict((conflict) => conflict.doNothing())
+    .values({ imp_id: impId, secret_name: secret.name, secret_generation: secret.generation })
+    .onConflict((conflict) =>
+      conflict
+        .columns(['imp_id', 'secret_name'])
+        .doUpdateSet({ secret_generation: secret.generation }),
+    )
     .execute();
 }
 
+// 128 random bits
 function createGeneration(): string {
-  return randomBytes(12).toString('hex');
+  return randomBytes(16).toString('hex');
+}
+
+// What a request depends on besides the value: the kind and the rules, with
+// the rules in host order, so a reorder is the same binding
+function isSameBinding(
+  a: Readonly<Pick<NewSecret, 'kind' | 'rules'>>,
+  b: Readonly<Pick<NewSecret, 'kind' | 'rules'>>,
+): boolean {
+  return a.kind === b.kind && toBindingKey(a.rules) === toBindingKey(b.rules);
+}
+
+function toBindingKey(rules: readonly BrokerRule[]): string {
+  const canonical = rules
+    .map((rule) => [rule.host, rule.header.toLowerCase(), rule.scheme, rule.user ?? null] as const)
+    .toSorted((x, y) => `${x[0]}\n${x[1]}`.localeCompare(`${y[0]}\n${y[1]}`));
+
+  return JSON.stringify(canonical);
 }
 
 function toSecretRecord(row: Readonly<SecretRow>): SecretRecord {

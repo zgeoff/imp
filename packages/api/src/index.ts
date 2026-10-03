@@ -140,7 +140,7 @@ export {
   SecretValueSchema,
 } from './secret-schema';
 
-export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema';
+export type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from './secret-schema';
 
 export {
   ServiceDefSchema,

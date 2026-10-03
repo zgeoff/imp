@@ -120,8 +120,8 @@ interface SecretsTable {
   rules: string;
   created_at: number;
 
-  // random, set on create and kept by a replace: a token's grantable list
-  // names a secret by name and generation
+  // random, set on create and kept by a rotation; a rebind or a delete and
+  // create gives another (docs/guides/connectors.md#rotate-or-rebind)
   generation: string;
 
   // the file in <dataDir>/secrets that holds the value; a replace writes a
@@ -132,6 +132,10 @@ interface SecretsTable {
 interface GrantsTable {
   imp_id: string;
   secret_name: string;
+
+  // the secret's generation at the grant: a rebind gives the secret another,
+  // and a grant counts only while the two match
+  secret_generation: string;
 }
 
 interface BrokerAuditTable {

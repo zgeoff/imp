@@ -70,6 +70,15 @@ test('the grantable migration gives each secret its own generation and its old f
       VALUES (${name}, 'custom', '[]', 0)`.execute(db);
   }
 
+  await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
+    VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
+
+  await sql`INSERT INTO imps (id, name, image_id, state, vcpus, memory_mib, slot, ip,
+    created_at, last_active_at)
+    VALUES ('imp', 'dev', 'img', 'stopped', 1, 512, 0, 'ip', 0, 0)`.execute(db);
+
+  await sql`INSERT INTO grants (imp_id, secret_name) VALUES ('imp', 'gh')`.execute(db);
+
   await sql`INSERT INTO tokens (id, name, secret_hash, scope, imps, created_at)
     VALUES ('t', 'ci', 'hash', 'manage', '["dev-*"]', 0)`.execute(db);
 
@@ -88,7 +97,14 @@ test('the grantable migration gives each secret its own generation and its old f
     ['npm', 'npm'],
   ]);
 
-  expect(secrets.every((row) => /^[0-9a-f]{24}$/v.test(row.generation))).toBeTrue();
+  const grants = await db.selectFrom('grants').selectAll().execute();
+
+  expect(secrets.every((row) => /^[0-9a-f]{32}$/v.test(row.generation))).toBeTrue();
+
+  expect(grants).toEqual([
+    { imp_id: 'imp', secret_name: 'gh', secret_generation: secrets[0]?.generation ?? '' },
+  ]);
+
   expect(secrets[0]?.generation).not.toBe(secrets[1]?.generation);
   expect(token).toEqual({ grantable: '[]' });
 

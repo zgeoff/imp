@@ -1,5 +1,13 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 // Secret values, one file each in <dataDir>/secrets: the directory 0700, each
@@ -11,6 +19,9 @@ export interface SecretFiles {
   // null when the file is gone
   readonly read: (file: string) => string | null;
   readonly remove: (file: string) => void;
+
+  // every file not in `keep`, and every temp file a crash left
+  readonly removeExcept: (keep: ReadonlySet<string>) => void;
 }
 
 // A new file for each value: a replace writes the new value beside the old,
@@ -52,6 +63,13 @@ export function createSecretFiles(dataDir: string): SecretFiles {
     },
     remove: (file) => {
       rmSync(join(dir, file), { force: true });
+    },
+    removeExcept: (keep) => {
+      for (const file of readdirSync(dir)) {
+        if (!keep.has(file)) {
+          rmSync(join(dir, file), { force: true, recursive: true });
+        }
+      }
     },
   };
 }

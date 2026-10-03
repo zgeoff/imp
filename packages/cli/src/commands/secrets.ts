@@ -77,7 +77,11 @@ const addCommand = defineCommand({
     header: { type: 'string', description: 'custom: the header to set (default authorization)' },
     scheme: { type: 'string', description: 'custom: bearer (default), basic or raw' },
     user: { type: 'string', description: 'custom: the user name for basic' },
-    replace: { type: 'boolean', description: 'replace a secret by that name' },
+    replace: { type: 'boolean', description: 'replace the value of a secret by that name' },
+    rebind: {
+      type: 'boolean',
+      description: 'with --replace: let the kind or hosts change, and revoke it from every imp',
+    },
     json: jsonArg,
   },
   run: (context) =>
@@ -97,7 +101,14 @@ const addCommand = defineCommand({
         value,
         ...(rules !== undefined && { rules }),
         ...(context.args.replace === true && { replace: true }),
+        ...(context.args.rebind === true && { rebind: true }),
       });
+
+      if (secret.droppedGrants > 0) {
+        console.error(
+          `imp: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
+        );
+      }
 
       console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
     }),

@@ -8,7 +8,7 @@ import type { ApiAudit } from './audit/api-audit';
 import {
   checkAccess,
   findAccess,
-  findGrantedGeneration,
+  findGrantAuthority,
   isAuditedProcedure,
 } from './auth/access-policy';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
@@ -595,7 +595,7 @@ export function buildRouter(deps: RouterDeps) {
         await deps.broker.addGrant(
           input.name,
           input.secret,
-          findGrantedGeneration(context.context.caller, input.secret),
+          findGrantAuthority(context.context.caller, input.secret),
         );
 
         return {};
@@ -606,7 +606,7 @@ export function buildRouter(deps: RouterDeps) {
         await deps.broker.removeGrant(
           input.name,
           input.secret,
-          findGrantedGeneration(context.context.caller, input.secret),
+          findGrantAuthority(context.context.caller, input.secret),
         );
 
         return {};
