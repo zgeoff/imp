@@ -156,6 +156,9 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // system.copyDatabase; from 0.30.0
+      databaseCopy: z.boolean().optional(),
     })
     .optional(),
 });

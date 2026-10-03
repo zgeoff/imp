@@ -13,7 +13,8 @@ type ResourceKind =
   | 'backup'
   | 'token'
   | 'ssh-key'
-  | 'network';
+  | 'network'
+  | 'database-copy';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.
