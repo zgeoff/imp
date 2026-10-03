@@ -227,7 +227,7 @@ export function createDockerProxy(
       return buildRefusal(request, path, 'the create body is not JSON');
     }
 
-    const checked = checkCreateBody(body, options.hostImage);
+    const checked = checkCreateBody(body, options.hostImage, options.builderImage);
 
     if (!checked.isOk || checked.image === undefined) {
       const reason = checked.isOk ? 'Image is missing' : checked.reason;

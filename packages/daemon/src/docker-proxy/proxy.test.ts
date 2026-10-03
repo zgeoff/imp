@@ -394,7 +394,7 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
   expect(seen[0]?.headers['x-registry-auth']).toBe('e30=');
 });
 
-test('under IMP_BUILD_ISOLATION=imp only a pull of IMP_BUILD_IMAGE by digest passes: no other pull, no build', async () => {
+test('under IMP_BUILD_ISOLATION=imp only IMP_BUILD_IMAGE by digest pulls or creates, and no build passes', async () => {
   const digest = `sha256:${'d'.repeat(64)}`;
   const lockedSocket = join(dir, 'locked.sock');
 
@@ -414,6 +414,22 @@ test('under IMP_BUILD_ISOLATION=imp only a pull of IMP_BUILD_IMAGE by digest pas
 
   const sendToLocked = (target: string) =>
     fetch(`http://docker${target}`, { method: 'POST', unix: lockedSocket });
+
+  // a create, which reaches a pull when the engine lacks its image
+  const createFrom = (image: string) =>
+    fetch('http://docker/v1.55/containers/create', {
+      method: 'POST',
+      unix: lockedSocket,
+      body: JSON.stringify({ Image: image, Cmd: ['/bin/true'] }),
+    });
+
+  const createBusybox = await createFrom('busybox:1.37');
+  const createBuilder = await createFrom(`ghcr.io/zgeoff/imp-base:0.29.0@${digest}`);
+
+  expect([createBusybox.status, createBuilder.status]).toEqual([403, 200]);
+  expect(seen.map((request) => request.target)).toEqual(['/v1.55/containers/create']);
+
+  seen.length = 0;
 
   const busybox = await sendToLocked('/v1.55/images/create?fromImage=busybox&tag=1.37');
 

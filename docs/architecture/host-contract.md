@@ -222,9 +222,9 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   in builder imps ([add an image](../guides/images.md#add-an-image)), and its one pull on the host's
   engine is its builder image, by digest, when the engine lacks it on the first add or build on a
   new host or after an `IMP_BUILD_IMAGE` change. The proxy refuses every other pull and every
-  `POST /build`, so the engine gets no image impd did not name. A `docker create` the CLI sends for
-  an image the engine lacks pulls through the same lock. Under `IMP_BUILD_ISOLATION=host` a pull and
-  a build meet only the rules in the table.
+  `POST /build`, so the engine gets no image impd did not name. A container create from any image
+  but `IMP_BUILD_IMAGE` by its digest is refused too, so no create reaches a pull. Under
+  `IMP_BUILD_ISOLATION=host` a pull and a build meet only the rules in the table.
 - **Units:** `imp-host.service` has `Wants=` and `After=` on the proxy, not `BindsTo=`. A proxy that
   stops fails image work only; running imps keep running. The proxy unit waits up to 30 s for its
   socket and restarts always. Compose has a healthcheck and `depends_on`; the NixOS module loads the
