@@ -503,3 +503,67 @@ test('a source gone, or made again under its name, before the disk copy refuses 
   expect(imps.map((imp) => imp.name)).toEqual(['dev']);
   expect(dirs).toEqual(imps.map((imp) => imp.id));
 });
+
+test('a refused fork’s cleanup leaves an imp that took the fork’s name in the meantime', async () => {
+  await using harness = await setupImpTest();
+
+  await harness.createTestImage('base');
+  await harness.imps.createImp({ name: 'dev' });
+
+  const state = { locks: 0, isCleanupGapRun: false };
+
+  // the fork goes by `imp rm` and another takes its name, just before the
+  // refused fork's cleanup removes what it made
+  const runCleanupGap = async (): Promise<void> => {
+    if (!state.isCleanupGapRun) {
+      state.isCleanupGapRun = true;
+
+      await harness.imps.destroyImp('copy');
+      await harness.imps.createImp({ name: 'copy' });
+    }
+  };
+
+  const checkpoints = createCheckpointService({
+    config: harness.config,
+    db: harness.db,
+    diskBudget: harness.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+    storage: harness.storage,
+    imps: {
+      ...harness.imps,
+
+      // the source made again under its name before the disk copy
+      lockImp: async (name, action) => {
+        state.locks += 1;
+
+        if (state.locks === 2) {
+          await harness.imps.destroyImp('dev');
+          await harness.imps.createImp({ name: 'dev' });
+        }
+
+        return harness.imps.lockImp(name, action);
+      },
+      destroyImpId: async (id) => {
+        await runCleanupGap();
+
+        return harness.imps.destroyImpId(id);
+      },
+    },
+  });
+
+  const readFailure = async (): Promise<unknown> => {
+    try {
+      return await checkpoints.forkImp({ source: 'dev', name: 'copy' });
+    } catch (error) {
+      return error;
+    }
+  };
+
+  const refused = await readFailure();
+  const imps = await harness.imps.listImps();
+
+  expect(refused).toMatchObject({ code: 'CONFLICT' });
+  expect(state.isCleanupGapRun).toBe(true);
+  expect(imps.map((imp) => imp.name).toSorted()).toEqual(['copy', 'dev']);
+});

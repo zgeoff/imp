@@ -87,16 +87,14 @@ export function isValidCheckpointLabel(label: string): boolean {
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
   const log = deps.log ?? printLog;
 
-  // a fork its source changed under goes, left by nothing; only the imp the
-  // fork made, never one that took its name since
+  // a fork its source changed under goes, by id: an imp that took its name
+  // since stays
   const removeRefusedFork = async (name: string, forkId: string | null): Promise<void> => {
-    const found = await findImpByName(deps.db, name);
-
-    if (forkId === null || found?.id !== forkId) {
+    if (forkId === null) {
       return;
     }
 
-    await deps.imps.destroyImp(name).catch((error: unknown) => {
+    await deps.imps.destroyImpId(forkId).catch((error: unknown) => {
       log(`impd: ${name}: a refused fork left the imp: ${readErrorMessage(error)}`);
     });
   };
