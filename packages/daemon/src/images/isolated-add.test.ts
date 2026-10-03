@@ -17,7 +17,7 @@ import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { createFakeGuest } from './fake-guest';
 import type { FakeAnswer, FakeRun } from './fake-guest';
 import { PIN_INSPECT_FORMAT } from './image-pin';
-import { createImageService } from './image-service';
+import { HOST_ADD_WARNING, createImageService } from './image-service';
 
 const CONTAINER_ID = 'e'.repeat(64);
 const CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';
@@ -472,7 +472,7 @@ test('the first-start seed goes through a builder too', async () => {
   expect(commands).toContain('pull --quiet --platform linux/amd64 ubuntu:24.04');
 });
 
-test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, and boots no builder', async () => {
+test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, with a warning and no builder', async () => {
   await using ctx = await setupAdd({ env: { IMP_BUILD_ISOLATION: 'host' } });
 
   const failure = await readFailure(
@@ -482,5 +482,6 @@ test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, and boots no 
   // the fake host docker fails every call
   expect(failure).toBeInstanceOf(Error);
   expect(ctx.readHostCalls()).toContain('image inspect busybox:1.37');
+  expect(ctx.logs).toContain(HOST_ADD_WARNING);
   expect(ctx.guest.runs).toEqual([]);
 });
