@@ -1,6 +1,6 @@
 {
   "name": "@imp/api",
-  "version": "0.28.0",
+  "version": "0.28.1",
   "private": true,
   "description": "oRPC contract, schemas and exec stream framing for the imp control API",
   "type": "module",
