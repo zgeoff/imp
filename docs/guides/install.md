@@ -554,7 +554,8 @@ your laptop is enough ([images](./images.md#build-an-image)):
 imp image build images/base --name base
 ```
 
-An image the host's Docker already has goes in with `imp image add <ref>`.
+An image from a public registry goes in with `imp image add <ref>`, which pulls it in a builder imp
+([add an image](./images.md#add-an-image)).
 
 Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `imp new` uses `ubuntu` and impd
 logs a warning at start.

@@ -217,7 +217,9 @@ of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)
 1. `imp image build <dir> --name <name>` uploads the directory as a tar and builds it with BuildKit
    in a builder imp ([isolated builds](../guides/images.md#isolated-builds)), or on the host Docker
    with `IMP_BUILD_ISOLATION=host`; `--on-host` builds a directory on the host instead.
-   `imp image add <ref>` takes an image the host Docker has, and pulls it when it is missing.
+   `imp image add <ref>` pulls the image in a builder imp
+   ([add an image](../guides/images.md#add-an-image)), or, with `IMP_BUILD_ISOLATION=host`, takes an
+   image the host Docker has and pulls it when it is missing.
 2. impd runs `docker create` and `docker export`, on the host or in the builder, and unpacks the tar
    on the host. It keeps owners, modes and the `security.capability` and `user.*` extended
    attributes, which `mkfs.ext4 -d` copies too.

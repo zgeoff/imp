@@ -26,6 +26,7 @@ import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
+import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -38,7 +39,7 @@ import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
-import { runGuestBuild, writeGuestTree } from './guest-build';
+import { loadGuestImage, runGuestBuild, writeGuestTree } from './guest-build';
 import type { GuestExec } from './guest-exec';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from './image-pin';
@@ -76,7 +77,8 @@ const InspectSchema = z
   .length(1);
 
 export interface ImageService {
-  readonly addImage: (ref: string, name?: string) => Promise<ImageRecord>;
+  // `signal` aborts when the client goes, and ends the add and its builder
+  readonly addImage: (ref: string, name?: string, signal?: AbortSignal) => Promise<ImageRecord>;
   readonly buildImage: (
     contextDir: string,
     name: string,
@@ -151,6 +153,17 @@ function toBadRequest(error: unknown): unknown {
   return error instanceof DockerfileError
     ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
     : error;
+}
+
+// The reference with the tag the engine would assume written out, so the
+// pull, the log and the error name what is fetched: `ubuntu` is
+// `ubuntu:latest`
+function formatExplicitRef(ref: string): string {
+  const [withoutDigest = ''] = ref.split('@');
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const hasTag = withoutDigest.includes(':', lastSlash + 1);
+
+  return ref.includes('@') || hasTag ? ref : `${ref}:latest`;
 }
 
 // one image's every spelling: the engine's registry and path, and the tag
@@ -362,21 +375,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
-  // `isImpds`: impd's own add of the builders' image, which no client may name
-  const createImageFromRef = async (
-    ref: string,
-    name?: string,
-    isImpds = true,
-  ): Promise<ImageRecord> => {
-    assertImageRef(ref);
-
-    const givenName = name ?? deriveImageName(ref);
-    const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
-
-    const taken = await findImageByName(deps.db, imageName);
-
-    requireDockerImage(taken);
-
+  // An image of the host's engine, pulled there when it lacks it: the
+  // builders' own image, and every add and build under
+  // IMP_BUILD_ISOLATION=host
+  const createImageOnHost = async (ref: string, imageName: string): Promise<ImageRecord> => {
     const inspect = await readInspect(ref);
 
     if (inspect === undefined) {
@@ -396,6 +398,90 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         return writeImageRow(imageName, ref, inspect.Id, sizeBytes);
       }),
     );
+  };
+
+  // An image pulled in a builder imp and streamed out of it, as a build's
+  // result is (docs/guides/images.md#add-an-image); the host engine never
+  // has it. A refused builder fails the add: it never falls back.
+  const createImageInBuilder = (
+    ref: string,
+    imageName: string,
+    signal: AbortSignal,
+  ): Promise<ImageRecord> => {
+    const builders = deps.readBuilders();
+
+    if (builders === null) {
+      throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is starting; try again' });
+    }
+
+    const explicitRef = formatExplicitRef(ref);
+
+    return builders.withBuilder(signal, async (exec) => {
+      const started = performance.now();
+
+      const platform = await createBuildEngine(toEngineRun(exec)).readPlatform(signal);
+      const pulled = await loadGuestImage(exec, { ref: explicitRef, platform, signal });
+
+      const pullMs = Math.round(performance.now() - started);
+
+      const image = await writeGuestImage(exec, imageName, ref, signal);
+
+      const imageMs = Math.round(performance.now() - started) - pullMs;
+
+      deps.log(
+        `impd: image add ${imageName}: ${explicitRef} for ${platform}${pulled === null ? '' : ` (${pulled})`}, digest ${image.digest}; pull=${String(pullMs)}ms image=${String(imageMs)}ms`,
+      );
+
+      return image;
+    });
+  };
+
+  // `isImpds`: impd's own add, of a name no client may take
+  const createImageFromRef = async (
+    ref: string,
+    name: string | undefined,
+    isImpds: boolean,
+    signal: AbortSignal,
+  ): Promise<ImageRecord> => {
+    assertImageRef(ref);
+
+    const givenName = name ?? deriveImageName(ref);
+    const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
+
+    const taken = await findImageByName(deps.db, imageName);
+
+    requireDockerImage(taken);
+
+    if (deps.config.build.isolation === 'host') {
+      return createImageOnHost(ref, imageName);
+    }
+
+    return createImageInBuilder(ref, imageName, signal);
+  };
+
+  // the builders' image, at most one add of it at a time
+  const builderImage = { adding: null as Promise<ImageRecord> | null };
+
+  const loadBuilderImage = async (): Promise<void> => {
+    const ref = deps.config.build.image;
+
+    const image = await findImageByName(deps.db, BUILDER_IMAGE);
+
+    if (image?.ref === ref) {
+      return;
+    }
+
+    builderImage.adding ??= createImageOnHost(ref, BUILDER_IMAGE);
+
+    try {
+      await builderImage.adding;
+    } catch (error) {
+      throw new ORPCError('SERVICE_UNAVAILABLE', {
+        message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${readErrorMessage(error)}`,
+      });
+    } finally {
+      builderImage.adding = null;
+    }
   };
 
   const findDefaultImage = async (): Promise<ImageRecord | undefined> => {
@@ -644,7 +730,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         return built;
       }
 
-      return await createImageFromRef(tag, name);
+      return await createImageOnHost(tag, NameSchema.parse(name));
     } catch (error) {
       // nobody waits for the image: the build was stopped, or its tag is left
       signal.throwIfAborted();
@@ -671,7 +757,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   return {
-    addImage: (ref, name) => createImageFromRef(ref, name, false),
+    addImage: (ref, name, signal) =>
+      createImageFromRef(ref, name, false, signal ?? new AbortController().signal),
     buildImage: async (contextDir, name, dockerfile) => {
       if (!contextDir.startsWith('/')) {
         throw new ORPCError('BAD_REQUEST', {
@@ -748,18 +835,17 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     },
     resolveImage,
     findDefaultImage,
-    ensureBuilderImage: async () => {
-      const image = await findImageByName(deps.db, BUILDER_IMAGE);
-
-      if (image?.ref !== deps.config.build.image) {
-        await createImageFromRef(deps.config.build.image, BUILDER_IMAGE);
-      }
-    },
+    ensureBuilderImage: loadBuilderImage,
     seedDefaultImage: async () => {
       const images = await listImages(deps.db);
 
       if (images.length === 0) {
-        await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE);
+        await createImageFromRef(
+          SEED_REF,
+          FALLBACK_DEFAULT_IMAGE,
+          true,
+          new AbortController().signal,
+        );
       }
     },
   };
