@@ -109,7 +109,30 @@ let
       stage ${lib.escapeShellArg secret.source} ${stagedPath secret.name} ${lib.escapeShellArg secret.missing}
     '') secrets}
   '';
-  runArgs = privileges ++ probedArgs ++ sharedArgs ++ secretArgs ++ [ cfg.image ];
+  # The DNS API token, staged on its own: impd reads it at each DNS call,
+  # so a new token must reach the running container. The container mounts
+  # the directory, where imp-host-dns-token.sh renames each new copy in; a
+  # bind-mounted file would keep its old inode.
+  dnsToken = cfg.dnsApiTokenFile != null;
+  dnsStageDir = "/run/imp-host/dns";
+  dnsContainerDir = "/run/imp/dns";
+  dnsArgs = lib.optionals dnsToken [
+    "-v"
+    "${dnsStageDir}:${dnsContainerDir}:ro"
+    "-e"
+    "IMP_DNS_API_TOKEN_FILE=${dnsContainerDir}/token"
+  ];
+  stageDnsToken = pkgs.writeShellScript "imp-host-dns-token" ''
+    export PATH=${
+      lib.makeBinPath [
+        pkgs.coreutils
+        pkgs.diffutils
+        pkgs.gnugrep
+      ]
+    }
+    exec ${pkgs.bash}/bin/bash ${./imp-host-dns-token.sh} ${lib.escapeShellArg cfg.dnsApiTokenFile} ${dnsStageDir}
+  '';
+  runArgs = privileges ++ probedArgs ++ sharedArgs ++ secretArgs ++ dnsArgs ++ [ cfg.image ];
 
   # imp-docker-proxy (deploy/imp-docker-proxy.service): the only Docker
   # socket imp-host sees. It closes the Docker socket path only: imp-host
@@ -166,6 +189,7 @@ let
         IMP_PUBLIC_PORTS = "";
         IMP_HOST_NETWORK = "";
         IMP_BACKUP_PASSWORD_FILE = "";
+        IMP_DNS_API_TOKEN_FILE = "";
       }
     ) cfg.settings
   );
@@ -536,6 +560,21 @@ in
       '';
     };
 
+    dnsApiTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/secrets/imp-dns-api-token";
+      description = ''
+        The DNS provider's API token (docs/guides/https.md), outside the Nix
+        store, instead of IMP_DNS_API_TOKEN in environmentFile; set one, not
+        both. It is copied to /run/imp-host/dns before each start, when the
+        file changes, and every 5 minutes, and impd reads the copy at each
+        DNS call, so a new token works without a restart. A missing or
+        empty file keeps the copy made before; with none, impd starts and
+        certificates and DNS records wait for the token.
+      '';
+    };
+
     tailscaleAuthKeyFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -559,7 +598,7 @@ in
       }
       {
         assertion = overridden == [ ];
-        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, publicPorts) instead";
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts) instead";
       }
       {
         assertion = !zfs || config.networking.hostId != null;
@@ -738,6 +777,29 @@ in
       };
     };
 
+    # The token again whenever its file changes, and every 5 minutes for
+    # what PathChanged misses, such as a symlink pointed somewhere new.
+    systemd.services.imp-host-dns-token = lib.mkIf dnsToken {
+      description = "imp host DNS API token (stage a new one for impd)";
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = stageDnsToken;
+      };
+    };
+    systemd.paths.imp-host-dns-token = lib.mkIf dnsToken {
+      description = "imp host DNS API token file";
+      wantedBy = [ "multi-user.target" ];
+      pathConfig.PathChanged = cfg.dnsApiTokenFile;
+    };
+    systemd.timers.imp-host-dns-token = lib.mkIf dnsToken {
+      description = "imp host DNS API token, every 5 minutes";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitActiveSec = "5min";
+      };
+    };
+
     systemd.services.imp-host = {
       description = "imp host (impd, Firecracker, tailscaled)";
       documentation = [ "https://github.com/zgeoff/imp/blob/main/docs/guides/nixos.md" ];
@@ -769,12 +831,15 @@ in
       };
       serviceConfig = {
         Type = "exec";
-        ExecStartPre = lib.optional (secrets != [ ]) stageSecrets ++ [
-          writeEnv
-          # A container left over from a crash would hold the name.
-          "-${docker} rm -f imp-host"
-          ensureNetwork
-        ];
+        ExecStartPre =
+          lib.optional (secrets != [ ]) stageSecrets
+          ++ lib.optional dnsToken stageDnsToken
+          ++ [
+            writeEnv
+            # A container left over from a crash would hold the name.
+            "-${docker} rm -f imp-host"
+            ensureNetwork
+          ];
         ExecStart = "${docker} run ${lib.escapeShellArgs runArgs}";
         # SIGTERM makes impd sleep every awake imp; it gets up to 120 s.
         ExecStop = "${docker} stop -t 120 imp-host";

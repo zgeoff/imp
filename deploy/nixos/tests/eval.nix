@@ -132,8 +132,12 @@ let
   };
   denyNoNftables = host { services.imp.forwardDeny = [ "10.42.0.0/16" ]; };
   networkInSettings = host { services.imp.settings.IMP_HOST_NETWORK = "--network x"; };
+  dnsHost = host { services.imp.dnsApiTokenFile = "/run/secrets/imp-dns-api-token"; };
+  dnsFileInSettings = host { services.imp.settings.IMP_DNS_API_TOKEN_FILE = "/x"; };
 
   zfsCfg = zfsHost.config;
+  dnsCfg = dnsHost.config;
+  dnsUnit = dnsCfg.systemd.services.imp-host;
   ipv6Cfg = ipv6Host.config;
   ipv6Unit = ipv6Cfg.systemd.services.imp-host;
   ipv6Rules = ipv6Cfg.networking.firewall.extraForwardRules;
@@ -316,6 +320,30 @@ let
     (expect "forwardDeny without nftables is refused" (
       lib.any (lib.hasInfix "forwardDeny needs networking.nftables.enable") (failed denyNoNftables)
     ))
+    (expect "dnsApiTokenFile: no failed assertion" (failed dnsHost == [ ]))
+    (expect "the DNS token's directory is mounted read-only, and impd reads the token there" (
+      lib.hasInfix "-v /run/imp-host/dns:/run/imp/dns:ro -e 'IMP_DNS_API_TOKEN_FILE=/run/imp/dns/token'" dnsUnit.serviceConfig.ExecStart
+    ))
+    (expect "the DNS token is staged before each start" (
+      lib.any (pre: lib.hasSuffix "-imp-host-dns-token" (toString pre)) dnsUnit.serviceConfig.ExecStartPre
+    ))
+    (expect "a change to the token file stages it again" (
+      dnsCfg.systemd.paths.imp-host-dns-token.pathConfig.PathChanged == "/run/secrets/imp-dns-api-token"
+      && lib.elem "multi-user.target" dnsCfg.systemd.paths.imp-host-dns-token.wantedBy
+    ))
+    (expect "the token is staged again every 5 minutes" (
+      dnsCfg.systemd.timers.imp-host-dns-token.timerConfig.OnUnitActiveSec == "5min"
+      && lib.elem "timers.target" dnsCfg.systemd.timers.imp-host-dns-token.wantedBy
+    ))
+    (expect "no DNS token file, no mount and no units" (
+      !(lib.hasInfix "/run/imp/dns" unit.serviceConfig.ExecStart)
+      && !(zfsCfg.systemd.paths ? imp-host-dns-token)
+      && !(zfsCfg.systemd.timers ? imp-host-dns-token)
+      && !(zfsCfg.systemd.services ? imp-host-dns-token)
+    ))
+    (expect "IMP_DNS_API_TOKEN_FILE goes in dnsApiTokenFile, not settings" (
+      lib.any (lib.hasInfix "sets IMP_DNS_API_TOKEN_FILE") (failed dnsFileInSettings)
+    ))
     (expect "IMP_HOST_NETWORK goes in ipv6.enable, not settings" (
       lib.any (lib.hasInfix "sets IMP_HOST_NETWORK") (failed networkInSettings)
     ))
@@ -334,6 +362,7 @@ let
   ipv6Pre = writerOf ipv6Cfg;
   ipv6Network = lib.last ipv6Unit.serviceConfig.ExecStartPre;
   stagePre = lib.head unit.serviceConfig.ExecStartPre;
+  dnsStage = dnsCfg.systemd.services.imp-host-dns-token.serviceConfig.ExecStart;
 in
 # The settings file is a store path; read it at build time.
 pkgs.runCommand "imp-nixos-eval" { } ''
@@ -355,6 +384,8 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   # the staging copies both secrets, by path
   grep -q "stage /run/secrets/imp-authkey /run/imp-host/tailscale-authkey" ${stagePre}
   grep -q "stage /run/secrets/backup-password /run/imp-host/backup-password" ${stagePre}
+  # the DNS token: by path, into the mounted directory
+  grep -q "imp-host-dns-token.sh /run/secrets/imp-dns-api-token /run/imp-host/dns" ${dnsStage}
   # own: bootstrap.sh's ruleset, for sshd's ports, and the env file says so
   rules=$(echo ${lib.escapeShellArg ownStart} | sed -n 's/.* -f //p')
   grep -qx '		tcp dport { 22, 2222 } accept comment "SSH"' "$rules"

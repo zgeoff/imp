@@ -28,7 +28,8 @@ meets the [host contract](../architecture/host-contract.md), as
             settings.IMP_TAILSCALE_HOSTNAME = "imp";
             tailscaleAuthKeyFile = "/var/lib/imp-host/secrets/tailscale-authkey"; # root, 0400
             backupPasswordFile = "/var/lib/imp-host/secrets/backup-password"; # root, 0400
-            # IMP_DNS_API_TOKEN, IMP_BACKUP_REPOSITORY, AWS_* and other secrets; root, 0400
+            dnsApiTokenFile = "/var/lib/imp-host/secrets/dns-api-token"; # root, 0400; with IMP_DOMAIN
+            # IMP_BACKUP_REPOSITORY, AWS_* and other secrets; root, 0400
             environmentFile = "/var/lib/imp-host/secrets/imp-host.env";
           };
         }
@@ -156,8 +157,8 @@ not the file:
 
 - `settings`: any [variable](./configuration.md) but the module's own keys (`IMP_HOST_IMAGE`,
   `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT`, `IMP_HOST_FIREWALL`, `IMP_HOST_IPV6`, `IMP_HOST_SUBNET6`),
-  `IMP_HOST_NETWORK` and `TAILSCALE_AUTHKEY`, which the module refuses there. They are in the Nix
-  store, so never put a secret here.
+  `IMP_HOST_NETWORK`, `TAILSCALE_AUTHKEY` and `IMP_DNS_API_TOKEN_FILE`, which the module refuses
+  there. They are in the Nix store, so never put a secret here.
 - `environmentFile`: a file outside the store, such as a sops or agenix secret, copied in at each
   start.
 - `IMP_RAM_BUDGET_MIB`: `ramBudgetMiB`, else measured at each start, as `bootstrap.sh` does, less
@@ -179,6 +180,37 @@ and is mounted read-only into the container at `/run/imp/backup-password`, and
 file only warns, and the module blanks `IMP_BACKUP_REPOSITORY`, so backups stay off. Put
 `IMP_BACKUP_REPOSITORY` and the `AWS_*` keys in `environmentFile`, such as
 `/var/lib/imp-host/secrets/imp-host.env` (root, 0400).
+
+## The DNS API token
+
+`dnsApiTokenFile` names a file outside the Nix store that holds the DNS provider's API token
+([HTTPS](./https.md#the-token-in-a-file)), such as `/var/lib/imp-host/secrets/dns-api-token` (root,
+0400). It replaces `IMP_DNS_API_TOKEN` in `environmentFile`: remove that line when you set it, as
+impd refuses to start with both.
+
+impd reads the token at each DNS call, so a new one must reach the running container. The module
+copies the file into the directory `/run/imp-host/dns` and mounts the directory read-only at
+`/run/imp/dns`, and `IMP_DNS_API_TOKEN_FILE` names `/run/imp/dns/token`. A mounted file would keep
+the old token after a copy; a mounted directory sees each new file, renamed in. The copy is made:
+
+- before each start of `imp-host`;
+- when the file changes (`imp-host-dns-token.path`, with `PathChanged`);
+- every 5 minutes (`imp-host-dns-token.timer`), for what `PathChanged` misses, such as a symlink
+  that now points at a new file.
+
+Each run copies only a token that changed, and never replaces a staged token with a file that is
+missing or empty: a secrets manager that drops the file for a moment does not take HTTPS down. With
+no token at all, `imp-host` still starts; impd logs the path, `imp info` shows the error, and
+certificates and DNS records wait for the token.
+
+With sops-nix, have a new secret run the copy at once instead of at the next timer:
+
+```nix
+sops.secrets.imp-dns-api-token = {
+  path = "/var/lib/imp-host/secrets/dns-api-token";
+  restartUnits = [ "imp-host-dns-token.service" ];
+};
+```
 
 ## The Tailscale key
 
