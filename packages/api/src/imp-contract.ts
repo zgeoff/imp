@@ -15,7 +15,7 @@ import { DockerfilePathSchema } from './image-build-protocol';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
-import { ImpSchema } from './imp-schema';
+import { ForkResultSchema, ImpSchema } from './imp-schema';
 import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
 import {
   MovePlanSchema,
@@ -184,7 +184,8 @@ export const impContract = {
     unexpose: base.input(NameInputSchema).output(ImpSchema),
 
     // disk only, with the source's egress policy: a memory fork would
-    // duplicate entropy and IDs across clones
+    // duplicate entropy and IDs across clones. The fork gets the source's
+    // grants the caller could make, and names the rest.
     fork: base
       .input(
         z.object({
@@ -193,7 +194,7 @@ export const impContract = {
           checkpoint: CheckpointRefSchema.optional(),
         }),
       )
-      .output(ImpSchema),
+      .output(ForkResultSchema),
 
     // a running VM takes a new CPU limit or weight at once, a sleeping or
     // stopped one when it next starts; vcpus only while stopped. A null
