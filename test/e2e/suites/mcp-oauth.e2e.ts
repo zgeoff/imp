@@ -122,7 +122,7 @@ async function runSignIn(scope: string) {
   const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
   const signature = /name="signature" value="(?<sig>[^"]+)"/u.exec(page)?.groups?.['sig'] ?? '';
 
-  const approved = await tryImp(['oauth', 'approve', code, '--scope', scope], {
+  const approved = await tryImp(['oauth', 'approve', code, '--scope', scope, '--yes'], {
     token: state.approverToken,
   });
 
