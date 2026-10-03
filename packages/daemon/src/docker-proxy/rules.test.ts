@@ -206,6 +206,15 @@ describe('an image reference', () => {
     }
 
     expect(checkImageReference('imp-host:dev', 'imp-host:dev').isOk).toBe(false);
+
+    // the NixOS module's digest pin: the guard still names the repository
+    expect(
+      checkImageReference(
+        'ghcr.io/zgeoff/imp-host:latest',
+        'ghcr.io/zgeoff/imp-host:0.25.1@sha256:aa',
+      ).isOk,
+    ).toBe(false);
+
     expect(checkImageReference('ghcr.io/zgeoff/other:latest', HOST_IMAGE).isOk).toBe(true);
   });
 });
