@@ -372,14 +372,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
         }
 
         // Under the lock no restore, reboot or sleep replaces the guest
-        // between the bundle step and the start, so the bundle is in the
-        // boot the command starts in. It may wait behind a locked operation.
-        return lock.withImp(name, (locked) => {
-          if (locked.state !== 'running') {
-            throw buildBrokerNotReadyError(`the imp is ${locked.state}, not running`);
-          }
+        // between the bundle step and the start; an imp a stop got to first
+        // boots again, as for any exec. It may wait behind a locked operation.
+        return lock.withImp(name, async (locked) => {
+          const running = locked.state === 'running' ? locked : await ops.requireRunningImp(locked);
 
-          return startWithBroker(locked);
+          return startWithBroker(running);
         });
       }),
     openAttach: (name, request) =>
