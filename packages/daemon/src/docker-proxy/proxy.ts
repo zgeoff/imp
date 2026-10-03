@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { findRequestRoute, formatQuery } from './router';
 import type { RoutedRequest } from './router';
 import {
+  BUILD_CONTENT_TYPE,
+  checkBuildContentType,
   checkBuildQuery,
   checkCreateBody,
   checkNoQuery,
@@ -20,8 +22,9 @@ export const PROXY_LABEL = 'imp.docker-proxy';
 // a create body from the CLI is about 2 KiB
 const CREATE_BODY_MAX_BYTES = 1024 ** 2;
 
-// headers the engine reads on the routes above; every other one is dropped
-const FORWARDED_HEADERS = ['content-type', 'x-registry-auth', 'x-registry-config'];
+// the client headers a build forwards; every other one is dropped, and the
+// proxy sets Content-Type itself (checkBuildContentType)
+const BUILD_FORWARDED_HEADERS = ['x-registry-config'];
 
 // response headers the proxy sets itself, or that belong to one connection
 const DROPPED_RESPONSE_HEADERS = new Set([
@@ -243,7 +246,19 @@ export function createDockerProxy(
     });
   };
 
-  const handleBuild = async (request: Request, routed: RoutedRequest): Promise<Response> => {
+  const handleBuild = async (
+    request: Request,
+    routed: RoutedRequest,
+    path: string,
+  ): Promise<Response> => {
+    const contentType = checkBuildContentType(request.headers.get('content-type'));
+
+    if (!contentType.isOk) {
+      options.log(`refused ${request.method} ${path}: ${contentType.reason}`);
+
+      return buildJsonResponse(400, `imp-docker-proxy: ${contentType.reason}`);
+    }
+
     const limit = createByteLimit(options.buildContextMaxBytes);
     const body = request.body === null ? null : request.body.pipeThrough(limit);
 
@@ -252,7 +267,10 @@ export function createDockerProxy(
         method: 'POST',
         path: '/build',
         query: routed.query,
-        headers: pickHeaders(request, FORWARDED_HEADERS),
+        headers: {
+          ...pickHeaders(request, BUILD_FORWARDED_HEADERS),
+          'content-type': BUILD_CONTENT_TYPE,
+        },
         body,
       });
     } catch (error) {
@@ -372,7 +390,7 @@ export function createDockerProxy(
       }
 
       case 'build': {
-        return handleBuild(request, routed);
+        return handleBuild(request, routed, path);
       }
 
       case 'create': {

@@ -153,8 +153,13 @@ through the calls impd's CLI makes and refuses every other with a 403 and a log 
 
 - **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
   that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
-  engine a new request with that same path, the checked query, and only `Content-Type`,
-  `X-Registry-Auth` and `X-Registry-Config`.
+  engine a new request with that same path and the checked query. Of the client's headers, a pull
+  keeps only `X-Registry-Auth` and a build only `X-Registry-Config`; no other header passes.
+- **Headers:** the engine reads a build's params with `r.FormValue`, where Go puts a form body ahead
+  of the query, so a form body would replace the checked query. A build whose `Content-Type` is
+  present and is not exactly `application/x-tar` gets a 400: a form (urlencoded or multipart), and a
+  tar with a parameter, too. The proxy sends `Content-Type: application/x-tar` itself. A create's
+  body and type are the proxy's own; a pull takes no body.
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach, exec or
   BuildKit session.
 - **The token:** made once, in `/var/lib/imp-docker-proxy/token` (0600), which only the proxy

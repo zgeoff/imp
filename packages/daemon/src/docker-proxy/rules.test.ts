@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { parseQuery } from './router';
 import {
+  checkBuildContentType,
   checkBuildQuery,
   checkCreateBody,
   checkImageReference,
@@ -159,6 +160,39 @@ describe('a build query', () => {
     expect(checkBuild(`${BUILD_FROM_DIR}&networkmode=host&networkmode=host`)).toBe(
       'param networkmode is not allowed',
     );
+  });
+});
+
+describe('a build Content-Type', () => {
+  test('passes as `docker build` sends it, or when absent', () => {
+    expect(checkBuildContentType('application/x-tar').isOk).toBe(true);
+    expect(checkBuildContentType(null).isOk).toBe(true);
+  });
+
+  test('fails with a form, which the engine would read ahead of the query', () => {
+    for (const value of [
+      'application/x-www-form-urlencoded',
+      'application/x-www-form-urlencoded; charset=utf-8',
+      'APPLICATION/X-WWW-FORM-URLENCODED',
+      'multipart/form-data; boundary=x',
+      'multipart/form-data',
+    ]) {
+      const checked = checkBuildContentType(value);
+      const reason = checked.isOk ? 'ok' : checked.reason;
+
+      expect(reason).toContain('is not application/x-tar');
+    }
+  });
+
+  test('fails with any other value, a parameterised tar or an empty one included', () => {
+    for (const value of [
+      'application/x-tar; charset=utf-8',
+      'application/x-tar ',
+      '',
+      'text/plain',
+    ]) {
+      expect(checkBuildContentType(value).isOk).toBe(false);
+    }
   });
 });
 
