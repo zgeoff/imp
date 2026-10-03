@@ -219,11 +219,18 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);
 
-  // a value no row names: a write whose row never came, or a file a replace
-  // or a delete displaced and impd stopped before removing
+  // A value no row names is kept aside, not deleted: it may be a secret
+  // added after the database copy a restore put back. Otherwise, a write
+  // whose row never came, or a file a replace or a delete failed to remove.
   const valueFiles = await listValueFiles(db);
 
-  files.removeExcept(valueFiles);
+  const orphans = files.keepOrphansExcept(valueFiles, new Date());
+
+  for (const file of orphans.files) {
+    log(
+      `impd: broker: kept secret value file ${file}, which no database row names, in ${orphans.dir ?? ''}`,
+    );
+  }
 
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
 
