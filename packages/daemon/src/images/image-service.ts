@@ -537,8 +537,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
         pins = pinned.pins;
 
+        const pinList = pinned.pins.map((pin) => `${pin.use} ${pin.ref} as ${pin.pin}`);
+
         console.log(
-          `impd: image build ${name}: ${String(pinned.pins.length)} images pinned, image store ${pinned.store}`,
+          `impd: image build ${name}: image store ${pinned.store}; pinned ${pinList.join(', ') || 'no image'}`,
         );
 
         signal.throwIfAborted();

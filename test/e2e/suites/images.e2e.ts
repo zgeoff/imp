@@ -1,7 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as z from 'zod';
 import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
@@ -16,7 +15,14 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
-import { REPO_ROOT, instance, readToken, runChecked, runCommand } from '../lib/instance';
+import {
+  REPO_ROOT,
+  instance,
+  readImpdLogSince,
+  readToken,
+  runChecked,
+  runCommand,
+} from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -50,56 +56,24 @@ afterAll(async () => {
   }
 });
 
-// the host's registry digest for a pulled image
-async function readRepoDigest(ref: string): Promise<string> {
-  await runChecked(['docker', 'pull', '--quiet', ref]);
-
-  const digests = await runChecked([
-    'docker',
-    'image',
-    'inspect',
-    '--format',
-    '{{json .RepoDigests}}',
-    ref,
-  ]);
-
-  const repository = ref.split(':')[0] ?? ref;
-  const parsed = z.array(z.string()).parse(JSON.parse(digests));
-  const own = parsed.find((digest) => digest.startsWith(`${repository}@`));
-
-  if (own === undefined) {
-    throw new Error(`${ref} has no RepoDigest under ${repository}: ${digests}`);
-  }
-
-  return own;
-}
-
-// images/examples/hello's files on busybox by its registry digest: impd
-// builds only from a registry image (#156), and images/base is local
-async function writeHelloCopy(): Promise<string> {
-  const dir = join(buildDir, 'hello');
-
-  const busybox = await readRepoDigest('busybox:1.37');
-
-  mkdirSync(dir, { recursive: true });
-  cpSync(join(HELLO_DIR, 'rootfs'), join(dir, 'rootfs'), { recursive: true });
-  writeFileSync(join(dir, 'Dockerfile'), `FROM ${busybox}\nCOPY rootfs/ /\n`);
-
-  return dir;
-}
-
 test('an image built from images/examples/hello serves its page through the proxy', async () => {
   await tryImp(['image', 'rm', hello]);
 
   const started = Date.now();
 
-  const helloDir = await writeHelloCopy();
+  // unmodified: FROM the published base by digest, which impd pins as is
+  const from = /^FROM (?<ref>\S+)$/mv.exec(readFileSync(join(HELLO_DIR, 'Dockerfile'), 'utf8'));
+  const ref = from?.groups?.['ref'] ?? '';
+  const digest = ref.slice(ref.indexOf('@'));
 
-  try {
-    await runImp('image', 'build', helloDir, '--name', hello);
-  } finally {
-    rmSync(helloDir, { recursive: true, force: true });
-  }
+  const since = new Date();
+
+  await runImp('image', 'build', HELLO_DIR, '--name', hello);
+
+  const log = await readImpdLogSince(since);
+
+  expect(digest).toStartWith('@sha256:');
+  expect(log).toContain(`pinned FROM ${ref} as ghcr.io/zgeoff/imp-base${digest}`);
 
   console.log(`    imp image build images/examples/hello: ${String(Date.now() - started)} ms`);
 
