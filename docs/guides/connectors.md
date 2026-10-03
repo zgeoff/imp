@@ -185,11 +185,15 @@ step that adds the variables. It refuses the exec with `PRECONDITION_FAILED`,
 - it is an exec in the agent (`outer`), which never gets the broker's variables. The protocol
   refuses `require` with `outer` or a `tool` before that.
 
-The command never starts then. A new Firecracker process is a new boot: after a wake, a resume, a
-live restore, a snapshot restore or a checkpoint restore, the next exec runs the bundle step again.
-impd holds the imp's lock from the bundle step until the agent starts the command, so no restore,
-reboot or sleep can replace the guest in between. Such an exec can wait behind a locked operation,
-such as a restore under way.
+The command never starts then. impd counts a new Firecracker process as a new boot, so after a wake,
+a snapshot restore or a checkpoint restore the next exec runs the bundle step again. impd holds the
+imp's lock from the bundle step until the agent starts the command, so no restore, reboot or sleep
+can replace the guest in between. Such an exec can wait behind a locked operation, such as a restore
+under way.
+
+A `start` that names a session that already runs attaches to it. impd checks the requirement for it
+too, but the session's command started earlier, with the environment it had then: the check says
+nothing about that environment.
 
 The boundary is exactly this: impd set the broker's variables and the CA bundle for this boot before
 it started the command. It does not prove that the process uses them: a command can unset
