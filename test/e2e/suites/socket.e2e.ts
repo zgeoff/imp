@@ -141,9 +141,9 @@ test("a build may not tag outside imp/, nor retag the host's image", async () =>
   expect(second).toContain('param t');
 });
 
-// the engine reads a build's params from r.Form, where an urlencoded body
-// replaces the query and a multipart body adds to it: these bodies would give
-// RUN the host's network, a remote context and a tag outside imp/
+// the engine reads a build's params from r.Form, where a form body replaces
+// or adds to the query: these would give RUN the host's network, a remote
+// context, a tag outside imp/ and the classic builder, with no frontend pin
 test('a build with a form body, which would replace or add to its checked query, is refused', async () => {
   const evil = `${prefix}evil:latest`;
 
@@ -151,6 +151,7 @@ test('a build with a form body, which would replace or add to its checked query,
     ['networkmode', 'host'],
     ['remote', 'http://127.0.0.1:9/ctx.tar'],
     ['t', evil],
+    ['version', '1'],
   ];
 
   const query = new URLSearchParams([['t', 'imp/e2e-sock:latest'], ['version', '2'], [...PIN]]);
