@@ -303,19 +303,35 @@ test('a client that goes mid-build stops the build, frees its slot and its file'
 
 // a docker on PATH whose pulls hang, and which logs its argv; a pull execs
 // its sleep, so killing it leaves nothing holding its pipes
-function writeHangingDocker(dir: string): { readonly log: string; readonly path: string } {
+// a docker on PATH that logs its argv to log, then runs the given lines
+function writeFakeDocker(
+  dir: string,
+  lines: readonly string[],
+): { readonly log: string; readonly path: string } {
   const bin = join(dir, 'fake-bin');
   const log = join(dir, 'docker.log');
 
   mkdirSync(bin, { recursive: true });
 
-  writeFileSync(
-    join(bin, 'docker'),
-    ['#!/bin/sh', `echo "$*" >>'${log}'`, '[ "$1" = pull ] && exec sleep 30', 'exit 1'].join('\n'),
-    { mode: 0o755 },
-  );
+  writeFileSync(join(bin, 'docker'), ['#!/bin/sh', `echo "$*" >>'${log}'`, ...lines].join('\n'), {
+    mode: 0o755,
+  });
 
   return { log, path: `${bin}:${process.env['PATH'] ?? ''}` };
+}
+
+function writeHangingDocker(dir: string): { readonly log: string; readonly path: string } {
+  return writeFakeDocker(dir, ['[ "$1" = pull ] && exec sleep 30', 'exit 1']);
+}
+
+// a tar of a context holding only this Dockerfile
+function buildDockerfileTar(dir: string, dockerfile: string): Uint8Array {
+  const contextDir = join(dir, `context-${Bun.randomUUIDv7()}`);
+
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), dockerfile);
+
+  return Bun.spawnSync(['tar', '-C', contextDir, '-c', 'Dockerfile']).stdout;
 }
 
 function readLog(log: string): string[] {
@@ -326,12 +342,12 @@ test('a client that goes during a base image pull ends it, starts no other and f
   await using ctx = await setupTest({ build: 'image-service' });
 
   const docker = writeHangingDocker(ctx.harness.config.dataDir);
-  const contextDir = join(ctx.harness.config.dataDir, 'context');
 
-  mkdirSync(contextDir);
-  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM first.test/a:1\nFROM second.test/b:1\n');
+  const tar = buildDockerfileTar(
+    ctx.harness.config.dataDir,
+    'FROM first.test/a:1\nFROM second.test/b:1\n',
+  );
 
-  const tar = Bun.spawnSync(['tar', '-C', contextDir, '-c', 'Dockerfile']);
   const savedPath = process.env['PATH'];
 
   process.env['PATH'] = docker.path;
@@ -342,7 +358,7 @@ test('a client that goes during a base image pull ends it, starts no other and f
     const builds = clients.map((client, n) =>
       ctx.sendBuild(
         `name=pull${String(n)}`,
-        new Blob([tar.stdout]).stream(),
+        new Blob([tar]).stream(),
         TEST_TOKEN,
         {},
         client.signal,
@@ -372,6 +388,82 @@ test('a client that goes during a base image pull ends it, starts no other and f
   } finally {
     process.env['PATH'] = savedPath;
   }
+});
+
+// base.test images are on the host; the rest are pulled, but mnt.test's
+// pull fails, which ends the build before the engine is asked
+const IMAGE_DOCKER = [
+  'case "$*" in',
+  `  "image inspect --format {{json .Config.OnBuild}} base.test/onbuild:1") echo '["RUN id"]' ;;`,
+  '  "image inspect --format {{json .Config.OnBuild}} "*) echo null ;;',
+  '  "image inspect base.test/"*) ;;',
+  '  "image inspect "*) exit 1 ;;',
+  '  "pull --quiet mnt.test/"*) echo "no such registry" >&2; exit 1 ;;',
+  '  "pull "*) ;;',
+  '  *) exit 1 ;;',
+  'esac',
+];
+
+async function sendFakeDockerBuild(dockerfile: string) {
+  await using ctx = await setupTest({ build: 'image-service' });
+
+  const docker = writeFakeDocker(ctx.harness.config.dataDir, IMAGE_DOCKER);
+  const tar = buildDockerfileTar(ctx.harness.config.dataDir, dockerfile);
+  const savedPath = process.env['PATH'];
+
+  process.env['PATH'] = docker.path;
+
+  try {
+    const response = await ctx.sendBuild('name=web', new Blob([tar]).stream());
+    const body: unknown = await response.json();
+
+    return { status: response.status, body, calls: readLog(docker.log) };
+  } finally {
+    process.env['PATH'] = savedPath;
+  }
+}
+
+test('a base image with ONBUILD triggers is refused once the host has it', async () => {
+  const sent = await sendFakeDockerBuild('FROM base.test/onbuild:1\nRUN true\n');
+
+  expect(sent.status).toBe(400);
+
+  expect(sent.body).toMatchObject({
+    message: 'FROM base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
+  });
+
+  expect(sent.calls).toEqual([
+    'image inspect base.test/onbuild:1',
+    'image inspect --format {{json .Config.OnBuild}} base.test/onbuild:1',
+  ]);
+});
+
+test('COPY --from and RUN --mount images are pulled first, like a FROM, by tag or digest', async () => {
+  const digest = `sha256:${'d'.repeat(64)}`;
+
+  const sent = await sendFakeDockerBuild(
+    [
+      'FROM base.test/a:1 AS build',
+      `COPY --from=tools.test/b@${digest} /x /x`,
+      'COPY --from=build /x /y',
+      'RUN --mount=type=bind,from=mnt.test/c:3,target=/m true',
+    ].join('\n'),
+  );
+
+  expect(sent.status).toBe(400);
+
+  expect(sent.body).toMatchObject({
+    message: 'RUN --mount from mnt.test/c:3: the pull failed: no such registry',
+  });
+
+  expect(sent.calls).toEqual([
+    'image inspect base.test/a:1',
+    'image inspect --format {{json .Config.OnBuild}} base.test/a:1',
+    `image inspect tools.test/b@${digest}`,
+    `pull --quiet tools.test/b@${digest}`,
+    'image inspect mnt.test/c:3',
+    'pull --quiet mnt.test/c:3',
+  ]);
 });
 
 test('a failed build answers its error and removes the upload', async () => {

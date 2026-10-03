@@ -29,7 +29,7 @@ import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import { DockerBuildError, runDockerBuild } from './docker-build';
-import { listBaseImages } from './dockerfile-check';
+import { checkDockerfile } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { writeExportedTree } from './unpack-export';
@@ -52,6 +52,7 @@ const DOCKERFILE_MAX_BYTES = 1024 ** 2;
 // the tail of a failed pull's message the client gets
 const FAILURE_MAX_CHARS = 4000;
 const SEED_REF = 'ubuntu:24.04';
+const OnBuildSchema = z.array(z.unknown()).nullable();
 
 const InspectSchema = z
   .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
@@ -277,13 +278,29 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
+  // the image's ONBUILD triggers, read once the host has it
+  const readOnBuild = async (ref: string, signal: AbortSignal): Promise<unknown[]> => {
+    const inspected = await runCommand(
+      ['docker', 'image', 'inspect', '--format', '{{json .Config.OnBuild}}', ref],
+      { signal },
+    );
+
+    signal.throwIfAborted();
+
+    if (inspected.exitCode !== 0) {
+      throw new Error(`docker image inspect ${ref}: ${inspected.stderr.trim()}`);
+    }
+
+    return OnBuildSchema.parse(JSON.parse(inspected.stdout)) ?? [];
+  };
+
   // A sessionless build cannot ask impd for registry credentials: each image
   // the Dockerfile names and the host lacks is pulled first, as `imp image
   // add` does. A client that goes kills the pull, and no later one starts.
-  const loadBaseImages = async (dockerfile: string, signal: AbortSignal): Promise<void> => {
-    const refs = (() => {
+  const loadExternalImages = async (dockerfile: string, signal: AbortSignal): Promise<void> => {
+    const images = (() => {
       try {
-        return listBaseImages(dockerfile);
+        return checkDockerfile(dockerfile);
       } catch (error) {
         throw error instanceof DockerfileError
           ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
@@ -291,10 +308,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
     })();
 
-    for (const ref of refs) {
+    for (const image of images) {
+      const ref = image.ref;
+
       if (!ImageRefSchema.safeParse(ref).success) {
         throw new ORPCError('BAD_REQUEST', {
-          message: `FROM ${JSON.stringify(ref)} is not an image reference`,
+          message: `${image.use} ${JSON.stringify(ref)} is not an image reference`,
         });
       }
 
@@ -311,7 +330,18 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
         if (pulled.exitCode !== 0) {
           throw new ORPCError('BAD_REQUEST', {
-            message: `FROM ${ref}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+            message: `${image.use} ${ref}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+          });
+        }
+      }
+
+      // a base's triggers run in this build, where impd cannot check them
+      if (image.use === 'FROM') {
+        const onBuild = await readOnBuild(ref, signal);
+
+        if (onBuild.length > 0) {
+          throw new ORPCError('BAD_REQUEST', {
+            message: `FROM ${ref} has ONBUILD triggers, which impd refuses`,
           });
         }
       }
@@ -346,7 +376,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
             : error;
         });
 
-        await loadBaseImages(context.dockerfile, signal);
+        await loadExternalImages(context.dockerfile, signal);
 
         signal.throwIfAborted();
 

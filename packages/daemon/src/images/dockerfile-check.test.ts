@@ -1,11 +1,17 @@
 import { expect, test } from 'bun:test';
-import { listBaseImages } from './dockerfile-check';
+import { checkDockerfile } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
 
-test('it lists each FROM image once, past flags and stage names', () => {
+function listBaseImages(dockerfile: string): string[] {
+  return checkDockerfile(dockerfile)
+    .filter((image) => image.use === 'FROM')
+    .map((image) => image.ref);
+}
+
+test('it lists each FROM image once, past stage names', () => {
   const dockerfile = [
     '# syntax=docker/dockerfile:1',
-    'FROM --platform=$BUILDPLATFORM golang:1.26 AS build',
+    'FROM golang:1.26 AS build',
     'RUN go build',
     'from ghcr.io/acme/base:2 as Runtime',
     'COPY --from=build /out /out',
@@ -17,16 +23,13 @@ test('it lists each FROM image once, past flags and stage names', () => {
 
 // the frontend matches a base to a stage as written: `FROM TOOLS` is an
 // image, which then fails as a reference
-test('it leaves out scratch, earlier stages and images an ARG names', () => {
+test('it leaves out scratch and earlier stages', () => {
   const dockerfile = [
-    'ARG BASE=ubuntu:24.04',
     'FROM scratch AS empty',
-    'FROM $BASE AS base',
     'FROM busybox:1.37 AS Tools',
     'FROM tools',
     'FROM TOOLS',
     'FROM empty',
-    'FROM registry.example/x:$TAG',
   ].join('\n');
 
   expect(listBaseImages(dockerfile)).toEqual(['busybox:1.37', 'TOOLS']);
@@ -97,7 +100,7 @@ test('a quote or the escape character in an ADD source is an ambiguous form', ()
   }
 
   // with the default escape, a backtick is the source's own character
-  expect(listBaseImages('FROM a:1\nADD h`ttp://x /probe')).toEqual(['a:1']);
+  expect(listBaseImages('FROM a:1\nADD h`ttp /probe')).toEqual(['a:1']);
 });
 
 test('a quote or the escape character in builder flags or FROM words is an ambiguous form', () => {
@@ -157,4 +160,90 @@ test('only shell-form RUN, COPY and ADD open heredocs, as the frontend reads the
 
 test('an instruction whose name is not ASCII is refused', () => {
   expect(readRefusal('FROM a:1\nONBU\u0130LD ADD http://x /x')).toContain('is not ASCII');
+});
+
+test('a remote ADD source is refused, in the shell and the JSON form', () => {
+  const sources = [
+    'http://127.0.0.1:9/x',
+    'https://example.invalid/x.tar',
+    'git://example.invalid/repo.git',
+    'ssh://git@example.invalid/repo.git',
+    'git@example.invalid:org/repo.git',
+    'HTTP://169.254.169.254/latest',
+  ];
+
+  for (const source of sources) {
+    expect(readRefusal(`FROM a:1\nADD ${source} /x`)).toContain(`ADD ${source} is refused`);
+    expect(readRefusal(`FROM a:1\nADD ["${source}", "/x"]`)).toContain(`ADD ${source} is refused`);
+  }
+
+  // JSON decodes its escapes before the check
+  const escaped = String.raw`ADD ["\u0068ttp://x/y", "/x"]`;
+
+  expect(readRefusal(`FROM a:1\n${escaped}`)).toContain('ADD http://x/y is refused');
+
+  expect(readRefusal('FROM a:1\nADD --checksum=sha256:00 ./a http://x/y /x')).toContain(
+    'ADD http://x/y is refused',
+  );
+
+  // local sources, and github.com/ paths, which the frontend reads as local
+  expect(listBaseImages('FROM a:1\nADD app.tar /app\nADD github.com/org/repo /src')).toEqual([
+    'a:1',
+  ]);
+});
+
+test('a variable in FROM, an ADD source, COPY --from or RUN --mount from is refused', () => {
+  const refusals = [
+    'ARG BASE=a:1\nFROM $BASE',
+    'FROM registry.example/x:$TAG',
+    'ARG URL=http://x\nFROM a:1\nADD $URL /x',
+    `FROM a:1\nADD ["\${URL}", "/x"]`,
+    'FROM a:1\nCOPY --from=$IMAGE /a /b',
+    'FROM a:1\nRUN --mount=type=bind,from=$IMAGE,target=/m true',
+  ].map((dockerfile) => readRefusal(dockerfile));
+
+  for (const refusal of refusals) {
+    expect(refusal).toContain('variable, which impd cannot check');
+  }
+});
+
+test('ONBUILD is refused, in the Dockerfile and in a stage a later FROM uses', () => {
+  const plain = readRefusal('FROM a:1\nONBUILD ADD http://x /x');
+  const staged = readRefusal('FROM a:1 AS base\nONBUILD RUN true\nFROM base\nRUN true');
+  const lower = readRefusal('FROM a:1\nonbuild RUN true');
+
+  for (const refusal of [plain, staged, lower]) {
+    expect(refusal).toContain('ONBUILD is refused');
+  }
+});
+
+test('FROM --platform is refused, so the platform impd inspects is the one built', () => {
+  expect(readRefusal('FROM --platform=$BUILDPLATFORM a:1')).toContain(
+    'FROM --platform=$BUILDPLATFORM is refused',
+  );
+
+  expect(readRefusal('FROM --platform=linux/arm64 a:1')).toContain(
+    'FROM --platform=linux/arm64 is refused',
+  );
+});
+
+test('COPY --from and RUN --mount from name an image unless they name a stage', () => {
+  const dockerfile = [
+    'FROM a:1 AS build',
+    'COPY --from=build /a /a',
+    'COPY --from=0 /a /b',
+    'COPY --from=LATER /a /c',
+    'COPY --from=scratch /a /d',
+    'COPY --from=registry.example/tools:2 /bin/x /x',
+    'RUN --mount=type=bind,from=alpine:3.21,target=/m --mount=type=cache,target=/c true',
+    'RUN --mount=type=cache,FROM=build,target=/c true',
+    'FROM b:1 AS later',
+  ].join('\n');
+
+  expect(checkDockerfile(dockerfile)).toEqual([
+    { ref: 'a:1', use: 'FROM' },
+    { ref: 'registry.example/tools:2', use: 'COPY --from' },
+    { ref: 'alpine:3.21', use: 'RUN --mount from' },
+    { ref: 'b:1', use: 'FROM' },
+  ]);
 });
