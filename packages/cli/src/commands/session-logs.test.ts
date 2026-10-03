@@ -82,6 +82,7 @@ test('log writes the newest log to stdout, and a gap to stderr', async () => {
   expect(written.join('')).toBe('abcdef');
   expect(ctx.reads).toEqual([0, 8, 10]);
   expect(errors).toHaveBeenCalledWith('imp: bytes 0 to 4 are not in the log');
+  expect(errors).toHaveBeenCalledWith(`imp: generation ${GENERATION}`);
 });
 
 test('log takes --from and refuses a bad one', async () => {
