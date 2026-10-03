@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.26.2](https://github.com/zgeoff/imp/compare/v0.26.1...v0.26.2) (2026-10-03)
+
+
+### Bug Fixes
+
+* **docker-proxy:** refuse a build body that is not a tar context ([#150](https://github.com/zgeoff/imp/issues/150)) ([3323f96](https://github.com/zgeoff/imp/commit/3323f968dd4f2d2de6e537d83f9f5a47e44490af))
+* **images:** keep file capabilities in an image ([#152](https://github.com/zgeoff/imp/issues/152)) ([4afacf9](https://github.com/zgeoff/imp/commit/4afacf9a83fe46668b890d4fa5bfdf2c497055fa))
+* **templates:** wait for the disk clone before a jailed restore ([#151](https://github.com/zgeoff/imp/issues/151)) ([6ead887](https://github.com/zgeoff/imp/commit/6ead8870e7c7af11b63036c61c73c811a1d0449d))
+
 ## [0.26.1](https://github.com/zgeoff/imp/compare/v0.26.0...v0.26.1) (2026-10-03)
 
 ### Bug Fixes
