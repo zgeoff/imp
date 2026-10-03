@@ -1,7 +1,4 @@
-import { join } from 'node:path';
-import { REPO_ROOT, runCommand } from './instance';
-
-export const LIB_SCRIPT = join(REPO_ROOT, 'scripts', 'lib.sh');
+import { LIB_SCRIPT, runCommand } from './instance';
 
 // The Tailscale auth key as dev.sh finds it (load_tailscale_authkey in
 // scripts/lib.sh), or null; never print it. An op miss stays in this

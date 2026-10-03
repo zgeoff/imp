@@ -1,15 +1,33 @@
 # shellcheck shell=bash
 # Shared helpers for scripts/*.sh. Source it; do not run it.
 
+# dev_image_tag ROOT prints the dev host image tag for the checkout at ROOT:
+# imp-host:dev-<basename>-<hash>, the basename cut to Docker's tag characters
+# and 40 of them, the hash the first 8 hex of ROOT's sha256. Each worktree
+# gets its own, so one worktree's build never replaces another's image.
+dev_image_tag() {
+  local name hash
+  name=$(basename "$1")
+  name=$(LC_ALL=C; printf '%s' "${name//[^A-Za-z0-9_.-]/-}")
+  hash=$(printf '%s' "$1" | sha256sum)
+  printf 'imp-host:dev-%s-%s\n' "${name:0:40}" "${hash:0:8}"
+}
+
 IMP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-IMP_HOST_IMAGE=${IMP_HOST_IMAGE:-imp-host:dev}
+IMP_HOST_IMAGE=${IMP_HOST_IMAGE:-$(dev_image_tag "$IMP_ROOT")}
 IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
+
+# build_host_image builds the host container image as $IMP_HOST_IMAGE, labelled
+# with this checkout's path, so `scripts/dev.sh prune` can find it once the
+# checkout is gone.
+build_host_image() {
+  docker build -q -t "$IMP_HOST_IMAGE" --label "imp.worktree=$IMP_ROOT" --target dev \
+    -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+}
 
 # ensure_host_image builds the host container image unless it exists.
 ensure_host_image() {
-  if ! docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1; then
-    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
-  fi
+  docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 || build_host_image
 }
 
 # read_host_privileges prints the imp-host container's privilege arguments

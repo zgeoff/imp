@@ -259,6 +259,8 @@ jobs:
       IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
       # sparse, so only what the imps write takes disk
       IMP_STORAGE_GIB: 40
+      # the tag e2e-build loads; one checkout per runner needs no tag of its own
+      IMP_HOST_IMAGE: imp-host:dev
       IMP_HOST_IMAGE_READY: 1
       # PRs read the caches main writes; their own writes would only crowd
       # the repo's cache quota
@@ -411,6 +413,8 @@ jobs:
       IMP_DEFAULT_MEMORY_MIB: 1024
       IMP_KERNEL: .cache/ci/vmlinux
       IMP_SYSTEM_DRIVE: .cache/ci/imp-system.squashfs
+      # the tag e2e-build loads; one checkout per runner needs no tag of its own
+      IMP_HOST_IMAGE: imp-host:dev
       IMP_HOST_IMAGE_READY: 1
       IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,disks,sleep,backups
       IMP_ZFS_TEST_UNIT: 0

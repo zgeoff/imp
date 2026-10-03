@@ -1,8 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { REPO_ROOT, runCommand } from './instance';
-import { LIB_SCRIPT } from './tailscale-key';
+import { LIB_SCRIPT, REPO_ROOT, runCommand } from './instance';
 
 const SECRET = 'fake-tskey-for-the-trace-check';
 const dir = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-tskey-'));

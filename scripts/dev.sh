@@ -22,6 +22,8 @@
 #      Without it, every up rebuilds the default drive from agent/; the docker
 #      cache makes that a no-op when the agent is unchanged.
 #      Both are repo-relative or absolute paths under the repo.
+#      IMP_HOST_IMAGE (default imp-host:dev-<dir>-<hash>, one per checkout:
+#      dev_image_tag in scripts/lib.sh) tags the host image.
 #      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
 #      it (CI builds and loads it first, with its own cache).
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
@@ -122,13 +124,13 @@ is_running() {
 # own bun, as the release image compiles it (host/Dockerfile), with the
 # deploy's privileges and command, and waits for its socket. It compiles on
 # every call, and replaces a running proxy when its stamp changed: the
-# binary, the privileges, its env and the image. With "keep", as up passes
-# while impd runs, it leaves a changed proxy alone and says so, because a
-# replacement would cut off a build or an export in flight; restart then
-# replaces it before impd comes back. The socket's directory and the proxy's
-# token are volumes of their own, which take the image's directories, owned
-# by the proxy's user (host/Dockerfile); the token outlives a replaced
-# proxy, so containers it made stay its own.
+# binary, the privileges, its env and the image, by tag and by id. With
+# "keep", as up passes while impd runs, it leaves a changed proxy alone and
+# says so, because a replacement would cut off a build or an export in
+# flight; restart then replaces it before impd comes back. The socket's
+# directory and the proxy's token are volumes of their own, which take the
+# image's directories, owned by the proxy's user (host/Dockerfile); the
+# token outlives a replaced proxy, so containers it made stay its own.
 start_proxy() {
   local mode=${1:-replace} privileges context=() stamp
   mkdir -p "$data"
@@ -140,7 +142,7 @@ start_proxy() {
   [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
   stamp=$({
     sha256sum <"$data/imp-docker-proxy.new"
-    printf '%s\n' "${privileges[@]}" "${context[@]}"
+    printf '%s\n' "${privileges[@]}" "${context[@]}" "$IMP_HOST_IMAGE"
     docker image inspect -f '{{.Id}}' "$IMP_HOST_IMAGE"
   } | sha256sum)
 
@@ -202,7 +204,7 @@ up() {
     docker image inspect "$IMP_HOST_IMAGE" >/dev/null 2>&1 \
       || { echo "dev.sh: IMP_HOST_IMAGE_READY=1 but there is no $IMP_HOST_IMAGE image" >&2; exit 1; }
   else
-    docker build -q -t "$IMP_HOST_IMAGE" --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+    build_host_image
   fi
   if [ -z "${IMP_SYSTEM_DRIVE:-}" ]; then
     "$IMP_ROOT/scripts/build-system-drive.sh" >/dev/null

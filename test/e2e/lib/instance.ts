@@ -4,6 +4,7 @@ import * as z from 'zod';
 // the harness drives scripts/dev.sh and scripts/imp from this checkout
 export const REPO_ROOT = join(import.meta.dir, '..', '..', '..');
 export const FIXTURES_DIR = join(REPO_ROOT, 'test', 'e2e', 'fixtures');
+export const LIB_SCRIPT = join(REPO_ROOT, 'scripts', 'lib.sh');
 const DEV_SCRIPT = join(REPO_ROOT, 'scripts', 'dev.sh');
 const offset = Number(process.env['IMP_DEV_PORT_OFFSET'] ?? '0');
 
@@ -122,6 +123,32 @@ export async function runChecked(argv: readonly string[]): Promise<string> {
   }
 
   return result.stdout;
+}
+
+// The dev host image as scripts/lib.sh picks it: IMP_HOST_IMAGE, else this
+// checkout's own tag (dev_image_tag). main.ts reads it once into the env, so
+// dev.sh, the suites and the harness all name the same image.
+export async function readHostImage(): Promise<string> {
+  const stdout = await runChecked([
+    'bash',
+    '-c',
+    'source "$1" && printf "%s" "$IMP_HOST_IMAGE"',
+    'bash',
+    LIB_SCRIPT,
+  ]);
+
+  return stdout.trim();
+}
+
+// the host image main.ts put in the env (readHostImage)
+export function getHostImage(): string {
+  const image = process.env['IMP_HOST_IMAGE'] ?? '';
+
+  if (image === '') {
+    throw new Error('IMP_HOST_IMAGE is not set: run the suites through scripts/test-e2e.sh');
+  }
+
+  return image;
 }
 
 // Passes dev.sh's output through, so a slow `up` shows progress. Tuning
