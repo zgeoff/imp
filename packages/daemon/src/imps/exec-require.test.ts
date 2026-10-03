@@ -18,7 +18,16 @@ import { setupImpTest } from './test-imps';
 // variables and the CA bundle for the boot it starts in.
 
 // what `activity` lists: every session as running
-function buildActivity(sessions: ReadonlyMap<string, { readonly generation: string }>) {
+// one run of a fake session: the client attached to it, and whether its
+// process exited (a resume of its generation can still attach)
+interface FakeRun {
+  readonly generation: string;
+  viewer: Socket | null;
+  state: 'running' | 'exited';
+}
+
+// what `activity` lists: every run, exited ones included
+function buildActivity(sessions: ReadonlyMap<string, Readonly<FakeRun>>) {
   return {
     tcp_established: 0,
     exec_sessions: sessions.size,
@@ -27,8 +36,8 @@ function buildActivity(sessions: ReadonlyMap<string, { readonly generation: stri
       name,
       pid: 9,
       argv: ['sh'],
-      state: 'running',
-      attached: true,
+      state: run.state,
+      attached: run.viewer !== null,
       cols: 80,
       rows: 24,
       started_unix_ms: 0,
@@ -43,6 +52,7 @@ const ExecFrameSchema = z.looseObject({
   op: z.string(),
   env: z.array(z.string()).optional(),
   session: z.string().optional(),
+  resume_from: z.object({ execution_generation: z.string() }).optional(),
 });
 
 const RefusalSchema = z.object({
@@ -76,7 +86,7 @@ async function setupRequireTest(installBundle?: InstallBundle) {
 
   // the fake agent's sessions, by name: each run's generation, and the
   // socket of the client attached to it
-  const sessions = new Map<string, { generation: string; viewer: Socket | null }>();
+  const sessions = new Map<string, FakeRun>();
 
   // The agent: `activity` lists the sessions; an exec answers STARTED. A
   // start with a new session name creates it, one with a known name attaches
@@ -102,8 +112,19 @@ async function setupRequireTest(installBundle?: InstallBundle) {
       return;
     }
 
-    const known = sessions.get(session);
-    const run = known ?? { generation: randomBytes(16).toString('hex'), viewer: null };
+    const found = sessions.get(session);
+
+    // an exited run takes an attach only from a resume of its generation
+    const known =
+      found?.state === 'running' || found?.generation === payload.resume_from?.execution_generation
+        ? found
+        : undefined;
+
+    const run: FakeRun = known ?? {
+      generation: randomBytes(16).toString('hex'),
+      viewer: null,
+      state: 'running',
+    };
 
     known?.viewer?.end(encodeJsonFrame(FRAME_TYPES.detached, { reason: 'taken_over' }));
     run.viewer = socket;
@@ -435,4 +456,70 @@ test('an attach after an impd restart passes; one after a cold boot does not', a
   );
 
   expect(refused).toBe('session main was started without the broker requirement');
+});
+
+test('a run that exited keeps its record while it is listed, so a resume of it passes', async () => {
+  await using ctx = await setupRequireTest();
+
+  ctx.writeSessionAgent();
+
+  await ctx.createGrant();
+
+  const first = await ctx.imps.openExec('dev', buildSessionStart('main', true));
+
+  const generation = ctx.sessions.get('main')?.generation ?? '';
+
+  first.close();
+
+  // main exits while detached; another required session starts after it
+  const main = ctx.sessions.get('main');
+
+  if (main !== undefined) {
+    main.state = 'exited';
+    main.viewer = null;
+  }
+
+  const other = await ctx.imps.openExec('dev', buildSessionStart('other', true));
+
+  other.close();
+
+  const resumed = await ctx.imps.openExec('dev', {
+    ...buildSessionStart('main', true),
+    resumeFrom: { executionGeneration: generation, offset: 0 },
+  });
+
+  resumed.close();
+
+  expect(ctx.readExecs()).toHaveLength(3);
+});
+
+test('a resume of an exited run started without the requirement is refused before the agent', async () => {
+  await using ctx = await setupRequireTest();
+
+  ctx.writeSessionAgent();
+
+  await ctx.createGrant();
+
+  const plain = await ctx.imps.openExec('dev', buildSessionStart('job', false));
+
+  const job = ctx.sessions.get('job');
+
+  plain.close();
+
+  if (job !== undefined) {
+    job.state = 'exited';
+    job.viewer = null;
+  }
+
+  const refused = await readRefusal(
+    ctx.imps.openExec('dev', {
+      ...buildSessionStart('job', true),
+      resumeFrom: { executionGeneration: job?.generation ?? '', offset: 0 },
+    }),
+  );
+
+  expect(refused).toBe('session job was started without the broker requirement');
+
+  // the agent never saw the resume, so it kept the exited run's output
+  expect(ctx.readExecs()).toHaveLength(1);
 });

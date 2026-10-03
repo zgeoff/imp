@@ -24,7 +24,7 @@ test('a session run is kept while it runs, and goes with its imp', async () => {
 
   expect(isFirstKept).toBe(true);
 
-  // gen-a no longer runs when gen-c starts
+  // the agent no longer lists gen-a when gen-c starts
   await writeBrokerSession(db, imp.id, 'gen-c', ['gen-b']);
 
   const kept = await Promise.all(

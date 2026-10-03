@@ -371,7 +371,13 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
             listed.push(...activity.sessions);
 
-            const refused = await checkBrokerAttach(context.db, target.id, session, listed);
+            const refused = await checkBrokerAttach(
+              context.db,
+              target.id,
+              session,
+              request.resumeFrom?.executionGeneration,
+              listed,
+            );
 
             if (refused !== null) {
               throw refused;
