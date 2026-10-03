@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/zgeoff/imp/compare/v0.23.0...v0.24.0) (2026-10-03)
+
+
+### Features
+
+* **daemon:** report the work before a sleep's duration in the event ([0c3772e](https://github.com/zgeoff/imp/commit/0c3772e698abd9d57871633e9c9e87f3e7e54960))
+
 ## [0.23.0](https://github.com/zgeoff/imp/compare/v0.22.0...v0.23.0) (2026-10-03)
 
 ### Features
