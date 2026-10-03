@@ -62,23 +62,50 @@ context.
 - **Images the build names.** A build has no session, so BuildKit cannot ask for registry
   credentials. Before the build, impd pulls each image that a `FROM`, a `COPY --from` or a
   `RUN --mount=from=` names and the host does not have yet, as `imp image add` pulls it, with the
-  credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd then
-  refuses a `FROM` image whose config holds `ONBUILD` triggers, because they would run in this
-  build. BuildKit still asks the registry for a tag before it uses the host's copy, so impd does not
-  yet hold a build to the image it inspected.
+  credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd
+  inspects each image once, for the engine's platform, and refuses an image the host has for another
+  platform, and a `FROM` image whose config holds `ONBUILD` triggers, because they would run in this
+  build.
+- **The digest the build uses.** The Dockerfile the engine gets names each of those images by the
+  registry digest of the image impd inspected: `FROM busybox:1.37` becomes `FROM busybox@sha256:…`,
+  so a tag that moves in the registry after the pull does not change the build. impd picks the
+  digest under the image's own repository, else another of its registry digests, which holds the
+  same content. An image with no registry digest is refused:
+
+  ```text
+  FROM imp/base: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).
+  ```
+
+  With Docker's classic image store, an image built on the host has no registry digest. With the
+  containerd image store, each tag has one under its own name. Docker 29.8 builds an image built on
+  the host by that digest; Docker 29.7 asks the registry for the name and fails the build, as both
+  do for a tag you put on a pulled multi-platform image (`docker tag busybox:1.37 imp/x`). A build
+  never uses such an image by its tag alone. `FROM --platform=$BUILDPLATFORM` and `$TARGETPLATFORM`
+  become the engine's platform, such as `--platform=linux/amd64`. A Dockerfile with
+  `# check=error=true` then fails the frontend's `FromPlatformFlagConstDisallowed` check; skip that
+  check, or leave `--platform` out.
+
 - **What impd refuses before the build.** impd reads the Dockerfile as the pinned frontend parses
   it, and refuses with `BAD_REQUEST`:
   - an `ADD` from a URL or a git remote (`http://`, `https://`, `git://`, `ssh://`,
     `user@host:path`), which the engine would fetch from the host's network;
   - a variable (`$`) in `FROM`, in an `ADD` source, in `COPY --from` or in `RUN --mount=from=`. impd
     passes no build arguments, so write the image or the source literally;
-  - any `ONBUILD`, and `FROM --platform`;
+  - any `ONBUILD`;
+  - `FROM --platform` with any value but `$BUILDPLATFORM` or `$TARGETPLATFORM`, written so, and an
+    `ARG` of `BUILDPLATFORM`, `BUILDOS`, `BUILDARCH`, `BUILDVARIANT`, `TARGETPLATFORM`, `TARGETOS`,
+    `TARGETARCH` or `TARGETVARIANT` in any stage: impd builds for the engine's platform only;
   - an ambiguous form: a quote, the escape character or a character that is not printable ASCII in a
     `FROM` word, an `ADD` source or the flags of `FROM`, `ADD`, `COPY` and `RUN`, since the
     frontend's lexer would read it another way than impd does.
 
-  These checks reject inputs and triggers. They do not isolate the build's network: a `RUN` step can
-  still fetch whatever it likes.
+  These checks are narrow input and trigger rejection, not build-network isolation. They leave open:
+  - a registry whose DNS name resolves to a private or loopback address: the pull rule reads the
+    name, not the address;
+  - a `RUN` step, which reaches the network through the host's bridge (the caution below);
+  - a base image built on the host, which does not build until
+    [#156](https://github.com/zgeoff/imp/issues/156) but on the containerd store of Docker 29.8;
+  - `.dockerignore`, which the engine does not apply to an uploaded context.
 
 - **The context impd builds.** impd writes the uploaded tar again as plain ustar, with pax records
   only for long names, and builds that copy. The Dockerfile it checks is the one the engine reads,

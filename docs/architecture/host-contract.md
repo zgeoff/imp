@@ -218,8 +218,8 @@ What stays open through the proxy, by design or until later work:
   through the bridge gateway. BuildKit pulls the pinned frontend from Docker Hub on a host's first
   build, so a host with no route to Docker Hub cannot build. An isolated builder, which would close
   this and the gaps below together, is a separate issue.
-- impd narrows what the engine fetches on its own, by input and trigger rejection
-  ([#145](https://github.com/zgeoff/imp/issues/145); the rules are in the
+- impd narrows what the engine fetches on its own, by narrow input and trigger rejection, not
+  build-network isolation ([#145](https://github.com/zgeoff/imp/issues/145); the rules are in the
   [images guide](../guides/images.md#build-an-image)). It refuses an `ADD` from a URL or a git
   remote, which dockerd would fetch in the host's network namespace, where it reaches services on
   the host's `127.0.0.1` and link-local addresses such as `169.254.169.254`. It refuses `$` in
@@ -228,11 +228,17 @@ What stays open through the proxy, by design or until later work:
   pull rule, as it pulls a `FROM` image. impd parses the Dockerfile with a port of the pinned
   frontend's parser and refuses forms the two could read differently; `scripts/dockerfile-difftest`
   checks the port against the Go parser on each frontend bump.
-- impd does not yet hold the build to the image it inspected: BuildKit asks the registry for a tag
-  again, so a tag that moves between the pull and the build is not checked.
-- The pull rule reads the registry's name, not its address. The engine resolves a hostname that
-  points into `127.0.0.0/8` or another private range and treats that registry as insecure, so a pull
-  from such a name reaches a registry on the host's loopback or network.
+- impd holds the build to the images it inspected: the Dockerfile the engine gets names each
+  external image by its registry digest, and `FROM --platform` by the engine's platform. An image
+  with no registry digest, which the classic image store gives an image built on the host, is
+  refused until [#156](https://github.com/zgeoff/imp/issues/156). The containerd store gives such an
+  image a digest under its own name; Docker 29.7 then asks the registry for it and fails the build.
+- The engine applies no ignore file to an uploaded context, so `.dockerignore` does not hide a file
+  from `COPY .` in an upload.
+- The pull rule reads the registry's name, not its address, so a pull from a name that resolves into
+  `127.0.0.0/8` or another private range reaches a registry on the host's loopback or network. The
+  engine speaks HTTPS to such a name: Docker 29.7.2 with the containerd image store refuses a
+  plain-HTTP answer, so the registry needs a certificate the engine trusts.
 - A build has no memory limit and may use all host RAM; a pull can fill the disk. BuildKit keeps a
   build cache in the host's Docker, which the engine's builder GC bounds and impd's disk budget does
   not count.
