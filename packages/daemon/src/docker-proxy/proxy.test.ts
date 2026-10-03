@@ -30,6 +30,9 @@ const proxySocket = join(dir, 'proxy.sock');
 const seen: Seen[] = [];
 const logged: string[] = [];
 
+// a slow build on the engine: it started, and its client went
+const slowBuild = { started: Promise.withResolvers<void>(), gone: Promise.withResolvers<void>() };
+
 function readContainer(id: string): Response {
   const labels = id === OWN_ID ? { [PROXY_LABEL]: TOKEN } : { [PROXY_LABEL]: '1' };
 
@@ -69,6 +72,19 @@ const engine = Bun.serve({
       return new Response('tar bytes');
     }
 
+    // a build that never answers until its client goes
+    if (url.searchParams.get('t') === 'imp/slow:latest') {
+      slowBuild.started.resolve();
+
+      await new Promise((resolve) => {
+        request.signal.addEventListener('abort', resolve);
+      });
+
+      slowBuild.gone.resolve();
+
+      return new Response(null, { status: 499 });
+    }
+
     return Response.json({ received: body.length });
   },
 });
@@ -90,6 +106,7 @@ const proxy = Bun.serve({
 interface ProxyInit {
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string | Uint8Array | ReadableStream<Uint8Array>;
+  readonly signal?: AbortSignal;
 }
 
 function sendToProxy(method: string, target: string, init: ProxyInit = {}): Promise<Response> {
@@ -205,7 +222,7 @@ test('an export or rm of another container, even one whose image sets the label,
   ).toBe(true);
 });
 
-test('a build streams its context and keeps only the registry headers', async () => {
+test('a build streams its context and forwards no client header', async () => {
   const context = new Uint8Array(2 * 1024 ** 2).fill(7);
 
   const response = await sendToProxy('POST', BUILD_PATH, {
@@ -223,7 +240,7 @@ test('a build streams its context and keeps only the registry headers', async ()
   expect(answer).toEqual({ received: context.length });
   expect(seen[0]?.target).toBe(BUILD_PATH);
   expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
-  expect(seen[0]?.headers['x-registry-config']).toBe('e30=');
+  expect(seen[0]?.headers['x-registry-config']).toBeUndefined();
   expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
   expect(seen[0]?.headers['cookie']).toBeUndefined();
 });
@@ -264,6 +281,23 @@ test('a build with a form body, which would replace or add to its query, never r
   expect(statuses).toEqual([403, 403, 403, 403]);
   expect(seen).toEqual([]);
   expect(logged).toHaveLength(4);
+});
+
+test('a client that goes ends its build on the engine', async () => {
+  const client = new AbortController();
+
+  const slowPath = BUILD_PATH.replace('imp%2Fx%3Alatest', 'imp%2Fslow%3Alatest');
+  const response = sendToProxy('POST', slowPath, { body: 'ctx', signal: client.signal });
+
+  await slowBuild.started.promise;
+
+  client.abort();
+
+  const failure = await response.catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+
+  await slowBuild.gone.promise;
 });
 
 test('a build context over the limit, sent chunked, is cut off', async () => {

@@ -22,10 +22,6 @@ export const PROXY_LABEL = 'imp.docker-proxy';
 // a create body from the CLI is about 2 KiB
 const CREATE_BODY_MAX_BYTES = 1024 ** 2;
 
-// the client headers a build forwards; every other one is dropped, and the
-// proxy sets Content-Type itself (checkBuildContentType)
-const BUILD_FORWARDED_HEADERS = ['x-registry-config'];
-
 // response headers the proxy sets itself, or that belong to one connection
 const DROPPED_RESPONSE_HEADERS = new Set([
   'connection',
@@ -143,6 +139,10 @@ interface UpstreamCall {
   readonly query?: ReadonlyMap<string, readonly string[]>;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string | ReadableStream<Uint8Array> | null;
+
+  // the client's: a client that goes ends a build, a pull or an export on
+  // the engine too
+  readonly signal?: AbortSignal;
 }
 
 export function createDockerProxy(
@@ -160,6 +160,7 @@ export function createDockerProxy(
       duplex: 'half',
       redirect: 'manual',
       decompress: false,
+      ...(call.signal !== undefined && { signal: call.signal }),
     });
   };
 
@@ -265,11 +266,11 @@ export function createDockerProxy(
         method: 'POST',
         path: '/build',
         query: routed.query,
-        headers: {
-          ...pickHeaders(request, BUILD_FORWARDED_HEADERS),
-          'content-type': BUILD_CONTENT_TYPE,
-        },
+        // the proxy's own Content-Type (checkBuildContentType), and no
+        // client header: a build without a session reads no registry auth
+        headers: { 'content-type': BUILD_CONTENT_TYPE },
         body,
+        signal: request.signal,
       });
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
@@ -307,6 +308,7 @@ export function createDockerProxy(
       path: '/images/create',
       query,
       headers: pickHeaders(request, ['x-registry-auth']),
+      signal: request.signal,
     });
   };
 
@@ -335,7 +337,11 @@ export function createDockerProxy(
       });
     }
 
-    return sendAndRelay(versionPrefix, { method: 'GET', path: `/containers/${fullId}/export` });
+    return sendAndRelay(versionPrefix, {
+      method: 'GET',
+      path: `/containers/${fullId}/export`,
+      signal: request.signal,
+    });
   };
 
   const checkRouteQuery = (routed: RoutedRequest): Check => {
