@@ -32,8 +32,8 @@ const stdinQueue = 4
 var errOver = errors.New("the session is over")
 
 // session is one program on a pty that outlives its connections. One pump
-// reads the pty into the screen, the raw ring and the attached viewer, if
-// any; it never waits on a viewer.
+// reads the pty into the screen, the raw ring, the attached viewer, if any,
+// and impd's taps of a logged session; it never waits on any of them.
 type session struct {
 	name    string
 	argv    []string
@@ -46,6 +46,8 @@ type session struct {
 	generation string
 	seq        uint64
 	bootID     string
+	// log marks a session whose output impd keeps; only it takes taps
+	log bool
 
 	stdin chan []byte
 	// done closes once the process exited and its output drained.
@@ -54,8 +56,11 @@ type session struct {
 	mu     sync.Mutex
 	screen Screen
 	// raw is the output a resume reads; its end is the session's offset
-	raw        *ring
-	viewer     *viewer
+	raw    *ring
+	viewer *viewer
+	// taps read the raw output beside the viewer: they take no input, never
+	// take the viewer over, and get the EXIT without delivering it
+	taps       map[*viewer]struct{}
 	cols, rows uint16
 	exit       *proto.Exit
 	// delivered is set once the EXIT was written to a viewer; the session is
@@ -89,10 +94,12 @@ func newSession(name string, req proto.Request, r run) *session {
 		generation: r.generation,
 		seq:        r.seq,
 		bootID:     r.bootID,
+		log:        req.Log,
 		stdin:      make(chan []byte, stdinQueue),
 		done:       make(chan struct{}),
 		screen:     newHistory(historyLimit),
 		raw:        newRing(ringSize),
+		taps:       make(map[*viewer]struct{}),
 		cols:       cols,
 		rows:       rows,
 	}
@@ -118,6 +125,10 @@ func (s *session) run() {
 	s.exit = &exit
 	if s.viewer != nil {
 		s.deliverExit(s.viewer)
+	}
+	for t := range s.taps {
+		delete(s.taps, t)
+		t.stop(s.exitFrame(nil), false)
 	}
 	s.mu.Unlock()
 	close(s.done)
@@ -147,6 +158,61 @@ func (s *session) output(p []byte) {
 		s.viewer = nil
 		v.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
 	}
+	// a tap that falls behind is dropped the same way: impd taps again from
+	// the offset it has, and learns of the gap from the ring
+	for t := range s.taps {
+		if !t.push(frame{typ: proto.TypeStdout, payload: append([]byte(nil), p...)}) {
+			delete(s.taps, t)
+			t.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
+		}
+	}
+}
+
+// tap adds t as a tap of a logged session: STARTED, the raw output from
+// resume (from the ring's start without it), then live output and the
+// EXIT. It never replays the screen or touches the viewer. It returns a
+// *proto.Error, and t got nothing, for a session with no log or a resume
+// past the end.
+func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.log {
+		return &proto.Error{Code: proto.ErrBadRequest, Message: fmt.Sprintf("session %q keeps no log", s.name)}
+	}
+	out, data := s.outputNow(), []byte(nil)
+	if resume == nil {
+		out.Offset = out.BufferStart
+		data = s.raw.From(out.Offset)
+	} else {
+		var err error
+		if out, data, err = s.place(resume); err != nil {
+			return err.(*proto.Error)
+		}
+	}
+	t.pushJSON(proto.TypeStarted, proto.Started{Pid: s.proc.Pid, Session: s.name, Output: &out})
+	if len(data) > 0 {
+		t.push(frame{typ: proto.TypeStdout, payload: data})
+	}
+	if s.exit != nil {
+		t.stop(s.exitFrame(nil), false)
+		return nil
+	}
+	s.taps[t] = struct{}{}
+	return nil
+}
+
+// untap drops t if it still taps the session.
+func (s *session) untap(t *viewer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.taps, t)
+	t.stop(nil, false)
+}
+
+// exitFrame is the EXIT as a last frame; written runs once it is out. The
+// caller holds mu, and exit is set.
+func (s *session) exitFrame(written func()) *frame {
+	return &frame{typ: proto.TypeExit, payload: mustJSON(*s.exit), written: written}
 }
 
 // attach makes v the viewer: STARTED, the output that resume asks for (a
@@ -192,8 +258,8 @@ func (s *session) attach(v *viewer, cols, rows uint16, created bool, resume *pro
 // fresh attach replays the history, its prelude first; a resume reads the
 // raw ring. The caller holds mu.
 func (s *session) place(resume *proto.ResumeFrom) (proto.Output, []byte, error) {
-	start, end := s.raw.Start(), s.raw.End()
-	out := proto.Output{BootID: s.bootID, Generation: s.generation, BufferStart: start, End: end}
+	out := s.outputNow()
+	start, end := out.BufferStart, out.End
 	switch {
 	case resume == nil:
 		prelude, kept := s.screen.Replay()
@@ -217,6 +283,12 @@ func (s *session) place(resume *proto.ResumeFrom) (proto.Output, []byte, error) 
 		out.Offset = start
 	}
 	return out, s.raw.From(out.Offset), nil
+}
+
+// outputNow is where the output stands, before a connection's place in it.
+// The caller holds mu.
+func (s *session) outputNow() proto.Output {
+	return proto.Output{BootID: s.bootID, Generation: s.generation, BufferStart: s.raw.Start(), End: s.raw.End(), Log: s.log}
 }
 
 // redraw sizes the pty for a new viewer. The kernel sends SIGWINCH only for
@@ -253,7 +325,7 @@ func (s *session) resizeLocked(cols, rows uint16) {
 // next viewer gets the EXIT. The caller holds mu.
 func (s *session) deliverExit(v *viewer) {
 	s.viewer = nil
-	v.stop(&frame{typ: proto.TypeExit, payload: mustJSON(*s.exit), written: s.markDelivered}, false)
+	v.stop(s.exitFrame(s.markDelivered), false)
 }
 
 func (s *session) markDelivered() {
@@ -329,6 +401,7 @@ func (s *session) info() proto.SessionInfo {
 		Generation:    s.generation,
 		BootID:        s.bootID,
 		End:           s.raw.End(),
+		Log:           s.log,
 	}
 	if s.exit != nil {
 		info.State = proto.SessionExited

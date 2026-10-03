@@ -114,9 +114,12 @@ func (m *Manager) Kill(name string) error {
 }
 
 // Serve runs one session connection: exec with a session name (start the
-// session, or attach to it if it runs) or session.attach. It returns when
-// the connection ends; the caller closes it.
+// session, or attach to it if it runs), session.attach or session.tap. It
+// returns when the connection ends; the caller closes it.
 func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
+	if req.Op == proto.OpSessionTap {
+		return m.serveTap(req, conn, r, w)
+	}
 	m.attached.Add(1)
 	defer m.attached.Add(-1)
 
@@ -133,6 +136,35 @@ func (m *Manager) Serve(req proto.Request, conn net.Conn, r *proto.Reader, w *pr
 	s.detach(v)
 	conn.Close()
 	<-v.done
+	return nil
+}
+
+// serveTap runs one tap: impd reading a logged session's output for its
+// log. A tap is not a viewer, so it counts as no open connection: a logged
+// session must not keep the imp awake.
+func (m *Manager) serveTap(req proto.Request, conn net.Conn, r *proto.Reader, w *proto.Writer) error {
+	m.mu.Lock()
+	s, ok := m.sessions[req.Session]
+	m.mu.Unlock()
+	if !ok {
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: m.noSession(req.Session)})
+	}
+	t := newViewer(conn, w)
+	safe.Go("session "+req.Session+" tap", t.run, func() { conn.Close() })
+	if perr := s.tap(t, req.ResumeFrom); perr != nil {
+		t.stop(nil, false)
+		<-t.done
+		return w.WriteJSON(proto.TypeResponse, proto.ErrorResponse{Error: perr})
+	}
+	// a tap sends nothing; reading finds the connection's end
+	for {
+		if _, err := r.Next(); err != nil {
+			break
+		}
+	}
+	s.untap(t)
+	conn.Close()
+	<-t.done
 	return nil
 }
 

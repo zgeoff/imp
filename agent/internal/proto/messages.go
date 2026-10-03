@@ -1,7 +1,7 @@
 package proto
 
 // Version is the agent protocol version reported by ping.
-const Version = "0.17.0"
+const Version = "0.18.0"
 
 // Op names.
 const (
@@ -26,6 +26,10 @@ const (
 	// sessions: exec with a session name starts or attaches one
 	OpSessionAttach = "session.attach"
 	OpSessionKill   = "session.kill"
+
+	// session.tap reads a logged session's raw output by offset beside its
+	// viewer, for impd's output log; an older agent answers UNKNOWN_OP
+	OpSessionTap = "session.tap"
 
 	// dial connects to an address in the guest and relays bytes
 	OpDial = "dial"
@@ -67,11 +71,15 @@ type Request struct {
 	// SIGKILL. 0 leaves the group alone.
 	KillGraceMs int64 `json:"kill_grace_ms,omitempty"`
 
-	// exec, session.attach, session.kill: the session name
+	// exec, session.attach, session.kill, session.tap: the session name
 	Session string `json:"session,omitempty"`
 
-	// exec with a session, session.attach: resume the output after the last
-	// byte the client saw, rather than replay it
+	// exec that starts a session: impd keeps a log of its output, so the
+	// agent marks it for a tap
+	Log bool `json:"log,omitempty"`
+
+	// exec with a session, session.attach, session.tap: resume the output
+	// after the last byte the client saw, rather than replay it
 	ResumeFrom *ResumeFrom `json:"resume_from,omitempty"`
 
 	// freeze: auto-thaw after this many ms (default 30000)
@@ -286,6 +294,8 @@ type SessionInfo struct {
 	Generation string `json:"execution_generation"`
 	BootID     string `json:"boot_id"`
 	End        uint64 `json:"end"`
+	// Log is set for a session started with log, which impd taps
+	Log bool `json:"log,omitempty"`
 }
 
 // ServiceDef is one services.d file. Name is the file name without .json;
@@ -354,6 +364,8 @@ type Output struct {
 	Previous *Previous `json:"previous,omitempty"`
 	// Resume is set when the request had resume_from
 	Resume *Resume `json:"resume,omitempty"`
+	// Log is set for a session started with log
+	Log bool `json:"log,omitempty"`
 }
 
 // Previous is a generation whose process ended: its end and exit are
