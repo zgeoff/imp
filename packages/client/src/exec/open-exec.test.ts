@@ -10,7 +10,6 @@ import type {
 } from '@imp/daemon/src/agent-client/exec-stream';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
-import * as z from 'zod';
 import { createImpClient } from '../create-imp-client';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
@@ -20,9 +19,6 @@ import { openExecSession } from './open-exec-session';
 import { toExecError } from './to-exec-error';
 
 const BIG_BYTES = 512 * 1024;
-
-// an RPC answer's body, as the oRPC link sends it
-const SystemInfoBodySchema = z.looseObject({ json: z.looseObject({}) });
 const GENERATION = 'd'.repeat(32);
 const COLD_BOOT = { bootId: 'boot-2', cause: 'recovery', at: '2026-10-03T00:00:00.000Z' } as const;
 
@@ -771,7 +767,7 @@ test('an impd without execRequire gets no start that requires anything', async (
 
   const calls: string[] = [];
 
-  // impd as an older one answers: features without execRequire
+  // impd answers as an older one would: execRequire is not true
   const readAsOlder = async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
 
@@ -783,11 +779,9 @@ test('an impd without execRequire gets no start that requires anything', async (
       return response;
     }
 
-    const raw: unknown = await response.json();
+    const text = await response.text();
 
-    const body = SystemInfoBodySchema.parse(raw);
-
-    return Response.json({ ...body, json: { ...body.json, features: { leases: true } } });
+    return new Response(text.replace('"execRequire":true', '"execRequire":false'), response);
   };
 
   const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: readAsOlder });
