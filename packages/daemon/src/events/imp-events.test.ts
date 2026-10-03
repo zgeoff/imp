@@ -11,8 +11,8 @@ import { findImpByName } from '../db/imps';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import type { ImpTest } from '../imps/test-imps';
 
-async function setupEventTest() {
-  const harness = await setupImpTest();
+async function setupEventTest(env: Readonly<Record<string, string>> = {}) {
+  const harness = await setupImpTest({ env });
 
   await harness.createTestImage('ubuntu');
 
@@ -129,6 +129,27 @@ test('a stream sends the snapshot, then each change with its reason', async () =
   }
 
   expect(timed[1]?.detail?.trigger).toBe('requested');
+});
+
+test('a slept event counts the work before its durationMs in prepareMs', async () => {
+  await using ctx = await setupEventTest({ IMP_SLEEP_MIN_GUEST_UPTIME_MS: '300' });
+
+  await ctx.client.imps.create({ name: 'dev' });
+
+  const stream = await readEvents(ctx.client);
+
+  // a young guest: the sleep first waits about 200 ms before the pause
+  ctx.fake.setGuestUptime(100);
+
+  await ctx.client.imps.sleep({ name: 'dev' });
+  await stream.waitFor('ImpChanged slept dev');
+  await stream.stop();
+
+  const slept = stream.events.find((event) => formatEvent(event) === 'ImpChanged slept dev');
+  const detail = slept?.ev === 'ImpChanged' ? slept.detail : undefined;
+
+  expect(detail?.prepareMs).toBeGreaterThanOrEqual(190);
+  expect(detail?.durationMs).toBeLessThan(detail?.prepareMs ?? 0);
 });
 
 test('a liveness repair and a restarted impd adopting a VM each send an event', async () => {

@@ -43,6 +43,10 @@ export const ImpEventDetailSchema = z
   .object({
     durationMs: z.int().nonnegative().optional(),
 
+    // `slept`: the work before `durationMs` (disk room, a young guest's wait,
+    // the shrink), so the sleep started at `at` less both
+    prepareMs: z.int().nonnegative().optional(),
+
     // what asked for it: `requested`, `idle`, the governor's reason, …
     trigger: z.string().optional(),
     coldBootReason: z.string().optional(),

@@ -61,7 +61,9 @@ reader skips a kind or a field it does not know.
 | `released` | A forced sleep or stop ended the imp's leases; `detail.released` is how many.                                               |
 
 `detail` comes with `booted`, `woke`, `slept` and `restored`: `durationMs`, `steps` (milliseconds
-per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`.
+per step, as impd logs them), `trigger` and, for a boot, `coldBootReason`. `slept` also has
+`prepareMs`, the work before `durationMs` (disk room, a young guest's wait, the shrink): the sleep
+started at `at` less both.
 
 An event's `imp.leases` is `{ leases: [], otherCount }`: the stream checks each event against the
 reader's imps, not its fields, so it carries no lease owners ([leases](./leases.md#owners)). A

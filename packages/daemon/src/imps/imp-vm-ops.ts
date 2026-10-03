@@ -484,6 +484,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
     pid: number,
     reason: string,
     waitedMs: number,
+    requestedAt: number,
   ): Promise<LockedImp> => {
     const pluggedMib = await shrinkForSleep(imp, paths);
 
@@ -529,7 +530,12 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
       const sleepMs = Math.round(performance.now() - started);
       const waited = waitedMs > 0 ? `, waited ${String(waitedMs)}ms for a young guest` : '';
 
-      slept.detail = { trigger: reason, durationMs: sleepMs, steps: timings };
+      slept.detail = {
+        trigger: reason,
+        durationMs: sleepMs,
+        prepareMs: Math.round(started - requestedAt),
+        steps: timings,
+      };
 
       const plugged = pluggedMib === null ? '' : `, ${String(pluggedMib)} MiB plugged`;
 
@@ -580,6 +586,8 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
   ): Promise<LockedImp> => {
     requireTransition(imp.state, 'sleeping', 'sleep');
 
+    // the slept event's prepareMs counts from here
+    const requestedAt = performance.now();
     const paths = context.findPaths(imp.id);
     const pid = imp.pid;
 
@@ -607,7 +615,7 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
         return imp;
       }
 
-      return sleepWithRoom(imp, paths, pid, reason, waitedMs);
+      return sleepWithRoom(imp, paths, pid, reason, waitedMs, requestedAt);
     });
 
     return slept;
