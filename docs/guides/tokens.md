@@ -136,6 +136,7 @@ token.
 | SSH key                  | the key; see below                                                                     |
 | Tailnet peer             | the identity a rule gives it; see below                                                |
 | Move ticket              | nothing but its one move's `/move/*` steps ([moves](../architecture/moves.md#tickets)) |
+| OAuth access token       | its grant, within the token that approved it; on the public `/mcp` only (see below)    |
 
 A wrong bearer token is refused outright: it never falls through to the cookie or the tailnet. An
 `/exec` or `/tunnel` socket that a token without `exec` opens is accepted, and each start on it
@@ -160,6 +161,14 @@ IMP_TOKEN=$(imp token new agent --scope manage --imps 'agent-*') imp mcp --prefi
 The server's `--prefix` guard stays a convenience. impd's own MCP endpoint, `/mcp`, takes a token
 per client instead, and its tools follow that token's scope and patterns: see
 [MCP over HTTP](./mcp.md#http).
+
+### OAuth grants
+
+On the [public MCP route](./mcp.md#public-route), a client signs in and a named token approves it
+with `imp oauth approve`. The grant gets at most that token's scope and patterns, and no secrets.
+impd checks both on every request, and the audit log names the caller `<client>/<grant id>`.
+Removing the token ends every grant it approved. `imp oauth grant ls` lists the grants, and
+`imp oauth grant rm` ends one.
 
 ## Tailnet identity
 

@@ -48,6 +48,7 @@ test('it fills every setting from its default when the env is empty', () => {
     dashboardDir: null,
     backup: null,
     https: null,
+    publicMcp: null,
     tailnetNames: null,
     moves: { peerUrl: null, testCidr: null },
     warnings: [],

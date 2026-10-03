@@ -17,6 +17,9 @@ const ResourceKindSchema = z.enum([
   'token',
   'ssh-key',
   'network',
+  'oauth-client',
+  'oauth-grant',
+  'oauth-approval',
 ]);
 
 const ResourceDataSchema = z.object({

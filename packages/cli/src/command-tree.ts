@@ -29,6 +29,7 @@ import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
 import { moveCommand } from './commands/move';
 import { netCommand } from './commands/networks';
+import { oauthCommand } from './commands/oauth';
 import { proxyCommand } from './commands/proxy';
 import {
   auditCommand,
@@ -95,6 +96,7 @@ export const mainCommand = defineCommand({
     events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,
+    oauth: oauthCommand,
     login: loginCommand,
     host: hostCommand,
     hosts: hostsCommand,

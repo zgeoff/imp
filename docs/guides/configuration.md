@@ -111,6 +111,16 @@ tailnet-only and `imp expose` fails.
 | `IMP_PUBLIC_HTTPS_PORT` | `7443`  | The public TLS listener's port in the host container, on every address; publish as 443. |
 | `IMP_PUBLIC_HTTP_PORT`  | `7480`  | The public redirect listener's port in the host container; publish as 80.               |
 
+### Public MCP route
+
+With `IMP_MCP_PUBLIC_URL` set, impd serves `/mcp` and its OAuth sign-in to an operator's TLS front
+([public route](./mcp.md#public-route)). Without it, no listener starts.
+
+| Variable              | Default | Meaning                                                                                                                                                          |
+| --------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMP_MCP_PUBLIC_URL`  | none    | The bare origin the front serves, such as `https://imp.example.com`: the OAuth issuer, and `<origin>/mcp` the resource. http only on a loopback host, for tests. |
+| `IMP_MCP_PUBLIC_PORT` | `7071`  | The route's plain-HTTP port in the host container, on every address; publish it on the host's loopback only.                                                     |
+
 ### Telemetry
 
 impd exports [metrics and spans](./events.md#telemetry) only when `OTEL_EXPORTER_OTLP_ENDPOINT` is

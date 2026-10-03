@@ -32,6 +32,7 @@ import { createMoveService } from '../moves/move-service';
 import type { MoveServiceDeps } from '../moves/move-service';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createNetworkService } from '../networks/network-service';
+import { createOAuthService } from '../oauth/oauth-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
@@ -341,6 +342,16 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     isFileKey: () => false,
   });
 
+  const oauth = createOAuthService({
+    db,
+    tokens,
+    revocations,
+    config: config.publicMcp,
+    now: readClock,
+    log: printTestLog,
+    key: Buffer.alloc(32, 7),
+  });
+
   // an image row whose rootfs is a small file in the data dir
   const createTestImage = async (name: string): Promise<ImageRecord> => {
     await Bun.write(`${dataDir}/images/${name}/rootfs.ext4`, 'rootfs');
@@ -375,6 +386,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     diskUsage,
     tokens,
     revocations,
+    oauth,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -414,6 +426,7 @@ type AppParts = Pick<
   | 'broker'
   | 'tokens'
   | 'revocations'
+  | 'oauth'
   | 'egress'
   | 'readIdentity'
   | 'readKsmHostStats'
@@ -505,6 +518,7 @@ export function buildTestApp(
     rootToken: TEST_TOKEN,
     tokens: ctx.tokens,
     revocations: ctx.revocations,
+    oauth: ctx.oauth,
     peers,
     tailnet,
     imps,
@@ -548,7 +562,14 @@ export function buildTestApp(
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
-  return { app: built.app, closeExecSessions: built.closeExecSessions, client, peers, moves };
+  return {
+    app: built.app,
+    publicMcp: built.publicMcp,
+    closeExecSessions: built.closeExecSessions,
+    client,
+    peers,
+    moves,
+  };
 }
 
 // a memory snapshot as a sleep at `createdAt` by a VM with `identity`

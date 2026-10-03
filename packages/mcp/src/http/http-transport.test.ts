@@ -244,6 +244,47 @@ test('a tool call streams its progress, keepalives and response as SSE', async (
   expect(events.at(-1)).toMatchObject({ id: 1, result: { isError: false } });
 });
 
+// 'ended' once the call ends, or 'running' after `ms`
+function readOutcome(callEnd: Promise<void>, ms: number): Promise<string> {
+  const waitForEnd = async () => {
+    await callEnd;
+
+    return 'ended';
+  };
+
+  const waitForTimeout = async () => {
+    await Bun.sleep(ms);
+
+    return 'running';
+  };
+
+  return Promise.race([waitForEnd(), waitForTimeout()]);
+}
+
+test('a dropped stream is no cancel: the call runs on, and its end is still known', async () => {
+  await using ctx = setupTransportTest({ listDelayMs: 120 });
+
+  const session = await ctx.openSession('alice');
+
+  const response = await ctx.sendInSession('alice', session, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'imp_list', arguments: {} },
+  });
+
+  const callEnd = ctx.transport.readCallEnd(response) ?? Promise.resolve();
+
+  await response.body?.cancel();
+
+  const early = await readOutcome(callEnd, 20);
+  const late = await readOutcome(callEnd, 1000);
+
+  expect(early).toBe('running');
+  expect(late).toBe('ended');
+  expect(ctx.transport.readCallEnd(new Response('x'))).toBeNull();
+});
+
 test('a tool call answers as JSON when the client takes no event stream', async () => {
   await using ctx = setupTransportTest({ listDelayMs: 60 });
 

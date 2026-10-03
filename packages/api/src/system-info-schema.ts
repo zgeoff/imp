@@ -156,6 +156,10 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // the oauth procedures and the public MCP route exist; the route runs
+      // only where the operator turned it on (publicMcp)
+      oauthGrants: z.boolean().optional(),
     })
     .optional(),
 });

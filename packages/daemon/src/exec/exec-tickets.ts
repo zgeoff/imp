@@ -1,5 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Caller } from '../auth/caller';
+import type { Revocations } from '../auth/revocations';
+import type { TokenStore } from '../auth/token-store';
 
 // Single-use `/exec` tickets: a browser WebSocket cannot send the bearer
 // header, and the token must never land in a URL (docs/architecture/daemon.md).
@@ -45,6 +47,19 @@ interface ExecTicketsDeps {
 
   // false once the caller's token is removed
   readonly isLive: (caller: Readonly<Caller>) => boolean;
+}
+
+// whether a ticket's caller may still open it: its token is there and its
+// OAuth grant, if any, is not revoked
+export function isCallerLive(
+  tokens: Pick<TokenStore, 'findById'>,
+  revocations: Pick<Revocations, 'isRevoked'>,
+  caller: Readonly<Caller>,
+): boolean {
+  return (
+    (caller.tokenId === null || tokens.findById(caller.tokenId) !== null) &&
+    (caller.grantId === null || !revocations.isRevoked(caller.grantId))
+  );
 }
 
 // A ticket is `<id>.<secret>`: the id finds the entry, and the secret is
