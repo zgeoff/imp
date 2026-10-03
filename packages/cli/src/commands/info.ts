@@ -46,6 +46,7 @@ export const infoCommand = defineCommand({
         ...formatKsm(info.ksm),
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
+        ...formatHttps(info.https),
         ['public', formatPublic(info.public)],
       ];
 
@@ -76,6 +77,29 @@ function formatPublic(info: SystemInfo['public']): string {
   }
 
   return `${String(info.imps)} imps at ${info.ip}, ${state}`;
+}
+
+// HTTPS on the domain, and whether the DNS API token reads; no line from
+// an impd before it
+function formatHttps(info: SystemInfo['https']): string[][] {
+  if (info === undefined) {
+    return [];
+  }
+
+  if (info === null) {
+    return [['https', 'off (IMP_DOMAIN unset)']];
+  }
+
+  const token = info.dnsToken;
+  let state = '';
+
+  if (token !== null) {
+    state = token.isOk
+      ? ', DNS token ok'
+      : `, DNS token failing at ${token.at.toISOString()}: ${token.error ?? ''}`;
+  }
+
+  return [['https', `${info.domain}${state}`]];
 }
 
 // what sleeping imps take back on a wake; nothing from an impd before it

@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import * as z from 'zod';
+import type { DnsTokenSource } from './dns/dns-token';
 
 const LETS_ENCRYPT_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 
@@ -28,6 +29,9 @@ export const HttpsEnvSchema = z.object({
   IMP_HTTP_PORT: PortSchema.default(80),
   IMP_DNS_PROVIDER: z.enum(DNS_PROVIDERS).optional(),
   IMP_DNS_API_TOKEN: z.string().optional(),
+
+  // the token in a file instead, read at each use (docs/guides/https.md)
+  IMP_DNS_API_TOKEN_FILE: z.string().optional(),
   IMP_DNS_API_URL: z.url().optional(),
   IMP_ACME_DIRECTORY: z.url().default(LETS_ENCRYPT_DIRECTORY),
   IMP_ACME_EMAIL: z.email().optional(),
@@ -46,8 +50,9 @@ export const HttpsEnvSchema = z.object({
 export interface DnsConfig {
   readonly provider: DnsProviderKind;
 
-  // a secret: never logged, never in an error message
-  readonly apiToken: string | null;
+  // the token, a secret: never logged, never in an error message; null
+  // for a provider that needs none
+  readonly token: DnsTokenSource | null;
 
   // the provider's API; null is the provider's public endpoint
   readonly apiUrl: string | null;
@@ -80,6 +85,10 @@ export interface HttpsConfig {
 // null when IMP_DOMAIN is unset: no HTTPS, and the per-port URLs are the only
 // tailnet URLs
 export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConfig | null {
+  if (env.IMP_DNS_API_TOKEN !== undefined && env.IMP_DNS_API_TOKEN_FILE !== undefined) {
+    throw new Error('set IMP_DNS_API_TOKEN or IMP_DNS_API_TOKEN_FILE, not both');
+  }
+
   if (env.IMP_DOMAIN === undefined) {
     if (env.IMP_PUBLIC_IP !== undefined) {
       throw new Error('IMP_PUBLIC_IP needs IMP_DOMAIN: public imps are served on it');
@@ -94,8 +103,14 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
     );
   }
 
-  if (env.IMP_DNS_PROVIDER === 'cloudflare' && env.IMP_DNS_API_TOKEN === undefined) {
-    throw new Error('IMP_DNS_PROVIDER=cloudflare needs IMP_DNS_API_TOKEN');
+  const token = readTokenSource(env);
+
+  // a file that is missing or empty is not checked here: impd starts, and
+  // says so until the file holds a token (buildHttpsService)
+  if (env.IMP_DNS_PROVIDER === 'cloudflare' && token === null) {
+    throw new Error(
+      'IMP_DNS_PROVIDER=cloudflare needs IMP_DNS_API_TOKEN or IMP_DNS_API_TOKEN_FILE',
+    );
   }
 
   if (env.IMP_DNS_PROVIDER === 'challtestsrv') {
@@ -121,7 +136,7 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
     httpPort: env.IMP_HTTP_PORT,
     dns: {
       provider: env.IMP_DNS_PROVIDER,
-      apiToken: env.IMP_DNS_API_TOKEN ?? null,
+      token,
       apiUrl: env.IMP_DNS_API_URL ?? null,
     },
     acmeDirectory: env.IMP_ACME_DIRECTORY,
@@ -136,6 +151,29 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
             httpPort: env.IMP_PUBLIC_HTTP_PORT,
           },
   };
+}
+
+// what HTTPS settings say about themselves without IMP_DOMAIN, for main to log
+export function listHttpsWarnings(env: z.infer<typeof HttpsEnvSchema>): string[] {
+  if (env.IMP_DOMAIN === undefined && env.IMP_DNS_API_TOKEN_FILE !== undefined) {
+    return [
+      'IMP_DNS_API_TOKEN_FILE is set without IMP_DOMAIN; HTTPS is off and the file is unused',
+    ];
+  }
+
+  return [];
+}
+
+function readTokenSource(env: z.infer<typeof HttpsEnvSchema>): DnsTokenSource | null {
+  if (env.IMP_DNS_API_TOKEN_FILE !== undefined) {
+    return { kind: 'file', path: env.IMP_DNS_API_TOKEN_FILE };
+  }
+
+  if (env.IMP_DNS_API_TOKEN !== undefined) {
+    return { kind: 'value', value: env.IMP_DNS_API_TOKEN };
+  }
+
+  return null;
 }
 
 // challtestsrv answers every lookup Pebble makes and none a real CA makes:

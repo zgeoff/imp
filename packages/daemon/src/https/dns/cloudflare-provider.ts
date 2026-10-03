@@ -52,8 +52,9 @@ const RecordListSchema = z.array(RecordSchema);
 type Zone = z.infer<typeof ZoneSchema>;
 
 interface CloudflareOptions {
-  // a token with Zone:Read and DNS:Edit on the zone; never logged
-  readonly token: string;
+  // a token with Zone:Read and DNS:Edit on the zone, read at each request
+  // so a rotated one works at once; never logged
+  readonly readToken: () => Promise<string>;
   readonly apiUrl?: string;
   readonly propagation?: WaitForTxtOptions;
   readonly log?: (message: string) => void;
@@ -68,11 +69,25 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
   // by the name asked for, so each name walks the labels once
   const zones = new Map<string, Zone>();
 
+  // the token the zones were found with
+  let zonesToken: string | null = null;
+
   const sendEnvelope = async (method: string, path: string, body?: unknown): Promise<Envelope> => {
+    const token = await options.readToken();
+
+    // a new token may see other zones, or the same names in other ones:
+    // the next lookup asks again. A request already holding a zone sends
+    // it once more with the new token, and fails at worst.
+    if (token !== zonesToken) {
+      zones.clear();
+
+      zonesToken = token;
+    }
+
     const response = await fetch(`${base}${path}`, {
       method,
       headers: {
-        authorization: `Bearer ${options.token}`,
+        authorization: `Bearer ${token}`,
         ...(body !== undefined && { 'content-type': 'application/json' }),
       },
       ...(body !== undefined && { body: JSON.stringify(body) }),

@@ -42,7 +42,7 @@ function buildConfig(publicIp?: string): HttpsConfig {
     domain: DOMAIN,
     httpsPort: ports.take(),
     httpPort: ports.take(),
-    dns: { provider: 'cloudflare', apiToken: 'unused', apiUrl: null },
+    dns: { provider: 'cloudflare', token: { kind: 'value', value: 'unused' }, apiUrl: null },
     acmeDirectory: 'https://acme.invalid/directory',
     acmeEmail: null,
     acmeCaFile: null,
@@ -268,7 +268,7 @@ test('a bad DNS token leaves impd running and stays out of the log', async () =>
   });
 
   const dns = createCloudflareProvider({
-    token,
+    readToken: () => Promise.resolve(token),
     apiUrl: `http://127.0.0.1:${String(cloudflare.port)}`,
   });
 

@@ -518,6 +518,7 @@ export function buildTestApp(
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     readTailnetNames: null,
     publicRecords: createPublicRecordsLink(),
+    readDnsTokenStatus: null,
     isReady: () => true,
     now: ctx.now,
     log: ctx.log,

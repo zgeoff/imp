@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createDnsToken } from '../dns/dns-token';
 import { createTestCertificate } from '../test-certificates';
 import { createCertManager } from './cert-manager';
 import type { Certificate } from './cert-store';
@@ -173,4 +174,53 @@ test('a certificate for another domain is replaced', async () => {
 
   expect(renewed).toEqual(fresh);
   expect(ctx.logs[0]).toContain('does not cover imp.test, *.imp.test');
+});
+
+test('a token file that holds no token backs off, and its token works at the next try', async () => {
+  const fresh = await createTestCertificate({ names: NAMES });
+
+  const tokenDir = mkdtempSync(join(tmpdir(), 'imp-token-'));
+  const tokenPath = join(tokenDir, 'token');
+  const tokens: string[] = [];
+
+  // the issuer reads the token for each DNS call, as the Cloudflare
+  // provider does
+  using ctx = setup(async () => {
+    const token = await dnsToken.read();
+
+    tokens.push(token);
+
+    return fresh;
+  });
+
+  const dnsToken = createDnsToken({ kind: 'file', path: tokenPath }, () => ctx.clock.now);
+
+  try {
+    writeFileSync(tokenPath, '');
+
+    const failed = await ctx.manager.renew();
+
+    expect(failed).toBeNull();
+    expect(ctx.store.readAttempts()).toMatchObject({ failures: 1 });
+    expect(ctx.logs.at(-1)).toContain(`the DNS API token file ${tokenPath} is empty`);
+
+    // the operator drops the token in place; the backoff still holds
+    writeFileSync(tokenPath, 'cf-new-token\n');
+
+    const early = await ctx.manager.renew();
+
+    expect(early).toBeNull();
+    expect(tokens).toEqual([]);
+
+    ctx.clock.now += 15 * MINUTE;
+
+    const renewed = await ctx.manager.renew();
+
+    expect(renewed).toEqual(fresh);
+    expect(tokens).toEqual(['cf-new-token']);
+    expect(ctx.store.readAttempts().failures).toBe(0);
+    expect(ctx.logs.join('\n')).not.toContain('cf-new-token');
+  } finally {
+    rmSync(tokenDir, { recursive: true, force: true });
+  }
 });

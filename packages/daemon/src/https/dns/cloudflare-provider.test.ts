@@ -7,6 +7,10 @@ import { buildPublicOwner } from './dns-provider';
 
 const TOKEN = 'cf-test-token-secret';
 
+function readTestToken(): Promise<string> {
+  return Promise.resolve(TOKEN);
+}
+
 const RecordBodySchema = z.object({
   type: z.string(),
   name: z.string(),
@@ -29,6 +33,11 @@ function startFakeCloudflare() {
   const zones = [{ id: 'z1', name: 'example.com', name_servers: ['ns1.test', 'ns2.test'] }];
   const records: FakeRecord[] = [];
   const calls: string[] = [];
+
+  // the tokens it takes, and the one each request came with
+  const tokens = new Set([TOKEN]);
+
+  const bearers: string[] = [];
   let nextId = 1;
 
   // how the list pages: a cap below what was asked, and whether
@@ -40,9 +49,12 @@ function startFakeCloudflare() {
     fetch: async (request) => {
       const url = new URL(request.url);
 
-      calls.push(`${request.method} ${url.pathname}${url.search}`);
+      const bearer = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
 
-      if (request.headers.get('authorization') !== `Bearer ${TOKEN}`) {
+      calls.push(`${request.method} ${url.pathname}${url.search}`);
+      bearers.push(bearer);
+
+      if (!tokens.has(bearer)) {
         return Response.json(
           { success: false, errors: [{ code: 9109, message: 'Invalid access token' }] },
           { status: 403 },
@@ -112,7 +124,15 @@ function startFakeCloudflare() {
     },
   });
 
-  return { server, records, calls, paging, url: `http://127.0.0.1:${String(server.port)}` };
+  return {
+    server,
+    records,
+    calls,
+    tokens,
+    bearers,
+    paging,
+    url: `http://127.0.0.1:${String(server.port)}`,
+  };
 }
 
 const fake = startFakeCloudflare();
@@ -126,7 +146,7 @@ function listContents(fqdn: string): string[] {
 }
 
 test('it adds two TXT values side by side and removes each by its id', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
   const fqdn = '_acme-challenge.imp.example.com';
 
   const first = await provider.addTxt(fqdn, 'value-one');
@@ -144,7 +164,7 @@ test('it adds two TXT values side by side and removes each by its id', async () 
 });
 
 test('it finds the zone by walking up the labels, and asks once per name', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
 
   fake.calls.length = 0;
 
@@ -162,7 +182,7 @@ test('it finds the zone by walking up the labels, and asks once per name', async
 });
 
 test('it sets an A record DNS only and marked as its own, and changes it in place', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
 
   fake.calls.length = 0;
 
@@ -194,7 +214,7 @@ test('it sets an A record DNS only and marked as its own, and changes it in plac
 });
 
 test('it never replaces a record it did not make, and names it', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
 
   // the zone apex, with a website on it
   fake.records.push({ id: 'web', type: 'A', name: 'example.com', content: '203.0.113.5' });
@@ -212,7 +232,7 @@ test('it warns when it finds more than one record of its own', async () => {
   const logs: string[] = [];
 
   const provider = createCloudflareProvider({
-    token: TOKEN,
+    readToken: readTestToken,
     apiUrl: fake.url,
     log: (message) => {
       logs.push(message);
@@ -237,7 +257,7 @@ test('it warns when it finds more than one record of its own', async () => {
 });
 
 test('it lists and removes only its owner’s A records under the domain, page by page', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
   const owner = buildPublicOwner('pub.example.com');
   const own = { type: 'A', comment: owner };
 
@@ -297,7 +317,10 @@ test('it lists and removes only its owner’s A records under the domain, page b
 });
 
 test('a bad token fails with the Cloudflare message, and the token is not in it', async () => {
-  const provider = createCloudflareProvider({ token: 'wrong-secret', apiUrl: fake.url });
+  const provider = createCloudflareProvider({
+    readToken: () => Promise.resolve('wrong-secret'),
+    apiUrl: fake.url,
+  });
 
   const error = await readRejection(provider.addTxt('_acme-challenge.imp.example.com', 'v'));
 
@@ -306,18 +329,62 @@ test('a bad token fails with the Cloudflare message, and the token is not in it'
 });
 
 test('a name in no zone the token sees is an error', async () => {
-  const provider = createCloudflareProvider({ token: TOKEN, apiUrl: fake.url });
+  const provider = createCloudflareProvider({ readToken: readTestToken, apiUrl: fake.url });
 
   const error = await readRejection(provider.setA('imp.other.org', '100.64.0.7'));
 
   expect(readErrorMessage(error)).toContain('no zone');
 });
 
+test('it reads the token at each request, and finds the zone again with a new one', async () => {
+  const rotated = 'cf-test-token-rotated';
+  const current = { token: TOKEN };
+
+  fake.tokens.add(rotated);
+
+  const provider = createCloudflareProvider({
+    readToken: () => Promise.resolve(current.token),
+    apiUrl: fake.url,
+  });
+
+  await provider.setA('rotate.example.com', '100.64.0.7');
+
+  fake.calls.length = 0;
+  fake.bearers.length = 0;
+  current.token = rotated;
+
+  // the first request with the new token drops the zones found with the
+  // old one, so the next name asks again
+  await provider.setA('rotate.example.com', '100.64.0.8');
+  await provider.setA('rotate.example.com', '100.64.0.9');
+
+  fake.tokens.delete(rotated);
+
+  expect(new Set(fake.bearers)).toEqual(new Set([rotated]));
+  expect(fake.calls.filter((call) => call === 'GET /zones?name=example.com')).toHaveLength(1);
+  expect(listContents('rotate.example.com')).toEqual(['100.64.0.9']);
+});
+
+test('a token it cannot read fails the request before any call', async () => {
+  const provider = createCloudflareProvider({
+    readToken: () =>
+      Promise.reject(new Error('the DNS API token file /run/imp/dns/token is empty')),
+    apiUrl: fake.url,
+  });
+
+  fake.calls.length = 0;
+
+  const error = await readRejection(provider.setA('imp.example.com', '100.64.0.7'));
+
+  expect(readErrorMessage(error)).toContain('/run/imp/dns/token is empty');
+  expect(fake.calls).toEqual([]);
+});
+
 test('it waits for the TXT values on the zone nameservers', async () => {
   const asked: string[] = [];
 
   const provider = createCloudflareProvider({
-    token: TOKEN,
+    readToken: readTestToken,
     apiUrl: fake.url,
     propagation: {
       intervalMs: 1,

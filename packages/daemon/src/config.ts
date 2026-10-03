@@ -5,7 +5,7 @@ import { TailnetRulesSchema } from './auth/tailnet-identity';
 import type { TailnetRule } from './auth/tailnet-identity';
 import { loadBackupConfig } from './backup/backup-config';
 import type { BackupConfig } from './backup/backup-config';
-import { HttpsEnvSchema, parseHttpsConfig } from './https/https-config';
+import { HttpsEnvSchema, listHttpsWarnings, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
 import { createPeerRanges, readPeerUrlAddress } from './moves/peer-address';
 import { countSlots, isTailnetOverlap, parseSubnet } from './net/addressing';
@@ -214,6 +214,9 @@ export interface Config {
   // moves between hosts: null peerUrl uses the tailnet IP and the API port;
   // testCidr, only on an e2e host, opens moves to one range off the tailnet
   readonly moves: { readonly peerUrl: string | null; readonly testCidr: string | null };
+
+  // settings that start impd but are likely a mistake; main logs them
+  readonly warnings: readonly string[];
 }
 
 function splitList(value: string): string[] {
@@ -368,6 +371,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     https,
     tailnetNames: parseTailnetNamesConfig(parsed, parsed.IMP_DATA_DIR, isTailnetNode),
     moves: { peerUrl: parsed.IMP_PEER_URL ?? null, testCidr: parsed.IMP_MOVE_TEST_CIDR ?? null },
+    warnings: listHttpsWarnings(parsed),
   };
 }
 
