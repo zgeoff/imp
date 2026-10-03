@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { lookup } from 'node:dns/promises';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as z from 'zod';
 import { runImp, tryImp } from '../lib/imp-cli';
 import { REPO_ROOT, runChecked, runCommand } from '../lib/instance';
+import { writeRegistryIndex } from '../lib/registry-index';
 import { setupSuite } from '../lib/setup-suite';
 
 // #145: impd builds each image by the digest it inspected. A registry the
@@ -50,6 +51,7 @@ const CACHE_DIR = join(REPO_ROOT, '.cache', 'e2e');
 mkdirSync(CACHE_DIR, { recursive: true });
 
 const buildDir = mkdtempSync(join(CACHE_DIR, 'registry-'));
+const certs = join(buildDir, 'certs');
 
 // the registry's host and port, once it runs
 let registry = '';
@@ -76,8 +78,6 @@ beforeAll(async () => {
   for (const id of stale.split('\n').filter((line) => line !== '')) {
     await runCommand(['docker', 'rm', '--force', '--volumes', id]);
   }
-
-  const certs = join(buildDir, 'certs');
 
   mkdirSync(certs);
 
@@ -388,8 +388,17 @@ test.skipIf(!REGISTRY_READY)(
       `linux/${otherArch}`,
     );
 
-    await runChecked(['docker', 'manifest', 'create', '--insecure', index, host, other]);
-    await runChecked(['docker', 'manifest', 'push', '--insecure', '--purge', index]);
+    await writeRegistryIndex({
+      registry,
+      ca: readFileSync(join(certs, 'cert.pem'), 'utf8'),
+      repository,
+      tag: '1',
+      entries: [
+        { tag: hostArch, architecture: hostArch },
+        { tag: otherArch, architecture: otherArch },
+      ],
+    });
+
     await runChecked(['docker', 'rmi', host, other]);
 
     try {
