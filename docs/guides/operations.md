@@ -53,13 +53,16 @@ bash upgrade.sh
 
 1. It pulls the image of its own release, unless `IMP_HOST_IMAGE` names another: from the
    environment, else (with compose) the `.env` next to the compose file, else a pin in
-   `/etc/imp/imp-host.env`. When the host already runs that image, it only updates the image lines
-   of step 3 and stops. With the systemd unit, it refuses an image from the environment that
-   `imp-host.service` or `imp-docker-proxy.service` (drop-ins included) would not run: pin it in the
-   env file instead. It refuses an env file whose last `IMP_HOST_IMAGE=` is empty, which would give
-   the units no image. It refuses an image from before the Docker socket proxy once the unit or
-   compose file gives imp-host the proxy's socket, and an image from before the unprivileged host
-   (no `imp.host-contract` label) once it runs without `--privileged`. To go back past either, run
+   `/etc/imp/imp-host.env`. It reads the `.env` as Compose does (through
+   `docker compose config --environment` when Compose has it), so a trailing comment is not part of
+   the image, and variables resolve. When the host already runs that image, it still installs the
+   image lines and files of step 3, so the next restart keeps that image, and restarts nothing. With
+   the systemd unit, it refuses an image from the environment that `imp-host.service` or
+   `imp-docker-proxy.service` (drop-ins included) would not run: pin it in the env file instead. It
+   refuses an env file whose last `IMP_HOST_IMAGE=` is empty, which would give the units no image.
+   It refuses an image from before the Docker socket proxy once the unit or compose file gives
+   imp-host the proxy's socket, and an image from before the unprivileged host (no
+   `imp.host-contract` label) once it runs without `--privileged`. To go back past either, run
    `deploy/bootstrap.sh` of that image's release.
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
@@ -76,14 +79,14 @@ bash upgrade.sh
    An env file line `IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest`, which every env file had before
    the units named their release, is the old template's and no pin. It becomes the commented pin, so
    the units run their release's image. This happens before the units are installed, and the file
-   before stays as `imp-host.env.bak-<time>`, with its mode. Any other value is a pin and stays. To
-   follow `latest` on purpose, pin `IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host`, which Docker reads as
-   `latest`.
+   before stays as `imp-host.env.bak-<time>`, mode `0600`; upgrade.sh prints its path. Any other
+   value is a pin and stays. To follow `latest` on purpose, pin
+   `IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host`, which Docker reads as `latest`.
 
    With compose, it writes `IMP_HOST_IMAGE` to the `.env` next to the compose file when that
-   differs, and keeps the file before as `.env.bak-<time>`. A pin there stays, since it chose the
-   image. Compose reads that `.env` at each `up`, so a later `docker compose up -d` keeps the new
-   image, not the default of an older compose file.
+   differs, and keeps the file before as `.env.bak-<time>`, mode `0600`. A pin there stays, since it
+   chose the image. Compose reads that `.env` at each `up`, so a later `docker compose up -d` keeps
+   the new image, not the default of an older compose file.
 
 4. It enables and restarts `imp-docker-proxy`, then restarts the host (with compose, `up -d` of both
    services, or of imp-host alone when the file has no proxy). It waits for `/health` to report

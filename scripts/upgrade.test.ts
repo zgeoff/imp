@@ -70,6 +70,10 @@ interface Host {
 
   // the pulled image is the one the container runs already
   readonly sameImage?: boolean;
+
+  // what `docker compose config --environment` prints; without it, that
+  // fails, as in a Compose older than 2.24
+  readonly composeConfig?: string;
 }
 
 // Fakes docker, systemctl and curl: each call lands in calls, the running
@@ -100,6 +104,9 @@ case "$*" in
   "run --rm ${image} cat "*.json) echo '{}' ;;
   "exec imp-host imp ls --json") echo '[]' ;;
   "exec imp-host imp info --json") echo '{}' ;;
+  "compose -f "*" config --environment")
+    echo "compose config, IMP_HOST_IMAGE \${IMP_HOST_IMAGE-unset}" >>'${calls}'
+    ${host.composeConfig === undefined ? 'exit 1' : `printf '%s' '${host.composeConfig}'`} ;;
   "exec imp-host imp ls" | "compose "*) ;;
   *) echo "unexpected: docker $*" >&2; exit 1 ;;
 esac
@@ -170,6 +177,7 @@ esac
   ]);
 
   return {
+    dir,
     exitCode,
     output: stdout + stderr,
     calls: readFileSync(calls, 'utf8'),
@@ -181,12 +189,15 @@ esac
     ),
     envFile: readIfThere(envFile),
     envFileBackup: readBackup(dir, 'imp-host.env'),
-    envFileModes: [envFile, findBackup(dir, 'imp-host.env')].map((file) =>
-      file !== null && existsSync(file) ? statSync(file).mode & 0o777 : null,
-    ),
+    envFileModes: [envFile, findBackup(dir, 'imp-host.env')].map((file) => readMode(file)),
     composeEnv: readIfThere(composeEnv),
     composeEnvBackup: readBackup(dir, '.env'),
+    composeEnvBackupMode: readMode(findBackup(dir, '.env')),
   };
+}
+
+function readMode(file: string | null): number | null {
+  return file !== null && existsSync(file) ? statSync(file).mode & 0o777 : null;
 }
 
 function readIfThere(file: string): string | null {
@@ -459,7 +470,9 @@ test('compose writes the image to the .env beside its file, with a .bak', async 
   expect(result.exitCode).toBe(0);
   expect(result.composeEnv).toBe(`IMP_DOCKER_GID=999\nIMP_HOST_IMAGE=${IMAGE}\n`);
   expect(result.composeEnvBackup).toBe(composeEnv);
-  expect(result.output).toContain(`wrote IMP_HOST_IMAGE=${IMAGE}`);
+  expect(result.composeEnvBackupMode).toBe(0o600);
+  expect(result.output).toContain(`wrote IMP_HOST_IMAGE=${IMAGE} to ${join(result.dir, '.env')}`);
+  expect(result.output).toContain(`(the file before: ${join(result.dir, '.env.bak-')}`);
 });
 
 test('compose without a .env gets one that names the image', async () => {
@@ -559,14 +572,15 @@ test('compose keeps the pin in its .env and moves to that image', async () => {
   expect(result.composeEnvBackup).toBeNull();
 });
 
-test('a host that runs the image already still gets its image lines', async () => {
+test('a host that runs the image already still gets its image lines and units', async () => {
   const systemd = await runUpgrade({
     newLabel: 'socket-proxy',
     oldLabel: 'socket-proxy',
-    unit: PROXY_UNIT,
+    unit: buildReleaseUnit('ghcr.io/zgeoff/imp-host:latest'),
     envImage: '',
     image: RELEASE_IMAGE,
     envFile: `${LEGACY_IMAGE_LINE}\n`,
+    newUnit: buildReleaseUnit(RELEASE_IMAGE),
     sameImage: true,
   });
 
@@ -574,7 +588,11 @@ test('a host that runs the image already still gets its image lines', async () =
   expect(systemd.output).toContain('already runs');
   expect(systemd.envFile).toBe(`# IMP_HOST_IMAGE=${RELEASE_IMAGE}\n`);
   expect(systemd.envFileBackup).toBe(`${LEGACY_IMAGE_LINE}\n`);
-  expect(systemd.calls).not.toContain('systemctl');
+  expect(systemd.unit).toBe(buildReleaseUnit(RELEASE_IMAGE));
+  expect(systemd.proxyUnit).toBe(buildReleaseUnit(RELEASE_IMAGE));
+  expect(systemd.calls).toContain('systemctl daemon-reload\n');
+  expect(systemd.calls).not.toContain('restart');
+  expect(systemd.calls).not.toContain('imp ls');
 
   const compose = await runUpgrade({
     newLabel: 'socket-proxy',
@@ -605,4 +623,80 @@ test('an env file that sets IMP_HOST_IMAGE empty is refused before anything chan
   expect(result.envFile).toBe(envFile);
   expect(result.calls).not.toContain('pull');
   expect(result.calls).not.toContain('systemctl');
+});
+
+test('a host that runs the image already, whose units would run another, is refused', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envFile: `${LEGACY_IMAGE_LINE}\n`,
+    newUnit: buildReleaseUnit(RELEASE_IMAGE),
+    sameImage: true,
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`imp-host.service would run ${RELEASE_IMAGE}, not ${IMAGE}`);
+  expect(result.unit).toBe(PROXY_UNIT);
+  expect(result.envFile).toBe(`${LEGACY_IMAGE_LINE}\n`);
+  expect(result.calls).not.toContain('systemctl');
+});
+
+const COMPOSE = 'services:\n  imp-host:\n    image: x\n';
+
+test("compose reads its .env's image through docker compose config, with the shell's unset", async () => {
+  const composeEnv = `REGISTRY=imp-host\nIMP_HOST_IMAGE=\${REGISTRY}:pinned # mine\n`;
+
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: COMPOSE,
+    envImage: '',
+    image: 'imp-host:pinned',
+    composeEnv,
+    composeConfig: 'PATH=/bin\nREGISTRY=imp-host\nIMP_HOST_IMAGE=imp-host:pinned\n',
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toContain('compose config, IMP_HOST_IMAGE unset\n');
+  expect(result.calls).toContain('docker pull -q imp-host:pinned\n');
+  expect(result.composeEnv).toBe(composeEnv);
+  expect(result.composeEnvBackup).toBeNull();
+});
+
+test('without compose config, a trailing comment is no part of the .env image', async () => {
+  const composeEnv = 'IMP_HOST_IMAGE=imp-host:pinned # mine\r\n';
+
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: COMPOSE,
+    envImage: '',
+    image: 'imp-host:pinned',
+    composeEnv,
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toContain('docker pull -q imp-host:pinned\n');
+  expect(result.composeEnv).toBe(composeEnv);
+});
+
+test('without compose config, a .env image from other variables is refused before any pull', async () => {
+  const composeEnv = `REGISTRY=imp-host\nIMP_HOST_IMAGE="\${REGISTRY}:pinned"\n`;
+
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: COMPOSE,
+    envImage: '',
+    composeEnv,
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('sets IMP_HOST_IMAGE from other variables');
+  expect(result.calls).not.toContain('pull');
+  expect(result.composeEnv).toBe(composeEnv);
 });

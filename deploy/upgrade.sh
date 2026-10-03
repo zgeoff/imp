@@ -11,8 +11,8 @@
 #
 # 1. Pulls the image: this script's own release, unless IMP_HOST_IMAGE (the
 #    environment, then with --compose the compose .env, then the env file)
-#    names another. When the host already runs it, only the image lines of
-#    step 3 change. Refuses an image that the restarted units would not run
+#    names another. When the host already runs it, step 3 still installs
+#    the image lines and files, and restarts nothing. Refuses an image that the restarted units would not run
 #    (drop-ins count), and an env file with IMP_HOST_IMAGE= empty. Refuses an
 #    image older than the Docker socket proxy (imp.host-contract other
 #    than socket-proxy) once the unit or compose file gives imp-host the
@@ -100,13 +100,53 @@ compose_env_file() {
   echo "$(dirname "$compose_file")/.env"
 }
 
-# the compose .env's IMP_HOST_IMAGE, without the quotes compose allows
+# A line that sets IMP_HOST_IMAGE in an env file compose reads
+readonly compose_env_line='^[ \t]*(export[ \t]+)?IMP_HOST_IMAGE[ \t]*='
+
+# the compose .env's IMP_HOST_IMAGE as compose reads it: interpolated, and
+# without a trailing comment; empty when it sets none. docker compose config
+# tells it, with the shell's IMP_HOST_IMAGE unset, as that one would win. An
+# older compose has no --environment: read_env_value reads the file instead.
 compose_env_image() {
-  local line
-  line=$(trim_lines "$(compose_env_file)" | grep -E '^IMP_HOST_IMAGE=.' | tail -n 1 || true)
-  line=${line#IMP_HOST_IMAGE=}
-  line=${line#[\"\']}
-  echo "${line%[\"\']}"
+  local env config
+  env=$(compose_env_file)
+  [ -f "$env" ] || return 0
+  if config=$(env -u IMP_HOST_IMAGE docker compose -f "$compose_file" config --environment 2>/dev/null); then
+    sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$config" | tail -n 1
+  else
+    read_env_value "$env"
+  fi
+}
+
+# read_env_value FILE: FILE's last IMP_HOST_IMAGE value as compose reads it:
+# without its quotes, and an unquoted one ends at a blank before #. Fails,
+# and says why, on a $ outside single quotes, which only compose resolves.
+read_env_value() {
+  local value
+  # shellcheck disable=SC2016 # an awk program
+  value=$(awk -v pattern="$compose_env_line" -v q="'" '
+    { sub(/\r$/, "") }
+    $0 ~ pattern { line = $0; found = 1 }
+    END {
+      if (!found) exit
+      sub(/^[^=]*=[ \t]*/, "", line)
+      first = substr(line, 1, 1)
+      if (first == q || first == "\"") {
+        line = substr(line, 2)
+        line = substr(line, 1, index(line, first) - 1)
+      } else {
+        sub(/([ \t]+#.*)?[ \t]*$/, "", line)
+      }
+      print (first == q ? "literal:" : "raw:") line
+    }' "$1")
+  case $value in
+    literal:*) echo "${value#literal:}" ;;
+    raw:*\$*)
+      echo "upgrade: $1 sets IMP_HOST_IMAGE from other variables, which only a docker compose with config --environment resolves: update Compose, or write the image there in full; nothing changed" >&2
+      return 1
+      ;;
+    *) echo "${value#raw:}" ;;
+  esac
 }
 
 # check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
@@ -119,14 +159,14 @@ check_env_image() {
 }
 
 # the image to move to: the environment, then (with --compose) the compose
-# .env, then the env file's pin, then this script's release
+# .env's, in $compose_image, then the env file's pin, then this script's
+# release
 read_image() {
   if [ -n "${IMP_HOST_IMAGE:-}" ]; then
     echo "$IMP_HOST_IMAGE"
     return
   fi
-  { [ -z "$compose_file" ] || compose_env_image; pinned_image; } | grep . | head -n 1 \
-    || echo "$release_image"
+  { echo "$compose_image"; pinned_image; } | grep . | head -n 1 || echo "$release_image"
 }
 
 # the IMP_HOST_IMAGE that the Environment= lines of FILE... set, the last
@@ -150,14 +190,14 @@ unit_image() {
 }
 
 # rewrite_file PATH AWK_PROGRAM [AWK_ARGS...]: PATH through awk, by rename,
-# with the old PATH kept as PATH.bak-<time>, named in $backup. Copies keep
-# PATH's mode: the env file holds secrets. Exits on a failure, before
-# anything restarts.
+# with the old PATH kept as PATH.bak-<time>, named in $backup. The env file
+# holds secrets: the backup is 0600, and the new PATH keeps PATH's mode.
+# Exits on a failure, before anything restarts.
 rewrite_file() {
   local path=$1
   shift
   backup=$path.bak-$(date +%Y%m%d-%H%M%S)
-  if ! { cp -p "$path" "$backup" && cp -p "$path" "$path.new" \
+  if ! { (umask 077 && cp "$path" "$backup") && chmod 600 "$backup" && cp -p "$path" "$path.new" \
     && awk "$@" "$backup" >"$path.new" && mv "$path.new" "$path"; }; then
     rm -f "$path.new"
     echo "upgrade: cannot rewrite $path; nothing restarted, the host still runs $old" >&2
@@ -185,9 +225,10 @@ write_compose_env() {
   if [ ! -f "$env" ]; then
     echo "IMP_HOST_IMAGE=$image" >"$env"
     echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env"
-  elif [ "$(compose_env_image)" != "$image" ]; then
-    rewrite_file "$env" -v line="IMP_HOST_IMAGE=$image" \
-      '/^[ \t]*IMP_HOST_IMAGE=/ { if (!done) print line; done = 1; next } { print } END { if (!done) print line }'
+  elif [ "$compose_image" != "$image" ]; then
+    # shellcheck disable=SC2016 # an awk program
+    rewrite_file "$env" -v pattern="$compose_env_line" -v line="IMP_HOST_IMAGE=$image" \
+      '$0 ~ pattern { if (!done) print line; done = 1; next } { print } END { if (!done) print line }'
     echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env (the file before: $backup)"
   fi
 }
@@ -265,6 +306,20 @@ install_file() {
   echo "upgrade: installed $1 from $image"
 }
 
+# The env file's migration, then the files fetched into $new_files, and a
+# daemon-reload when a unit changed. The migration comes first: a failed
+# rewrite stops here, with the old units in place.
+install_new_files() {
+  local f unit_changed=
+  migrate_env_file
+  for f in "${new_files[@]}"; do
+    if install_file "$f" && [ "$f" != "$seccomp_file" ]; then
+      unit_changed=1
+    fi
+  done
+  [ -z "$unit_changed" ] || systemctl daemon-reload
+}
+
 # the proxy first: imp-host starts after it, and impd's first docker call
 # needs its socket
 restart_host() {
@@ -305,6 +360,8 @@ fi
 
 # compose takes its image from the shell or its .env, never the env file
 [ -n "$compose_file" ] || check_env_image "$env_file" || exit 1
+compose_image=
+[ -z "$compose_file" ] || compose_image=$(compose_env_image) || exit 1
 
 image=$(read_image)
 
@@ -314,16 +371,7 @@ docker pull -q "$image" >/dev/null
 old=$(docker inspect -f '{{.Image}}' "$container")
 new=$(docker image inspect -f '{{.Id}}' "$image")
 
-# The env file and the compose .env still get their image lines: a host on
-# :latest may run this release's image already.
-if [ "$old" = "$new" ]; then
-  migrate_env_file
-  [ -z "$compose_file" ] || write_compose_env
-  echo "upgrade: $container already runs $new"
-  exit 0
-fi
-
-echo "upgrade: $old -> $new"
+[ "$old" = "$new" ] || echo "upgrade: $old -> $new"
 
 new_contract=$(contract_of "$image")
 old_contract=$(contract_of "$old")
@@ -374,6 +422,16 @@ if [ -z "$compose_file" ]; then
   done
 fi
 
+# A host on :latest may run this release's image already. It still gets
+# its image lines and this image's units, or the old units' :latest would
+# run another image at the next restart. Nothing restarts.
+if [ "$old" = "$new" ]; then
+  install_new_files
+  [ -z "$compose_file" ] || write_compose_env
+  echo "upgrade: $container already runs $new"
+  exit 0
+fi
+
 # its own line: a failed `imp ls` stops the script before anything restarts
 awake=$(list_awake)
 
@@ -385,15 +443,7 @@ for name in $awake; do
   echo "upgrade: $name asleep"
 done
 
-# before the units: a failed rewrite stops here, with the old units in place
-migrate_env_file
-unit_changed=
-for f in "${new_files[@]}"; do
-  if install_file "$f" && [ "$f" != "$seccomp_file" ]; then
-    unit_changed=1
-  fi
-done
-[ -z "$unit_changed" ] || systemctl daemon-reload
+install_new_files
 restart_host
 wait_ready
 
