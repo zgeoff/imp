@@ -4,7 +4,11 @@ import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-g
 import { findBudgetBreaches, findOvershoots } from '../lib/budget-overshoot';
 import type { Overshoot, OvershootLimits, SleepSpan } from '../lib/budget-overshoot';
 import { config } from '../lib/config';
-import { FIRECRACKER_MEMORY_SCRIPT, parseFirecrackerMemory } from '../lib/firecracker-memory';
+import {
+  FIRECRACKER_MEMORY_SCRIPT,
+  parseFirecrackerMemory,
+  readSmallestOwnedMib,
+} from '../lib/firecracker-memory';
 import { resolveImageName } from '../lib/fixtures';
 import { getThroughProxy } from '../lib/http';
 import {
@@ -177,26 +181,21 @@ async function createFilledImp(name: string): Promise<number> {
   return ms;
 }
 
-// The smallest RAM of the first `count` imps: imp 1 may cold-boot while its
-// boot template builds, and the imps restored from it own less, so more fit.
-async function readPerImpMib(count: number, usedBefore: number): Promise<number> {
-  const figures: number[] = [];
+// The smallest RAM of the first `count` imps, each read after its fill: imp
+// 1 may cold-boot while its boot template builds, and the imps restored from
+// it own less, so more fit.
+async function readPerImpMib(count: number): Promise<number> {
+  const ids: string[] = [];
 
   for (let index = 1; index <= count; index++) {
     const row = await requireImp(buildName(index));
 
-    if (row.ramMib !== undefined) {
-      figures.push(row.ramMib);
-    }
+    ids.push(row.id);
   }
 
-  if (figures.length > 0) {
-    return Math.min(...figures);
-  }
+  const smaps = await runInContainer(['sh', '-c', FIRECRACKER_MEMORY_SCRIPT]);
 
-  const info = await readInfo();
-
-  return Math.floor((info.ramUsedMib - usedBefore) / count);
+  return readSmallestOwnedMib(ids, parseFirecrackerMemory(smaps.stdout));
 }
 
 // An imp that fits the budget but not its boot reserve (a share of its
@@ -263,9 +262,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
       createMs.push(ms);
     }
 
-    await Bun.sleep(3000);
-
-    perImp = await readPerImpMib(measured, start.ramUsedMib);
+    perImp = await readPerImpMib(measured);
 
     const fit = Math.floor(config.ramBudgetMib / perImp);
 
