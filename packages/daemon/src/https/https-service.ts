@@ -114,15 +114,22 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
     publicListeners?.setCertificate(certificate);
   };
 
-  // the last tailnet IP tailscaled reported, the IP the A records were last
-  // set to, the one checked for a conflicting `tailscale serve`, and whether
-  // stop ran: a renewal that finishes later must not start listeners again
+  // the tailnet IP, the records' IP and their last failure (logged once),
+  // the IP checked for `tailscale serve`, and whether stop ran: a renewal
+  // that finishes later must not start listeners again
   const state: {
     tailnetIp: string | null;
     recordsIp: string | null;
+    recordsError: string | null;
     checkedServeFor: string | null;
     stopped: boolean;
-  } = { tailnetIp: null, recordsIp: null, checkedServeFor: null, stopped: false };
+  } = {
+    tailnetIp: null,
+    recordsIp: null,
+    recordsError: null,
+    checkedServeFor: null,
+    stopped: false,
+  };
 
   const tickers: Ticker[] = [];
 
@@ -142,10 +149,17 @@ export function createHttpsService(deps: HttpsServiceDeps): HttpsService {
       await deps.dns.setA(`*.${domain}`, ip);
 
       state.recordsIp = ip;
+      state.recordsError = null;
 
       log(`impd: https: ${domain} and *.${domain} point at ${ip}`);
     } catch (error) {
-      log(`impd: https: cannot point ${domain} at ${ip}: ${readErrorMessage(error)}`);
+      const message = `impd: https: cannot point ${domain} at ${ip}: ${readErrorMessage(error)}`;
+
+      if (message !== state.recordsError) {
+        state.recordsError = message;
+
+        log(message);
+      }
     }
   };
 

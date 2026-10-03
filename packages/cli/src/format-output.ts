@@ -250,8 +250,9 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
   ].join('\n');
 }
 
-// `imp info`'s https line: the domain, and whether the DNS API token reads
-// now. No line from an impd before it.
+// `imp info`'s https line: the domain, and whether the DNS API token file
+// reads now. A token from the env has no check, and says nothing: only the
+// provider can tell whether a token is good. No line from an impd before it.
 export function formatHttps(info: SystemInfo['https']): string[][] {
   if (info === undefined) {
     return [];
@@ -267,7 +268,9 @@ export function formatHttps(info: SystemInfo['https']): string[][] {
     return [['https', info.domain]];
   }
 
-  const state = token.isOk ? 'DNS token ok' : `ERROR: ${token.error ?? 'the DNS token fails'}`;
+  const state = token.isOk
+    ? 'DNS token file readable'
+    : `ERROR: ${token.error ?? 'the DNS token file fails'}`;
 
   return [['https', `${info.domain}, ${state}`]];
 }

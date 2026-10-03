@@ -33,8 +33,9 @@ const PassStatusSchema = z.object({
 const HttpsInfoSchema = z.object({
   domain: z.string(),
 
-  // read as system info is asked for; null for a provider without a
-  // token. An error names the token file, never the token
+  // the token file, read as system info is asked for; null for a token
+  // from the env or a provider without one. An error names the file,
+  // never the token
   dnsToken: PassStatusSchema.nullable(),
 });
 

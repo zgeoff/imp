@@ -203,8 +203,9 @@ test('expose makes an imp public with a credential shown once, and unexpose ends
   expect(imp.public).toEqual({ auth: 'basic' });
   expect(urls.public).toBe('https://web.imp.example.com');
   expect(info.public).toEqual({ ip: '203.0.113.7', imps: 1, records: null });
-  expect(info.https?.domain).toBe('imp.example.com');
-  expect(info.https?.dnsToken).toMatchObject({ isOk: true, error: null });
+
+  // a token from the env has nothing to check
+  expect(info.https).toEqual({ domain: 'imp.example.com', dnsToken: null });
 
   // only a hash is kept
   const row = await ctx.db

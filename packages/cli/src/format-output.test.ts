@@ -365,7 +365,7 @@ test('imp info names a DNS token that fails as an error, with its file', () => {
 
   expect(
     formatHttps({ domain: 'imp.example.com', dnsToken: { isOk: true, error: null, at } }),
-  ).toEqual([['https', 'imp.example.com, DNS token ok']]);
+  ).toEqual([['https', 'imp.example.com, DNS token file readable']]);
 
   expect(
     formatHttps({

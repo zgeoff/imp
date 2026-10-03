@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { readErrorMessage } from '../../read-error-message';
 
+const TOKEN_PATTERN = /^[\w.~+/-]+$/;
+
 // Where the DNS provider's API token comes from: IMP_DNS_API_TOKEN, fixed at
 // start, or IMP_DNS_API_TOKEN_FILE, read again at each use so a rotated
 // token works without a restart
@@ -8,7 +10,7 @@ export type DnsTokenSource =
   | { readonly kind: 'value'; readonly value: string }
   | { readonly kind: 'file'; readonly path: string };
 
-// whether the token reads now; a value from the env always does
+// whether the token file reads now, and holds a token
 export interface DnsTokenStatus {
   readonly isOk: boolean;
 
@@ -22,13 +24,17 @@ export interface DnsToken {
   readonly read: () => Promise<string>;
 
   // reads the file again, for system info: a status kept from the last DNS
-  // call would say nothing before the first, and stay stale between them
-  readonly check: () => Promise<DnsTokenStatus>;
+  // call would say nothing before the first, and stay stale between them.
+  // null for a value from the env, which has nothing to check.
+  readonly check: (() => Promise<DnsTokenStatus>) | null;
 }
 
 export function createDnsToken(source: DnsTokenSource, now: () => number): DnsToken {
-  const read = (): Promise<string> =>
-    source.kind === 'value' ? Promise.resolve(source.value) : readTokenFile(source.path);
+  if (source.kind === 'value') {
+    return { read: () => Promise.resolve(source.value), check: null };
+  }
+
+  const read = (): Promise<string> => readTokenFile(source.path);
 
   return {
     read,
@@ -63,10 +69,13 @@ async function readTokenFile(path: string): Promise<string> {
     throw new Error(`the DNS API token file ${path} is empty`);
   }
 
-  // `IMP_DNS_API_TOKEN=...` pasted into the file, or two tokens: either
-  // would go to the provider as a bad token
-  if (/[\s=]/.test(token)) {
-    throw new Error(`the DNS API token file ${path} holds whitespace or '=' inside the token`);
+  // anything else is a mistake (a pasted `KEY=...` line, two tokens, a
+  // UTF-16 file), and a byte a header refuses puts the token into fetch's
+  // own error message
+  if (!TOKEN_PATTERN.test(token)) {
+    throw new Error(
+      `the DNS API token file ${path} holds characters no token has, such as whitespace, '=' or a NUL byte`,
+    );
   }
 
   return token;

@@ -34,6 +34,9 @@ interface ServiceTestOptions {
   // public mode at this IP, and the public imps
   readonly publicIp?: string;
   readonly publicImps?: readonly string[];
+
+  // how often the tailnet IP is read
+  readonly addressIntervalMs?: number;
 }
 
 function buildConfig(publicIp?: string): HttpsConfig {
@@ -156,6 +159,9 @@ function setup(options: ServiceTestOptions) {
       return Promise.resolve(found);
     },
     publicAddress: '127.0.0.1',
+    ...(options.addressIntervalMs !== undefined && {
+      addressIntervalMs: options.addressIntervalMs,
+    }),
   });
 
   return {
@@ -379,6 +385,53 @@ test('with no DNS token, nothing serves on the HTTPS, redirect or public ports, 
 
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a records failure that repeats is logged once, until it changes', async () => {
+  const recording = createRecordingDns();
+  const failure = { message: 'DNS down' as string | null };
+  let attempts = 0;
+
+  const dns: DnsProvider = {
+    ...recording.dns,
+    setA: async (fqdn, ip, owner) => {
+      attempts += 1;
+
+      if (failure.message !== null) {
+        throw new Error(failure.message);
+      }
+
+      await recording.dns.setA(fqdn, ip, owner);
+    },
+  };
+
+  await using ctx = setup({
+    dns,
+    tailnetIp: TAILNET_IP,
+    addressIntervalMs: 5,
+    issue: () => Promise.reject(new Error('the CA is down')),
+  });
+
+  const readPointLogs = () => ctx.logs.filter((line) => line.includes('point'));
+
+  ctx.service.start();
+
+  await waitFor(() => attempts >= 5);
+
+  failure.message = 'DNS still down';
+  attempts = 0;
+
+  await waitFor(() => attempts >= 5);
+
+  failure.message = null;
+
+  await waitFor(() => recording.records.get(DOMAIN) === TAILNET_IP);
+
+  expect(readPointLogs()).toEqual([
+    `impd: https: cannot point imp.test at ${TAILNET_IP}: DNS down`,
+    `impd: https: cannot point imp.test at ${TAILNET_IP}: DNS still down`,
+    `impd: https: imp.test and *.imp.test point at ${TAILNET_IP}`,
+  ]);
 });
 
 test('the domain points at the tailnet IP, and the listeners bind it', async () => {

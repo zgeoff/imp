@@ -38,6 +38,16 @@ function startFakeCloudflare() {
   const tokens = new Set([TOKEN]);
 
   const bearers: string[] = [];
+
+  // a zone lookup of this name with this token waits for `release`;
+  // `arrived` says it came
+  const holds: {
+    name: string;
+    bearer: string;
+    arrived: () => void;
+    release: Promise<void>;
+  }[] = [];
+
   let nextId = 1;
 
   // how the list pages: a cap below what was asked, and whether
@@ -65,6 +75,17 @@ function startFakeCloudflare() {
       const recordId = url.pathname.split('/').at(4);
 
       if (!url.pathname.includes('/dns_records')) {
+        const hold = holds.find(
+          (item) => item.name === url.searchParams.get('name') && item.bearer === bearer,
+        );
+
+        if (hold !== undefined) {
+          holds.splice(holds.indexOf(hold), 1);
+          hold.arrived();
+
+          await hold.release;
+        }
+
         return buildReply(zones.filter((zone) => zone.name === url.searchParams.get('name')));
       }
 
@@ -130,6 +151,7 @@ function startFakeCloudflare() {
     calls,
     tokens,
     bearers,
+    holds,
     paging,
     url: `http://127.0.0.1:${String(server.port)}`,
   };
@@ -378,6 +400,68 @@ test('a token it cannot read fails the request before any call', async () => {
 
   expect(readErrorMessage(error)).toContain('/run/imp/dns/token is empty');
   expect(fake.calls).toEqual([]);
+});
+
+test('a zone found with the old token, after a new one took over, is not kept', async () => {
+  const rotated = 'cf-test-token-race';
+  const current = { token: TOKEN };
+  const arrived = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+
+  fake.tokens.add(rotated);
+
+  fake.holds.push({
+    name: 'example.com',
+    bearer: TOKEN,
+    arrived: () => {
+      arrived.resolve(undefined);
+    },
+    release: release.promise,
+  });
+
+  const provider = createCloudflareProvider({
+    readToken: () => Promise.resolve(current.token),
+    apiUrl: fake.url,
+  });
+
+  // the old token's lookup is on the wire when the token changes, and a
+  // request with the new one runs to the end
+  const slow = provider.setA('race.example.com', '100.64.0.7');
+
+  await arrived.promise;
+
+  current.token = rotated;
+
+  await provider.setA('other-race.example.com', '100.64.0.8');
+
+  release.resolve(undefined);
+
+  await slow;
+
+  // the next use of the name asks for its zone again, with the new token
+  fake.calls.length = 0;
+
+  await provider.setA('race.example.com', '100.64.0.9');
+
+  fake.tokens.delete(rotated);
+
+  expect(fake.calls).toContain('GET /zones?name=race.example.com');
+});
+
+test('a fetch error never holds the token', async () => {
+  const bad = `${TOKEN}\u0000`;
+
+  const provider = createCloudflareProvider({
+    readToken: () => Promise.resolve(bad),
+    apiUrl: fake.url,
+  });
+
+  const error = await readRejection(provider.setA('imp.example.com', '100.64.0.7'));
+
+  const message = readErrorMessage(error);
+
+  expect(error).not.toBeNull();
+  expect(message).not.toContain(TOKEN);
 });
 
 test('it waits for the TXT values on the zone nameservers', async () => {
