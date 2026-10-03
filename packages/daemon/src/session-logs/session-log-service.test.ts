@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ResumeFrom, SessionOutput } from '@imp/api';
@@ -15,7 +15,7 @@ type LogsView = Readonly<{ logs: SessionLogs; imp: SessionLogImp }>;
 
 const GEN_A = 'a'.repeat(32);
 const GEN_B = 'b'.repeat(32);
-const BOOT = 'boot-1';
+const BOOT = '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11';
 const dirs: string[] = [];
 
 // each test's services: their open files close before the directories go
@@ -117,6 +117,7 @@ function buildOutput(
 const LIMITS: SessionLogLimits = {
   generationMaxBytes: 1024,
   impMaxBytes: 4096,
+  impMaxLive: 8,
   maxAgeMs: 1000,
 };
 
@@ -148,6 +149,9 @@ function setupLogs(
         : Promise.resolve(),
     now: () => clock.now,
     log: () => {},
+
+    // the restart case waits for a flush; it need not wait a second
+    commitDelayMs: 10,
     openTap: (_vsockPath, session, resumeFrom) => {
       calls.push({ session, resumeFrom });
 
@@ -452,7 +456,7 @@ test('a stopped imp ends its logs, and the sweep removes them past their age', a
 });
 
 test('past the imp limit the oldest ended log goes first', async () => {
-  const ctx = setupLogs({ limits: { generationMaxBytes: 1024, impMaxBytes: 1000, maxAgeMs: 1e9 } });
+  const ctx = setupLogs({ limits: { ...LIMITS, impMaxBytes: 1000, maxAgeMs: 1e9 } });
   const first = createFakeTap(buildOutput(GEN_A, 0));
 
   ctx.answers.push(first);
@@ -542,4 +546,163 @@ test('a restarted impd taps a live log on from its end', async () => {
 
   expect(before.text).toBe('before');
   expect(after.text).toBe('+after');
+});
+
+test("a forged generation never names a path outside the imp's logs", async () => {
+  const ctx = setupLogs();
+  const errors: unknown[] = [];
+
+  for (const generation of ['../../../evil', '..', 'A'.repeat(32), `${'a'.repeat(31)}/`]) {
+    ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: generation, boot_id: BOOT });
+
+    const refused = await ctx.logs
+      .readLog(ctx.imp, { session: 'main', executionGeneration: generation, from: 0 })
+      .catch((error: unknown) => error);
+
+    errors.push(refused);
+  }
+
+  await Bun.sleep(20);
+
+  expect(ctx.calls).toEqual([]);
+  expect(readdirSync(ctx.root)).toEqual([]);
+
+  expect(errors).toMatchObject([
+    { code: 'NOT_FOUND' },
+    { code: 'NOT_FOUND' },
+    { code: 'NOT_FOUND' },
+    { code: 'NOT_FOUND' },
+  ]);
+});
+
+test('a meta on disk that names another generation is not read', async () => {
+  const ctx = setupLogs();
+  const dir = join(ctx.imp.sessionLogsDir, GEN_A);
+
+  mkdirSync(dir, { recursive: true });
+
+  writeFileSync(
+    join(dir, 'meta.json'),
+    JSON.stringify({
+      version: 1,
+      session: 'main',
+      executionGeneration: '../../evil',
+      bootId: BOOT,
+      startedAt: 1,
+      origin: 0,
+      segments: [],
+      state: 'live',
+    }),
+  );
+
+  expect(ctx.logs.listLogs(ctx.imp)).toEqual([]);
+
+  ctx.logs.observe(ctx.imp, []);
+
+  await Bun.sleep(20);
+
+  expect(readdirSync(ctx.imp.sessionLogsDir)).toEqual([GEN_A]);
+});
+
+test('a forged agent that lists many logged generations gets at most the cap of logs', async () => {
+  const ctx = setupLogs();
+
+  const generations = Array.from({ length: 30 }, (_, index) =>
+    index.toString(16).padStart(32, '0'),
+  );
+
+  ctx.answers.push(...generations.map(() => createFakeTap(buildOutput(GEN_A, 0))));
+
+  ctx.logs.observe(
+    ctx.imp,
+    generations.map((generation) => buildSession(generation)),
+  );
+
+  await Bun.sleep(50);
+
+  expect(ctx.logs.listLogs(ctx.imp)).toHaveLength(LIMITS.impMaxLive);
+  expect(ctx.calls).toHaveLength(LIMITS.impMaxLive);
+});
+
+test('past the imp limit with only live logs left, the newest stops with imp_limit', async () => {
+  const ctx = setupLogs({ limits: { ...LIMITS, generationMaxBytes: 200, impMaxBytes: 150 } });
+  const first = createFakeTap(buildOutput(GEN_A, 0));
+  const second = createFakeTap(buildOutput(GEN_B, 0));
+
+  ctx.answers.push(first);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the tap', () => ctx.calls.length === 1);
+
+  first.write('a'.repeat(100));
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 100);
+
+  ctx.answers.push(second);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A), buildSession(GEN_B)]);
+
+  await waitFor('the tap', () => ctx.calls.length === 2);
+
+  // segments of 100: each log holds one, and together they pass 150
+  second.write('b'.repeat(100));
+
+  await waitFor('the stop', () => findLog(ctx, GEN_B)?.stopped === 'imp_limit');
+
+  expect(second.state.closed).toBe(true);
+  expect(findLog(ctx, GEN_A)?.stopped).toBeUndefined();
+
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A), buildSession(GEN_B)]);
+
+  await Bun.sleep(20);
+
+  expect(ctx.calls).toHaveLength(2);
+});
+
+test('a destroy while a log is being made leaves no directory behind', async () => {
+  const ctx = setupLogs();
+
+  ctx.answers.push(createFakeTap(buildOutput(GEN_A, 0)));
+  ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: GEN_A, boot_id: BOOT });
+
+  // the destroy: forget, then remove the imp's directory
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  rmSync(ctx.imp.sessionLogsDir, { recursive: true, force: true });
+
+  await Bun.sleep(50);
+
+  expect(existsSync(ctx.imp.sessionLogsDir)).toBe(false);
+  expect(ctx.calls).toEqual([]);
+});
+
+test('a deleted live log is not tapped again by a restarted impd', async () => {
+  const ctx = setupLogs();
+  const tap = createFakeTap(buildOutput(GEN_A, 0));
+
+  ctx.answers.push(tap);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the tap', () => ctx.calls.length === 1);
+
+  expect(ctx.logs.deleteLogs(ctx.imp, { session: 'main' })).toBe(1);
+
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  const next = setupLogs({ dir: ctx.root });
+
+  next.answers.push(createFakeTap(buildOutput(GEN_A, 0)));
+  next.logs.observe(next.imp, [buildSession(GEN_A)]);
+
+  await Bun.sleep(30);
+
+  expect(next.calls).toEqual([]);
+  expect(next.logs.listLogs(next.imp)).toEqual([]);
+
+  // once the generation is gone, so is its tombstone
+  next.logs.observe(next.imp, []);
+
+  await waitFor(
+    'the tombstone to go',
+    () => !existsSync(join(next.imp.sessionLogsDir, '.deleted', GEN_A)),
+  );
 });

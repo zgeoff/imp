@@ -57,11 +57,14 @@ has `logs`, `readLog` and `deleteLog`.
 | `IMP_SESSION_LOG_MAX_MIB`      | 16      | One generation's log. It keeps at least half of it, the newest output; older segments go.     |
 | `IMP_SESSION_LOG_IMP_MAX_MIB`  | 64      | One imp's logs together. Ended generations go first, oldest first; then the largest live one. |
 | `IMP_SESSION_LOG_MAX_AGE_DAYS` | 7       | An ended generation's log goes this long after it ended.                                      |
+| `IMP_SESSION_LOG_IMP_MAX_LIVE` | 8       | Live logs per imp. A session past it runs unlogged.                                           |
 
 A log writes in segments of half its bound, and each new segment checks the host's free space
 against `IMP_DISK_RESERVE_GIB`, as every other write does
 ([disk reserve](../architecture/storage.md#disk-sizes)). A segment the reserve refuses stops the log
-for good: `stopped: 'disk_full'`, and the session runs on unlogged.
+for good: `stopped: 'disk_full'`, and the session runs on unlogged. When an imp's logs pass
+`IMP_SESSION_LOG_IMP_MAX_MIB` with no ended log left to remove and every live log down to one
+segment, its newest live log stops the same way: `stopped: 'imp_limit'`.
 
 A logged session's program waits for impd, as on a slow terminal, rather than lose bytes: the agent
 holds its output while its 256 KiB ring could drop bytes impd has not read, for at most 5 s at a
@@ -91,8 +94,11 @@ Output can hold secrets: a token a program prints, a password typed at a prompt 
   Listing the logs needs `read`; the list holds no output.
 - The log lives under the imp's directory on the host, `imps/<id>/session-logs/`, mode 0700, which
   the guest cannot reach. It goes nowhere else: no backup, fork, template or move carries it.
-- `imp sessions log-rm`, the age bound and `imp rm` delete it. A live generation that is deleted is
-  not logged again for as long as impd runs; after an impd restart, impd logs it again from the
-  agent's ring, at most its last 256 KiB.
+- `imp sessions log-rm`, the age bound and `imp rm` delete it. A live generation that is deleted
+  leaves a tombstone, `session-logs/.deleted/<generation>`, so no impd logs it again, a restarted
+  one included; the tombstone goes once the generation has ended.
+- impd does not trust the guest: every generation, boot id and session name an agent reports must
+  have the form the real agent gives it before impd uses it, and a log's directory must be a child
+  of the imp's `session-logs/`.
 
 Start a session without `log` when its output should never reach the host's disk.

@@ -31,6 +31,7 @@ test('it fills every setting from its default when the env is empty', () => {
     sessionLog: {
       generationMaxBytes: 16 * 1024 ** 2,
       impMaxBytes: 64 * 1024 ** 2,
+      impMaxLive: 8,
       maxAgeMs: 7 * 86_400_000,
     },
     dockerHost: null,

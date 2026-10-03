@@ -41,8 +41,9 @@ export const SessionLogSchema = z
     // the log holds every byte of a generation that ended with an exit
     complete: z.boolean(),
 
-    // logging stopped early: the host's disk reached its reserve
-    stopped: z.literal('disk_full').optional(),
+    // logging stopped early: the host's disk reached its reserve, or the
+    // imp's logs reached their bound (IMP_SESSION_LOG_IMP_MAX_MIB)
+    stopped: z.enum(['disk_full', 'imp_limit']).optional(),
     startedAt: z.date(),
     endedAt: z.date().optional(),
   })

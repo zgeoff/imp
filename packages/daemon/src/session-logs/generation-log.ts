@@ -3,6 +3,11 @@ import { mkdir, open, rename, stat, truncate, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as z from 'zod';
+import {
+  AgentBootIdSchema,
+  AgentGenerationSchema,
+  AgentSessionNameSchema,
+} from '../agent-client/agent-ids';
 import { readLogBounds } from './plan-log-read';
 import type { LogBounds, LogSegment } from './plan-log-read';
 
@@ -19,9 +24,9 @@ const OffsetSchema = z.int().nonnegative();
 
 const GenerationMetaSchema = z.object({
   version: z.literal(1),
-  session: z.string(),
-  executionGeneration: z.string(),
-  bootId: z.string(),
+  session: AgentSessionNameSchema,
+  executionGeneration: AgentGenerationSchema,
+  bootId: AgentBootIdSchema,
   startedAt: z.int(),
 
   // where the log began while it holds no segment
@@ -35,8 +40,9 @@ const GenerationMetaSchema = z.object({
   end: OffsetSchema.optional(),
   exitCode: z.int().nullable().optional(),
 
-  // logging stopped before the generation ended
-  stopped: z.literal('disk_full').optional(),
+  // logging stopped before the generation ended: the host disk reached its
+  // reserve, or the imp's logs their bound
+  stopped: z.enum(['disk_full', 'imp_limit']).optional(),
 });
 
 type StoredMeta = z.infer<typeof GenerationMetaSchema>;
@@ -67,7 +73,7 @@ export interface GenerationLog {
   // false when no segment could go: one is always kept
   readonly removeOldestSegment: () => Promise<boolean>;
   readonly finish: (end: Readonly<GenerationEnd>) => Promise<void>;
-  readonly stop: (reason: 'disk_full') => Promise<void>;
+  readonly stop: (reason: StopReason) => Promise<void>;
 
   // flushes what was appended now, not at the next commit
   readonly commit: () => Promise<void>;
@@ -88,7 +94,12 @@ export interface GenerationLogOptions {
   readonly requireRoom: (bytes: number) => Promise<void>;
   readonly now: () => number;
   readonly log: (message: string) => void;
+
+  // how long appended bytes wait for their flush; a test shortens it
+  readonly commitDelayMs?: number;
 }
+
+type StopReason = NonNullable<StoredMeta['stopped']>;
 
 type MetaChange = Readonly<Partial<Omit<StoredMeta, 'segments'>>>;
 
@@ -286,8 +297,14 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     state.file = null;
     state.current = null;
 
-    if (file !== null) {
+    if (file === null) {
+      return;
+    }
+
+    // closed even when the flush fails: no handle outlives its log
+    try {
       await file.datasync();
+    } finally {
       await file.close();
     }
   };
@@ -315,7 +332,7 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     state.timer = setTimeout(() => {
       state.timer = null;
       void runCommit();
-    }, COMMIT_DELAY_MS);
+    }, options.commitDelayMs ?? COMMIT_DELAY_MS);
 
     state.timer.unref();
   };
@@ -353,8 +370,16 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
     // a file the meta never counted is a crash's leftover
     await removeQuietly(path);
 
-    state.file = await open(path, 'wx', 0o600);
+    const file = await open(path, 'wx', 0o600);
 
+    // abandoned while it opened: nothing may hold the file
+    if (state.abandoned) {
+      await file.close();
+
+      throw new Error('session log: abandoned');
+    }
+
+    state.file = file;
     state.current = { start, length: 0 };
 
     meta.segments.push(state.current);
@@ -407,8 +432,11 @@ function buildGenerationLog(options: GenerationLogOptions, initial: GenerationMe
 
     Object.assign(meta, change);
 
-    await writeMeta();
-    await stopFile();
+    try {
+      await writeMeta();
+    } finally {
+      await stopFile();
+    }
   };
 
   return {

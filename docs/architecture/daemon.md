@@ -573,7 +573,18 @@ torn tail never reads back as bytes. A segment is half of `IMP_SESSION_LOG_MAX_M
 at least that half of its newest output; each new segment asks the
 [disk budget](./storage.md#disk-sizes) for its size, and a refusal stops the log
 (`stopped: 'disk_full'`). Past `IMP_SESSION_LOG_IMP_MAX_MIB` per imp, ended logs go oldest first,
-then the largest live log's oldest segment. A sweep every minute removes ended logs past
+then the largest live log's oldest segment; with every live log down to one segment, the newest live
+log stops (`stopped: 'imp_limit'`). An imp has at most `IMP_SESSION_LOG_IMP_MAX_LIVE` live logs, as
+a forged agent can list any number of logged generations. A deleted live log leaves a tombstone,
+`session-logs/.deleted/<generation>`, which keeps every impd from tapping it again and goes once the
+generation is gone. A destroy marks the imp forgotten first, so a tap still being set up writes
+nothing after the directory is removed.
+
+**Trust.** The guest is not trusted. Every generation, boot id and session name an agent reports
+goes through the form the real agent gives it (32 lowercase hex characters, a lowercase UUID or
+empty, the session name rule) before impd uses it; `activity` drops a session that fails, and a
+STARTED that fails fails its stream. A log's directory is checked once more when impd builds it, and
+must resolve to a child of the imp's `session-logs/`. A sweep every minute removes ended logs past
 `IMP_SESSION_LOG_MAX_AGE_DAYS` and ends the live logs of imps whose VM is gone, as after an impd
 restart.
 

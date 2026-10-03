@@ -17,10 +17,15 @@ import {
 import type { GenerationEnd, GenerationLog, GenerationLogOptions } from './generation-log';
 import {
   findGenerationDir,
+  hasTombstone,
+  listTombstones,
   readImpMetas,
   readSessionLogRange,
+  removeEmptyDirs,
   removeGenerationDir,
+  removeTombstone,
   toApiSessionLog,
+  writeTombstone,
 } from './session-log-files';
 import type { SessionLogReadRequest } from './session-log-files';
 
@@ -32,8 +37,12 @@ export interface SessionLogLimits {
   // one generation's log, of which it keeps at least half the newest
   readonly generationMaxBytes: number;
 
-  // an imp's logs together; ended generations go first, oldest first
+  // an imp's logs together; ended generations go first, oldest first, then
+  // the live logs' oldest segments, then the newest live log stops
   readonly impMaxBytes: number;
+
+  // live logs per imp: a forged agent can list any number of generations
+  readonly impMaxLive: number;
 
   // an ended generation's log goes this long after it ended
   readonly maxAgeMs: number;
@@ -83,6 +92,9 @@ interface SessionLogDeps {
   readonly requireRoom: (bytes: number) => Promise<void>;
   readonly now: () => number;
   readonly log: (message: string) => void;
+
+  // how long appended bytes wait for their flush; a test shortens it
+  readonly commitDelayMs?: number;
   readonly openTap?: (
     vsockPath: string,
     session: string,
@@ -100,6 +112,9 @@ interface LiveLog {
 }
 
 const SEGMENTS_PER_LOG = 2;
+
+// how often an imp at its cap of live logs says so
+const CAP_NOTICE_MS = 60_000;
 
 // NO_SESSION's data in the API's shape: the generation that last left the
 // name, with its final end and exit code
@@ -140,6 +155,15 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   // imps whose directory this impd has read since it started
   const recovered = new Set<string>();
 
+  // generations whose log is being made, so the cap counts them
+  const creating = new Set<string>();
+
+  // destroyed imps: a tap still on its way writes nothing for them
+  const forgotten = new Set<string>();
+
+  // when each imp last logged a refusal for its cap
+  const capNotices = new Map<string, number>();
+
   const buildOptions = (imp: SessionLogImp, generation: string): GenerationLogOptions => ({
     dir: findGenerationDir(imp.sessionLogsDir, generation),
     segmentBytes,
@@ -147,6 +171,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     requireRoom: deps.requireRoom,
     now: deps.now,
     log: deps.log,
+    ...(deps.commitDelayMs !== undefined && { commitDelayMs: deps.commitDelayMs }),
   });
 
   const readLive = (impId: string) => (generation: string) =>
@@ -208,6 +233,12 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
         const log = await loadGenerationLog(options, meta);
 
+        if (forgotten.has(imp.id)) {
+          log.abandon();
+
+          return;
+        }
+
         setLive(imp, meta.executionGeneration, meta.session, log);
 
         if (meta.stopped !== undefined) {
@@ -217,8 +248,21 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     }
   };
 
+  const stopForLimit = async (imp: SessionLogImp, entry: LiveLog): Promise<void> => {
+    deps.log(
+      `impd: imp ${imp.id}: stopped the log of session ${entry.session}: its logs reached IMP_SESSION_LOG_IMP_MAX_MIB`,
+    );
+
+    dropped.add(entry.key);
+
+    stopTap(entry.key);
+
+    await entry.log.stop('imp_limit');
+  };
+
   // ended logs go oldest first; then the largest live log gives up its
-  // oldest segment
+  // oldest segment; when every live log is down to one, the newest still
+  // written stops, and stays as it is until its generation ends
   const applyImpLimit = async (imp: SessionLogImp): Promise<void> => {
     const countImpBytes = () =>
       readImpMetas(imp.sessionLogsDir, readLive(imp.id)).reduce(
@@ -256,11 +300,85 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       const isRemoved = await largest.log.removeOldestSegment();
 
       if (!isRemoved) {
+        // the newest by start, and of two that started at once the later one
+        const newest = listLive(imp.id)
+          .filter((entry) => !dropped.has(entry.key))
+          .reduce<LiveLog | undefined>(
+            (found, entry) =>
+              found === undefined ||
+              entry.log.readMeta().startedAt >= found.log.readMeta().startedAt
+                ? entry
+                : found,
+            undefined,
+          );
+
+        if (newest !== undefined) {
+          await stopForLimit(imp, newest);
+        }
+
         return;
       }
 
       total = countImpBytes();
     }
+  };
+
+  const countCreating = (impId: string) =>
+    [...creating].filter((key) => key.startsWith(`${impId}/`)).length;
+
+  // a log for a generation impd has not logged: null when the imp has its
+  // cap of live logs, the generation was deleted, or the imp is destroyed
+  const createLiveLog = async (
+    imp: SessionLogImp,
+    generation: string,
+    session: string,
+    bootId: string,
+  ): Promise<LiveLog | null> => {
+    const key = findKey(imp.id, generation);
+
+    if (forgotten.has(imp.id) || hasTombstone(imp.sessionLogsDir, generation)) {
+      return null;
+    }
+
+    if (listLive(imp.id).length + countCreating(imp.id) >= deps.limits.impMaxLive) {
+      const last = capNotices.get(imp.id) ?? 0;
+
+      if (deps.now() - last >= CAP_NOTICE_MS) {
+        capNotices.set(imp.id, deps.now());
+
+        deps.log(
+          `impd: imp ${imp.id}: logs no more sessions: it has ${String(deps.limits.impMaxLive)} live logs`,
+        );
+      }
+
+      return null;
+    }
+
+    creating.add(key);
+
+    let log: GenerationLog;
+
+    try {
+      log = await createGenerationLog(buildOptions(imp, generation), {
+        session,
+        executionGeneration: generation,
+        bootId,
+      });
+    } finally {
+      creating.delete(key);
+    }
+
+    // destroyed while the directory was made: it goes again
+    if (forgotten.has(imp.id)) {
+      log.abandon();
+
+      removeGenerationDir(imp.sessionLogsDir, generation);
+      removeEmptyDirs(imp.sessionLogsDir);
+
+      return null;
+    }
+
+    return setLive(imp, generation, session, log);
   };
 
   const stopForFullDisk = async (imp: SessionLogImp, entry: LiveLog): Promise<void> => {
@@ -339,15 +457,18 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     taps.set(key, tap);
 
-    const log = await createGenerationLog(buildOptions(imp, output.executionGeneration), {
-      session: entry.session,
-      executionGeneration: output.executionGeneration,
-      bootId: output.bootId,
-    });
+    const next = await createLiveLog(imp, output.executionGeneration, entry.session, output.bootId);
 
-    log.setOrigin(output.offset);
+    if (next === null || taps.get(key) !== tap) {
+      taps.delete(key);
+      tap.close();
 
-    await runTap(imp, setLive(imp, output.executionGeneration, entry.session, log), tap);
+      return;
+    }
+
+    next.log.setOrigin(output.offset);
+
+    await runTap(imp, next, tap);
   };
 
   // NO_SESSION or BAD_REQUEST (no longer logged): the generation ended
@@ -438,13 +559,21 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
           return;
         }
 
-        const log = await createGenerationLog(buildOptions(imp, generation), {
-          session: session.name,
-          executionGeneration: generation,
-          bootId,
-        });
+        const created = await createLiveLog(imp, generation, session.name, bootId);
 
-        entry = setLive(imp, generation, session.name, log);
+        if (created === null) {
+          taps.delete(key);
+
+          return;
+        }
+
+        entry = created;
+      }
+
+      if (forgotten.has(imp.id)) {
+        taps.delete(key);
+
+        return;
       }
 
       await openEntryTap(imp, entry);
@@ -473,6 +602,11 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     for (const entry of listLive(imp.id)) {
       await writeEnd(entry, {});
     }
+
+    // the VM is gone, and every generation it ran with it
+    for (const generation of listTombstones(imp.sessionLogsDir)) {
+      removeTombstone(imp.sessionLogsDir, generation);
+    }
   };
 
   const removeExpired = (imp: SessionLogImp, cutoff: number): void => {
@@ -493,6 +627,13 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         await loadImpLogs(imp);
 
         const listed = new Set(sessions.map((session) => session.execution_generation));
+
+        // a deleted generation that is gone can never be tapped again
+        for (const generation of listTombstones(imp.sessionLogsDir)) {
+          if (!listed.has(generation)) {
+            removeTombstone(imp.sessionLogsDir, generation);
+          }
+        }
 
         for (const entry of listLive(imp.id)) {
           if (!listed.has(entry.generation) && !isTapped(entry.key)) {
@@ -516,11 +657,18 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     endImp: stopImpLogs,
 
     forgetImp: (impId) => {
+      forgotten.add(impId);
+
       for (const entry of listLive(impId)) {
         stopTap(entry.key);
 
         entry.log.abandon();
         live.delete(entry.key);
+      }
+
+      // a tap on its way finds its slot gone and closes
+      for (const key of [...taps.keys()].filter((each) => each.startsWith(`${impId}/`))) {
+        stopTap(key);
       }
 
       recovered.delete(impId);
@@ -552,6 +700,9 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
           entry.log.abandon();
           live.delete(key);
           dropped.add(key);
+
+          // a restarted impd must not tap it again
+          writeTombstone(imp.sessionLogsDir, meta.executionGeneration);
         }
 
         removeGenerationDir(imp.sessionLogsDir, meta.executionGeneration);
