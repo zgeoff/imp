@@ -55,6 +55,7 @@ export function createImpPresenter(
       name: imp.name,
       image: imageName,
       state: imp.state,
+      kind: imp.kind,
       vcpus: imp.vcpus,
       memoryMib: imp.memoryMib,
       diskMib: Math.ceil(imp.diskBytes / MIB),

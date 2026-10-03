@@ -103,8 +103,8 @@ export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';
 export type { ForbiddenReason } from './imp-errors';
 export { isImpAllowed } from './imp-patterns';
-export { ImpSchema, ImpStateSchema } from './imp-schema';
-export type { Imp, ImpState, OutdatedPart } from './imp-schema';
+export { ImpKindSchema, ImpSchema, ImpStateSchema } from './imp-schema';
+export type { Imp, ImpKind, ImpState, OutdatedPart } from './imp-schema';
 export { CONSOLE_SHELL } from './login-shell';
 
 export {

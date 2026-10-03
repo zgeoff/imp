@@ -28,12 +28,13 @@ from ([releasing](../../RELEASING.md#what-a-release-ships)).
 ## Build an image
 
 `imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
-uploads it to impd, which builds it with BuildKit on the host Docker and tags the result
-`imp/<name>`. `--file <path>` names a Dockerfile inside the context. A later image can start FROM an
-image you built this way on Docker's containerd image store, where impd pins it by its content
-digest (Docker 29.8 builds from that pin, 29.7 does not; see the digest the build uses, below). The
-classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The published base,
-`ghcr.io/zgeoff/imp-base` by digest as `images/dev` names it, works on both.
+uploads it to impd, which builds it with BuildKit in a throwaway builder imp
+([isolated builds](#isolated-builds)) and adds the result as the image `<name>`. `--file <path>`
+names a Dockerfile inside the context. A later image can start FROM an image you built this way on
+Docker's containerd image store, where impd pins it by its content digest (Docker 29.8 builds from
+that pin, 29.7 does not; see the digest the build uses, below). The classic store refuses it
+([#156](https://github.com/zgeoff/imp/issues/156)). The published base, `ghcr.io/zgeoff/imp-base` by
+digest as `images/dev` names it, works on both.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -48,27 +49,31 @@ classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The
   and frees its slot and its disk room.
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
-  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
-  image ([storage](../architecture/storage.md#disk-budget)).
+  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, its rewrite, and twice
+  `IMP_BUILD_IMAGE_MAX_MIB` for the unpacked image and its ext4 file
+  ([storage](../architecture/storage.md#disk-budget)). Each build's builder imp takes a slot, its
+  memory and its disk like any imp.
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
-- **What the build may do.** impd sends one fixed BuildKit build, `POST /build?version=2`, with the
-  tar as the body and no session. The client gives only the name and the Dockerfile path, which must
-  stay inside the context; it cannot pass build arguments, secrets, SSH agents, `--network` or
-  `--allow`. `BUILDKIT_SYNTAX` pins the Dockerfile frontend by digest (`docker/dockerfile:1.19`, as
-  in `host/Dockerfile`), so a `# syntax=` line is ignored. `RUN --mount=type=cache` works;
-  `RUN --network=host` and `RUN --security=insecure` fail the build. A failed build shows BuildKit's
-  error, without the `RUN` step's output. The host pulls the frontend from Docker Hub on its first
-  build. `imp-docker-proxy` allows only this build
+- **What the build may do.** impd runs one fixed BuildKit build: in a builder, `docker build -` with
+  the tar on stdin; on the host, `POST /build?version=2` with the tar as the body and no session.
+  The client gives only the name and the Dockerfile path, which must stay inside the context; it
+  cannot pass build arguments, secrets, SSH agents, `--network` or `--allow`. `BUILDKIT_SYNTAX` pins
+  the Dockerfile frontend by digest (`docker/dockerfile:1.19`, as in `host/Dockerfile`), so a
+  `# syntax=` line is ignored. `RUN --mount=type=cache` works; `RUN --network=host` and
+  `RUN --security=insecure` fail the build. A failed host build shows BuildKit's error, without the
+  `RUN` step's output. The engine pulls the frontend from Docker Hub when it lacks it.
+  `imp-docker-proxy` allows only this build
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
   Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
-- **Images the build names.** A build has no session, so BuildKit cannot ask for registry
-  credentials. Before the build, impd pulls each image that a `FROM`, a `COPY --from` or a
-  `RUN --mount=from=` names and the host does not have yet, as `imp image add` pulls it, with the
-  credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd
-  inspects each image once, for the engine's platform, and refuses an image the host has for another
-  platform, and any image the build names whose config holds `ONBUILD` triggers: the frontend runs
-  the triggers of a `COPY --from` or a `RUN --mount=from=` image too, in this build.
+- **Images the build names.** Before the build, impd pulls each image that a `FROM`, a `COPY --from`
+  or a `RUN --mount=from=` names and the engine that builds does not have yet. In a builder that is
+  a cold pull with no credentials. A host build has no session, so BuildKit cannot ask for
+  credentials there; impd pulls as `imp image add` does, with the credentials in impd's Docker
+  config. It skips `scratch` and the Dockerfile's own stages. impd inspects each image once, for the
+  engine's platform, and refuses an image the host has for another platform, and any image the build
+  names whose config holds `ONBUILD` triggers: the frontend runs the triggers of a `COPY --from` or
+  a `RUN --mount=from=` image too, in this build.
 - **The digest the build uses.** The Dockerfile the engine gets names each of those images by the
   registry digest of the image impd inspected: `FROM busybox:1.37` becomes `FROM busybox@sha256:…`,
   so a tag that moves in the registry after the pull does not change the build. impd picks the
@@ -122,10 +127,10 @@ classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The
   `user.*` xattrs and sub-second mtimes. The engine applies no ignore file to the uploaded tar, so
   the tar holds exactly the files `COPY .` sees.
 
-**CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
-reach the internet and anything the host's bridge can reach, the host's services on the bridge among
-them. impd's refusal of a remote `ADD` does not change that. Give `manage` only to callers you trust
-with that.
+**CAUTION:** With `IMP_BUILD_ISOLATION=host`, a `RUN` step runs on the impd host's Docker with the
+default bridge network. It can reach the internet and anything the host's bridge can reach, the
+host's services on the bridge among them. impd's refusal of a remote `ADD` does not change that.
+Isolated builds, the default, close this ([isolated builds](#isolated-builds)).
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
@@ -134,6 +139,62 @@ and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An im
 plain `docker build` goes in with `imp image add <ref>`. `images/dev` and `images/examples/hello`
 start FROM the published base by digest; to stack them on another base, edit that FROM line. An
 imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
+
+## Isolated builds
+
+By default (`IMP_BUILD_ISOLATION=imp`) each build runs in its own builder imp, which impd destroys
+when the build ends. Two separate things hold for a build, and neither stands in for the other:
+
+1. **The input guard** ([#145](https://github.com/zgeoff/imp/issues/145)): impd reads the Dockerfile
+   on the host and refuses what the engine would fetch or run on its own, before any builder boots
+   (the list above). It rejects inputs; it isolates nothing.
+2. **The isolation:** the build runs in a Firecracker VM under the
+   [`public` egress policy](../architecture/networking.md#public). A `RUN` step, a pull and the
+   frontend's fetch reach the internet only: not the host, impd, other imps, the tailnet, link-local
+   or private networks. The firewall does not restrict the builder's own loopback.
+
+A build goes:
+
+1. impd checks the context and the Dockerfile on the host (the guard).
+2. It creates a builder imp, `imp-build-<8 letters>`, from the image `imp-builder`
+   (`IMP_BUILD_IMAGE`, the published `imp-base` by digest, which impd adds on the first build), with
+   `IMP_BUILD_MEMORY_MIB` (2048) of memory and `IMP_BUILD_DISK_GIB` (20) of disk. The governor and
+   the disk budget admit it as any imp; a refusal fails the build and never falls back to the host.
+   Where nft cannot hold the `public` policy, a build fails with `PRECONDITION_FAILED`.
+3. It waits for the builder's dockerd (60 s at most), then pulls and pins each image the Dockerfile
+   names on the builder's engine, as the host does for a host build. The builder holds no registry
+   credentials, so a private image does not pull, and a registry name that resolves to a private
+   address fails in the builder's resolver.
+4. The pinned context goes in on the builder's stdin to `docker build`. A failed build returns the
+   last 8000 characters of its log, `RUN` output included.
+5. impd streams `docker export` of the result out of the builder into the same `tar` unpack every
+   `imp image add` uses, as root, and computes the image's digest itself: `imp-build-` and a sha256
+   over a fixed domain string, the config with its length, and the export, so it never equals a
+   Docker image ID or a template's. No host engine reads what the build made, and no Docker tag on
+   the host changes. An export fails with `BAD_REQUEST` when its stream, or the disk its entries
+   take, is over `IMP_BUILD_IMAGE_MAX_MIB` (8192). The disk counts each entry, as `tar` lists it, at
+   its full logical size in whole 4 KiB blocks, so a sparse file or many small files cannot pass a
+   small archive off as a small image. An export with more entries than `IMP_BUILD_IMAGE_MAX_FILES`
+   (1,000,000) also fails. The directories `tar` makes for a member's missing parents count as
+   entries and blocks too. impd ends the export at once when a limit trips or `tar` fails, and after
+   120 s in which the builder sends nothing, so a builder that holds its export open still goes.
+6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
+   finds at start, which a stop cut short. A builder that survives its removal does not fail its
+   build, whose image impd wrote: impd logs an `ERROR`, tries again every 30 s until it is gone, and
+   `imp ls --builders` shows it meanwhile.
+
+A builder is impd's while it builds: every stream, exec, wake and change but `imp rm` is refused it
+with `PRECONDITION_FAILED`, the idle loop and the governor never sleep it, and backups leave it out.
+`imp ls` hides builders; `imp ls --builders` shows them, marked `image builder`, and `imps.get`
+shows `kind: builder`.
+
+What a build costs on top of a host build: about 1.5 s for the builder and its dockerd, and the
+pulls, which start cold in every builder (about 7.5 s for `busybox` and the frontend on a home
+link). impd logs each build's phases as `pins=… build=… image=…`.
+
+`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.30.0, for one release only: impd
+logs a warning at start and at every build. Use it only when every caller with `manage` is trusted
+with the host (the caution above).
 
 The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
 `context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
@@ -151,7 +212,9 @@ call would.
   without it, an image with a file capability fails to add or build. An image added by impd 0.25.1
   or older lost its file capabilities, and impd keeps that rootfs for the same image ID:
   `imp image rm <name>` and add or build it again.
-- **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`:
+- **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`, in
+  place of any file the image has there. `/etc` and `/etc/imp` must be directories: an image with a
+  symlink or a file at either fails to add or build.
 
   ```json
   { "env": ["PATH=/root/.local/bin:..."], "workdir": "", "user": "" }

@@ -299,12 +299,18 @@ export const lsCommand = defineCommand({
   meta: { name: 'ls', description: 'List imps' },
   args: {
     all: { type: 'boolean', description: 'list the imps on every saved host (see imp host ls)' },
+    builders: {
+      type: 'boolean',
+      description: 'list the image builders impd runs for builds too',
+    },
     json: jsonArg,
   },
   run: async (context) => {
     if (context.args.all !== true) {
       await runAction(context.host, async (client) => {
-        const imps = await client.imps.list();
+        const input = context.args.builders === true ? { builders: true } : undefined;
+
+        const imps = await client.imps.list(input);
 
         console.log(formatOutput(imps, context.args.json, formatImps));
       });

@@ -67,7 +67,8 @@ export interface DatabaseCopy {
 }
 
 // One consistent view of the database for a backup run: `VACUUM INTO` copies
-// it in a single read transaction, and the run backs up only what it names.
+// it in a single read transaction, and the run backs up only what it names,
+// which leaves out image builders.
 export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<DatabaseCopy> {
   mkdirSync(dirname(path), { recursive: true });
   rmSync(path, { force: true });
@@ -83,7 +84,7 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
            max_memory_mib AS maxMemoryMib, http_port AS httpPort, egress_policy AS egressPolicy,
            egress_allow AS egressAllow, disk_bytes AS diskBytes,
            identity_reset_pending AS identityResetPending
-           FROM imps ORDER BY name`,
+           FROM imps WHERE kind = 'user' ORDER BY name`,
       )
       .all();
 

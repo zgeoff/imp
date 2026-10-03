@@ -24,30 +24,28 @@ import {
 import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { createBuildEngine } from './build-engine';
+import type { BuildEngine, EngineRun } from './build-engine';
+import { BUILDER_IMAGE } from './builder-imps';
+import type { Builders } from './builder-imps';
 import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
+import { runGuestBuild, writeGuestTree } from './guest-build';
+import type { GuestExec } from './guest-exec';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
-import {
-  PIN_INSPECT_FORMAT,
-  PinInspectSchema,
-  formatPinFailure,
-  formatPlatform,
-  normalizePlatform,
-  pickRepoDigest,
-  readImageStore,
-} from './image-pin';
+import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from './image-pin';
 import type { ImageStore, Pin, PinInspect } from './image-pin';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
+import { writeImageConfig } from './write-image-config';
 
 const GIB = 1024 ** 3;
 
@@ -62,10 +60,10 @@ const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 
 // the largest Dockerfile impd reads for its FROM lines
 const DOCKERFILE_MAX_BYTES = 1024 ** 2;
-
-// the tail of a failed pull's message the client gets
-const FAILURE_MAX_CHARS = 4000;
 const SEED_REF = 'ubuntu:24.04';
+
+export const HOST_BUILD_WARNING =
+  'impd: WARNING: IMP_BUILD_ISOLATION=host: image builds run on the host engine, whose RUN steps can reach the host and its private networks; for a trusted operator only, and gone in the next release (docs/guides/images.md#isolated-builds)';
 
 const InspectSchema = z
   .array(
@@ -104,6 +102,32 @@ export interface ImageService {
 
   // adds ubuntu:24.04 as `ubuntu` when there are no images at all
   readonly seedDefaultImage: () => Promise<void>;
+
+  // adds IMP_BUILD_IMAGE as the builders' image, unless it is that already
+  readonly ensureBuilderImage: () => Promise<void>;
+}
+
+// the host's engine, through imp-docker-proxy
+function runOnHost(argv: readonly string[], signal: AbortSignal): ReturnType<EngineRun> {
+  return runCommand(argv, { signal });
+}
+
+// a builder's engine, through its agent
+function toEngineRun(exec: GuestExec): EngineRun {
+  return (argv, signal) => exec(argv, { signal });
+}
+
+// a name a client may give an image: BUILDER_IMAGE is impd's
+function requireClientImageName(name: string): string {
+  const imageName = NameSchema.parse(name);
+
+  if (imageName === BUILDER_IMAGE) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `the image name ${BUILDER_IMAGE} is impd's, for its image builders; pick another`,
+    });
+  }
+
+  return imageName;
 }
 
 export interface ImageServiceDeps {
@@ -117,108 +141,16 @@ export interface ImageServiceDeps {
 
   // a build holds room for the unpacked tree and its ext4 file
   readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
+
+  // where an isolated build runs; null until the imps are up
+  readonly readBuilders: () => Builders | null;
+  readonly log: (message: string) => void;
 }
 
 function toBadRequest(error: unknown): unknown {
   return error instanceof DockerfileError
     ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
     : error;
-}
-
-// the engine's platform, which a build without one runs for
-async function readHostPlatform(signal: AbortSignal): Promise<string> {
-  const version = await runCommand(
-    ['docker', 'version', '--format', '{{json .Server.Os}} {{json .Server.Arch}}'],
-    { signal },
-  );
-
-  signal.throwIfAborted();
-
-  if (version.exitCode !== 0) {
-    throw new Error(`docker version: ${version.stderr.trim()}`);
-  }
-
-  const [os, arch] = z.tuple([z.string(), z.string()]).parse(
-    version.stdout
-      .trim()
-      .split(' ')
-      .map((part): unknown => JSON.parse(part)),
-  );
-
-  return normalizePlatform(os, arch);
-}
-
-// what impd reads of an image the host has, or null when it lacks it
-async function readPinInspect(ref: string, signal: AbortSignal): Promise<PinInspect | null> {
-  const inspected = await runCommand(
-    ['docker', 'image', 'inspect', '--format', PIN_INSPECT_FORMAT, ref],
-    { signal },
-  );
-
-  signal.throwIfAborted();
-
-  if (inspected.exitCode !== 0) {
-    return null;
-  }
-
-  return PinInspectSchema.parse(JSON.parse(inspected.stdout));
-}
-
-// the image the host has for ref, pulled first when it lacks it
-async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): Promise<PinInspect> {
-  const ref = image.ref;
-
-  const local = await readPinInspect(ref, signal);
-
-  if (local !== null) {
-    return local;
-  }
-
-  const pulled = await runCommand(['docker', 'pull', '--quiet', ref], { signal });
-
-  signal.throwIfAborted();
-
-  if (pulled.exitCode !== 0) {
-    throw new ORPCError('BAD_REQUEST', {
-      message: `${image.use} ${ref}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
-    });
-  }
-
-  const loaded = await readPinInspect(ref, signal);
-
-  if (loaded === null) {
-    throw new Error(`docker image inspect ${ref} failed after its pull`);
-  }
-
-  return loaded;
-}
-
-// Engines before 29.6.0 (BuildKit v0.31.0) fetch the BUILDKIT_SYNTAX frontend
-// only through a client session, which impd's build has none of; a frontend
-// the engine already has needs no fetch. Pulled by digest when it lacks it.
-async function loadFrontend(signal: AbortSignal): Promise<void> {
-  const inspected = await runCommand(
-    ['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND],
-    { signal },
-  );
-
-  signal.throwIfAborted();
-
-  if (inspected.exitCode === 0) {
-    return;
-  }
-
-  const pulled = await runCommand(['docker', 'pull', '--quiet', DOCKERFILE_FRONTEND], { signal });
-
-  signal.throwIfAborted();
-
-  if (pulled.exitCode !== 0) {
-    throw new ORPCError('BAD_GATEWAY', {
-      message: `the Dockerfile frontend ${DOCKERFILE_FRONTEND}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
-    });
-  }
-
-  console.log(`impd: pulled the Dockerfile frontend ${DOCKERFILE_FRONTEND}`);
 }
 
 // one image's every spelling: the engine's registry and path, and the tag
@@ -299,9 +231,57 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return InspectSchema.parse(JSON.parse(stdout))[0];
   };
 
-  // OCI image → sparse ext4
+  // A fresh directory for an unpacked tree. 0700: a host user must not
+  // reach the tree, whose setuid and capability files are live while it is
+  // unpacked.
+  const makeWorkDir = (): { work: string; root: string } => {
+    const images = join(deps.config.dataDir, 'images');
+    const work = join(images, `.build-${Bun.randomUUIDv7()}`);
+    const root = join(work, 'root');
+
+    mkdirSync(images, { recursive: true });
+    mkdirSync(work, { mode: 0o700 });
+    mkdirSync(root, { mode: 0o755 });
+
+    return { work, root };
+  };
+
+  // an unpacked tree → sparse ext4
   // (docs/architecture/storage.md#images-any-oci-image); returns the rootfs
   // size on disk
+  const writeRootfs = async (root: string, digest: string, ociConfig: unknown): Promise<number> => {
+    writeImageConfig(root, JSON.stringify(buildImageRuntimeConfig(ociConfig)));
+
+    const usage = await readTreeUsage(root);
+
+    const plan = planRootfs(usage);
+
+    // the backend gives the directory: on ZFS it is a dataset of its own
+    await deps.storage.createImage(digest, async (dir) => {
+      const image = join(dir, 'rootfs.ext4');
+
+      await runChecked(['truncate', '-s', String(plan.bytes), image]);
+
+      // the default features keep resize_inode, which an online grow needs
+      await runChecked([
+        'mkfs.ext4',
+        '-q',
+        '-F',
+        '-L',
+        'imp-root',
+        ...(plan.inodes === null ? [] : ['-N', String(plan.inodes)]),
+        '-d',
+        root,
+        image,
+      ]);
+
+      writeFileSync(join(dir, 'config.json'), JSON.stringify(ociConfig ?? {}, null, 2));
+    });
+
+    return readDiskUsage(buildImagePaths(deps.config.dataDir, digest).rootfs);
+  };
+
+  // an image of the host's engine → its rootfs, unless it has one
   const buildRootfs = async (ref: string, digest: string, ociConfig: unknown): Promise<number> => {
     const paths = buildImagePaths(deps.config.dataDir, digest);
 
@@ -309,15 +289,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       return readDiskUsage(paths.rootfs);
     }
 
-    const images = join(deps.config.dataDir, 'images');
-    const work = join(images, `.build-${Bun.randomUUIDv7()}`);
-    const root = join(work, 'root');
-
-    // 0700: a host user must not reach the tree, whose setuid and capability
-    // files are live while it is unpacked
-    mkdirSync(images, { recursive: true });
-    mkdirSync(work, { mode: 0o700 });
-    mkdirSync(root, { mode: 0o755 });
+    const workDir = makeWorkDir();
+    const root = workDir.root;
 
     const created = await runChecked(['docker', 'create', ref, '/bin/true']);
 
@@ -326,59 +299,23 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       await writeExportedTree(containerId, root);
 
-      mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-
-      writeFileSync(
-        join(root, 'etc', 'imp', 'image.json'),
-        JSON.stringify(buildImageRuntimeConfig(ociConfig)),
-      );
-
-      const usage = await readTreeUsage(root);
-
-      const plan = planRootfs(usage);
-
-      // the backend gives the directory: on ZFS it is a dataset of its own
-      await deps.storage.createImage(digest, async (dir) => {
-        const image = join(dir, 'rootfs.ext4');
-
-        await runChecked(['truncate', '-s', String(plan.bytes), image]);
-
-        // the default features keep resize_inode, which an online grow needs
-        await runChecked([
-          'mkfs.ext4',
-          '-q',
-          '-F',
-          '-L',
-          'imp-root',
-          ...(plan.inodes === null ? [] : ['-N', String(plan.inodes)]),
-          '-d',
-          root,
-          image,
-        ]);
-
-        writeFileSync(join(dir, 'config.json'), JSON.stringify(ociConfig ?? {}, null, 2));
-      });
+      return await writeRootfs(root, digest, ociConfig);
     } finally {
       await runCommand(['docker', 'rm', '-f', containerId]);
 
-      rmSync(work, { recursive: true, force: true });
+      rmSync(workDir.work, { recursive: true, force: true });
     }
-
-    return readDiskUsage(paths.rootfs);
   };
 
-  const buildRootfsOnce = async (
-    ref: string,
-    digest: string,
-    ociConfig: unknown,
-  ): Promise<number> => {
+  // one rootfs per digest at a time; a second build of it waits for the first
+  const createRootfsOnce = async (digest: string, create: () => Promise<number>) => {
     const inFlight = building.get(digest);
 
     if (inFlight !== undefined) {
       return inFlight;
     }
 
-    const promise = buildRootfs(ref, digest, ociConfig);
+    const promise = create();
 
     building.set(digest, promise);
 
@@ -387,6 +324,33 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     } finally {
       building.delete(digest);
     }
+  };
+
+  // the image row by its name: made, or moved to the new digest, whose old
+  // rootfs goes when nothing else uses it
+  const writeImageRow = async (
+    imageName: string,
+    ref: string,
+    digest: string,
+    sizeBytes: number,
+  ): Promise<ImageRecord> => {
+    const existing = await findImageByName(deps.db, imageName);
+
+    requireDockerImage(existing);
+
+    if (existing === undefined) {
+      return createImage(deps.db, { name: imageName, ref, digest, sizeBytes });
+    }
+
+    if (existing.digest === digest) {
+      return existing;
+    }
+
+    const updated = await updateImage(deps.db, existing.id, { ref, digest, sizeBytes });
+
+    await removeUnusedRootfs(existing.digest);
+
+    return updated;
   };
 
   // drops an image directory no image row points at any more
@@ -398,10 +362,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
-  const createImageFromRef = async (ref: string, name?: string): Promise<ImageRecord> => {
+  // `isImpds`: impd's own add of the builders' image, which no client may name
+  const createImageFromRef = async (
+    ref: string,
+    name?: string,
+    isImpds = true,
+  ): Promise<ImageRecord> => {
     assertImageRef(ref);
 
-    const imageName = NameSchema.parse(name ?? deriveImageName(ref));
+    const givenName = name ?? deriveImageName(ref);
+    const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
 
     const taken = await findImageByName(deps.db, imageName);
 
@@ -419,33 +389,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     return withRoom(buildBytes, () =>
       storageGate.join(async () => {
-        const sizeBytes = await buildRootfsOnce(ref, inspect.Id, inspect.Config);
-        const existing = await findImageByName(deps.db, imageName);
+        const sizeBytes = await createRootfsOnce(inspect.Id, () =>
+          buildRootfs(ref, inspect.Id, inspect.Config),
+        );
 
-        requireDockerImage(existing);
-
-        if (existing === undefined) {
-          return createImage(deps.db, {
-            name: imageName,
-            ref,
-            digest: inspect.Id,
-            sizeBytes,
-          });
-        }
-
-        if (existing.digest === inspect.Id) {
-          return existing;
-        }
-
-        const updated = await updateImage(deps.db, existing.id, {
-          ref,
-          digest: inspect.Id,
-          sizeBytes,
-        });
-
-        await removeUnusedRootfs(existing.digest);
-
-        return updated;
+        return writeImageRow(imageName, ref, inspect.Id, sizeBytes);
       }),
     );
   };
@@ -462,19 +410,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
-  // A sessionless build cannot ask impd for registry credentials: each image
-  // the Dockerfile names and the host lacks is pulled first, as `imp image
-  // add` does. Returns the Dockerfile with each image pinned to its digest.
-  const resolvePinnedDockerfile = async (dockerfile: string, signal: AbortSignal) => {
-    const images = (() => {
-      try {
-        return checkDockerfile(dockerfile);
-      } catch (error) {
-        throw toBadRequest(error);
-      }
-    })();
-
-    const platform = await readHostPlatform(signal);
+  // Each image the Dockerfile names and the engine lacks is pulled first,
+  // on the engine that builds. Returns the Dockerfile with each image pinned
+  // to its digest.
+  const resolvePinnedDockerfile = async (
+    dockerfile: string,
+    images: readonly ExternalImage[],
+    engine: BuildEngine,
+    signal: AbortSignal,
+  ) => {
+    const platform = await engine.readPlatform(signal);
 
     const pins = new Map<string, string>();
 
@@ -509,7 +454,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       if (known === undefined) {
         signal.throwIfAborted();
 
-        const inspect = await loadImage(image, signal);
+        const inspect = await engine.loadImage(image, signal);
 
         keys.set(key, pickPin(image, inspect, platform));
         stores.add(readImageStore(inspect));
@@ -531,26 +476,73 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
-  // nothing from the client reaches the engine but the tag's name and the
-  // Dockerfile's path in the context, both validated by the API schemas
-  // and again by imp-docker-proxy
+  // The host build (IMP_BUILD_ISOLATION=host): the tag's name and the
+  // Dockerfile's path are all of the client's that reach the engine, checked
+  // again by imp-docker-proxy. Its RUN steps reach what the engine reaches.
+  const runHostBuild = (tarPath: string, tag: string, dockerfile: string, signal: AbortSignal) =>
+    deps.diskBudget.withRoom(statSync(tarPath).size, () =>
+      runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
+    );
+
+  // the built image, streamed out of its builder into a rootfs and a row
+  const writeGuestImage = (
+    exec: GuestExec,
+    imageName: string,
+    ref: string,
+    signal: AbortSignal,
+  ): Promise<ImageRecord> => {
+    const maxBytes = deps.config.build.imageMaxBytes;
+
+    // the tree unpacked, and the ext4 file written from it
+    return deps.diskBudget.withRoom(2 * maxBytes, () =>
+      storageGate.join(async () => {
+        const workDir = makeWorkDir();
+        const root = workDir.root;
+
+        try {
+          const exported = await writeGuestTree(
+            exec,
+            root,
+            { maxBytes, maxFiles: deps.config.build.imageMaxFiles },
+            signal,
+          );
+
+          const digest = exported.digest;
+          const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
+
+          const sizeBytes = await createRootfsOnce(digest, () =>
+            existsSync(rootfs)
+              ? Promise.resolve(readDiskUsage(rootfs))
+              : writeRootfs(root, digest, exported.config),
+          );
+
+          return await writeImageRow(imageName, ref, digest, sizeBytes);
+        } finally {
+          rmSync(workDir.work, { recursive: true, force: true });
+        }
+      }),
+    );
+  };
+
   const buildFromContext = async (
     tarPath: string,
     name: string,
     givenDockerfile: string | undefined,
     signal: AbortSignal,
   ): Promise<ImageRecord> => {
-    const tag = `imp/${NameSchema.parse(name)}:latest`;
+    const imageName = requireClientImageName(name);
+    const tag = `imp/${imageName}:latest`;
     const tarBytes = statSync(tarPath).size;
     const dockerfilePath = normalizeDockerfilePath(givenDockerfile);
     const rewrittenPath = `${tarPath}.rewritten`;
+    const isolation = deps.config.build.isolation;
 
     // the pins the build used, for a failure the engine reports
     let pins: readonly Pin[] = [];
 
     try {
       // the rewrite is the context again, with pax headers for long names
-      await deps.diskBudget.withRoom(tarBytes, async () => {
+      const built = await deps.diskBudget.withRoom(tarBytes, async () => {
         const context = await readBuildContext(
           tarPath,
           dockerfilePath,
@@ -562,44 +554,95 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
             : error;
         });
 
-        const pinned = await resolvePinnedDockerfile(context.dockerfile, signal);
+        const dockerfile = context.dockerfilePath ?? 'Dockerfile';
 
-        pins = pinned.pins;
+        // the input guard (#145): a Dockerfile it refuses boots no builder
+        const named = (() => {
+          try {
+            return checkDockerfile(context.dockerfile);
+          } catch (error) {
+            throw toBadRequest(error);
+          }
+        })();
 
-        const pinList = pinned.pins.map((pin) => `${pin.use} ${pin.ref} as ${pin.pin}`);
+        // the pins, on the engine that builds
+        const writePinnedContext = async (engine: BuildEngine): Promise<void> => {
+          const pinned = await resolvePinnedDockerfile(context.dockerfile, named, engine, signal);
 
-        console.log(
-          `impd: image build ${name}: image store ${pinned.store}; pinned ${pinList.join(', ') || 'no image'}`,
-        );
+          pins = pinned.pins;
 
-        signal.throwIfAborted();
+          const pinList = pinned.pins.map((pin) => `${pin.use} ${pin.ref} as ${pin.pin}`);
 
-        await writeBuildContext(
-          tarPath,
-          rewrittenPath,
-          context,
-          pinned.dockerfile,
-          DOCKERFILE_MAX_BYTES,
-          signal,
-        );
+          deps.log(
+            `impd: image build ${name} (${isolation}): image store ${pinned.store}; pinned ${pinList.join(', ') || 'no image'}`,
+          );
 
-        signal.throwIfAborted();
+          signal.throwIfAborted();
 
-        // a prune between this and the build fails it with the engine's
-        // error, and the client can retry
-        await loadFrontend(signal);
-
-        // the engine keeps its own copy of the context while it builds
-        await deps.diskBudget.withRoom(statSync(rewrittenPath).size, () =>
-          runDockerBuild({
-            dockerHost: deps.config.dockerHost,
-            tarPath: rewrittenPath,
-            tag,
-            dockerfile: context.dockerfilePath,
+          await writeBuildContext(
+            tarPath,
+            rewrittenPath,
+            context,
+            pinned.dockerfile,
+            DOCKERFILE_MAX_BYTES,
             signal,
-          }),
-        );
+          );
+
+          signal.throwIfAborted();
+
+          // a prune between this and the build fails it with the engine's
+          // error, and the client can retry
+          await engine.loadFrontend(signal);
+        };
+
+        if (isolation === 'host') {
+          deps.log(HOST_BUILD_WARNING);
+
+          await writePinnedContext(createBuildEngine(runOnHost));
+          await runHostBuild(rewrittenPath, tag, dockerfile, signal);
+
+          return null;
+        }
+
+        const builders = deps.readBuilders();
+
+        if (builders === null) {
+          throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is starting; try again' });
+        }
+
+        return builders.withBuilder(signal, async (exec) => {
+          const started = performance.now();
+
+          await writePinnedContext(createBuildEngine(toEngineRun(exec)));
+
+          const pinned = performance.now();
+
+          await runGuestBuild(exec, { tarPath: rewrittenPath, dockerfile, signal });
+
+          const ran = performance.now();
+
+          const image = await writeGuestImage(exec, imageName, tag, signal);
+
+          const pinsMs = Math.round(pinned - started);
+          const buildMs = Math.round(ran - pinned);
+          const imageMs = Math.round(performance.now() - ran);
+
+          // pins: the pulls, cold in each builder; image: the export and its rootfs
+          deps.log(
+            `impd: image build ${name} (imp): pins=${String(pinsMs)}ms build=${String(buildMs)}ms image=${String(imageMs)}ms`,
+          );
+
+          return image;
+        });
       });
+
+      signal.throwIfAborted();
+
+      if (built !== null) {
+        return built;
+      }
+
+      return await createImageFromRef(tag, name);
     } catch (error) {
       // nobody waits for the image: the build was stopped, or its tag is left
       signal.throwIfAborted();
@@ -612,10 +655,6 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     } finally {
       rmSync(rewrittenPath, { force: true });
     }
-
-    signal.throwIfAborted();
-
-    return createImageFromRef(tag, name);
   };
 
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
@@ -630,7 +669,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   return {
-    addImage: createImageFromRef,
+    addImage: (ref, name) => createImageFromRef(ref, name, false),
     buildImage: async (contextDir, name, dockerfile) => {
       if (!contextDir.startsWith('/')) {
         throw new ORPCError('BAD_REQUEST', {
@@ -707,6 +746,13 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     },
     resolveImage,
     findDefaultImage,
+    ensureBuilderImage: async () => {
+      const image = await findImageByName(deps.db, BUILDER_IMAGE);
+
+      if (image?.ref !== deps.config.build.image) {
+        await createImageFromRef(deps.config.build.image, BUILDER_IMAGE);
+      }
+    },
     seedDefaultImage: async () => {
       const images = await listImages(deps.db);
 

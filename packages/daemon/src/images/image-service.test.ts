@@ -22,6 +22,8 @@ test('it refuses refs and build contexts that docker could read as flags', async
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
       diskBudget: { withRoom: (_bytes, task) => task() },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     for (const ref of ['--help', '-v/:/host', 'ubuntu --privileged', '']) {
@@ -53,6 +55,8 @@ test('it refuses a build context that is not on the impd host', async () => {
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
       diskBudget: { withRoom: (_bytes, task) => task() },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     const failure = await images
@@ -92,6 +96,8 @@ test('a build context on the impd host with no Dockerfile is the client’s mist
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
       diskBudget: { withRoom: (_bytes, task) => task() },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
@@ -115,6 +121,8 @@ test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
       diskBudget: { withRoom: (_bytes, task) => task() },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     writeFileSync(`${dataDir}/Dockerfile`, 'FROM scratch\n');

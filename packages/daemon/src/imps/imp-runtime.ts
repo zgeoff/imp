@@ -14,7 +14,7 @@ import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
 import type { AgentAttachRequest, AgentExecRequest, ExecStream } from '../agent-client/exec-stream';
 import { openAccept, openListener } from '../agent-client/listener-stream';
 import type { GuestListener, ListenSpec } from '../agent-client/listener-stream';
-import { buildInvalidStateError, isDiskFullError } from '../api-errors';
+import { buildBuilderError, buildInvalidStateError, isDiskFullError } from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -48,6 +48,10 @@ export interface ImpRuntime {
     request: AgentExecRequest,
     feature?: AgentFeature,
   ) => Promise<ExecStream>;
+
+  // as openExec, for an image build's own steps in its builder, which every
+  // other stream and wake is refused (docs/guides/images.md#isolated-builds)
+  readonly openBuilderExec: (name: string, request: AgentExecRequest) => Promise<ExecStream>;
 
   // as openExec, for a session that exists; with `wake: false`, an imp that
   // is not running fails with INVALID_STATE and nothing boots
@@ -173,8 +177,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     context.memoryLimit.setGuestMib(imp.id, imp.memoryMib + pluggedMib);
   };
 
-  const requireRunning: ImpRuntime['requireRunning'] = async (name, onFound) => {
+  const requireRunningImp = async (
+    name: string,
+    onFound: ((imp: ImpRecord) => void) | undefined,
+    isBuilderAllowed: boolean,
+  ) => {
     const found = await lock.findImp(name);
+
+    if (found.kind === 'builder' && !isBuilderAllowed) {
+      throw buildBuilderError(found.name);
+    }
 
     onFound?.(found);
 
@@ -196,10 +208,17 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     });
   };
 
+  const requireRunning: ImpRuntime['requireRunning'] = (name, onFound) =>
+    requireRunningImp(name, onFound, false);
+
   // as requireRunning, for a caller that must not boot or wake the imp: one
   // that is not running fails with INVALID_STATE and its cold boots
   const requireAwake: ImpRuntime['requireRunning'] = async (name, onFound) => {
     const found = await lock.findImp(name);
+
+    if (found.kind === 'builder') {
+      throw buildBuilderError(found.name);
+    }
 
     if (found.state === 'running' && !lock.isLocked(found.id)) {
       onFound?.(found);
@@ -226,17 +245,20 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     kind: ConnectionKind | null,
     open: (paths: ImpPaths, imp: ImpRecord) => Promise<T>,
     wake = true,
+    isBuilderAllowed = false,
   ): Promise<T> => {
     const opened = { release: () => {} };
 
-    try {
-      const findRunning = wake ? requireRunning : requireAwake;
+    const onFound = (found: ImpRecord) => {
+      if (kind !== null) {
+        opened.release = context.tracker.open(found.id, kind);
+      }
+    };
 
-      const running = await findRunning(name, (found) => {
-        if (kind !== null) {
-          opened.release = context.tracker.open(found.id, kind);
-        }
-      });
+    try {
+      const running = wake
+        ? await requireRunningImp(name, onFound, isBuilderAllowed)
+        : await requireAwake(name, onFound);
 
       const imp = running.imp;
 
@@ -257,8 +279,9 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     }
   };
 
+  // a builder sleeps through nothing: its build would stall until a wake
   const isSleepAllowed = (imp: ImpRecord, policy: SleepPolicy): boolean => {
-    if (context.tracker.count(imp.id) > 0) {
+    if (imp.kind === 'builder' || context.tracker.count(imp.id) > 0) {
       return false;
     }
 
@@ -345,6 +368,8 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
         return request.session === undefined ? opening : withColdBoots(context, imp, opening);
       }),
+    openBuilderExec: (name, request) =>
+      openStream(name, 'exec', (paths) => openExecStream(paths.vsockSocket, request), true, true),
     openAttach: (name, request) =>
       openStream(
         name,
@@ -395,6 +420,10 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
     findAgent: async (name, feature) => {
       const imp = await lock.findImp(name);
+
+      if (imp.kind === 'builder') {
+        throw buildBuilderError(imp.name);
+      }
 
       if (imp.state !== 'running' || lock.isLocked(imp.id)) {
         return { imp, vsockPath: null };

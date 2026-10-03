@@ -1,4 +1,4 @@
-import type { EgressPolicy } from '@imp/api';
+import type { EgressPolicy, ImpKind } from '@imp/api';
 import { buildConflictError } from '../api-errors';
 import type { ImageRecord } from '../db/images';
 import { createImpInFreeSlot, findImpByName } from '../db/imps';
@@ -24,6 +24,7 @@ interface NewImpInput {
   readonly isIdentityResetPending?: boolean;
   readonly networkIds?: readonly string[] | undefined;
   readonly moveState?: 'receiving' | undefined;
+  readonly kind?: ImpKind | undefined;
 
   // a warm move's: this slot, or a SlotTakenError
   readonly slot?: number | undefined;
@@ -56,6 +57,7 @@ export async function createImpRecord(
         ...(input.networkIds !== undefined && { networkIds: input.networkIds }),
         ...(input.diskBytes !== undefined && { diskBytes: input.diskBytes }),
         ...(input.moveState !== undefined && { moveState: input.moveState }),
+        ...(input.kind !== undefined && { kind: input.kind }),
         cpu,
         ...(input.isIdentityResetPending === true && { isIdentityResetPending: true }),
       },
