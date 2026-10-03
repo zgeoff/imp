@@ -1,7 +1,12 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
-import { MissingDockerfileError, countTarBytes, listContextEntries } from '@imp/local-tar';
+import {
+  MissingDockerfileError,
+  countTarBytes,
+  listContextEntries,
+  readTarFile,
+} from '@imp/local-tar';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
@@ -18,11 +23,13 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
+import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import { DockerBuildError, runDockerBuild } from './docker-build';
+import { listBaseImages } from './dockerfile-bases';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
@@ -37,6 +44,12 @@ const ROOTFS_SPARE_BYTES = 2 * GIB;
 // mkfs.ext4's default: one inode per 16 KiB
 const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
+
+// the largest Dockerfile impd reads for its FROM lines
+const DOCKERFILE_MAX_BYTES = 1024 ** 2;
+
+// the tail of a failed pull's message the client gets
+const FAILURE_MAX_CHARS = 4000;
 const SEED_REF = 'ubuntu:24.04';
 
 const InspectSchema = z
@@ -263,17 +276,59 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
+  // A sessionless build cannot ask impd for registry credentials: each
+  // image the Dockerfile names outright and the host lacks is pulled first,
+  // as `imp image add` pulls; BuildKit then finds it locally.
+  const loadBaseImages = async (tarPath: string, dockerfile: string): Promise<void> => {
+    const text = await readTarFile(tarPath, dockerfile, DOCKERFILE_MAX_BYTES).catch(
+      (error: unknown) => {
+        throw new ORPCError('BAD_REQUEST', { message: readErrorMessage(error) });
+      },
+    );
+
+    if (text === null) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `there is no ${dockerfile} in the build context`,
+      });
+    }
+
+    for (const ref of listBaseImages(text)) {
+      if (!ImageRefSchema.safeParse(ref).success) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `FROM ${JSON.stringify(ref)} is not an image reference`,
+        });
+      }
+
+      const local = await runCommand(['docker', 'image', 'inspect', ref]);
+
+      if (local.exitCode !== 0) {
+        const pulled = await runCommand(['docker', 'pull', '--quiet', ref]);
+
+        if (pulled.exitCode !== 0) {
+          throw new ORPCError('BAD_REQUEST', {
+            message: `FROM ${ref}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+          });
+        }
+      }
+    }
+  };
+
   // nothing from the client reaches the engine but the tag's name and the
   // Dockerfile's path in the context, both validated by the API schemas
   // and again by imp-docker-proxy
   const buildFromContext = async (
     tarPath: string,
     name: string,
-    dockerfile: string | undefined,
+    givenDockerfile: string | undefined,
     signal: AbortSignal,
   ): Promise<ImageRecord> => {
     const tag = `imp/${NameSchema.parse(name)}:latest`;
     const tarBytes = statSync(tarPath).size;
+    const dockerfile = normalizeDockerfilePath(givenDockerfile);
+
+    await loadBaseImages(tarPath, dockerfile);
+
+    signal.throwIfAborted();
 
     try {
       // the engine keeps its own copy of the context while it builds
@@ -327,13 +382,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       // packed here as the CLI packs an upload: the engine does not read
       // .dockerignore from a context sent as the body
-      const entries = await listContextEntries(contextDir, dockerfile ?? 'Dockerfile').catch(
-        (error: unknown) => {
-          throw error instanceof MissingDockerfileError
-            ? new ORPCError('BAD_REQUEST', { message: error.message })
-            : error;
-        },
-      );
+      const entries = await listContextEntries(
+        contextDir,
+        normalizeDockerfilePath(dockerfile),
+      ).catch((error: unknown) => {
+        throw error instanceof MissingDockerfileError
+          ? new ORPCError('BAD_REQUEST', { message: error.message })
+          : error;
+      });
 
       const tarBytes = await countTarBytes(entries);
 
@@ -392,6 +448,27 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
     },
   };
+}
+
+// The Dockerfile's path in the context in one spelling, `./a//Dockerfile`
+// as `a/Dockerfile`, which the proxy checks; one that leaves the context is
+// refused.
+export function normalizeDockerfilePath(path: string | undefined): string {
+  const normalized = posix.normalize(path ?? 'Dockerfile');
+
+  if (
+    normalized.startsWith('/') ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized === '.' ||
+    normalized.endsWith('/')
+  ) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `the Dockerfile path ${JSON.stringify(path)} is not a file inside the build context`,
+    });
+  }
+
+  return normalized;
 }
 
 // A template is never rebuilt from docker: its name is made again from an
