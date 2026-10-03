@@ -430,6 +430,8 @@ const IMAGE_DOCKER = [
   `    base.test/onbuild:1) ${buildInspect([`base.test/onbuild@${DIGEST_A}`], { OnBuild: ['RUN id'] })} ;;`,
   `    base.test/local:1) ${buildInspect([])} ;;`,
   `    base.test/arm:1) ${buildInspect([`base.test/arm@${DIGEST_A}`], { Architecture: 'aarch64' })} ;;`,
+  `    base.test/arm32:1) ${buildInspect([`base.test/arm32@${DIGEST_A}`], { Architecture: 'arm' })} ;;`,
+  `    base.test/private:1) ${buildInspect([`localhost:5000/x@${DIGEST_A}`, `10.0.0.5:5000/y@${DIGEST_B}`])} ;;`,
   `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
   `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
   `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
@@ -591,12 +593,37 @@ test('an image with no registry digest, or for another platform, is refused befo
       'FROM base.test/arm:1: the host has this image for linux/arm64, and builds for linux/amd64',
   });
 
-  expect([local.built, copied.built, arm.built]).toEqual([[], [], []]);
+  const arm32 = await sendFakeDockerBuild('FROM base.test/arm32:1\n');
+
+  expect(arm32.body).toMatchObject({
+    code: 'BAD_REQUEST',
+    message:
+      'FROM base.test/arm32:1: the host has this image for linux/arm, and builds for linux/amd64',
+  });
+
+  expect([local.built, copied.built, arm.built, arm32.built]).toEqual([[], [], [], []]);
 });
 
 function readMessage(body: unknown): string {
   return z.object({ message: z.string() }).parse(body).message;
 }
+
+// with the image on the host already, no pull would meet the proxy's rule
+test('an image or its digest under a registry the pull rule refuses is refused', async () => {
+  const named = await sendFakeDockerBuild('FROM 127.0.0.1:5000/x:1\n');
+  const pinned = await sendFakeDockerBuild('FROM base.test/private:1\n');
+
+  expect(named.body).toMatchObject({
+    message: 'FROM 127.0.0.1:5000/x:1: registry 127.0.0.1:5000 is an IP address',
+  });
+
+  expect(pinned.body).toMatchObject({
+    message: `FROM base.test/private:1: its registry digests name only registries impd refuses: localhost:5000/x@${DIGEST_A}, 10.0.0.5:5000/y@${DIGEST_B}`,
+  });
+
+  expect(named.calls).toEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+  expect([named.built, pinned.built]).toEqual([[], []]);
+});
 
 test('a platform variable set by ARG, or another --platform, is refused before any pull', async () => {
   const global = await sendFakeDockerBuild(

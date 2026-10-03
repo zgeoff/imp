@@ -198,6 +198,12 @@ function checkRegistry(registry: string): string | null {
   return null;
 }
 
+// what is wrong with the registry a reference names, or null; impd checks a
+// ref it builds from, which the engine may reach without a pull
+export function checkReferenceRegistry(reference: string): string | null {
+  return checkRegistry(readImageReference(reference).registry);
+}
+
 // An image the proxy will pull or create from: from a named registry, and
 // never the repository imp-host and the proxy run from, whose tag a pull
 // would move.

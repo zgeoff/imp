@@ -24,6 +24,7 @@ import {
 import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { checkReferenceRegistry } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -37,6 +38,7 @@ import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import {
   PIN_INSPECT_FORMAT,
   PinInspectSchema,
+  formatPlatform,
   normalizePlatform,
   pickRepoDigest,
 } from './image-pin';
@@ -196,7 +198,7 @@ function pickPin(
   platform: string,
 ): string {
   const ref = image.ref;
-  const imagePlatform = normalizePlatform(inspect.Os, inspect.Architecture);
+  const imagePlatform = formatPlatform(inspect.Os, inspect.Architecture);
 
   if (imagePlatform !== platform) {
     throw new ORPCError('BAD_REQUEST', {
@@ -211,7 +213,16 @@ function pickPin(
     });
   }
 
-  const pin = pickRepoDigest(ref, inspect.RepoDigests ?? []);
+  // a digest under a registry the pull rule refuses would reach it unpulled
+  const repoDigests = inspect.RepoDigests ?? [];
+  const allowed = repoDigests.filter((digest) => checkReferenceRegistry(digest) === null);
+  const pin = pickRepoDigest(ref, allowed);
+
+  if (pin === null && repoDigests.length > 0) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref}: its registry digests name only registries impd refuses: ${repoDigests.join(', ')}`,
+    });
+  }
 
   if (pin === null) {
     const advice = image.use === 'FROM' ? 'build FROM' : 'name';
@@ -430,6 +441,15 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       if (!ImageRefSchema.safeParse(image.ref).success) {
         throw new ORPCError('BAD_REQUEST', {
           message: `${image.use} ${JSON.stringify(image.ref)} is not an image reference`,
+        });
+      }
+
+      // the host may have it already, and then no pull meets the proxy
+      const registryProblem = checkReferenceRegistry(image.ref);
+
+      if (registryProblem !== null) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `${image.use} ${image.ref}: ${registryProblem}`,
         });
       }
 

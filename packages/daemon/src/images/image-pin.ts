@@ -23,17 +23,25 @@ const ARCHITECTURES = new Map([
   ['i686', '386'],
 ]);
 
-// The engine's platform, as `os/arch`. 32-bit arm needs a variant the
-// engine's version does not give, so impd does not build there.
-export function normalizePlatform(os: string, architecture: string): string {
+// `os/arch`, with the architecture named as containerd names it
+export function formatPlatform(os: string, architecture: string): string {
   const arch = architecture.toLowerCase();
-  const normalized = ARCHITECTURES.get(arch) ?? arch;
 
-  if (os.toLowerCase() !== 'linux' || !/^[a-z0-9]+$/v.test(normalized) || normalized === 'arm') {
-    throw new Error(`impd builds images on linux hosts other than 32-bit arm, not ${os}/${arch}`);
+  return `${os.toLowerCase()}/${ARCHITECTURES.get(arch) ?? arch}`;
+}
+
+// The engine's platform. 32-bit arm needs a variant the engine's version
+// does not give, so impd does not build there.
+export function normalizePlatform(os: string, architecture: string): string {
+  const platform = formatPlatform(os, architecture);
+
+  if (!/^linux\/[a-z0-9]+$/v.test(platform) || platform === 'linux/arm') {
+    throw new Error(
+      `impd builds images on linux hosts other than 32-bit arm, not ${os}/${architecture.toLowerCase()}`,
+    );
   }
 
-  return `linux/${normalized}`;
+  return platform;
 }
 
 // The repository a ref names, as docker writes it in RepoDigests:
