@@ -188,6 +188,27 @@ if (isDefinedError(error) && error.code === 'RAM_BUDGET_EXCEEDED') {
 
 A 401 means the token is wrong.
 
+## Features
+
+An older impd drops an input field it does not know, and the call succeeds without it. Check
+`system.info().features` before you send a field that a later impd added:
+
+| Field                                 | Feature           | Since  |
+| ------------------------------------- | ----------------- | ------ |
+| `grantable` on `tokens.create`        | `grantableTokens` | 0.27.0 |
+| `rebind` on `secrets.add` (`replace`) | `secretRebind`    | 0.27.0 |
+
+```ts
+const info = await imp.system.info();
+
+if (info.features?.grantableTokens !== true) {
+  throw new Error('this impd makes tokens without a grantable list');
+}
+```
+
+Without the `secretRebind` feature, a `replace` that changes the hosts keeps every grant. With it,
+it fails with `CONFLICT` and `data.reason: 'binding_changed'` unless `rebind` is set.
+
 ## Versions
 
 The client and impd are released together with the same version. `imp.checkServer()` tells whether

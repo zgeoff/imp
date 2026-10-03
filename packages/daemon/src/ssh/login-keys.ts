@@ -51,6 +51,7 @@ function buildFileCaller(key: Readonly<AuthorizedKey>): Caller {
     name: `key ${display}`,
     scope: 'manage',
     imps: null,
+    grantable: [],
     tokenId: null,
     expiresAt: null,
     principal: `key:${formatKeyFingerprint(key.blob)}`,

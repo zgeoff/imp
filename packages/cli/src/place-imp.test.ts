@@ -15,7 +15,13 @@ const REQUEST: PlaceRequest = {
   needsWholeHost: false,
 };
 
-const MANAGE: Identity = { kind: 'token', name: 'root', scope: 'manage', imps: null };
+const MANAGE: Identity = {
+  kind: 'token',
+  name: 'root',
+  scope: 'manage',
+  imps: null,
+  grantable: [],
+};
 
 function buildInfo(change: Partial<SystemInfo> = {}): SystemInfo {
   return {

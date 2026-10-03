@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listAuditEntries } from '../db/broker-audit';
 import { findImpByName } from '../db/imps';
+import { findSecret, listGrantNames, removeCheckedGrant } from '../db/secrets';
 import { setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { loadOrCreateBrokerCa } from './broker-ca';
@@ -22,7 +23,11 @@ interface Seen {
   readonly bodyBytes: number;
 }
 
-async function setupBroker() {
+interface BrokerOptions {
+  readonly afterRuleRead?: () => Promise<void>;
+}
+
+async function setupBroker(options: BrokerOptions = {}) {
   // the broker reads the file when a request comes, so it is written below
   const fixtures = mkdtempSync(join(tmpdir(), 'imp-broker-'));
   const upstreams = join(fixtures, 'upstreams.json');
@@ -57,12 +62,16 @@ async function setupBroker() {
     resolveTunnelTarget: () => Promise.resolve('127.0.0.1'),
     dialTunnel: (address, port) =>
       createConnection({ host: address, port: port === 443 ? realPort : port }),
+    ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
   });
 
   await ctx.createTestImage('base');
   await ctx.imps.createImp({ name: 'dev' });
 
   const seen: Seen[] = [];
+
+  // what the upstream does on a path before it answers
+  const beforeAnswer = new Map<string, () => Promise<void>>();
 
   // the fake upstream, with its own CA the broker is told to trust
   const upstreamCa = await loadOrCreateBrokerCa(join(ctx.dataDir, 'upstream-ca'));
@@ -77,6 +86,8 @@ async function setupBroker() {
       const body = await request.arrayBuffer();
 
       const path = new URL(request.url).pathname;
+
+      await beforeAnswer.get(path)?.();
 
       seen.push({
         method: request.method,
@@ -194,6 +205,7 @@ async function setupBroker() {
   return {
     ...ctx,
     seen,
+    beforeAnswer,
     tunnelled,
     runCurl,
     startTunnel,
@@ -205,6 +217,20 @@ async function setupBroker() {
       rmSync(fixtures, { recursive: true, force: true });
     },
   };
+}
+
+type BrokerTest = Awaited<ReturnType<typeof setupBroker>>;
+
+// a custom secret's one rule: the value as a bearer token for the host
+function buildBearerRules(host: string) {
+  return [{ host, header: 'authorization', scheme: 'bearer' as const }];
+}
+
+// polls until the check holds
+async function waitUntil(check: () => Promise<boolean>): Promise<void> {
+  while (!(await check())) {
+    await Bun.sleep(5);
+  }
 }
 
 async function createGithubGrant(broker: Broker): Promise<void> {
@@ -446,4 +472,146 @@ test('bodiless answers and redirects pass through as they are', async () => {
       stdout: `${code} ${location}`.trim(),
     });
   }
+});
+
+// /a then /b in one curl run, on one connection when it can: each line is
+// the body, the status and the new connections that request made
+function readTwice(runCurl: BrokerTest['runCurl']) {
+  return runCurl('https://api.github.com/b', [
+    '-w',
+    ' %{http_code} %{num_connects}\n',
+    'https://api.github.com/a',
+  ]);
+}
+
+test('a grant gone while a connection stays open: the next request on it gets no credential', async () => {
+  await using ctx = await setupBroker();
+
+  await createGithubGrant(ctx.broker);
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  // the row goes while the upstream handles /a, and no prune runs, so the
+  // connection stays: the lookup on each request is what refuses /b
+  ctx.beforeAnswer.set('/a', async () => {
+    await removeCheckedGrant(ctx.db, imp?.id ?? '', 'gh', null);
+  });
+
+  const result = await readTwice(ctx.runCurl);
+
+  expect(result.stdout).toBe(
+    'from upstream 200 1\nno credential is granted for api.github.com\n 403 0\n',
+  );
+
+  expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
+});
+
+test('a revoke lets the request under way finish, and the next gets no credential', async () => {
+  await using ctx = await setupBroker();
+
+  await createGithubGrant(ctx.broker);
+
+  const imp = await findImpByName(ctx.db, 'dev');
+
+  // the revoke lands while the upstream handles /a; it waits for the grant
+  // to go, not for the revoke's prune, which waits for /a to end
+  const revoke: { done: Promise<void> | null } = { done: null };
+
+  ctx.beforeAnswer.set('/a', async () => {
+    revoke.done = ctx.broker.removeGrant('dev', 'gh');
+
+    await waitUntil(async () => {
+      const names = await listGrantNames(ctx.db, imp?.id ?? '');
+
+      return names.length === 0;
+    });
+  });
+
+  const result = await readTwice(ctx.runCurl);
+
+  await revoke.done;
+
+  // the prune closed the connection once /a was done: /b dialled again,
+  // got a plain tunnel to the real host, and never trusted it (curl's 60)
+  expect(result.code).toBe(60);
+  expect(result.stdout).toBe('from upstream 200 1\n 000 1\n');
+  expect(ctx.seen.map((entry) => entry.path)).toEqual(['/a']);
+  expect(ctx.tunnelled).toHaveLength(0);
+});
+
+test('a rebind to another host never sends the new value to the old', async () => {
+  const held = { armed: false, reached: Promise.withResolvers<void>() };
+  const release = Promise.withResolvers<void>();
+
+  // holds the one request between its rule read and its value read
+  await using ctx = await setupBroker({
+    afterRuleRead: async () => {
+      if (held.armed) {
+        held.reached.resolve();
+
+        await release.promise;
+      }
+    },
+  });
+
+  await ctx.broker.addSecret({
+    name: 'api',
+    kind: 'custom',
+    value: 'old-value',
+    rules: buildBearerRules('api.github.com'),
+  });
+
+  await ctx.broker.addGrant('dev', 'api');
+
+  held.armed = true;
+
+  const request = ctx.runCurl('https://api.github.com/x');
+
+  // the request read the old host's rule; the replace lands before its value read
+  await held.reached.promise;
+
+  const replaced = ctx.broker.addSecret({
+    name: 'api',
+    kind: 'custom',
+    value: 'new-value',
+    rules: buildBearerRules('other.example.com'),
+    replace: true,
+    rebind: true,
+  });
+
+  // the row has switched and the old file is gone; the replace itself then
+  // waits for the held request, as a revoke's prune does
+  await waitUntil(async () => {
+    const secret = await findSecret(ctx.db, 'api');
+
+    return secret?.rules[0]?.host === 'other.example.com';
+  });
+
+  await waitUntil(() => Promise.resolve(readdirSync(join(ctx.dataDir, 'secrets')).length === 1));
+
+  release.resolve();
+
+  const [result] = await Promise.all([request, replaced]);
+
+  expect(result.stdout).toBe('no credential is granted for api.github.com\n');
+  expect(ctx.seen).toEqual([]);
+});
+
+test('a rotation sends the new value on the next request, with the grant kept', async () => {
+  await using ctx = await setupBroker();
+
+  await createGithubGrant(ctx.broker);
+
+  const first = await ctx.runCurl('https://api.github.com/one');
+
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_rotated', replace: true });
+
+  const second = await ctx.runCurl('https://api.github.com/two');
+
+  expect([first.code, second.code]).toEqual([0, 0]);
+
+  expect(ctx.seen.map((entry) => `${entry.path} ${String(entry.authorization)}`)).toEqual([
+    '/one Bearer ghp_real',
+    '/two Bearer ghp_rotated',
+  ]);
 });

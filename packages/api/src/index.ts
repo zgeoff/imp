@@ -101,6 +101,7 @@ export type { Image, ImageSource } from './image-schema';
 export { impContract } from './imp-contract';
 export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';
+export type { ForbiddenReason } from './imp-errors';
 export { isImpAllowed } from './imp-patterns';
 export { ImpSchema, ImpStateSchema } from './imp-schema';
 export type { Imp, ImpState, OutdatedPart } from './imp-schema';
@@ -139,7 +140,7 @@ export {
   SecretValueSchema,
 } from './secret-schema';
 
-export type { AuditEntry, BrokerRule, Secret, SecretKind } from './secret-schema';
+export type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from './secret-schema';
 
 export {
   ServiceDefSchema,

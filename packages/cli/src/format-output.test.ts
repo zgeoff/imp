@@ -321,15 +321,32 @@ test('it lists tokens with their scope and imps, and * for every imp', () => {
   const createdAt = new Date('2026-10-02T00:00:00Z');
 
   const text = formatTokens([
-    { name: 'ci', scope: 'exec', imps: ['dev-*', 'ci-*'], sshKeys: [LAPTOP_KEY], createdAt },
-    { name: 'ops', scope: 'manage', imps: null, sshKeys: [], createdAt },
+    {
+      name: 'ci',
+      scope: 'manage',
+      imps: ['dev-*', 'ci-*'],
+      sshKeys: [LAPTOP_KEY],
+      grantable: ['gh', 'npm'],
+      createdAt,
+    },
+    { name: 'ops', scope: 'manage', imps: null, sshKeys: [], grantable: [], createdAt },
   ]);
 
   expect(text.split('\n').map((line) => line.trimEnd())).toEqual([
-    'NAME  SCOPE   IMPS        SSH KEYS  CREATED',
-    'ci    exec    dev-*,ci-*  1         2026-10-02T00:00:00.000Z',
-    'ops   manage  *           0         2026-10-02T00:00:00.000Z',
+    'NAME  SCOPE   IMPS        GRANTABLE  SSH KEYS  CREATED',
+    'ci    manage  dev-*,ci-*  gh,npm     1         2026-10-02T00:00:00.000Z',
+    'ops   manage  *           -          0         2026-10-02T00:00:00.000Z',
   ]);
+});
+
+test('it lists a token from an impd that sends no grantable list', () => {
+  const createdAt = new Date('2026-10-02T00:00:00Z');
+
+  const text = formatTokens([{ name: 'ci', scope: 'exec', imps: null, sshKeys: [], createdAt }]);
+
+  expect(text.split('\n')[1]?.trimEnd()).toBe(
+    'ci    exec   *     -          0         2026-10-02T00:00:00.000Z',
+  );
 });
 
 test('it prints a key as ssh-keygen -l does', () => {
@@ -339,8 +356,29 @@ test('it prints a key as ssh-keygen -l does', () => {
 
 test('it names the caller and what it may do, and who made each api call', () => {
   expect(
-    formatIdentity({ kind: 'tailnet', name: 'me@example.com', scope: 'read', imps: null }),
+    formatIdentity({
+      kind: 'tailnet',
+      name: 'me@example.com',
+      scope: 'read',
+      imps: null,
+      grantable: [],
+    }),
   ).toBe('tailnet me@example.com: read on every imp');
+
+  expect(
+    formatIdentity({
+      kind: 'token',
+      name: 'agent',
+      scope: 'manage',
+      imps: ['agent-*'],
+      grantable: ['gh', 'npm'],
+    }),
+  ).toBe('token agent: manage on agent-*; may grant gh,npm');
+
+  // an impd from before grantable lists leaves the field out
+  expect(formatIdentity({ kind: 'token', name: 'ci', scope: 'read', imps: null })).toBe(
+    'token ci: read on every imp',
+  );
 
   const call = { at: new Date(0), procedure: 'imps.stop', outcome: 'ok', durationMs: 3 };
 

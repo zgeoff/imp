@@ -166,7 +166,7 @@ test('every host-wide procedure refuses a manage token limited to some imps', as
     hostPaths.map((path) => readErrorCode(runByPath(limited.client, path))),
   );
 
-  expect(hostPaths).toContain('grants.add');
+  expect(hostPaths).toContain('secrets.add');
   expect(codes).toEqual(hostPaths.map(() => 'FORBIDDEN'));
 });
 
@@ -192,6 +192,7 @@ test('the root token makes, lists and removes tokens; the secret shows once', as
     name: 'ci',
     scope: 'exec',
     imps: ['dev-*'],
+    grantable: [],
   });
 
   const conflicts = await Promise.all([

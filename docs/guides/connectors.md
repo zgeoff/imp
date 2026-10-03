@@ -24,18 +24,75 @@ put secrets into the sandbox as environment variables.
 | Command                               | What it does                                                                                                                                                          |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                        |
-| `imp secret add <name> ... --replace` | Replaces the value and the hosts of a secret that exists, for a rotation.                                                                                             |
+| `imp secret add <name> ... --replace` | Replaces the value of a secret that exists, for a rotation. Other hosts or headers need `--rebind` too ([rotate or rebind](#rotate-or-rebind)).                       |
 | `imp secret ls`                       | Lists each secret's kind, hosts and imps. It never shows a value.                                                                                                     |
 | `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                       |
 | `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                          |
-| `imp revoke <imp> <secret>`           | Takes it away. A request on a connection that is already open gets a 403 from then on.                                                                                |
+| `imp revoke <imp> <secret>`           | Takes it away. A request under way finishes; every later one fails, on any connection.                                                                                |
 | `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                                                                                                 |
 | `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential, newest first. `--kind api` lists the calls that changed impd instead ([events](./events.md#the-api-audit-log)). |
 
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same
-host conflict. A fork gets the grants of its source, as it gets the disk. `imp rm` takes the imp's
+host conflict. impd checks for the clash and makes the grant in one transaction, so two grants at
+once cannot both pass. A fork gets the grants of its source, as it gets the disk, less any that
+would clash with a grant the fork has by then; impd logs each one it skips. `imp rm` takes the imp's
 grants and audit rows with it.
+
+Grants are host-wide: only a `manage` token with no imp patterns makes them, unless the token was
+given a list of secrets to grant to its imps ([granting secrets](./tokens.md#granting-secrets)).
+
+The broker decides each request on its own: it looks up the grant, the rule and the value file when
+the request arrives, not when the connection opens. After a revoke, the broker stops the terminator
+for that imp and host. A request already under way on it finishes, then its connections close, and
+the next request opens a new one: a plain tunnel, with no credential. A request that reaches a
+terminator between the revoke and its stop finds no grant and gets a 403
+`no credential is granted for <host>`.
+
+### Rotate or rebind
+
+A secret's binding is its kind and its rules: hosts, headers, schemes and users. impd compares them
+in host order, so the same rules in another order are the same binding.
+
+- `--replace` with the same binding is a rotation. Only the value changes; grants and the
+  [grantable lists](./tokens.md#granting-secrets) of tokens keep working.
+- `--replace` with another binding fails with `CONFLICT`, `data.reason` `binding_changed`, and
+  changes nothing. With `--rebind` (`rebind: true`), impd revokes the secret from every imp in the
+  same transaction and gives it a new generation. The answer says how many grants it dropped
+  (`droppedGrants`). Grant it again where it belongs; a token's list entry from before the rebind no
+  longer covers it.
+
+Each grant records the secret's generation, and the broker uses a grant only while the two match.
+
+A preset's hosts are part of its binding. If a later impd changes the hosts of a preset such as
+`github`, a plain `--replace` of a secret of that kind fails with `binding_changed`; add `--rebind`.
+
+The split between rotation and rebind needs impd 0.27.0 or later. An older impd drops `rebind`
+unread, takes a changed binding with a plain replace, and keeps every grant. Before a client sends
+`replace` or `rebind`, it checks that `system.info()` has `features.secretRebind`.
+`imp secret add --replace` does that check, with or without `--rebind`, and against an older impd it
+fails before it stores anything.
+
+### Value files
+
+Each value is a file of its own, named `<name>.<random>`, that impd never writes again. The secret's
+row names the file, and a replace or a rebind switches the row to a new one in the transaction that
+changes the rules. A request reads the row and then exactly that file: it gets the old rules with
+the old value, or the new with the new. If the file is gone by then, the request gets no credential
+(a 403); the broker never falls back to another file.
+
+impd removes the file a replace or a delete displaced once the transaction commits, and only that
+file. A file no row names, from a crash before the commit or before that removal, goes when impd
+next starts. A failed commit removes its new file and leaves the old one in place.
+
+### Restores
+
+- A checkpoint restore, a sleep and a wake keep the grants the host has now: a grant revoked or
+  rebound after the checkpoint stays gone.
+- A backup restore still re-creates the grants a backup lists, as fresh host-authorized grants
+  against the current secrets: each one takes the secret's generation now and passes the clash
+  check. A grant revoked after the backup is created again, so revoke it again if needed.
+- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism.
 
 ### Kinds
 
@@ -109,13 +166,13 @@ key id, so strict verifiers such as Python 3.13 accept it.
 
 ## Where secrets are
 
-| Place                    | What is there                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `<data>/secrets/<name>`  | The value, mode 0600 in a 0700 directory, written by a temp file and a rename. |
-| The database             | The name, kind, hosts and grants. Never a value.                               |
-| The API, the CLI, logs   | Never a value. A failed `imp secret add` logs the error but not the value.     |
-| The guest, its snapshots | The placeholder and the public CA bundle only.                                 |
-| `imp audit`              | Time, imp, secret, method, host, path without the query, status, bytes, time.  |
+| Place                            | What is there                                                                                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `<data>/secrets/<name>.<random>` | The value, mode 0600 in a 0700 directory, written by a temp file and a rename ([value files](#value-files)); an older impd's file is `<name>`. Never in an imp's disk, snapshot or backup. |
+| The database                     | The name, kind, hosts and grants. Never a value.                                                                                                                                           |
+| The API, the CLI, logs           | Never a value. A failed `imp secret add` logs the error but not the value.                                                                                                                 |
+| The guest, its snapshots         | The placeholder and the public CA bundle only.                                                                                                                                             |
+| `imp audit`                      | Time, imp, secret, method, host, path without the query, status, bytes, time.                                                                                                              |
 
 Values are not encrypted at rest: the key would sit on the same disk. The audit log keeps the newest
 1000 rows per imp.

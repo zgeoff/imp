@@ -3,6 +3,7 @@ import type { BrokerRule, SecretKind } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatApiCalls, formatAudit, formatOutput, formatSecrets } from '../format-output';
 import { readToken } from '../read-token';
+import { requireFeature } from '../require-feature';
 import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { jsonArg, nameArg } from './common-args';
@@ -77,13 +78,30 @@ const addCommand = defineCommand({
     header: { type: 'string', description: 'custom: the header to set (default authorization)' },
     scheme: { type: 'string', description: 'custom: bearer (default), basic or raw' },
     user: { type: 'string', description: 'custom: the user name for basic' },
-    replace: { type: 'boolean', description: 'replace a secret by that name' },
+    replace: { type: 'boolean', description: 'replace the value of a secret by that name' },
+    rebind: {
+      type: 'boolean',
+      description: 'with --replace: let the kind or hosts change, and revoke it from every imp',
+    },
     json: jsonArg,
   },
   run: (context) =>
     runAction(context.host, async (client) => {
       const kind = parseKind(context.args.kind);
       const rules = buildCustomRules(kind, context.args);
+
+      if (context.args.rebind === true && context.args.replace !== true) {
+        throw new UsageError('--rebind needs --replace');
+      }
+
+      // an older impd would take another binding and keep every grant
+      if (context.args.replace === true) {
+        await requireFeature(
+          client,
+          'secretRebind',
+          'let --replace change the hosts and keep every grant',
+        );
+      }
 
       const value = await readToken(`value for ${context.args.name}: `);
 
@@ -97,7 +115,14 @@ const addCommand = defineCommand({
         value,
         ...(rules !== undefined && { rules }),
         ...(context.args.replace === true && { replace: true }),
+        ...(context.args.rebind === true && { rebind: true }),
       });
+
+      if (secret.droppedGrants > 0) {
+        console.error(
+          `imp: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
+        );
+      }
 
       console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));
     }),

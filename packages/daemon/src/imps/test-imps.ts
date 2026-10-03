@@ -103,6 +103,9 @@ export interface ImpTestOptions {
   readonly resolveTunnelTarget?: (host: string) => Promise<string>;
   readonly dialTunnel?: (address: string, port: number) => Socket;
 
+  // holds a broker request between its rule read and its value read
+  readonly afterRuleRead?: () => Promise<void>;
+
   // nft in place of the real one; by default it records each script
   readonly runNft?: (script: string) => Promise<void>;
 
@@ -214,6 +217,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       options.resolveTunnelTarget ??
       ((host) => Promise.reject(new TunnelRefusedError(`${host}: no network in tests`))),
     ...(options.dialTunnel !== undefined && { dialTunnel: options.dialTunnel }),
+    ...(options.afterRuleRead !== undefined && { afterRuleRead: options.afterRuleRead }),
   });
 
   // every nft script and conntrack flush the egress firewall ran
