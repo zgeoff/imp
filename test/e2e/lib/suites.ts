@@ -17,6 +17,10 @@ export const SUITES: readonly Suite[] = [
   { name: 'lifecycle', prefix: 'e2e-life-', images: [] },
   { name: 'docker', prefix: 'e2e-dock-', images: ['base'] },
   { name: 'images', prefix: 'e2e-img-', images: ['base'] },
+
+  // a registry on the host's loopback; skips unless its name resolves there,
+  // as CI's /etc/hosts makes it
+  { name: 'registry', prefix: 'e2e-reg-', images: [] },
   { name: 'checkpoints', prefix: 'e2e-cp-', images: ['e2e-tiny'] },
   { name: 'disks', prefix: 'e2e-disk-', images: ['e2e-tiny'] },
   { name: 'sleep', prefix: 'e2e-slp-', images: ['e2e-bare', 'e2e-ws'] },
@@ -96,6 +100,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'boot-templates',
     'inner',
     'socket',
+    'registry',
     'jail',
     'memory',
     'ksm',

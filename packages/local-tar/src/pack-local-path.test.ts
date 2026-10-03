@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CopyProgress } from './copy-progress';
 import { countTarBytes, listLocalEntries, writeLocalEntries } from './pack-local-path';
+import type { PackProgress } from './pack-local-path';
 
-const SILENT: CopyProgress = { setTotal: () => {}, add: () => {}, finish: () => {} };
+const SILENT: PackProgress = { add: () => {} };
 
 test('countTarBytes is the length of the tar writeLocalEntries makes', async () => {
   const root = mkdtempSync(join(tmpdir(), 'imp-tar-count-'));

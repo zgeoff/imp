@@ -95,6 +95,17 @@ jobs:
       - name: Test
         run: bun test
 
+      # impd's port of the Dockerfile parser against the Go parser it ports,
+      # at the commit behind the pinned frontend (scripts/dockerfile-difftest)
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: scripts/dockerfile-difftest/go.mod
+          cache-dependency-path: scripts/dockerfile-difftest/go.sum
+
+      - name: Dockerfile Parser Diff
+        run: bun scripts/dockerfile-difftest/run.ts --seed 1
+
       # the ACME issuer against Pebble and challtestsrv in Docker
       - name: Test ACME
         run: bun run test:pebble
@@ -362,6 +373,12 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      # The registry suite's registry runs on loopback under this name, since
+      # the docker proxy refuses an IP or localhost; the suite trusts its
+      # certificate in /etc/docker/certs.d with sudo
+      - name: Name the e2e registry
+        run: echo '127.0.0.1 imp-e2e-registry.test' | sudo tee -a /etc/hosts
 
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.

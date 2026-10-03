@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@balena/dockerignore": "catalog:",
     "@imp/api": "workspace:*",
+    "@imp/local-tar": "workspace:*",
     "@imp/mcp": "workspace:*",
     "@orpc/client": "catalog:",
     "@zgeoff/imp-client": "workspace:*",

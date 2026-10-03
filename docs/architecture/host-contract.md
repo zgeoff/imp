@@ -146,39 +146,60 @@ namespace, which the jailer's mounts need today.
 
 ## The Docker socket
 
-impd builds, pulls and exports images with the `docker` CLI. imp-host does not mount the host's
-`/var/run/docker.sock`. A second container from the same image, `imp-docker-proxy`, holds it and
-serves `/run/imp-docker/docker.sock`. imp-host mounts `/run/imp-docker` read-only and sets
-`DOCKER_HOST` to that socket.
+impd pulls and exports images with the `docker` CLI, and sends its image builds to the socket
+itself, so `DOCKER_HOST` must be `unix:///<path>`; any other value fails a build, not impd's start.
+imp-host does not mount the host's `/var/run/docker.sock`. A second container from the same image,
+`imp-docker-proxy`, holds it and serves `/run/imp-docker/docker.sock`. imp-host mounts
+`/run/imp-docker` read-only and sets `DOCKER_HOST` to that socket.
 
 **CAUTION:** The proxy closes the Docker socket path only. imp-host keeps `SYS_ADMIN`, and root in
 it can still become root on the host through a new procfs and `core_pattern`
 ([privileges](#privileges)). The container is still no security boundary.
 
 The proxy, [`packages/daemon/src/docker-proxy/`](../../packages/daemon/src/docker-proxy/), lets
-through the calls impd's CLI makes and refuses every other with a 403 and a log line:
+through the calls impd and its CLI make, and refuses every other with a 403 and a log line:
 
-| Call                                                     | What passes                                                                                                                                                                                                                  |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `HEAD`/`GET /_ping`, `/version`                          | As they are                                                                                                                                                                                                                  |
-| `GET /images/{name}/json`                                | As it is                                                                                                                                                                                                                     |
-| `POST /images/create` (pull)                             | `fromImage` and `tag` only, an empty body. Not a registry named `localhost` or by an IP address (by name only: see below), and not the repository of `IMP_HOST_IMAGE`, so a pull cannot move the tag both containers run     |
-| `POST /build`                                            | The classic builder (`version=1`). Every `t` is `imp/<name>:latest`; `dockerfile` is a path in the context; `buildargs` holds only `BUILDKIT_SYNTAX=docker/dockerfile:1`; `q`, `rm`, `forcerm`. Every other param is refused |
-| `POST /containers/create`                                | Only `<image> /bin/true` at the CLI's defaults. The engine gets a body the proxy builds: that image, `/bin/true`, network `none`, and a label with the proxy's token                                                         |
-| `GET /containers/{id}/export`, `DELETE /containers/{id}` | Only a container whose label holds the proxy's token, by its full ID. `rm` forwards `force=1&v=1`                                                                                                                            |
+| Call                                                     | What passes                                                                                                                                                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HEAD`/`GET /_ping`, `/version`                          | As they are                                                                                                                                                                                                                         |
+| `GET /images/{name}/json`                                | As it is                                                                                                                                                                                                                            |
+| `POST /images/create` (pull)                             | `fromImage` and `tag` only, an empty body. Not a registry named `localhost` or by an IP address (by name only: see below), and not the repository of `IMP_HOST_IMAGE`, so a pull cannot move the tag both containers run            |
+| `POST /build`                                            | BuildKit (`version=2`) with no session: the context is the body. One `t`, `imp/<name>:latest`; `dockerfile` is a path in the context; `buildargs` is exactly `BUILDKIT_SYNTAX` at the pinned frontend. Every other param is refused |
+| `POST /containers/create`                                | Only `<image> /bin/true` at the CLI's defaults. The engine gets a body the proxy builds: that image, `/bin/true`, network `none`, and a label with the proxy's token                                                                |
+| `GET /containers/{id}/export`, `DELETE /containers/{id}` | Only a container whose label holds the proxy's token, by its full ID. `rm` forwards `force=1&v=1`                                                                                                                                   |
 
 - **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
   that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
   engine a new request with that same path and the checked query. Of the client's headers, a pull
-  keeps only `X-Registry-Auth` and a build only `X-Registry-Config`; no other header passes.
+  keeps only `X-Registry-Auth`, and a build keeps none. A client that goes ends a build, a pull or
+  an export upstream.
 - **Headers:** the engine reads a build's params from `r.Form`, where Go puts an urlencoded body
   ahead of the query and appends a multipart body after it, so a form body would replace or add
   params the checked query does not allow, such as `networkmode`, `remote` and `t`. A build whose
   `Content-Type` is present and is not exactly `application/x-tar` gets the 403: a form (urlencoded
   or multipart), and a tar with a parameter, too. The proxy sends `Content-Type: application/x-tar`
   itself. A create's body and type are the proxy's own; a pull takes no body.
-- **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach, exec or
-  BuildKit session.
+- **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach or exec.
+- **No BuildKit session:** `/session` and `/grpc` are refused, and so are the build params that need
+  a session or move the build: `session`, `remote`, `outputs`, `cachefrom`, `pull`, `platform`,
+  `buildid` and `networkmode`. Without the session the engine does not apply `.dockerignore`, so
+  impd and the CLI leave its matches out when they pack the context.
+- **Entitlements:** `RUN --network=host` fails in the engine: on the `/build` route a build gets
+  `network.host` only from `networkmode=host` (moby `daemon/internal/builder-next/builder.go`,
+  docker-v29.8.2), which the proxy refuses, so BuildKit answers `network.host is not allowed`.
+  `RUN --security=insecure` never reaches the engine: the pinned frontend is a stable channel, which
+  has no `--security` flag, and fails with `unknown flag: --security`. The engine would refuse it
+  too, since dockerd grants `security.insecure` only when `daemon.json` sets
+  `builder.entitlements.security-insecure` (`daemon/internal/builder-next/controller.go`), but no
+  e2e case shows that refusal. A frontend bump that parses `--security` must keep the e2e case
+  green.
+- **The frontend:** `BUILDKIT_SYNTAX` must name
+  [`DOCKERFILE_FRONTEND`](../../packages/daemon/src/docker-proxy/dockerfile-frontend.ts) by digest,
+  the same pin as `host/Dockerfile`'s first line. It wins over a `# syntax=` line, so a Dockerfile
+  cannot pick the image BuildKit runs as its frontend. impd pulls the frontend by digest before a
+  build when the engine lacks it: an engine before Docker 29.6.0 (BuildKit v0.31.0,
+  [moby/buildkit#6760](https://github.com/moby/buildkit/pull/6760)) fetches a frontend only through
+  a client session, and impd's build has none. The pull meets the same rule as a base image's.
 - **The token:** made once, in `/var/lib/imp-docker-proxy/token` (0600), which only the proxy
   mounts. An image cannot carry it, because imp-host never sees it.
 - **Bodies:** a build context streams through, up to `IMP_BUILD_CONTEXT_MAX_MIB`; a create body is
@@ -197,17 +218,34 @@ through the calls impd's CLI makes and refuses every other with a 403 and a log 
 What stays open through the proxy, by design or until later work:
 
 - A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
-  through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
-  because the classic builder pulls it itself.
-- `ADD http://...` and `ADD <git url>` in a Dockerfile make dockerd download in the host's own
-  network, so a build can reach a service on the host's `127.0.0.1`, impd's published loopback port
-  among them, and a link-local address ([#145](https://github.com/zgeoff/imp/issues/145)).
-- The pull rule reads the registry's name, not its address. The engine resolves a hostname that
-  points into `127.0.0.0/8` and treats that registry as insecure, so a pull from such a name reaches
-  a registry on the host's loopback.
-- A build has no memory limit and may use all host RAM; a pull can fill the disk.
-- The classic builder is deprecated upstream. When the engine drops it, builds stop; BuildKit
-  through the proxy is later work.
+  through the bridge gateway. impd pulls the pinned frontend from Docker Hub on a host's first
+  build, so a host with no route to Docker Hub cannot build. An isolated builder, which would close
+  this and the gaps below together, is a separate issue.
+- impd narrows what the engine fetches on its own, by narrow input and trigger rejection, not
+  build-network isolation ([#145](https://github.com/zgeoff/imp/issues/145); the rules are in the
+  [images guide](../guides/images.md#build-an-image)). It refuses an `ADD` from a URL or a git
+  remote, which dockerd would fetch in the host's network namespace, where it reaches services on
+  the host's `127.0.0.1` and link-local addresses such as `169.254.169.254`. It refuses `$` in
+  `FROM`, so `FROM $BASE` with `ARG BASE=127.0.0.1:5000/x` no longer goes around the pull rule. It
+  refuses `ONBUILD` in the Dockerfile and in the config of every image the build names, and it pulls
+  the images of `COPY --from` and `RUN --mount=from=` through the pull rule, as it pulls a `FROM`
+  image. impd parses the Dockerfile with a port of the pinned frontend's parser and refuses forms
+  the two could read differently; `scripts/dockerfile-difftest` checks the port against the Go
+  parser on each frontend bump.
+- impd holds the build to the images it inspected: the Dockerfile the engine gets names each
+  external image by its registry digest, and `FROM --platform` by the engine's platform. An image
+  with no registry digest, which the classic image store gives an image built on the host, is
+  refused until [#156](https://github.com/zgeoff/imp/issues/156). The containerd store gives such an
+  image a digest under its own name; Docker 29.7 then asks the registry for it and fails the build.
+- The engine applies no ignore file to an uploaded context, so `.dockerignore` does not hide a file
+  from `COPY .` in an upload.
+- The pull rule reads the registry's name, not its address, so a pull from a name that resolves into
+  `127.0.0.0/8` or another private range reaches a registry on the host's loopback or network. The
+  engine speaks HTTPS to such a name: Docker 29.7.2 with the containerd image store refuses a
+  plain-HTTP answer, so the registry needs a certificate the engine trusts.
+- A build has no memory limit and may use all host RAM; a pull can fill the disk. BuildKit keeps a
+  build cache in the host's Docker, which the engine's builder GC bounds and impd's disk budget does
+  not count.
 
 ## Firewall
 

@@ -214,9 +214,10 @@ of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)
 
 ## Images: any OCI image
 
-1. `imp image build <dir> --name <name>` uploads the directory as a tar and runs `docker build` on
-   it; `--on-host` builds a directory on the host instead. Either way the result is `imp/<name>`.
-   `imp image add <ref>` takes an image the host Docker has, and pulls it when it is missing.
+1. `imp image build <dir> --name <name>` uploads the directory as a tar and builds it with BuildKit
+   on the host Docker; `--on-host` builds a directory on the host instead. Either way the result is
+   `imp/<name>`. `imp image add <ref>` takes an image the host Docker has, and pulls it when it is
+   missing.
 2. impd runs `docker create` and `docker export` and unpacks the tar. It keeps owners, modes and the
    `security.capability` and `user.*` extended attributes, which `mkfs.ext4 -d` copies too.
 3. It writes the OCI config (`Env`, `WorkingDir`, `User`) to `/etc/imp/image.json` in the rootfs.

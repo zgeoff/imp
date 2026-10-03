@@ -56,6 +56,9 @@ const EnvSchema = z.object({
   IMP_DEFAULT_DISK_GIB: CountSchema.default(32),
   IMP_DISK_RESERVE_GIB: CountSchema.optional(),
   IMP_BUILD_CONTEXT_MAX_MIB: CountSchema.default(1024),
+
+  // the engine, as the docker CLI reads it; impd's own builds go there too
+  DOCKER_HOST: z.string().optional(),
   IMP_KSM: z.enum(['0', '1']).default('0'),
   IMP_KSM_EXEC: z.string().default('ksm-exec'),
 
@@ -146,6 +149,10 @@ export interface Config {
 
   // the largest build context a client may upload to IMAGE_BUILD_PATH
   readonly buildContextMaxBytes: number;
+
+  // DOCKER_HOST, where impd sends its image builds: imp-docker-proxy's
+  // socket on imp-host (docs/architecture/host-contract.md#the-docker-socket)
+  readonly dockerHost: string | null;
   readonly dns: readonly string[];
   readonly subnet: Subnet;
 
@@ -349,6 +356,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     diskReserveBytes:
       parsed.IMP_DISK_RESERVE_GIB === undefined ? null : parsed.IMP_DISK_RESERVE_GIB * 1024 ** 3,
     buildContextMaxBytes: parsed.IMP_BUILD_CONTEXT_MAX_MIB * 1024 ** 2,
+    dockerHost: parsed.DOCKER_HOST ?? null,
     dns: parsed.IMP_DNS,
     subnet,
     ipv6: parseIpv6Setting(parsed.IMP_SUBNET6),

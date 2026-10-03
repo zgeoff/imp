@@ -11,9 +11,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { countTarBytes, listContextEntries } from '@imp/local-tar';
 import type { CopyProgress } from '../cp/copy-progress';
-import { countTarBytes } from '../cp/pack-local-path';
-import { listContextEntries } from './pack-build-context';
 import { createContextStream } from './run-image-build';
 
 // `docker build -o` exports the image's files; FROM scratch pulls nothing
@@ -90,6 +89,7 @@ function runDocker(argv: readonly string[], stdin?: string): void {
 async function listDockerViews(
   files: Readonly<Record<string, string>>,
   dockerfile: string,
+  requested = dockerfile,
 ): Promise<{ readonly fromDir: string[]; readonly fromTar: string[] }> {
   const work = mkdtempSync(join(tmpdir(), 'imp-context-docker-'));
 
@@ -104,7 +104,7 @@ async function listDockerViews(
     chmodSync(join(root, 'app.js'), 0o755);
     symlinkSync('app.js', join(root, 'start'));
 
-    const entries = await listContextEntries(root, dockerfile);
+    const entries = await listContextEntries(root, requested);
 
     const tarPath = join(work, 'context.tar');
 
@@ -181,6 +181,42 @@ test.skipIf(!HAS_BUILDX)(
 
     expect(views.fromTar).toEqual(views.fromDir);
     expect(views.fromTar).toEqual(['app.js*', 'start@', 'web.Dockerfile']);
+  },
+  120_000,
+);
+
+// the CLI falls back to dockerfile before it reads an ignore file, so
+// dockerfile.dockerignore applies, not Dockerfile.dockerignore
+test.skipIf(!HAS_BUILDX)(
+  'with only a lowercase dockerfile, docker and the packer use its ignore file',
+  async () => {
+    const views = await listDockerViews(
+      {
+        dockerfile: 'FROM scratch\nCOPY . /\n',
+        'Dockerfile.dockerignore': 'a.txt\n',
+        'dockerfile.dockerignore': 'b.txt\n',
+        '.dockerignore': 'c.txt\n',
+        'app.js': 'app',
+        'a.txt': '',
+        'b.txt': '',
+        'c.txt': '',
+      },
+      'dockerfile',
+      'Dockerfile',
+    );
+
+    expect(views.fromTar).toEqual(views.fromDir);
+
+    expect(views.fromTar).toEqual([
+      '.dockerignore',
+      'Dockerfile.dockerignore',
+      'a.txt',
+      'app.js*',
+      'c.txt',
+      'dockerfile',
+      'dockerfile.dockerignore',
+      'start@',
+    ]);
   },
   120_000,
 );

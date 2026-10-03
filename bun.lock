@@ -42,8 +42,8 @@
         "imp": "src/main.ts",
       },
       "dependencies": {
-        "@balena/dockerignore": "catalog:",
         "@imp/api": "workspace:*",
+        "@imp/local-tar": "workspace:*",
         "@imp/mcp": "workspace:*",
         "@orpc/client": "catalog:",
         "@zgeoff/imp-client": "workspace:*",
@@ -78,6 +78,7 @@
       "version": "0.28.1",
       "dependencies": {
         "@imp/api": "workspace:*",
+        "@imp/local-tar": "workspace:*",
         "@imp/mcp": "workspace:*",
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",
@@ -131,6 +132,14 @@
         "@types/react-dom": "catalog:",
         "@vitejs/plugin-react": "catalog:",
         "vite": "catalog:",
+      },
+    },
+    "packages/local-tar": {
+      "name": "@imp/local-tar",
+      "version": "0.0.0",
+      "dependencies": {
+        "@balena/dockerignore": "catalog:",
+        "tar-stream": "catalog:",
       },
     },
     "packages/mcp": {
@@ -309,6 +318,8 @@
     "@imp/daemon": ["@imp/daemon@workspace:packages/daemon"],
 
     "@imp/dashboard": ["@imp/dashboard@workspace:packages/dashboard"],
+
+    "@imp/local-tar": ["@imp/local-tar@workspace:packages/local-tar"],
 
     "@imp/mcp": ["@imp/mcp@workspace:packages/mcp"],
 

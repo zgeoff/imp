@@ -108,6 +108,7 @@ packages/cli      imp CLI
 packages/client   @zgeoff/imp-client, the typed client published to npm
 packages/dashboard web dashboard, served at /ui/
 packages/mcp      MCP server, behind imp mcp and /mcp
+packages/local-tar local files as a tar, with .dockerignore: imp cp, image build contexts
 images/base       thin base image
 images/dev        example dev image
 host/             host container Dockerfile (dev and release), entrypoint, storage, network

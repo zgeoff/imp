@@ -8,9 +8,6 @@ interface CommandOptions {
   // the whole environment of the child; impd's own by default
   readonly env?: Readonly<Record<string, string>>;
 
-  // a file the child reads as stdin; none by default
-  readonly stdinFile?: string;
-
   // kills the child when it aborts
   readonly signal?: AbortSignal;
 }
@@ -22,10 +19,12 @@ export async function runCommand(
   options: CommandOptions = {},
 ): Promise<CommandResult> {
   const child = Bun.spawn([...argv], {
-    stdin: options.stdinFile === undefined ? 'ignore' : Bun.file(options.stdinFile),
+    stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
-    ...(options.env !== undefined && { env: { ...options.env } }),
+
+    // process.env as it is now: Bun's own default is the env impd started with
+    env: options.env === undefined ? process.env : { ...options.env },
     ...(options.signal !== undefined && { signal: options.signal }),
   });
 

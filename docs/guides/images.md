@@ -28,8 +28,12 @@ from ([releasing](../../RELEASING.md#what-a-release-ships)).
 ## Build an image
 
 `imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
-uploads it to impd, which runs `docker build` on the host Docker and tags the result `imp/<name>`.
-Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the context.
+uploads it to impd, which builds it with BuildKit on the host Docker and tags the result
+`imp/<name>`. `--file <path>` names a Dockerfile inside the context. A later image can start FROM an
+image you built this way on Docker's containerd image store, where impd pins it by its content
+digest (Docker 29.8 builds from that pin, 29.7 does not; see the digest the build uses, below). The
+classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The published base,
+`ghcr.io/zgeoff/imp-base` by digest as `images/dev` names it, works on both.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -40,32 +44,96 @@ Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside 
 - **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
   the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
   under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
-  starts. When the client goes, impd kills the build and frees its slot and its disk room.
+  starts. When the client goes, impd ends the build request, which stops the build on the engine,
+  and frees its slot and its disk room.
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
   `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, for Docker's copy of it, and for the
   image ([storage](../architecture/storage.md#disk-budget)).
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
-- **What the build may do.** impd runs one fixed command:
-  `docker build --quiet --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 -t imp/<name> -f <file> -`.
-  The client cannot pass build arguments, secrets, `--network` or `--allow`. The Dockerfile path
-  must stay inside the context. The image has no buildx, so the build runs on Docker's classic
-  builder, which ignores `BUILDKIT_SYNTAX` and a `# syntax=` line, and has no `RUN --mount`.
-  `imp-docker-proxy` allows only that builder
+- **What the build may do.** impd sends one fixed BuildKit build, `POST /build?version=2`, with the
+  tar as the body and no session. The client gives only the name and the Dockerfile path, which must
+  stay inside the context; it cannot pass build arguments, secrets, SSH agents, `--network` or
+  `--allow`. `BUILDKIT_SYNTAX` pins the Dockerfile frontend by digest (`docker/dockerfile:1.19`, as
+  in `host/Dockerfile`), so a `# syntax=` line is ignored. `RUN --mount=type=cache` works;
+  `RUN --network=host` and `RUN --security=insecure` fail the build. A failed build shows BuildKit's
+  error, without the `RUN` step's output. The host pulls the frontend from Docker Hub on its first
+  build. `imp-docker-proxy` allows only this build
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
   Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
+- **Images the build names.** A build has no session, so BuildKit cannot ask for registry
+  credentials. Before the build, impd pulls each image that a `FROM`, a `COPY --from` or a
+  `RUN --mount=from=` names and the host does not have yet, as `imp image add` pulls it, with the
+  credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd
+  inspects each image once, for the engine's platform, and refuses an image the host has for another
+  platform, and any image the build names whose config holds `ONBUILD` triggers: the frontend runs
+  the triggers of a `COPY --from` or a `RUN --mount=from=` image too, in this build.
+- **The digest the build uses.** The Dockerfile the engine gets names each of those images by the
+  registry digest of the image impd inspected: `FROM busybox:1.37` becomes `FROM busybox@sha256:…`,
+  so a tag that moves in the registry after the pull does not change the build. impd picks the
+  digest under the image's own repository, else another of its registry digests, which holds the
+  same content. An image with no registry digest is refused:
+
+  ```text
+  FROM imp/base: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).
+  ```
+
+  With Docker's classic image store, an image built on the host has no registry digest, and impd
+  refuses it (#156). With the containerd image store, each tag has a digest under its own name, so
+  impd pins a base built on the host by its content digest. Docker 29.8 builds from that pin; Docker
+  29.7 asks the registry for the name and fails the build. A tag you put on a pulled multi-platform
+  image (`docker tag busybox:1.37 imp/x`) cannot be pinned on the containerd store: the engine asks
+  the registry for `imp/x@sha256:…` and fails. impd then adds a line to the error that names the
+  pin; build FROM the original repository, `busybox:1.37`, instead of the retag. A build never uses
+  such an image by its tag alone, and impd's log line for each build names the image store.
+
+  `FROM --platform=$BUILDPLATFORM` and `$TARGETPLATFORM` become the engine's platform, such as
+  `--platform=linux/amd64`. A Dockerfile with `# check=error=true` then fails the frontend's
+  `FromPlatformFlagConstDisallowed` check; skip that check, or leave `--platform` out.
+
+- **What impd refuses before the build.** impd reads the Dockerfile as the pinned frontend parses
+  it, and refuses with `BAD_REQUEST`:
+  - an `ADD` from a URL or a git remote (`http://`, `https://`, `git://`, `ssh://`,
+    `user@host:path`), which the engine would fetch from the host's network;
+  - a variable (`$`) in `FROM`, in an `ADD` source, in `COPY --from` or in `RUN --mount=from=`. impd
+    passes no build arguments, so write the image or the source literally;
+  - any `ONBUILD`;
+  - `FROM --platform` with any value but `$BUILDPLATFORM` or `$TARGETPLATFORM`, written so, and an
+    `ARG` of `BUILDPLATFORM`, `BUILDOS`, `BUILDARCH`, `BUILDVARIANT`, `TARGETPLATFORM`, `TARGETOS`,
+    `TARGETARCH` or `TARGETVARIANT` in any stage: impd builds for the engine's platform only;
+  - an ambiguous form: a quote, the escape character or a character that is not printable ASCII in a
+    `FROM` word, an `ADD` source or the flags of `FROM`, `ADD`, `COPY` and `RUN`, since the
+    frontend's lexer would read it another way than impd does.
+
+  These checks are narrow input and trigger rejection, not build-network isolation. They leave open:
+  - a registry whose DNS name resolves to a private or loopback address: the pull rule reads the
+    name, not the address;
+  - a `RUN` step, which reaches the network through the host's bridge (the caution below);
+  - a base image built on the host, which does not build until
+    [#156](https://github.com/zgeoff/imp/issues/156) but on the containerd store of Docker 29.8;
+  - `.dockerignore`, which the engine does not apply to an uploaded context.
+
+- **The context impd builds.** impd writes the uploaded tar again as plain ustar, with pax records
+  only for long names, and builds that copy. The Dockerfile it checks is the one the engine reads,
+  and the lowercase `dockerfile` fallback works as in the frontend. impd refuses a context with two
+  entries at one name, a hard link, an entry under a symlink or a file, a device or a FIFO, a name
+  that is absolute or holds `..`, or a `security.*` or other xattr that is not `user.*`. It drops
+  `user.*` xattrs and sub-second mtimes. The engine applies no ignore file to the uploaded tar, so
+  the tar holds exactly the files `COPY .` sees.
 
 **CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
-reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
+reach the internet and anything the host's bridge can reach, the host's services on the bridge among
+them. impd's refusal of a remote `ADD` does not change that. Give `manage` only to callers you trust
 with that.
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
-An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` and
-`images/examples/hello` start FROM the published base by digest; to stack them on another base, edit
-that FROM line. An imp's own disk can be an image too: a [template](./templates.md) copies a set-up
-imp into new ones.
+impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`,
+and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An image you built with
+plain `docker build` goes in with `imp image add <ref>`. `images/dev` and `images/examples/hello`
+start FROM the published base by digest; to stack them on another base, edit that FROM line. An
+imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
 
 The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
 `context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
@@ -151,10 +219,13 @@ them on a running imp, and `imp logs` prints their logs ([services](./services.m
 
 ## Make your own
 
-Any image boots. FROM `imp/base` to get Docker and the usual tools:
+Any image boots. Start FROM the published base to get Docker and the usual tools. Copy its FROM line
+from `images/dev/Dockerfile`, which names it by digest. `FROM imp/base`, a base you built yourself,
+is pinned by its content digest on the containerd image store and refused on the classic store
+(#156):
 
 ```dockerfile
-FROM imp/base
+FROM ghcr.io/zgeoff/imp-base:<tag>@sha256:<digest>
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY app/ /srv/app/

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { listContextEntries } from './pack-build-context';
+import { MissingDockerfileError, listContextEntries } from './pack-build-context';
 
 // a directory with these files (relative path → content), removed on dispose
 function createContext(files: Readonly<Record<string, string>>) {
@@ -107,10 +107,30 @@ test('symlinks stay links and modes keep their exec bits', async () => {
   expect(link?.kind).toBe('symlink');
 });
 
-test('a missing Dockerfile is a usage error', async () => {
+test('a missing Dockerfile is a MissingDockerfileError', async () => {
   using ctx = createContext({ 'app.js': '' });
 
   const failure = await listContextEntries(ctx.root, 'Dockerfile').catch((error: unknown) => error);
 
+  expect(failure).toBeInstanceOf(MissingDockerfileError);
   expect(String(failure)).toContain('there is no Dockerfile');
+});
+
+test('a lowercase dockerfile stands in for a missing Dockerfile, with its own ignore file', async () => {
+  using ctx = createContext({
+    dockerfile: 'FROM scratch',
+    'dockerfile.dockerignore': '*\n',
+    '.dockerignore': '',
+    'app.js': '',
+  });
+
+  using both = createContext({ Dockerfile: 'FROM scratch', dockerfile: 'FROM scratch' });
+
+  const lower = await listNames(ctx.root);
+  const dotted = await listNames(ctx.root, './Dockerfile');
+  const upper = await listNames(both.root);
+
+  expect(lower).toEqual(['dockerfile']);
+  expect(dotted).toEqual(['dockerfile']);
+  expect(upper).toEqual(['Dockerfile', 'dockerfile']);
 });

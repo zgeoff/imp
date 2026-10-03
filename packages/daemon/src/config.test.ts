@@ -28,6 +28,7 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultDiskBytes: 32 * 1024 ** 3,
     diskReserveBytes: null,
     buildContextMaxBytes: 1024 ** 3,
+    dockerHost: null,
     dns: ['1.1.1.1', '8.8.8.8'],
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },
     ipv6: { kind: 'auto' },

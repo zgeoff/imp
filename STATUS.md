@@ -127,7 +127,8 @@ From the milestone work:
   ([#83](https://github.com/zgeoff/imp/issues/83)): imp-host reaches Docker only through
   `imp-docker-proxy`, which lets through the calls impd makes
   ([the Docker socket](./docs/architecture/host-contract.md#the-docker-socket)), and the `socket`
-  e2e suite checks the refusals. Builds use Docker's deprecated classic builder through it.
+  e2e suite checks the refusals. Builds run on BuildKit with no session and a pinned frontend
+  ([#129](https://github.com/zgeoff/imp/issues/129)).
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
   its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).

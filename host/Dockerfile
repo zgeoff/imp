@@ -60,7 +60,9 @@ RUN echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/
  && apt-get install -y --no-install-recommends -t trixie-backports "zfsutils-linux=${ZFS_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
-# Docker CLI and Tailscale from their upstream apt repos.
+# Docker CLI and Tailscale from their upstream apt repos. The CLI is pinned, so
+# a rebuild gets the same `docker pull`, `create` and `export` impd runs.
+ARG DOCKER_CLI_VERSION=5:29.8.2-1~debian.13~trixie
 RUN install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
  && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable" \
@@ -68,7 +70,7 @@ RUN install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg \
  && curl -fsSL https://pkgs.tailscale.com/stable/debian/trixie.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends docker-ce-cli tailscale \
+ && apt-get install -y --no-install-recommends "docker-ce-cli=${DOCKER_CLI_VERSION}" tailscale \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /tmp/firecracker.tgz "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-x86_64.tgz" \

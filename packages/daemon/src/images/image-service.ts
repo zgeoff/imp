@@ -1,6 +1,14 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
+import {
+  BuildContextError,
+  MissingDockerfileError,
+  countTarBytes,
+  listContextEntries,
+  readBuildContext,
+  writeBuildContext,
+} from '@imp/local-tar';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
@@ -16,13 +24,30 @@ import {
 import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
-import { buildImagePaths } from '../storage/data-layout';
+import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { DockerBuildError, runDockerBuild } from './docker-build';
+import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
+import type { ExternalImage } from './dockerfile-check';
+import { DockerfileError } from './dockerfile-error';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
+import {
+  PIN_INSPECT_FORMAT,
+  PinInspectSchema,
+  formatPinFailure,
+  formatPlatform,
+  normalizePlatform,
+  pickRepoDigest,
+  readImageStore,
+} from './image-pin';
+import type { ImageStore, Pin, PinInspect } from './image-pin';
 import { writeExportedTree } from './unpack-export';
+import { writeContextTar } from './write-context-tar';
 
 const GIB = 1024 ** 3;
 
@@ -35,12 +60,21 @@ const ROOTFS_SPARE_BYTES = 2 * GIB;
 const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 
-// pins the Dockerfile frontend, so a `# syntax=` line cannot pull another one
-const PINNED_FRONTEND = 'BUILDKIT_SYNTAX=docker/dockerfile:1';
+// the largest Dockerfile impd reads for its FROM lines
+const DOCKERFILE_MAX_BYTES = 1024 ** 2;
+
+// the tail of a failed pull's message the client gets
+const FAILURE_MAX_CHARS = 4000;
 const SEED_REF = 'ubuntu:24.04';
 
 const InspectSchema = z
-  .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
+  .array(
+    z.object({
+      Id: z.string(),
+      Config: z.unknown(),
+      Size: z.number().optional(),
+    }),
+  )
   .length(1);
 
 export interface ImageService {
@@ -51,8 +85,8 @@ export interface ImageService {
     dockerfile?: string,
   ) => Promise<ImageRecord>;
 
-  // a context the client uploaded: a tar file docker build reads on stdin;
-  // `signal` aborts when the client goes, and kills the build
+  // a context the client uploaded, as a tar file; `signal` aborts when the
+  // client goes, and ends the build
   readonly buildImageFromContext: (
     tarPath: string,
     name: string,
@@ -83,6 +117,166 @@ export interface ImageServiceDeps {
 
   // a build holds room for the unpacked tree and its ext4 file
   readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
+}
+
+function toBadRequest(error: unknown): unknown {
+  return error instanceof DockerfileError
+    ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
+    : error;
+}
+
+// the engine's platform, which a build without one runs for
+async function readHostPlatform(signal: AbortSignal): Promise<string> {
+  const version = await runCommand(
+    ['docker', 'version', '--format', '{{json .Server.Os}} {{json .Server.Arch}}'],
+    { signal },
+  );
+
+  signal.throwIfAborted();
+
+  if (version.exitCode !== 0) {
+    throw new Error(`docker version: ${version.stderr.trim()}`);
+  }
+
+  const [os, arch] = z.tuple([z.string(), z.string()]).parse(
+    version.stdout
+      .trim()
+      .split(' ')
+      .map((part): unknown => JSON.parse(part)),
+  );
+
+  return normalizePlatform(os, arch);
+}
+
+// what impd reads of an image the host has, or null when it lacks it
+async function readPinInspect(ref: string, signal: AbortSignal): Promise<PinInspect | null> {
+  const inspected = await runCommand(
+    ['docker', 'image', 'inspect', '--format', PIN_INSPECT_FORMAT, ref],
+    { signal },
+  );
+
+  signal.throwIfAborted();
+
+  if (inspected.exitCode !== 0) {
+    return null;
+  }
+
+  return PinInspectSchema.parse(JSON.parse(inspected.stdout));
+}
+
+// the image the host has for ref, pulled first when it lacks it
+async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): Promise<PinInspect> {
+  const ref = image.ref;
+
+  const local = await readPinInspect(ref, signal);
+
+  if (local !== null) {
+    return local;
+  }
+
+  const pulled = await runCommand(['docker', 'pull', '--quiet', ref], { signal });
+
+  signal.throwIfAborted();
+
+  if (pulled.exitCode !== 0) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+    });
+  }
+
+  const loaded = await readPinInspect(ref, signal);
+
+  if (loaded === null) {
+    throw new Error(`docker image inspect ${ref} failed after its pull`);
+  }
+
+  return loaded;
+}
+
+// Engines before 29.6.0 (BuildKit v0.31.0) fetch the BUILDKIT_SYNTAX frontend
+// only through a client session, which impd's build has none of; a frontend
+// the engine already has needs no fetch. Pulled by digest when it lacks it.
+async function loadFrontend(signal: AbortSignal): Promise<void> {
+  const inspected = await runCommand(
+    ['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND],
+    { signal },
+  );
+
+  signal.throwIfAborted();
+
+  if (inspected.exitCode === 0) {
+    return;
+  }
+
+  const pulled = await runCommand(['docker', 'pull', '--quiet', DOCKERFILE_FRONTEND], { signal });
+
+  signal.throwIfAborted();
+
+  if (pulled.exitCode !== 0) {
+    throw new ORPCError('BAD_GATEWAY', {
+      message: `the Dockerfile frontend ${DOCKERFILE_FRONTEND}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+    });
+  }
+
+  console.log(`impd: pulled the Dockerfile frontend ${DOCKERFILE_FRONTEND}`);
+}
+
+// one image's every spelling: the engine's registry and path, and the tag
+// (latest when none) and digest
+function toImageKey(ref: string): string {
+  const named = readImageReference(ref);
+  const [withoutDigest = '', digest = ''] = ref.split('@');
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const tagColon = withoutDigest.indexOf(':', lastSlash + 1);
+  const tag = tagColon === -1 ? 'latest' : withoutDigest.slice(tagColon + 1);
+
+  return `${named.registry}/${named.path}:${tag}@${digest}`;
+}
+
+// The pin for one image: its digest ref, once impd has checked the
+// variant the host has, which is the one the build uses.
+function pickPin(
+  image: Readonly<ExternalImage>,
+  inspect: Readonly<PinInspect>,
+  platform: string,
+): string {
+  const ref = image.ref;
+  const imagePlatform = formatPlatform(inspect.Os, inspect.Architecture);
+
+  if (imagePlatform !== platform) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref}: the host has this image for ${imagePlatform}, and builds for ${platform}`,
+    });
+  }
+
+  // the frontend runs the triggers of every image the build reaches, a
+  // COPY --from or a mount's too, where impd cannot check them
+  if ((inspect.OnBuild ?? []).length > 0) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref} has ONBUILD triggers, which impd refuses`,
+    });
+  }
+
+  // a digest under a registry the pull rule refuses would reach it unpulled
+  const repoDigests = inspect.RepoDigests ?? [];
+  const allowed = repoDigests.filter((digest) => checkReferenceRegistry(digest) === null);
+  const pin = pickRepoDigest(ref, allowed);
+
+  if (pin === null && repoDigests.length > 0) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref}: its registry digests name only registries impd refuses: ${repoDigests.join(', ')}`,
+    });
+  }
+
+  if (pin === null) {
+    const advice = image.use === 'FROM' ? 'build FROM' : 'name';
+
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${image.use} ${ref}: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; ${advice} a registry image by tag or digest. Local base images are not supported yet (#156).`,
+    });
+  }
+
+  return pin;
 }
 
 export function createImageService(deps: ImageServiceDeps): ImageService {
@@ -231,7 +425,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         requireDockerImage(existing);
 
         if (existing === undefined) {
-          return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
+          return createImage(deps.db, {
+            name: imageName,
+            ref,
+            digest: inspect.Id,
+            sizeBytes,
+          });
         }
 
         if (existing.digest === inspect.Id) {
@@ -263,6 +462,162 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
+  // A sessionless build cannot ask impd for registry credentials: each image
+  // the Dockerfile names and the host lacks is pulled first, as `imp image
+  // add` does. Returns the Dockerfile with each image pinned to its digest.
+  const resolvePinnedDockerfile = async (dockerfile: string, signal: AbortSignal) => {
+    const images = (() => {
+      try {
+        return checkDockerfile(dockerfile);
+      } catch (error) {
+        throw toBadRequest(error);
+      }
+    })();
+
+    const platform = await readHostPlatform(signal);
+
+    const pins = new Map<string, string>();
+
+    const used: Pin[] = [];
+
+    const stores = new Set<ImageStore>();
+
+    // Each image inspected and pinned once, whatever its uses or spellings
+    // (`busybox` is `docker.io/library/busybox:latest`): a tag that moves
+    // between two inspects would give the build two images.
+    const keys = new Map<string, string>();
+
+    for (const image of images) {
+      if (!ImageRefSchema.safeParse(image.ref).success) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `${image.use} ${JSON.stringify(image.ref)} is not an image reference`,
+        });
+      }
+
+      // the host may have it already, and then no pull meets the proxy
+      const registryProblem = checkReferenceRegistry(image.ref);
+
+      if (registryProblem !== null) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `${image.use} ${image.ref}: ${registryProblem}`,
+        });
+      }
+
+      const key = toImageKey(image.ref);
+      const known = keys.get(key);
+
+      if (known === undefined) {
+        signal.throwIfAborted();
+
+        const inspect = await loadImage(image, signal);
+
+        keys.set(key, pickPin(image, inspect, platform));
+        stores.add(readImageStore(inspect));
+      }
+
+      pins.set(image.ref, keys.get(key) ?? '');
+    }
+
+    for (const image of images) {
+      used.push({ use: image.use, ref: image.ref, pin: pins.get(image.ref) ?? '' });
+    }
+
+    const store = [...stores].find((candidate) => candidate !== 'unknown') ?? 'unknown';
+
+    try {
+      return { dockerfile: renderPinnedDockerfile(dockerfile, pins, platform), pins: used, store };
+    } catch (error) {
+      throw toBadRequest(error);
+    }
+  };
+
+  // nothing from the client reaches the engine but the tag's name and the
+  // Dockerfile's path in the context, both validated by the API schemas
+  // and again by imp-docker-proxy
+  const buildFromContext = async (
+    tarPath: string,
+    name: string,
+    givenDockerfile: string | undefined,
+    signal: AbortSignal,
+  ): Promise<ImageRecord> => {
+    const tag = `imp/${NameSchema.parse(name)}:latest`;
+    const tarBytes = statSync(tarPath).size;
+    const dockerfilePath = normalizeDockerfilePath(givenDockerfile);
+    const rewrittenPath = `${tarPath}.rewritten`;
+
+    // the pins the build used, for a failure the engine reports
+    let pins: readonly Pin[] = [];
+
+    try {
+      // the rewrite is the context again, with pax headers for long names
+      await deps.diskBudget.withRoom(tarBytes, async () => {
+        const context = await readBuildContext(
+          tarPath,
+          dockerfilePath,
+          DOCKERFILE_MAX_BYTES,
+          signal,
+        ).catch((error: unknown) => {
+          throw error instanceof BuildContextError
+            ? new ORPCError('BAD_REQUEST', { message: error.message })
+            : error;
+        });
+
+        const pinned = await resolvePinnedDockerfile(context.dockerfile, signal);
+
+        pins = pinned.pins;
+
+        const pinList = pinned.pins.map((pin) => `${pin.use} ${pin.ref} as ${pin.pin}`);
+
+        console.log(
+          `impd: image build ${name}: image store ${pinned.store}; pinned ${pinList.join(', ') || 'no image'}`,
+        );
+
+        signal.throwIfAborted();
+
+        await writeBuildContext(
+          tarPath,
+          rewrittenPath,
+          context,
+          pinned.dockerfile,
+          DOCKERFILE_MAX_BYTES,
+          signal,
+        );
+
+        signal.throwIfAborted();
+
+        // a prune between this and the build fails it with the engine's
+        // error, and the client can retry
+        await loadFrontend(signal);
+
+        // the engine keeps its own copy of the context while it builds
+        await deps.diskBudget.withRoom(statSync(rewrittenPath).size, () =>
+          runDockerBuild({
+            dockerHost: deps.config.dockerHost,
+            tarPath: rewrittenPath,
+            tag,
+            dockerfile: context.dockerfilePath,
+            signal,
+          }),
+        );
+      });
+    } catch (error) {
+      // nobody waits for the image: the build was stopped, or its tag is left
+      signal.throwIfAborted();
+
+      if (error instanceof DockerBuildError) {
+        throw new ORPCError('BAD_REQUEST', { message: formatPinFailure(error.message, pins) });
+      }
+
+      throw error;
+    } finally {
+      rmSync(rewrittenPath, { force: true });
+    }
+
+    signal.throwIfAborted();
+
+    return createImageFromRef(tag, name);
+  };
+
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
     const image =
       name === undefined ? await findDefaultImage() : await findImageByName(deps.db, name);
@@ -292,50 +647,45 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
       }
 
-      const tag = `imp/${NameSchema.parse(name)}:latest`;
-      const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
+      // packed here as the CLI packs an upload: the engine does not read
+      // .dockerignore from a context sent as the body
+      const entries = await listContextEntries(
+        contextDir,
+        normalizeDockerfilePath(dockerfile),
+      ).catch((error: unknown) => {
+        throw error instanceof MissingDockerfileError
+          ? new ORPCError('BAD_REQUEST', { message: error.message })
+          : error;
+      });
 
-      await runChecked(['docker', 'build', '--quiet', '-t', tag, ...fileArgs, contextDir]);
+      const tarBytes = await countTarBytes(entries);
 
-      return createImageFromRef(tag, name);
-    },
+      const maxBytes = deps.config.buildContextMaxBytes;
 
-    // a fixed argv: nothing from the client but the tag's name and the
-    // Dockerfile's path in the context, both validated by the API schemas
-    buildImageFromContext: async (tarPath, name, dockerfile, signal) => {
-      const tag = `imp/${NameSchema.parse(name)}:latest`;
-      const tarBytes = statSync(tarPath).size;
-
-      const argv = [
-        'docker',
-        'build',
-        '--quiet',
-        '--build-arg',
-        PINNED_FRONTEND,
-        '-t',
-        tag,
-        '-f',
-        dockerfile ?? 'Dockerfile',
-        '-',
-      ];
-
-      // docker keeps its own copy of the context while it builds
-      const result = await deps.diskBudget.withRoom(tarBytes, () =>
-        runCommand(argv, { stdinFile: tarPath, signal }),
-      );
-
-      // nobody waits for the image: the build was killed, or its tag is left
-      signal.throwIfAborted();
-
-      // the client's Dockerfile failed: its output is the client's to read
-      if (result.exitCode !== 0) {
+      // the limit an upload has, and the proxy's
+      if (tarBytes > maxBytes) {
         throw new ORPCError('BAD_REQUEST', {
-          message: `docker build failed: ${(result.stderr.trim() || result.stdout.trim()).slice(-4000)}`,
+          message: `the build context is ${String(tarBytes)} bytes, over the limit of ${String(Math.floor(maxBytes / 1024 ** 2))} MiB (IMP_BUILD_CONTEXT_MAX_MIB)`,
         });
       }
 
-      return createImageFromRef(tag, name);
+      const uploadsDir = buildUploadsDir(deps.config.dataDir);
+      const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
+
+      mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
+
+      return deps.diskBudget.withRoom(tarBytes, async () => {
+        try {
+          await writeContextTar(entries, tarPath);
+
+          // nobody to abort it: the oRPC call waits for the image
+          return await buildFromContext(tarPath, name, dockerfile, new AbortController().signal);
+        } finally {
+          rmSync(tarPath, { force: true });
+        }
+      });
     },
+    buildImageFromContext: buildFromContext,
     listImages: () => listImages(deps.db),
     removeImage: async (name) => {
       const image = await findImageByName(deps.db, name);
@@ -365,6 +715,27 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
     },
   };
+}
+
+// The Dockerfile's path in the context in one spelling, `./a//Dockerfile`
+// as `a/Dockerfile`, which the proxy checks; one that leaves the context is
+// refused.
+export function normalizeDockerfilePath(path: string | undefined): string {
+  const normalized = posix.normalize(path ?? 'Dockerfile');
+
+  if (
+    normalized.startsWith('/') ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized === '.' ||
+    normalized.endsWith('/')
+  ) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `the Dockerfile path ${JSON.stringify(path)} is not a file inside the build context`,
+    });
+  }
+
+  return normalized;
 }
 
 // A template is never rebuilt from docker: its name is made again from an

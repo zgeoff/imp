@@ -2,12 +2,20 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
 
 const TOKEN = 'test-token';
 const OWN_ID = 'a'.repeat(64);
 const OTHER_ID = 'b'.repeat(64);
 const CONTEXT_MAX_BYTES = 4 * 1024 ** 2;
+
+// a build as impd sends it
+const BUILD_PATH = `/v1.55/build?${new URLSearchParams({
+  t: 'imp/x:latest',
+  version: '2',
+  buildargs: JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }),
+}).toString()}`;
 
 interface Seen {
   readonly method: string;
@@ -21,6 +29,9 @@ const engineSocket = join(dir, 'engine.sock');
 const proxySocket = join(dir, 'proxy.sock');
 const seen: Seen[] = [];
 const logged: string[] = [];
+
+// a slow build on the engine: it started, and its client went
+const slowBuild = { started: Promise.withResolvers<void>(), gone: Promise.withResolvers<void>() };
 
 function readContainer(id: string): Response {
   const labels = id === OWN_ID ? { [PROXY_LABEL]: TOKEN } : { [PROXY_LABEL]: '1' };
@@ -61,6 +72,19 @@ const engine = Bun.serve({
       return new Response('tar bytes');
     }
 
+    // a build that never answers until its client goes
+    if (url.searchParams.get('t') === 'imp/slow:latest') {
+      slowBuild.started.resolve();
+
+      await new Promise((resolve) => {
+        request.signal.addEventListener('abort', resolve);
+      });
+
+      slowBuild.gone.resolve();
+
+      return new Response(null, { status: 499 });
+    }
+
     return Response.json({ received: body.length });
   },
 });
@@ -82,6 +106,7 @@ const proxy = Bun.serve({
 interface ProxyInit {
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string | Uint8Array | ReadableStream<Uint8Array>;
+  readonly signal?: AbortSignal;
 }
 
 function sendToProxy(method: string, target: string, init: ProxyInit = {}): Promise<Response> {
@@ -197,10 +222,10 @@ test('an export or rm of another container, even one whose image sets the label,
   ).toBe(true);
 });
 
-test('a build streams its context and keeps only the registry headers', async () => {
+test('a build streams its context and forwards no client header', async () => {
   const context = new Uint8Array(2 * 1024 ** 2).fill(7);
 
-  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1', {
+  const response = await sendToProxy('POST', BUILD_PATH, {
     headers: {
       'content-type': 'application/x-tar',
       'x-registry-config': 'e30=',
@@ -213,15 +238,15 @@ test('a build streams its context and keeps only the registry headers', async ()
   const answer: unknown = await response.json();
 
   expect(answer).toEqual({ received: context.length });
-  expect(seen[0]?.target).toBe('/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1');
+  expect(seen[0]?.target).toBe(BUILD_PATH);
   expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
-  expect(seen[0]?.headers['x-registry-config']).toBe('e30=');
+  expect(seen[0]?.headers['x-registry-config']).toBeUndefined();
   expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
   expect(seen[0]?.headers['cookie']).toBeUndefined();
 });
 
 test('a build without a Content-Type reaches the engine as a tar', async () => {
-  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+  const response = await sendToProxy('POST', BUILD_PATH, {
     body: new Blob([new Uint8Array(512)]).stream(),
   });
 
@@ -239,7 +264,7 @@ test('a build with a form body, which would replace or add to its query, never r
     'multipart/form-data; boundary=x',
     'application/x-tar; charset=utf-8',
   ]) {
-    const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+    const response = await sendToProxy('POST', BUILD_PATH, {
       headers: { 'content-type': contentType },
       body: 'networkmode=host&remote=http%3A%2F%2F127.0.0.1%3A9%2Fctx.tar&t=evil%3Alatest',
     });
@@ -258,6 +283,76 @@ test('a build with a form body, which would replace or add to its query, never r
   expect(logged).toHaveLength(4);
 });
 
+// the query passes as impd sends it; the body, encoded as fetch encodes a
+// form, would move the build to the host's network, a remote context, a tag
+// outside imp/ and the classic builder, which takes no frontend pin
+test('a BuildKit build with an urlencoded or a multipart form body never reaches the engine', async () => {
+  const fields: [string, string][] = [
+    ['networkmode', 'host'],
+    ['remote', 'http://127.0.0.1:9/ctx.tar'],
+    ['t', 'evil:latest'],
+    ['version', '1'],
+  ];
+
+  const multipart = new FormData();
+
+  for (const [key, value] of fields) {
+    multipart.append(key, value);
+  }
+
+  const statuses: number[] = [];
+  const contentTypes: string[] = [];
+
+  for (const form of [new URLSearchParams(fields), multipart]) {
+    // fetch's own encoding, with its Content-Type and multipart boundary
+    const encoded = new Request('http://docker/', { method: 'POST', body: form });
+
+    const contentType = encoded.headers.get('content-type') ?? '';
+
+    const body = await encoded.bytes();
+
+    contentTypes.push(contentType);
+
+    const response = await sendToProxy('POST', BUILD_PATH, {
+      headers: { 'content-type': contentType },
+      body,
+    });
+
+    statuses.push(response.status);
+
+    const refusal: unknown = await response.json();
+
+    expect(refusal).toEqual({
+      message: `imp-docker-proxy: a build body is a tar context, and Content-Type ${JSON.stringify(contentType)} is not application/x-tar`,
+    });
+  }
+
+  expect(contentTypes.map((value) => value.split(';')[0])).toEqual([
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+  ]);
+
+  expect(statuses).toEqual([403, 403]);
+  expect(seen).toEqual([]);
+});
+
+test('a client that goes ends its build on the engine', async () => {
+  const client = new AbortController();
+
+  const slowPath = BUILD_PATH.replace('imp%2Fx%3Alatest', 'imp%2Fslow%3Alatest');
+  const response = sendToProxy('POST', slowPath, { body: 'ctx', signal: client.signal });
+
+  await slowBuild.started.promise;
+
+  client.abort();
+
+  const failure = await response.catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+
+  await slowBuild.gone.promise;
+});
+
 test('a build context over the limit, sent chunked, is cut off', async () => {
   const chunk = new Uint8Array(1024 ** 2);
 
@@ -271,7 +366,7 @@ test('a build context over the limit, sent chunked, is cut off', async () => {
     },
   });
 
-  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+  const response = await sendToProxy('POST', BUILD_PATH, {
     body: stream,
   });
 
@@ -299,16 +394,12 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
 });
 
 test('an Upgrade, a refused route and a refused param never reach the engine', async () => {
-  const upgrade = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+  const upgrade = await sendToProxy('POST', BUILD_PATH, {
     headers: { upgrade: 'h2c', connection: 'Upgrade' },
   });
 
   const start = await sendToProxy('POST', `/v1.55/containers/${OWN_ID}/start`);
-
-  const remote = await sendToProxy(
-    'POST',
-    '/v1.55/build?t=imp%2Fx%3Alatest&version=1&remote=https%3A%2F%2Fx',
-  );
+  const remote = await sendToProxy('POST', `${BUILD_PATH}&remote=https%3A%2F%2Fx`);
 
   expect([upgrade.status, start.status, remote.status]).toEqual([403, 403, 403]);
 
