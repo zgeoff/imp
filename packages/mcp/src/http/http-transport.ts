@@ -41,6 +41,10 @@ export interface HttpTransport {
 
   // ends every session and stops what their calls run
   readonly close: () => Promise<void>;
+
+  // when the tool call behind a streamed response ends, which a dropped
+  // stream does not hasten; null for any other response
+  readonly readCallEnd: (response: Response) => Promise<void> | null;
 }
 
 const SESSION_HEADER = 'mcp-session-id';
@@ -55,6 +59,9 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
   const now = options.now ?? Date.now;
   const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
   const challenge = options.challenge ?? 'Bearer';
+
+  // each streamed call's end, by its response
+  const callEnds = new WeakMap<Response, Promise<void>>();
 
   const sessions = createSessionStore({
     limits: options.limits ?? DEFAULT_LIMITS,
@@ -166,6 +173,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     const encoder = new TextEncoder();
 
     const state = { open: true };
+    const ended = Promise.withResolvers<void>();
 
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -189,6 +197,8 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
           } finally {
             clearInterval(keepalive);
 
+            ended.resolve();
+
             if (state.open) {
               state.open = false;
 
@@ -204,9 +214,13 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       },
     });
 
-    return new Response(stream, {
+    const response = new Response(stream, {
       headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
     });
+
+    callEnds.set(response, ended.promise);
+
+    return response;
   };
 
   const handleDelete = async (request: Request): Promise<Response> => {
@@ -248,6 +262,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       );
     },
     close: () => sessions.endAll(),
+    readCallEnd: (response) => callEnds.get(response) ?? null,
   };
 }
 

@@ -560,7 +560,7 @@ test('the listener serves the route on its own port', async () => {
   }
 });
 
-test('a streaming response counts as open until its stream ends', async () => {
+test('a tool call keeps its room until the tool ends, though its client goes', async () => {
   await using ctx = await setupTest();
 
   const config = ctx.config.publicMcp;
@@ -569,22 +569,26 @@ test('a streaming response counts as open until its stream ends', async () => {
     throw new Error('the public route is off');
   }
 
-  // an MCP endpoint whose every answer is a stream that stays open
-  const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+  // an MCP endpoint whose every answer is a call's stream; the test ends
+  // each call's tool by hand
+  const toolEnds: (() => void)[] = [];
+
+  const callEnds = new WeakMap<Response, Promise<void>>();
 
   const mcp = {
     handle: () => {
-      const body = new ReadableStream<Uint8Array>({
-        start: (controller) => {
-          streams.push(controller);
-        },
-      });
+      const body = new ReadableStream<Uint8Array>({ start: () => {} });
+      const response = new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 
-      return Promise.resolve(
-        new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
-      );
+      const ended = Promise.withResolvers<void>();
+
+      toolEnds.push(ended.resolve);
+      callEnds.set(response, ended.promise);
+
+      return Promise.resolve(response);
     },
     close: () => Promise.resolve(),
+    readCallEnd: (response: Response) => callEnds.get(response) ?? null,
   };
 
   const handle = createPublicHandler({ config, oauth: ctx.oauth, mcp });
@@ -592,34 +596,25 @@ test('a streaming response counts as open until its stream ends', async () => {
   const sendCall = () =>
     handle(new Request(`${ORIGIN}/mcp`, { method: 'POST', headers: { host: HOST } }), null);
 
-  const open: Response[] = [];
-
+  // 64 long calls whose clients go away at once
   for (let index = 0; index < 64; index += 1) {
     const response = await sendCall();
 
-    open.push(response);
+    expect(response.status).toBe(200);
+
+    await response.body?.cancel();
   }
 
   const refused = await sendCall();
 
-  expect(open.every((response) => response.status === 200)).toBeTrue();
   expect(refused.status).toBe(429);
 
-  // one stream ends, and its room is free again
-  const [first] = open;
+  // one tool ends, and its room is free again
+  toolEnds[0]?.();
 
-  streams[0]?.close();
-
-  await first?.text();
+  await Bun.sleep(0);
 
   const next = await sendCall();
 
   expect(next.status).toBe(200);
-
-  // a client that goes away frees its room too
-  await open[1]?.body?.cancel();
-
-  const after = await sendCall();
-
-  expect(after.status).toBe(200);
 });

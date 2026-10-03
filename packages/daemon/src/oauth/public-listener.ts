@@ -164,14 +164,14 @@ export function createPublicHandler(
 
     state.open += 1;
 
-    const release = createRelease(request, () => {
+    const release = createRelease(() => {
       state.open -= 1;
     });
 
     try {
       const response = await handleRequest(request, server);
 
-      return holdUntilSent(response, release);
+      return holdUntilDone(request, response, deps.mcp.readCallEnd(response), release);
     } catch (error) {
       release();
       throw error;
@@ -179,34 +179,53 @@ export function createPublicHandler(
   };
 }
 
-// `release` once: when the response is sent, or the client goes first
-function createRelease(request: Request, release: () => void): () => void {
+// `release`, made safe to call more than once
+function createRelease(release: () => void): () => void {
   const state = { isReleased: false };
 
-  const runReleaseOnce = (): void => {
+  return () => {
     if (!state.isReleased) {
       state.isReleased = true;
 
       release();
     }
   };
-
-  request.signal.addEventListener('abort', runReleaseOnce, { once: true });
-
-  return runReleaseOnce;
 }
 
-// A request counts until its body is sent: a tool call's SSE stream can
-// run for minutes after the handler returns it
-function holdUntilSent(response: Response, release: () => void): Response {
-  if (response.body === null) {
+// A request counts until it is done. A tool call is done when the tool
+// ends: as MCP says, a dropped stream is no cancel, so the call runs on and
+// keeps its room. Any other response is done once sent, or the client goes.
+async function waitThenRelease(callEnd: Promise<void>, release: () => void): Promise<void> {
+  try {
+    await callEnd;
+  } finally {
+    release();
+  }
+}
+
+function holdUntilDone(
+  request: Request,
+  response: Response,
+  callEnd: Promise<void> | null,
+  release: () => void,
+): Response {
+  if (callEnd !== null) {
+    void waitThenRelease(callEnd, release);
+  } else if (response.body === null) {
     release();
 
+    return response;
+  } else {
+    request.signal.addEventListener('abort', release, { once: true });
+  }
+
+  if (response.body === null) {
     return response;
   }
 
   const source: ReadableStream<Uint8Array> = response.body;
   const reader = source.getReader();
+  const releaseSent = callEnd === null ? release : () => {};
 
   const held = new ReadableStream<Uint8Array>({
     pull: async (controller) => {
@@ -214,7 +233,7 @@ function holdUntilSent(response: Response, release: () => void): Response {
         const read = await reader.read();
 
         if (read.done) {
-          release();
+          releaseSent();
 
           controller.close();
 
@@ -223,13 +242,13 @@ function holdUntilSent(response: Response, release: () => void): Response {
 
         controller.enqueue(read.value);
       } catch (error) {
-        release();
+        releaseSent();
 
         controller.error(error);
       }
     },
     cancel: async (reason) => {
-      release();
+      releaseSent();
 
       await reader.cancel(reason);
     },
