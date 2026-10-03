@@ -598,7 +598,12 @@ jobs:
           git fetch --depth=1 origin "$branch"
           git checkout -B "$branch" FETCH_HEAD
           bun install
-          bun run format
+          # oxfmt can need a second pass to settle a changelog line it
+          # re-wraps, so format until the check passes
+          for _ in 1 2 3; do
+            bun run format
+            bun run format:check && break
+          done
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
