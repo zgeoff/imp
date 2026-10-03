@@ -643,3 +643,18 @@ test('a builder image the host engine has already, pulled ahead by its reference
   expect(builder).toMatchObject({ ref: ctx.config.build.image });
   expect(pulls).toEqual([]);
 });
+
+test('a step after the pull that fails past the limit names its own error, not the pull', async () => {
+  const create = `  "create "*) sleep 0.6; echo 'no space left on device' >&2; exit 1 ;;`;
+
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => buildBuilderHost(dataDir).replace(/^ {2}"create "\*\).*$/mv, create),
+    builderImagePullMs: 300,
+  });
+
+  const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
+
+  expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+  expect(String(failure)).toContain('no space left on device');
+  expect(String(failure)).not.toContain('the pull did not finish');
+});

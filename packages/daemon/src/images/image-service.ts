@@ -185,6 +185,9 @@ interface HostImageOptions {
 
   // kills the inspect and the pull when it aborts
   readonly signal?: AbortSignal | undefined;
+
+  // once the inspect and any pull are done, before the rootfs is written
+  readonly onPulled?: (() => void) | undefined;
 }
 
 // the pull's limit as the error names it: 10 minutes, or seconds in a test
@@ -457,6 +460,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const inspect = await readInspect(ref, options.signal);
 
+    options.onPulled?.();
+
     if (inspect === undefined) {
       throw new Error(`docker image inspect ${ref}: no result`);
     }
@@ -565,13 +570,22 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const pullMs = deps.builderImagePullMs ?? BUILDER_IMAGE_PULL_MS;
     const timeout = AbortSignal.timeout(pullMs);
 
+    // a later step that fails after the limit is no pull that timed out
+    const step = { pulled: false };
+
     const createBuilderImage = async (): Promise<ImageRecord> => {
       try {
-        return await createImageOnHost(ref, BUILDER_IMAGE, { signal: timeout });
+        return await createImageOnHost(ref, BUILDER_IMAGE, {
+          signal: timeout,
+          onPulled: () => {
+            step.pulled = true;
+          },
+        });
       } catch (error) {
-        const reason = timeout.aborted
-          ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
-          : readErrorMessage(error);
+        const reason =
+          timeout.aborted && !step.pulled
+            ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
+            : readErrorMessage(error);
 
         throw new ORPCError('SERVICE_UNAVAILABLE', {
           message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${reason}`,
