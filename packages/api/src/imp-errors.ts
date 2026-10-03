@@ -24,6 +24,14 @@ const ResourceDataSchema = z.object({
   name: z.string(),
 });
 
+// why a grant or a revoke was refused: the imp is outside the caller's
+// patterns, the secret is not one it may grant, or its scope is too low
+const ForbiddenReasonSchema = z.enum(['imp_out_of_scope', 'not_grantable', 'scope']);
+
+export type ForbiddenReason = z.infer<typeof ForbiddenReasonSchema>;
+
+const ForbiddenDataSchema = z.object({ reason: ForbiddenReasonSchema });
+
 // an awake imp the governor could not sleep: leased (a lease of any kind)
 // or busy (in use, under an operation, or its sleep failed)
 const ProtectedImpSchema = z.object({
@@ -39,8 +47,9 @@ export const IMP_ERRORS = defineErrors({
   NOT_FOUND: { message: 'Not found', data: ResourceDataSchema },
   CONFLICT: { message: 'Already exists', data: ResourceDataSchema },
 
-  // the caller's token lacks the scope, or the imp is outside its patterns
-  FORBIDDEN: { message: 'Not allowed' },
+  // the caller's token lacks the scope, or the imp is outside its patterns;
+  // a grant or a revoke says which (docs/guides/tokens.md#granting-secrets)
+  FORBIDDEN: { message: 'Not allowed', data: ForbiddenDataSchema.optional() },
 
   // the host is not set up for this, such as backups with no repository
   PRECONDITION_FAILED: { message: 'Not possible on this host' },

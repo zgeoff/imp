@@ -45,6 +45,7 @@ import { SessionNameSchema, SessionSchema } from './session-schema';
 import { StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 import {
+  GrantableSchema,
   IdentitySchema,
   ImpPatternSchema,
   MAX_SSH_KEYS,
@@ -529,6 +530,9 @@ export const impContract = {
           scope: ScopeSchema,
           imps: z.array(ImpPatternSchema).min(1).max(32).optional(),
           sshKeys: z.array(SshPublicKeySchema).min(1).max(MAX_SSH_KEYS).optional(),
+
+          // existing secrets it may grant to its imps; needs manage and imps
+          grantable: GrantableSchema.optional(),
         }),
       )
       .output(z.object({ token: TokenSchema, secret: z.string() })),

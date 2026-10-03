@@ -4,12 +4,20 @@ import * as z from 'zod';
 import type { ImpDatabase } from './open-database';
 import type { TokenSshKeysTable, TokensTable } from './schema';
 
+// a secret a token may grant: its name, and its generation when the token
+// was made; a secret deleted and made again under the name is another one
+export interface GrantableSecret {
+  readonly name: string;
+  readonly generation: string;
+}
+
 export interface TokenRecord {
   readonly id: string;
   readonly name: string;
   readonly secretHash: string;
   readonly scope: Scope;
   readonly imps: readonly string[] | null;
+  readonly grantable: readonly GrantableSecret[];
   readonly createdAt: Date;
 }
 
@@ -26,6 +34,7 @@ export interface TokenSshKeyRecord {
 }
 
 const ImpsSchema = z.array(z.string()).nullable();
+const GrantableSchema = z.array(z.object({ name: z.string(), generation: z.string() }));
 
 export async function listTokenRecords(db: ImpDatabase): Promise<TokenRecord[]> {
   const rows = await db.selectFrom('tokens').selectAll().orderBy('name').execute();
@@ -54,6 +63,7 @@ export async function writeTokenRecord(
         secret_hash: token.secretHash,
         scope: token.scope,
         imps: token.imps === null ? null : JSON.stringify(token.imps),
+        grantable: JSON.stringify(token.grantable),
         created_at: token.createdAt.getTime(),
       })
       .execute();
@@ -109,6 +119,7 @@ function toTokenRecord(row: Readonly<Selectable<TokensTable>>): TokenRecord {
     secretHash: row.secret_hash,
     scope: row.scope,
     imps: ImpsSchema.parse(imps),
+    grantable: GrantableSchema.parse(JSON.parse(row.grantable)),
     createdAt: new Date(row.created_at),
   };
 }

@@ -119,6 +119,14 @@ interface SecretsTable {
   // BrokerRule[] as JSON
   rules: string;
   created_at: number;
+
+  // random, set on create and kept by a replace: a token's grantable list
+  // names a secret by name and generation
+  generation: string;
+
+  // the file in <dataDir>/secrets that holds the value; a replace writes a
+  // new one and switches to it with the rules
+  value_file: string;
 }
 
 interface GrantsTable {
@@ -165,6 +173,11 @@ export interface TokensTable {
 
   // a JSON array of imp patterns; null for every imp and the host
   imps: string | null;
+
+  // a JSON array of { name, generation }: the secrets it may grant to its
+  // imps. Set at create and never changed, so a non-empty list also marks
+  // a token made able to grant.
+  grantable: Generated<string>;
   created_at: number;
 }
 

@@ -18,6 +18,10 @@ import type { ImageService } from './image-service';
 const MAX_BUILDS = 4;
 const PROCEDURE = 'images.build';
 
+function readNoSecret(): Promise<null> {
+  return Promise.resolve(null);
+}
+
 export interface BuildContextRoute {
   // `toApi` turns the image into what the API shows
   readonly handle: (
@@ -86,7 +90,9 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       const startedAt = deps.now();
       const params = Object.fromEntries(new URL(request.url).searchParams);
       const parsed = ImageBuildQuerySchema.safeParse(params);
-      const denial = checkAccess(findAccess(PROCEDURE), caller, params);
+
+      // images.build is host-wide, so no secret is read
+      const denial = await checkAccess(findAccess(PROCEDURE), caller, params, readNoSecret);
 
       // audited with what was thrown; answered with its code, as oRPC would
       const sendFailure = (error: unknown): Response => {
@@ -104,7 +110,7 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       };
 
       if (denial !== null) {
-        return sendFailure(new ORPCError('FORBIDDEN', { message: denial }));
+        return sendFailure(new ORPCError('FORBIDDEN', { message: denial.message }));
       }
 
       if (!parsed.success) {

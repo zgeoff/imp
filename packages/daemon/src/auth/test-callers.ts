@@ -7,6 +7,7 @@ export function buildTestCaller(overrides: Partial<Caller> = {}): Caller {
     name: 'test',
     scope: 'manage',
     imps: null,
+    grantable: [],
     tokenId: 'test-token-id',
     expiresAt: null,
     principal: 'token:test-token-id',

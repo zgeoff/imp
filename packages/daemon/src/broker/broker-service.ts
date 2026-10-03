@@ -2,7 +2,12 @@ import type { Socket } from 'node:net';
 import { join } from 'node:path';
 import type { AuditEntry, BrokerRule, Secret, SecretKind } from '@imp/api';
 import { ORPCError } from '@orpc/server';
-import { buildConflictError, buildMovingError, buildNotFoundError } from '../api-errors';
+import {
+  buildConflictError,
+  buildForbiddenError,
+  buildMovingError,
+  buildNotFoundError,
+} from '../api-errors';
 import type { Config } from '../config';
 import { listAuditEntries, writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';
@@ -10,19 +15,19 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import {
+  createCheckedGrant,
   createForkGrants,
-  createGrant,
+  createSecret,
   findBrokerPeer,
-  findSecret,
   listAllGrantedRules,
   listGrantNames,
   listGrantedRules,
   listSecrets,
-  removeGrant,
+  removeCheckedGrant,
   removeSecret,
-  writeSecret,
+  upsertSecret,
 } from '../db/secrets';
-import type { GrantedRule, SecretRecord } from '../db/secrets';
+import type { GrantClash, GrantedRule, NewSecret, SecretRecord } from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
@@ -47,7 +52,7 @@ import {
   runBundleInstall,
 } from './guest-trust';
 import type { InstallBundle, TrustedImp } from './guest-trust';
-import { createSecretFiles } from './secret-files';
+import { buildValueFile, createSecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
 import { createUpstreamResolver } from './test-upstreams';
 import { resolveTunnelTarget } from './tunnel-target';
@@ -68,8 +73,19 @@ export interface Broker {
   readonly addSecret: (input: AddSecretInput) => Promise<Secret>;
   readonly listSecrets: () => Promise<Secret[]>;
   readonly deleteSecret: (name: string) => Promise<void>;
-  readonly addGrant: (impName: string, secretName: string) => Promise<void>;
-  readonly removeGrant: (impName: string, secretName: string) => Promise<void>;
+
+  // with a generation, the secret must still be the one a grantable list
+  // named; FORBIDDEN otherwise (docs/guides/tokens.md#granting-secrets)
+  readonly addGrant: (
+    impName: string,
+    secretName: string,
+    generation?: string | null,
+  ) => Promise<void>;
+  readonly removeGrant: (
+    impName: string,
+    secretName: string,
+    generation?: string | null,
+  ) => Promise<void>;
   readonly listGrants: (impName: string) => Promise<string[]>;
 
   // one imp's, or every imp's; only imps within the patterns when there
@@ -80,8 +96,9 @@ export interface Broker {
     patterns: readonly string[] | null,
   ) => Promise<AuditEntry[]>;
 
-  // a fork gets its source's grants; a failure is logged, not thrown, as
-  // the fork exists by then
+  // a fork gets its source's grants, but none that clashes with a grant it
+  // has by then; a skip or a failure is logged, not thrown, as the fork
+  // exists by then
   readonly createForkGrants: (fromImpName: string, toImpName: string) => Promise<void>;
 
   // the variables for an exec in this imp: none without a grant, or when
@@ -117,6 +134,9 @@ export interface BrokerDeps {
 
   // the IPv6 impd resolved at start; without it, tunnels dial IPv4 only
   readonly ipv6?: Ipv6Plan | null;
+
+  // tests hold a request between its rule read and its value read
+  readonly afterRuleRead?: () => Promise<void>;
 }
 
 // how long the container's own IPv6 prefixes stay read
@@ -175,10 +195,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     return rules.find((granted) => granted.rule.host === host);
   };
 
+  // The value comes from the file the rule's row names: a replace writes a
+  // new file and switches the row, so the old host never gets the new value.
+  // A request that read the row just before finds the old file gone.
   const findCredential = async (impId: string, host: string): Promise<Credential | null> => {
     const granted = await findRule(impId, host);
 
-    const value = granted === undefined ? null : files.read(granted.secretName);
+    await deps.afterRuleRead?.();
+
+    const value = granted === undefined ? null : files.read(granted.valueFile);
 
     if (granted === undefined || value === null) {
       return null;
@@ -232,39 +257,6 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     return imp;
   };
 
-  const requireSecret = async (name: string): Promise<SecretRecord> => {
-    const secret = await findSecret(db, name);
-
-    if (secret === undefined) {
-      throw buildNotFoundError('secret', name);
-    }
-
-    return secret;
-  };
-
-  // A host may have one credential per imp: two would leave the header
-  // ambiguous. Checked against the imp's other grants.
-  const requireNoClash = async (
-    imp: ImpRecord,
-    secretName: string,
-    rules: readonly BrokerRule[],
-  ): Promise<void> => {
-    const granted = await listGrantedRules(db, imp.id);
-
-    const clash = granted.find(
-      (other) =>
-        other.secretName !== secretName && rules.some((rule) => rule.host === other.rule.host),
-    );
-
-    if (clash !== undefined) {
-      throw buildConflictError(
-        'grant',
-        `${imp.name}/${secretName}`,
-        `secret ${clash.secretName} already gives ${imp.name} a credential for ${clash.rule.host}`,
-      );
-    }
-  };
-
   const toApiSecret = async (secret: SecretRecord): Promise<Secret> => {
     const listed = await listSecrets(db);
 
@@ -277,6 +269,36 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       imps,
       createdAt: secret.createdAt,
     };
+  };
+
+  // The row for a value just written to its file, which goes again when no
+  // row names it. With replace, the file the row named before.
+  const writeSecretRow = async (
+    secret: Readonly<NewSecret>,
+    replace: boolean,
+  ): Promise<{ readonly secret: SecretRecord; readonly oldValueFile: string | null }> => {
+    try {
+      if (!replace) {
+        const made = await createSecret(db, secret);
+
+        if (made === null) {
+          throw buildConflictError('secret', secret.name);
+        }
+
+        return { secret: made, oldValueFile: null };
+      }
+
+      const outcome = await upsertSecret(db, secret);
+
+      if (outcome.kind === 'clash') {
+        throw buildClashError(outcome.impName, secret.name, outcome.clash);
+      }
+
+      return outcome;
+    } catch (error) {
+      files.remove(secret.valueFile);
+      throw error;
+    }
   };
 
   // never rejects: it runs from a timer and from imp changes
@@ -308,49 +330,23 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw error;
       }
 
-      const secret = { name: input.name, kind: input.kind, rules };
+      const valueFile = buildValueFile(input.name);
 
-      if (input.replace !== true) {
-        const saved = await writeSecret(db, secret, false);
+      // the value first, so no row ever names a file that is not there
+      files.write(valueFile, input.value);
 
-        if (saved === null) {
-          throw buildConflictError('secret', input.name);
-        }
+      const saved = await writeSecretRow(
+        { name: input.name, kind: input.kind, rules, valueFile },
+        input.replace === true,
+      );
 
-        try {
-          files.write(input.name, input.value);
-        } catch (error) {
-          await removeSecret(db, input.name);
+      if (saved.oldValueFile !== null) {
+        files.remove(saved.oldValueFile);
 
-          throw error;
-        }
-
-        return toApiSecret(saved);
+        await applyGrants();
       }
 
-      const existing = await findSecret(db, input.name);
-
-      const shown = existing === undefined ? null : await toApiSecret(existing);
-      const grantedTo = shown?.imps ?? [];
-
-      for (const impName of grantedTo) {
-        const imp = await requireImp(impName);
-
-        await requireNoClash(imp, input.name, rules);
-      }
-
-      // the value first: a failed write leaves the old secret as it was
-      files.write(input.name, input.value);
-
-      const saved = await writeSecret(db, secret, true);
-
-      if (saved === null) {
-        throw new Error(`secret ${input.name} was not saved`);
-      }
-
-      await applyGrants();
-
-      return toApiSecret(saved);
+      return toApiSecret(saved.secret);
     },
 
     listSecrets: async () => {
@@ -366,16 +362,18 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     deleteSecret: async (name) => {
-      if (!(await removeSecret(db, name))) {
+      const valueFile = await removeSecret(db, name);
+
+      if (valueFile === null) {
         throw buildNotFoundError('secret', name);
       }
 
-      files.remove(name);
+      files.remove(valueFile);
 
       await applyGrants();
     },
 
-    addGrant: async (impName, secretName) => {
+    addGrant: async (impName, secretName, generation = null) => {
       const imp = await requireImp(impName);
 
       // a send carries the grants it read at its start; a target's staged
@@ -384,20 +382,38 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildMovingError(impName);
       }
 
-      const secret = await requireSecret(secretName);
+      const outcome = await createCheckedGrant(db, imp.id, secretName, generation);
 
-      await requireNoClash(imp, secret.name, secret.rules);
-      await createGrant(db, imp.id, secret.name);
+      switch (outcome.kind) {
+        case 'granted': {
+          return;
+        }
+        case 'no-secret': {
+          throw buildNotFoundError('secret', secretName);
+        }
+        case 'not-grantable': {
+          throw buildStaleError(secretName);
+        }
+        case 'clash': {
+          throw buildClashError(impName, secretName, outcome.clash);
+        }
+      }
     },
 
-    removeGrant: async (impName, secretName) => {
+    removeGrant: async (impName, secretName, generation = null) => {
       const imp = await requireImp(impName);
 
       if (imp.moveState !== null) {
         throw buildMovingError(impName);
       }
 
-      if (!(await removeGrant(db, imp.id, secretName))) {
+      const outcome = await removeCheckedGrant(db, imp.id, secretName, generation);
+
+      if (outcome.kind === 'not-grantable') {
+        throw buildStaleError(secretName);
+      }
+
+      if (outcome.kind === 'no-grant') {
         throw buildNotFoundError('grant', `${impName}/${secretName}`);
       }
 
@@ -419,8 +435,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     createForkGrants: async (fromImpName, toImpName) => {
       try {
         const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
+        const skipped = await createForkGrants(db, from.id, to.id);
 
-        await createForkGrants(db, from.id, to.id);
+        for (const name of skipped) {
+          log(
+            `impd: ${toImpName}: forked without grant ${name} of ${fromImpName}: it has another credential for that host`,
+          );
+        }
       } catch (error) {
         log(
           `impd: ${toImpName}: forked without the grants of ${fromImpName}: ${readErrorMessage(error)}`,
@@ -485,4 +506,21 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       await terminators.stop();
     },
   };
+}
+
+function buildClashError(impName: string, secretName: string, clash: Readonly<GrantClash>) {
+  return buildConflictError(
+    'grant',
+    `${impName}/${secretName}`,
+    `secret ${clash.secretName} already gives ${impName} a credential for ${clash.host}`,
+  );
+}
+
+// the call came through a grantable list whose entry is stale: the secret
+// was deleted, and maybe made again, since the access check
+function buildStaleError(secretName: string) {
+  return buildForbiddenError(
+    `secret ${secretName} is not one this caller may grant`,
+    'not_grantable',
+  );
 }

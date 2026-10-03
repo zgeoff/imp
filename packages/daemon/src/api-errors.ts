@@ -1,4 +1,4 @@
-import type { ImpState } from '@imp/api';
+import type { ForbiddenReason, ImpState } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { LeaseRecord } from './db/leases';
 
@@ -32,9 +32,12 @@ export function buildConflictError(kind: ResourceKind, name: string, message?: s
   });
 }
 
-// the caller's scope or imp patterns do not cover the call
-export function buildForbiddenError(message: string) {
-  return new ORPCError('FORBIDDEN', { message });
+// the caller's scope or imp patterns do not cover the call; a reason when
+// the client can act on it
+export function buildForbiddenError(message: string, reason: ForbiddenReason | null = null) {
+  return reason === null
+    ? new ORPCError('FORBIDDEN', { message })
+    : new ORPCError('FORBIDDEN', { message, data: { reason } });
 }
 
 export function buildInvalidStateError(

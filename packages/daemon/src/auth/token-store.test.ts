@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { impContract } from '@imp/api';
 import { utils } from 'ssh2';
+import { createSecret, findSecret } from '../db/secrets';
 import { setupTestDatabase } from '../db/test-database';
 import { readRejection } from '../read-rejection';
 import { formatKeyFingerprint } from '../ssh/authorized-keys';
@@ -68,7 +69,14 @@ test('a made token is stored hashed, survives a restart and authenticates', asyn
   });
 
   expect(restarted.list()).toEqual([
-    { name: 'ci', scope: 'exec', imps: ['dev-*'], sshKeys: [], createdAt: new Date(NOW) },
+    {
+      name: 'ci',
+      scope: 'exec',
+      imps: ['dev-*'],
+      sshKeys: [],
+      grantable: [],
+      createdAt: new Date(NOW),
+    },
   ]);
 });
 
@@ -293,5 +301,60 @@ test('no token procedure changes a token in place', () => {
     'list',
     'removeKey',
     'whoami',
+  ]);
+});
+
+test('a grantable list keeps each secret’s generation, through a restart and its ssh keys', async () => {
+  await using ctx = await setupTest();
+
+  const laptop = createPublicKey('me@laptop');
+
+  for (const name of ['gh', 'npm']) {
+    await createSecret(ctx.db, { name, kind: 'github', rules: [], valueFile: name });
+  }
+
+  const secrets = await Promise.all(['gh', 'npm'].map((name) => findSecret(ctx.db, name)));
+
+  const granted = secrets.map((secret) => ({
+    name: secret?.name ?? '',
+    generation: secret?.generation ?? '',
+  }));
+
+  const made = await ctx.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['dev-*'],
+    sshKeys: [laptop.line],
+    grantable: ['gh', 'npm'],
+  });
+
+  expect(made.token.grantable).toEqual(['gh', 'npm']);
+
+  const restarted = await ctx.load();
+
+  expect(restarted.authenticate(made.secret)?.grantable).toEqual(granted);
+
+  expect(restarted.findSshKey(laptop.blob)?.caller).toMatchObject({
+    kind: 'ssh',
+    grantable: granted,
+  });
+
+  expect(restarted.list()[0]?.grantable).toEqual(['gh', 'npm']);
+
+  // a host-wide token, or one below manage, may not take a list
+  const refused = await Promise.all([
+    readRejection(ctx.tokens.create({ name: 'a', scope: 'manage', imps: null, grantable: ['gh'] })),
+    readRejection(
+      ctx.tokens.create({ name: 'b', scope: 'exec', imps: ['dev-*'], grantable: ['gh'] }),
+    ),
+    readRejection(
+      ctx.tokens.create({ name: 'c', scope: 'manage', imps: ['dev-*'], grantable: ['nope'] }),
+    ),
+  ]);
+
+  expect(refused).toMatchObject([
+    { code: 'BAD_REQUEST' },
+    { code: 'BAD_REQUEST' },
+    { code: 'NOT_FOUND', data: { kind: 'secret', name: 'nope' } },
   ]);
 });

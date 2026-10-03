@@ -42,7 +42,7 @@ export function createFakeImpd(): FakeImpd {
     images: [],
     checkpoints: new Map(),
     tokens: [],
-    identity: { kind: 'dashboard', name: 'root', scope: 'manage', imps: null },
+    identity: { kind: 'dashboard', name: 'root', scope: 'manage', imps: null, grantable: [] },
     calls: [],
     info: buildSystemInfo(),
     unauthorized: false,
@@ -379,6 +379,7 @@ export function createFakeImpd(): FakeImpd {
           scope: context.input.scope,
           imps: context.input.imps ?? null,
           sshKeys: [],
+          grantable: context.input.grantable ?? [],
           createdAt: NOW,
         };
 

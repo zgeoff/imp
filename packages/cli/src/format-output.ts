@@ -400,11 +400,12 @@ export function formatNetworks(networks: readonly Network[]): string {
 
 export function formatTokens(tokens: readonly Token[]): string {
   return formatTable(
-    ['NAME', 'SCOPE', 'IMPS', 'SSH KEYS', 'CREATED'],
+    ['NAME', 'SCOPE', 'IMPS', 'GRANTABLE', 'SSH KEYS', 'CREATED'],
     tokens.map((token) => [
       token.name,
       token.scope,
       token.imps === null ? '*' : token.imps.join(','),
+      token.grantable.length === 0 ? '-' : token.grantable.join(','),
       String(token.sshKeys.length),
       token.createdAt.toISOString(),
     ]),
@@ -419,7 +420,10 @@ export function formatSshKey(key: SshKey): string {
 export function formatIdentity(identity: Identity): string {
   const imps = identity.imps === null ? 'every imp' : identity.imps.join(',');
 
-  return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}`;
+  const grants =
+    identity.grantable.length === 0 ? '' : `; may grant ${identity.grantable.join(',')}`;
+
+  return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}${grants}`;
 }
 
 export function formatAudit(entries: readonly AuditEntry[]): string {

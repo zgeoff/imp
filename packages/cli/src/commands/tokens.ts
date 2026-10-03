@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { ImpPatternSchema, ScopeSchema } from '@imp/api';
+import { ImpPatternSchema, ScopeSchema, SecretNameSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
 import { defineCommand } from '../define-command';
 import { formatIdentity, formatOutput, formatSshKey, formatTokens } from '../format-output';
@@ -39,6 +39,26 @@ function parseImpPatterns(text: string | undefined): string[] | undefined {
   }
 
   return patterns;
+}
+
+// --grantable 'gh,npm': existing secrets the token may grant to its imps
+function parseGrantable(text: string | undefined): string[] | undefined {
+  if (text === undefined) {
+    return undefined;
+  }
+
+  const names = text
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+
+  const bad = names.find((name) => !SecretNameSchema.safeParse(name).success);
+
+  if (names.length === 0 || bad !== undefined) {
+    throw new UsageError(`--grantable takes secret names, such as gh,npm; not ${bad ?? text}`);
+  }
+
+  return names;
 }
 
 // The key lines of a public key file, such as ~/.ssh/id_ed25519.pub. A
@@ -86,6 +106,11 @@ const newCommand = defineCommand({
       type: 'string',
       description: "limit it to these imps, such as 'dev-*' (comma-separated; default every imp)",
     },
+    grantable: {
+      type: 'string',
+      description:
+        "secrets it may grant to its imps and revoke, such as 'gh,npm' (comma-separated; needs manage and --imps)",
+    },
     'ssh-key': {
       type: 'string',
       description: 'a public key file whose keys log in over ssh as this token',
@@ -96,6 +121,7 @@ const newCommand = defineCommand({
     runAction(context.host, async (client) => {
       const scope = parseScope(context.args.scope);
       const imps = parseImpPatterns(context.args.imps);
+      const grantable = parseGrantable(context.args.grantable);
       const keyFile = context.args['ssh-key'];
       const sshKeys = keyFile === undefined ? undefined : readKeyFile(keyFile);
 
@@ -104,6 +130,7 @@ const newCommand = defineCommand({
         scope,
         ...(imps !== undefined && { imps }),
         ...(sshKeys !== undefined && { sshKeys }),
+        ...(grantable !== undefined && { grantable }),
       });
 
       if (context.args.json === true) {
@@ -118,7 +145,10 @@ const newCommand = defineCommand({
 });
 
 const lsCommand = defineCommand({
-  meta: { name: 'ls', description: 'List tokens: their scopes and imps, never their secrets' },
+  meta: {
+    name: 'ls',
+    description: 'List tokens: their scopes, imps and grantable secrets, never their secrets',
+  },
   args: { json: jsonArg },
   run: (context) =>
     runAction(context.host, async (client) => {
