@@ -37,7 +37,11 @@ engine never has the image:
 2. The builder's dockerd pulls the reference for the builder's platform (`linux/amd64` on an x86
    host), under the `public` egress policy. A reference with no tag and no digest means `:latest`,
    and impd writes it out. The builder holds no registry credentials, so a private image does not
-   pull, and a registry name that resolves to a private address fails in the builder's resolver.
+   pull. Before any builder boots, impd refuses a registry named `localhost` or by an IP address,
+   which needs no resolver to reach the host. A registry name that resolves to a private address
+   fails in the builder's resolver; one that resolves to the host's public address meets the
+   `public` policy's deny list, which `IMP_HOST_ADDRESSES` fills
+   ([public](../architecture/networking.md#public)).
 3. impd streams `docker export` out of the builder into the host's `tar` unpack, with every limit of
    an isolated build's step 5, and computes the image's `imp-build-` digest as a build does.
 4. impd destroys the builder, on success, failure or a client that goes.
