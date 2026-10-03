@@ -608,7 +608,7 @@ run_device() {
   bootstrap --yes || fail "[$distro] the --data-device run failed"
   grep -qF "ipv6: off (auto: the host has no global IPv6 default route)" <<<"$LAST_OUTPUT" \
     || fail "[$distro] auto did not turn IPv6 off on a host without an IPv6 route"
-  in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nofail 0 2$' /etc/fstab \
+  in_container grep -qE '^UUID=[0-9a-f-]+ /var/lib/imp xfs defaults,nosuid,nofail 0 2$' /etc/fstab \
     || fail "[$distro] /etc/fstab has no UUID entry for /var/lib/imp"
   expect_exit 0 --check
 

@@ -28,6 +28,7 @@ import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
 import { createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
+import { readSetfcapWarning } from './images/unpack-export';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
 import { MOVE_PART_BYTES } from './moves/move-parts';
 import { createMoveService } from './moves/move-service';
@@ -148,6 +149,14 @@ async function main(): Promise<void> {
   mkdirSync(join(config.dataDir, 'db'), { recursive: true });
 
   const systemFiles = await setupSystemFiles(config);
+
+  // a start-time hint; an image with a file capability still fails its build
+  const setfcapWarning = readSetfcapWarning();
+
+  if (setfcapWarning !== null) {
+    printLog(setfcapWarning);
+  }
+
   const db = await openDatabase(join(config.dataDir, 'db', 'imp.sqlite'));
 
   const token = loadOrCreateToken(config.dataDir);

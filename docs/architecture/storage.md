@@ -217,7 +217,8 @@ of each image in `staging/` while restic reads them ([backups](./backups.md#zfs)
 1. `imp image build <dir> --name <name>` uploads the directory as a tar and runs `docker build` on
    it; `--on-host` builds a directory on the host instead. Either way the result is `imp/<name>`.
    `imp image add <ref>` takes an image the host Docker has, and pulls it when it is missing.
-2. impd runs `docker create` and `docker export` and unpacks the tar.
+2. impd runs `docker create` and `docker export` and unpacks the tar. It keeps owners, modes and the
+   `security.capability` and `user.*` extended attributes, which `mkfs.ext4 -d` copies too.
 3. It writes the OCI config (`Env`, `WorkingDir`, `User`) to `/etc/imp/image.json` in the rootfs.
    The agent uses it as the default environment for exec and services.
 4. It writes the tree into a sparse ext4 file with `mkfs.ext4 -d`, at `images/<digest>/rootfs.ext4`:

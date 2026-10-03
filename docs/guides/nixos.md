@@ -55,7 +55,9 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   serial, so `/dev/disk/by-id` has no link to them and the import finds the pool `MISSING`.
   `imp-zfs-dataset.service` runs after `zfs-import.target` and creates `zfs.root` (default
   `tank/imp`) with `mountpoint=legacy` only when it is missing. With `storage = "xfs"`, declare
-  `/var/lib/imp` in `fileSystems`, as XFS with reflink; the module refuses the build without it.
+  `/var/lib/imp` in `fileSystems`, as XFS with reflink and `options = [ "nosuid" ]` (the host
+  contract's [privileges](../architecture/host-contract.md#privileges) say why); the module refuses
+  the build without it.
 - **`imp-host.service`:** runs the image with the arguments in
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json), the same file
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes

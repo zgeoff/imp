@@ -77,15 +77,31 @@ says what fails without the capability, from a run with that one capability drop
 | `DAC_OVERRIDE` | Removing another uid's rootfs dirs after a build (`/home/ubuntu`); the jail's `firecracker.log` |
 | `FOWNER`       | Image builds: `tar -xp` cannot set modes on files it does not own                               |
 | `FSETID`       | Silent: image builds lose the setgid bit of a file whose group is not root                      |
+| `SETFCAP`      | Image builds fail on an image with a file capability: tar cannot set `security.capability`      |
 
 For `MKNOD` and `DAC_OVERRIDE`, the dev instance's loop file and an image build fail first; the
 jailer's steps in those rows come from its code, not from that run.
 
 `NET_RAW`, `NET_BIND_SERVICE` and `SYS_CHROOT` are not needed: every suite passes without each.
 Docker opens ports below 1024 to the container's own namespace, and the jailer pivots its root
-instead of calling `chroot`. `SETFCAP` is not needed either: image builds restore only `user.*`
-extended attributes (`tar --xattrs` without `--xattrs-include`), so a file capability such as
-`ping`'s `cap_net_raw` is lost with or without it. Restoring them would take both.
+instead of calling `chroot`.
+
+`SETFCAP` lets an image keep a file capability, such as `ping`'s `cap_net_raw` or a server's
+`cap_net_bind_service`: tar restores `security.capability` as it unpacks the image. Without it, tar
+only warns, so impd fails the image add or build with an error that names `CAP_SETFCAP`, and logs a
+warning at start. What it adds: root in imp-host can write a file capability, any capability at all,
+onto a file it can write. `DAC_OVERRIDE` already lets it write every file on its mounts, so it can
+stamp, for instance, `cap_sys_admin+ep` on a binary under `/var/lib/imp`. The bounding set does not
+limit what is written: the file's metadata can name any capability. It limits only what a process
+gains when it runs the file. In imp-host that set is the list above, so a process there gains
+nothing root there lacks. A process outside imp-host has its own bounding set, the full set for a
+host process, so the host keeps such files inert: bootstrap mounts `/var/lib/imp` with `nosuid`,
+which ignores setuid bits and file capabilities, and warns when an existing mount lacks it; the
+NixOS guide asks for the same option. On ZFS, the datasets are mounted inside the container, where
+the host's mount table does not see them. impd unpacks an image in a 0700 directory, so no host user
+reaches its files during a build. imp-host is not a security boundary against its own root;
+`SETFCAP` adds one more way for that root to leave the host a privileged file, next to the setuid
+files it can already write.
 
 The rest of the list:
 
