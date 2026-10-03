@@ -16,6 +16,8 @@ This page gives the shape and the main decisions. The other architecture pages g
 - [Sleep and wake](./sleep-and-wake.md): memory snapshots, idle detection and the RAM governor.
 - [Backups](./backups.md): restic backups of disks, checkpoints and images, off the host.
 - [Boot templates](./boot-templates.md): a cold boot restored from a snapshot of a parked guest.
+- [Elastic memory](./memory.md): `--max-memory`, a guest that grows and shrinks with virtio-mem.
+- [Moves](./moves.md): an imp's move from one host to another.
 
 ## Shape
 
@@ -47,8 +49,10 @@ This page gives the shape and the main decisions. The other architecture pages g
  ┌──────────────── guest (one per imp) ────────────────┐
  │ /dev/vda  user rootfs (ext4, rw) from any OCI image  │
  │ /dev/vdb  imp system drive (ro): imp-agent           │
- │ PID 1 = imp-agent: mounts, network, service          │
- │   supervisor, zombie reaper, exec/PTY over vsock     │
+ │ PID 1 = imp-agent: mounts, network, zombie reaper,   │
+ │   exec/PTY over vsock                                │
+ │   └─ inner container (root = /dev/vda): user code,   │
+ │      services, its own PID 1 (imp-agent inner)       │
  └──────────────────────────────────────────────────────┘
 ```
 
@@ -57,12 +61,12 @@ This page gives the shape and the main decisions. The other architecture pages g
 - One Firecracker microVM per imp gives a hardware (KVM) boundary per tenant.
 - Firecracker over QEMU: about 5 MB of VMM overhead against 50–150 MB, fast snapshot and restore,
   and a minimal device model. The cost: no GPU and no virtiofs.
-- Each Firecracker runs under its jailer, as the imp's own uid in a chroot
-  ([#27](https://github.com/zgeoff/imp/issues/27)). The host container around them is not a security
+- Each Firecracker runs under its jailer, as the imp's own uid in a chroot (`IMP_JAILER`, on by
+  default; [the jailer](./daemon.md#the-jailer)). The host container around them is not a security
   boundary ([privileges](./host-contract.md#privileges)).
-- The guest has no inner container yet. Fly runs user code in a container inside the VM, so the
-  agent survives a user who breaks PID 1 or runs `rm -rf /`. imp runs user code next to the agent.
-  That risk is accepted for a personal platform ([#28](https://github.com/zgeoff/imp/issues/28)).
+- User code runs in an inner container inside the guest, whose root is the user disk
+  ([the inner container](./agent.md#the-inner-container)). The agent stays outside it, so it
+  survives a user who breaks PID 1 or runs `rm -rf /`.
 - KASLR is off in every guest: Firecracker loads the uncompressed `vmlinux` at its link address, and
   the guest logs `KASLR disabled`, although the config has `RANDOMIZE_BASE=y`. Every imp has the
   same kernel layout, so a kernel exploit needs no address leak. Imps restored from one
@@ -87,8 +91,8 @@ This page gives the shape and the main decisions. The other architecture pages g
 ## Control plane and API
 
 - Bun workspaces: `packages/api` (the oRPC contract and zod schemas), `packages/daemon` (impd),
-  `packages/cli` (the `imp` CLI) and `packages/client` (`@zgeoff/imp-client`, the typed client on
-  npm for browsers, Bun and Node).
+  `packages/cli` (the `imp` CLI), `packages/client` (`@zgeoff/imp-client`, the typed client on npm
+  for browsers, Bun and Node), `packages/dashboard`, `packages/mcp` and `packages/local-tar`.
 - Control calls are oRPC procedures over HTTP at `/rpc`. Exec and console use a WebSocket at
   `/exec`, because they need two-way streams. The dashboard is at `/ui/` and the MCP endpoint at
   `/mcp`. `/health` answers without auth.
@@ -111,6 +115,7 @@ packages/mcp      MCP server, behind imp mcp and /mcp
 packages/local-tar local files as a tar, with .dockerignore: imp cp, image build contexts
 images/base       thin base image
 images/dev        example dev image
+images/examples   small example images
 host/             host container Dockerfile (dev and release), entrypoint, storage, network
                   and tailnet setup
 deploy/           compose file, systemd unit and env file for the release image, the server
@@ -123,5 +128,4 @@ docs/             this documentation
 
 ## Not yet
 
-The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what is left: the jailer, an inner
-container, memory forks, more than one host and more.
+The [roadmap](https://github.com/zgeoff/imp/issues/41) tracks what is left, such as memory forks.
