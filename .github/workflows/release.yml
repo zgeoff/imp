@@ -8,8 +8,8 @@ name: Release
 # - Started by ci.yml's release-please job with the tag it just created.
 # - Run by hand with a tag to republish an existing release. Every step is
 #   safe to repeat: assets upload with --clobber, and `latest` moves only
-#   when the tag is the newest release. The base job skips its push when
-#   the release's imp-base tag exists already: a published base never moves.
+#   when the tag is the newest release. The base job never pushes over an
+#   existing imp-base tag, and skips a release from before imp-base.
 # - Run by hand with no tag for a dry run of the current commit: it builds,
 #   checks, pushes imp-host:dryrun-<sha> and imp-base:dryrun-<sha> and
 #   attests them, but uploads nothing to a release and leaves `latest` alone.
@@ -239,8 +239,10 @@ jobs:
   # Publishes images/base as imp-base:<push_tag>, the base other images
   # build FROM by digest. A published tag never moves: when the tag exists,
   # as on a republish of a release that has its base or a second dry run of
-  # one commit, the job leaves it alone and stays green. The concurrency
-  # group keeps two runs for one tag apart between the check and the push.
+  # one commit, the job leaves it alone and stays green. It skips a release
+  # from before imp-base, and attests an existing tag that has no
+  # attestation. The concurrency group keeps two runs for one tag apart
+  # between the check and the push.
   # imp-base has no `latest`. Publish does not wait for this job: consumers
   # pin a digest, so a base failure must not hold up a release.
   base:
@@ -271,32 +273,53 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      # An existing tag skips the rest of the job: nothing is built, pushed
-      # or attested again. Only "not found" lets the push go ahead; any other
-      # error fails, so a registry hiccup never reads as a missing tag.
-      - name: Check the tag is new
-        id: tag
+      # Decides what the job does, before any build:
+      # - skip: the tree predates imp-base (every tag up to v0.27.0 has an
+      #   unpinned images/base and no check script), or the tag exists with
+      #   this repository's attestation;
+      # - attest: the tag exists but has no attestation, as after a run that
+      #   pushed and then failed to attest; the existing digest is attested,
+      #   and nothing is pushed again;
+      # - push: the registry answers "not found" for the tag.
+      # Any other registry answer fails, so a 401, a 403 or a network error
+      # never reads as a missing tag. A failed verify only attests again,
+      # which is harmless: the tag never moves.
+      - name: Plan
+        id: plan
         env:
           PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           ref=$BASE_IMAGE:$PUSH_TAG
-          if digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>&1); then
-            echo "::notice::$ref exists already at $digest; a published imp-base never moves, so this run leaves it alone"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          if [ ! -f host/check-base-image.sh ] || ! grep -q '^ARG DOCKER_CE_VERSION=' images/base/Dockerfile; then
+            echo "::notice::this tree predates the published imp-base, so $ref is not built"
+            echo "action=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! grep -q 'not found' <<<"$digest"; then
+          if out=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>&1); then
+            digest=$out
+            if gh attestation verify "oci://$BASE_IMAGE@$digest" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              echo "::notice::$ref exists already at $digest, attested; a published imp-base never moves, so this run leaves it alone"
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::$ref exists already at $digest with no attestation from $GITHUB_REPOSITORY; this run attests that digest and leaves the tag alone"
+              echo "action=attest" >> "$GITHUB_OUTPUT"
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          if ! grep -qF "$ref: not found" <<<"$out"; then
             echo "cannot tell whether $ref exists:" >&2
-            echo "$digest" >&2
+            echo "$out" >&2
             exit 1
           fi
-          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "action=push" >> "$GITHUB_OUTPUT"
 
       # Loads into the runner's docker, so the image checked is the image
       # pushed. The revision is the commit checked out: on a republish,
       # github.sha is main's head, not the tag's.
       - name: Build image
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.plan.outputs.action == 'push'
         env:
           PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
           VERSION: ${{ needs.assets.outputs.version }}
@@ -311,7 +334,7 @@ jobs:
             --label "org.opencontainers.image.description=imp base image: Ubuntu 24.04 with the Docker engine"
 
       - name: Check image
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.plan.outputs.action == 'push'
         env:
           PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
         run: host/check-base-image.sh "$BASE_IMAGE:$PUSH_TAG"
@@ -320,7 +343,7 @@ jobs:
       # attestation names exactly what was pushed.
       - name: Push image
         id: push
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.plan.outputs.action == 'push'
         env:
           PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
         run: |
@@ -329,11 +352,11 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest image
-        if: steps.tag.outputs.exists == 'false'
+        if: steps.plan.outputs.action == 'push' || steps.plan.outputs.action == 'attest'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.BASE_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ steps.push.outputs.digest || steps.plan.outputs.digest }}
           push-to-registry: true
 
   publish:

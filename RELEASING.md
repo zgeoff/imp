@@ -64,9 +64,11 @@ fails and prints the new sum to review.
      version, or when the image's kernel or drive differs from `SHA256SUMS`. Then it pushes
      `imp-host:X.Y.Z` and attests the image and every asset.
    - **base:** after every smoke check passes, builds `images/base`, runs `host/check-base-image.sh`
-     and pushes and attests `imp-base:X.Y.Z`. When `imp-base:X.Y.Z` exists already, it builds and
-     pushes nothing and prints a notice with the tag's digest. publish does not wait for it:
-     consumers pin a digest, so a base failure does not hold up a release.
+     and pushes and attests `imp-base:X.Y.Z`. It never pushes over an existing tag: when
+     `imp-base:X.Y.Z` exists, it prints a notice with the tag's digest, and attests that digest only
+     when it has no attestation from this repository. A tag from before the pinned `images/base`
+     (v0.27.0 and older) is skipped with a notice. publish does not wait for it: consumers pin a
+     digest, so a base failure does not hold up a release.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
@@ -198,6 +200,15 @@ gh workflow run release.yml -f tag=vX.Y.Z
 
 It builds the tag's sources, not `main`'s. It replaces the release assets (`--clobber`) and the
 `imp-host:X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes
-the client when npm does not have that version yet. It publishes `imp-base:X.Y.Z` when the release
-has none, for example a release from before `imp-base` existed. When the tag exists, the `base` job
-leaves it alone and says so in a notice. A fix to the sources needs a new release, not a republish.
+the client when npm does not have that version yet. `imp-base` exists only for releases from the
+pinned `images/base` on: a republish of v0.27.0 or older builds no `imp-base`, and the `base` job
+says so in a notice. For a newer release it publishes `imp-base:X.Y.Z` when the tag is missing and
+leaves an existing tag alone. A fix to the sources needs a new release, not a republish.
+
+When a run pushed `imp-base:X.Y.Z` and then failed to attest it, the tag has no attestation. A
+republish repairs that: the `base` job finds the tag, finds no attestation for its digest with
+`gh attestation verify`, and attests that digest without pushing again. Check it afterwards:
+
+```sh
+gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp
+```
