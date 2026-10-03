@@ -504,7 +504,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         const root = workDir.root;
 
         try {
-          const exported = await writeGuestTree(exec, root, maxBytes, signal);
+          const exported = await writeGuestTree(
+            exec,
+            root,
+            { maxBytes, maxFiles: deps.config.build.imageMaxFiles },
+            signal,
+          );
 
           const digest = exported.digest;
           const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;

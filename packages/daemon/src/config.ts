@@ -70,6 +70,7 @@ const EnvSchema = z.object({
   IMP_BUILD_MEMORY_MIB: CountSchema.default(2048),
   IMP_BUILD_DISK_GIB: CountSchema.default(20),
   IMP_BUILD_IMAGE_MAX_MIB: CountSchema.default(8192),
+  IMP_BUILD_IMAGE_MAX_FILES: CountSchema.default(1_000_000),
   IMP_BUILD_IMAGE: z
     .string()
     .regex(/^[\w.\/:\-]+@sha256:[a-f0-9]{64}$/v, 'must name an image by digest, <ref>@sha256:<hex>')
@@ -121,8 +122,10 @@ interface BuildConfig {
   readonly memoryMib: number;
   readonly diskBytes: number;
 
-  // the largest filesystem a build's export may stream out
+  // the largest filesystem a build's export may stream out, and the most
+  // entries it may hold
   readonly imageMaxBytes: number;
+  readonly imageMaxFiles: number;
 
   // the builders' image, by digest
   readonly image: string;
@@ -435,6 +438,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
       memoryMib: parsed.IMP_BUILD_MEMORY_MIB,
       diskBytes: parsed.IMP_BUILD_DISK_GIB * 1024 ** 3,
       imageMaxBytes: parsed.IMP_BUILD_IMAGE_MAX_MIB * 1024 ** 2,
+      imageMaxFiles: parsed.IMP_BUILD_IMAGE_MAX_FILES,
       image: parsed.IMP_BUILD_IMAGE,
     },
     dockerHost: parsed.DOCKER_HOST ?? null,

@@ -1,8 +1,8 @@
-import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
+import { ImageLimitError } from './image-limit-error';
 import { UNPACK_TAR_ARGS, assertUnpacked } from './unpack-export';
 
 // the tag of the one image a builder makes
@@ -53,14 +53,61 @@ export async function runGuestBuild(
   }
 }
 
-// The export grew past IMP_BUILD_IMAGE_MAX_MIB
-export class ImageTooLargeError extends ORPCError<'BAD_REQUEST', undefined> {
-  override readonly name = 'ImageTooLargeError';
+// a build's digest names no Docker image ID, nor a template's `imp-<uuid>`
+const DIGEST_PREFIX = 'imp-build-';
+const DIGEST_DOMAIN = 'imp build image v1\n';
 
-  constructor(maxBytes: number) {
-    super('BAD_REQUEST', {
-      message: `the built image's filesystem is over ${String(Math.floor(maxBytes / 1024 ** 2))} MiB (IMP_BUILD_IMAGE_MAX_MIB)`,
-    });
+export interface ExportedImage {
+  // DIGEST_PREFIX and the sha256 of DIGEST_DOMAIN, the Config's JSON with
+  // its length in front, and the export, as impd read them: the builder
+  // names nothing on the host
+  readonly digest: string;
+  readonly config: z.infer<typeof OciConfigSchema>;
+}
+
+export interface ExportLimits {
+  readonly maxBytes: number;
+
+  // tar's own count of what it unpacked, so a stream cannot hide entries
+  // from a second parser
+  readonly maxFiles: number;
+}
+
+// the digest's hash, once the export has gone into it
+function createImageHash(configText: string): Bun.CryptoHasher {
+  const config = new TextEncoder().encode(configText);
+  const length = new Uint8Array(8);
+
+  new DataView(length.buffer).setBigUint64(0, BigInt(config.byteLength));
+
+  const hash = new Bun.CryptoHasher('sha256');
+
+  hash.update(DIGEST_DOMAIN);
+  hash.update(length);
+  hash.update(config);
+
+  return hash;
+}
+
+// tar -v prints one line per entry it unpacks, names escaped; past maxFiles
+// it is killed
+async function countUnpacked(
+  stdout: ReadableStream<Uint8Array>,
+  maxFiles: number,
+  onOver: () => void,
+): Promise<void> {
+  const counted = { lines: 0 };
+
+  for await (const chunk of stdout as AsyncIterable<Uint8Array>) {
+    for (const byte of chunk) {
+      counted.lines += byte === 10 ? 1 : 0;
+    }
+
+    if (counted.lines > maxFiles) {
+      onOver();
+
+      return;
+    }
   }
 }
 
@@ -77,9 +124,11 @@ export interface ExportedImage {
 export async function writeGuestTree(
   exec: GuestExec,
   root: string,
-  maxBytes: number,
+  limits: Readonly<ExportLimits>,
   signal: AbortSignal,
 ): Promise<ExportedImage> {
+  const maxBytes = limits.maxBytes;
+
   const inspected = await exec(
     ['docker', 'image', 'inspect', '--format', '{{json .Config}}', GUEST_BUILD_TAG],
     { signal },
@@ -100,18 +149,24 @@ export async function writeGuestTree(
 
   const containerId = ContainerIdSchema.parse(created.stdout.trim());
 
-  const tar = Bun.spawn([...UNPACK_TAR_ARGS, '-C', root], {
+  const tar = Bun.spawn([...UNPACK_TAR_ARGS, '-v', '--quoting-style=escape', '-C', root], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, LC_ALL: 'C' },
   });
 
-  const hash = new Bun.CryptoHasher('sha256');
-
-  hash.update(configText);
-
+  const hash = createImageHash(configText);
   const sent = { bytes: 0 };
+  const files = { over: false };
+
+  const counting = countUnpacked(tar.stdout, limits.maxFiles, () => {
+    files.over = true;
+
+    tar.kill();
+  });
+
+  const stderrText = new Response(tar.stderr).text();
 
   try {
     const exported = await exec(['docker', 'export', containerId], {
@@ -120,7 +175,11 @@ export async function writeGuestTree(
         sent.bytes += chunk.byteLength;
 
         if (sent.bytes > maxBytes) {
-          throw new ImageTooLargeError(maxBytes);
+          throw new ImageLimitError('bytes', maxBytes);
+        }
+
+        if (files.over) {
+          throw new ImageLimitError('files', limits.maxFiles);
         }
 
         hash.update(chunk);
@@ -136,17 +195,23 @@ export async function writeGuestTree(
 
     await tar.stdin.end();
 
-    const [exitCode, stdout, stderr] = await Promise.all([
-      tar.exited,
-      new Response(tar.stdout).text(),
-      new Response(tar.stderr).text(),
-    ]);
+    const [exitCode, stderr] = await Promise.all([tar.exited, stderrText, counting]);
 
-    assertUnpacked({ exitCode, stdout, stderr });
+    if (files.over) {
+      throw new ImageLimitError('files', limits.maxFiles);
+    }
+
+    assertUnpacked({ exitCode, stdout: '', stderr });
   } catch (error) {
     tar.kill();
+
+    // a write to the tar it killed fails first
+    if (files.over) {
+      throw new ImageLimitError('files', limits.maxFiles);
+    }
+
     throw error;
   }
 
-  return { digest: `sha256:${hash.digest('hex')}`, config };
+  return { digest: `${DIGEST_PREFIX}${hash.digest('hex')}`, config };
 }

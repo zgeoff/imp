@@ -36,6 +36,7 @@ test('it fills every setting from its default when the env is empty', () => {
       memoryMib: 2048,
       diskBytes: 20 * 1024 ** 3,
       imageMaxBytes: 8192 * 1024 ** 2,
+      imageMaxFiles: 1_000_000,
       image:
         'ghcr.io/zgeoff/imp-base:0.29.0@sha256:1851f631ea77f3a99b6f1f9af8ca8868434f4cd066158bcf9def8678c29b0c21',
     },

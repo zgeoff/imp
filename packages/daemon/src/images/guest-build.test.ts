@@ -6,8 +6,9 @@ import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { DockerBuildError } from './docker-build';
 import { createFakeGuest } from './fake-guest';
 import type { FakeAnswer, FakeRun } from './fake-guest';
-import { ImageTooLargeError, runGuestBuild, writeGuestTree } from './guest-build';
+import { runGuestBuild, writeGuestTree } from './guest-build';
 import { GuestOutputError, createGuestExec } from './guest-exec';
+import { ImageLimitError } from './image-limit-error';
 
 let dir = '';
 
@@ -71,12 +72,17 @@ test('the export unpacks into root, and its digest is of the config and the stre
   const image = await writeGuestTree(
     createGuestExec(guest.open),
     root,
-    1024 ** 3,
+    { maxBytes: 1024 ** 3, maxFiles: 100 },
     new AbortController().signal,
   );
 
   const hash = new Bun.CryptoHasher('sha256');
+  const length = new Uint8Array(8);
 
+  new DataView(length.buffer).setBigUint64(0, BigInt(CONFIG.length));
+
+  hash.update('imp build image v1\n');
+  hash.update(length);
   hash.update(CONFIG);
 
   for (const chunk of exported) {
@@ -84,7 +90,7 @@ test('the export unpacks into root, and its digest is of the config and the stre
   }
 
   expect(image).toEqual({
-    digest: `sha256:${hash.digest('hex')}`,
+    digest: `imp-build-${hash.digest('hex')}`,
     config: { Cmd: ['sh'], Env: ['A=1'] },
   });
 
@@ -107,13 +113,39 @@ test('an export past the cap stops at the cap, and its exec is ended', async () 
   const failure = await writeGuestTree(
     createGuestExec(guest.open),
     root,
-    2 * CHUNK_BYTES,
+    { maxBytes: 2 * CHUNK_BYTES, maxFiles: 100 },
     new AbortController().signal,
   ).catch((error: unknown) => error);
 
-  expect(failure).toBeInstanceOf(ImageTooLargeError);
+  expect(failure).toBeInstanceOf(ImageLimitError);
   expect(String(failure)).toContain('(IMP_BUILD_IMAGE_MAX_MIB)');
   expect(guest.runs.at(-1)?.closed).toBe(true);
+});
+
+test('an export of more entries than the file cap is refused as tar counts them', async () => {
+  const tree = join(dir, 'many');
+
+  mkdirSync(tree);
+
+  for (let n = 0; n < 50; n += 1) {
+    writeFileSync(join(tree, `f${String(n)}`), '');
+  }
+
+  const exported = [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout];
+  const guest = createFakeGuest(createExportAnswer(exported));
+  const root = join(dir, 'root');
+
+  mkdirSync(root);
+
+  const failure = await writeGuestTree(
+    createGuestExec(guest.open),
+    root,
+    { maxBytes: 1024 ** 3, maxFiles: 10 },
+    new AbortController().signal,
+  ).catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(ImageLimitError);
+  expect(String(failure)).toContain('is over 10 files (IMP_BUILD_IMAGE_MAX_FILES)');
 });
 
 test("a builder's config that is not one JSON object is refused", async () => {
@@ -122,7 +154,7 @@ test("a builder's config that is not one JSON object is refused", async () => {
   const failure = await writeGuestTree(
     createGuestExec(guest.open),
     dir,
-    1024,
+    { maxBytes: 1024, maxFiles: 100 },
     new AbortController().signal,
   ).catch((error: unknown) => error);
 

@@ -168,9 +168,11 @@ A build goes:
 4. The pinned context goes in on the builder's stdin to `docker build`. A failed build returns the
    last 8000 characters of its log, `RUN` output included.
 5. impd streams `docker export` of the result out of the builder into the same `tar` unpack every
-   `imp image add` uses, as root, and computes the image's digest itself, as the sha256 of its
-   config and the export. No host engine reads what the build made, and no Docker tag on the host
-   changes. An export over `IMP_BUILD_IMAGE_MAX_MIB` (8192) fails with `BAD_REQUEST`.
+   `imp image add` uses, as root, and computes the image's digest itself: `imp-build-` and a sha256
+   over a fixed domain string, the config with its length, and the export, so it never equals a
+   Docker image ID or a template's. No host engine reads what the build made, and no Docker tag on
+   the host changes. An export over `IMP_BUILD_IMAGE_MAX_MIB` (8192), or with more entries than
+   `IMP_BUILD_IMAGE_MAX_FILES` (1,000,000) as `tar` counts them, fails with `BAD_REQUEST`.
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
    finds at start, which a stop cut short.
 

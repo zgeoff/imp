@@ -479,7 +479,7 @@ export const MIGRATIONS: Record<string, Migration> = {
 
   // image builders (#156): an imp impd made for one build, which only rm
   // reaches and which goes at the build's end or impd's next start
-  '023_add_imp_kind': {
+  '024_add_imp_kind': {
     async up(db: Kysely<DatabaseSchema>) {
       await db.schema
         .alterTable('imps')
