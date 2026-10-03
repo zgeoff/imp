@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/zgeoff/imp/compare/v0.27.0...v0.28.0) (2026-10-03)
+
+### Features
+
+- **release:** publish the imp base image to ghcr ([#158](https://github.com/zgeoff/imp/issues/158))
+  ([4b3f4fc](https://github.com/zgeoff/imp/commit/4b3f4fc940b95b043da3efded10d3c5fec54a29d))
+
 ## [0.27.0](https://github.com/zgeoff/imp/compare/v0.26.2...v0.27.0) (2026-10-03)
 
 ### Features
