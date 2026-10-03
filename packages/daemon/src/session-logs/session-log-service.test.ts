@@ -12,7 +12,7 @@ import {
   HOSTILE_GENERATIONS,
   HOSTILE_SESSION_NAMES,
 } from '../agent-client/test-agent-ids';
-import { readGenerationMeta } from './generation-log';
+import { createGenerationLog, readGenerationMeta } from './generation-log';
 import { createSessionLogs } from './session-log-service';
 import type { SessionLogImp, SessionLogLimits, SessionLogs } from './session-log-service';
 
@@ -127,7 +127,12 @@ const LIMITS: SessionLogLimits = {
 };
 
 function setupLogs(
-  options: Readonly<{ limits?: SessionLogLimits; dir?: string; full?: boolean }> = {},
+  options: Readonly<{
+    limits?: SessionLogLimits;
+    dir?: string;
+    full?: boolean;
+    createLog?: typeof createGenerationLog;
+  }> = {},
 ) {
   const root = options.dir ?? mkdtempSync(join(tmpdir(), 'imp-session-logs-'));
 
@@ -157,6 +162,7 @@ function setupLogs(
 
     // the restart case waits for a flush; it need not wait a second
     commitDelayMs: 10,
+    ...(options.createLog !== undefined && { createLog: options.createLog }),
     openTap: (_vsockPath, session, resumeFrom) => {
       calls.push({ session, resumeFrom });
 
@@ -990,6 +996,131 @@ test('a tap from before a destroy that fails after the imp is back leaves the ne
 
     return findLog(ctx, GEN_A)?.state === 'ended';
   });
+});
+
+// the new life after a held await: its log stays live, a look opens no
+// second tap, and a destroy closes its tap
+// oxlint-disable-next-line prefer-readonly-parameter-types -- the fakes the test drives
+async function requireNewLifeIntact(ctx: LogsView & { calls: unknown[] }, current: FakeTap) {
+  const calls = ctx.calls.length;
+
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await Bun.sleep(20);
+
+  current.write('+more');
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 8);
+
+  expect(ctx.calls).toHaveLength(calls);
+  expect(findLog(ctx, GEN_A)).toMatchObject({ state: 'live' });
+  expect(findLog(ctx, GEN_A)?.stopped).toBeUndefined();
+
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  expect(current.state.closed).toBe(true);
+}
+
+// a destroy and a move home under the same id, with the same generation
+// oxlint-disable-next-line prefer-readonly-parameter-types -- the fakes the test drives
+async function startNextLife(ctx: ReturnType<typeof setupLogs>): Promise<FakeTap> {
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  rmSync(ctx.imp.sessionLogsDir, { recursive: true, force: true });
+
+  ctx.logs.admitImp(ctx.imp.id);
+
+  const current = createFakeTap(buildOutput(GEN_A, 0));
+  const calls = ctx.calls.length;
+
+  ctx.answers.push(current);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the new tap', () => ctx.calls.length === calls + 1);
+
+  current.write('new');
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 3);
+
+  return current;
+}
+
+test("a log made across a destroy and a move home frees no slot of the new life's", async () => {
+  const held = Promise.withResolvers<undefined>();
+  let count = 0;
+
+  const ctx = setupLogs({
+    createLog: async (options, identity) => {
+      count += 1;
+
+      if (count === 1) {
+        await held.promise;
+      }
+
+      return createGenerationLog(options, identity);
+    },
+  });
+
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the held log', () => count === 1);
+
+  const current = await startNextLife(ctx);
+
+  held.resolve(undefined);
+
+  await requireNewLifeIntact(ctx, current);
+});
+
+test("a limit check held across a destroy and a move home stops no log of the new life's", async () => {
+  const held = Promise.withResolvers<undefined>();
+  const limits = { ...LIMITS, generationMaxBytes: 2048, impMaxBytes: 100 };
+  const reached = { removal: false };
+  let count = 0;
+
+  const ctx = setupLogs({
+    limits,
+    createLog: async (options, identity) => {
+      count += 1;
+
+      const log = await createGenerationLog(options, identity);
+
+      if (count > 1) {
+        return log;
+      }
+
+      return {
+        ...log,
+        removeOldestSegment: async () => {
+          reached.removal = true;
+
+          await held.promise;
+
+          return log.removeOldestSegment();
+        },
+      };
+    },
+  });
+
+  const first = createFakeTap(buildOutput(GEN_A, 0));
+
+  ctx.answers.push(first);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the first tap', () => ctx.calls.length === 1);
+
+  // past the limit in one segment: the check waits on its removal
+  first.write('x'.repeat(200));
+
+  await waitFor('the held removal', () => reached.removal);
+
+  const current = await startNextLife(ctx);
+
+  held.resolve(undefined);
+
+  await Bun.sleep(20);
+
+  await requireNewLifeIntact(ctx, current);
 });
 
 test('a deleted live log is not tapped again by a restarted impd', async () => {
