@@ -10,7 +10,7 @@ import {
   checkDockerfile,
   renderPinnedDockerfile,
 } from '../../packages/daemon/src/images/dockerfile-check';
-import { parseDockerfile } from '../../packages/daemon/src/images/dockerfile-parse';
+import { parseDockerfile, splitNameWords } from '../../packages/daemon/src/images/dockerfile-parse';
 import type { Instruction } from '../../packages/daemon/src/images/dockerfile-parse';
 
 const GoInstructionSchema = z.object({
@@ -127,6 +127,11 @@ const PIECES = [
   'ONBUILD ADD x y',
   'ONBUILD COPY <<EOF /x',
   'expose 80 81',
+  'ARG A=1 B="x y"',
+  'ARG D="TARGETPLATFORM=x" E=\'BUILD OS\'',
+  String.raw`arg "TARGET"ARCH=1 BUILD\OS`,
+  'ARG a\u00A0b\u0085c',
+  'ARG "open',
   'EOF',
   'EOF ',
   'END',
@@ -182,11 +187,20 @@ function normalizeFlag(flag: string): string {
 
 const WORD_KEYWORDS = new Set(['from', 'add', 'copy']);
 
-function toComparable(instruction: Readonly<Instruction>): Comparable {
+// ARG's words come from parseWords, which impd ports as splitNameWords
+function readWords(instruction: Readonly<Instruction>, escape: string): readonly string[] | null {
+  if (instruction.keyword === 'arg') {
+    return splitNameWords(instruction.args, escape);
+  }
+
+  return WORD_KEYWORDS.has(instruction.keyword) ? instruction.words : null;
+}
+
+function toComparable(instruction: Readonly<Instruction>, escape: string): Comparable {
   return {
     keyword: instruction.keyword,
     flags: instruction.flags.map((flag) => normalizeFlag(flag)),
-    words: WORD_KEYWORDS.has(instruction.keyword) ? instruction.words : null,
+    words: readWords(instruction, escape),
     trigger: instruction.trigger?.keyword ?? null,
   };
 }
@@ -195,7 +209,10 @@ function toGoComparable(instruction: DeepReadonly<GoInstruction>): Comparable {
   return {
     keyword: instruction.keyword,
     flags: instruction.flags.map((flag) => normalizeFlag(flag)),
-    words: WORD_KEYWORDS.has(instruction.keyword) ? instruction.words : null,
+    words:
+      WORD_KEYWORDS.has(instruction.keyword) || instruction.keyword === 'arg'
+        ? instruction.words
+        : null,
     trigger: instruction.trigger ?? null,
   };
 }
@@ -207,7 +224,9 @@ function readOurs(dockerfile: string) {
     return {
       error: null,
       escape: parsed.escape,
-      instructions: parsed.instructions.map((instruction) => toComparable(instruction)),
+      instructions: parsed.instructions.map((instruction) =>
+        toComparable(instruction, parsed.escape),
+      ),
     };
   } catch (error) {
     return {

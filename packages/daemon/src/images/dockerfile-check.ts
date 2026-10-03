@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { DockerfileError } from './dockerfile-error';
-import { parseDockerfile, splitDockerfileLines } from './dockerfile-parse';
+import { parseDockerfile, splitDockerfileLines, splitNameWords } from './dockerfile-parse';
 import type { Instruction, ParsedDockerfile } from './dockerfile-parse';
 
 // where a Dockerfile names an image the engine would pull on its own
@@ -60,13 +60,21 @@ function resolvePlatform(value: string, platform: string | null, line: number): 
   );
 }
 
-// An ARG of a platform variable would change what --platform reads. Quotes
-// and the escape character are dropped first, so a name hides behind none.
+// An ARG of a platform variable would change what --platform reads. The
+// frontend splits ARG as parseWords does, and lexes each name; impd drops
+// the quotes and escapes from the name, and refuses a variable in it.
 function checkArg(instruction: Readonly<Instruction>, escape: string): void {
-  const plain = instruction.args.replaceAll(/["']/gv, '').replaceAll(escape, '');
+  for (const word of splitNameWords(instruction.args, escape)) {
+    const [written = ''] = word.split('=');
 
-  for (const word of plain.split(/[\s\u0085]+/v)) {
-    const name = word.split('=')[0] ?? '';
+    if (written.includes('$')) {
+      throw buildRefusal(
+        instruction.line,
+        `ARG ${written} names its variable with a variable, which impd cannot check`,
+      );
+    }
+
+    const name = written.replaceAll(/["']/gv, '').replaceAll(escape, '');
 
     if (PLATFORM_ARGS.has(name.toUpperCase())) {
       throw buildRefusal(

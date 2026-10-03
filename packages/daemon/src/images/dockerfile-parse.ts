@@ -336,6 +336,92 @@ function readInstruction(text: string, escape: string, line: number, endLine: nu
   };
 }
 
+// parseWords, which splits ARG and ENV: words at Go's spaces, outside
+// quotes, with the quotes and escapes kept as written
+export function splitNameWords(text: string, escape: string): string[] {
+  // code points, as Go's range over a string gives runes
+  const chars = text.match(/./gsv) ?? [];
+  const words: string[] = [];
+  let word = '';
+  let phase: 'spaces' | 'word' | 'quote' = 'spaces';
+  let quote = '';
+  let isBlankOk = false;
+
+  for (let index = 0; index <= chars.length; index += 1) {
+    const isEnd = index === chars.length;
+    const char = chars[index] ?? '';
+
+    if (phase === 'spaces') {
+      if (isEnd) {
+        break;
+      }
+
+      if (LEADING_SPACE.test(char)) {
+        continue;
+      }
+
+      phase = 'word';
+    }
+
+    if (isEnd) {
+      if (isBlankOk || word.length > 0) {
+        words.push(word);
+      }
+
+      break;
+    }
+
+    if (phase === 'word') {
+      if (LEADING_SPACE.test(char)) {
+        if (isBlankOk || word.length > 0) {
+          words.push(word);
+        }
+
+        phase = 'spaces';
+        word = '';
+        isBlankOk = false;
+        continue;
+      }
+
+      if (char === "'" || char === '"') {
+        quote = char;
+        isBlankOk = true;
+        phase = 'quote';
+      }
+
+      if (char === escape) {
+        if (index + 1 === chars.length) {
+          continue;
+        }
+
+        word += char;
+        index += 1;
+      }
+
+      word += chars[index] ?? '';
+      continue;
+    }
+
+    if (char === quote) {
+      phase = 'word';
+    }
+
+    if (char === escape && quote !== "'") {
+      if (index + 1 === chars.length) {
+        phase = 'word';
+        continue;
+      }
+
+      word += char;
+      index += 1;
+    }
+
+    word += chars[index] ?? '';
+  }
+
+  return words;
+}
+
 function canHoldHeredoc(instruction: Readonly<Instruction>): boolean {
   const target = instruction.keyword === 'onbuild' ? instruction.trigger : instruction;
 

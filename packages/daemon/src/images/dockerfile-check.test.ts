@@ -249,7 +249,16 @@ FROM a:1`);
   expect(staged).toContain('line 2: ARG TARGETPLATFORM is refused');
   expect(quoted).toContain('ARG targetarch is refused');
   expect(escaped).toContain('ARG BUILDOS is refused');
-  expect(checkDockerfile('ARG VERSION="1.2" PLATFORM_NOTE\nFROM a:1')).toBeDefined();
+  expect(readRefusal('ARG $NAME=x\nFROM a:1')).toContain('ARG $NAME names its variable');
+
+  for (const line of [
+    'ARG VERSION="1.2" PLATFORM_NOTE',
+    'ARG DESCRIPTION="Build for TARGETARCH"',
+    'ARG A=1 B="x y"',
+    'ARG D="TARGETPLATFORM=linux/arm64" E=\'BUILDOS x\'',
+  ]) {
+    expect(checkDockerfile(`${line}\nFROM a:1`)).toEqual([{ ref: 'a:1', use: 'FROM' }]);
+  }
 });
 
 const PINS = new Map([
