@@ -445,3 +445,38 @@ test('blanking the key leaves every other line alone', () => {
     'IMP_HOST_IMAGE=imp-host:1\nTAILSCALE_AUTHKEY=\nIMP_TAILSCALE_HOSTNAME=imp\n',
   );
 });
+
+// a docker that reports `label` as every image's imp.host-contract
+function runContractCheck(label: string) {
+  const bin = mkdtempSync(path.join(tmpdir(), 'imp-contract-'));
+
+  writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\necho '${label}'\n`, { mode: 0o755 });
+
+  try {
+    return Bun.spawnSync(
+      [
+        'bash',
+        '-c',
+        'source "$1"; check_image_contract ghcr.io/zgeoff/imp-host:latest',
+        'x',
+        script,
+      ],
+      { env: { PATH: `${bin}:${process.env['PATH'] ?? ''}` } },
+    );
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+}
+
+test('a stale image, from before the proxy, is refused with how to get the new one', () => {
+  const stale = runContractCheck('unprivileged');
+
+  expect(stale.exitCode).toBe(1);
+
+  expect(stale.stderr.toString()).toContain(
+    'pull the new image (docker pull ghcr.io/zgeoff/imp-host:latest)',
+  );
+
+  expect(runContractCheck('').exitCode).toBe(1);
+  expect(runContractCheck('socket-proxy').exitCode).toBe(0);
+});

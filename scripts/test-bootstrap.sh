@@ -151,6 +151,9 @@ COPY <<'JSON' /usr/local/share/imp/deploy/imp-host.seccomp.json
 JSON
 CMD ["sh", "-c", "mkdir -p /var/lib/imp/tailscale && echo stub >/var/lib/imp/tailscale/tailscaled.state && exec sleep infinity"]
 EOF
+  # the release before the proxy, as a stale :latest on a #75 host would be
+  printf 'FROM %s\nLABEL imp.host-contract="unprivileged"\n' "$image" \
+    | docker build -q -t imp-host-stub:stale - >/dev/null
 fi
 # Not a real key: a marker the test looks for in the output.
 fake_key=fake-authkey-$$-$RANDOM
@@ -158,6 +161,7 @@ printf '%s\n' "$fake_key" >"$work/authkey"
 log "saving $image"
 docker image inspect "$image" >/dev/null || fail "no local image $image"
 docker save -o "$work/image.tar" "$image"
+[ -z "$stub" ] || docker save -o "$work/stale.tar" imp-host-stub:stale
 
 build_image() {
   local distro=$1 base extra=
@@ -455,6 +459,25 @@ check_ipv6_cases() {
   in_container ip link del "$fake"
 }
 
+# check_stale_image: an image from before the proxy is refused before
+# bootstrap.sh writes the env file or a unit, as on a #75 host whose :latest
+# was never pulled again.
+check_stale_image() {
+  log "[$distro] a stale image is refused before anything is written"
+  local files="/etc/imp/imp-host.env /etc/systemd/system/imp-host.service /etc/systemd/system/imp-docker-proxy.service"
+  local before current=$image
+  in_container docker load -q -i /mnt/archive/stale.tar >/dev/null
+  # shellcheck disable=SC2086 # plain paths
+  before=$(in_container sha256sum $files)
+  image=imp-host-stub:stale
+  expect_exit 1 --yes
+  image=$current
+  grep -q 'pull the new image' <<<"$LAST_OUTPUT" || fail "[$distro] the stale image's refusal does not say to pull"
+  # shellcheck disable=SC2086
+  [ "$(in_container sha256sum $files)" = "$before" ] || fail "[$distro] the stale image run changed the env file or a unit"
+  in_container docker rmi imp-host-stub:stale >/dev/null
+}
+
 # make_old_host: the host as a bootstrap.sh before IPv6 left it: imp-host
 # on the default bridge, and no IPv6 keys in the env file or the unit.
 make_old_host() {
@@ -537,6 +560,7 @@ run_distro() {
   bootstrap --yes || fail "[$distro] the second run failed"
   grep -q 'bootstrap: 0 change(s) made' <<<"$LAST_OUTPUT" || fail "[$distro] the second run changed something"
 
+  [ -z "$stub" ] || check_stale_image
   check_host_firewall_none
   [ "$distro" != debian ] || check_ipv6_cases
 

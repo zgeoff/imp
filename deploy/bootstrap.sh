@@ -1654,6 +1654,16 @@ ensure_imp() {
     && ! refusal=$(check_ram_budget "$budget" "$memtotal" "$arc" "IMP_RAM_BUDGET_MIB in $ENV_FILE" 2>&1); then
     die "$refusal"
   fi
+  # The image the units run: the env file's, which an operator may pin.
+  # Checked before anything is written: the units run imp-docker-proxy from
+  # the image and give imp-host no docker.sock, and an older image, such as
+  # a stale :latest that ensure_image keeps, has neither.
+  local run_image
+  run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
+  ensure_image "${run_image:-$DEFAULT_IMAGE}"
+  if ! dry || docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
+    refusal=$(check_image_contract "${run_image:-$DEFAULT_IMAGE}" 2>&1) || die "$refusal"
+  fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
   # imp-host reaches Docker through this proxy only (docs/architecture/host-contract.md#the-docker-socket)
@@ -1663,16 +1673,6 @@ ensure_imp() {
     put_file /etc/systemd/system/imp-host.service.d/zfs.conf 644 "$(unit_imp_host_zfs)" && changed=1
   fi
 
-  # The image the unit runs: the env file's, which an operator may pin.
-  local run_image
-  run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
-  ensure_image "${run_image:-$DEFAULT_IMAGE}"
-  # The units run imp-docker-proxy from the image, and imp-host has no
-  # docker.sock: an older image has neither.
-  if ! dry || docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
-    [ "$(docker image inspect -f '{{index .Config.Labels "imp.host-contract"}}' "${run_image:-$DEFAULT_IMAGE}")" = socket-proxy ] \
-      || die "${run_image:-$DEFAULT_IMAGE} predates the Docker socket proxy; run the bootstrap.sh of its own release"
-  fi
   # The unit's seccomp profile, from the image it runs: Docker's default plus
   # pivot_root for the jailer (docs/architecture/host-contract.md#privileges).
   # A dry run pulls nothing, so it may have no image to read.
@@ -1694,6 +1694,16 @@ ensure_imp() {
     ensure_service imp-docker-proxy
     ensure_service imp-host
   fi
+}
+
+# check_image_contract REF: fails, and says why, unless REF runs as these
+# units expect: imp.host-contract=socket-proxy (host/Dockerfile)
+check_image_contract() {
+  local contract
+  contract=$(docker image inspect -f '{{index .Config.Labels "imp.host-contract"}}' "$1" 2>/dev/null) || contract=
+  [ "$contract" = socket-proxy ] && return 0
+  echo "$1 predates the Docker socket proxy (imp.host-contract is '${contract:-none}'): pull the new image (docker pull $1) and run again; the env file and the units are unchanged" >&2
+  return 1
 }
 
 ensure_image() {
