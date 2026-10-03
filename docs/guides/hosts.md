@@ -162,8 +162,10 @@ has an image by that name with another digest, the moved image's name gets a `-<
 
 A move carries the imp's live [leases](./leases.md) and holds. Each one ends on the target as long
 after the target reads the stream's header as it had left when the source built it, so the two
-hosts' clocks need not agree. One that ends while the disk streams is left out. The target shows the
-leases while the imp is `receiving`, and its idle loop and governor respect them once it commits.
+hosts' clocks need not agree. One that ends while the disk streams is left out. The target writes
+the leases after the disk arrives, and shows them on the `receiving` imp from then on. Its idle loop
+and governor respect them once it commits, and the commit emits `ImpChanged` with reason `held` for
+an imp with a live lease.
 
 - `imp move --stop` of a running or sleeping imp ends its leases from `leases.*`, as `imp stop`
   does: it passes `force`. Without `force`, `moves.prepare` with `stop` fails with `LEASED` before

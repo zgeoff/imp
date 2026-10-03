@@ -165,11 +165,14 @@ The target notes its own now when it parses the header and ends each lease `rema
 so clock skew between the hosts has no effect; only the network's latency adds to a lease. The disk
 can take long: the target writes the leases after it, beside the cold boots, and leaves out one that
 ended meanwhile. The rows belong to the staged imp, so a failed or aborted receive, and a restart
-that removes a staged imp, delete them with it. The commit writes nothing more.
+that removes a staged imp, delete them with it. The commit writes nothing more; for an imp with a
+live lease it emits `ImpChanged` with reason `held`, as an acquire does.
 
 The header bounds them: at most 1024 leases, `remainingMs` a whole number up to 100 years, a label
-by the lease API's rules, and a principal and a display of 1 to 256 characters. A source from before
-moving leases leaves `leases` out; the target logs that the imp arrives with none.
+by the lease API's rules, and a principal and a display of 1 to 256 characters. The source checks
+its own leases against these bounds at the offer, and refuses before the stream; a lease that ends
+past 100 years moves with 100 years left, and the source logs it. A source from before moving leases
+leaves `leases` out; the target logs that the imp arrives with none.
 
 On the source, `prepare` with `stop` checks `LEASED` before it halts a running or sleeping imp, and
 with `force` ends the leases from `leases.*` after its mark is on, under the same lock. A failure
