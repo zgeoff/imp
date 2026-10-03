@@ -180,20 +180,25 @@ step that adds the variables. It refuses the exec with `PRECONDITION_FAILED`,
 - the imp has no grant, so impd sets no broker variables;
 - the CA bundle step failed for this boot (the detail carries its error). A step that has not run
   for this boot yet runs first;
-- the exec's own `env` sets a variable the broker sets, such as `HTTPS_PROXY` or `SSL_CERT_FILE`;
+- the exec's own `env` sets a variable the broker sets, such as `HTTPS_PROXY` or `SSL_CERT_FILE`, or
+  a placeholder variable of a granted kind, such as `GH_TOKEN` with a value of the caller's own;
 - the variables lack `HTTPS_PROXY` for any other reason;
 - it is an exec in the agent (`outer`), which never gets the broker's variables. The protocol
   refuses `require` with `outer` or a `tool` before that.
 
-The command never starts then. impd counts a new Firecracker process as a new boot, so after a wake,
-a snapshot restore or a checkpoint restore the next exec runs the bundle step again. impd holds the
-imp's lock from the bundle step until the agent starts the command, so no restore, reboot or sleep
-can replace the guest in between. Such an exec can wait behind a locked operation, such as a restore
-under way.
+The command never starts then. impd mints a boot id when the imp runs under a new Firecracker
+process, and drops it when the imp stops, sleeps or halts, so a pid the kernel hands out again is
+still a new boot. After a wake, a snapshot restore or a checkpoint restore, the next exec runs the
+bundle step again. impd holds the imp's lock from the bundle step until the agent starts the
+command, so no restore, reboot or sleep can replace the guest in between. Such an exec can wait
+behind a locked operation, such as a restore under way.
 
-A `start` that names a session that already runs attaches to it. impd checks the requirement for it
-too, but the session's command started earlier, with the environment it had then: the check says
-nothing about that environment.
+A `start` that names a session that already runs attaches to it. With `require: ['broker']`, the
+attach passes only when that session was itself started with `require: ['broker']` in this boot of
+the guest. Otherwise impd closes the attach before the client sees it and refuses with
+`broker_not_ready` and the detail `session <name> was started without the broker requirement`. impd
+keeps that record in memory, so after an impd restart such an attach is refused until the session is
+started again. Like any attach, the refused one takes the session over from a client attached to it.
 
 The boundary is exactly this: impd set the broker's variables and the CA bundle for this boot before
 it started the command. It does not prove that the process uses them: a command can unset
@@ -201,9 +206,10 @@ it started the command. It does not prove that the process uses them: a command 
 credential.
 
 `system.info().features.execRequire` is `true` on an impd that checks requirements (0.30.0). An
-older impd drops `require` unread and runs the command, so the CLI and the SDK check the feature
-first and fail with `PRECONDITION_FAILED` (`broker_not_ready`) without starting anything. A client
-that sends the `start` itself must do the same.
+older impd drops `require` unread and runs the command, so the CLI and every SDK exec call check the
+feature first. Without it they fail with `PRECONDITION_FAILED` and `data.reason: 'impd_outdated'`
+(upgrade impd) without starting anything, where `broker_not_ready` means the broker is not ready on
+an impd that checks. A client that sends the `start` itself must check the same.
 
 ## Where secrets are
 
