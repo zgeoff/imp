@@ -10,13 +10,13 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
-| `dev/` → `imp/dev`              | `imp/base` + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code         |
-| `examples/hello/` → `imp/hello` | `imp/base` + a tiny HTTP service on :8080 (the bring-your-own example)   |
+| `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
+| `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
 ```sh
-imp image build images/base --name base     # tagged imp/base
-imp image build images/dev --name dev       # FROM imp/base
+imp image build images/dev --name dev       # FROM the published base, by digest
 imp image build images/examples/hello --name hello
+imp image build images/base --name base     # optional: your own imp/base
 ```
 
 Each release also publishes `images/base` as `ghcr.io/zgeoff/imp-base:X.Y.Z`, linux/amd64 only, with
@@ -62,9 +62,10 @@ with that.
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
-An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
-`--build-arg BASE=...` to stack on another base; use `docker build` and `imp image add` for that. An
-imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
+An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` and
+`images/examples/hello` start FROM the published base by digest; to stack them on another base, edit
+that FROM line. An imp's own disk can be an image too: a [template](./templates.md) copies a set-up
+imp into new ones.
 
 The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
 `context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
