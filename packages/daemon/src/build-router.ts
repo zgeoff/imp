@@ -28,6 +28,7 @@ import type { Broker } from './broker/broker-service';
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import { listApiCalls } from './db/api-audit';
+import { writeDatabaseCopy } from './db/database-copy';
 import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpRecord } from './db/imps';
@@ -667,6 +668,14 @@ export function buildRouter(deps: RouterDeps) {
           isOrphans: context.input.orphans ?? false,
         }),
       ),
+      copyDatabase: os.system.copyDatabase.handler((context) =>
+        writeDatabaseCopy(
+          deps.db,
+          deps.config.dataDir,
+          context.input.name ?? buildCopyName(deps.now()),
+          deps.now,
+        ),
+      ),
     },
     tokens: {
       list: os.tokens.list.handler(() => deps.tokens.list()),
@@ -704,7 +713,15 @@ const SYSTEM_FEATURES = {
   leases: true,
   grantableTokens: true,
   secretRebind: true,
+  databaseCopy: true,
 } as const;
+
+// imp-20261004-061233: a name's form, in UTC, to the second
+function buildCopyName(now: number): string {
+  const stamp = new Date(now).toISOString().slice(0, 19).replaceAll(/[-:]/g, '').replace('T', '-');
+
+  return `imp-${stamp}`;
+}
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given
