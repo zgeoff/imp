@@ -78,10 +78,11 @@ restarts and day-to-day care.
 
 ## What `dev.sh up` does
 
-- Builds the `dev` target of `host/Dockerfile` as the host image, and rebuilds
-  `build/imp-system.squashfs` (the agent's system drive) from `agent/`, so a changed agent reaches
-  the next imp. The Docker cache makes the rebuild take about half a second when the agent is
-  unchanged. With `IMP_SYSTEM_DRIVE` set, it uses that drive as it is.
+- Builds the `dev` target of `host/Dockerfile` as the host image, tagged for this checkout
+  ([worktrees](./development.md#worktrees)), and rebuilds `build/imp-system.squashfs` (the agent's
+  system drive) from `agent/`, so a changed agent reaches the next imp. The Docker cache makes the
+  rebuild take about half a second when the agent is unchanged. With `IMP_SYSTEM_DRIVE` set, it uses
+  that drive as it is.
 - Starts `<name>-docker-proxy` first: this checkout's proxy, compiled with `bun build --compile` as
   the release image compiles it, with the proxy's privileges from `deploy/imp-host.args.json`. Its
   socket directory and token are Docker volumes of their own, which `dev.sh down` removes.
