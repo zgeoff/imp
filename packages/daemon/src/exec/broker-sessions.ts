@@ -8,21 +8,32 @@ import { buildBrokerNotReadyError } from './exec-require';
 // that runs only when that session's run started with the requirement
 // (db/broker-sessions.ts).
 
-// Before the open, from the agent's session list: a refusal here never
-// reaches the agent, so the session's viewer keeps it.
-export function checkBrokerAttach(
+// Before the open: each run the start would attach to (the running one, an
+// exited one its resumeFrom names) must have started with the requirement.
+// Refused here, the agent never sees it: viewer and output stay as they are.
+export async function checkBrokerAttach(
   db: ImpDatabase,
   impId: string,
   name: string,
+  resumeGeneration: string | undefined,
   sessions: readonly AgentSession[],
 ): Promise<Error | null> {
-  const running = sessions.find((session) => session.name === name && session.state === 'running');
+  const attached = sessions.filter(
+    (session) =>
+      session.name === name &&
+      (session.state === 'running' ||
+        (resumeGeneration !== undefined && session.execution_generation === resumeGeneration)),
+  );
 
-  if (running === undefined) {
-    return Promise.resolve(null);
+  for (const session of attached) {
+    const refused = await isCovered(db, impId, session.execution_generation, name);
+
+    if (refused !== null) {
+      return refused;
+    }
   }
 
-  return isCovered(db, impId, running.execution_generation, name);
+  return null;
 }
 
 // After the open: records a session the start created; an attach to one
@@ -44,11 +55,10 @@ export async function checkOpenedSession(
   // an agent from before output offsets names no generation: its sessions
   // never pass an attach that requires the broker
   if (generation !== undefined) {
-    const running = sessions
-      .filter((session) => session.state === 'running')
-      .flatMap((session) => session.execution_generation ?? []);
+    // an exited run stays listed while a resume can still attach to it
+    const listed = sessions.flatMap((session) => session.execution_generation ?? []);
 
-    await writeBrokerSession(db, impId, generation, running);
+    await writeBrokerSession(db, impId, generation, listed);
   }
 
   return null;

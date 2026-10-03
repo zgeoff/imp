@@ -19,15 +19,15 @@ export async function isBrokerSession(
   return row !== undefined;
 }
 
-// the new one, and of the rest only those still `running`, so the rows
-// never outgrow the imp's live sessions
+// the new one, and of the rest only those the agent still lists, running or
+// exited, so the rows never outgrow the imp's sessions
 export async function writeBrokerSession(
   db: ImpDatabase,
   impId: string,
   generation: string,
-  running: readonly string[],
+  listed: readonly string[],
 ): Promise<void> {
-  const kept = [generation, ...running];
+  const kept = [generation, ...listed];
 
   await db.transaction().execute(async (trx) => {
     await trx
