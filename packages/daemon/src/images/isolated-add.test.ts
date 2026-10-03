@@ -38,6 +38,9 @@ interface AddTestOptions {
   // sh lines the host docker runs after it logs its call; by default none,
   // so every call fails
   readonly hostDocker?: (dataDir: string) => string;
+
+  // how long the builder image's pull may take
+  readonly builderImagePullMs?: number;
 }
 
 // the error `adding` rejects with, or null
@@ -179,6 +182,9 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     log: (message) => {
       logs.push(message);
     },
+    ...(options.builderImagePullMs !== undefined && {
+      builderImagePullMs: options.builderImagePullMs,
+    }),
   });
 
   holder.images = images;
@@ -435,7 +441,7 @@ test('a builder image the host engine cannot give fails the add with a clear err
 
 // The host engine as the proxy's lock leaves it: the builder image pulls by
 // its digest, and create and export serve a small tree
-function buildBuilderHost(dataDir: string): string {
+function buildBuilderHost(dataDir: string, pull = 'touch "$pulled"; exit 0'): string {
   const tar = join(dataDir, 'builder.tar');
 
   writeFileSync(tar, buildTar(dataDir, { dockerd: 'builder\n' }));
@@ -446,7 +452,7 @@ function buildBuilderHost(dataDir: string): string {
     `pulled='${dataDir}/pulled'`,
     'case "$1 $2" in',
     `  "image inspect") [ -f "$pulled" ] && { echo '${inspect}'; exit 0; } ;;`,
-    '  "pull --quiet") touch "$pulled"; exit 0 ;;',
+    `  "pull --quiet") ${pull} ;;`,
     `  "create "*) echo '${CONTAINER_ID}'; exit 0 ;;`,
     `  "export "*) cat '${tar}'; exit 0 ;;`,
     '  "rm -f") exit 0 ;;',
@@ -511,4 +517,129 @@ test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, with a warnin
   expect(ctx.readHostCalls()).toContain('image inspect busybox:1.37');
   expect(ctx.logs).toContain(HOST_ADD_WARNING);
   expect(ctx.guest.runs).toEqual([]);
+});
+
+// a pull that never ends: exec, so the timeout's kill reaches it
+const HANG = 'exec sleep 30';
+
+test('a builder image pull that hangs fails at its timeout, naming IMP_BUILD_IMAGE', async () => {
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => buildBuilderHost(dataDir, HANG),
+    builderImagePullMs: 300,
+  });
+
+  const started = performance.now();
+
+  const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
+
+  expect(performance.now() - started).toBeLessThan(5000);
+  expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+
+  expect(String(failure)).toContain(
+    `impd cannot add its builder image ${ctx.config.build.image} (IMP_BUILD_IMAGE)`,
+  );
+
+  expect(String(failure)).toContain(
+    `the pull did not finish in 0.3 s; on a slow link, pull ${ctx.config.build.image} on the host engine first (docker pull ${ctx.config.build.image})`,
+  );
+
+  // the inspect that found no image, then the pull: nothing else on the host
+  expect(ctx.readHostCalls().trim().split('\n')).toEqual([
+    `image inspect ${ctx.config.build.image}`,
+    `pull --quiet ${ctx.config.build.image}`,
+  ]);
+});
+
+test('an add after a failed builder image pull pulls again', async () => {
+  // the first pull hangs, the second succeeds
+  const pull =
+    'if [ -f "$pulled.tried" ]; then touch "$pulled"; exit 0; fi; touch "$pulled.tried"; exec sleep 30';
+
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => buildBuilderHost(dataDir, pull),
+    builderImagePullMs: 1000,
+  });
+
+  const first = await readFailure(ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage()));
+
+  expect(String(first)).toContain('the pull did not finish');
+
+  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+
+  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx
+    .readHostCalls()
+    .split('\n')
+    .filter((call) => call.startsWith('pull '));
+
+  expect(builder).toMatchObject({ ref: ctx.config.build.image });
+  expect(pulls).toHaveLength(2);
+});
+
+test('a caller that goes stops waiting, and the pull it shared goes on for the others', async () => {
+  const go = { path: '' };
+
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => {
+      go.path = join(dataDir, 'go');
+
+      return buildBuilderHost(
+        dataDir,
+        `while [ ! -f '${go.path}' ]; do sleep 0.05; done; touch "$pulled"; exit 0`,
+      );
+    },
+  });
+
+  const controller = new AbortController();
+
+  // one PATH for both callers: each call's own would restore it as it ends
+  await ctx.withHostDocker(async () => {
+    const leaving = readFailure(ctx.addImages.ensureBuilderImage(controller.signal));
+    const staying = ctx.addImages.ensureBuilderImage();
+
+    controller.abort(new Error('the client went'));
+
+    const left = await leaving;
+
+    expect(String(left)).toContain('the client went');
+
+    writeFileSync(go.path, '');
+
+    await staying;
+  });
+
+  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx
+    .readHostCalls()
+    .split('\n')
+    .filter((call) => call.startsWith('pull '));
+
+  expect(builder).toMatchObject({ ref: ctx.config.build.image });
+  expect(pulls).toHaveLength(1);
+});
+
+test('a builder image the host engine has already, pulled ahead by its reference, is not pulled', async () => {
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => {
+      // the operator's own `docker pull` of IMP_BUILD_IMAGE
+      writeFileSync(join(dataDir, 'pulled'), '');
+
+      return buildBuilderHost(dataDir, HANG);
+    },
+    builderImagePullMs: 300,
+  });
+
+  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+
+  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx
+    .readHostCalls()
+    .split('\n')
+    .filter((call) => call.startsWith('pull '));
+
+  expect(builder).toMatchObject({ ref: ctx.config.build.image });
+  expect(pulls).toEqual([]);
 });

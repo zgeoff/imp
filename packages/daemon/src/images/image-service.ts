@@ -129,7 +129,8 @@ export interface ImageService {
   readonly seedDefaultImage: () => Promise<void>;
 
   // adds IMP_BUILD_IMAGE as the builders' image, unless it is that already
-  readonly ensureBuilderImage: () => Promise<void>;
+  // a caller that goes stops waiting; the pull goes on for the others
+  readonly ensureBuilderImage: (signal?: AbortSignal) => Promise<void>;
 }
 
 // the host's engine, through imp-docker-proxy
@@ -170,6 +171,50 @@ export interface ImageServiceDeps {
   // where an isolated build runs; null until the imps are up
   readonly readBuilders: () => Builders | null;
   readonly log: (message: string) => void;
+
+  // BUILDER_IMAGE_PULL_MS, but for tests
+  readonly builderImagePullMs?: number;
+}
+
+// how long the builder image's pull onto the host engine may take; a hung
+// pull would hold every add and build
+const BUILDER_IMAGE_PULL_MS = 600_000;
+
+interface HostImageOptions {
+  readonly onResolved?: ((reference: string) => void) | undefined;
+
+  // kills the inspect and the pull when it aborts
+  readonly signal?: AbortSignal | undefined;
+}
+
+// the pull's limit as the error names it: 10 minutes, or seconds in a test
+function formatPullLimit(pullMs: number): string {
+  return pullMs >= 60_000 ? `${String(pullMs / 60_000)} minutes` : `${String(pullMs / 1000)} s`;
+}
+
+// `pulling`, or the abort of the caller's signal, whichever comes first
+async function waitForPull(pulling: Promise<unknown>, signal: AbortSignal | undefined) {
+  if (signal === undefined) {
+    await pulling;
+
+    return;
+  }
+
+  signal.throwIfAborted();
+
+  const aborted = Promise.withResolvers<never>();
+
+  const stopWaiting = () => {
+    aborted.reject(signal.reason);
+  };
+
+  signal.addEventListener('abort', stopWaiting, { once: true });
+
+  try {
+    await Promise.race([pulling, aborted.promise]);
+  } finally {
+    signal.removeEventListener('abort', stopWaiting);
+  }
 }
 
 function toBadRequest(error: unknown): unknown {
@@ -253,16 +298,18 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
-  const readInspect = async (ref: string) => {
-    const first = await runCommand(['docker', 'image', 'inspect', ref]);
+  const readInspect = async (ref: string, signal?: AbortSignal) => {
+    const options = signal === undefined ? {} : { signal };
+
+    const first = await runCommand(['docker', 'image', 'inspect', ref], options);
 
     if (first.exitCode === 0) {
       return InspectSchema.parse(JSON.parse(first.stdout))[0];
     }
 
-    await runChecked(['docker', 'pull', '--quiet', ref]);
+    await runChecked(['docker', 'pull', '--quiet', ref], options);
 
-    const stdout = await runChecked(['docker', 'image', 'inspect', ref]);
+    const stdout = await runChecked(['docker', 'image', 'inspect', ref], options);
 
     return InspectSchema.parse(JSON.parse(stdout))[0];
   };
@@ -404,9 +451,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   const createImageOnHost = async (
     ref: string,
     imageName: string,
-    onResolved?: (reference: string) => void,
+    options: Readonly<HostImageOptions> = {},
   ): Promise<ImageRecord> => {
-    const inspect = await readInspect(ref);
+    const onResolved = options.onResolved;
+
+    const inspect = await readInspect(ref, options.signal);
 
     if (inspect === undefined) {
       throw new Error(`docker image inspect ${ref}: no result`);
@@ -501,7 +550,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     if (deps.config.build.isolation === 'host') {
       deps.log(HOST_ADD_WARNING);
 
-      return createImageOnHost(ref, imageName, options.onResolved);
+      return createImageOnHost(ref, imageName, { onResolved: options.onResolved });
     }
 
     return createImageInBuilder(ref, imageName, options);
@@ -510,7 +559,47 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // the builders' image, at most one add of it at a time
   const builderImage = { adding: null as Promise<ImageRecord> | null };
 
-  const loadBuilderImage = async (): Promise<void> => {
+  // The one add of the builder image, under its own timeout and no caller's
+  // signal; once it settles, the next add starts afresh
+  const startBuilderImage = (ref: string): Promise<ImageRecord> => {
+    const pullMs = deps.builderImagePullMs ?? BUILDER_IMAGE_PULL_MS;
+    const timeout = AbortSignal.timeout(pullMs);
+
+    const createBuilderImage = async (): Promise<ImageRecord> => {
+      try {
+        return await createImageOnHost(ref, BUILDER_IMAGE, { signal: timeout });
+      } catch (error) {
+        const reason = timeout.aborted
+          ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
+          : readErrorMessage(error);
+
+        throw new ORPCError('SERVICE_UNAVAILABLE', {
+          message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${reason}`,
+        });
+      }
+    };
+
+    const adding = createBuilderImage();
+
+    const removeOnSettle = async () => {
+      try {
+        await adding;
+      } catch {
+        // each caller gets the error from its own wait
+      } finally {
+        if (builderImage.adding === adding) {
+          builderImage.adding = null;
+        }
+      }
+    };
+
+    builderImage.adding = adding;
+    void removeOnSettle();
+
+    return adding;
+  };
+
+  const loadBuilderImage = async (signal?: AbortSignal): Promise<void> => {
     const ref = deps.config.build.image;
 
     const image = await findImageByName(deps.db, BUILDER_IMAGE);
@@ -519,17 +608,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       return;
     }
 
-    builderImage.adding ??= createImageOnHost(ref, BUILDER_IMAGE);
-
-    try {
-      await builderImage.adding;
-    } catch (error) {
-      throw new ORPCError('SERVICE_UNAVAILABLE', {
-        message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${readErrorMessage(error)}`,
-      });
-    } finally {
-      builderImage.adding = null;
-    }
+    await waitForPull(builderImage.adding ?? startBuilderImage(ref), signal);
   };
 
   const findDefaultImage = async (): Promise<ImageRecord | undefined> => {
