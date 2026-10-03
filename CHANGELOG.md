@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0](https://github.com/zgeoff/imp/compare/v0.28.1...v0.29.0) (2026-10-03)
+
+### ⚠ BREAKING CHANGES
+
+- **images:** imp image build refuses a Dockerfile with a variable
+  ($) in FROM, such as FROM
+  ${BASE}; write the base image literally.
+
+### Features
+
+- **images:** build with BuildKit through the socket proxy, bound to inspected images
+  ([#163](https://github.com/zgeoff/imp/issues/163))
+  ([51df459](https://github.com/zgeoff/imp/commit/51df459d63b85426e419294b3410fe10a3bf7c64))
+
 ## [0.28.1](https://github.com/zgeoff/imp/compare/v0.28.0...v0.28.1) (2026-10-03)
 
 ### Bug Fixes
