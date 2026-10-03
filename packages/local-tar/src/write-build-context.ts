@@ -11,7 +11,8 @@ export class BuildContextError extends Error {
 
 type Source = Extract extends AsyncIterable<infer Entry> ? Entry : never;
 
-// a failed write of the rewrite, which stops the read of the upload
+// a failed write of the rewrite, or the caller's abort, which stops the
+// read of the upload
 interface WriteFailure {
   error?: Error;
 }
@@ -293,7 +294,9 @@ async function runContextPass(
   dockerfilePath: string,
   maxDockerfileBytes: number,
   target: CopyTarget | null,
+  signal: AbortSignal | undefined,
 ): Promise<CheckedContext> {
+  signal?.throwIfAborted();
   const candidates = listDockerfileCandidates(dockerfilePath);
 
   const types = new Map<string, EntryType>();
@@ -327,8 +330,19 @@ async function runContextPass(
 
   input.pipe(extract);
 
+  // a client that goes stops the read, and frees its slot without reading on
+  const stop = (): void => {
+    writeFailure.error = toError(signal?.reason);
+
+    input.destroy();
+    extract.destroy(writeFailure.error);
+  };
+
+  signal?.addEventListener('abort', stop, { once: true });
+
   try {
     for await (const entry of readEntries(extract, writeFailure)) {
+      signal?.throwIfAborted();
       const type = readEntryType(entry.header);
       const name = normalizeEntryName(entry.header.name);
 
@@ -405,6 +419,8 @@ async function runContextPass(
 
     throw error;
   } finally {
+    signal?.removeEventListener('abort', stop);
+
     await output?.close();
   }
 }
@@ -416,8 +432,9 @@ export function readBuildContext(
   inputPath: string,
   dockerfilePath: string,
   maxDockerfileBytes: number,
+  signal?: AbortSignal,
 ): Promise<CheckedContext> {
-  return runContextPass(inputPath, dockerfilePath, maxDockerfileBytes, null);
+  return runContextPass(inputPath, dockerfilePath, maxDockerfileBytes, null, signal);
 }
 
 // Writes the context readBuildContext checked again at outputPath, which
@@ -428,10 +445,9 @@ export async function writeBuildContext(
   checked: CheckedContext,
   dockerfile: string,
   maxDockerfileBytes: number,
+  signal?: AbortSignal,
 ): Promise<void> {
-  await runContextPass(inputPath, checked.dockerfilePath, maxDockerfileBytes, {
-    outputPath,
-    checked,
-    dockerfile: new TextEncoder().encode(dockerfile),
-  });
+  const target = { outputPath, checked, dockerfile: new TextEncoder().encode(dockerfile) };
+
+  await runContextPass(inputPath, checked.dockerfilePath, maxDockerfileBytes, target, signal);
 }

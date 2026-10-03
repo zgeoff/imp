@@ -506,13 +506,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       // the rewrite is the context again, with pax headers for long names
       await deps.diskBudget.withRoom(tarBytes, async () => {
-        const context = await readBuildContext(tarPath, dockerfilePath, DOCKERFILE_MAX_BYTES).catch(
-          (error: unknown) => {
-            throw error instanceof BuildContextError
-              ? new ORPCError('BAD_REQUEST', { message: error.message })
-              : error;
-          },
-        );
+        const context = await readBuildContext(
+          tarPath,
+          dockerfilePath,
+          DOCKERFILE_MAX_BYTES,
+          signal,
+        ).catch((error: unknown) => {
+          throw error instanceof BuildContextError
+            ? new ORPCError('BAD_REQUEST', { message: error.message })
+            : error;
+        });
 
         const pinned = await resolvePinnedDockerfile(context.dockerfile, signal);
 
@@ -530,6 +533,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
           context,
           pinned.dockerfile,
           DOCKERFILE_MAX_BYTES,
+          signal,
         );
 
         signal.throwIfAborted();

@@ -325,3 +325,49 @@ test('a compressed or broken body is refused as not a tar', async () => {
     expect(String(outcome.result)).toContain('the build context is not a tar');
   }
 });
+
+test('an aborted signal stops either pass, before or during its read', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-abort-context-'));
+  const input = join(dir, 'in.tar');
+
+  const entries = Array.from({ length: 3000 }, (_entry, index) => ({
+    name: `f${String(index)}`,
+    content: 'x'.repeat(512),
+  }));
+
+  const bytes = await writeTarBytes([{ name: 'Dockerfile', content: DOCKERFILE }, ...entries]);
+
+  writeFileSync(input, bytes);
+
+  try {
+    const checked = await readBuildContext(input, 'Dockerfile', 1024);
+
+    const before = new AbortController();
+
+    before.abort(new Error('the client went'));
+
+    const early = await readBuildContext(input, 'Dockerfile', 1024, before.signal).catch(
+      (error: unknown) => error,
+    );
+
+    const during = new AbortController();
+
+    const writing = writeBuildContext(
+      input,
+      join(dir, 'out.tar'),
+      checked,
+      DOCKERFILE,
+      1024,
+      during.signal,
+    );
+
+    during.abort(new Error('the client went'));
+
+    const late = await writing.catch((error: unknown) => error);
+
+    expect(early).toMatchObject({ message: 'the client went' });
+    expect(late).toMatchObject({ message: 'the client went' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
