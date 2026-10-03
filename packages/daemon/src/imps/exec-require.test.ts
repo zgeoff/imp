@@ -45,15 +45,23 @@ async function setupRequireTest(installBundle?: InstallBundle) {
 
   const paths = buildImpPaths(ctx.dataDir, imp.id);
 
-  // every exec the agent got, which answers each with STARTED, a session's
-  // as one that already ran
+  // the sessions the fake agent runs: a start with a new name creates one,
+  // a start with a known name attaches
+  const sessions = new Set<string>();
+
+  // every exec the agent got, which answers each with STARTED
   const agent = await startFakeAgent(paths.vsockSocket, (socket, request) => {
     const session = ExecFrameSchema.parse(decodeJsonPayload(request)).session;
+    const created = session !== undefined && !sessions.has(session);
+
+    if (session !== undefined) {
+      sessions.add(session);
+    }
 
     socket.write(
       encodeJsonFrame(FRAME_TYPES.started, {
         pid: 9,
-        ...(session !== undefined && { session, created: false }),
+        ...(session !== undefined && { session, created }),
       }),
     );
   });
@@ -264,7 +272,7 @@ test('a stop that takes the lock first leaves the exec to boot the imp and check
   expect(ctx.readExecs()[0]?.env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
 });
 
-test('a session start that requires the broker is checked even when it attaches', async () => {
+test('an attach that requires the broker passes only to a session started with it', async () => {
   await using ctx = await setupRequireTest();
 
   const identity = readVmIdentity(ctx.paths);
@@ -275,18 +283,34 @@ test('a session start that requires the broker is checked even when it attaches'
 
   writeVmIdentity(ctx.paths, { ...identity, agentVersion: '0.16.0' });
 
-  const session = { argv: ['sh'], tty: true, session: 'main', require: ['broker'] } as const;
+  const start = (session: string, required: boolean) =>
+    ctx.imps.openExec('dev', {
+      argv: ['sh'],
+      tty: true,
+      session,
+      ...(required && { require: ['broker'] as const }),
+    });
 
-  const refused = await readRefusal(ctx.imps.openExec('dev', session));
+  const ungranted = await readRefusal(start('main', true));
 
-  expect(refused).toContain('no grant');
+  expect(ungranted).toContain('no grant');
   expect(ctx.readExecs()).toEqual([]);
 
   await ctx.createGrant();
 
-  const stream = await ctx.imps.openExec('dev', session);
+  // started with the requirement, then attached to with it
+  for (const opening of [start('main', true), start('main', true)]) {
+    const stream = await opening;
 
-  stream.close();
+    stream.close();
+  }
 
-  expect(ctx.readExecs()[0]).toMatchObject({ session: 'main' });
+  // started without it: an attach that requires the broker is refused
+  const plain = await start('other', false);
+
+  plain.close();
+
+  const refused = await readRefusal(start('other', true));
+
+  expect(refused).toBe('session other was started without the broker requirement');
 });
