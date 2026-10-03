@@ -1,8 +1,10 @@
+import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
+import { PIN_INSPECT_FORMAT, PinInspectSchema, formatPlatform, pickRepoDigest } from './image-pin';
 import { UNPACK_TAR_ARGS, assertUnpacked } from './unpack-export';
 
 // the tag of the one image a builder makes
@@ -51,6 +53,64 @@ export async function runGuestBuild(
 
     throw new DockerBuildError(`docker build failed:\n${log}`);
   }
+}
+
+export interface GuestPullOptions {
+  // the reference with its tag or digest written out
+  readonly ref: string;
+
+  // the builder engine's own, `linux/amd64`
+  readonly platform: string;
+  readonly signal: AbortSignal;
+}
+
+// An add's pull on the builder's engine, for a platform named in full, as
+// the builder's one image; returns the registry digest it reports, for the
+// log only.
+export async function loadGuestImage(
+  exec: GuestExec,
+  options: Readonly<GuestPullOptions>,
+): Promise<string | null> {
+  const ref = options.ref;
+  const signal = options.signal;
+
+  const pulled = await exec(['docker', 'pull', '--quiet', '--platform', options.platform, ref], {
+    signal,
+  });
+
+  if (pulled.exitCode !== 0) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `the pull of ${ref} in the builder failed: ${pulled.stderr.trim().slice(-LOG_MAX_CHARS)}`,
+    });
+  }
+
+  const inspected = await exec(
+    ['docker', 'image', 'inspect', '--format', PIN_INSPECT_FORMAT, ref],
+    {
+      signal,
+    },
+  );
+
+  if (inspected.exitCode !== 0) {
+    throw new Error(`docker image inspect ${ref} in the builder: ${inspected.stderr.trim()}`);
+  }
+
+  const inspect = PinInspectSchema.parse(JSON.parse(inspected.stdout));
+  const imagePlatform = formatPlatform(inspect.Os, inspect.Architecture);
+
+  if (imagePlatform !== options.platform) {
+    throw new ORPCError('BAD_REQUEST', {
+      message: `${ref} pulled for ${imagePlatform}, not ${options.platform}`,
+    });
+  }
+
+  const tagged = await exec(['docker', 'tag', ref, GUEST_BUILD_TAG], { signal });
+
+  if (tagged.exitCode !== 0) {
+    throw new Error(`docker tag in the builder: ${tagged.stderr.trim()}`);
+  }
+
+  return pickRepoDigest(ref, inspect.RepoDigests ?? []);
 }
 
 // a build's digest names no Docker image ID, nor a template's `imp-<uuid>`

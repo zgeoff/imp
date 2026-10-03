@@ -471,13 +471,16 @@ export function buildRouter(deps: RouterDeps) {
 
         return images.map((image) => toApiImage(image));
       }),
+
+      // a client that goes, or whose token ends, ends a pull and its builder
       add: os.images.add.handler(async (context) => {
         const input = context.input;
+        const signal = mergeSignals(context.signal, context.context.ends);
 
         const image =
           'imp' in input
             ? await deps.templates.createTemplate(input.imp, input.name)
-            : await deps.images.addImage(input.ref, input.name);
+            : await deps.images.addImage(input.ref, input.name, signal);
 
         return toApiImage(image);
       }),
