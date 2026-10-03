@@ -28,7 +28,7 @@ import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
 import { createBuilders } from './images/builder-imps';
 import type { Builders } from './images/builder-imps';
-import { HOST_BUILD_WARNING, createImageService } from './images/image-service';
+import { HOST_ADD_WARNING, HOST_BUILD_WARNING, createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { readSetfcapWarning } from './images/unpack-export';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
@@ -195,6 +195,7 @@ async function main(): Promise<void> {
 
   if (config.build.isolation === 'host') {
     printLog(HOST_BUILD_WARNING);
+    printLog(HOST_ADD_WARNING);
   }
 
   const diskUsage = createDiskUsageCache({ db, storage, log: printLog });

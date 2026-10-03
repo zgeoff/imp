@@ -66,6 +66,9 @@ const SEED_REF = 'ubuntu:24.04';
 export const HOST_BUILD_WARNING =
   'impd: WARNING: IMP_BUILD_ISOLATION=host: image builds run on the host engine, whose RUN steps can reach the host and its private networks; for a trusted operator only, and gone in the next release (docs/guides/images.md#isolated-builds)';
 
+export const HOST_ADD_WARNING =
+  'impd: WARNING: IMP_BUILD_ISOLATION=host: image adds pull onto the host engine, which keeps each image impd pulled; gone in the next release (docs/guides/images.md#add-an-image)';
+
 const RepoDigestsSchema = z.array(z.string()).nullish();
 
 const InspectSchema = z
@@ -488,6 +491,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     requireDockerImage(taken);
 
     if (deps.config.build.isolation === 'host') {
+      deps.log(HOST_ADD_WARNING);
+
       return createImageOnHost(ref, imageName, options.onResolved);
     }
 
