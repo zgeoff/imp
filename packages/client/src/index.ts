@@ -16,6 +16,8 @@ export type {
   ResumeFrom,
   ResumeResult,
   Session,
+  SessionLog,
+  SessionLogRead,
   SessionOutput,
   SshKey,
   SystemInfo,

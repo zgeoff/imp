@@ -35,6 +35,9 @@ interface SessionOptions {
 
   // the byte that detaches, read from a raw terminal; null turns it off
   readonly detachKey: number | null;
+
+  // impd keeps the output of a session this start creates
+  readonly log?: boolean;
 }
 
 // what runExec touches besides signals; tests swap it
@@ -159,6 +162,7 @@ export function runExec(options: Readonly<ExecOptions>, io: ExecIo = PROCESS_IO)
             tty: options.tty,
             ...(options.env !== undefined && { env: { ...options.env } }),
             ...(session !== null && { session: session.name }),
+            ...(session?.log === true && { log: true }),
             ...(options.outer === true && { outer: true }),
             ...size,
           };

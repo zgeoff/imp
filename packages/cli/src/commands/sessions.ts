@@ -6,20 +6,47 @@ import { runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
 import { readTermEnv } from './imps';
+import { listSessionLogs, removeSessionLogs, writeSessionLog } from './session-logs';
 
-// `imp sessions kill <name> <session>` shares the command with
-// `imp sessions <name>`: citty cannot mix subcommands with positionals, so a
-// first positional `kill` always means a kill.
+// `imp sessions kill|logs|log|log-rm ...` share the command with
+// `imp sessions <name>`: citty cannot mix subcommands with positionals, so
+// a first positional that names a verb always means it.
 export const sessionsCommand = defineCommand({
   meta: {
     name: 'sessions',
     description:
-      "List an imp's sessions without waking it (imp sessions kill <name> <session> ends one)",
+      "List an imp's sessions without waking it (imp sessions kill <name> <session> ends one; logs, log and log-rm read and delete session logs)",
   },
-  args: { name: nameArg, json: jsonArg },
+  args: {
+    name: nameArg,
+    json: jsonArg,
+    from: {
+      type: 'string',
+      description: 'imp sessions log: the offset to read from (default 0)',
+    },
+  },
   run: (context) =>
     runAction(context.host, async (client) => {
       const positionals = context.args._;
+      const [verb, ...rest] = positionals;
+
+      if (verb === 'logs') {
+        await listSessionLogs(client, rest, context.args.json === true);
+
+        return;
+      }
+
+      if (verb === 'log') {
+        await writeSessionLog(client, rest, context.args.from);
+
+        return;
+      }
+
+      if (verb === 'log-rm') {
+        await removeSessionLogs(client, rest);
+
+        return;
+      }
 
       if (positionals[0] === 'kill') {
         const [, name, session] = positionals;

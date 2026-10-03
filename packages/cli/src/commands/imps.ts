@@ -22,6 +22,7 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
+import { requireFeature } from '../require-feature';
 import { formatError, printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
@@ -552,13 +553,30 @@ export const consoleCommand = defineCommand({
       type: 'string',
       description: `session to start or attach to (default ${DEFAULT_SESSION} on a terminal); --no-session for a shell that ends with the terminal`,
     },
+    log: {
+      type: 'boolean',
+      description:
+        'impd keeps the output of the session this starts, for imp sessions log (docs/guides/session-logs.md)',
+    },
     'detach-key': detachKeyArg,
   },
   run: async (context) => {
     const session = readConsoleSession(context.args.session, process.stdin.isTTY);
     const detachKey = readDetachKey(context.args['detach-key']);
+    const log = context.args.log === true;
 
     if (session === undefined || detachKey === undefined) {
+      return;
+    }
+
+    if (log && session === null) {
+      printError(new UsageError('--log needs a session'));
+
+      return;
+    }
+
+    // an older impd would start the session and keep nothing
+    if (log && !(await checkSessionLogs(context.host))) {
       return;
     }
 
@@ -569,13 +587,26 @@ export const consoleCommand = defineCommand({
       tty: true,
       env: readTermEnv(),
       ...(typeof session === 'string' && {
-        session: { name: session, attachOnly: false, detachKey },
+        session: { name: session, attachOnly: false, detachKey, log },
       }),
     });
 
     process.exit(code);
   },
 });
+
+// false once a failure is reported
+async function checkSessionLogs(host: string | null): Promise<boolean> {
+  const checked = { ok: false };
+
+  await runAction(host, async (client) => {
+    await requireFeature(client, 'sessionLog', 'start the session without a log');
+
+    checked.ok = true;
+  });
+
+  return checked.ok;
+}
 
 // the named session, the default on a terminal, or null for none;
 // undefined once a bad name is reported
