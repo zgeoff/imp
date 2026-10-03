@@ -301,8 +301,8 @@ test('a GC with orphans waits for a destroy that holds the gate', async () => {
 
 // Secret values the broker kept aside (docs/guides/connectors.md#value-files)
 // come only to a caller that asks with `secretFiles`: an older client does not
-// know kind `secrets`, and its `orphans` must not delete them unseen.
-test('a GC lists the secret values kept aside only when asked, and removes them with orphans', async () => {
+// know kind `secrets`. Only `removeSecretFiles` with `orphans` deletes them.
+test('a GC lists the secret values kept aside when asked, and removes them only when told to', async () => {
   await using ctx = await setupImpTest();
 
   const app = buildTestApp(ctx, ctx);
@@ -334,12 +334,21 @@ test('a GC lists the secret values kept aside only when asked, and removes them 
     },
   ]);
 
-  const dry = await app.client.system.gc({ secretFiles: true, orphans: true, dryRun: true });
+  // orphans alone retires disks and images, and only lists these
+  const orphans = await app.client.system.gc({ secretFiles: true, orphans: true });
+
+  expect(orphans.kept?.map((orphan) => orphan.id)).toContain(id);
+  expect(orphans.dropped).not.toContainEqual({ kind: 'secrets', id });
+  expect(existsSync(kept.dir ?? '')).toBe(true);
+
+  const told = { secretFiles: true, removeSecretFiles: true, orphans: true };
+
+  const dry = await app.client.system.gc({ ...told, dryRun: true });
 
   expect(dry.dropped).toContainEqual({ kind: 'secrets', id });
   expect(existsSync(kept.dir ?? '')).toBe(true);
 
-  const removed = await app.client.system.gc({ secretFiles: true, orphans: true });
+  const removed = await app.client.system.gc(told);
 
   expect(removed.dropped).toContainEqual({ kind: 'secrets', id });
   expect(existsSync(kept.dir ?? '')).toBe(false);

@@ -29,9 +29,11 @@ interface GcOptions {
 }
 
 // `isSecretFiles`: the caller asked for kind `secrets`, which an older
-// client does not know
+// client does not know. Only `isRemoveSecretFiles` with `isOrphans` deletes
+// them: they may be values a restore lost, to recover first.
 interface ManualGcOptions extends GcOptions {
   readonly isSecretFiles?: boolean;
+  readonly isRemoveSecretFiles?: boolean;
 }
 
 export interface StorageGcService {
@@ -80,7 +82,8 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
         });
       }
 
-      const secrets = options.isSecretFiles === true ? removeSecretFiles(deps, options) : null;
+      const isAsked = options.isSecretFiles === true || options.isRemoveSecretFiles === true;
+      const secrets = isAsked ? removeSecretFiles(deps, options) : null;
 
       return {
         dryRun: options.isDryRun,
@@ -99,14 +102,15 @@ export function createStorageGc(deps: StorageGcDeps): StorageGcService {
 }
 
 // Each directory of secret values the broker kept aside: listed under
-// `kept`, or with `orphans` removed (listed under `dropped` in a dry run).
+// `kept`, or with `orphans` and `removeSecretFiles` removed (listed under
+// `dropped` in a dry run).
 function removeSecretFiles(
   deps: Readonly<StorageGcDeps>,
-  options: Readonly<GcOptions>,
+  options: Readonly<ManualGcOptions>,
 ): { readonly dropped: DroppedStorage[]; readonly kept: OrphanStorage[] } {
   const kept = deps.secretFiles?.listKept() ?? [];
 
-  if (!options.isOrphans) {
+  if (!options.isOrphans || options.isRemoveSecretFiles !== true) {
     return {
       dropped: [],
       kept: kept.map((entry) => ({
