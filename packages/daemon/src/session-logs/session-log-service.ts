@@ -79,6 +79,9 @@ export interface SessionLogs {
   // the imp is being destroyed: taps close and nothing more is written
   readonly forgetImp: (impId: string) => void;
 
+  // an imp was made under the id, a move home included: it logs again
+  readonly admitImp: (impId: string) => void;
+
   readonly listLogs: (imp: SessionLogImp, session?: string) => SessionLog[];
   readonly readLog: (imp: SessionLogImp, request: SessionLogReadRequest) => Promise<SessionLogRead>;
   readonly deleteLogs: (imp: SessionLogImp, target: SessionLogTarget) => number;
@@ -159,8 +162,17 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   // generations whose log is being made, so the cap counts them
   const creating = new Set<string>();
 
-  // destroyed imps: a tap still on its way writes nothing for them
+  // destroyed imps not back yet: nothing is tapped or written for them
   const forgotten = new Set<string>();
+
+  // how often each imp was destroyed: work that began before a destroy
+  // writes nothing, even once the imp is back under its id (a move home)
+  const lives = new Map<string, number>();
+
+  const readLife = (impId: string) => lives.get(impId) ?? 0;
+
+  const isForgotten = (impId: string, life: number) =>
+    forgotten.has(impId) || readLife(impId) !== life;
 
   // when each imp last logged a refusal for its cap
   const capNotices = new Map<string, number>();
@@ -219,8 +231,8 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
   // the live logs an earlier impd left come back, so the rules that end or
   // tap live logs cover them too
-  const loadImpLogs = async (imp: SessionLogImp): Promise<void> => {
-    if (recovered.has(imp.id)) {
+  const loadImpLogs = async (imp: SessionLogImp, life: number): Promise<void> => {
+    if (recovered.has(imp.id) || isForgotten(imp.id, life)) {
       return;
     }
 
@@ -234,7 +246,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
         const log = await loadGenerationLog(options, meta);
 
-        if (forgotten.has(imp.id)) {
+        if (isForgotten(imp.id, life)) {
           log.abandon();
 
           return;
@@ -334,6 +346,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     generation: string,
     session: string,
     bootId: string,
+    life: number,
   ): Promise<LiveLog | null> => {
     const key = findKey(imp.id, generation);
 
@@ -341,7 +354,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       return null;
     }
 
-    if (forgotten.has(imp.id) || hasTombstone(imp.sessionLogsDir, generation)) {
+    if (isForgotten(imp.id, life) || hasTombstone(imp.sessionLogsDir, generation)) {
       return null;
     }
 
@@ -373,12 +386,15 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       creating.delete(key);
     }
 
-    // destroyed while the directory was made: it goes again
-    if (forgotten.has(imp.id)) {
+    // destroyed while the directory was made: it goes again, unless the imp
+    // is back under its id, whose log of the generation it may be now
+    if (isForgotten(imp.id, life)) {
       log.abandon();
 
-      removeGenerationDir(imp.sessionLogsDir, generation);
-      removeEmptyDirs(imp.sessionLogsDir);
+      if (forgotten.has(imp.id)) {
+        removeGenerationDir(imp.sessionLogsDir, generation);
+        removeEmptyDirs(imp.sessionLogsDir);
+      }
 
       return null;
     }
@@ -401,17 +417,19 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   // copies the tap into the log until it ends: an exit ends the log; a
   // detach or a dropped connection leaves it for the next look to tap again
   const runTap = async (imp: SessionLogImp, entry: LiveLog, tap: Readonly<ExecStream>) => {
-    let segments = entry.log.readMeta().segments.length;
+    // each new segment is a new start: a log at its own bound adds one as it
+    // drops one, so its count stays the same
+    let newest = entry.log.readMeta().segments.at(-1)?.start;
 
     try {
       for await (const event of tap.events()) {
         if (event.type === 'stdout') {
           await entry.log.append(event.data);
 
-          const count = entry.log.readMeta().segments.length;
+          const start = entry.log.readMeta().segments.at(-1)?.start;
 
-          if (count !== segments) {
-            segments = count;
+          if (start !== newest) {
+            newest = start;
 
             await applyImpLimit(imp);
           }
@@ -475,7 +493,13 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     taps.set(key, tap);
 
-    const next = await createLiveLog(imp, output.executionGeneration, entry.session, output.bootId);
+    const next = await createLiveLog(
+      imp,
+      output.executionGeneration,
+      entry.session,
+      output.bootId,
+      readLife(imp.id),
+    );
 
     if (next === null || taps.get(key) !== tap) {
       taps.delete(key);
@@ -550,7 +574,11 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     await runTap(imp, entry, tap);
   };
 
-  const startTap = async (imp: SessionLogImp, session: Readonly<TappedSession>): Promise<void> => {
+  const startTap = async (
+    imp: SessionLogImp,
+    session: Readonly<TappedSession>,
+    life: number,
+  ): Promise<void> => {
     const generation = session.execution_generation;
     const bootId = session.boot_id;
 
@@ -581,7 +609,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
           return;
         }
 
-        const created = await createLiveLog(imp, generation, session.name, bootId);
+        const created = await createLiveLog(imp, generation, session.name, bootId, life);
 
         if (created === null) {
           taps.delete(key);
@@ -592,7 +620,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         entry = created;
       }
 
-      if (forgotten.has(imp.id)) {
+      if (isForgotten(imp.id, life)) {
         taps.delete(key);
 
         return;
@@ -619,7 +647,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   };
 
   const stopImpLogs = async (imp: SessionLogImp): Promise<void> => {
-    await loadImpLogs(imp);
+    await loadImpLogs(imp, readLife(imp.id));
 
     for (const entry of listLive(imp.id)) {
       await writeEnd(entry, {});
@@ -641,12 +669,14 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
   return {
     observe: (imp, sessions) => {
-      if (imp.state !== 'running') {
+      const life = readLife(imp.id);
+
+      if (imp.state !== 'running' || isForgotten(imp.id, life)) {
         return;
       }
 
       runInBackground(imp, async () => {
-        await loadImpLogs(imp);
+        await loadImpLogs(imp, life);
 
         const listed = new Set(sessions.map((session) => session.execution_generation));
 
@@ -665,14 +695,16 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
         const logged = sessions.filter((session) => session.log === true);
 
-        await Promise.all(logged.map((session) => startTap(imp, session)));
+        await Promise.all(logged.map((session) => startTap(imp, session, life)));
       });
     },
 
     tapNow: (imp, session) => {
+      const life = readLife(imp.id);
+
       runInBackground(imp, async () => {
-        await loadImpLogs(imp);
-        await startTap(imp, session);
+        await loadImpLogs(imp, life);
+        await startTap(imp, session, life);
       });
     },
 
@@ -680,6 +712,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     forgetImp: (impId) => {
       forgotten.add(impId);
+      lives.set(impId, readLife(impId) + 1);
 
       for (const entry of listLive(impId)) {
         stopTap(entry.key);
@@ -694,6 +727,10 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       }
 
       recovered.delete(impId);
+    },
+
+    admitImp: (impId) => {
+      forgotten.delete(impId);
     },
 
     listLogs: (imp, session) =>

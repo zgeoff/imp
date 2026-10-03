@@ -578,7 +578,9 @@ log stops (`stopped: 'imp_limit'`). An imp has at most `IMP_SESSION_LOG_IMP_MAX_
 a forged agent can list any number of logged generations. A deleted live log leaves a tombstone,
 `session-logs/.deleted/<generation>`, which keeps every impd from tapping it again and goes once the
 generation is gone. A destroy marks the imp forgotten first, so a tap still being set up writes
-nothing after the directory is removed.
+nothing after the directory is removed; an imp made again under its id, as on a move home, logs
+again, while work begun before the destroy still writes nothing. The imp limit is checked each time
+a log starts a segment, so a log that rolls at its own bound is counted too.
 
 **Trust.** The guest is not trusted. Every generation, boot id and session name an agent reports
 goes through the form the real agent gives it (32 lowercase hex characters, a lowercase UUID or
