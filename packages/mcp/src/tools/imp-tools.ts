@@ -135,7 +135,7 @@ export const IMP_TOOLS: readonly Tool[] = [
     scope: 'manage',
     cancellable: false,
     description:
-      'Create a new imp from the disk of another, now or as it was at one of its checkpoints. The fork boots fresh: it has the disk, not the running processes. Use it to try two approaches side by side. A cancel does not stop the fork, and its result still comes back.',
+      "Create a new imp from the disk of another, now or as it was at one of its checkpoints. The fork boots fresh: it has the disk, not the running processes. Use it to try two approaches side by side. A token limited to some imps gives the fork only the source's secret grants it could make itself; grantsNotCopied names each grant the fork did not get, and grantsError says why it got none. A cancel does not stop the fork, and its result still comes back.",
     input: z.strictObject({
       source: NameSchema.describe('The imp to fork, from imp_list'),
       name: NameSchema.optional().describe("The fork's name; omit to have one picked"),
@@ -164,13 +164,21 @@ export const IMP_TOOLS: readonly Tool[] = [
 
       context.guard.require(name);
 
-      const imp = await context.client.imps.fork({
+      const { grantsNotCopied, grantsError, ...imp } = await context.client.imps.fork({
         source: input.source,
         name,
         ...(input.checkpoint !== undefined && { checkpoint: input.checkpoint }),
       });
 
-      return { data: { imp } };
+      // beside the imp, not in it, so an agent reads them as the fork's
+      // outcome; none from an impd before the report
+      return {
+        data: {
+          imp,
+          grantsNotCopied: grantsNotCopied ?? [],
+          ...(grantsError !== undefined && { grantsError }),
+        },
+      };
     },
   }),
   defineTool({

@@ -1,4 +1,4 @@
-import type { ExposeResult, Imp } from '@imp/api';
+import type { ExposeResult, ForkResult, Imp } from '@imp/api';
 import { CONSOLE_SHELL } from '@zgeoff/imp-client';
 import type { CliConfig } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
@@ -486,6 +486,21 @@ export const policyCommand = defineCommand({
     }),
 });
 
+// The source's grants a fork did not get, one line each, and why none came
+// when the copy failed as a whole; none from an impd before the report
+export function listForkWarnings(
+  source: string,
+  fork: Readonly<Pick<ForkResult, 'name' | 'grantsNotCopied' | 'grantsError'>>,
+): string[] {
+  const skipped = (fork.grantsNotCopied ?? []).map(
+    (each) => `${fork.name}: grant ${each.secret} of ${source} not copied: ${each.reason}`,
+  );
+
+  return fork.grantsError === undefined
+    ? skipped
+    : [...skipped, `${fork.name}: ${fork.grantsError}`];
+}
+
 export const forkCommand = defineCommand({
   meta: { name: 'fork', description: "Create an imp from another imp's disk or checkpoint" },
   args: {
@@ -501,6 +516,11 @@ export const forkCommand = defineCommand({
         name: context.args.name,
         ...(context.args.from !== undefined && { checkpoint: context.args.from }),
       });
+
+      // the fork exists either way, so these warn and the exit stays 0
+      for (const warning of listForkWarnings(context.args.source, imp)) {
+        console.error(`imp: ${warning}`);
+      }
 
       console.log(formatOutput(imp, context.args.json, formatImp));
     }),
