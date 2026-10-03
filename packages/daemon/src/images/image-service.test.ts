@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
@@ -37,6 +38,59 @@ test('it refuses refs and build contexts that docker could read as flags', async
 
     expect(buildFailure).toMatchObject({ code: 'BAD_REQUEST' });
   } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// #173: the docker CLI prints the proxy's 403 body after its own words;
+// impd answers BAD_REQUEST with the proxy's message, and nothing else of
+// the CLI's output (its argv, the ref's other output) reaches the client
+test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the create', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
+  const bin = join(dataDir, 'fake-bin');
+  const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
+  const stderr = `Unable to find image locally\nError response from daemon: ${JSON.stringify({ message: refusal })}`;
+  const inspect = JSON.stringify([{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 1 }]);
+  const savedPath = process.env['PATH'];
+
+  mkdirSync(bin);
+  writeFileSync(join(dataDir, 'stderr'), stderr);
+
+  // localhost:5320/pulled is not on the host, so impd pulls it; the host
+  // has localhost:5320/local, so impd goes on to create a container
+  writeFileSync(
+    join(bin, 'docker'),
+    [
+      '#!/bin/sh',
+      'for last; do :; done',
+      'case "$1 $last" in',
+      `  "image localhost:5320/local:1") echo '${inspect}' ;;`,
+      `  "pull "*|"create "*) cat '${join(dataDir, 'stderr')}' >&2; exit 1 ;;`,
+      '  *) exit 1 ;;',
+      'esac',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+
+  process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
+
+  try {
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db: await openDatabase(':memory:'),
+      storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
+    });
+
+    for (const ref of ['localhost:5320/pulled:1', 'localhost:5320/local:1']) {
+      const failure = await images.addImage(ref, 'x').catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({ code: 'BAD_REQUEST', message: refusal });
+    }
+  } finally {
+    process.env['PATH'] = savedPath;
+
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

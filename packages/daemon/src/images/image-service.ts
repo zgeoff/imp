@@ -46,6 +46,7 @@ import {
   readImageStore,
 } from './image-pin';
 import type { ImageStore, Pin, PinInspect } from './image-pin';
+import { runDocker, runDockerChecked } from './run-docker';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
 
@@ -127,8 +128,8 @@ function toBadRequest(error: unknown): unknown {
 
 // the engine's platform, which a build without one runs for
 async function readHostPlatform(signal: AbortSignal): Promise<string> {
-  const version = await runCommand(
-    ['docker', 'version', '--format', '{{json .Server.Os}} {{json .Server.Arch}}'],
+  const version = await runDocker(
+    ['version', '--format', '{{json .Server.Os}} {{json .Server.Arch}}'],
     { signal },
   );
 
@@ -150,10 +151,9 @@ async function readHostPlatform(signal: AbortSignal): Promise<string> {
 
 // what impd reads of an image the host has, or null when it lacks it
 async function readPinInspect(ref: string, signal: AbortSignal): Promise<PinInspect | null> {
-  const inspected = await runCommand(
-    ['docker', 'image', 'inspect', '--format', PIN_INSPECT_FORMAT, ref],
-    { signal },
-  );
+  const inspected = await runDocker(['image', 'inspect', '--format', PIN_INSPECT_FORMAT, ref], {
+    signal,
+  });
 
   signal.throwIfAborted();
 
@@ -174,7 +174,7 @@ async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): P
     return local;
   }
 
-  const pulled = await runCommand(['docker', 'pull', '--quiet', ref], { signal });
+  const pulled = await runDocker(['pull', '--quiet', ref], { signal });
 
   signal.throwIfAborted();
 
@@ -197,8 +197,8 @@ async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): P
 // only through a client session, which impd's build has none of; a frontend
 // the engine already has needs no fetch. Pulled by digest when it lacks it.
 async function loadFrontend(signal: AbortSignal): Promise<void> {
-  const inspected = await runCommand(
-    ['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND],
+  const inspected = await runDocker(
+    ['image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND],
     { signal },
   );
 
@@ -208,7 +208,7 @@ async function loadFrontend(signal: AbortSignal): Promise<void> {
     return;
   }
 
-  const pulled = await runCommand(['docker', 'pull', '--quiet', DOCKERFILE_FRONTEND], { signal });
+  const pulled = await runDocker(['pull', '--quiet', DOCKERFILE_FRONTEND], { signal });
 
   signal.throwIfAborted();
 
@@ -286,15 +286,15 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   const building = new Map<string, Promise<number>>();
 
   const readInspect = async (ref: string) => {
-    const first = await runCommand(['docker', 'image', 'inspect', ref]);
+    const first = await runDocker(['image', 'inspect', ref]);
 
     if (first.exitCode === 0) {
       return InspectSchema.parse(JSON.parse(first.stdout))[0];
     }
 
-    await runChecked(['docker', 'pull', '--quiet', ref]);
+    await runDockerChecked(['pull', '--quiet', ref]);
 
-    const stdout = await runChecked(['docker', 'image', 'inspect', ref]);
+    const stdout = await runDockerChecked(['image', 'inspect', ref]);
 
     return InspectSchema.parse(JSON.parse(stdout))[0];
   };
@@ -319,7 +319,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     mkdirSync(work, { mode: 0o700 });
     mkdirSync(root, { mode: 0o755 });
 
-    const created = await runChecked(['docker', 'create', ref, '/bin/true']);
+    const created = await runDockerChecked(['create', ref, '/bin/true']);
 
     const containerId = created.trim();
 
