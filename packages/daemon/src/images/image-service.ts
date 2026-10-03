@@ -15,6 +15,7 @@ import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { Config } from '../config';
 import {
   countImageDigestUses,
+  countImageRefUses,
   createImage,
   findImageByName,
   listImages,
@@ -123,6 +124,16 @@ function toBadRequest(error: unknown): unknown {
   return error instanceof DockerfileError
     ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
     : error;
+}
+
+// `docker image rm` without force; an image already gone is fine, and any
+// other refusal leaves it on the engine with a log line
+async function removeEngineImage(name: string): Promise<void> {
+  const result = await runCommand(['docker', 'image', 'rm', name]);
+
+  if (result.exitCode !== 0 && !/no such image/iv.test(result.stderr)) {
+    console.log(`impd: kept the engine image ${name}: ${result.stderr.trim()}`);
+  }
 }
 
 // the engine's platform, which a build without one runs for
@@ -389,6 +400,23 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
+  // The engine image a docker image row named, once no row names it: its
+  // reference, then its ID, which a rebuild leaves untagged
+  // (docs/guides/images.md#engine-images)
+  const removeUnusedEngineImage = async (image: Readonly<ImageRecord>): Promise<void> => {
+    if (image.source !== 'oci') {
+      return;
+    }
+
+    if ((await countImageRefUses(deps.db, image.ref)) === 0) {
+      await removeEngineImage(image.ref);
+    }
+
+    if ((await countImageDigestUses(deps.db, image.digest)) === 0) {
+      await removeEngineImage(image.digest);
+    }
+  };
+
   // drops an image directory no image row points at any more
   const removeUnusedRootfs = async (digest: string): Promise<void> => {
     const uses = await countImageDigestUses(deps.db, digest);
@@ -444,6 +472,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
 
         await removeUnusedRootfs(existing.digest);
+        await removeUnusedEngineImage(existing);
 
         return updated;
       }),
@@ -703,6 +732,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       await storageGate.join(async () => {
         await removeImage(deps.db, image.id);
         await removeUnusedRootfs(image.digest);
+        await removeUnusedEngineImage(image);
       });
     },
     resolveImage,

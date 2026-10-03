@@ -123,6 +123,16 @@ export async function updateImage(
   return toImageRecord(row);
 }
 
+export async function countImageRefUses(db: ImpDatabase, ref: string): Promise<number> {
+  const row = await db
+    .selectFrom('images')
+    .select((eb) => eb.fn.countAll<number>().as('count'))
+    .where('ref', '=', ref)
+    .executeTakeFirstOrThrow();
+
+  return row.count;
+}
+
 export async function countImageDigestUses(db: ImpDatabase, digest: string): Promise<number> {
   const row = await db
     .selectFrom('images')
