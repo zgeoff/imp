@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as z from 'zod';
 import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
@@ -49,12 +50,56 @@ afterAll(async () => {
   }
 });
 
+// the host's registry digest for a pulled image
+async function readRepoDigest(ref: string): Promise<string> {
+  await runChecked(['docker', 'pull', '--quiet', ref]);
+
+  const digests = await runChecked([
+    'docker',
+    'image',
+    'inspect',
+    '--format',
+    '{{json .RepoDigests}}',
+    ref,
+  ]);
+
+  const repository = ref.split(':')[0] ?? ref;
+  const parsed = z.array(z.string()).parse(JSON.parse(digests));
+  const own = parsed.find((digest) => digest.startsWith(`${repository}@`));
+
+  if (own === undefined) {
+    throw new Error(`${ref} has no RepoDigest under ${repository}: ${digests}`);
+  }
+
+  return own;
+}
+
+// images/examples/hello's files on busybox by its registry digest: impd
+// builds only from a registry image (#156), and images/base is local
+async function writeHelloCopy(): Promise<string> {
+  const dir = join(buildDir, 'hello');
+
+  const busybox = await readRepoDigest('busybox:1.37');
+
+  mkdirSync(dir, { recursive: true });
+  cpSync(join(HELLO_DIR, 'rootfs'), join(dir, 'rootfs'), { recursive: true });
+  writeFileSync(join(dir, 'Dockerfile'), `FROM ${busybox}\nCOPY rootfs/ /\n`);
+
+  return dir;
+}
+
 test('an image built from images/examples/hello serves its page through the proxy', async () => {
   await tryImp(['image', 'rm', hello]);
 
   const started = Date.now();
 
-  await runImp('image', 'build', HELLO_DIR, '--name', hello);
+  const helloDir = await writeHelloCopy();
+
+  try {
+    await runImp('image', 'build', helloDir, '--name', hello);
+  } finally {
+    rmSync(helloDir, { recursive: true, force: true });
+  }
 
   console.log(`    imp image build images/examples/hello: ${String(Date.now() - started)} ms`);
 
@@ -210,16 +255,34 @@ test('a RUN step cannot ask for the host network or insecure mode', async () => 
   expect(images).not.toContain(rejected);
 });
 
-test('a FROM image only the host has builds without a pull', async () => {
+// The classic store gives an image built here no RepoDigest. The containerd
+// store gives it one under its own name: Docker 29.8 builds by it, and 29.7
+// asks the registry and fails. No build uses the tag unbound.
+test('a FROM image built on the host is refused, or built by its own digest', async () => {
   const local = 'e2e-img-localbase:1';
-  const dir = writeContext('local-base', `FROM ${local}\nRUN echo local > /m\n`);
+  const baseDir = writeContext('local-base-image', 'FROM busybox:1.37\nRUN echo local > /m\n');
+  const dir = writeContext('local-base', `FROM ${local}\nRUN grep local /m\n`);
 
-  await runChecked(['docker', 'pull', '--quiet', 'busybox:1.37']);
-  await runChecked(['docker', 'tag', 'busybox:1.37', local]);
+  await runChecked(['docker', 'build', '--quiet', '--tag', local, baseDir]);
+
+  const drivers = await runChecked(['docker', 'info', '--format', '{{json .DriverStatus}}']);
+
+  const isContainerdStore = drivers.includes('io.containerd.snapshotter');
 
   try {
-    await runImp('image', 'build', dir, '--name', onHost);
-    await runImp('image', 'rm', onHost);
+    const result = await tryImp(['image', 'build', dir, '--name', onHost]);
+
+    if (!isContainerdStore) {
+      expect(result.exitCode).not.toBe(0);
+
+      expect(result.stderr).toContain(
+        `FROM ${local}: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).`,
+      );
+    } else if (result.exitCode === 0) {
+      await runImp('image', 'rm', onHost);
+    } else {
+      expect(result.stderr).toContain('pull access denied');
+    }
   } finally {
     await runCommand(['docker', 'rmi', local]);
   }

@@ -374,6 +374,12 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
 
+      # The registry suite's registry runs on loopback under this name, since
+      # the docker proxy refuses an IP or localhost; the suite trusts its
+      # certificate in /etc/docker/certs.d with sudo
+      - name: Name the e2e registry
+        run: echo '127.0.0.1 imp-e2e-registry.test' | sudo tee -a /etc/hosts
+
       # No TAILSCALE_AUTHKEY here: the fast set has no tailscale suite, and
       # outside acceptance a missed timing limit only warns.
       - name: End-to-end tests

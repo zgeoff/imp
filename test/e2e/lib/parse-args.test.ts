@@ -10,6 +10,7 @@ test('it runs the acceptance set when no suite is named', () => {
     'lifecycle',
     'docker',
     'images',
+    'registry',
     'checkpoints',
     'disks',
     'sleep',
@@ -60,6 +61,7 @@ test('it runs named suites in run order, not the order given', () => {
 test('it expands a set and drops duplicates', () => {
   expect(parseArgs(['--only', 'fast,sleep']).suites).toEqual([
     'lifecycle',
+    'registry',
     'checkpoints',
     'disks',
     'sleep',
