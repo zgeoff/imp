@@ -85,7 +85,7 @@ test('a failed install is tried again on the next exec, and a success is kept', 
   const third = await trust.ensure(imp, '/vsock');
 
   expect(first).toEqual({ installed: false, detail: 'no sh' });
-  expect(second).toMatchObject({ installed: true });
+  expect(second).toEqual({ installed: true });
   expect(third).toEqual(second);
   expect(calls).toHaveLength(2);
   expect(logs.join('\n')).toContain('no sh');
@@ -118,8 +118,11 @@ test('the same pid after a stop is a new boot, and installs again', async () => 
 
   const again = await trust.ensure(imp, '/vsock');
 
-  expect(same).toEqual(first);
-  expect(again).toMatchObject({ installed: true });
-  expect(again).not.toEqual(first);
+  expect([first, same, again]).toEqual([
+    { installed: true },
+    { installed: true },
+    { installed: true },
+  ]);
+
   expect(calls).toHaveLength(2);
 });

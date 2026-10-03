@@ -560,7 +560,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         placeholder: PLACEHOLDER,
       });
 
-      return { kind: 'ready', env, boot: outcome.boot };
+      return { kind: 'ready', env };
     },
 
     applyGrants,

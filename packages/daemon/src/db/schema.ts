@@ -100,6 +100,12 @@ interface ImpColdBootsTable {
   at: number;
 }
 
+interface BrokerSessionsTable {
+  imp_id: string;
+  generation: string;
+  at: number;
+}
+
 interface CheckpointsTable {
   id: string;
   imp_id: string;
@@ -272,6 +278,7 @@ export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
   imp_cold_boots: ImpColdBootsTable;
+  broker_sessions: BrokerSessionsTable;
   checkpoints: CheckpointsTable;
   secrets: SecretsTable;
   grants: GrantsTable;
