@@ -346,6 +346,12 @@ client's memory. A tool runs as root in the guest, so it needs `manage` scope on
 ([tokens](../guides/tokens.md#scopes)); `exec` scope runs only as the image's USER. A ticket socket
 cannot start a tool.
 
+A `start` with `require: ['broker']` starts the command only once impd set the credential broker's
+variables and CA bundle for this boot of the guest, and fails with `PRECONDITION_FAILED`
+(`data.reason: 'broker_not_ready'`) otherwise. impd checks it under the imp's lock, which it holds
+until the agent starts the command
+([requiring the broker](../guides/connectors.md#requiring-the-broker)).
+
 ### tunnel: `imp proxy`
 
 `imp proxy <name> 5432 3001:3000` listens on local ports and opens one `/tunnel` WebSocket per TCP

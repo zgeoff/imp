@@ -197,6 +197,7 @@ An older impd drops an input field it does not know, and the call succeeds witho
 | ------------------------------------- | ----------------- | ------ |
 | `grantable` on `tokens.create`        | `grantableTokens` | 0.27.0 |
 | `rebind` on `secrets.add` (`replace`) | `secretRebind`    | 0.27.0 |
+| `require` on `openExec`               | `execRequire`     | 0.30.0 |
 
 ```ts
 const info = await imp.system.info();
@@ -208,6 +209,13 @@ if (info.features?.grantableTokens !== true) {
 
 Without the `secretRebind` feature, a `replace` that changes the hosts keeps every grant. With it,
 it fails with `CONFLICT` and `data.reason: 'binding_changed'` unless `rebind` is set.
+
+`openExec` checks `execRequire` itself when `require` is set. With `require: ['broker']`, the
+command starts only once impd set the credential broker's variables and CA bundle for this boot;
+otherwise `openExec` rejects with an `ExecError` whose `code` is `PRECONDITION_FAILED` and whose
+`data` is `{ reason: 'broker_not_ready', detail }`, and nothing runs. Without the feature it rejects
+the same way before it opens anything. See
+[requiring the broker](https://github.com/zgeoff/imp/blob/main/docs/guides/connectors.md#requiring-the-broker).
 
 ## Versions
 
