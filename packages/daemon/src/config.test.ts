@@ -31,6 +31,14 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultDiskBytes: 32 * 1024 ** 3,
     diskReserveBytes: null,
     buildContextMaxBytes: 1024 ** 3,
+    build: {
+      isolation: 'imp',
+      memoryMib: 2048,
+      diskBytes: 20 * 1024 ** 3,
+      imageMaxBytes: 8192 * 1024 ** 2,
+      image:
+        'ghcr.io/zgeoff/imp-base:0.29.0@sha256:1851f631ea77f3a99b6f1f9af8ca8868434f4cd066158bcf9def8678c29b0c21',
+    },
     dockerHost: null,
     dns: ['1.1.1.1', '8.8.8.8'],
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },

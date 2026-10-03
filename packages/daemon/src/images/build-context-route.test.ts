@@ -39,9 +39,11 @@ interface TestOptions {
   readonly build?: ImageService['buildImageFromContext'] | 'image-service';
 }
 
-// impd with a fake build that records what reached it
+// impd with a fake build that records what reached it; 'image-service'
+// builds on the host engine, a fake docker, through the same input guard
+// and pins as a builder's
 async function setupTest(options: TestOptions = {}) {
-  const harness = await setupImpTest({ env: { ...options.env } });
+  const harness = await setupImpTest({ env: { IMP_BUILD_ISOLATION: 'host', ...options.env } });
 
   const calls: BuildCall[] = [];
 
