@@ -458,6 +458,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     imp: SessionLogImp,
     entry: LiveLog,
     tap: Readonly<ExecStream>,
+    life: number,
   ): Promise<void> => {
     const output = tap.output;
 
@@ -482,6 +483,12 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
 
     await writeEnd(entry, toPreviousEnd(output.previous, entry.generation));
 
+    if (isForgotten(imp.id, life)) {
+      tap.close();
+
+      return;
+    }
+
     const key = findKey(imp.id, output.executionGeneration);
     const dir = findGenerationDir(imp.sessionLogsDir, output.executionGeneration);
 
@@ -498,7 +505,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       output.executionGeneration,
       entry.session,
       output.bootId,
-      readLife(imp.id),
+      life,
     );
 
     if (next === null || taps.get(key) !== tap) {
@@ -520,7 +527,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     await writeEnd(entry, toPreviousEnd(previous, entry.generation));
   };
 
-  const openEntryTap = async (imp: SessionLogImp, entry: LiveLog): Promise<void> => {
+  const openEntryTap = async (imp: SessionLogImp, entry: LiveLog, life: number): Promise<void> => {
     const meta = entry.log.readMeta();
     const logEnd = readGenerationBounds(meta).logEnd;
 
@@ -534,6 +541,11 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     try {
       tap = await openTap(imp.vsockPath, entry.session, resumeFrom);
     } catch (error) {
+      // destroyed meanwhile: the slot under the key may be the imp's next life's
+      if (isForgotten(imp.id, life)) {
+        return;
+      }
+
       taps.delete(entry.key);
 
       if (error instanceof AgentError && ['NO_SESSION', 'BAD_REQUEST'].includes(error.code)) {
@@ -545,13 +557,19 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       throw error;
     }
 
+    if (isForgotten(imp.id, life)) {
+      tap.close();
+
+      return;
+    }
+
     const output = tap.output?.continuity === 'offsets' ? tap.output : null;
     const resume = output?.resume;
 
     if (resume?.kind === 'generation_changed') {
       taps.delete(entry.key);
 
-      await startNextGeneration(imp, entry, tap);
+      await startNextGeneration(imp, entry, tap, life);
 
       return;
     }
@@ -626,7 +644,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
         return;
       }
 
-      await openEntryTap(imp, entry);
+      await openEntryTap(imp, entry, life);
     } catch (error) {
       if (taps.get(key) === 'opening') {
         taps.delete(key);

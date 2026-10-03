@@ -144,7 +144,7 @@ function setupLogs(
 
   const clock = { now: 10_000 };
   const calls: { session: string; resumeFrom: ResumeFrom | undefined }[] = [];
-  const answers: (FakeTap | Error)[] = [];
+  const answers: (FakeTap | Error | Promise<FakeTap>)[] = [];
 
   const logs = createSessionLogs({
     limits: options.limits ?? LIMITS,
@@ -164,6 +164,10 @@ function setupLogs(
 
       if (answer === undefined) {
         return Promise.reject(new Error('no tap scripted'));
+      }
+
+      if (answer instanceof Promise) {
+        return answer.then((tap) => tap.stream);
       }
 
       return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer.stream);
@@ -819,7 +823,9 @@ test('a destroyed imp moved home under its id logs again, and old work writes no
 
   const tap = createFakeTap(buildOutput(GEN_B, 0));
 
-  ctx.answers.splice(0, ctx.answers.length, tap);
+  ctx.answers.length = 0;
+
+  ctx.answers.push(tap);
   ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: GEN_B, boot_id: BOOT });
 
   await waitFor('the tap', () => ctx.calls.length === 1);
@@ -829,6 +835,115 @@ test('a destroyed imp moved home under its id logs again, and old work writes no
   await waitFor('the bytes', () => findLog(ctx, GEN_B)?.logEnd === 4);
 
   expect(ctx.logs.listLogs(ctx.imp).map((log) => log.executionGeneration)).toEqual([GEN_B]);
+});
+
+test('a tap from before a destroy that opens after the imp is back writes nothing', async () => {
+  for (const late of ['same', 'generation_changed'] as const) {
+    const ctx = setupLogs();
+    const opened = Promise.withResolvers<FakeTap>();
+
+    // life 0 asks for a tap that answers only once the imp is back
+    ctx.answers.push(opened.promise);
+    ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+    await waitFor('the first tap', () => ctx.calls.length === 1);
+
+    ctx.logs.forgetImp(ctx.imp.id);
+
+    rmSync(ctx.imp.sessionLogsDir, { recursive: true, force: true });
+
+    ctx.logs.admitImp(ctx.imp.id);
+
+    // life 1, a warm move home: the same generation
+    const current = createFakeTap(buildOutput(GEN_A, 0));
+
+    ctx.answers.push(current);
+    ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+    await waitFor('the second tap', () => ctx.calls.length === 2);
+
+    current.write('new');
+
+    await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 3);
+
+    const lateOutput =
+      late === 'same'
+        ? buildOutput(GEN_A, 0)
+        : buildOutput(GEN_B, 0, {
+            resume: { kind: 'generation_changed', executionGeneration: GEN_B, firstOffset: 0 },
+            previous: { executionGeneration: GEN_A, end: 3, exitCode: 0 },
+          });
+
+    const old = createFakeTap(lateOutput);
+
+    old.write('old');
+    opened.resolve(old);
+
+    await waitFor('the old tap closed', () => old.state.closed);
+
+    current.write('+more');
+
+    await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 8);
+
+    const read = await readText(ctx, GEN_A, 0);
+
+    expect(read.text).toBe('new+more');
+    expect(findLog(ctx, GEN_A)).toMatchObject({ state: 'live' });
+    expect(readdirSync(ctx.imp.sessionLogsDir)).toEqual([GEN_A]);
+  }
+});
+
+test('a tap from before a destroy that fails after the imp is back leaves the new tap alone', async () => {
+  const ctx = setupLogs();
+  const opened = Promise.withResolvers<FakeTap>();
+
+  ctx.answers.push(opened.promise);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the first tap', () => ctx.calls.length === 1);
+
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  rmSync(ctx.imp.sessionLogsDir, { recursive: true, force: true });
+
+  ctx.logs.admitImp(ctx.imp.id);
+
+  const current = createFakeTap(buildOutput(GEN_A, 0));
+
+  ctx.answers.push(current);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the second tap', () => ctx.calls.length === 2);
+
+  opened.reject(
+    new AgentError('NO_SESSION', 'no session "main"', {
+      bootId: BOOT,
+      coldBoots: [],
+      previous: { executionGeneration: GEN_A, end: 0, exitCode: 0 },
+    }),
+  );
+
+  await Bun.sleep(20);
+
+  // the new life's log and tap keep their slots: no second tap opens, and
+  // the log still ends once its session is gone
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await Bun.sleep(20);
+
+  current.write('new');
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 3);
+
+  expect(ctx.calls).toHaveLength(2);
+
+  current.drop();
+
+  await waitFor('the end', () => {
+    ctx.logs.observe(ctx.imp, []);
+
+    return findLog(ctx, GEN_A)?.state === 'ended';
+  });
 });
 
 test('a deleted live log is not tapped again by a restarted impd', async () => {
