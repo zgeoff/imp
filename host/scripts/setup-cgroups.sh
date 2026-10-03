@@ -8,7 +8,7 @@ set -uo pipefail
 root=/sys/fs/cgroup
 
 if [ "$(cat /proc/self/cgroup)" != "0::/" ]; then
-  echo "setup-cgroups: not in a private cgroup v2 namespace; CPU limits are off" >&2
+  echo "setup-cgroups: not in a private cgroup v2 namespace; CPU and memory limits are off" >&2
   exit 0
 fi
 
@@ -16,7 +16,7 @@ fi
 # so the remount reaches no cgroup but this container's own (CAP_SYS_ADMIN).
 if [[ ,$(findmnt -n -o OPTIONS --mountpoint "$root"), == *,ro,* ]]; then
   if ! mount -o remount,rw "$root" 2>/dev/null; then
-    echo "setup-cgroups: cannot remount $root read-write; CPU limits are off" >&2
+    echo "setup-cgroups: cannot remount $root read-write; CPU and memory limits are off" >&2
     exit 0
   fi
 fi

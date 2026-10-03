@@ -22,6 +22,9 @@ interface Host {
 
   // the deploy file whose `docker run ... cat` fails, such as .service
   readonly failCat?: string;
+
+  // mv fails, as on a read-only /etc
+  readonly failMv?: boolean;
 }
 
 // Fakes docker, systemctl and curl: each call lands in calls, the running
@@ -56,7 +59,15 @@ esac
   writeFileSync(join(dir, 'systemctl'), `#!/bin/sh\necho "systemctl $*" >>'${calls}'\n`);
   writeFileSync(join(dir, 'curl'), '#!/bin/sh\necho \'{"ready":true}\'\n');
 
-  for (const name of ['docker', 'systemctl', 'curl']) {
+  const fakes = ['docker', 'systemctl', 'curl'];
+
+  if (host.failMv === true) {
+    writeFileSync(join(dir, 'mv'), '#!/bin/sh\necho "mv: cannot move" >&2\nexit 1\n');
+
+    fakes.push('mv');
+  }
+
+  for (const name of fakes) {
     chmodSync(join(dir, name), 0o755);
   }
 
@@ -155,5 +166,21 @@ test('an image that cannot give its unit stops the upgrade before any imp sleeps
   expect(result.seccomp).toBeNull();
   expect(result.leftovers).toEqual([]);
   expect(result.calls).not.toContain('imp ls');
+  expect(result.calls).not.toContain('systemctl');
+});
+
+test('a unit that cannot be installed stops the upgrade before the restart', async () => {
+  const result = await runUpgrade({
+    newLabel: 'unprivileged',
+    oldLabel: '',
+    unit: PRIVILEGED_UNIT,
+    failMv: true,
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('cannot install');
+  expect(result.output).not.toContain('installed');
+  expect(result.unit).toBe(PRIVILEGED_UNIT);
+  expect(result.leftovers).toEqual([]);
   expect(result.calls).not.toContain('systemctl');
 });
