@@ -67,7 +67,8 @@ export function toRepository(ref: string): string {
   const [first = '', ...rest] = repository.split('/');
 
   const hasDomain =
-    rest.length > 0 && (first.includes('.') || first.includes(':') || first === 'localhost');
+    rest.length > 0 &&
+    (first.includes('.') || first.includes(':') || first.toLowerCase() === 'localhost');
 
   if (!hasDomain || (first !== 'docker.io' && first !== 'index.docker.io')) {
     return repository;

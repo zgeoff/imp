@@ -7,6 +7,7 @@ import {
   checkCreateBody,
   checkImageReference,
   checkPullQuery,
+  checkReferenceRegistry,
   checkRemoveQuery,
   readImageReference,
 } from './rules';
@@ -221,6 +222,20 @@ describe('a build Content-Type', () => {
 });
 
 describe('an image reference', () => {
+  test('names a refused registry in any case', () => {
+    expect(checkReferenceRegistry('LocalHost/name')).toBe("registry LocalHost is the host's own");
+
+    expect(checkReferenceRegistry('LOCALHOST:5000/x')).toBe(
+      "registry LOCALHOST:5000 is the host's own",
+    );
+
+    expect(checkReferenceRegistry('Reg.LocalHost/x')).toBe(
+      "registry Reg.LocalHost is the host's own",
+    );
+
+    expect(checkReferenceRegistry('ghcr.io/x')).toBeNull();
+  });
+
   test('reads the registry and the repository as the engine does', () => {
     expect(readImageReference('busybox')).toEqual({
       registry: 'docker.io',
@@ -240,6 +255,12 @@ describe('an image reference', () => {
     expect(readImageReference('localhost:5000/x@sha256:ab')).toEqual({
       registry: 'localhost:5000',
       path: 'x',
+    });
+
+    // docker lowercases the first label, so this is the localhost registry
+    expect(readImageReference('LocalHost/name')).toEqual({
+      registry: 'LocalHost',
+      path: 'name',
     });
 
     expect(readImageReference('imp-host:dev')).toEqual({

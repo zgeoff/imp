@@ -443,6 +443,7 @@ const IMAGE_DOCKER = [
   `      if [ "$n" = 0 ]; then ${buildInspect([`base.test/moving@${DIGEST_A}`])}; else ${buildInspect([`base.test/moving@${DIGEST_B}`])}; fi ;;`,
   '    moving:1|docker.io/library/moving:1|index.docker.io/library/moving) count="$(dirname "$0")/moving"; n=$(cat "$count" 2>/dev/null || echo 0); echo $((n + 1)) >"$count"',
   `      if [ "$n" = 0 ]; then ${buildInspect([`moving@${DIGEST_A}`])}; else ${buildInspect([`moving@${DIGEST_B}`])}; fi ;;`,
+  `    LocalHost/name:1) ${buildInspect([`LocalHost/name@${DIGEST_A}`])} ;;`,
   `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
   `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
   `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
@@ -708,6 +709,17 @@ test('an image or its digest under a registry the pull rule refuses is refused',
   });
 
   expect(named.calls).toEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+
+  // the host has it, so no pull would meet the proxy; docker reads the
+  // label as localhost in any case
+  const local = await sendFakeDockerBuild('FROM LocalHost/name:1\n');
+
+  expect(local.body).toMatchObject({
+    message: "FROM LocalHost/name:1: registry LocalHost is the host's own",
+  });
+
+  expect(local.calls).toEqual(['version --format {{json .Server.Os}} {{json .Server.Arch}}']);
+  expect(local.built).toEqual([]);
   expect([named.built, pinned.built]).toEqual([[], []]);
 });
 

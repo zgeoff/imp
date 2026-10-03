@@ -162,7 +162,8 @@ export function readImageReference(reference: string): ImageReference {
   const [first = '', ...rest] = name.split('/');
 
   const isRegistry =
-    rest.length > 0 && (first.includes('.') || first.includes(':') || first === 'localhost');
+    rest.length > 0 &&
+    (first.includes('.') || first.includes(':') || first.toLowerCase() === 'localhost');
 
   const registry = isRegistry ? first : 'docker.io';
   const path = isRegistry ? rest.join('/') : name;

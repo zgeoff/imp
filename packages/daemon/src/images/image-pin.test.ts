@@ -26,6 +26,7 @@ test('a ref names its repository as RepoDigests writes it', () => {
   expect(toRepository(`ghcr.io/acme/app:2@${DIGEST_A}`)).toBe('ghcr.io/acme/app');
   expect(toRepository('registry.test:5000/app:1')).toBe('registry.test:5000/app');
   expect(toRepository('localhost/app')).toBe('localhost/app');
+  expect(toRepository('LocalHost/app:1')).toBe('LocalHost/app');
   expect(toRepository('library/busybox')).toBe('library/busybox');
 });
 
