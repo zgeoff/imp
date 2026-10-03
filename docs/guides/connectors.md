@@ -213,8 +213,11 @@ attach passes only when that run of the session was itself started with `require
 records each such run by its execution generation (one run of a session's process) in its database,
 so the record holds across sleeps, wakes and impd restarts, and a cold boot or a session started
 again without the requirement is a new run it does not cover. impd reads the agent's session list
-before it opens anything, so a refused attach never reaches the agent and the client attached to the
-session keeps it. The refusal is `broker_not_ready` with the detail
+before it opens anything, so a refused attach almost never reaches the agent and the client attached
+to the session keeps it. One race remains: a plain exec takes no imp lock, so it can start that
+session between impd's list and its open, and the refused attach then takes the new session from its
+viewer; a start in the agent that only creates a session, and fails if one runs, would close it. The
+refusal is `broker_not_ready` with the detail
 `session <name> was started without the broker requirement`. A session on an agent from before
 output offsets, which names no generation, and one an imp brought from another host, never pass.
 
