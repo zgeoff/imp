@@ -9,7 +9,7 @@ const SETFCAP_HELP = 'imp-host needs CAP_SETFCAP (docs/architecture/host-contrac
 
 // GNU tar's `--xattrs` alone restores only `user.*`; docker export writes
 // file capabilities as `security.capability`. LC_ALL=C keeps tar's warnings
-// in the English that findLostCapability reads.
+// in the English that findXattrFailure reads.
 const UNPACK_SCRIPT =
   'docker export "$1" | LC_ALL=C tar --numeric-owner --xattrs --xattrs-include=security.capability --xattrs-include="user.*" -xpf - -C "$2"';
 
@@ -39,20 +39,52 @@ export function assertUnpacked(result: CommandResult): void {
     );
   }
 
-  const lost = findLostCapability(result.stderr);
+  const failure = findXattrFailure(result.stderr);
 
-  if (lost !== null) {
+  if (failure?.missingSetfcap === true) {
+    throw new ORPCError('PRECONDITION_FAILED', {
+      message: `the image has a file capability that impd could not keep (${failure.line}); ${SETFCAP_HELP}`,
+    });
+  }
+
+  // another cause, such as a namespaced capability the host refuses: not
+  // SETFCAP's to fix, so the error is tar's own
+  if (failure !== null) {
     throw new ORPCError('INTERNAL_SERVER_ERROR', {
-      message: `the image has a file capability that impd could not keep (${lost}); ${SETFCAP_HELP}`,
+      message: `the image has an extended attribute that impd could not keep: ${failure.line}`,
     });
   }
 }
 
-// tar's line about the first file capability it could not set, if any
-export function findLostCapability(stderr: string): string | null {
-  const line = stderr.split('\n').find((text) => text.includes('security.capability'));
+// GNU tar 1.35's warning for an attribute it could not set
+const XATTR_FAILURE =
+  /Cannot set '(?<name>[^']+)' extended attribute for file '.*': (?<reason>[^:]+)$/;
 
-  return line?.trim() ?? null;
+interface XattrFailure {
+  readonly line: string;
+
+  // EPERM on security.capability: what tar gets without CAP_SETFCAP
+  readonly missingSetfcap: boolean;
+}
+
+// tar's line about an attribute it could not set, the missing-SETFCAP kind
+// first; null when it set them all
+function findXattrFailure(stderr: string): XattrFailure | null {
+  const failures = stderr.split('\n').flatMap((text) => {
+    const line = text.trim();
+    const groups = XATTR_FAILURE.exec(line)?.groups;
+
+    if (groups === undefined) {
+      return [];
+    }
+
+    const missingSetfcap =
+      groups['name'] === 'security.capability' && groups['reason'] === 'Operation not permitted';
+
+    return [{ line, missingSetfcap }];
+  });
+
+  return failures.find((failure) => failure.missingSetfcap) ?? failures[0] ?? null;
 }
 
 // A warning for the start log when impd runs without CAP_SETFCAP, which an
