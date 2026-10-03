@@ -1,11 +1,14 @@
 import { expect, test } from 'bun:test';
 import { findImpByName, listImps } from '../db/imps';
+import type { ImpDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { createFakeGuest } from './fake-guest';
 
-async function setupBuilderTest() {
+// failedDestroys: how many destroyImp calls fail; the ones after wait for
+// releaseDestroys
+async function setupBuilderTest(failedDestroys = 0) {
   const ctx = await setupImpTest({ env: { IMP_BUILD_MEMORY_MIB: '512', IMP_BUILD_DISK_GIB: '4' } });
 
   await ctx.createTestImage('base');
@@ -24,20 +27,43 @@ async function setupBuilderTest() {
   });
 
   const ensured: string[] = [];
+  const logs: string[] = [];
+  const destroys = { failed: 0 };
+  const released = Promise.withResolvers<void>();
+
+  if (failedDestroys === 0) {
+    released.resolve();
+  }
 
   const builders = createBuilders({
     config: ctx.config,
     db: ctx.db,
-    imps: { ...ctx.imps, openBuilderExec: (_name, request) => guest.open(request) },
+    imps: {
+      ...ctx.imps,
+      openBuilderExec: (_name, request) => guest.open(request),
+      destroyImp: async (name) => {
+        if (destroys.failed < failedDestroys) {
+          destroys.failed += 1;
+          throw new Error('the jailer did not stop');
+        }
+
+        await released.promise;
+
+        await ctx.imps.destroyImp(name);
+      },
+    },
     ensureImage: async () => {
       ensured.push(BUILDER_IMAGE);
 
       await ctx.createTestImage(BUILDER_IMAGE);
     },
-    log: () => {},
+    log: (message) => {
+      logs.push(message);
+    },
+    removeRetryMs: 10,
   });
 
-  return Object.assign(ctx, { builders, guest, ensured });
+  return Object.assign(ctx, { builders, guest, ensured, logs, releaseDestroys: released.resolve });
 }
 
 test('a build gets a public builder of the build size, which goes when the build ends', async () => {
@@ -110,6 +136,65 @@ test('a failed build leaves no builder, and a stopped impd’s builders go at th
   const left = await listImps(ctx.db);
 
   expect(left.map((imp) => imp.name)).toEqual(['dev']);
+});
+
+// the builders left, once impd's retries have had their chance
+async function readBuildersAfterRetries(db: ImpDatabase) {
+  for (let tries = 0; tries < 50; tries += 1) {
+    const imps = await listImps(db);
+
+    if (imps.length === 0) {
+      return imps;
+    }
+
+    await Bun.sleep(10);
+  }
+
+  return listImps(db);
+}
+
+test('a builder that survives its removal fails its build, logs, and goes on a retry', async () => {
+  await using ctx = await setupBuilderTest(1);
+
+  const failure = await ctx.builders
+    .withBuilder(new AbortController().signal, async (exec) => {
+      const built = await exec(['true'], { signal: new AbortController().signal });
+
+      return built.stdout;
+    })
+    .catch((error: unknown) => error);
+
+  expect(String(failure)).toMatch(/the builder imp-build-[a-z2-9]{8} could not be removed/v);
+
+  const survivors = await listImps(ctx.db);
+
+  expect(survivors.map((imp) => imp.kind)).toEqual(['builder']);
+
+  ctx.releaseDestroys();
+
+  const left = await readBuildersAfterRetries(ctx.db);
+
+  expect(left).toEqual([]);
+  expect(ctx.logs.some((line) => line.includes('ERROR: builder imp-build-'))).toBe(true);
+  expect(ctx.logs.some((line) => line.startsWith('impd: image build: removed builder'))).toBe(true);
+});
+
+test('a leftover builder that survives its removal at start goes on a retry', async () => {
+  await using ctx = await setupBuilderTest(2);
+
+  await ctx.imps.createImp({ name: 'imp-build-left', image: 'base', kind: 'builder' });
+  await ctx.builders.removeLeftovers();
+
+  const survivors = await listImps(ctx.db);
+
+  expect(survivors.map((imp) => imp.name)).toEqual(['imp-build-left']);
+
+  ctx.releaseDestroys();
+
+  const left = await readBuildersAfterRetries(ctx.db);
+
+  expect(left).toEqual([]);
+  expect(ctx.logs.filter((line) => line.includes('ERROR: builder imp-build-left'))).toHaveLength(2);
 });
 
 test('a builder refuses every stream and every change but rm, and lists only when asked', async () => {

@@ -177,7 +177,8 @@ A build goes:
    small archive off as a small image. An export with more entries than `IMP_BUILD_IMAGE_MAX_FILES`
    (1,000,000) also fails.
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
-   finds at start, which a stop cut short.
+   finds at start, which a stop cut short. A builder that survives its removal fails its build, even
+   one whose image impd wrote, and impd logs an `ERROR` and tries again every 30 s until it is gone.
 
 A builder is impd's while it builds: every stream, exec, wake and change but `imp rm` is refused it
 with `PRECONDITION_FAILED`, the idle loop and the governor never sleep it, and backups leave it out.

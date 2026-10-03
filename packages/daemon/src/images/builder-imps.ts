@@ -15,6 +15,9 @@ const ENGINE_READY_MS = 60_000;
 const ENGINE_POLL_MS = 500;
 const NAME_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789';
 
+// how often impd tries again to remove a builder that survived its removal
+const REMOVE_RETRY_MS = 30_000;
+
 // One builder imp per isolated build (docs/guides/images.md#isolated-builds):
 // the public egress policy, the governor's and the disk budget's admission
 // as any imp, and destroyed at the build's end or impd's next start.
@@ -36,6 +39,9 @@ export interface BuildersDeps {
   // adds IMP_BUILD_IMAGE as BUILDER_IMAGE, when it is not that already
   readonly ensureImage: () => Promise<void>;
   readonly log: (message: string) => void;
+
+  // REMOVE_RETRY_MS, but for tests
+  readonly removeRetryMs?: number;
 }
 
 function pickBuilderName(): string {
@@ -73,14 +79,62 @@ async function waitForEngine(exec: GuestExec, signal: AbortSignal): Promise<void
 }
 
 export function createBuilders(deps: BuildersDeps): Builders {
-  const removeBuilder = async (name: string): Promise<void> => {
+  const retryMs = deps.removeRetryMs ?? REMOVE_RETRY_MS;
+
+  const retrying = new Set<string>();
+
+  // true once the builder is gone; a builder that survives holds its memory
+  // and disk, and refuses sleep, so it is an error
+  const removeOnce = async (name: string): Promise<boolean> => {
     try {
       await deps.imps.destroyImp(name);
+
+      return true;
     } catch (error) {
-      if (!isNotFound(error)) {
-        deps.log(`impd: image build: could not remove builder ${name}: ${readErrorMessage(error)}`);
+      if (isNotFound(error)) {
+        return true;
       }
+
+      deps.log(
+        `impd: image build: ERROR: builder ${name} survives its removal, tried again every ${String(retryMs / 1000)} s: ${readErrorMessage(error)}`,
+      );
+
+      return false;
     }
+  };
+
+  const removeLater = (name: string): void => {
+    if (retrying.has(name)) {
+      return;
+    }
+
+    retrying.add(name);
+
+    const tryAgain = async () => {
+      const gone = await removeOnce(name);
+
+      if (gone) {
+        retrying.delete(name);
+        deps.log(`impd: image build: removed builder ${name}`);
+
+        return;
+      }
+
+      setTimeout(() => void tryAgain(), retryMs).unref();
+    };
+
+    setTimeout(() => void tryAgain(), retryMs).unref();
+  };
+
+  // false when the builder survives, and impd keeps trying
+  const removeBuilder = async (name: string): Promise<boolean> => {
+    const gone = await removeOnce(name);
+
+    if (!gone) {
+      removeLater(name);
+    }
+
+    return gone;
   };
 
   return {
@@ -91,6 +145,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
       const name = pickBuilderName();
       const started = performance.now();
+      const removed: { ok?: boolean } = {};
 
       try {
         // the create fails where the firewall cannot hold the public policy,
@@ -112,9 +167,22 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
         deps.log(`impd: image build: builder ${name} ready in ${String(readyMs)}ms`);
 
-        return await run(exec);
+        const result = await run(exec);
+
+        removed.ok = await removeBuilder(name);
+
+        // the image is written, but a build whose builder lives on fails
+        if (!removed.ok) {
+          throw new Error(
+            `the builder ${name} could not be removed; impd tries again every ${String(retryMs / 1000)} s`,
+          );
+        }
+
+        return result;
       } finally {
-        await removeBuilder(name);
+        if (removed.ok === undefined) {
+          await removeBuilder(name);
+        }
       }
     },
     removeLeftovers: async () => {
