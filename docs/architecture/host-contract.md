@@ -146,7 +146,7 @@ through the calls impd's CLI makes and refuses every other with a 403 and a log 
 | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HEAD`/`GET /_ping`, `/version`                          | As they are                                                                                                                                                                                                                  |
 | `GET /images/{name}/json`                                | As it is                                                                                                                                                                                                                     |
-| `POST /images/create` (pull)                             | `fromImage` and `tag` only, an empty body. Not a registry on `localhost`, an IP address or link-local, and not the repository of `IMP_HOST_IMAGE`, so a pull cannot move the tag both containers run                         |
+| `POST /images/create` (pull)                             | `fromImage` and `tag` only, an empty body. Not a registry named `localhost` or by an IP address (by name only: see below), and not the repository of `IMP_HOST_IMAGE`, so a pull cannot move the tag both containers run     |
 | `POST /build`                                            | The classic builder (`version=1`). Every `t` is `imp/<name>:latest`; `dockerfile` is a path in the context; `buildargs` holds only `BUILDKIT_SYNTAX=docker/dockerfile:1`; `q`, `rm`, `forcerm`. Every other param is refused |
 | `POST /containers/create`                                | Only `<image> /bin/true` at the CLI's defaults. The engine gets a body the proxy builds: that image, `/bin/true`, network `none`, and a label with the proxy's token                                                         |
 | `GET /containers/{id}/export`, `DELETE /containers/{id}` | Only a container whose label holds the proxy's token, by its full ID. `rm` forwards `force=1&v=1`                                                                                                                            |
@@ -177,6 +177,9 @@ What stays open through the proxy, by design or until later work:
 - A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
   through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
   because the classic builder pulls it itself.
+- The pull rule reads the registry's name, not its address. The engine resolves a hostname that
+  points into `127.0.0.0/8` and treats that registry as insecure, so a pull from such a name reaches
+  a registry on the host's loopback.
 - A build has no memory limit and may use all host RAM; a pull can fill the disk.
 - The classic builder is deprecated upstream. When the engine drops it, builds stop; BuildKit
   through the proxy is later work.

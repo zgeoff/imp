@@ -47,7 +47,8 @@ Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside 
   must stay inside the context. The image has no buildx, so the build runs on Docker's classic
   builder, which ignores `BUILDKIT_SYNTAX` and a `# syntax=` line, and has no `RUN --mount`.
   `imp-docker-proxy` allows only that builder
-  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
+  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
+  Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
 
 **CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
 reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
