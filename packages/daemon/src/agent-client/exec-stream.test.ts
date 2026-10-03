@@ -10,6 +10,7 @@ import type { ExecEvent, ExecStream } from './exec-stream';
 import { startFakeAgent } from './fake-agent';
 import type { FakeAgentHandler } from './fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
+import { HOSTILE_BOOT_IDS, HOSTILE_GENERATIONS, HOSTILE_SESSION_NAMES } from './test-agent-ids';
 
 // a fake agent in a fresh directory
 async function setupFakeVsock(agent: FakeAgentHandler) {
@@ -451,9 +452,9 @@ test('activity drops a session whose generation, boot or name is not of its form
         load1: 0,
         sessions: [
           good,
-          { ...good, execution_generation: '../../../evil' },
-          { ...good, boot_id: '../x' },
-          { ...good, name: '../x' },
+          ...HOSTILE_GENERATIONS.map((value) => ({ ...good, execution_generation: value })),
+          ...HOSTILE_BOOT_IDS.map((value) => ({ ...good, boot_id: value })),
+          ...HOSTILE_SESSION_NAMES.map((value) => ({ ...good, name: value })),
         ],
       }),
     );
@@ -466,26 +467,44 @@ test('activity drops a session whose generation, boot or name is not of its form
   ]);
 });
 
-test('a tap whose STARTED names a forged generation fails', async () => {
-  using vsock = await setupFakeVsock((socket) => {
-    socket.end(
-      encodeJsonFrame(FRAME_TYPES.started, {
-        pid: 42,
-        session: 'main',
-        output: {
-          boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
-          execution_generation: '../../../evil',
-          buffer_start: 0,
-          end: 0,
-          offset: 0,
-          prelude: 0,
-          log: true,
-        },
-      }),
-    );
-  });
+test('a tap whose STARTED names a forged generation, boot id or session fails', async () => {
+  const output = {
+    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    execution_generation: 'a'.repeat(32),
+    buffer_start: 0,
+    end: 0,
+    offset: 0,
+    prelude: 0,
+    log: true,
+  };
 
-  const refused = await readRejection(openTapStream(vsock.path, 'main'));
+  const forged = [
+    ...HOSTILE_GENERATIONS.map((value) => ({
+      session: 'main',
+      output: { ...output, execution_generation: value },
+    })),
+    ...HOSTILE_BOOT_IDS.map((value) => ({
+      session: 'main',
+      output: { ...output, boot_id: value },
+    })),
+    ...HOSTILE_SESSION_NAMES.map((value) => ({ session: value, output })),
+  ];
 
-  expect(refused).toBeDefined();
+  const opened: unknown[] = [];
+
+  // the real STARTED opens, so each refusal below is its forged value's
+  for (const started of [{ session: 'main', output }, ...forged]) {
+    using vsock = await setupFakeVsock((socket) => {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 42, ...started }));
+    });
+
+    const stream = await openTapStream(vsock.path, 'main').catch(() => null);
+
+    if (stream !== null) {
+      opened.push(started);
+      stream.close();
+    }
+  }
+
+  expect(opened).toEqual([{ session: 'main', output }]);
 });

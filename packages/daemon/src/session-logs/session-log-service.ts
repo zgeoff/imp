@@ -2,6 +2,7 @@ import type { PreviousGeneration, ResumeFrom, SessionLog, SessionLogRead } from 
 import { PreviousGenerationSchema } from '@imp/api';
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
+import { isAgentLogIdentity } from '../agent-client/agent-ids';
 import type { AgentSession } from '../agent-client/agent-requests';
 import { openTapStream } from '../agent-client/exec-stream';
 import type { ExecStream } from '../agent-client/exec-stream';
@@ -336,6 +337,10 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   ): Promise<LiveLog | null> => {
     const key = findKey(imp.id, generation);
 
+    if (!isAgentLogIdentity({ generation, session, bootId })) {
+      return null;
+    }
+
     if (forgotten.has(imp.id) || hasTombstone(imp.sessionLogsDir, generation)) {
       return null;
     }
@@ -444,6 +449,19 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       return;
     }
 
+    const identity = {
+      generation: output.executionGeneration,
+      session: entry.session,
+      bootId: output.bootId,
+    };
+
+    // a forged next generation ends nothing and makes nothing
+    if (!isAgentLogIdentity(identity)) {
+      tap.close();
+
+      return;
+    }
+
     await writeEnd(entry, toPreviousEnd(output.previous, entry.generation));
 
     const key = findKey(imp.id, output.executionGeneration);
@@ -537,6 +555,10 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
     const bootId = session.boot_id;
 
     if (generation === undefined || bootId === undefined) {
+      return;
+    }
+
+    if (!isAgentLogIdentity({ generation, session: session.name, bootId })) {
       return;
     }
 
