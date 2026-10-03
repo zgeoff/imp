@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { findImageByName } from '../db/images';
 import { listImps } from '../db/imps';
@@ -265,6 +273,37 @@ test('an export over IMP_BUILD_IMAGE_MAX_MIB is refused, and leaves nothing behi
 
   expect(box).toBeUndefined();
   expect(ctx.listWorkDirs()).toEqual([]);
+});
+
+// an image whose /etc/imp/image.json its author made a link to the host path
+// `target`, as a registry image may be
+function buildLinkedTar(dir: string, target: string): Uint8Array {
+  const tree = join(dir, `linked-${Bun.randomUUIDv7()}`);
+
+  mkdirSync(join(tree, 'etc', 'imp'), { recursive: true });
+  rmSync(join(tree, 'etc', 'imp', 'image.json'), { force: true });
+  symlinkSync(target, join(tree, 'etc', 'imp', 'image.json'));
+
+  return Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout;
+}
+
+test("an added image's image.json link changes no host file", async () => {
+  const canary = { path: '' };
+
+  await using ctx = await setupAdd({
+    buildExport: (dir) => {
+      canary.path = join(dir, 'canary');
+
+      writeFileSync(canary.path, "the host's\n");
+
+      return [buildLinkedTar(dir, canary.path)];
+    },
+  });
+
+  const image = await ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box'));
+
+  expect(image.digest).toMatch(/^imp-build-[a-f0-9]{64}$/v);
+  expect(readFileSync(canary.path, 'utf8')).toBe("the host's\n");
 });
 
 test('a client that goes ends the pull in the builder, and the builder with it', async () => {

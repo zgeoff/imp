@@ -254,10 +254,11 @@ What stays open through the proxy, by design or until later work:
   image a digest under its own name; Docker 29.7 then asks the registry for it and fails the build.
 - The engine applies no ignore file to an uploaded context, so `.dockerignore` does not hide a file
   from `COPY .` in an upload.
-- The pull rule reads the registry's name, not its address, so a pull from a name that resolves into
-  `127.0.0.0/8` or another private range reaches a registry on the host's loopback or network. The
-  engine speaks HTTPS to such a name: Docker 29.7.2 with the containerd image store refuses a
-  plain-HTTP answer, so the registry needs a certificate the engine trusts.
+- Under `IMP_BUILD_ISOLATION=host` only, the pull rule reads the registry's name, not its address,
+  so a pull from a name that resolves into `127.0.0.0/8` or another private range reaches a registry
+  on the host's loopback or network. The engine speaks HTTPS to such a name: Docker 29.7.2 with the
+  containerd image store refuses a plain-HTTP answer, so the registry needs a certificate the engine
+  trusts.
 - A build has no memory limit and may use all host RAM; a pull can fill the disk. BuildKit keeps a
   build cache in the host's Docker, which the engine's builder GC bounds and impd's disk budget does
   not count.
