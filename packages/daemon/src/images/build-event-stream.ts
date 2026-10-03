@@ -85,7 +85,12 @@ export function createBuildEventStream(
         if (state.open) {
           stop();
 
-          controller.close();
+          // a client that went as the build ended may have closed it already
+          try {
+            controller.close();
+          } catch {
+            // nothing is left to send
+          }
         }
       };
 
