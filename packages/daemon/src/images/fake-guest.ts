@@ -11,6 +11,9 @@ export interface FakeAnswer {
   readonly stdout?: string | readonly Uint8Array[];
   readonly stderr?: string;
   readonly code?: number;
+
+  // after its output, no exit: the exec stays open until impd closes it
+  readonly stall?: boolean;
 }
 
 const encoder = new TextEncoder();
@@ -24,6 +27,7 @@ interface FakeRecord {
 // the answer's output, then its exit; nothing once the exec is closed
 async function* readFakeEvents(
   answering: Promise<FakeAnswer | null>,
+  closing: Promise<null>,
   isClosed: () => boolean,
 ): AsyncGenerator<ExecEvent, void, undefined> {
   const answered = await answering;
@@ -45,6 +49,12 @@ async function* readFakeEvents(
 
   if (answered.stderr !== undefined) {
     yield { type: 'stderr', data: encoder.encode(answered.stderr) };
+  }
+
+  if (answered.stall === true) {
+    await closing;
+
+    return;
   }
 
   yield { type: 'exit', code: answered.code ?? 0, signal: 0 };
@@ -85,7 +95,7 @@ export function createFakeGuest(answer: (run: FakeRun) => Promise<FakeAnswer> | 
       sendSignal: (signal) => {
         record.signals.push(signal);
       },
-      events: () => readFakeEvents(answering, () => record.closed),
+      events: () => readFakeEvents(answering, closed.promise, () => record.closed),
       close: () => {
         record.closed = true;
 

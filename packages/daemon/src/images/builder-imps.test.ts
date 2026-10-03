@@ -1,14 +1,22 @@
 import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { createFakeGuest } from './fake-guest';
+import type { FakeAnswer, FakeRun } from './fake-guest';
+import { writeGuestTree } from './guest-build';
 
 // failedDestroys: how many destroyImp calls fail; the ones after wait for
-// releaseDestroys
-async function setupBuilderTest(failedDestroys = 0) {
+// releaseDestroys. answer: the builder's engine, once it is up
+async function setupBuilderTest(
+  failedDestroys = 0,
+  answer: (run: FakeRun) => FakeAnswer = () => ({ stdout: 'ok' }),
+) {
   const ctx = await setupImpTest({ env: { IMP_BUILD_MEMORY_MIB: '512', IMP_BUILD_DISK_GIB: '4' } });
 
   await ctx.createTestImage('base');
@@ -23,7 +31,7 @@ async function setupBuilderTest(failedDestroys = 0) {
       return infos === 1 ? { code: 1, stderr: 'Cannot connect to the Docker daemon' } : {};
     }
 
-    return { stdout: 'ok' };
+    return answer(run);
   });
 
   const ensured: string[] = [];
@@ -193,6 +201,60 @@ test('a leftover builder that survives its removal at start goes on a retry', as
 
   expect(left).toEqual([]);
   expect(ctx.logs.filter((line) => line.includes('ERROR: builder imp-build-left'))).toHaveLength(2);
+});
+
+test('an export that stalls past a limit ends, and its builder goes, with no client cancel', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-builder-stall-'));
+  const parents = Array.from({ length: 20 }, (_, n) => `d${String(n)}`).join('/');
+
+  mkdirSync(join(dir, 'tree', parents), { recursive: true });
+  writeFileSync(join(dir, 'tree', parents, 'f'), 'x');
+
+  const deep = Bun.spawnSync([
+    'tar',
+    '-C',
+    join(dir, 'tree'),
+    '--no-recursion',
+    '-c',
+    `${parents}/f`,
+  ]);
+
+  await using ctx = await setupBuilderTest(0, (run) => {
+    const command = run.argv.slice(1, 3).join(' ');
+
+    if (command === 'image inspect') {
+      return { stdout: '{}' };
+    }
+
+    if (command.startsWith('create ')) {
+      return { stdout: 'e'.repeat(64) };
+    }
+
+    return { stdout: [deep.stdout], stall: true };
+  });
+
+  try {
+    mkdirSync(join(dir, 'root'));
+
+    const failure = await ctx.builders
+      .withBuilder(new AbortController().signal, (exec) =>
+        writeGuestTree(
+          exec,
+          join(dir, 'root'),
+          { maxBytes: 1024 ** 3, maxFiles: 1 },
+          new AbortController().signal,
+        ),
+      )
+      .catch((error: unknown) => error);
+
+    expect(String(failure)).toContain('is over 1 files');
+
+    const left = await listImps(ctx.db);
+
+    expect(left).toEqual([]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a builder refuses every stream and every change but rm, and lists only when asked', async () => {

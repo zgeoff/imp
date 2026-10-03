@@ -7,6 +7,7 @@ import { DockerBuildError } from './docker-build';
 import { createFakeGuest } from './fake-guest';
 import type { FakeAnswer, FakeRun } from './fake-guest';
 import { runGuestBuild, writeGuestTree } from './guest-build';
+import type { ExportLimits } from './guest-build';
 import { GuestOutputError, createGuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
 
@@ -198,6 +199,69 @@ test('small files count a block each against the cap', async () => {
 
   expect(failure).toBeInstanceOf(ImageLimitError);
   expect(String(failure)).toContain('is over 1 MiB (IMP_BUILD_IMAGE_MAX_MIB)');
+});
+
+// an archive of one file under 80 directories that are not in it, which tar
+// makes as it unpacks
+function buildDeepExport(): Uint8Array[] {
+  const tree = join(dir, 'deep');
+  const parents = Array.from({ length: 80 }, (_, n) => `d${String(n)}`).join('/');
+
+  mkdirSync(join(tree, parents), { recursive: true });
+  writeFileSync(join(tree, parents, 'f'), 'x');
+
+  return [Bun.spawnSync(['tar', '-C', tree, '--no-recursion', '-c', `${parents}/f`]).stdout];
+}
+
+// how writeGuestTree ends for `exported`; a stalled export stays open
+async function readExportEnd(
+  exported: readonly Uint8Array[],
+  limits: Readonly<ExportLimits>,
+  stall = false,
+): Promise<{ failure: unknown; closed: boolean | undefined }> {
+  const answer = createExportAnswer(exported);
+
+  const guest = createFakeGuest((run) => {
+    const answered = answer(run);
+
+    return stall && run.argv[1] === 'export' ? { ...answered, stall } : answered;
+  });
+
+  const root = join(dir, `root-${Bun.randomUUIDv7()}`);
+
+  mkdirSync(root);
+
+  try {
+    await writeGuestTree(createGuestExec(guest.open), root, limits, new AbortController().signal);
+  } catch (error) {
+    return { failure: error, closed: guest.runs.at(-1)?.closed };
+  }
+
+  return { failure: undefined, closed: guest.runs.at(-1)?.closed };
+}
+
+test('the directories tar makes for a member count as entries, and as blocks', async () => {
+  const files = await readExportEnd(buildDeepExport(), { maxBytes: 1024 ** 3, maxFiles: 1 });
+  const bytes = await readExportEnd(buildDeepExport(), { maxBytes: 64 * 1024, maxFiles: 1000 });
+
+  expect(String(files.failure)).toContain('is over 1 files (IMP_BUILD_IMAGE_MAX_FILES)');
+  expect(bytes.failure).toBeInstanceOf(ImageLimitError);
+  expect(String(bytes.failure)).toContain('(IMP_BUILD_IMAGE_MAX_MIB)');
+});
+
+test('a limit ends an export that stalls, and so does one that sends nothing', async () => {
+  const limited = await readExportEnd(
+    buildDeepExport(),
+    { maxBytes: 1024 ** 3, maxFiles: 1 },
+    true,
+  );
+
+  const silent = await readExportEnd([], { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 50 }, true);
+
+  expect(String(limited.failure)).toContain('is over 1 files');
+  expect(limited.closed).toBe(true);
+  expect(String(silent.failure)).toContain('docker export in the builder sent nothing in 0.05 s');
+  expect(silent.closed).toBe(true);
 });
 
 test("a builder's config that is not one JSON object is refused", async () => {

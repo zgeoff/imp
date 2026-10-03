@@ -73,7 +73,16 @@ export interface ExportLimits {
   // tar's own count of what it unpacked, so a stream cannot hide entries
   // from a second parser
   readonly maxFiles: number;
+
+  // how long the export may send nothing; EXPORT_IDLE_MS, but for tests
+  readonly idleMs?: number;
 }
+
+// how long a builder's export may send nothing before impd ends it
+const EXPORT_IDLE_MS = 120_000;
+
+// the export's end when its tar fails first
+const TAR_STOPPED = new Error('tar stopped before the export ended');
 
 // the digest's hash, once the export has gone into it
 function createImageHash(configText: string): Bun.CryptoHasher {
@@ -104,8 +113,9 @@ function readAllocatedBytes(line: string): number {
   return Math.max(1, Math.ceil(bytes / BLOCK_BYTES)) * BLOCK_BYTES;
 }
 
-// tar -vv prints one line per entry it unpacks, names escaped; past either
-// limit it is killed
+// tar -vv prints one line per entry it unpacks, names escaped, and a
+// "Creating directory:" line for each parent a member names that the
+// archive does not; past either limit it is killed
 async function countUnpacked(
   stdout: ReadableStream<Uint8Array>,
   limits: Readonly<ExportLimits>,
@@ -179,30 +189,60 @@ export async function writeGuestTree(
 
   const hash = createImageHash(configText);
   const sent = { bytes: 0 };
-  const unpacked: { over?: 'bytes' | 'files' } = {};
+  const unpacked: { over?: 'bytes' | 'files'; ended?: boolean } = {};
 
+  // ends the export, which a stalled builder would keep open, as soon as
+  // its tar is gone or it sends nothing for idleMs
+  const stopExport = new AbortController();
+
+  const readMax = (limit: 'bytes' | 'files') => (limit === 'bytes' ? maxBytes : limits.maxFiles);
+  const idleMs = limits.idleMs ?? EXPORT_IDLE_MS;
+
+  // tar's listing may come only as it exits, which can be after the end of
+  // the archive and before the end of the export
   const counting = countUnpacked(tar.stdout, limits, (limit) => {
     unpacked.over = limit;
 
+    const max = readMax(limit);
+
     tar.kill();
+    stopExport.abort(new ImageLimitError(limit, max));
   });
+
+  const waitForTar = async () => {
+    const code = await tar.exited;
+
+    if (code !== 0 && unpacked.ended !== true) {
+      stopExport.abort(TAR_STOPPED);
+    }
+  };
+
+  void waitForTar();
 
   const assertWithinLimits = () => {
     const over = unpacked.over;
 
     if (over !== undefined) {
-      const max = over === 'bytes' ? maxBytes : limits.maxFiles;
-
-      throw new ImageLimitError(over, max);
+      throw new ImageLimitError(over, readMax(over));
     }
   };
+
+  const stopIdle = () => {
+    stopExport.abort(
+      new Error(`docker export in the builder sent nothing in ${String(idleMs / 1000)} s`),
+    );
+  };
+
+  const idle = { timer: setTimeout(stopIdle, idleMs) };
 
   const stderrText = new Response(tar.stderr).text();
 
   try {
     const exported = await exec(['docker', 'export', containerId], {
-      signal,
+      signal: AbortSignal.any([signal, stopExport.signal]),
       onStdout: async (chunk) => {
+        idle.timer.refresh();
+
         sent.bytes += chunk.byteLength;
 
         if (sent.bytes > maxBytes) {
@@ -222,6 +262,8 @@ export async function writeGuestTree(
       throw new Error(`docker export in the builder: ${exported.stderr.trim()}`);
     }
 
+    unpacked.ended = true;
+
     await tar.stdin.end();
 
     const [exitCode, stderr] = await Promise.all([tar.exited, stderrText, counting]);
@@ -233,7 +275,16 @@ export async function writeGuestTree(
 
     // a write to the tar it killed fails first
     assertWithinLimits();
+
+    if (stopExport.signal.reason === TAR_STOPPED) {
+      const [exitCode, stderr] = await Promise.all([tar.exited, stderrText]);
+
+      assertUnpacked({ exitCode, stdout: '', stderr });
+    }
+
     throw error;
+  } finally {
+    clearTimeout(idle.timer);
   }
 
   return { digest: `${DIGEST_PREFIX}${hash.digest('hex')}`, config };

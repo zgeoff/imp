@@ -175,7 +175,9 @@ A build goes:
    take, is over `IMP_BUILD_IMAGE_MAX_MIB` (8192). The disk counts each entry, as `tar` lists it, at
    its full logical size in whole 4 KiB blocks, so a sparse file or many small files cannot pass a
    small archive off as a small image. An export with more entries than `IMP_BUILD_IMAGE_MAX_FILES`
-   (1,000,000) also fails.
+   (1,000,000) also fails. The directories `tar` makes for a member's missing parents count as
+   entries and blocks too. impd ends the export at once when a limit trips or `tar` fails, and after
+   120 s in which the builder sends nothing, so a builder that holds its export open still goes.
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
    finds at start, which a stop cut short. A builder that survives its removal does not fail its
    build, whose image impd wrote: impd logs an `ERROR`, tries again every 30 s until it is gone, and
