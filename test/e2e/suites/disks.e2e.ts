@@ -85,12 +85,13 @@ test('a stopped disk grows at its next boot, and never shrinks', async () => {
   expect(String(shrink)).toContain('a disk only grows');
 
   await runImp('stop', imp);
-  await checkDiskClean(imp);
 
   // The stop wrote the grown filesystem out and asked for a pass, about 10 s
   // later. A count from a pass that started before the stop does not hold
   // those blocks, so only a later one counts.
   const stoppedAt = new Date();
+
+  await checkDiskClean(imp);
 
   const usage = await waitFor(
     `a usage count for ${imp} measured after its stop`,

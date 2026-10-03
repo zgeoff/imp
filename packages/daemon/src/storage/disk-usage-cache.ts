@@ -9,9 +9,15 @@ import type { ImpDiskUsage, StorageBackend } from './storage-backend';
 // it runs, so a burst of them costs one
 const REFRESH_DELAY_MS = 10_000;
 
-// changes to an imp that change what it takes: a grown disk, and a stop or a
-// sleep, which writes the guest's cache and memory out
-export const CHANGES_USAGE: ReadonlySet<ImpChangeReason> = new Set(['resized', 'stopped', 'slept']);
+// changes to an imp that change what it takes: a grown disk, a restored
+// checkpoint, and a stop or a sleep, which writes the guest's cache and memory
+// out
+export const CHANGES_USAGE: ReadonlySet<ImpChangeReason> = new Set([
+  'resized',
+  'restored',
+  'stopped',
+  'slept',
+]);
 
 export interface CachedDiskUsage extends ImpDiskUsage {
   // when the pass started: the count holds every write before it
@@ -48,6 +54,9 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
     usage: new Map<string, CachedDiskUsage>(),
     running: null as Promise<void> | null,
     timer: null as ReturnType<typeof setTimeout> | null,
+
+    // set at shutdown: the sleeps that follow ask for passes nobody reads
+    isStopped: false,
   };
 
   const readUsagePass = async (): Promise<void> => {
@@ -100,7 +109,10 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
 
   const runAfterCurrent = async (): Promise<void> => {
     await state.running;
-    await runOnePass();
+
+    if (!state.isStopped) {
+      await runOnePass();
+    }
   };
 
   return {
@@ -109,6 +121,10 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
     // a pass under way may have measured before the write that asked, so
     // the refresh waits for it and runs its own
     requestRefresh: () => {
+      if (state.isStopped) {
+        return;
+      }
+
       state.timer ??= setTimeout(() => {
         state.timer = null;
         void runAfterCurrent();
@@ -118,6 +134,8 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
     readExclusiveTotal: () =>
       [...state.usage.values()].reduce((total, usage) => total + usage.exclusiveBytes, 0),
     stop: () => {
+      state.isStopped = true;
+
       if (state.timer !== null) {
         clearTimeout(state.timer);
 

@@ -173,3 +173,23 @@ test('a refresh asked for during a pass runs a pass of its own after it', async 
 
   expect(state.calls).toBe(2);
 });
+
+test('after stop, a refresh runs no pass', async () => {
+  const state = { calls: 0 };
+
+  await using ctx = await setupCache(
+    (imps) => {
+      state.calls += 1;
+
+      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
+    },
+    { refreshDelayMs: 0 },
+  );
+
+  ctx.cache.stop();
+  ctx.cache.requestRefresh();
+
+  await Bun.sleep(5);
+
+  expect(state.calls).toBe(0);
+});
