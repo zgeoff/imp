@@ -1,6 +1,6 @@
 {
   "name": "@imp/cli",
-  "version": "0.25.0",
+  "version": "0.25.1",
   "private": true,
   "description": "imp: the command-line client for impd",
   "bin": {
