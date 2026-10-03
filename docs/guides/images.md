@@ -49,8 +49,9 @@ digest as `images/dev` names it, works on both.
   and frees its slot and its disk room.
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
   with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
-  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, its rewrite, and twice
-  `IMP_BUILD_IMAGE_MAX_MIB` for the unpacked image and its ext4 file
+  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, its rewrite, and, as the export
+  streams, twice what it has written so far for the unpacked image and its ext4 file, in 256 MiB
+  steps; a disk that fills stops the export with `DISK_FULL`
   ([storage](../architecture/storage.md#disk-budget)). Each build's builder imp takes a slot, its
   memory and its disk like any imp.
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every

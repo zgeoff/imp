@@ -303,15 +303,15 @@ One ledger in impd takes each write's estimate off the free space until the writ
 lock, so two writes never pass on the same reading. A write that would leave less than the reserve
 fails with `DISK_FULL` (HTTP 507), before it touches anything:
 
-| Write                                           | Estimate                                                                                                                                                                              |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| sleep                                           | the imp's memory: the file is full size until its holes are dug                                                                                                                       |
-| watchdog snapshot                               | the imp's memory, as a sleep                                                                                                                                                          |
-| image build                                     | twice the Docker image: the tree, and the ext4 file from it                                                                                                                           |
-| build from an upload                            | its Content-Length (else the upload limit) while the tar arrives, the tar again for Docker's copy, then twice the image; in a builder, twice `IMP_BUILD_IMAGE_MAX_MIB` for the export |
-| restore from backup                             | twice each file's blocks while restic fetches and writes it (an older manifest: the disk size); twice an image's size                                                                 |
-| create, fork                                    | 0: a thin clone                                                                                                                                                                       |
-| checkpoint, template, resize, start, backup run | 0: refused only once the reserve is reached                                                                                                                                           |
+| Write                                           | Estimate                                                                                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| sleep                                           | the imp's memory: the file is full size until its holes are dug                                                                                                                                                |
+| watchdog snapshot                               | the imp's memory, as a sleep                                                                                                                                                                                   |
+| image build                                     | twice the Docker image: the tree, and the ext4 file from it                                                                                                                                                    |
+| build from an upload                            | its Content-Length (else the upload limit) while the tar arrives, the tar again for Docker's copy, then twice the image; in a builder, twice what the export has written, grown in 256 MiB steps as it streams |
+| restore from backup                             | twice each file's blocks while restic fetches and writes it (an older manifest: the disk size); twice an image's size                                                                                          |
+| create, fork                                    | 0: a thin clone                                                                                                                                                                                                |
+| checkpoint, template, resize, start, backup run | 0: refused only once the reserve is reached                                                                                                                                                                    |
 
 A wake is never refused: its disk and memory exist already, and a full disk must not strand an imp's
 work. A sleep that is refused leaves its imp running, as any failed sleep does; the governor turns

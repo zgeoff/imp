@@ -140,7 +140,7 @@ export interface ImageServiceDeps {
   readonly storageGate: StorageGate;
 
   // a build holds room for the unpacked tree and its ext4 file
-  readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
+  readonly diskBudget: Pick<DiskBudget, 'withRoom' | 'withGrowingRoom'>;
 
   // where an isolated build runs; null until the imps are up
   readonly readBuilders: () => Builders | null;
@@ -493,8 +493,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   ): Promise<ImageRecord> => {
     const maxBytes = deps.config.build.imageMaxBytes;
 
-    // the tree unpacked, and the ext4 file written from it
-    return deps.diskBudget.withRoom(2 * maxBytes, () =>
+    // the tree unpacked, and the ext4 file written from it, held as the
+    // export grows
+    return deps.diskBudget.withGrowingRoom((grow) =>
       storageGate.join(async () => {
         const workDir = makeWorkDir();
         const root = workDir.root;
@@ -505,6 +506,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
             root,
             { maxBytes, maxFiles: deps.config.build.imageMaxFiles },
             signal,
+            grow,
           );
 
           const digest = exported.digest;

@@ -26,6 +26,12 @@ interface DiskStatus {
 export interface DiskBudget {
   readonly withRoom: <T>(bytes: number, task: () => Promise<T>) => Promise<T>;
 
+  // withRoom for a write whose size shows only as it goes, such as a
+  // build's export: grow(total) holds up to total, or refuses as withRoom
+  readonly withGrowingRoom: <T>(
+    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+  ) => Promise<T>;
+
   // withRoom for a write the estimate cannot see, such as a thin clone
   readonly requireRoom: (bytes: number) => Promise<void>;
   readonly readStatus: () => Promise<DiskStatus>;
@@ -126,8 +132,31 @@ export function createDiskBudget(deps: DiskBudgetDeps): DiskBudget {
     }
   };
 
+  const withGrowingRoom = async <T>(
+    task: (grow: (totalBytes: number) => Promise<void>) => Promise<T>,
+  ): Promise<T> => {
+    const held = { bytes: 0 };
+
+    const grow = async (totalBytes: number) => {
+      const more = totalBytes - held.bytes;
+
+      if (more > 0) {
+        await holdRoom(more);
+
+        held.bytes += more;
+      }
+    };
+
+    try {
+      return await task(grow);
+    } finally {
+      removeHold(held.bytes);
+    }
+  };
+
   return {
     withRoom,
+    withGrowingRoom,
     requireRoom: (bytes) => withRoom(bytes, () => Promise.resolve()),
     readStatus,
   };

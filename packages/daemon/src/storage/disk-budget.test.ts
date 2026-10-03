@@ -63,6 +63,37 @@ test('writes under way hold their room until they end', async () => {
   expect(after.pendingBytes).toBe(0);
 });
 
+test('a growing write holds what it has grown to, refuses past the reserve, and frees all at its end', async () => {
+  const ctx = setupBudget(10 * GIB, 4 * GIB);
+  const steps: unknown[] = [];
+
+  const ended = await ctx.budget
+    .withGrowingRoom(async (grow) => {
+      await grow(GIB);
+      await grow(GIB / 2);
+
+      const status = await ctx.budget.readStatus();
+
+      steps.push(status.pendingBytes);
+
+      await grow(5 * GIB);
+
+      const grown = await ctx.budget.readStatus();
+
+      steps.push(grown.pendingBytes);
+
+      await grow(7 * GIB);
+    })
+    .catch((error: unknown) => error);
+
+  expect(steps).toEqual([GIB, 5 * GIB]);
+  expect(ended).toMatchObject({ code: 'DISK_FULL', data: { requestedBytes: 2 * GIB } });
+
+  const after = await ctx.budget.readStatus();
+
+  expect(after.pendingBytes).toBe(0);
+});
+
 test('a create past the reserve is refused even with an estimate of 0', async () => {
   const ctx = setupBudget(3 * GIB);
 

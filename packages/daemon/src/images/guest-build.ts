@@ -81,6 +81,9 @@ export interface ExportLimits {
 // how long a builder's export may send nothing before impd ends it
 const EXPORT_IDLE_MS = 120_000;
 
+// how far ahead of the export the disk is held at a time
+const GROW_STEP_BYTES = 256 * 1024 ** 2;
+
 // the export's end when its tar fails first
 const TAR_STOPPED = new Error('tar stopped before the export ended');
 
@@ -119,6 +122,7 @@ function readAllocatedBytes(line: string): number {
 async function countUnpacked(
   stdout: ReadableStream<Uint8Array>,
   limits: Readonly<ExportLimits>,
+  onCounted: (bytes: number) => void,
   onOver: (limit: 'bytes' | 'files') => void,
 ): Promise<void> {
   const decoder = new TextDecoder();
@@ -134,6 +138,8 @@ async function countUnpacked(
       counted.lines += 1;
       counted.bytes += readAllocatedBytes(line);
     }
+
+    onCounted(counted.bytes);
 
     if (counted.bytes > limits.maxBytes) {
       onOver('bytes');
@@ -157,6 +163,7 @@ export async function writeGuestTree(
   root: string,
   limits: Readonly<ExportLimits>,
   signal: AbortSignal,
+  grow: (totalBytes: number) => Promise<void> = () => Promise.resolve(),
 ): Promise<ExportedImage> {
   const maxBytes = limits.maxBytes;
 
@@ -200,7 +207,26 @@ export async function writeGuestTree(
 
   // tar's listing may come only as it exits, which can be after the end of
   // the archive and before the end of the export
-  const counting = countUnpacked(tar.stdout, limits, (limit) => {
+  const listed = { bytes: 0 };
+  const held = { bytes: 0 };
+
+  // twice the larger of the archive and the disk its entries take: the tree,
+  // then its ext4 file; in steps, ahead of what tar has listed
+  const growHold = async () => {
+    const needed = 2 * Math.max(sent.bytes, listed.bytes);
+
+    if (needed > held.bytes) {
+      held.bytes = (Math.floor(needed / GROW_STEP_BYTES) + 1) * GROW_STEP_BYTES;
+
+      await grow(held.bytes);
+    }
+  };
+
+  const onCounted = (bytes: number) => {
+    listed.bytes = bytes;
+  };
+
+  const counting = countUnpacked(tar.stdout, limits, onCounted, (limit) => {
     unpacked.over = limit;
 
     const max = readMax(limit);
@@ -251,6 +277,8 @@ export async function writeGuestTree(
 
         assertWithinLimits();
 
+        await growHold();
+
         hash.update(chunk);
 
         await tar.stdin.write(chunk);
@@ -270,6 +298,9 @@ export async function writeGuestTree(
 
     assertWithinLimits();
     assertUnpacked({ exitCode, stdout: '', stderr });
+
+    // what tar listed after the last chunk
+    await growHold();
   } catch (error) {
     tar.kill();
 

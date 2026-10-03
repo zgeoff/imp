@@ -21,7 +21,10 @@ test('it refuses refs and build contexts that docker could read as flags', async
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
       readBuilders: () => null,
       log: () => {},
     });
@@ -54,7 +57,10 @@ test('it refuses a build context that is not on the impd host', async () => {
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
       readBuilders: () => null,
       log: () => {},
     });
@@ -95,7 +101,10 @@ test('a build context on the impd host with no Dockerfile is the client’s mist
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
       readBuilders: () => null,
       log: () => {},
     });
@@ -120,7 +129,10 @@ test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
       readBuilders: () => null,
       log: () => {},
     });
