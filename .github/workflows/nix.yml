@@ -7,6 +7,7 @@ on:
     paths:
       - flake.nix
       - flake.lock
+      - package.json
       - deploy/**
       - host/scripts/tailscale-up.sh
       - scripts/check-kvm.sh
@@ -16,6 +17,7 @@ on:
     paths:
       - flake.nix
       - flake.lock
+      - package.json
       - deploy/**
       - host/scripts/tailscale-up.sh
       - scripts/check-kvm.sh
