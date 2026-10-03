@@ -15,7 +15,8 @@ abort, and an open and a box imp that keep their tmpfs and processes and reach D
 broker right after the wake. `moves-tailnet` makes both hosts `tag:imp` nodes, each with its own
 `IMP_TAILSCALE_HOSTNAME`: the real peer check and, with `IMP_E2E_TAILNET_NAMES=1`, the handover of a
 per-imp tailnet name. The CI `zfs` job runs the whole flow, cold and warm, between two impds on one
-real pool, with fake VMs (`packages/daemon/src/storage/zfs/zfs-move-flow.real.test.ts`).
+real pool, with fake VMs (`packages/daemon/src/storage/zfs/zfs-move-flow.real.test.ts`), and the
+moves suite with real VMs between two dev instances, each on a dataset of its own.
 
 Not yet tested, because it needs a second machine: a warm move refused for a real mismatch of CPU,
 kernel or Firecracker (one machine has one of each, so only faked facts reach it), clock skew

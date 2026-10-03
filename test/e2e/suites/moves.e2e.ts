@@ -11,6 +11,7 @@ import {
   assertState,
   findImp,
   readImpEnv,
+  readInfo,
   requireImp,
   runImp,
   runImpWith,
@@ -18,7 +19,7 @@ import {
 } from '../lib/imp-cli';
 import { createImp, holdImp, writeGuestFile } from '../lib/imps';
 import type { DevInstance } from '../lib/instance';
-import { readToken, runInContainer } from '../lib/instance';
+import { readImpdLogSince, readToken, runInContainer } from '../lib/instance';
 import { HOST_B, startMoveHosts, stopMoveHosts } from '../lib/move-hosts';
 import type { MoveHosts } from '../lib/move-hosts';
 import { setupSuite } from '../lib/setup-suite';
@@ -223,17 +224,37 @@ afterAll(async () => {
   await stopMoveHosts(hosts);
 }, 900_000);
 
+// both hosts on the run's backend, so the moves send what that pair sends:
+// files from XFS, `zfs send` streams between two ZFS hosts
+test('both hosts run the storage backend the run asked for', async () => {
+  const backend = process.env['IMP_STORAGE_BACKEND'] === 'zfs' ? 'zfs' : 'xfs';
+
+  const [infoA, infoB] = await Promise.all([readInfo(hosts.a), readInfo(hosts.b)]);
+
+  expect([infoA.storage.backend, infoB.storage.backend]).toEqual([backend, backend]);
+});
+
 test('a stopped imp moves cold with its disk and checkpoint, and boots on the target', async () => {
   await createImp(cold, '--image', TINY, '--memory', '256');
   await writeGuestFile(cold, '/root/moved', 'cold-ok');
   await runImp('checkpoint', cold, 'mv1');
   await runImp('stop', cold);
 
+  const since = new Date();
+
   const out = await runMoveToB(cold);
   const left = await findImp(cold);
 
   expect(out).toContain(`${cold}: moved to ${HOST_B}`);
   expect(left).toBeUndefined();
+
+  // what B received, not what each host is configured for: a client that
+  // dropped the target's backend would send files between two ZFS hosts
+  const form = process.env['IMP_STORAGE_BACKEND'] === 'zfs' ? 'zfs streams' : 'files';
+
+  const logB = await readImpdLogSince(since, hosts.b);
+
+  expect(logB).toContain(`impd: move: ${cold}: received as ${form}`);
 
   const row = await requireImp(cold, hosts.b);
   const checkpoints = await runOnB('checkpoints', cold, '--json');

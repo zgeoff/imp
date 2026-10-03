@@ -18,7 +18,8 @@
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
 #      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites (CI adds
-#      lifecycle, disks, backups and boot-templates);
+#      lifecycle, disks, backups, boot-templates and moves, whose second impd
+#      gets a dataset of its own);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
 set -euo pipefail
@@ -44,9 +45,16 @@ export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
 
 # The results stay in $work; the pool file goes unless the pool will not.
+# The moves suites' B and its network go first, as a killed run leaves them
+# up, with B's dataset busy in the pool.
 cleanup() {
   docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
+  if docker container inspect "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1; then
+    docker logs "$IMP_DEV_NAME-mv-b" >"$work/impd-mv-b.log" 2>&1 || true
+  fi
+  IMP_DEV_NAME=$IMP_DEV_NAME-mv-b "$IMP_ROOT/scripts/dev.sh" down || true
   "$IMP_ROOT/scripts/dev.sh" down || true
+  docker network rm "$IMP_DEV_NAME-mv" >/dev/null 2>&1 || true
   if sudo zpool list "$pool" >/dev/null 2>&1 && ! sudo zpool destroy -f "$pool"; then
     echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
     return
@@ -61,6 +69,8 @@ truncate -s "${gib}G" "$work/bench.img"
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$work/bench.img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
+# the moves suites' second impd, B, on a dataset of its own (test/e2e/lib/move-hosts.ts)
+sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT-mv-b"
 
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
 summarize() {
@@ -83,7 +93,7 @@ report() {
   grep -E '^ +(newPlusExecMs|checkpointMs|restoreMs|forkCheckpointMs|forkLiveMs|idleToSleepMs|wakeOnHttpMs|backup[A-Za-z]+): ' \
     "$work/e2e.log" || true
   echo
-  sudo zfs list -r -o name,used,refer,compressratio,recordsize "$pool"
+  sudo zfs list -r -t all -o name,used,refer,compressratio,recordsize "$pool"
 }
 
 # A failed suite still gets its report; the script then exits with the
