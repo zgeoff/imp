@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { copyFileSync } from 'node:fs';
 import type { ImpEvent } from '@imp/api';
-import { findImpByName, updateImpActivity } from '../db/imps';
+import { findImpByName, updateImpActivity, updateImpExposure } from '../db/imps';
 import { listLeases, writeLease } from '../db/leases';
 import type { LeaseRecord } from '../db/leases';
 import { createIdleLoop } from '../idle/idle-loop';
@@ -9,7 +9,12 @@ import type { ImpTest, ImpTestOptions } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { MOVE_PATHS, MoveOfferReplySchema } from './move-header';
+import {
+  MAX_LEASE_REMAINING_MS,
+  MAX_MOVED_LEASES,
+  MOVE_PATHS,
+  MoveOfferReplySchema,
+} from './move-header';
 import { createUbuntuImage, setupMoveHosts } from './test-moves';
 import type { FetchHook } from './test-moves';
 
@@ -85,6 +90,18 @@ function writeLeaseOn(
 // the owner and end of each lease, as a test compares them
 function toEnds(leases: readonly LeaseRecord[]) {
   return leases.map((lease) => ({ label: lease.label, until: lease.until }));
+}
+
+// XFS on plain files, as the test harness makes it, for a test to wrap
+function createCopyingXfs(dataDir: string): StorageBackend {
+  return createXfsBackend({
+    dataDir,
+    cloneFile: (source, target) => {
+      copyFileSync(source, target);
+
+      return Promise.resolve();
+    },
+  });
 }
 
 function readMoveRows(ctx: Readonly<Pick<ImpTest, 'db'>>) {
@@ -199,8 +216,14 @@ test('a warm move keeps each lease with its time left on the target clock, and i
   expect(notHeld).toMatchObject({ code: 'LEASE_NOT_HELD' });
 });
 
-test('a cold move of a stopped imp keeps its hold', async () => {
+test('a cold move of a stopped imp keeps its hold, and the commit says it is held', async () => {
   await using ctx = await setupLeaseTest();
+
+  const events: ImpEvent[] = [];
+
+  ctx.target.imps.events.subscribe((event) => {
+    events.push(event);
+  });
 
   await ctx.sourceApp.client.imps.stop({ name: 'dev' });
   await ctx.writeSourceLease(HOLD, 300_000);
@@ -208,7 +231,12 @@ test('a cold move of a stopped imp keeps its hold', async () => {
   const status = await ctx.runMove('dev');
   const leases = await ctx.readLeases(ctx.target);
 
+  await Bun.sleep(10);
+
+  const held = events.find((event) => event.ev === 'ImpChanged' && event.reason === 'held');
+
   expect(status).toMatchObject({ isDone: true, error: null });
+  expect(held).toMatchObject({ imp: { name: 'dev', state: 'stopped' } });
   expect(toEnds(leases)).toEqual([{ label: 'hold', until: new Date(TARGET_CLOCK_MS + 300_000) }]);
 });
 
@@ -217,14 +245,7 @@ test('each lease ends from when the target read the header; one that ended durin
 
   // the disk takes 30 s on the target's clock
   const createStorage = (dataDir: string): StorageBackend => {
-    const backend = createXfsBackend({
-      dataDir,
-      cloneFile: (source, target) => {
-        copyFileSync(source, target);
-
-        return Promise.resolve();
-      },
-    });
+    const backend = createCopyingXfs(dataDir);
 
     return {
       ...backend,
@@ -257,14 +278,7 @@ test('a forced prepare that fails after the halt keeps the leases, and the imp r
 
   // the source cannot open its disk for the count
   const createStorage = (dataDir: string): StorageBackend => {
-    const backend = createXfsBackend({
-      dataDir,
-      cloneFile: (source, target) => {
-        copyFileSync(source, target);
-
-        return Promise.resolve();
-      },
-    });
+    const backend = createCopyingXfs(dataDir);
 
     return {
       ...backend,
@@ -455,4 +469,96 @@ test("after a warm commit the target's idle loop and governor leave the leased i
 
   expect(refused).toMatchObject({ code: 'RAM_BUDGET_EXCEEDED' });
   expect(imp?.state).toBe('running');
+});
+
+test('an expose that lands between the halt and the mark undoes the mark, keeps the leases, and runs the imp', async () => {
+  const hooks = { onOpen: () => Promise.resolve() };
+
+  // the count opens the disk after the halt and before the mark
+  const createStorage = (dataDir: string): StorageBackend => {
+    const backend = createCopyingXfs(dataDir);
+
+    return {
+      ...backend,
+      openMoveSource: async (impId, checkpointIds, mode) => {
+        await hooks.onOpen();
+
+        return backend.openMoveSource(impId, checkpointIds, mode);
+      },
+    };
+  };
+
+  await using ctx = await setupLeaseTest({ source: { createStorage } });
+
+  hooks.onOpen = async () => {
+    await updateImpExposure(ctx.source.db, ctx.impId, { auth: 'none', user: null, hash: null });
+  };
+
+  await ctx.writeSourceLease(JOB, 600_000);
+
+  const refused = await readRejection(
+    ctx.sourceApp.client.moves.prepare({ name: 'dev', stop: true, force: true }),
+  );
+
+  const imp = await findImpByName(ctx.source.db, 'dev');
+  const leases = await ctx.readLeases(ctx.source);
+  const rows = await readMoveRows(ctx.source);
+
+  expect(refused).toMatchObject({ code: 'PRECONDITION_FAILED' });
+  expect(imp).toMatchObject({ state: 'running', moveState: null });
+  expect(leases.map((lease) => lease.label)).toEqual(['job']);
+  expect(rows).toEqual([]);
+});
+
+test('an imp with more leases than a move carries is refused at the offer, and runs again', async () => {
+  await using ctx = await setupLeaseTest();
+
+  // holds, which a forced stop keeps
+  for (let index = 0; index <= MAX_MOVED_LEASES; index += 1) {
+    await ctx.writeSourceLease({ ...HOLD, principal: `tailnet:n${String(index)}` }, 600_000);
+  }
+
+  const status = await ctx.runMove('dev', true);
+  const imp = await findImpByName(ctx.source.db, 'dev');
+  const landed = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('more than a move carries');
+  expect(status.sentBytes).toBe(0);
+  expect(imp).toMatchObject({ state: 'running', moveState: null });
+  expect(landed).toBeUndefined();
+});
+
+test('a lease whose owner is longer than a header carries is refused at the offer, and the imp runs again', async () => {
+  await using ctx = await setupLeaseTest();
+
+  const principal = `tailnet-user:${'x'.repeat(300)}@example.com`;
+
+  await ctx.writeSourceLease({ ...HOLD, principal }, 600_000);
+
+  const status = await ctx.runMove('dev', true);
+  const imp = await findImpByName(ctx.source.db, 'dev');
+  const leases = await ctx.readLeases(ctx.source);
+  const landed = await findImpByName(ctx.target.db, 'dev');
+
+  expect(status.error).toContain('a move cannot carry');
+  expect(status.sentBytes).toBe(0);
+  expect(imp).toMatchObject({ state: 'running', moveState: null });
+  expect(leases.map((lease) => lease.principal)).toEqual([principal]);
+  expect(landed).toBeUndefined();
+});
+
+test('a hold that ends past 100 years moves with 100 years left', async () => {
+  await using ctx = await setupLeaseTest();
+
+  await ctx.sourceApp.client.imps.stop({ name: 'dev' });
+  await ctx.writeSourceLease(HOLD, MAX_LEASE_REMAINING_MS + 60_000);
+
+  const status = await ctx.runMove('dev');
+  const leases = await ctx.readLeases(ctx.target);
+
+  expect(status).toMatchObject({ isDone: true, error: null });
+
+  expect(toEnds(leases)).toEqual([
+    { label: 'hold', until: new Date(TARGET_CLOCK_MS + MAX_LEASE_REMAINING_MS) },
+  ]);
 });
