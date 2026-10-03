@@ -82,8 +82,22 @@ the old value, or the new with the new. If the file is gone by then, the request
 (a 403); the broker never falls back to another file.
 
 impd removes the file a replace or a delete displaced once the transaction commits, and only that
-file. A file no row names, from a crash before the commit or before that removal, goes when impd
-next starts. A failed commit removes its new file and leaves the old one in place.
+file, so a deleted secret's value does not stay on disk. The transaction also records that file, and
+the record goes once the file does: if impd stops in between, or the removal fails, the next start
+removes the file. A failed commit removes its new file and leaves the old one in place.
+
+At start, impd never deletes a value file that no row and no such record names. It moves each one,
+temp files a crash left included, into `<data>/secrets/.orphaned/<start time>/` (mode 0700) and logs
+`impd: broker: kept secret value file <file>, which no database row names, in <dir>`. Such a file is
+the value of a secret added after the database copy a restore put back, or of an add or a replace
+that impd stopped in before its commit: that value was never stored, but its file was written. impd
+does not read these files again. `imp gc` lists each directory as kind `secrets`, with how many
+files it holds, and `imp gc --orphans` leaves them.
+
+**CAUTION:** after a database restore, these files may hold the only copy of a secret's value.
+Recover the values first: check each file, and add back with `imp secret add` any value you still
+need. Only then run `imp gc --orphans --secret-files`, which deletes the directories and cannot be
+undone ([storage cleanup](./operations.md#storage-cleanup)).
 
 ### Restores
 
@@ -92,7 +106,9 @@ next starts. A failed commit removes its new file and leaves the old one in plac
 - A backup restore still re-creates the grants a backup lists, as fresh host-authorized grants
   against the current secrets: each one takes the secret's generation now and passes the clash
   check. A grant revoked after the backup is created again, so revoke it again if needed.
-- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism.
+- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism. The
+  values of secrets added after the copy are kept aside at the next start
+  ([value files](#value-files)), not deleted.
 
 ### Kinds
 

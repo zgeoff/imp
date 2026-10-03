@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
+import { gcCommand } from './gc';
 import { imageCommand } from './image';
 import { consoleCommand, newCommand, readConsoleSession } from './imps';
 import { auditCommand, secretCommand } from './secrets';
@@ -224,4 +225,13 @@ test('token key add refuses a private key, an empty file and a missing one', asy
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('gc --secret-files without --orphans fails before it deletes anything', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(gcCommand, { rawArgs: ['--secret-files'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: --secret-files goes with --orphans');
+  expect(process.exitCode).toBe(2);
 });

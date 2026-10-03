@@ -157,6 +157,8 @@ export function upsertSecret(
       .returningAll()
       .executeTakeFirstOrThrow();
 
+    await createFileRemoval(trx, existing.valueFile);
+
     return {
       kind: 'saved',
       secret: toSecretRecord(row),
@@ -195,15 +197,42 @@ export async function listSecrets(
 }
 
 // cascades to its grants; the file that held its value, or null when there
-// was no such secret
-export async function removeSecret(db: ImpDatabase, name: string): Promise<string | null> {
-  const row = await db
-    .deleteFrom('secrets')
-    .where('name', '=', name)
-    .returning('value_file')
-    .executeTakeFirst();
+// was no such secret. The file is recorded for removal in the same write.
+export function removeSecret(db: ImpDatabase, name: string): Promise<string | null> {
+  return db.transaction().execute(async (trx) => {
+    const row = await trx
+      .deleteFrom('secrets')
+      .where('name', '=', name)
+      .returning('value_file')
+      .executeTakeFirst();
 
-  return row?.value_file ?? null;
+    if (row === undefined) {
+      return null;
+    }
+
+    await createFileRemoval(trx, row.value_file);
+
+    return row.value_file;
+  });
+}
+
+async function createFileRemoval(db: ImpDatabase, valueFile: string): Promise<void> {
+  await db
+    .insertInto('secret_file_removals')
+    .values({ value_file: valueFile, created_at: Date.now() })
+    .onConflict((conflict) => conflict.column('value_file').doNothing())
+    .execute();
+}
+
+// the value files a committed delete or replace displaced, not yet removed
+export async function listFileRemovals(db: ImpDatabase): Promise<string[]> {
+  const rows = await db.selectFrom('secret_file_removals').select('value_file').execute();
+
+  return rows.map((row) => row.value_file);
+}
+
+export async function removeFileRemoval(db: ImpDatabase, valueFile: string): Promise<void> {
+  await db.deleteFrom('secret_file_removals').where('value_file', '=', valueFile).execute();
 }
 
 // A no-op when the grant exists. The clash check and the insert are one

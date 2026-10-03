@@ -514,9 +514,19 @@ export const impContract = {
 
     // removes the crash leftovers no row names and lists the orphans it
     // keeps, or retires them with `orphans`; PRECONDITION_FAILED while
-    // storage operations keep it busy (docs/architecture/storage.md#cleanup)
+    // storage is busy (docs/guides/operations.md#storage-cleanup)
     gc: base
-      .input(z.object({ dryRun: z.boolean().optional(), orphans: z.boolean().optional() }))
+      .input(
+        z.object({
+          dryRun: z.boolean().optional(),
+          orphans: z.boolean().optional(),
+
+          // lists the secret values kept aside, as kind `secrets`; only
+          // `removeSecretFiles` with `orphans` deletes them
+          secretFiles: z.boolean().optional(),
+          removeSecretFiles: z.boolean().optional(),
+        }),
+      )
       .output(StorageGcSchema),
   },
 

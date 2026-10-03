@@ -156,6 +156,10 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // system.gc takes `secretFiles`; an older impd drops it unread and
+      // never lists the secret values it kept aside
+      secretFilesGc: z.boolean().optional(),
     })
     .optional(),
 });
