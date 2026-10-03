@@ -80,6 +80,7 @@ services:
       - DAC_OVERRIDE
       - FOWNER
       - FSETID
+      - SETFCAP
     security_opt:
       - apparmor=unconfined
       - seccomp=/etc/imp/imp-host.seccomp.json

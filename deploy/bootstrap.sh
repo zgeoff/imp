@@ -552,7 +552,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add MKNOD \
   --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add KILL \
   --cap-add SYS_PTRACE --cap-add DAC_OVERRIDE --cap-add FOWNER \
-  --cap-add FSETID \
+  --cap-add FSETID --cap-add SETFCAP \
   --security-opt apparmor=unconfined \
   --security-opt seccomp=/etc/imp/imp-host.seccomp.json \
   --device /dev/kvm --device /dev/net/tun \
