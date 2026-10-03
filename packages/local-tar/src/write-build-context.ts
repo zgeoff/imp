@@ -271,18 +271,28 @@ function openEntry(pack: Pack, header: Readonly<Header>) {
   };
 }
 
+async function removeChunk(): Promise<void> {}
+
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-// Writes the tar at inputPath again at outputPath, which must not exist yet,
-// and returns the Dockerfile the engine will read from it. Refuses what an
-// extractor could read another way than impd does (docs/guides/images.md).
-export async function writeBuildContext(
+// where a pass writes the context, and the Dockerfile text it writes in
+// place of the one the context holds
+interface CopyTarget {
+  readonly outputPath: string;
+  readonly checked: CheckedContext;
+  readonly dockerfile: Uint8Array;
+}
+
+// One pass over the uploaded tar: checks every entry, and with a target
+// writes the context again there as plain ustar, with pax only for long
+// names.
+async function runContextPass(
   inputPath: string,
-  outputPath: string,
   dockerfilePath: string,
   maxDockerfileBytes: number,
+  target: CopyTarget | null,
 ): Promise<CheckedContext> {
   const candidates = listDockerfileCandidates(dockerfilePath);
 
@@ -291,15 +301,13 @@ export async function writeBuildContext(
 
   const extract = tar.extract();
   const pack = tar.pack();
-
-  const output = await open(outputPath, 'wx', 0o600);
-
+  const output = target === null ? null : await open(target.outputPath, 'wx', 0o600);
   const writeFailure: WriteFailure = {};
 
   const writing = (async () => {
     try {
       for await (const chunk of pack) {
-        if (chunk instanceof Uint8Array) {
+        if (chunk instanceof Uint8Array && output !== null) {
           await output.write(chunk);
         }
       }
@@ -338,11 +346,24 @@ export async function writeBuildContext(
 
       types.set(name, type);
 
-      const sink = openEntry(pack, buildHeader(entry.header, name, type));
       const isCandidate = type === 'file' && candidates.includes(name);
       const isSmall = entry.header.size <= maxDockerfileBytes;
 
-      const text = await writeEntryData(entry, sink.write, isCandidate && isSmall);
+      const isReplaced =
+        target !== null && type === 'file' && name === target.checked.dockerfilePath;
+
+      const header = buildHeader(entry.header, name, type);
+      const written = isReplaced ? { ...header, size: target.dockerfile.byteLength } : header;
+      const sink = openEntry(pack, written);
+
+      // the replaced Dockerfile's own bytes are still read, for the check
+      const write = isReplaced ? removeChunk : sink.write;
+
+      const text = await writeEntryData(entry, write, isCandidate && isSmall);
+
+      if (isReplaced) {
+        await sink.write(target.dockerfile);
+      }
 
       if (isCandidate) {
         const kept = isSmall ? text : null;
@@ -356,6 +377,15 @@ export async function writeBuildContext(
     checkParents(types);
 
     const picked = pickDockerfile(candidates, types, texts, maxDockerfileBytes);
+
+    // the rewrite was made from the Dockerfile the first pass read
+    if (
+      target !== null &&
+      (picked.dockerfilePath !== target.checked.dockerfilePath ||
+        picked.dockerfile !== target.checked.dockerfile)
+    ) {
+      throw new Error('the build context changed between its check and its rewrite');
+    }
 
     pack.finalize();
 
@@ -375,6 +405,33 @@ export async function writeBuildContext(
 
     throw error;
   } finally {
-    await output.close();
+    await output?.close();
   }
+}
+
+// Checks the tar at inputPath and returns the Dockerfile the engine will
+// read from it. Refuses what an extractor could read another way than impd
+// does (docs/guides/images.md).
+export function readBuildContext(
+  inputPath: string,
+  dockerfilePath: string,
+  maxDockerfileBytes: number,
+): Promise<CheckedContext> {
+  return runContextPass(inputPath, dockerfilePath, maxDockerfileBytes, null);
+}
+
+// Writes the context readBuildContext checked again at outputPath, which
+// must not exist yet, with dockerfile in place of its Dockerfile.
+export async function writeBuildContext(
+  inputPath: string,
+  outputPath: string,
+  checked: CheckedContext,
+  dockerfile: string,
+  maxDockerfileBytes: number,
+): Promise<void> {
+  await runContextPass(inputPath, checked.dockerfilePath, maxDockerfileBytes, {
+    outputPath,
+    checked,
+    dockerfile: new TextEncoder().encode(dockerfile),
+  });
 }

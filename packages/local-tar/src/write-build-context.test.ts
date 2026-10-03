@@ -8,10 +8,14 @@ import type { Header } from 'tar-stream';
 import {
   BuildContextError,
   listDockerfileCandidates,
+  readBuildContext,
   writeBuildContext,
 } from './write-build-context';
 
-type Entry = Partial<Header> & { readonly name: string; readonly content?: string };
+type Entry = Partial<Header> & {
+  readonly name: string;
+  readonly content?: string;
+};
 
 const DOCKERFILE = 'FROM busybox:1.37\n';
 const LONG_NAME = `${'deep/'.repeat(60)}file.txt`;
@@ -36,8 +40,13 @@ async function writeTarBytes(entries: readonly Entry[]): Promise<Uint8Array> {
   return new Uint8Array(Bun.concatArrayBuffers(chunks));
 }
 
-// a context of these bytes, rewritten; the result or what was thrown
-async function runRewrite(bytes: Uint8Array, dockerfile = 'Dockerfile') {
+// a context of these bytes, checked and written again with its Dockerfile
+// as replacement gives it; the result or what was thrown
+async function runRewrite(
+  bytes: Uint8Array,
+  dockerfile = 'Dockerfile',
+  replacement?: (text: string) => string,
+) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-rewrite-context-'));
   const input = join(dir, 'in.tar');
   const output = join(dir, 'out.tar');
@@ -45,11 +54,21 @@ async function runRewrite(bytes: Uint8Array, dockerfile = 'Dockerfile') {
   writeFileSync(input, bytes);
 
   try {
-    const result = await writeBuildContext(input, output, dockerfile, 1024).catch(
-      (error: unknown) => error,
-    );
+    const result = await readBuildContext(input, dockerfile, 1024)
+      .then(async (checked) => {
+        const text =
+          replacement === undefined ? checked.dockerfile : replacement(checked.dockerfile);
 
-    return { result, written: result instanceof Error ? null : readFileSync(output) };
+        await writeBuildContext(input, output, checked, text, 1024);
+
+        return checked;
+      })
+      .catch((error: unknown) => error);
+
+    return {
+      result,
+      written: result instanceof Error ? null : readFileSync(output),
+    };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -93,7 +112,10 @@ test('a context is written again with its files, directories, symlinks and long 
     { name: LONG_NAME, content: 'long' },
   ]);
 
-  expect(rewritten.result).toEqual({ dockerfilePath: 'Dockerfile', dockerfile: DOCKERFILE });
+  expect(rewritten.result).toEqual({
+    dockerfilePath: 'Dockerfile',
+    dockerfile: DOCKERFILE,
+  });
 
   const headers = await listHeaders(rewritten.written ?? new Uint8Array());
 
@@ -123,9 +145,21 @@ test('the Dockerfile falls back to dockerfile beside it, as the frontend reads i
     'sub/Dockerfile',
   );
 
-  expect(lower.result).toEqual({ dockerfilePath: 'dockerfile', dockerfile: DOCKERFILE });
-  expect(both.result).toEqual({ dockerfilePath: 'Dockerfile', dockerfile: DOCKERFILE });
-  expect(nested.result).toEqual({ dockerfilePath: 'sub/dockerfile', dockerfile: DOCKERFILE });
+  expect(lower.result).toEqual({
+    dockerfilePath: 'dockerfile',
+    dockerfile: DOCKERFILE,
+  });
+
+  expect(both.result).toEqual({
+    dockerfilePath: 'Dockerfile',
+    dockerfile: DOCKERFILE,
+  });
+
+  expect(nested.result).toEqual({
+    dockerfilePath: 'sub/dockerfile',
+    dockerfile: DOCKERFILE,
+  });
+
   expect(listDockerfileCandidates('Containerfile')).toEqual(['Containerfile']);
 
   const missing = await readRefusal(
@@ -134,6 +168,54 @@ test('the Dockerfile falls back to dockerfile beside it, as the frontend reads i
   );
 
   expect(missing).toBe('there is no Containerfile in the build context');
+});
+
+// the data of each file in the tar, by name
+async function readFiles(bytes: Uint8Array): Promise<Map<string, string>> {
+  const extract = tar.extract();
+
+  const files = new Map<string, string>();
+
+  extract.end(bytes);
+
+  for await (const entry of extract) {
+    const chunks: Uint8Array[] = [];
+
+    for await (const chunk of entry) {
+      if (chunk instanceof Uint8Array) {
+        chunks.push(chunk);
+      }
+    }
+
+    files.set(entry.header.name, new TextDecoder().decode(Bun.concatArrayBuffers(chunks)));
+  }
+
+  return files;
+}
+
+test('the write puts the given text in place of the Dockerfile the check read', async () => {
+  const pinned = 'FROM busybox@sha256:aaaa\n';
+
+  const bytes = await writeTarBytes([
+    { name: 'dockerfile', content: DOCKERFILE },
+    { name: 'Dockerfile.txt', content: DOCKERFILE },
+    { name: 'app.txt', content: 'app' },
+  ]);
+
+  const rewritten = await runRewrite(bytes, 'Dockerfile', () => pinned);
+
+  expect(rewritten.result).toEqual({
+    dockerfilePath: 'dockerfile',
+    dockerfile: DOCKERFILE,
+  });
+
+  const files = await readFiles(rewritten.written ?? new Uint8Array());
+
+  expect(Object.fromEntries(files)).toEqual({
+    dockerfile: pinned,
+    'Dockerfile.txt': DOCKERFILE,
+    'app.txt': 'app',
+  });
 });
 
 test('a Dockerfile that is not a regular file is refused, not passed over', async () => {
@@ -202,10 +284,17 @@ test('hard links, special files and names outside the context are refused', asyn
 
 test('user xattrs are dropped; security and other xattrs, and unknown pax records, are refused', async () => {
   const rewritten = await runEntriesRewrite([
-    { name: 'Dockerfile', content: DOCKERFILE, pax: { 'SCHILY.xattr.user.note': 'x' } },
+    {
+      name: 'Dockerfile',
+      content: DOCKERFILE,
+      pax: { 'SCHILY.xattr.user.note': 'x' },
+    },
   ]);
 
-  expect(rewritten.result).toEqual({ dockerfilePath: 'Dockerfile', dockerfile: DOCKERFILE });
+  expect(rewritten.result).toEqual({
+    dockerfilePath: 'Dockerfile',
+    dockerfile: DOCKERFILE,
+  });
 
   const headers = await listHeaders(rewritten.written ?? new Uint8Array());
 

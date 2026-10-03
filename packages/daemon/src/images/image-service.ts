@@ -6,6 +6,7 @@ import {
   MissingDockerfileError,
   countTarBytes,
   listContextEntries,
+  readBuildContext,
   writeBuildContext,
 } from '@imp/local-tar';
 import { ORPCError } from '@orpc/server';
@@ -55,7 +56,13 @@ const SEED_REF = 'ubuntu:24.04';
 const OnBuildSchema = z.array(z.unknown()).nullable();
 
 const InspectSchema = z
-  .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
+  .array(
+    z.object({
+      Id: z.string(),
+      Config: z.unknown(),
+      Size: z.number().optional(),
+    }),
+  )
   .length(1);
 
 export interface ImageService {
@@ -246,7 +253,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         requireDockerImage(existing);
 
         if (existing === undefined) {
-          return createImage(deps.db, { name: imageName, ref, digest: inspect.Id, sizeBytes });
+          return createImage(deps.db, {
+            name: imageName,
+            ref,
+            digest: inspect.Id,
+            sizeBytes,
+          });
         }
 
         if (existing.digest === inspect.Id) {
@@ -303,7 +315,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         return checkDockerfile(dockerfile);
       } catch (error) {
         throw error instanceof DockerfileError
-          ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
+          ? new ORPCError('BAD_REQUEST', {
+              message: `the Dockerfile: ${error.message}`,
+            })
           : error;
       }
     })();
@@ -319,12 +333,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       signal.throwIfAborted();
 
-      const local = await runCommand(['docker', 'image', 'inspect', ref], { signal });
+      const local = await runCommand(['docker', 'image', 'inspect', ref], {
+        signal,
+      });
 
       if (local.exitCode !== 0) {
         signal.throwIfAborted();
 
-        const pulled = await runCommand(['docker', 'pull', '--quiet', ref], { signal });
+        const pulled = await runCommand(['docker', 'pull', '--quiet', ref], {
+          signal,
+        });
 
         signal.throwIfAborted();
 
@@ -365,18 +383,25 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       // the rewrite is the context again, with pax headers for long names
       await deps.diskBudget.withRoom(tarBytes, async () => {
-        const context = await writeBuildContext(
-          tarPath,
-          rewrittenPath,
-          dockerfilePath,
-          DOCKERFILE_MAX_BYTES,
-        ).catch((error: unknown) => {
-          throw error instanceof BuildContextError
-            ? new ORPCError('BAD_REQUEST', { message: error.message })
-            : error;
-        });
+        const context = await readBuildContext(tarPath, dockerfilePath, DOCKERFILE_MAX_BYTES).catch(
+          (error: unknown) => {
+            throw error instanceof BuildContextError
+              ? new ORPCError('BAD_REQUEST', { message: error.message })
+              : error;
+          },
+        );
 
         await loadExternalImages(context.dockerfile, signal);
+
+        signal.throwIfAborted();
+
+        await writeBuildContext(
+          tarPath,
+          rewrittenPath,
+          context,
+          context.dockerfile,
+          DOCKERFILE_MAX_BYTES,
+        );
 
         signal.throwIfAborted();
 

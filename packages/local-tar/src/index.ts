@@ -8,5 +8,5 @@ export {
 } from './pack-local-path';
 
 export type { LocalEntry, PackProgress } from './pack-local-path';
-export { BuildContextError, writeBuildContext } from './write-build-context';
+export { BuildContextError, readBuildContext, writeBuildContext } from './write-build-context';
 export type { CheckedContext } from './write-build-context';
