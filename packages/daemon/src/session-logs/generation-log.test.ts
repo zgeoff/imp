@@ -63,7 +63,11 @@ async function loadGenerationLog(options: GenerationLogOptions, meta: Generation
   return log;
 }
 
-const IDENTITY = { session: 'main', executionGeneration: GENERATION, bootId: 'boot-1' };
+const IDENTITY = {
+  session: 'main',
+  executionGeneration: GENERATION,
+  bootId: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+};
 
 function readSegment(dir: string, start: number): string {
   return readFileSync(findSegmentPath(dir, start), 'utf8');

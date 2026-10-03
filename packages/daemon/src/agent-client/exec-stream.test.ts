@@ -186,7 +186,7 @@ test('a resume goes to the agent in its shape, without wake, and STARTED places 
         pid: 42,
         session: 'main',
         output: {
-          boot_id: 'boot-1',
+          boot_id: '11111111-1111-4111-8111-111111111111',
           execution_generation: generation,
           buffer_start: 10,
           end: 20,
@@ -214,7 +214,7 @@ test('a resume goes to the agent in its shape, without wake, and STARTED places 
 
   expect(stream.output).toEqual({
     continuity: 'offsets',
-    bootId: 'boot-1',
+    bootId: '11111111-1111-4111-8111-111111111111',
     executionGeneration: generation,
     bufferStart: 10,
     end: 20,
@@ -385,7 +385,7 @@ test('a tap is the session.tap op, and a logged STARTED says the log is on', asy
         pid: 42,
         session: 'main',
         output: {
-          boot_id: 'boot-1',
+          boot_id: '11111111-1111-4111-8111-111111111111',
           execution_generation: generation,
           buffer_start: 0,
           end: 9,
@@ -426,4 +426,66 @@ test('a tap on an agent from before session logs fails as AGENT_OUTDATED', async
   const tap = await readRejection(openTapStream(vsock.path, 'main'));
 
   expect(tap).toMatchObject({ code: 'AGENT_OUTDATED' });
+});
+
+test('activity drops a session whose generation, boot or name is not of its form', async () => {
+  const good = {
+    name: 'main',
+    pid: 1,
+    argv: ['sh'],
+    state: 'running',
+    attached: false,
+    cols: 80,
+    rows: 24,
+    started_unix_ms: 1,
+    execution_generation: 'a'.repeat(32),
+    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    log: true,
+  };
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        tcp_established: 0,
+        exec_sessions: 0,
+        load1: 0,
+        sessions: [
+          good,
+          { ...good, execution_generation: '../../../evil' },
+          { ...good, boot_id: '../x' },
+          { ...good, name: '../x' },
+        ],
+      }),
+    );
+  });
+
+  const activity = await sendActivity(vsock.path);
+
+  expect(activity.sessions.map((session) => session.execution_generation)).toEqual([
+    'a'.repeat(32),
+  ]);
+});
+
+test('a tap whose STARTED names a forged generation fails', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+          execution_generation: '../../../evil',
+          buffer_start: 0,
+          end: 0,
+          offset: 0,
+          prelude: 0,
+          log: true,
+        },
+      }),
+    );
+  });
+
+  const refused = await readRejection(openTapStream(vsock.path, 'main'));
+
+  expect(refused).toBeDefined();
 });
