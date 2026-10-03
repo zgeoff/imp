@@ -6,7 +6,7 @@ test('the line shows how long impd has built, in minutes and seconds', () => {
   expect(formatBuildStatus(605_400, 'imp image build')).toBe('imp image build: building, 10m05s');
 });
 
-test('a terminal gets the line redrawn, and one newline at the end', () => {
+test('a terminal gets the line redrawn from the build’s start, and one newline at the end', () => {
   const written: string[] = [];
 
   const status = createBuildStatus(
@@ -19,14 +19,15 @@ test('a terminal gets the line redrawn, and one newline at the end', () => {
     'imp image build',
   );
 
-  status.show(15_000);
-  status.show(30_000);
+  // the upload took 40 s of the stream
+  status.show(40_000);
+  status.show(55_000);
   status.finish();
   status.finish();
 
   expect(written).toEqual([
+    '\rimp image build: building, 0m00s\u001B[K',
     '\rimp image build: building, 0m15s\u001B[K',
-    '\rimp image build: building, 0m30s\u001B[K',
     '\n',
   ]);
 });
