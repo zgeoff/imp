@@ -193,11 +193,11 @@ A 401 means the token is wrong.
 An older impd drops an input field it does not know, and the call succeeds without it. Check
 `system.info().features` before you send a field that a later impd added:
 
-| Field                                 | Feature           | Since  |
-| ------------------------------------- | ----------------- | ------ |
-| `grantable` on `tokens.create`        | `grantableTokens` | 0.27.0 |
-| `rebind` on `secrets.add` (`replace`) | `secretRebind`    | 0.27.0 |
-| `secretFiles` on `system.gc`          | `secretFilesGc`   | 0.30.0 |
+| Field                                             | Feature           | Since  |
+| ------------------------------------------------- | ----------------- | ------ |
+| `grantable` on `tokens.create`                    | `grantableTokens` | 0.27.0 |
+| `rebind` on `secrets.add` (`replace`)             | `secretRebind`    | 0.27.0 |
+| `secretFiles`, `removeSecretFiles` on `system.gc` | `secretFilesGc`   | 0.30.0 |
 
 ```ts
 const info = await imp.system.info();

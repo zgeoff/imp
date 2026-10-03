@@ -201,18 +201,24 @@ impd removes what a crash leaves at start and every hour
   database. After a database restore, check the list before you remove anything: each orphan may be
   an imp.
 - `imp gc` also lists, as kind `secrets`, each directory of secret values that impd kept aside at
-  start, with how many files it holds ([value files](./connectors.md#value-files)).
+  start, with how many files it holds ([value files](./connectors.md#value-files)). After a database
+  restore they may hold the only copy of a value.
 - `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire.
 
 **CAUTION:** `imp gc --orphans` deletes every disk, image, checkpoint and memory snapshot the
-database does not name, and every directory of secret values kept aside. It cannot be undone. Run it
-with `--dry-run` first, and only when no orphan holds data you need.
+database does not name. It cannot be undone. Run it with `--dry-run` first, and only when no orphan
+holds data you need.
 
-The API is `system.gc` with `{ dryRun?, orphans?, secretFiles? }`. It returns `dryRun`, `dropped`
-(each `kind` and `id`) and `kept` (each orphan's `kind`, `id`, `location`, `bytes`, `createdAt` and
-`snapshots`). Kind `secrets` comes only with `secretFiles`, which `system.info` reports as
-`features.secretFilesGc`: its entries carry `files`, and only a call with `secretFiles` and
-`orphans` deletes them. An older impd drops `secretFiles` and lists none.
+**CAUTION:** `imp gc --orphans --secret-files` also deletes every directory of secret values kept
+aside. It cannot be undone. Recover the values you need with `imp secret add` first; `--orphans`
+alone leaves these directories.
+
+The API is `system.gc` with `{ dryRun?, orphans?, secretFiles?, removeSecretFiles? }`. It returns
+`dryRun`, `dropped` (each `kind` and `id`) and `kept` (each orphan's `kind`, `id`, `location`,
+`bytes`, `createdAt` and `snapshots`). Kind `secrets` comes only with `secretFiles` or
+`removeSecretFiles`, which `system.info` reports as `features.secretFilesGc`: its entries carry
+`files`, and only a call with `removeSecretFiles` and `orphans` deletes them. An older impd drops
+both fields, and lists and deletes none.
 
 ## Logs
 

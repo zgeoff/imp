@@ -666,6 +666,7 @@ export function buildRouter(deps: RouterDeps) {
           isDryRun: context.input.dryRun ?? false,
           isOrphans: context.input.orphans ?? false,
           isSecretFiles: context.input.secretFiles ?? false,
+          isRemoveSecretFiles: context.input.removeSecretFiles ?? false,
         }),
       ),
     },
