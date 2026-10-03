@@ -415,6 +415,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
         deps.config.egressDnsPort,
         deps.config.subnet,
         handle,
+        { log: deps.log, now },
       );
 
       state.sweep = setInterval(() => {
