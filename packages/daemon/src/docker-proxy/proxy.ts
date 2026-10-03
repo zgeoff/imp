@@ -254,9 +254,7 @@ export function createDockerProxy(
     const contentType = checkBuildContentType(request.headers.get('content-type'));
 
     if (!contentType.isOk) {
-      options.log(`refused ${request.method} ${path}: ${contentType.reason}`);
-
-      return buildJsonResponse(400, `imp-docker-proxy: ${contentType.reason}`);
+      return buildRefusal(request, path, contentType.reason);
     }
 
     const limit = createByteLimit(options.buildContextMaxBytes);

@@ -229,8 +229,8 @@ test('a build without a Content-Type reaches the engine as a tar', async () => {
   expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
 });
 
-// a form body would replace the checked query: the engine reads r.FormValue
-test('a build with a form body, which would override its query, never reaches the engine', async () => {
+// a form body would replace or add to the checked query: the engine reads r.Form
+test('a build with a form body, which would replace or add to its query, never reaches the engine', async () => {
   const statuses: number[] = [];
 
   for (const contentType of [
@@ -253,7 +253,7 @@ test('a build with a form body, which would override its query, never reaches th
     });
   }
 
-  expect(statuses).toEqual([400, 400, 400, 400]);
+  expect(statuses).toEqual([403, 403, 403, 403]);
   expect(seen).toEqual([]);
   expect(logged).toHaveLength(4);
 });

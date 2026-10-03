@@ -127,9 +127,9 @@ export function checkBuildQuery(query: ReadonlyMap<string, readonly string[]>): 
 // the one Content-Type `docker build` sends: a tar context
 export const BUILD_CONTENT_TYPE = 'application/x-tar';
 
-// A build body is a tar, never a form: the engine reads params with
-// r.FormValue, where Go puts a form body ahead of the query checked above.
-// The proxy sends its own Content-Type either way.
+// A build body is a tar, never a form: the engine reads params from r.Form,
+// where a form body replaces or adds to the query checked above. The proxy
+// sends its own Content-Type either way.
 export function checkBuildContentType(value: string | null): Check {
   if (value === null || value === BUILD_CONTENT_TYPE) {
     return OK;

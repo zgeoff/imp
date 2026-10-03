@@ -169,7 +169,7 @@ describe('a build Content-Type', () => {
     expect(checkBuildContentType(null).isOk).toBe(true);
   });
 
-  test('fails with a form, which the engine would read ahead of the query', () => {
+  test('fails with a form, which the engine would read with the query', () => {
     for (const value of [
       'application/x-www-form-urlencoded',
       'application/x-www-form-urlencoded; charset=utf-8',

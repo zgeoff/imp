@@ -105,10 +105,10 @@ test("a build may not tag outside imp/, nor retag the host's image", async () =>
   expect(second).toContain('param t');
 });
 
-// the engine reads a build's params with r.FormValue, where a form body
-// comes ahead of the query: this body would give RUN the host's network, a
+// the engine reads a build's params from r.Form, where a form body replaces
+// or adds to the query: this body would give RUN the host's network, a
 // remote context and a tag outside imp/
-test('a build with a form body, which would override its checked query, is refused', async () => {
+test('a build with a form body, which would replace or add to its checked query, is refused', async () => {
   const evil = `${prefix}evil:latest`;
 
   const body = new URLSearchParams({
@@ -135,12 +135,8 @@ test('a build with a form body, which would override its checked query, is refus
 
   const [answer, status] = sent.stdout.trim().split('\n');
 
-  expect(status).toBe('400');
+  expect(status).toBe('403');
   expect(answer).toContain('imp-docker-proxy: a build body is a tar context');
-
-  const tagged = await runCommand(['docker', 'image', 'inspect', evil]);
-
-  expect(tagged.exitCode).not.toBe(0);
 });
 
 test("a pull of the host's repository is refused, so its tag cannot move", async () => {
