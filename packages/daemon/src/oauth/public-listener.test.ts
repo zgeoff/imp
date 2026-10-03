@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { ApprovalCodeSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
 import * as z from 'zod';
+import { listApiCalls } from '../db/api-audit';
 import { setupImpdTest } from '../mcp/test-mcp';
 import { createPublicHandler, startPublicListener } from './public-listener';
 
@@ -443,6 +444,21 @@ test('a grant narrower than its token gets only its own scope and imps', async (
   }
 
   expect(ctx.guest.requests).toEqual([]);
+
+  // a change it may make lands in the audit log under its client and id
+  await devOnly.sendRequest('tools/call', { name: 'imp_sleep', arguments: { name: 'dev-a' } });
+
+  const grants = await ctx.oauth.listGrants();
+
+  const desk = grants.find((grant) => grant.token === 'desk');
+
+  const calls = await listApiCalls(ctx.db, null, 100, null);
+
+  const byGrants = calls.filter((call) => call.actor === 'oauth');
+
+  expect(byGrants.map((call) => [call.procedure, call.actorName])).toEqual([
+    ['imps.sleep', `conn/${desk?.id ?? ''}`],
+  ]);
 });
 
 test('removing the approving token ends every grant it approved, and their commands', async () => {
