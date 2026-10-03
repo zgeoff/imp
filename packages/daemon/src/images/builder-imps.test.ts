@@ -153,18 +153,16 @@ async function readBuildersAfterRetries(db: ImpDatabase) {
   return listImps(db);
 }
 
-test('a builder that survives its removal fails its build, logs, and goes on a retry', async () => {
+test('a builder that survives its removal keeps its build, logs, and goes on a retry', async () => {
   await using ctx = await setupBuilderTest(1);
 
-  const failure = await ctx.builders
-    .withBuilder(new AbortController().signal, async (exec) => {
-      const built = await exec(['true'], { signal: new AbortController().signal });
+  const built = await ctx.builders.withBuilder(new AbortController().signal, async (exec) => {
+    const ran = await exec(['true'], { signal: new AbortController().signal });
 
-      return built.stdout;
-    })
-    .catch((error: unknown) => error);
+    return ran.stdout;
+  });
 
-  expect(String(failure)).toMatch(/the builder imp-build-[a-z2-9]{8} could not be removed/v);
+  expect(built).toBe('ok');
 
   const survivors = await listImps(ctx.db);
 

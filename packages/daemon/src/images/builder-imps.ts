@@ -126,15 +126,13 @@ export function createBuilders(deps: BuildersDeps): Builders {
     setTimeout(() => void tryAgain(), retryMs).unref();
   };
 
-  // false when the builder survives, and impd keeps trying
-  const removeBuilder = async (name: string): Promise<boolean> => {
+  // a builder that survives impd keeps trying to remove
+  const removeBuilder = async (name: string): Promise<void> => {
     const gone = await removeOnce(name);
 
     if (!gone) {
       removeLater(name);
     }
-
-    return gone;
   };
 
   return {
@@ -145,7 +143,6 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
       const name = pickBuilderName();
       const started = performance.now();
-      const removed: { ok?: boolean } = {};
 
       try {
         // the create fails where the firewall cannot hold the public policy,
@@ -167,22 +164,11 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
         deps.log(`impd: image build: builder ${name} ready in ${String(readyMs)}ms`);
 
-        const result = await run(exec);
-
-        removed.ok = await removeBuilder(name);
-
-        // the image is written, but a build whose builder lives on fails
-        if (!removed.ok) {
-          throw new Error(
-            `the builder ${name} could not be removed; impd tries again every ${String(retryMs / 1000)} s`,
-          );
-        }
-
-        return result;
+        return await run(exec);
       } finally {
-        if (removed.ok === undefined) {
-          await removeBuilder(name);
-        }
+        // a builder that survives is logged and retried; a build it served
+        // still stands, its image written
+        await removeBuilder(name);
       }
     },
     removeLeftovers: async () => {
