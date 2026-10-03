@@ -171,11 +171,12 @@ export const IMP_TOOLS: readonly Tool[] = [
       });
 
       // beside the imp, not in it, so an agent reads them as the fork's
-      // outcome; none from an impd before the report
+      // outcome; left out, not empty, from an impd before the report, which
+      // does not say what it skipped
       return {
         data: {
           imp,
-          grantsNotCopied: grantsNotCopied ?? [],
+          ...(grantsNotCopied !== undefined && { grantsNotCopied }),
           ...(grantsError !== undefined && { grantsError }),
         },
       };
