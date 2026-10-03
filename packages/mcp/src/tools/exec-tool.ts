@@ -1,3 +1,4 @@
+import { EXEC_REQUIREMENTS } from '@imp/api';
 import * as z from 'zod';
 import { formatCappedText } from '../exec/output-cap';
 import { runCapped } from '../exec/run-capped';
@@ -40,6 +41,12 @@ const ExecInput = z
       .record(z.string(), z.string())
       .optional()
       .describe("Environment variables, added to the image's"),
+    require: z
+      .array(z.enum(EXEC_REQUIREMENTS))
+      .optional()
+      .describe(
+        "What impd must ensure before the command starts, or the call fails with PRECONDITION_FAILED and nothing runs. broker: impd set the credential broker's proxy variables and CA bundle for this boot.",
+      ),
     timeoutSeconds: z
       .int()
       .min(1)
@@ -85,6 +92,7 @@ export const EXEC_TOOL: Tool = defineTool({
       ...(input.stdin !== undefined && { stdin: new TextEncoder().encode(input.stdin) }),
       ...(input.cwd !== undefined && { cwd: input.cwd }),
       ...(input.env !== undefined && { env: input.env }),
+      ...(input.require !== undefined && { require: input.require }),
       timeoutMs: input.timeoutSeconds * 1000,
       maxOutputBytes: input.maxOutputBytes,
       headBytes: Math.min(HEAD_BYTES, Math.floor(input.maxOutputBytes / 2)),
