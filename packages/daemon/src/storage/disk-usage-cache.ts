@@ -1,14 +1,20 @@
+import type { ImpChangeReason } from '@imp/api';
 import { listCheckpoints } from '../db/checkpoints';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { readErrorMessage } from '../read-error-message';
 import type { ImpDiskUsage, StorageBackend } from './storage-backend';
 
-// a create or a destroy asks for a pass; this many ms later it runs, so a
-// burst of them costs one
+// a write that changes what an imp takes asks for a pass; this many ms later
+// it runs, so a burst of them costs one
 const REFRESH_DELAY_MS = 10_000;
 
+// changes to an imp that change what it takes: a grown disk, and a stop or a
+// sleep, which writes the guest's cache and memory out
+export const CHANGES_USAGE: ReadonlySet<ImpChangeReason> = new Set(['resized', 'stopped', 'slept']);
+
 export interface CachedDiskUsage extends ImpDiskUsage {
+  // when the pass started: the count holds every write before it
   readonly measuredAt: Date;
   readonly isPartial: boolean;
 }
@@ -29,12 +35,14 @@ interface DiskUsageCacheDeps {
   readonly storage: Pick<StorageBackend, 'measureUsage'>;
   readonly log: (message: string) => void;
   readonly now?: () => Date;
+  readonly refreshDelayMs?: number;
 }
 
 // Usage is slow to measure on XFS (FIEMAP over every file), so `imp ls` and
 // `imp info` read the last pass, with its time.
 export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
   const now = deps.now ?? (() => new Date());
+  const refreshDelayMs = deps.refreshDelayMs ?? REFRESH_DELAY_MS;
 
   const state = {
     usage: new Map<string, CachedDiskUsage>(),
@@ -43,6 +51,8 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
   };
 
   const readUsagePass = async (): Promise<void> => {
+    const measuredAt = now();
+
     try {
       const imps = await listImps(deps.db);
 
@@ -55,8 +65,6 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
       );
 
       const report = await deps.storage.measureUsage(listed);
-
-      const measuredAt = now();
 
       // an imp a cut-short pass did not reach keeps its last count and time
       const kept = listed.flatMap((imp) => {
@@ -90,13 +98,21 @@ export function createDiskUsageCache(deps: DiskUsageCacheDeps): DiskUsageCache {
     }
   };
 
+  const runAfterCurrent = async (): Promise<void> => {
+    await state.running;
+    await runOnePass();
+  };
+
   return {
     runPass: runOnePass,
+
+    // a pass under way may have measured before the write that asked, so
+    // the refresh waits for it and runs its own
     requestRefresh: () => {
       state.timer ??= setTimeout(() => {
         state.timer = null;
-        void runOnePass();
-      }, REFRESH_DELAY_MS);
+        void runAfterCurrent();
+      }, refreshDelayMs);
     },
     read: (impId) => state.usage.get(impId),
     readExclusiveTotal: () =>
