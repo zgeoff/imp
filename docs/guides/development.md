@@ -125,9 +125,11 @@ suite holds what the Firecrackers own (`Pss_Anon` + `Pss_Shmem`, read from `smap
 impd) to the budget, and reports their full PSS, which also has clean file pages the governor does
 not count
 ([what the governor measures](../architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)).
-A guest grows past its boot reserve after admission, so use may pass the budget until the governor's
-next enforce pass. The suite fails when impd's figure or the owned figure stays over the budget for
-longer than one enforce period plus one sample, or goes over by more than one imp's boot reserve.
+A guest grows past its boot reserve after admission, so use may pass the budget until a governor
+sleep ends. The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which
+started `detail.durationMs` before its time). It fails when impd's figure or the owned figure goes
+over by more than one imp's boot reserve, when no sleep starts within one enforce period plus one
+sample while use stays over, or when use is still over after that sleep ends.
 
 The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
 default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists

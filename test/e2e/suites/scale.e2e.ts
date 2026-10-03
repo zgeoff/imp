@@ -2,7 +2,7 @@ import { beforeAll, expect, test } from 'bun:test';
 import { loadConfig } from '../../../packages/daemon/src/config';
 import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
 import { findBudgetBreaches, findOvershoots } from '../lib/budget-overshoot';
-import type { OvershootLimits } from '../lib/budget-overshoot';
+import type { Overshoot, OvershootLimits, SleepSpan } from '../lib/budget-overshoot';
 import { config } from '../lib/config';
 import { FIRECRACKER_MEMORY_SCRIPT, parseFirecrackerMemory } from '../lib/firecracker-memory';
 import { resolveImageName } from '../lib/fixtures';
@@ -20,6 +20,7 @@ import {
 import { registerImp, removeImps, waitForExec } from '../lib/imps';
 import { runDevScript, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
+import { startSleepWatch } from '../lib/sleep-events';
 import { buildStats } from '../lib/stats';
 import { writeMetric } from '../lib/write-metric';
 
@@ -56,6 +57,9 @@ interface BudgetSample {
 
 interface BudgetMonitor {
   readonly samples: readonly BudgetSample[];
+
+  // every imp's sleep, from the event stream
+  readonly sleeps: readonly SleepSpan[];
   readonly stop: () => Promise<void>;
 }
 
@@ -81,8 +85,11 @@ async function readBudgetSample(): Promise<BudgetSample | null> {
   };
 }
 
-// samples impd's RAM figure and Firecracker's memory about every 0.5 s
-function startBudgetMonitor(): BudgetMonitor {
+// samples impd's RAM figure and Firecracker's memory about every 0.5 s, and
+// follows the sleeps that end an overshoot
+async function startBudgetMonitor(): Promise<BudgetMonitor> {
+  const watch = await startSleepWatch();
+
   const samples: BudgetSample[] = [];
   const state = { running: true };
 
@@ -100,20 +107,23 @@ function startBudgetMonitor(): BudgetMonitor {
 
   return {
     samples,
+    sleeps: watch.sleeps,
     stop: async () => {
       state.running = false;
 
       await loop;
+
+      await watch.stop();
     },
   };
 }
 
 // A guest grows past its boot reserve after admission, so use may pass the
-// budget until the governor's next enforce pass sleeps an imp: a breach is
-// use over it for longer than that, or by more than one boot reserve.
+// budget until a governor sleep ends; the next enforce pass starts one
+// (findBudgetBreaches has the rules).
 const OVERSHOOT_LIMITS: OvershootLimits = {
   budgetMib: config.ramBudgetMib,
-  maxMs: ENFORCE_INTERVAL_MS + BUDGET_SAMPLE_MS,
+  maxStartMs: ENFORCE_INTERVAL_MS + BUDGET_SAMPLE_MS,
   maxOverMib: Math.ceil(
     (config.scaleMemoryMib *
       loadConfig({ IMP_BOOT_RESERVE_PERCENT: process.env['IMP_BOOT_RESERVE_PERCENT'] })
@@ -130,15 +140,19 @@ const BUDGET_SERIES = [
   ['Firecracker owned', (sample: BudgetSample) => sample.firecrackerOwnedMib],
 ] as const;
 
-function findViolations(samples: readonly BudgetSample[]): readonly string[] {
+function findViolations(monitor: BudgetMonitor): readonly string[] {
   return BUDGET_SERIES.flatMap(([name, read]) => {
-    const usage = samples.map((sample) => ({ at: sample.at, usedMib: read(sample) }));
+    const usage = monitor.samples.map((sample) => ({ at: sample.at, usedMib: read(sample) }));
 
-    return findBudgetBreaches(usage, OVERSHOOT_LIMITS).map(
-      (overshoot) =>
-        `${name} ${String(overshoot.maxOverMib)} MiB over the budget for ${String(overshoot.ms)} ms`,
+    return findBudgetBreaches(usage, monitor.sleeps, OVERSHOOT_LIMITS).map(
+      (breach) => `${name} ${String(breach.maxOverMib)} MiB over the budget: ${breach.why}`,
     );
   });
+}
+
+// from the first sample over the budget to the last
+function readOvershootMs(overshoot: Overshoot): number {
+  return (overshoot.samples.at(-1)?.at ?? 0) - (overshoot.samples[0]?.at ?? 0);
 }
 
 function buildName(index: number): string {
@@ -231,7 +245,8 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
   expect(start.ramBudgetMib).toBe(config.ramBudgetMib);
   expect(config.scaleMemoryMib * 2).toBeLessThanOrEqual(config.ramBudgetMib);
 
-  const monitor = startBudgetMonitor();
+  const monitor = await startBudgetMonitor();
+
   const createMs: number[] = [];
   const wakeMs: number[] = [];
   let sleepingAfterCreate = 0;
@@ -282,7 +297,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
       createMs.push(ms);
 
-      expect(findViolations(monitor.samples)).toBeEmpty();
+      expect(findViolations(monitor)).toBeEmpty();
     }
 
     const rows = await listImps();
@@ -327,7 +342,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
 
     await Bun.sleep(3000);
 
-    expect(findViolations(monitor.samples)).toBeEmpty();
+    expect(findViolations(monitor)).toBeEmpty();
 
     // each request to a sleeping imp must wake it within the budget
     for (let index = 1; index <= config.scaleCount; index++) {
@@ -372,7 +387,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     await monitor.stop();
   }
 
-  expect(findViolations(monitor.samples)).toBeEmpty();
+  expect(findViolations(monitor)).toBeEmpty();
 
   const maxUsed = Math.max(...monitor.samples.map((sample) => sample.ramUsedMib));
   const maxPss = Math.max(...monitor.samples.map((sample) => sample.firecrackerPssMib));
@@ -400,11 +415,11 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
       `${String(pssOver)}), max awake ${String(maxAwake)}`,
   );
 
-  // each run of ramUsedMib over the budget, which an enforce pass ended
+  // each run of ramUsedMib over the budget, which a governor sleep ended
   for (const overshoot of overshoots) {
     console.log(
-      `    ramUsedMib ${String(overshoot.maxOverMib)} MiB over the budget for ${String(overshoot.ms)} ms ` +
-        `(limits ${String(OVERSHOOT_LIMITS.maxOverMib)} MiB, ${String(OVERSHOOT_LIMITS.maxMs)} ms)`,
+      `    ramUsedMib ${String(overshoot.maxOverMib)} MiB over the budget in ` +
+        `${String(overshoot.samples.length)} samples, over ${String(readOvershootMs(overshoot))} ms`,
     );
   }
 
@@ -415,7 +430,7 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     maxFirecrackerFileMib: maxFileMib,
     pssOverBudgetSamples: pssOver,
     overshoots: overshoots.length,
-    maxOvershootMs: Math.max(0, ...overshoots.map((overshoot) => overshoot.ms)),
+    maxOvershootMs: Math.max(0, ...overshoots.map((overshoot) => readOvershootMs(overshoot))),
     maxAwake,
     samples: monitor.samples.length,
     sleepingAfterCreate,
