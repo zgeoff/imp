@@ -309,6 +309,16 @@ describe('a pull query', () => {
     expect(checkPull('fromImage=docker.io%2Flibrary%2Fbusybox&tag=latest')).toBe('ok');
   });
 
+  // `docker pull <DOCKERFILE_FRONTEND>` sends the digest as the tag; the
+  // rule a base image's pull meets, with no exception for it
+  test('passes for the Dockerfile frontend, by digest', () => {
+    const digest = DOCKERFILE_FRONTEND.split('@')[1] ?? '';
+
+    expect(
+      checkPull(`fromImage=docker.io%2Fdocker%2Fdockerfile&tag=${encodeURIComponent(digest)}`),
+    ).toBe('ok');
+  });
+
   test('fails with fromSrc, repo or changes, or on a refused registry', () => {
     expect(checkPull('fromSrc=-&repo=x')).toContain('is not allowed');
     expect(checkPull('fromImage=busybox&changes=CMD')).toContain('is not allowed');

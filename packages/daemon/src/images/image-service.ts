@@ -24,6 +24,7 @@ import {
 import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
@@ -190,6 +191,34 @@ async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): P
   }
 
   return loaded;
+}
+
+// Engines before 29.6.0 (BuildKit v0.31.0) fetch the BUILDKIT_SYNTAX frontend
+// only through a client session, which impd's build has none of; a frontend
+// the engine already has needs no fetch. Pulled by digest when it lacks it.
+async function loadFrontend(signal: AbortSignal): Promise<void> {
+  const inspected = await runCommand(
+    ['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND],
+    { signal },
+  );
+
+  signal.throwIfAborted();
+
+  if (inspected.exitCode === 0) {
+    return;
+  }
+
+  const pulled = await runCommand(['docker', 'pull', '--quiet', DOCKERFILE_FRONTEND], { signal });
+
+  signal.throwIfAborted();
+
+  if (pulled.exitCode !== 0) {
+    throw new ORPCError('BAD_GATEWAY', {
+      message: `the Dockerfile frontend ${DOCKERFILE_FRONTEND}: the pull failed: ${pulled.stderr.trim().slice(-FAILURE_MAX_CHARS)}`,
+    });
+  }
+
+  console.log(`impd: pulled the Dockerfile frontend ${DOCKERFILE_FRONTEND}`);
 }
 
 // one image's every spelling: the engine's registry and path, and the tag
@@ -555,6 +584,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         );
 
         signal.throwIfAborted();
+
+        // a prune between this and the build fails it with the engine's
+        // error, and the client can retry
+        await loadFrontend(signal);
 
         // the engine keeps its own copy of the context while it builds
         await deps.diskBudget.withRoom(statSync(rewrittenPath).size, () =>

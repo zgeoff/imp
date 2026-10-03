@@ -629,12 +629,12 @@ what the engine would fetch on its own (`images/dockerfile-check.ts`), and pulls
 `FROM`, `COPY --from` and `RUN --mount=from=` name and the host lacks, since a build with no session
 cannot ask for registry credentials. It inspects each image once and pins it to its registry digest
 (`images/image-pin.ts`), then writes the context again as plain ustar with the pinned Dockerfile
-(`writeBuildContext`), and builds that copy. The build route streams an upload to a temp file,
-checks its size as the bytes come, holds disk room for it, and lets 4 builds run at once. A client
-that goes aborts the build request. It checks the caller and writes the audit row itself, as the
-router does for an oRPC call. For `imp image add` it uses the image the host Docker has, and pulls
-it when it is missing. Then it exports the filesystem and writes the image config for the agent.
-When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
+(`writeBuildContext`), pulls the pinned frontend when the engine lacks it, and builds that copy. The
+build route streams an upload to a temp file, checks its size as the bytes come, holds disk room for
+it, and lets 4 builds run at once. A client that goes aborts the build request. It checks the caller
+and writes the audit row itself, as the router does for an oRPC call. For `imp image add` it uses
+the image the host Docker has, and pulls it when it is missing. Then it exports the filesystem and
+writes the image config for the agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
 The template service (`images/template-service.ts`) makes an image from an imp's disk instead, for

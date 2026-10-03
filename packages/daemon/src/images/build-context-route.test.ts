@@ -16,6 +16,7 @@ import * as z from 'zod';
 import { createApiAudit } from '../audit/api-audit';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
+import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import { buildUploadsDir } from '../storage/data-layout';
 import { createBuildContextRoute } from './build-context-route';
@@ -426,8 +427,9 @@ function buildInspect(
   return `echo '${JSON.stringify({ ...inspect, ...extra })}'`;
 }
 
-// An amd64 engine. base.test images are on the host; the rest are pulled
-// and then inspected, but mnt.test's pull fails.
+// An amd64 engine. base.test images and the Dockerfile frontend are on the
+// host; the rest are pulled and then inspected, but mnt.test's pull fails.
+// Marker files next to it take the frontend away and fail its pull.
 const IMAGE_DOCKER = [
   'for last; do :; done',
   'pulled="$(dirname "$0")/pulled-$(echo "$last" | tr "/:@" "___")"',
@@ -446,9 +448,13 @@ const IMAGE_DOCKER = [
   `    LocalHost/name:1) ${buildInspect([`LocalHost/name@${DIGEST_A}`])} ;;`,
   `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
   `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
+  '    docker/dockerfile:*) [ -e "$(dirname "$0")/no-frontend" ] && [ ! -e "$pulled" ] && exit 1',
+  `      echo sha256:${'f'.repeat(64)} ;;`,
   `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
   '  esac ;;',
   '  "pull --quiet") case "$last" in',
+  '    docker/dockerfile:*) [ -e "$(dirname "$0")/unreachable-frontend" ] && echo "no route to host" >&2 && exit 1',
+  '      touch "$pulled" ;;',
   '    mnt.test/*) echo "no such registry" >&2; exit 1 ;;',
   '    *) touch "$pulled" ;;',
   '  esac ;;',
@@ -466,15 +472,22 @@ function readCalls(log: string): string[] {
 async function sendFakeDockerBuild(
   dockerfile: string,
   engineError = 'the fake engine builds nothing',
+  frontend: 'present' | 'no-frontend' | 'unreachable-frontend' = 'present',
 ) {
   const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
   const socket = join(socketDir, 'docker.sock');
   const contexts: Uint8Array[] = [];
 
+  // the fake docker's calls when the engine got the build
+  let callsAtBuild: string[] = [];
+  let log = '';
+
   const engine = Bun.serve({
     unix: socket,
     fetch: async (request) => {
       const context = await request.arrayBuffer();
+
+      callsAtBuild = readCalls(log);
 
       contexts.push(new Uint8Array(context));
 
@@ -489,6 +502,17 @@ async function sendFakeDockerBuild(
 
   const docker = writeFakeDocker(ctx.harness.config.dataDir, IMAGE_DOCKER);
   const tar = buildDockerfileTar(ctx.harness.config.dataDir, dockerfile);
+
+  log = docker.log;
+
+  if (frontend !== 'present') {
+    writeFileSync(join(ctx.harness.config.dataDir, 'fake-bin', 'no-frontend'), '');
+  }
+
+  if (frontend === 'unreachable-frontend') {
+    writeFileSync(join(ctx.harness.config.dataDir, 'fake-bin', 'unreachable-frontend'), '');
+  }
+
   const savedPath = process.env['PATH'];
 
   process.env['PATH'] = docker.path;
@@ -507,6 +531,7 @@ async function sendFakeDockerBuild(
       status: response.status,
       body,
       calls: readCalls(docker.log),
+      callsAtBuild,
       built: built.map((bytes) => new TextDecoder().decode(bytes)),
     };
   } finally {
@@ -611,7 +636,7 @@ test('a ref the build names twice is inspected and pinned once, so a moving tag 
     'FROM base.test/moving:1\nCOPY --from=base.test/moving:1 /x /x\nRUN --mount=from=base.test/moving:1,target=/m true\n',
   );
 
-  const inspects = sent.calls.filter((call) => call.startsWith('image inspect'));
+  const inspects = sent.calls.filter((call) => call.startsWith('image inspect --format PIN'));
 
   expect(inspects).toEqual(['image inspect --format PIN base.test/moving:1']);
 
@@ -630,7 +655,7 @@ test('the spellings of one image are inspected and pinned once', async () => {
     'FROM moving:1\nCOPY --from=docker.io/library/moving:1 /x /x\nRUN --mount=from=index.docker.io/library/moving,target=/m true\n',
   );
 
-  const inspects = sent.calls.filter((call) => call.startsWith('image inspect'));
+  const inspects = sent.calls.filter((call) => call.startsWith('image inspect --format PIN'));
 
   // moving and moving:1 differ: no tag is latest
   expect(inspects).toEqual([
@@ -742,6 +767,38 @@ test('a platform variable set by ARG, or another --platform, is refused before a
   );
 
   expect([global.calls, staged.calls, braced.calls]).toEqual([[], [], []]);
+});
+
+test('an engine without the Dockerfile frontend pulls it by digest once, before the build', async () => {
+  const lacking = await sendFakeDockerBuild('FROM base.test/a:1\n', undefined, 'no-frontend');
+  const having = await sendFakeDockerBuild('FROM base.test/a:1\n');
+
+  const inspectCall = `image inspect --format {{.Id}} ${DOCKERFILE_FRONTEND}`;
+  const frontendCalls = [inspectCall, `pull --quiet ${DOCKERFILE_FRONTEND}`];
+
+  expect(lacking.callsAtBuild.slice(-2)).toEqual(frontendCalls);
+  expect(lacking.calls.filter((call) => call.includes('docker/dockerfile'))).toEqual(frontendCalls);
+  expect(lacking.built).toHaveLength(1);
+
+  expect(having.callsAtBuild.filter((call) => call.includes('docker/dockerfile'))).toEqual([
+    inspectCall,
+  ]);
+
+  expect(having.calls.filter((call) => call.startsWith('pull'))).toEqual([]);
+  expect(having.built).toHaveLength(1);
+});
+
+test('a failed pull of the Dockerfile frontend fails the build before the engine gets it', async () => {
+  const sent = await sendFakeDockerBuild('FROM base.test/a:1\n', undefined, 'unreachable-frontend');
+
+  expect(sent.status).toBe(502);
+
+  expect(sent.body).toMatchObject({
+    code: 'BAD_GATEWAY',
+    message: `the Dockerfile frontend ${DOCKERFILE_FRONTEND}: the pull failed: no route to host`,
+  });
+
+  expect(sent.built).toEqual([]);
 });
 
 test('a failed build answers its error and removes the upload', async () => {

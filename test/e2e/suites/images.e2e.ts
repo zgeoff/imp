@@ -2,6 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
+import { DOCKERFILE_FRONTEND } from '../../../packages/daemon/src/docker-proxy/dockerfile-frontend';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import { getThroughProxy } from '../lib/http';
@@ -74,6 +75,9 @@ test('an image built from images/examples/hello serves its page through the prox
 
   expect(digest).toStartWith('@sha256:');
   expect(log).toContain(`pinned FROM ${ref} as ghcr.io/zgeoff/imp-base${digest}`);
+
+  // impd pulls the frontend first, so an engine before 29.6.0 can run it
+  await runChecked(['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND]);
 
   console.log(`    imp image build images/examples/hello: ${String(Date.now() - started)} ms`);
 

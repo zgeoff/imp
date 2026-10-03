@@ -196,7 +196,10 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 - **The frontend:** `BUILDKIT_SYNTAX` must name
   [`DOCKERFILE_FRONTEND`](../../packages/daemon/src/docker-proxy/dockerfile-frontend.ts) by digest,
   the same pin as `host/Dockerfile`'s first line. It wins over a `# syntax=` line, so a Dockerfile
-  cannot pick the image BuildKit runs as its frontend.
+  cannot pick the image BuildKit runs as its frontend. impd pulls the frontend by digest before a
+  build when the engine lacks it: an engine before Docker 29.6.0 (BuildKit v0.31.0,
+  [moby/buildkit#6760](https://github.com/moby/buildkit/pull/6760)) fetches a frontend only through
+  a client session, and impd's build has none. The pull meets the same rule as a base image's.
 - **The token:** made once, in `/var/lib/imp-docker-proxy/token` (0600), which only the proxy
   mounts. An image cannot carry it, because imp-host never sees it.
 - **Bodies:** a build context streams through, up to `IMP_BUILD_CONTEXT_MAX_MIB`; a create body is
@@ -215,7 +218,7 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 What stays open through the proxy, by design or until later work:
 
 - A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
-  through the bridge gateway. BuildKit pulls the pinned frontend from Docker Hub on a host's first
+  through the bridge gateway. impd pulls the pinned frontend from Docker Hub on a host's first
   build, so a host with no route to Docker Hub cannot build. An isolated builder, which would close
   this and the gaps below together, is a separate issue.
 - impd narrows what the engine fetches on its own, by narrow input and trigger rejection, not
