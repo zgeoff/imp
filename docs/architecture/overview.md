@@ -50,9 +50,9 @@ This page gives the shape and the main decisions. The other architecture pages g
  │ /dev/vda  user rootfs (ext4, rw) from any OCI image  │
  │ /dev/vdb  imp system drive (ro): imp-agent           │
  │ PID 1 = imp-agent: mounts, network, zombie reaper,   │
- │   exec/PTY over vsock                                │
+ │   service supervisor, exec/PTY over vsock            │
  │   └─ inner container (root = /dev/vda): user code,   │
- │      services, its own PID 1 (imp-agent inner)       │
+ │      service processes, PID 1 = imp-agent inner      │
  └──────────────────────────────────────────────────────┘
 ```
 
