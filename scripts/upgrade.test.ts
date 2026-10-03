@@ -74,6 +74,13 @@ interface Host {
   // what `docker compose config --environment` prints; without it, that
   // fails, as in a Compose older than 2.24
   readonly composeConfig?: string;
+
+  // what that prints to stdout and stderr before it fails, when there is no
+  // composeConfig
+  readonly composeConfigError?: string;
+
+  // IMP_DOCKER_GID in the environment, unset unless set
+  readonly dockerGid?: string;
 }
 
 // Fakes docker, systemctl and curl: each call lands in calls, the running
@@ -105,8 +112,12 @@ case "$*" in
   "exec imp-host imp ls --json") echo '[]' ;;
   "exec imp-host imp info --json") echo '{}' ;;
   "compose -f "*" config --environment")
-    echo "compose config, IMP_HOST_IMAGE \${IMP_HOST_IMAGE-unset}" >>'${calls}'
-    ${host.composeConfig === undefined ? 'exit 1' : `printf '%s' '${host.composeConfig}'`} ;;
+    echo "compose config, IMP_HOST_IMAGE \${IMP_HOST_IMAGE-unset}, IMP_DOCKER_GID \${IMP_DOCKER_GID-unset}" >>'${calls}'
+    ${
+      host.composeConfig === undefined
+        ? `printf '%s' '${host.composeConfigError ?? ''}' | tee /dev/stderr; exit 1`
+        : `printf '%s' '${host.composeConfig}'`
+    } ;;
   "exec imp-host imp ls" | "compose "*) ;;
   *) echo "unexpected: docker $*" >&2; exit 1 ;;
 esac
@@ -158,9 +169,11 @@ esac
     {
       stdout: 'pipe',
       stderr: 'pipe',
+
+      // only what upgrade.sh needs: never this process's tokens
       env: {
-        ...process.env,
         PATH: `${dir}:${process.env['PATH'] ?? ''}`,
+        ...(host.dockerGid === undefined ? {} : { IMP_DOCKER_GID: host.dockerGid }),
         IMP_HOST_IMAGE: host.envImage ?? IMAGE,
         IMP_HOST_ENV_FILE: envFile,
         IMP_HOST_UNIT_FILE: unitFile,
@@ -656,10 +669,11 @@ test("compose reads its .env's image through docker compose config, with the she
     image: 'imp-host:pinned',
     composeEnv,
     composeConfig: 'PATH=/bin\nREGISTRY=imp-host\nIMP_HOST_IMAGE=imp-host:pinned\n',
+    dockerGid: '4242',
   });
 
   expect(result.exitCode).toBe(0);
-  expect(result.calls).toContain('compose config, IMP_HOST_IMAGE unset\n');
+  expect(result.calls).toContain('compose config, IMP_HOST_IMAGE unset, IMP_DOCKER_GID 4242\n');
   expect(result.calls).toContain('docker pull -q imp-host:pinned\n');
   expect(result.composeEnv).toBe(composeEnv);
   expect(result.composeEnvBackup).toBeNull();
@@ -699,4 +713,62 @@ test('without compose config, a .env image from other variables is refused befor
   expect(result.output).toContain('sets IMP_HOST_IMAGE from other variables');
   expect(result.calls).not.toContain('pull');
   expect(result.composeEnv).toBe(composeEnv);
+});
+
+test('compose config gets an IMP_DOCKER_GID when the environment has none', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: COMPOSE,
+    envImage: '',
+    image: 'imp-host:pinned',
+    composeEnv: 'IMP_HOST_IMAGE=imp-host:pinned\n',
+    composeConfig: 'IMP_HOST_IMAGE=imp-host:pinned\n',
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toMatch(/compose config, IMP_HOST_IMAGE unset, IMP_DOCKER_GID \d*\n/v);
+});
+
+test('the environment compose config prints never reaches the output', async () => {
+  const host = {
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: COMPOSE,
+    envImage: '',
+    image: 'imp-host:pinned',
+    composeEnv: 'IMP_HOST_IMAGE=imp-host:pinned\n',
+  };
+
+  const read = await runUpgrade({
+    ...host,
+    composeConfig: 'SECRET=hunter2\nIMP_HOST_IMAGE=imp-host:pinned\n',
+  });
+
+  expect(read.exitCode).toBe(0);
+  expect(read.output).not.toContain('hunter2');
+
+  const failed = await runUpgrade({ ...host, composeConfigError: 'SECRET=hunter2\n' });
+
+  expect(failed.exitCode).toBe(0);
+  expect(failed.calls).toContain('docker pull -q imp-host:pinned\n');
+  expect(failed.output).not.toContain('hunter2');
+});
+
+test('a quoted legacy line is the old template line too', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envImage: '',
+    image: RELEASE_IMAGE,
+    envFile: 'IMP_PORT=7070\nIMP_HOST_IMAGE="ghcr.io/zgeoff/imp-host:latest"\n',
+    newUnit: buildReleaseUnit(RELEASE_IMAGE),
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toContain(`docker pull -q ${RELEASE_IMAGE}\n`);
+  expect(result.envFile).toBe(`IMP_PORT=7070\n# IMP_HOST_IMAGE=${RELEASE_IMAGE}\n`);
 });

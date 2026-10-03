@@ -77,10 +77,25 @@ case ${1:-} in
   *) usage ;;
 esac
 
-# trim_lines FILE: FILE without a trailing \r or the blanks around each line,
-# as an env file edited on another system may have them
+# The awk function trim(line): line without a trailing \r or the blanks
+# around it, as an env file edited on another system may have them, and
+# without one pair of matching quotes around its value, which systemd takes
+# off too. Its caller passes -v q="'".
+# shellcheck disable=SC2016 # an awk program
+readonly trim_awk='
+function trim(line, value, first) {
+  sub(/\r$/, "", line)
+  gsub(/^[ \t]+|[ \t]+$/, "", line)
+  if (!match(line, /^[A-Za-z_][A-Za-z0-9_]*=/)) return line
+  value = substr(line, RLENGTH + 1)
+  first = substr(value, 1, 1)
+  if (length(value) < 2 || (first != q && first != "\"") || substr(value, length(value)) != first) return line
+  return substr(line, 1, RLENGTH) substr(value, 2, length(value) - 2)
+}'
+
+# trim_lines FILE: each line of FILE through trim
 trim_lines() {
-  awk '{ sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print }' "$1" 2>/dev/null || true
+  awk -v q="'" "$trim_awk"' { print trim($0) }' "$1" 2>/dev/null || true
 }
 
 # strip_markers: stdin without the release-please marker lines, which only
@@ -111,7 +126,10 @@ compose_env_image() {
   local env config
   env=$(compose_env_file)
   [ -f "$env" ] || return 0
-  if config=$(env -u IMP_HOST_IMAGE docker compose -f "$compose_file" config --environment 2>/dev/null); then
+  # compose.yaml needs IMP_DOCKER_GID, as in restart_host
+  if config=$(env -u IMP_HOST_IMAGE \
+    IMP_DOCKER_GID="${IMP_DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || true)}" \
+    docker compose -f "$compose_file" config --environment 2>/dev/null); then
     sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$config" | tail -n 1
   else
     read_env_value "$env"
@@ -210,9 +228,8 @@ rewrite_file() {
 migrate_env_file() {
   trim_lines "$env_file" | grep -qxF "$legacy_image_line" || return 0
   # shellcheck disable=SC2016 # an awk program
-  rewrite_file "$env_file" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" '
-    { line = $0; sub(/\r$/, "", line); gsub(/^[ \t]+|[ \t]+$/, "", line) }
-    line == legacy { print pin; next }
+  rewrite_file "$env_file" -v q="'" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" "$trim_awk"'
+    trim($0) == legacy { print pin; next }
     { print }'
   echo "upgrade: $env_file: $legacy_image_line was the old template's line, not a pin; it is a comment now, and the units run their release's image (the file before: $backup)"
 }
