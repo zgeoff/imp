@@ -3,7 +3,7 @@ import { createEventBus } from '../events/event-bus';
 import { createKeyedMutex } from '../imps/keyed-mutex';
 import { createLockFreeSleep } from '../imps/lock-free-sleep';
 import type { SleepOutcome } from '../imps/lock-free-sleep';
-import { createRamGovernor } from './ram-governor';
+import { ENFORCE_INTERVAL_MS, createRamGovernor } from './ram-governor';
 
 // a fake sleep behind a real try-lock, as the governor's type demands
 function buildFakeSleep(sleep: (id: string) => Promise<SleepOutcome>) {
@@ -14,6 +14,12 @@ function buildFakeSleep(sleep: (id: string) => Promise<SleepOutcome>) {
     (id) => sleep(id),
   );
 }
+
+// docs/architecture/sleep-and-wake.md says every 5 s, and the scale
+// e2e suite allows use over the budget for that long
+test('enforce runs every 5 s, as the docs say', () => {
+  expect(ENFORCE_INTERVAL_MS).toBe(5000);
+});
 
 test('it sleeps the oldest unpinned imp and never a pinned one', async () => {
   const awake = new Map([

@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { ENFORCE_TRIGGER } from '../../../packages/daemon/src/governor/ram-governor';
 import type { SleepSpan } from './budget-overshoot';
 import { startImp } from './imp-cli';
 
@@ -6,7 +7,7 @@ const SleptEventSchema = z.object({
   ev: z.literal('ImpChanged'),
   reason: z.literal('slept'),
   at: z.iso.datetime(),
-  detail: z.object({ durationMs: z.int().nonnegative() }),
+  detail: z.object({ durationMs: z.int().nonnegative(), trigger: z.string().optional() }),
 });
 
 // an `imp events` line as a sleep, from the event's own time less the length
@@ -20,7 +21,11 @@ export function parseSleepSpan(line: string): SleepSpan | null {
 
   const endAt = Date.parse(event.data.at);
 
-  return { startAt: endAt - event.data.detail.durationMs, endAt };
+  return {
+    startAt: endAt - event.data.detail.durationMs,
+    endAt,
+    isEnforce: event.data.detail.trigger === ENFORCE_TRIGGER,
+  };
 }
 
 export interface SleepWatch {

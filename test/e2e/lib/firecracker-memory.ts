@@ -1,15 +1,29 @@
 const KIB_PER_MIB = 1024;
 
 // One line per Firecracker in the container, read without impd:
-// "<imp id> <Pss> <Pss_Anon> <Pss_Shmem>", the id from the --id the jailer
-// passes on, the sizes in kB from its smaps_rollup; "-" for a missing field.
+// "<Pss> <Pss_Anon> <Pss_Shmem> <argv...>", the sizes in kB from its
+// smaps_rollup ("-" for a missing field), then its command line.
 export const FIRECRACKER_MEMORY_SCRIPT = `
 for pid in $(pgrep -x firecracker); do
-  id=$(tr '\\0' '\\n' < /proc/$pid/cmdline 2>/dev/null | awk 'prev == "--id" { print; exit } { prev = $0 }')
-  awk -v id="\${id:--}" '/^Pss:/ { p = $2 } /^Pss_Anon:/ { a = $2 } /^Pss_Shmem:/ { s = $2 }
-    END { if (p != "") print id, p, (a == "" ? "-" : a), (s == "" ? "-" : s) }' \
+  argv=$(tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null)
+  awk -v argv="$argv" '/^Pss:/ { p = $2 } /^Pss_Anon:/ { a = $2 } /^Pss_Shmem:/ { s = $2 }
+    END { if (p != "") print p, (a == "" ? "-" : a), (s == "" ? "-" : s), argv }' \
     /proc/$pid/smaps_rollup 2>/dev/null
 done`;
+
+// A jailed Firecracker has the jailer's `--id <imp id>`; an unjailed one
+// (IMP_JAILER=false) only its socket, <data>/imps/<imp id>/run/api.sock.
+export function readImpIdFromArgv(argv: readonly string[]): string | null {
+  const id = argv.indexOf('--id');
+
+  if (id !== -1) {
+    return argv[id + 1] ?? null;
+  }
+
+  const socket = argv[argv.indexOf('--api-sock') + 1] ?? '';
+
+  return /\/imps\/(?<id>[^/]+)\/run\/api\.sock$/.exec(socket)?.groups?.['id'] ?? null;
+}
 
 export interface FirecrackerMemory {
   // every resident page, clean file pages included: the copy of the
@@ -40,8 +54,8 @@ export function parseFirecrackerMemory(output: string): FirecrackerMemory {
       continue;
     }
 
-    const [id = '-', ...rest] = line.trim().split(/\s+/);
-    const fields = rest.map(Number);
+    const words = line.trim().split(/\s+/);
+    const fields = words.slice(0, 3).map(Number);
 
     if (fields.length !== 3 || fields.some((field) => !Number.isInteger(field))) {
       throw new Error(`smaps_rollup without Pss, Pss_Anon and Pss_Shmem: '${line}'`);
@@ -53,7 +67,9 @@ export function parseFirecrackerMemory(output: string): FirecrackerMemory {
     ownedKib += anon + shmem;
     count += 1;
 
-    if (id !== '-') {
+    const id = readImpIdFromArgv(words.slice(3));
+
+    if (id !== null) {
       ownedByImpMib.set(id, Math.floor((anon + shmem) / KIB_PER_MIB));
     }
   }
