@@ -10,6 +10,10 @@ import { pickSleepVictims } from './pick-sleep-victims';
 // or woke measures small for some seconds.
 const RESERVATION_TTL_MS = 20_000;
 
+// How often enforce runs. A guest can grow past its boot reserve, so measured
+// use may pass the budget until the next pass sleeps an imp.
+export const ENFORCE_INTERVAL_MS = 5000;
+
 interface AwakeImp {
   readonly id: string;
   readonly name: string;

@@ -20,6 +20,7 @@ import { openDatabase } from './db/open-database';
 import { runNft } from './egress/egress-firewall';
 import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
+import { ENFORCE_INTERVAL_MS } from './governor/ram-governor';
 import { buildHttpsService } from './https/build-https-service';
 import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
@@ -465,7 +466,7 @@ async function main(): Promise<void> {
 
   const tickers = [
     startTicker('idle', 2000, idle.runCheck, printLog),
-    startTicker('governor', 5000, governor.enforce, printLog),
+    startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
 
     // elastic guests grow within a second of running low
