@@ -39,11 +39,12 @@ imp new work --image coder
 
 It is the published base by digest plus the Claude Code binary at the exact version its Dockerfile
 pins, in `/usr/local/bin/claude`, checked against the sha256 from Anthropic's signed release
-manifest. It has no Node: the binary does not need it. `DISABLE_UPDATES=1` in the image keeps Claude
-Code on that version. A release builds it FROM the base its Dockerfile pins, which is the base of an
-earlier release: the FROM line is a literal digest, since a build of the same release's base has no
-digest until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile
-comment gives the steps to check a new Claude Code version.
+manifest. It has no Node: the binary does not need it. The binary is owned by root in
+`/usr/local/bin`, which is what pins the version; `DISABLE_UPDATES=1` in the image keeps updates off
+by default. A release builds it FROM the base its Dockerfile pins, which is the base of an earlier
+release: the FROM line is a literal digest, since a build of the same release's base has no digest
+until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
+gives the steps to check a new Claude Code version.
 
 ## Build an image
 

@@ -1,7 +1,10 @@
 #!/bin/bash
-# Check a built imp coder image (images/coder) before it is pushed: it is
-# linux/amd64, it runs the Claude Code that images/coder/Dockerfile pins,
-# byte for byte, with updates off, and it keeps the base's tools.
+# Check a built imp coder image (images/coder) before it is pushed: it
+# proves the image matches images/coder/Dockerfile. It is linux/amd64, it
+# runs the Claude Code that the Dockerfile pins, byte for byte, with updates
+# off by default, and it keeps the base's tools. The pins come from the
+# Dockerfile, so a bump to the version or the sum is a reviewed change
+# there, never an edit here.
 #
 #   host/check-coder-image.sh IMAGE
 #

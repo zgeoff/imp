@@ -372,10 +372,13 @@ jobs:
   # attested tag is left alone, an unattested one fails the job, and a tree
   # with no images/coder is skipped. Its FROM line pins an earlier release's
   # imp-base by digest, as the same release's base has no digest until it
-  # is pushed; it runs after base only to keep the pushes in order.
+  # is pushed. It waits for base only to keep the pushes in order, and runs
+  # whatever base's result: a base failure must not hold back the coder
+  # image. A smoke failure still stops it, as it stops every push.
   # imp-coder has no `latest`, and publish does not wait for it.
   coder:
     needs: [assets, smoke, base]
+    if: ${{ !cancelled() && needs.smoke.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

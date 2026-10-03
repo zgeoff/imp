@@ -26,6 +26,7 @@ RUN curl -fsSL -o /usr/local/bin/claude \
  && echo "${CLAUDE_CODE_SHA256}  /usr/local/bin/claude" | sha256sum -c - \
  && chmod 0755 /usr/local/bin/claude
 
-# The image is the pin: no background update and no `claude update`, which
-# would install another version under ~/.local.
+# The root-owned binary above is the pin. This keeps updates off by default:
+# no background update and no `claude update`, which would install another
+# version under ~/.local.
 ENV DISABLE_UPDATES=1

@@ -78,9 +78,10 @@ against both before the push.
      digest; without one, it fails ([an unattested imp-base](#an-unattested-imp-base)). A tag from
      before the pinned `images/base` (v0.27.0 and older) is skipped with a notice. publish does not
      wait for it: consumers pin a digest, so a base failure does not hold up a release.
-   - **coder:** after base, builds `images/coder`, runs `host/check-coder-image.sh` and pushes and
-     attests `imp-coder:X.Y.Z`, by the base job's rules for an existing tag. A tag with no
-     `images/coder` is skipped with a notice. publish does not wait for it either.
+   - **coder:** after base, whatever its result, builds `images/coder`, runs
+     `host/check-coder-image.sh` and pushes and attests `imp-coder:X.Y.Z`, by the base job's rules
+     for an existing tag. A tag with no `images/coder` is skipped with a notice. publish does not
+     wait for it either.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
