@@ -1,6 +1,13 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
-import type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from '@imp/api';
+import type {
+  AuditEntry,
+  BrokerRule,
+  GrantNotCopied,
+  Secret,
+  SecretAdded,
+  SecretKind,
+} from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import {
   buildConflictError,
@@ -29,6 +36,7 @@ import {
   upsertSecret,
 } from '../db/secrets';
 import type {
+  ForkAuthority,
   GrantAuthority,
   GrantClash,
   GrantedRule,
@@ -78,6 +86,20 @@ interface AddSecretInput {
   readonly rebind?: boolean | undefined;
 }
 
+// what a fork's copy of its source's grants did: the grants it skipped, and
+// a message when it copied none because the copy failed as a whole
+interface ForkGrantsReport {
+  readonly notCopied: readonly GrantNotCopied[];
+  readonly error: string | null;
+}
+
+// an imp by id, not by name, which another imp may take meanwhile; the
+// name is for the log
+interface ForkEnd {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface Broker {
   readonly addSecret: (input: AddSecretInput) => Promise<SecretAdded>;
   readonly listSecrets: () => Promise<Secret[]>;
@@ -105,10 +127,13 @@ export interface Broker {
     patterns: readonly string[] | null,
   ) => Promise<AuditEntry[]>;
 
-  // a fork gets its source's grants, but none that clashes with a grant it
-  // has by then; a skip or a failure is logged, not thrown, as the fork
-  // exists by then
-  readonly createForkGrants: (fromImpName: string, toImpName: string) => Promise<void>;
+  // as db createForkGrants; a skip or a failure is logged and reported,
+  // not thrown, as the fork exists by then
+  readonly createForkGrants: (
+    source: Readonly<ForkEnd>,
+    fork: Readonly<ForkEnd>,
+    authority: Readonly<ForkAuthority> | null,
+  ) => Promise<ForkGrantsReport>;
 
   // the variables for an exec in this imp: none without a grant, or when
   // the CA could not be put in the guest
@@ -473,20 +498,31 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
-    createForkGrants: async (fromImpName, toImpName) => {
+    createForkGrants: async (source, fork, authority) => {
       try {
-        const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
-        const skipped = await createForkGrants(db, from.id, to.id);
+        const outcome = await createForkGrants(db, source.id, fork.id, authority);
 
-        for (const name of skipped) {
+        if (outcome.kind === 'no-token') {
           log(
-            `impd: ${toImpName}: forked without grant ${name} of ${fromImpName}: it has another credential for that host`,
+            `impd: ${fork.name}: forked without the grants of ${source.name}: the token was removed`,
+          );
+
+          return { notCopied: [], error: FORK_TOKEN_GONE };
+        }
+
+        for (const skipped of outcome.notCopied) {
+          log(
+            `impd: ${fork.name}: forked without grant ${skipped.secret} of ${source.name}: ${FORK_SKIP_CAUSES[skipped.reason]}`,
           );
         }
+
+        return { notCopied: outcome.notCopied, error: null };
       } catch (error) {
         log(
-          `impd: ${toImpName}: forked without the grants of ${fromImpName}: ${readErrorMessage(error)}`,
+          `impd: ${fork.name}: forked without the grants of ${source.name}: ${readErrorMessage(error)}`,
         );
+
+        return { notCopied: [], error: FORK_COPY_FAILED };
       }
     },
 
@@ -564,6 +600,20 @@ function buildBindingChangedError(name: string) {
     data: { kind: 'secret', name, reason: 'binding_changed' },
   });
 }
+
+const FORK_SKIP_CAUSES: Readonly<Record<GrantNotCopied['reason'], string>> = {
+  'not-grantable': 'the caller may not grant it',
+  clash: 'it has another credential for that host',
+  'no-secret': 'the secret is gone',
+};
+
+// what a fork answers when its copy made no grant at all; the cause of a
+// failure stays in impd's log
+const FORK_TOKEN_GONE =
+  "the token behind this fork was removed, so it got none of the source's grants";
+
+const FORK_COPY_FAILED =
+  "the source's grants could not be copied, so the fork has none; impd's log has the cause";
 
 // the token behind the call was removed after its access check
 function buildTokenGoneError() {

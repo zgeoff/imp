@@ -326,15 +326,21 @@ test('the audit log keeps the newest rows of each imp', async () => {
   expect(afterRm).toEqual([]);
 });
 
-test('a fork whose grants cannot be copied is still returned, and the failure logged', async () => {
+test('a fork whose grants cannot be copied gets an error, not a throw, and the cause is logged', async () => {
   await using ctx = await setupTest();
 
-  await ctx.client.imps.create({ name: 'dev' });
+  const dev = await ctx.client.imps.create({ name: 'dev' });
 
-  // the source is gone by the time the grants are copied
-  await ctx.broker.createForkGrants('gone', 'dev');
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  expect(ctx.logs.join('\n')).toContain('forked without the grants of gone');
+  // the fork is gone by the time the grants are copied
+  const report = await ctx.broker.createForkGrants(dev, { id: 'gone', name: 'gone' }, null);
+
+  expect(report.notCopied).toEqual([]);
+  expect(report.error).toContain('could not be copied');
+  expect(report.error).not.toContain('FOREIGN KEY');
+  expect(ctx.logs.join('\n')).toContain('gone: forked without the grants of dev');
 });
 
 test('a replace refused for a clash keeps the old value and leaves no new file', async () => {

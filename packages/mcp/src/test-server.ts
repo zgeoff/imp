@@ -46,6 +46,7 @@ export function buildFakeClient(listDelayMs = 0): ToolClient {
 interface ServerTestOptions {
   readonly guard?: GuardOptions;
   readonly scope?: Scope;
+  readonly client?: ToolClient;
 }
 
 // a server over the fake client, as stdio runs it; `sent` holds every
@@ -58,7 +59,7 @@ export function setupServerTest(options: Readonly<ServerTestOptions> = {}) {
     reply: (message: string) => {
       sent.push(JSON.parse(message));
     },
-    client: buildFakeClient(),
+    client: options.client ?? buildFakeClient(),
     guard: createImpGuard(options.guard ?? { all: true }),
     scope: options.scope ?? 'manage',
   };
