@@ -610,10 +610,28 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         }
 
         return builders.withBuilder(signal, async (exec) => {
+          const started = performance.now();
+
           await writePinnedContext(createBuildEngine(toEngineRun(exec)));
+
+          const pinned = performance.now();
+
           await runGuestBuild(exec, { tarPath: rewrittenPath, dockerfile, signal });
 
-          return writeGuestImage(exec, imageName, tag, signal);
+          const ran = performance.now();
+
+          const image = await writeGuestImage(exec, imageName, tag, signal);
+
+          const pinsMs = Math.round(pinned - started);
+          const buildMs = Math.round(ran - pinned);
+          const imageMs = Math.round(performance.now() - ran);
+
+          // pins: the pulls, cold in each builder; image: the export and its rootfs
+          deps.log(
+            `impd: image build ${name} (imp): pins=${String(pinsMs)}ms build=${String(buildMs)}ms image=${String(imageMs)}ms`,
+          );
+
+          return image;
         });
       });
 
