@@ -84,12 +84,42 @@ test('a failed install is tried again on the next exec, and a success is kept', 
   const second = await trust.ensure(imp, '/vsock');
   const third = await trust.ensure(imp, '/vsock');
 
-  expect([first, second, third]).toEqual([
-    { installed: false, detail: 'no sh' },
-    { installed: true },
-    { installed: true },
-  ]);
-
+  expect(first).toEqual({ installed: false, detail: 'no sh' });
+  expect(second).toMatchObject({ installed: true });
+  expect(third).toEqual(second);
   expect(calls).toHaveLength(2);
   expect(logs.join('\n')).toContain('no sh');
+});
+
+test('the same pid after a stop is a new boot, and installs again', async () => {
+  const calls: string[] = [];
+
+  const trust = createGuestTrust(
+    'input',
+    (vsockPath) => {
+      calls.push(vsockPath);
+
+      return Promise.resolve();
+    },
+    () => {},
+  );
+
+  const imp = { id: 'imp-1', name: 'dev', pid: 7 };
+
+  const first = await trust.ensure(imp, '/vsock');
+
+  trust.observe({ ...imp, state: 'running' });
+
+  const same = await trust.ensure(imp, '/vsock');
+
+  // the stop's write, then a boot that got pid 7 again
+  trust.observe({ ...imp, pid: null, state: 'stopped' });
+  trust.observe({ ...imp, state: 'running' });
+
+  const again = await trust.ensure(imp, '/vsock');
+
+  expect(same).toEqual(first);
+  expect(again).toMatchObject({ installed: true });
+  expect(again).not.toEqual(first);
+  expect(calls).toHaveLength(2);
 });

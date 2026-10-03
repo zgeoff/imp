@@ -18,7 +18,7 @@ test('only a list that names the broker requires it', () => {
 test('the broker is ready with its variables as impd set them', () => {
   const env = [...BROKER, 'TERM=xterm'];
 
-  expect(readDetail({ kind: 'ready', env: BROKER }, env)).toBeNull();
+  expect(readDetail({ kind: 'ready', env: BROKER, boot: 'b1' }, env)).toBeNull();
 });
 
 test('each cause of a refusal is named in its detail', () => {
@@ -35,14 +35,14 @@ test('each cause of a refusal is named in its detail', () => {
   // a grant whose variables lack the proxy: nothing to route through
   const proxyless = BROKER.slice(1);
 
-  expect(readDetail({ kind: 'ready', env: proxyless }, proxyless)).toBe(
+  expect(readDetail({ kind: 'ready', env: proxyless, boot: 'b1' }, proxyless)).toBe(
     'impd built no HTTPS_PROXY for this exec',
   );
 
   // the caller's env replaced one
   const replaced = ['HTTPS_PROXY=', BROKER[1] ?? ''];
 
-  expect(readDetail({ kind: 'ready', env: BROKER }, replaced)).toBe(
+  expect(readDetail({ kind: 'ready', env: BROKER, boot: 'b1' }, replaced)).toBe(
     "the exec's env sets HTTPS_PROXY, which the broker sets",
   );
 });
