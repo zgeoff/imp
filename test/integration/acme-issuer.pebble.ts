@@ -135,7 +135,7 @@ test('a DNS provider that refuses the token fails with its reason, and no token'
 
   try {
     const dns = createCloudflareProvider({
-      token,
+      readToken: () => Promise.resolve(token),
       apiUrl: `http://127.0.0.1:${String(cloudflare.port)}`,
     });
 

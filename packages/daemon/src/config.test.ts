@@ -49,6 +49,7 @@ test('it fills every setting from its default when the env is empty', () => {
     https: null,
     tailnetNames: null,
     moves: { peerUrl: null, testCidr: null },
+    warnings: [],
   });
 });
 
@@ -170,7 +171,7 @@ test('it reads the HTTPS settings when IMP_DOMAIN is set', () => {
     domain: 'imp.example.com',
     httpsPort: 443,
     httpPort: 80,
-    dns: { provider: 'cloudflare', apiToken: 'cf-token', apiUrl: null },
+    dns: { provider: 'cloudflare', token: { kind: 'value', value: 'cf-token' }, apiUrl: null },
     acmeDirectory: 'https://acme-v02.api.letsencrypt.org/directory',
     acmeEmail: 'ops@example.com',
     acmeCaFile: null,
@@ -228,6 +229,43 @@ test('it refuses a domain it cannot get a certificate for', () => {
   expect(() => loadConfig({ IMP_DOMAIN: 'localhost', IMP_DNS_PROVIDER: 'cloudflare' })).toThrow(
     'domain name',
   );
+});
+
+test('the DNS API token may come from a file, read at each use, not at start', () => {
+  const file = {
+    IMP_DOMAIN: 'imp.example.com',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN_FILE: '/run/imp/dns/token',
+  };
+
+  // the file need not exist yet: impd starts and says so until it does
+  expect(loadConfig(file).https?.dns.token).toEqual({ kind: 'file', path: '/run/imp/dns/token' });
+
+  expect(() => loadConfig({ ...file, IMP_DNS_API_TOKEN: 'cf-token' })).toThrow(
+    'set IMP_DNS_API_TOKEN or IMP_DNS_API_TOKEN_FILE, not both',
+  );
+
+  // an empty value is unset, as an env file's `IMP_DNS_API_TOKEN=` line is
+  expect(loadConfig({ ...file, IMP_DNS_API_TOKEN: '' }).https?.dns.token).toEqual({
+    kind: 'file',
+    path: '/run/imp/dns/token',
+  });
+
+  expect(() => loadConfig({ ...file, IMP_DNS_API_TOKEN_FILE: '', IMP_DNS_API_TOKEN: '' })).toThrow(
+    'IMP_DNS_PROVIDER=cloudflare needs IMP_DNS_API_TOKEN or IMP_DNS_API_TOKEN_FILE',
+  );
+});
+
+test('a token file without IMP_DOMAIN is a warning, not an error', () => {
+  const config = loadConfig({ IMP_DNS_API_TOKEN_FILE: '/run/imp/dns/token' });
+
+  expect(config.https).toBeNull();
+
+  expect(config.warnings).toEqual([
+    'IMP_DNS_API_TOKEN_FILE is set without IMP_DOMAIN; HTTPS is off and the file is unused',
+  ]);
+
+  expect(loadConfig({}).warnings).toEqual([]);
 });
 
 const CLOUDFLARE = {

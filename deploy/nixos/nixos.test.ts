@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -175,4 +183,83 @@ test('a backup password names its file; without one, backups stay off', () => {
   expect(getEnvValues(without.env, 'IMP_BACKUP_REPOSITORY')).toEqual(['']);
   expect(getEnvValues(without.env, 'IMP_BACKUP_PASSWORD_FILE')).toEqual([]);
   expect(without.output).toContain('backups stay off');
+});
+
+// The DNS token's staging, as the module runs it before each start, on a
+// change to the file, and every 5 minutes.
+const stageDnsToken = path.join(import.meta.dir, 'imp-host-dns-token.sh');
+
+function runStage(source: string, stageDir: string) {
+  const result = Bun.spawnSync(['bash', stageDnsToken, source, stageDir], {
+    env: { PATH: process.env['PATH'] ?? '' },
+  });
+
+  return { exitCode: result.exitCode, output: result.stderr.toString() + result.stdout.toString() };
+}
+
+test('the DNS token is staged into its directory, 0400, by rename, and only when it changed', () => {
+  const source = writeTempFile('dns-token', 'cf-first\n');
+  const stageDir = path.join(dir, 'run', 'dns');
+  const staged = path.join(stageDir, 'token');
+  const first = runStage(source, stageDir);
+
+  expect(first.exitCode).toBe(0);
+  expect(readFileSync(staged, 'utf8')).toBe('cf-first\n');
+  expect(statSync(staged).mode & 0o777).toBe(0o400);
+  expect(statSync(stageDir).mode & 0o777).toBe(0o700);
+  expect(first.output).not.toContain('cf-first');
+
+  // unchanged: the same file, untouched
+  const inode = statSync(staged).ino;
+
+  expect(runStage(source, stageDir).output).toBe('');
+  expect(statSync(staged).ino).toBe(inode);
+
+  // a new token is a new file in the same directory, which the container
+  // mounts
+  const stageDirInode = statSync(stageDir).ino;
+
+  writeFileSync(source, 'cf-second\n');
+
+  expect(runStage(source, stageDir).exitCode).toBe(0);
+  expect(readFileSync(staged, 'utf8')).toBe('cf-second\n');
+  expect(statSync(staged).ino).not.toBe(inode);
+  expect(statSync(stageDir).ino).toBe(stageDirInode);
+  expect(readdirSync(stageDir)).toEqual(['token']);
+});
+
+test('a missing or empty source never replaces a staged token, and never fails the start', () => {
+  const source = path.join(dir, 'dns-token');
+  const stageDir = path.join(dir, 'dns');
+  const staged = path.join(stageDir, 'token');
+  const none = runStage(source, stageDir);
+
+  expect(none.exitCode).toBe(0);
+  expect(none.output).toContain('certificates and DNS records wait until it holds the token');
+  expect(readdirSync(stageDir)).toEqual([]);
+
+  writeFileSync(source, 'cf-good\n');
+  runStage(source, stageDir);
+
+  for (const content of ['', ' \n']) {
+    writeFileSync(source, content);
+
+    const empty = runStage(source, stageDir);
+
+    expect(empty.exitCode).toBe(0);
+    expect(empty.output).toContain('impd keeps the token staged before');
+    expect(readFileSync(staged, 'utf8')).toBe('cf-good\n');
+  }
+
+  rmSync(source);
+
+  expect(runStage(source, stageDir).exitCode).toBe(0);
+  expect(readFileSync(staged, 'utf8')).toBe('cf-good\n');
+
+  // a source that cannot be read, such as a directory in its place
+  mkdirSync(source);
+
+  expect(runStage(source, stageDir).exitCode).toBe(0);
+  expect(readFileSync(staged, 'utf8')).toBe('cf-good\n');
+  expect(readdirSync(stageDir)).toEqual(['token']);
 });

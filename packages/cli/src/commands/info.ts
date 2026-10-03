@@ -1,6 +1,6 @@
 import type { SystemInfo } from '@imp/api';
 import { defineCommand } from '../define-command';
-import { formatBootStatus, formatJson } from '../format-output';
+import { formatBootStatus, formatHttps, formatJson } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
@@ -46,6 +46,7 @@ export const infoCommand = defineCommand({
         ...formatKsm(info.ksm),
         ['tailscale', info.tailscale.enabled ? (info.tailscale.state ?? 'enabled') : 'disabled'],
         ...formatTailnetNames(info.tailscale.names),
+        ...formatHttps(info.https),
         ['public', formatPublic(info.public)],
       ];
 

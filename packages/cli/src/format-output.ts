@@ -250,6 +250,31 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
   ].join('\n');
 }
 
+// `imp info`'s https line: the domain, and whether the DNS API token file
+// reads now. A token from the env has no check, and says nothing: only the
+// provider can tell whether a token is good. No line from an impd before it.
+export function formatHttps(info: SystemInfo['https']): string[][] {
+  if (info === undefined) {
+    return [];
+  }
+
+  if (info === null) {
+    return [['https', 'off (IMP_DOMAIN unset)']];
+  }
+
+  const token = info.dnsToken;
+
+  if (token === null) {
+    return [['https', info.domain]];
+  }
+
+  const state = token.isOk
+    ? 'DNS token file readable'
+    : `ERROR: ${token.error ?? 'the DNS token file fails'}`;
+
+  return [['https', `${info.domain}, ${state}`]];
+}
+
 // what `imp info` says an upgrade left: the imps whose next wake boots
 // cold, and how many run each older part; an older impd does not count them
 export function formatBootStatus(

@@ -32,6 +32,7 @@ import { createEventCheck } from './events/event-check';
 import { openEventStream } from './events/event-stream';
 import type { ExecTickets } from './exec/exec-tickets';
 import type { RamGovernor } from './governor/ram-governor';
+import type { DnsTokenStatus } from './https/dns/dns-token';
 import { createExposureService } from './https/exposure-service';
 import type { RecordsStatus } from './https/https-service';
 import type { PublicRecordsLink } from './https/public-records-link';
@@ -84,6 +85,9 @@ export interface RouterDeps {
 
   // the HTTPS service's public records, once it runs
   readonly publicRecords: PublicRecordsLink;
+
+  // reads the DNS API token now; null for a provider without one
+  readonly checkDnsToken: (() => Promise<DnsTokenStatus>) | null;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
   readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
@@ -713,6 +717,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     egress: { isEnforced: deps.egress.isEnforced() },
     ksm: readKsmInfo(deps, running, usage.headroomMib),
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
+    https: await readHttpsInfo(deps),
     features: SYSTEM_FEATURES,
   };
 }
@@ -735,6 +740,22 @@ function readPublicInfo(
       records === null
         ? null
         : { isOk: records.isOk, error: records.error, at: new Date(records.at) },
+  };
+}
+
+async function readHttpsInfo(deps: RouterDeps): Promise<SystemInfo['https']> {
+  const domain = deps.config.https?.domain;
+
+  if (domain === undefined) {
+    return null;
+  }
+
+  const token = deps.checkDnsToken === null ? null : await deps.checkDnsToken();
+
+  return {
+    domain,
+    dnsToken:
+      token === null ? null : { isOk: token.isOk, error: token.error, at: new Date(token.at) },
   };
 }
 

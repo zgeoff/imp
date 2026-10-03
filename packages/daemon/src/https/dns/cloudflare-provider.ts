@@ -52,8 +52,9 @@ const RecordListSchema = z.array(RecordSchema);
 type Zone = z.infer<typeof ZoneSchema>;
 
 interface CloudflareOptions {
-  // a token with Zone:Read and DNS:Edit on the zone; never logged
-  readonly token: string;
+  // a token with Zone:Read and DNS:Edit on the zone, read at each request
+  // so a rotated one works at once; never logged
+  readonly readToken: () => Promise<string>;
   readonly apiUrl?: string;
   readonly propagation?: WaitForTxtOptions;
   readonly log?: (message: string) => void;
@@ -68,17 +69,29 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
   // by the name asked for, so each name walks the labels once
   const zones = new Map<string, Zone>();
 
-  const sendEnvelope = async (method: string, path: string, body?: unknown): Promise<Envelope> => {
-    const response = await fetch(`${base}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${options.token}`,
-        ...(body !== undefined && { 'content-type': 'application/json' }),
-      },
-      ...(body !== undefined && { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(30_000),
-    });
+  // the token the zones were found with
+  let zonesToken: string | null = null;
 
+  // the envelope, and the token it was sent with
+  const sendEnvelope = async (
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ envelope: Envelope; token: string }> => {
+    const token = await options.readToken();
+
+    // a new token may see other zones, or the same names in other ones:
+    // the next lookup asks again. A request already holding a zone sends
+    // it once more with the new token, and fails at worst.
+    if (token !== zonesToken) {
+      zones.clear();
+
+      zonesToken = token;
+    }
+
+    const json = body === undefined ? null : JSON.stringify(body);
+
+    const response = await sendFetch(`${base}${path}`, token, method, json);
     const text = await response.text();
 
     const parsed = EnvelopeSchema.safeParse(parseJsonOrNull(text));
@@ -94,13 +107,13 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
       );
     }
 
-    return parsed.data;
+    return { envelope: parsed.data, token };
   };
 
   const sendRequest = async (method: string, path: string, body?: unknown): Promise<unknown> => {
-    const envelope = await sendEnvelope(method, path, body);
+    const sent = await sendEnvelope(method, path, body);
 
-    return envelope.result;
+    return sent.envelope.result;
   };
 
   // The zone that holds the name: walk up its labels until one is a zone
@@ -120,13 +133,17 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
     for (let index = first; index < labels.length - 1; index += 1) {
       const candidate = labels.slice(index).join('.');
 
-      const result = await sendRequest('GET', `/zones?name=${encodeURIComponent(candidate)}`);
+      const sent = await sendEnvelope('GET', `/zones?name=${encodeURIComponent(candidate)}`);
 
-      const found = ZoneListSchema.parse(result);
+      const found = ZoneListSchema.parse(sent.envelope.result);
       const zone = found.find((item) => item.name === candidate);
 
       if (zone !== undefined) {
-        zones.set(fqdn, zone);
+        // a lookup the old token started, which ends after a new one
+        // cleared the zones, must not put its answer back
+        if (sent.token === zonesToken) {
+          zones.set(fqdn, zone);
+        }
 
         return zone;
       }
@@ -220,8 +237,9 @@ export function createCloudflareProvider(options: CloudflareOptions): DnsProvide
       for (let page = 1; ; page += 1) {
         const query = `type=A&name.endswith=${encodeURIComponent(`.${domain}`)}&per_page=${String(PAGE_SIZE)}&page=${String(page)}`;
 
-        const envelope = await sendEnvelope('GET', `/zones/${zone.id}/dns_records?${query}`);
+        const sent = await sendEnvelope('GET', `/zones/${zone.id}/dns_records?${query}`);
 
+        const envelope = sent.envelope;
         const records = RecordListSchema.parse(envelope.result);
 
         // the filter is the API's; checked again, since a record found by
@@ -258,5 +276,31 @@ function parseJsonOrNull(text: string): unknown {
     return JSON.parse(text);
   } catch {
     return null;
+  }
+}
+
+// fetch, with the token cut out of its errors: Bun names a header value it
+// refuses, and the error reaches the log and system info
+async function sendFetch(
+  url: string,
+  token: string,
+  method: string,
+  body: string | null,
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(body !== null && { 'content-type': 'application/json' }),
+      },
+      ...(body !== null && { body }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // oxlint-disable-next-line preserve-caught-error -- the cause holds the token
+    throw new Error(message.replaceAll(token, '<token>'));
   }
 }

@@ -22,6 +22,7 @@ import { createEgressService } from './egress/egress-service';
 import { createGovernedImps } from './governor/create-governed-imps';
 import { ENFORCE_INTERVAL_MS } from './governor/ram-governor';
 import { buildHttpsService } from './https/build-https-service';
+import { createDnsToken } from './https/dns/dns-token';
 import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
@@ -124,6 +125,10 @@ function buildTailnetAccess(config: Config, readStatus: () => Promise<TailscaleS
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
+  for (const warning of config.warnings) {
+    printLog(`impd: warning: ${warning}`);
+  }
+
   if (config.ksm !== null) {
     const ksm = readKsmHostStats();
     const refusal = checkKsmHost(release(), ksm);
@@ -191,6 +196,8 @@ async function main(): Promise<void> {
 
   const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
   const publicRecords = createPublicRecordsLink();
+  const dnsTokenSource = config.https?.dns.token ?? null;
+  const dnsToken = dnsTokenSource === null ? null : createDnsToken(dnsTokenSource, Date.now);
   const namesHolder: { names: TailnetNames | null } = { names: null };
   const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
   const cgroups = createCpuCgroups({ root: '/sys/fs/cgroup', log: printLog });
@@ -403,6 +410,7 @@ async function main(): Promise<void> {
     readTailscale,
     readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
     publicRecords,
+    checkDnsToken: dnsToken?.check ?? null,
     isReady: () => state.ready,
     now: Date.now,
     log: printLog,
@@ -435,6 +443,7 @@ async function main(): Promise<void> {
           db,
           proxy,
           readTailscale: config.tailscaleEnabled ? readTailscale : null,
+          dnsToken,
           log: printLog,
         });
 

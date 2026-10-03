@@ -6,6 +6,7 @@ import {
   formatCheckpoints,
   formatExposeResult,
   formatGc,
+  formatHttps,
   formatIdentity,
   formatImps,
   formatSessions,
@@ -350,4 +351,35 @@ test('it names the caller and what it may do, and who made each api call', () =>
 
   expect(text).toContain('token ci');
   expect(text.split('\n')[2]).toContain(' dashboard ');
+});
+
+test('imp info names a DNS token that fails as an error, with its file', () => {
+  const at = new Date(0);
+
+  expect(formatHttps(undefined)).toEqual([]);
+  expect(formatHttps(null)).toEqual([['https', 'off (IMP_DOMAIN unset)']]);
+
+  expect(formatHttps({ domain: 'imp.example.com', dnsToken: null })).toEqual([
+    ['https', 'imp.example.com'],
+  ]);
+
+  expect(
+    formatHttps({ domain: 'imp.example.com', dnsToken: { isOk: true, error: null, at } }),
+  ).toEqual([['https', 'imp.example.com, DNS token file readable']]);
+
+  expect(
+    formatHttps({
+      domain: 'imp.example.com',
+      dnsToken: {
+        isOk: false,
+        error: 'cannot read the DNS API token from /etc/imp/dns-api-token: ENOENT',
+        at,
+      },
+    }),
+  ).toEqual([
+    [
+      'https',
+      'imp.example.com, ERROR: cannot read the DNS API token from /etc/imp/dns-api-token: ENOENT',
+    ],
+  ]);
 });

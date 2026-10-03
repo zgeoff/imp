@@ -663,10 +663,14 @@ IMP_TAILSCALE_HOSTNAME=imp
 
 # HTTPS on your own domain (docs/guides/https.md): every imp at
 # https://<name>.<domain> on the tailnet. The token is a Cloudflare API token
-# with Zone:Read and DNS:Edit on the zone.
+# with Zone:Read and DNS:Edit on the zone. Set IMP_DNS_API_TOKEN, or put the
+# token alone in a file (root, 0400) and name it in IMP_DNS_API_TOKEN_FILE
+# instead, not both; impd reads the file at each use, so a new token needs
+# no restart. The container sees /etc/imp read-only.
 IMP_DOMAIN=
 IMP_DNS_PROVIDER=cloudflare
 IMP_DNS_API_TOKEN=
+# IMP_DNS_API_TOKEN_FILE=/etc/imp/dns-api-token
 IMP_ACME_EMAIL=
 
 # Public imps (docs/guides/https.md#public-imps): `imp expose <name>` serves

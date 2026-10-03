@@ -22,11 +22,21 @@ const BootStatusSchema = z.object({
   }),
 });
 
-// the last pass over the public imps' DNS records
-const RecordsStatusSchema = z.object({
+// the last pass over the public imps' DNS records, or a read of the DNS
+// API token as system info is asked for
+const PassStatusSchema = z.object({
   isOk: z.boolean(),
   error: z.string().nullable(),
   at: z.date(),
+});
+
+const HttpsInfoSchema = z.object({
+  domain: z.string(),
+
+  // the token file, read as system info is asked for; null for a token
+  // from the env or a provider without one. An error names the file,
+  // never the token
+  dnsToken: PassStatusSchema.nullable(),
 });
 
 const PublicInfoSchema = z.object({
@@ -34,7 +44,7 @@ const PublicInfoSchema = z.object({
   imps: CountSchema,
 
   // null before the first pass
-  records: RecordsStatusSchema.nullable(),
+  records: PassStatusSchema.nullable(),
 });
 
 export const SystemInfoSchema = z.object({
@@ -129,6 +139,10 @@ export const SystemInfoSchema = z.object({
   // point at, and how many there are; null without IMP_PUBLIC_IP. Optional
   // for an impd from before them.
   public: PublicInfoSchema.nullable().optional(),
+
+  // HTTPS on IMP_DOMAIN (docs/guides/https.md); null without it. Optional
+  // for an impd from before it.
+  https: HttpsInfoSchema.nullable().optional(),
 
   // what this impd can do; an impd without it has none of them.
   // `sessionOffsets` says only that impd can carry offsets: each session's
