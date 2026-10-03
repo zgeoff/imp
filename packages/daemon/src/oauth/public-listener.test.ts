@@ -104,6 +104,9 @@ async function setupTest() {
 
     const location = new URL(allowed.headers.get('location') ?? '');
 
+    // the redirect to the client sends no referrer at all
+    expect(allowed.headers.get('referrer-policy')).toBe('no-referrer');
+
     const tokens = await sendForm('/oauth/token', {
       grant_type: 'authorization_code',
       client_id: client.clientId,
@@ -252,7 +255,7 @@ test('/mcp takes only an OAuth access token: no imp token, peer or forwarded hea
   }
 });
 
-test('the sign-in page escapes what it shows, and sends no referrer', async () => {
+test('the sign-in page escapes what it shows, and sends no referrer elsewhere', async () => {
   await using ctx = await setupTest();
 
   const odd = 'https://client.example/cb?next=%22%3E&x=<b>"\'';
@@ -272,7 +275,7 @@ test('the sign-in page escapes what it shows, and sends no referrer', async () =
   const page = await response.text();
 
   expect(response.status).toBe(200);
-  expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(response.headers.get('referrer-policy')).toBe('same-origin');
   expect(response.headers.get('x-frame-options')).toBe('DENY');
   expect(response.headers.get('cache-control')).toBe('no-store');
   expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
@@ -319,21 +322,51 @@ test('a refused sign-in page carries no Location, and a form from another origin
 
   expect(unknown.status).toBe(400);
   expect(unknown.headers.get('location')).toBeNull();
-  expect(unknown.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(unknown.headers.get('referrer-policy')).toBe('same-origin');
 
   const unknownText = await unknown.text();
 
   expect(unknownText).not.toContain('evil.example');
+});
 
-  for (const headers of [{}, { origin: 'https://evil.example' }]) {
+test('a browser’s form counts by its Origin, or by Sec-Fetch-Site when Origin is null', async () => {
+  await using ctx = await setupTest();
+
+  const query = new URLSearchParams({
+    response_type: 'code',
+    client_id: ctx.client.clientId,
+    redirect_uri: REDIRECT,
+    code_challenge: CHALLENGE,
+    code_challenge_method: 'S256',
+  });
+
+  const opened = await ctx.send(`/oauth/authorize?${query.toString()}`);
+  const page = await opened.text();
+
+  const id = /name="id" value="(?<id>[^"]+)"/.exec(page)?.groups?.['id'] ?? '';
+  const signature = /name="signature" value="(?<sig>[^"]+)"/.exec(page)?.groups?.['sig'] ?? '';
+  const statuses: number[] = [];
+
+  for (const headers of [
+    { origin: ORIGIN },
+    { origin: 'null', 'sec-fetch-site': 'same-origin' },
+    { origin: 'null' },
+    { origin: 'null', 'sec-fetch-site': 'cross-site' },
+    { 'sec-fetch-site': 'same-origin' },
+    { origin: 'https://evil.example', 'sec-fetch-site': 'same-origin' },
+    {},
+  ]) {
     const posted = await ctx.sendForm(
       '/oauth/authorize',
-      { id: 'x', signature: 'y', action: 'allow' },
+      { id, signature, action: 'continue' },
       headers,
     );
 
-    expect(posted.status).toBe(400);
+    statuses.push(posted.status);
   }
+
+  // Continue shows the page again; a refused form gets the error page
+  expect(statuses).toEqual([200, 200, 400, 400, 400, 400, 400]);
 });
 
 test('the token endpoint takes a small form and caches nothing', async () => {
@@ -525,4 +558,68 @@ test('the listener serves the route on its own port', async () => {
   } finally {
     await listener.stop();
   }
+});
+
+test('a streaming response counts as open until its stream ends', async () => {
+  await using ctx = await setupTest();
+
+  const config = ctx.config.publicMcp;
+
+  if (config === null) {
+    throw new Error('the public route is off');
+  }
+
+  // an MCP endpoint whose every answer is a stream that stays open
+  const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+
+  const mcp = {
+    handle: () => {
+      const body = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          streams.push(controller);
+        },
+      });
+
+      return Promise.resolve(
+        new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+      );
+    },
+    close: () => Promise.resolve(),
+  };
+
+  const handle = createPublicHandler({ config, oauth: ctx.oauth, mcp });
+
+  const sendCall = () =>
+    handle(new Request(`${ORIGIN}/mcp`, { method: 'POST', headers: { host: HOST } }), null);
+
+  const open: Response[] = [];
+
+  for (let index = 0; index < 64; index += 1) {
+    const response = await sendCall();
+
+    open.push(response);
+  }
+
+  const refused = await sendCall();
+
+  expect(open.every((response) => response.status === 200)).toBeTrue();
+  expect(refused.status).toBe(429);
+
+  // one stream ends, and its room is free again
+  const [first] = open;
+
+  streams[0]?.close();
+
+  await first?.text();
+
+  const next = await sendCall();
+
+  expect(next.status).toBe(200);
+
+  // a client that goes away frees its room too
+  await open[1]?.body?.cancel();
+
+  const after = await sendCall();
+
+  expect(after.status).toBe(200);
 });

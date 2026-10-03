@@ -10,8 +10,9 @@ const ERROR_TEXT: Readonly<Record<AuthorizeErrorPage, string>> = {
   bad_request: 'This request is not valid.',
 };
 
-// what each response of these pages carries: no script, no frame, no form
-// target but impd and the client's redirect, no referrer and no cache
+// What each response of these pages carries: no script, no frame, no form
+// target but impd and the client's redirect, and no cache. same-origin, not
+// no-referrer: under no-referrer a browser posts the form with Origin null.
 export function buildPageHeaders(redirectOrigin: string | null): Headers {
   const formAction = redirectOrigin === null ? "'self'" : `'self' ${redirectOrigin}`;
 
@@ -19,7 +20,7 @@ export function buildPageHeaders(redirectOrigin: string | null): Headers {
     'content-type': 'text/html; charset=utf-8',
     'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
     'x-frame-options': 'DENY',
-    'referrer-policy': 'no-referrer',
+    'referrer-policy': 'same-origin',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
   });

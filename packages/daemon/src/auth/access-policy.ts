@@ -250,6 +250,12 @@ export async function checkAccess(
     };
   }
 
+  // an OAuth grant carries its token's list for the refusals above it, and
+  // grants or revokes no secret itself (docs/guides/mcp.md#public-route)
+  if (access.on === 'grant' && caller.kind === 'oauth') {
+    return { message: `${formatCaller(caller)} may not grant or revoke secrets`, reason: null };
+  }
+
   if (access.on === 'imp' && access.noGrantable === true && caller.grantable.length > 0) {
     return {
       message: `${formatCaller(caller)} may grant secrets, so it may not fork or move an imp`,

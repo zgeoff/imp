@@ -62,10 +62,18 @@ const MAX_PENDING_PER_CLIENT = 3;
 
 // a grant's last use is written at most this often
 const TOUCH_MS = MINUTE_MS;
+
+// sign-ins per client: with no client address, a flood with a client's
+// public ID can hold back that client's sign-ins, and no other's
 const AUTHORIZE_BUCKET = { size: 10, refillMs: 6000 };
-const TOKEN_BUCKET = { size: 30, refillMs: 2000 };
+
+// failed token requests per client; a valid one is never charged
+const TOKEN_FAILURE_BUCKET = { size: 30, refillMs: 2000 };
 const APPROVE_FAILURE_BUCKET = { size: 20, refillMs: 3000 };
 const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
+
+// the failure bucket token requests from no known client share
+const UNKNOWN_CLIENT_KEY = '';
 
 export interface AuthorizeParams {
   readonly responseType: string | null;
@@ -222,7 +230,7 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
   const spentCodes = new Map<string, SpentCode>();
 
   const tryAuthorize = createBuckets(AUTHORIZE_BUCKET, deps.now);
-  const tryToken = createBuckets(TOKEN_BUCKET, deps.now);
+  const tryTokenFailure = createBuckets(TOKEN_FAILURE_BUCKET, deps.now);
   const tryApproveFailure = createBuckets(APPROVE_FAILURE_BUCKET, deps.now);
 
   const buildSignature = (id: string): string =>
@@ -365,17 +373,18 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
     byApprovalCode.set(entry.approvalCode, entry.id);
   };
 
-  // the sign-in an approver names by its code; a miss counts against a
-  // burst, so codes cannot be tried fast
+  // the sign-in an approver names by its code; a miss counts against the
+  // token's burst, so codes cannot be tried fast
   const requirePending = (code: string, approver: Readonly<Caller>): Pending => {
-    requireNamedToken(approver);
+    const tokenId = requireNamedToken(approver);
+
     removeStale();
 
     const id = byApprovalCode.get(code);
     const entry = id === undefined ? undefined : pending.get(id);
 
     if (entry === undefined) {
-      if (!tryApproveFailure('approve')) {
+      if (!tryApproveFailure(tokenId)) {
         throw new ORPCError('TOO_MANY_REQUESTS', {
           message: 'too many codes that match no sign-in; wait a few seconds',
         });
@@ -542,20 +551,31 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
     return buildTokenResponse(issued.texts, grant.scope);
   };
 
-  // the known client a token request names, under its rate limit
+  // the known client a token request names; an unknown one is a failure
+  // charged to one shared key
   const requireTokenClient = async (form: OAuthForm): Promise<OAuthClientRecord | TokenOutcome> => {
     const clientId = form.get('client_id');
     const client = clientId === null ? undefined : await findOAuthClientById(deps.db, clientId);
 
     if (client === undefined) {
-      return buildTokenError(401, 'invalid_client', 'no such client');
-    }
-
-    if (!tryToken(client.id)) {
-      return buildTokenError(429, 'slow_down', 'too many token requests from this client');
+      return applyFailureCharge(
+        UNKNOWN_CLIENT_KEY,
+        buildTokenError(401, 'invalid_client', 'no such client'),
+      );
     }
 
     return client;
+  };
+
+  // A failed token request costs its client one token; past the burst a
+  // failure answers slow_down instead, so its cause stays hidden. A valid
+  // request never pays, so a flood cannot hold back a real refresh.
+  const applyFailureCharge = (key: string, outcome: TokenOutcome): TokenOutcome => {
+    if (outcome.status === 200 || tryTokenFailure(key)) {
+      return outcome;
+    }
+
+    return buildTokenError(429, 'slow_down', 'too many failed token requests from this client');
   };
 
   return {
@@ -701,7 +721,7 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
 
       pending.set(entry.id, {
         ...entry,
-        approval: { tokenId: approver.tokenId ?? '', scope, imps: patterns },
+        approval: { tokenId: requireNamedToken(approver), scope, imps: patterns },
       });
 
       deps.log(
@@ -765,7 +785,7 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         );
       }
 
-      if (!tryAuthorize('authorize')) {
+      if (!tryAuthorize(client.id)) {
         return { kind: 'too-many', retryS: AUTHORIZE_BUCKET.refillMs / 1000 };
       }
 
@@ -867,9 +887,12 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         return client;
       }
 
-      return grantType === 'authorization_code'
-        ? handleCodeExchange(client, form)
-        : handleRefresh(client, form);
+      const outcome =
+        grantType === 'authorization_code'
+          ? await handleCodeExchange(client, form)
+          : await handleRefresh(client, form);
+
+      return applyFailureCharge(client.id, outcome);
     },
 
     // RFC 7009: the token's whole grant goes; an unknown or wrong token is
@@ -944,7 +967,10 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
         name: `${row.clientName}/${grant.id}`,
         scope: readLowerScope(grant.scope, approver.scope),
         imps: grant.imps,
-        grantable: [],
+
+        // the approver's own list: a grant then meets every refusal its
+        // token would, such as no fork; grants of secrets stay refused
+        grantable: approver.grantable,
         tokenId: approver.tokenId,
         grantId: grant.id,
         expiresAt: approver.expiresAt,
@@ -966,18 +992,18 @@ export function createOAuthService(deps: Readonly<OAuthServiceDeps>): OAuthServi
 }
 
 // Only a named token approves: root and tailnet identities cannot be removed
-// one by one, so a grant from them could not be ended with its approver
-function requireNamedToken(approver: Readonly<Caller>): void {
-  const isNamed =
-    (approver.kind === 'token' || approver.kind === 'dashboard') &&
-    approver.tokenId !== null &&
-    approver.tokenId !== ROOT_TOKEN_ID;
+// one by one, so a grant from them could not be ended with its approver.
+// Returns the token's id.
+function requireNamedToken(approver: Readonly<Caller>): string {
+  const isNamedKind = approver.kind === 'token' || approver.kind === 'dashboard';
 
-  if (!isNamed) {
+  if (!isNamedKind || approver.tokenId === null || approver.tokenId === ROOT_TOKEN_ID) {
     throw buildForbiddenError(
       'only a named token approves a sign-in; make one with imp token new and use it',
     );
   }
+
+  return approver.tokenId;
 }
 
 // the scopes a request lists; null for one that is no scope. None asked is
