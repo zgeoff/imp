@@ -2,10 +2,10 @@
 
 ## [0.25.1](https://github.com/zgeoff/imp/compare/v0.25.0...v0.25.1) (2026-10-03)
 
-
 ### Bug Fixes
 
-* **dev:** replace a changed docker proxy on up and restart ([8d7723c](https://github.com/zgeoff/imp/commit/8d7723cb4441c55269ef5679d4a2eb6e996da5d9))
+- **dev:** replace a changed docker proxy on up and restart
+  ([8d7723c](https://github.com/zgeoff/imp/commit/8d7723cb4441c55269ef5679d4a2eb6e996da5d9))
 
 ## [0.25.0](https://github.com/zgeoff/imp/compare/v0.24.0...v0.25.0) (2026-10-03)
 
