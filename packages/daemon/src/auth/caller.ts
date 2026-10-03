@@ -1,5 +1,6 @@
 import { isImpAllowed } from '@imp/api';
 import type { ApiActor, Identity, Scope } from '@imp/api';
+import type { GrantableSecret } from '../db/tokens';
 import { hasScope } from './scopes';
 
 // Who a request runs as (docs/guides/tokens.md): a token, the dashboard
@@ -13,6 +14,11 @@ export interface Caller {
 
   // the imps it may touch; null for every imp and the host itself
   readonly imps: readonly string[] | null;
+
+  // the secrets it may grant to those imps, as they were when its token was
+  // made (docs/guides/tokens.md#granting-secrets); none for a caller that is
+  // not a token. Never shrinks: non-empty marks a token made able to grant.
+  readonly grantable: readonly GrantableSecret[];
 
   // the token behind it, so deleting the token ends what it opened; null
   // for an ssh key or a tailnet identity
@@ -40,7 +46,13 @@ export function isCallerAllowed(caller: Readonly<Caller>, scope: Scope, name: st
 }
 
 export function toIdentity(caller: Readonly<Caller>): Identity {
-  return { kind: caller.kind, name: caller.name, scope: caller.scope, imps: caller.imps };
+  return {
+    kind: caller.kind,
+    name: caller.name,
+    scope: caller.scope,
+    imps: caller.imps,
+    grantable: caller.grantable.map((secret) => secret.name),
+  };
 }
 
 export function formatCaller(caller: Readonly<Caller>): string {

@@ -14,6 +14,7 @@ import { dirname, join, relative } from 'node:path';
 import { createCheckpoint, listCheckpoints } from '../db/checkpoints';
 import { findImageByName } from '../db/images';
 import { findImpByName, updateImpState } from '../db/imps';
+import { findSecret } from '../db/secrets';
 import { createTemplateService } from '../images/template-service';
 import { setupImpTest } from '../imps/test-imps';
 import { createNetworkService } from '../networks/network-service';
@@ -970,4 +971,88 @@ test('a restore holds the storage gate for its image and room for each file', as
   expect(new Set(seen)).toEqual(
     new Set(['image joined=true held=true', 'file joined=true held=true']),
   );
+});
+
+test('a restore grants against the secret as it is now, and a stale list entry stays refused', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  // a token for back* that may grant gh as it is before the rebind
+  const made = await ctx.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['back*'],
+    grantable: ['gh'],
+  });
+
+  const caller = ctx.tokens.authenticate(made.secret);
+
+  const stale = {
+    tokenId: caller?.tokenId ?? '',
+    generation: caller?.grantable[0]?.generation ?? '',
+  };
+
+  await ctx.backups.runBackup();
+
+  await ctx.broker.addSecret({
+    name: 'gh',
+    kind: 'custom',
+    value: 'ghp_other',
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.backups.restoreBackup({ name: 'dev', as: 'back' });
+
+  const back = await findImpByName(ctx.db, 'back');
+  const secret = await findSecret(ctx.db, 'gh');
+  const rows = await ctx.db.selectFrom('grants').selectAll().execute();
+  const isGranted = await ctx.broker.isGranted(back?.id ?? '', 'api.github.com');
+
+  // the revoke the token's list allowed before the rebind
+  const refused = await ctx.broker
+    .removeGrant('back', 'gh', stale)
+    .catch((error: unknown) => error);
+
+  expect(rows).toEqual([
+    { imp_id: back?.id ?? '', secret_name: 'gh', secret_generation: secret?.generation ?? '' },
+  ]);
+
+  expect(isGranted).toBeTrue();
+  expect(refused).toMatchObject({ code: 'FORBIDDEN', data: { reason: 'not_grantable' } });
+});
+
+test('a restore that fails leaves the host’s imps, secrets and grants as they were', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.createDevImp();
+  await ctx.broker.addSecret({ name: 'gh', kind: 'github', value: 'ghp_value' });
+  await ctx.broker.addGrant('dev', 'gh');
+
+  const run = await ctx.backups.runBackup();
+  const manifest = await ctx.readManifest(run.snapshotId);
+
+  const readState = async () => {
+    const [imps, secrets, grants] = await Promise.all([
+      ctx.db.selectFrom('imps').select(['id', 'name']).orderBy('name').execute(),
+      ctx.db.selectFrom('secrets').selectAll().execute(),
+      ctx.db.selectFrom('grants').selectAll().execute(),
+    ]);
+
+    return { imps, secrets, grants };
+  };
+
+  const before = await readState();
+
+  rmSync(join(ctx.repoDir, run.snapshotId, manifest.imps[0]?.disk ?? ''));
+
+  const failure = await ctx.backups.restoreBackup({ name: 'dev', as: 'copy' }).catch(String);
+  const after = await readState();
+
+  expect(failure).toContain('ENOENT');
+  expect(after).toEqual(before);
 });

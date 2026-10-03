@@ -147,7 +147,17 @@ export const SystemInfoSchema = z.object({
   // what this impd can do; an impd without it has none of them.
   // `sessionOffsets` says only that impd can carry offsets: each session's
   // continuity decides, as an imp runs its old agent until a cold boot.
-  features: z.object({ sessionOffsets: z.boolean(), leases: z.boolean() }).optional(),
+  features: z
+    .object({
+      sessionOffsets: z.boolean(),
+      leases: z.boolean(),
+
+      // tokens.create takes `grantable`, and secrets.add takes `rebind`; an
+      // older impd drops both unread, so a client checks first
+      grantableTokens: z.boolean().optional(),
+      secretRebind: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 export type SystemInfo = z.infer<typeof SystemInfoSchema>;

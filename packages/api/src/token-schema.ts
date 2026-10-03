@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { ApiActorSchema } from './api-call-schema';
 import { NameSchema } from './name-schema';
+import { SecretNameSchema } from './secret-schema';
 
 // What a token may do. Scopes nest: manage includes exec, exec includes read.
 export const ScopeSchema = z.enum(['read', 'exec', 'manage']);
@@ -17,6 +18,17 @@ export const ImpPatternSchema = z
 
 // the most SSH keys one token holds
 export const MAX_SSH_KEYS = 16;
+
+// the most secret names one token may grant
+const MAX_GRANTABLE = 32;
+
+// The secrets a token limited to some imps may grant to them and revoke
+// (docs/guides/tokens.md#granting-secrets): exact names, no two the same
+export const GrantableSchema = z
+  .array(SecretNameSchema)
+  .min(1)
+  .max(MAX_GRANTABLE)
+  .refine((names) => new Set(names).size === names.length, 'must not name a secret twice');
 
 // An SSH public key line, as in a `.pub` file: `<type> <base64> [comment]`
 export const SshPublicKeySchema = z.string().trim().min(1).max(16_384);
@@ -41,6 +53,9 @@ export const TokenSchema = z.object({
 
   // the SSH keys that log in as it (docs/guides/ssh.md#keys-bound-to-tokens)
   sshKeys: z.array(SshKeySchema).readonly(),
+
+  // the secrets it may grant to its imps; an older impd sends none
+  grantable: z.array(SecretNameSchema).readonly().default([]),
   createdAt: z.date(),
 });
 
@@ -53,6 +68,7 @@ export const IdentitySchema = z.object({
   name: z.string(),
   scope: ScopeSchema,
   imps: z.array(ImpPatternSchema).readonly().nullable(),
+  grantable: z.array(SecretNameSchema).readonly().default([]),
 });
 
 export type Identity = z.infer<typeof IdentitySchema>;

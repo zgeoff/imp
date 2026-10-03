@@ -1,10 +1,11 @@
 import { expect, spyOn, test } from 'bun:test';
-import { mkdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { AUDIT_ROWS_PER_IMP, listAuditEntries, writeAuditEntry } from '../db/broker-audit';
 import { findImpByName } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
+import { findSecret } from '../db/secrets';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import type { InstallBundle } from './guest-trust';
 
@@ -16,6 +17,17 @@ async function setupTest(options: { readonly installBundle?: InstallBundle } = {
   await harness.createTestImage('base');
 
   return { ...harness, ...buildTestApp(harness, harness) };
+}
+
+// the file that holds the secret's value now
+async function readValuePath(ctx: Readonly<{ db: ImpDatabase; dataDir: string }>, name: string) {
+  const secret = await findSecret(ctx.db, name);
+
+  if (secret === undefined) {
+    throw new Error(`no secret ${name}`);
+  }
+
+  return join(ctx.dataDir, 'secrets', secret.valueFile);
 }
 
 async function requireImp(db: ImpDatabase, name: string): Promise<ImpRecord> {
@@ -37,7 +49,7 @@ test('a secret is stored owner-only and never comes back out of the API', async 
 
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  const path = join(ctx.dataDir, 'secrets', 'gh');
+  const path = await readValuePath(ctx, 'gh');
 
   expect(readFileSync(path, 'utf8')).toBe(VALUE);
   expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -83,12 +95,18 @@ test('names are checked before they reach the disk, and a taken name needs repla
     .add({ name: 'gh', kind: 'github', value: 'other' })
     .catch((error: unknown) => error);
 
-  expect(taken).toMatchObject({ code: 'CONFLICT' });
-  expect(readFileSync(join(ctx.dataDir, 'secrets', 'gh'), 'utf8')).toBe(VALUE);
+  const kept = await readValuePath(ctx, 'gh');
 
+  expect(taken).toMatchObject({ code: 'CONFLICT' });
+  expect(readFileSync(kept, 'utf8')).toBe(VALUE);
+
+  // a replace writes a new file, and the old one goes
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'rotated', replace: true });
 
-  expect(readFileSync(join(ctx.dataDir, 'secrets', 'gh'), 'utf8')).toBe('rotated');
+  const rotated = await readValuePath(ctx, 'gh');
+
+  expect(readFileSync(rotated, 'utf8')).toBe('rotated');
+  expect(readdirSync(join(ctx.dataDir, 'secrets'))).toEqual([basename(rotated)]);
 
   const custom = await ctx.client.secrets
     .add({ name: 'api', kind: 'custom', value: VALUE })
@@ -100,8 +118,11 @@ test('names are checked before they reach the disk, and a taken name needs repla
 test('a failed write never puts the value in a log or an error', async () => {
   await using ctx = await setupTest();
 
-  // a non-empty directory where the file goes: the rename fails, even as root
-  mkdirSync(join(ctx.dataDir, 'secrets', 'gh', 'x'), { recursive: true });
+  // a file where the directory goes: the write fails, even as root
+  const dir = join(ctx.dataDir, 'secrets');
+
+  rmSync(dir, { recursive: true });
+  writeFileSync(dir, '');
 
   const logged: string[] = [];
 
@@ -195,7 +216,10 @@ test('imp rm and secret rm take their grants along; a fork keeps them', async ()
   const afterSecretRm = await ctx.client.grants.list({ name: 'dev' });
 
   expect(afterSecretRm).toEqual(['gh']);
-  expect(() => statSync(join(ctx.dataDir, 'secrets', 'claude'))).toThrow();
+
+  expect(
+    readdirSync(join(ctx.dataDir, 'secrets')).filter((file) => file.startsWith('claude')),
+  ).toEqual([]);
 
   await ctx.client.imps.destroy({ name: 'dev' });
   await ctx.client.imps.create({ name: 'dev' });
@@ -311,4 +335,36 @@ test('a fork whose grants cannot be copied is still returned, and the failure lo
   await ctx.broker.createForkGrants('gone', 'dev');
 
   expect(ctx.logs.join('\n')).toContain('forked without the grants of gone');
+});
+
+test('a replace refused for a clash keeps the old value and leaves no new file', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.secrets.add({ name: 'claude', kind: 'anthropic', value: VALUE });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev', secret: 'claude' });
+
+  const before = await readValuePath(ctx, 'claude');
+
+  // claude moving onto gh's host would give dev two credentials for it
+  const clash = await ctx.client.secrets
+    .add({
+      name: 'claude',
+      kind: 'custom',
+      value: 'other',
+      rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+      replace: true,
+    })
+    .catch((error: unknown) => error);
+
+  const after = await readValuePath(ctx, 'claude');
+
+  const files = readdirSync(join(ctx.dataDir, 'secrets'));
+
+  expect(clash).toMatchObject({ code: 'CONFLICT' });
+  expect(after).toBe(before);
+  expect(readFileSync(after, 'utf8')).toBe(VALUE);
+  expect(files).toHaveLength(2);
 });

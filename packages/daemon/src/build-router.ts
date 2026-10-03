@@ -5,7 +5,12 @@ import packageJson from '../package.json' with { type: 'json' };
 import { buildForbiddenError } from './api-errors';
 import { readImpName } from './audit/api-audit';
 import type { ApiAudit } from './audit/api-audit';
-import { checkAccess, findAccess, isAuditedProcedure } from './auth/access-policy';
+import {
+  checkAccess,
+  findAccess,
+  findGrantAuthority,
+  isAuditedProcedure,
+} from './auth/access-policy';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
 import {
@@ -27,6 +32,7 @@ import type { ImageRecord } from './db/images';
 import { listImps } from './db/imps';
 import type { ImpRecord } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
+import { findSecret } from './db/secrets';
 import type { EgressService } from './egress/egress-service';
 import { createEventCheck } from './events/event-check';
 import { openEventStream } from './events/event-stream';
@@ -113,6 +119,14 @@ export function buildRouter(deps: RouterDeps) {
     updateRecords: deps.publicRecords.update,
   });
 
+  // read at each grant or revoke, never cached: the secret by a name can be
+  // another one than a token was given
+  const readGeneration = async (name: string): Promise<string | null> => {
+    const secret = await findSecret(deps.db, name);
+
+    return secret?.generation ?? null;
+  };
+
   // every call is checked against its access rule (auth/access-policy.ts);
   // every call that changes something, refused or not, leaves an audit row
   // after its answer
@@ -122,17 +136,17 @@ export function buildRouter(deps: RouterDeps) {
       const procedure = options.path.join('.');
       const caller = options.context.caller;
 
-      const requireAccess = (): void => {
-        const refusal = checkAccess(findAccess(procedure), caller, input);
+      const requireAccess = async (): Promise<void> => {
+        const refusal = await checkAccess(findAccess(procedure), caller, input, readGeneration);
 
         if (refusal !== null) {
-          throw buildForbiddenError(refusal);
+          throw buildForbiddenError(refusal.message, refusal.reason);
         }
       };
 
       if (!isAuditedProcedure(procedure)) {
         try {
-          requireAccess();
+          await requireAccess();
 
           return await options.next();
         } catch (error) {
@@ -150,7 +164,7 @@ export function buildRouter(deps: RouterDeps) {
       });
 
       try {
-        requireAccess();
+        await requireAccess();
 
         const result = await options.next();
 
@@ -572,13 +586,28 @@ export function buildRouter(deps: RouterDeps) {
       ),
     },
     grants: {
+      // a caller for some imps grants the secret its list names, checked
+      // again in the grant's transaction: it could be deleted and made
+      // again since the access check
       add: os.grants.add.handler(async (context) => {
-        await deps.broker.addGrant(context.input.name, context.input.secret);
+        const input = context.input;
+
+        await deps.broker.addGrant(
+          input.name,
+          input.secret,
+          findGrantAuthority(context.context.caller, input.secret),
+        );
 
         return {};
       }),
       delete: os.grants.delete.handler(async (context) => {
-        await deps.broker.removeGrant(context.input.name, context.input.secret);
+        const input = context.input;
+
+        await deps.broker.removeGrant(
+          input.name,
+          input.secret,
+          findGrantAuthority(context.context.caller, input.secret),
+        );
 
         return {};
       }),
@@ -647,6 +676,7 @@ export function buildRouter(deps: RouterDeps) {
           scope: context.input.scope,
           imps: context.input.imps ?? null,
           sshKeys: context.input.sshKeys ?? [],
+          grantable: context.input.grantable ?? [],
         }),
       ),
       delete: os.tokens.delete.handler(async (context) => {
@@ -669,7 +699,12 @@ export function buildRouter(deps: RouterDeps) {
 
 // what this impd can do; each session's `continuity` still decides whether
 // its imp's agent counts output
-const SYSTEM_FEATURES = { sessionOffsets: true, leases: true } as const;
+const SYSTEM_FEATURES = {
+  sessionOffsets: true,
+  leases: true,
+  grantableTokens: true,
+  secretRebind: true,
+} as const;
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given

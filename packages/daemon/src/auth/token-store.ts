@@ -4,6 +4,7 @@ import type { Scope, SshKey, Token } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import type { ImpDatabase } from '../db/open-database';
+import { findSecret } from '../db/secrets';
 import {
   listTokenRecords,
   listTokenSshKeyRecords,
@@ -12,7 +13,7 @@ import {
   writeTokenRecord,
   writeTokenSshKeyRecord,
 } from '../db/tokens';
-import type { TokenRecord, TokenSshKeyRecord } from '../db/tokens';
+import type { GrantableSecret, TokenRecord, TokenSshKeyRecord } from '../db/tokens';
 import { formatKeyFingerprint, parsePublicKey } from '../ssh/authorized-keys';
 import type { AuthorizedKey } from '../ssh/authorized-keys';
 import type { Caller } from './caller';
@@ -36,6 +37,9 @@ interface NewToken {
 
   // public key lines to bind to it; none when left out
   readonly sshKeys?: readonly string[];
+
+  // existing secrets it may grant to its imps; none when left out
+  readonly grantable?: readonly string[];
 }
 
 // A key bound to a token, as the SSH gateway sees it. A login with it runs
@@ -54,7 +58,9 @@ interface KeyEntry {
 export interface TokenStore {
   readonly list: () => Token[];
 
-  // the token, and its secret: the only time impd has it
+  // the token, and its secret: the only time impd has it. BAD_REQUEST for
+  // a grantable list without manage and imps; NOT_FOUND for a name no
+  // secret has.
   readonly create: (token: Readonly<NewToken>) => Promise<{ token: Token; secret: string }>;
 
   // NOT_FOUND for an unknown name; CONFLICT while authorized_keys lists one
@@ -120,6 +126,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     name: ROOT_NAME,
     scope: 'manage',
     imps: null,
+    grantable: [],
     tokenId: ROOT_TOKEN_ID,
     expiresAt: null,
 
@@ -213,12 +220,15 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       const secret = randomBytes(32).toString('base64url');
       const entries = buildKeyEntries(token.sshKeys ?? [], (line) => buildKeyEntry(id, line));
 
+      const grantable = await readGrantable(deps.db, token);
+
       const record: TokenRecord = {
         id,
         name: token.name,
         secretHash: buildSecretHash(secret).toString('hex'),
         scope: token.scope,
         imps: token.imps,
+        grantable,
         createdAt: new Date(deps.now()),
       };
 
@@ -321,6 +331,40 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
   };
 }
 
+// Each name with its secret's generation now, so the token is bound to that
+// secret and not to one made later under the name. Only a manage token for
+// some imps takes a list: a host-wide one grants anything already.
+async function readGrantable(
+  db: ImpDatabase,
+  token: Readonly<NewToken>,
+): Promise<GrantableSecret[]> {
+  const names = token.grantable ?? [];
+
+  if (names.length === 0) {
+    return [];
+  }
+
+  if (token.imps === null || token.scope !== 'manage') {
+    throw new ORPCError('BAD_REQUEST', {
+      message: 'a token that may grant secrets needs scope manage and imp patterns',
+    });
+  }
+
+  const grantable: GrantableSecret[] = [];
+
+  for (const name of names) {
+    const secret = await findSecret(db, name);
+
+    if (secret === undefined) {
+      throw buildNotFoundError('secret', name);
+    }
+
+    grantable.push({ name, generation: secret.generation });
+  }
+
+  return grantable;
+}
+
 // each line as a key entry; CONFLICT for the same key twice
 function buildKeyEntries(lines: readonly string[], build: (line: string) => KeyEntry): KeyEntry[] {
   const entries = lines.map((line) => build(line));
@@ -368,6 +412,7 @@ function toToken(record: Readonly<TokenRecord>): Omit<Token, 'sshKeys'> {
     name: record.name,
     scope: record.scope,
     imps: record.imps,
+    grantable: record.grantable.map((secret) => secret.name),
     createdAt: record.createdAt,
   };
 }
@@ -386,6 +431,7 @@ function toCaller(record: Readonly<TokenRecord>): Caller {
     name: record.name,
     scope: record.scope,
     imps: record.imps,
+    grantable: record.grantable,
     tokenId: record.id,
     expiresAt: null,
 

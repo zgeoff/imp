@@ -56,13 +56,15 @@ it. impd keeps at most 32 live tickets per caller, and 1024 in all. The router m
 of the contract in `packages/api` to a service call. Errors come from the contract: `NOT_FOUND`,
 `CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
 [disk reserve](./storage.md#disk-budget), `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
-call outside the caller's scope or imps, `PRECONDITION_FAILED` when the host is not set up for the
-call (backups with no repository, say), `AGENT_OUTDATED` for a request the imp's agent is too old
-for, `LEASED` for a sleep or stop without `force` of a leased imp, `LEASE_NOT_HELD` for a renew of a
-lease the caller does not hold ([leases](../guides/leases.md)), and `INVALID_RESUME` for a session
-resume past the end of its output ([output offsets](#output-offsets)). `LEASED` and
-`RAM_BUDGET_EXCEEDED` show only what the caller may see. `/rpc` takes POST only: a GET is what a
-link or an image on any page can make a browser send.
+call outside the caller's scope or imps (a grant or a revoke says why in `data.reason`,
+[granting secrets](../guides/tokens.md#granting-secrets)), `PRECONDITION_FAILED` when the host is
+not set up for the call (backups with no repository, say), `AGENT_OUTDATED` for a request the imp's
+agent is too old for, `LEASED` for a sleep or stop without `force` of a leased imp, `LEASE_NOT_HELD`
+for a renew of a lease the caller does not hold ([leases](../guides/leases.md)), and
+`INVALID_RESUME` for a session resume past the end of its output
+([output offsets](#output-offsets)). `LEASED` and `RAM_BUDGET_EXCEEDED` show only what the caller
+may see. `/rpc` takes POST only: a GET is what a link or an image on any page can make a browser
+send.
 
 `/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
 tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes

@@ -1,16 +1,33 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 // Secret values, one file each in <dataDir>/secrets: the directory 0700, each
-// file 0600. They are not encrypted: the key would live on the same disk.
-// Names come from SecretNameSchema, so a name is never a path.
+// file 0600, unencrypted, as the key would live on the same disk. A file is
+// named by buildValueFile, or by the bare secret name from an older impd.
 export interface SecretFiles {
-  readonly write: (name: string, value: string) => void;
+  readonly write: (file: string, value: string) => void;
 
   // null when the file is gone
-  readonly read: (name: string) => string | null;
-  readonly remove: (name: string) => void;
+  readonly read: (file: string) => string | null;
+  readonly remove: (file: string) => void;
+
+  // every file not in `keep`, and every temp file a crash left
+  readonly removeExcept: (keep: ReadonlySet<string>) => void;
+}
+
+// A new file for each value: a replace writes the new value beside the old,
+// and the secret's row switches from one to the other.
+export function buildValueFile(name: string): string {
+  return `${name}.${randomBytes(8).toString('hex')}`;
 }
 
 export function createSecretFiles(dataDir: string): SecretFiles {
@@ -23,19 +40,19 @@ export function createSecretFiles(dataDir: string): SecretFiles {
 
   return {
     // a temp file then a rename, so a reader never sees half a value
-    write: (name, value) => {
-      const temp = join(dir, `.${name}.${randomBytes(6).toString('hex')}`);
+    write: (file, value) => {
+      const temp = join(dir, `.${file}.${randomBytes(6).toString('hex')}`);
 
       try {
         writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
-        renameSync(temp, join(dir, name));
+        renameSync(temp, join(dir, file));
       } finally {
         rmSync(temp, { force: true });
       }
     },
-    read: (name) => {
+    read: (file) => {
       try {
-        return readFileSync(join(dir, name), 'utf8');
+        return readFileSync(join(dir, file), 'utf8');
       } catch (error) {
         if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
           return null;
@@ -44,8 +61,15 @@ export function createSecretFiles(dataDir: string): SecretFiles {
         throw error;
       }
     },
-    remove: (name) => {
-      rmSync(join(dir, name), { force: true });
+    remove: (file) => {
+      rmSync(join(dir, file), { force: true });
+    },
+    removeExcept: (keep) => {
+      for (const file of readdirSync(dir)) {
+        if (!keep.has(file)) {
+          rmSync(join(dir, file), { force: true });
+        }
+      }
     },
   };
 }

@@ -38,6 +38,7 @@ test('it deletes a token after a confirm', async () => {
     name: 'old',
     scope: 'read',
     imps: null,
+    grantable: [],
     sshKeys: [],
     createdAt: new Date(),
   });
@@ -60,7 +61,13 @@ test('it deletes a token after a confirm', async () => {
 test('the nav offers tokens only to a caller that manages the whole host', async () => {
   const fake = createFakeImpd();
 
-  fake.state.identity = { kind: 'dashboard', name: 'dev', scope: 'manage', imps: ['dev-*'] };
+  fake.state.identity = {
+    kind: 'dashboard',
+    name: 'dev',
+    scope: 'manage',
+    imps: ['dev-*'],
+    grantable: [],
+  };
 
   renderApp(fake, '/');
 
@@ -85,6 +92,7 @@ test('it lists the SSH keys bound to each token', async () => {
     name: 'laptop',
     scope: 'exec',
     imps: ['dev-*'],
+    grantable: [],
     sshKeys: [{ fingerprint: 'SHA256:abc', type: 'ssh-ed25519', comment: 'me@laptop' }],
     createdAt: new Date(),
   });

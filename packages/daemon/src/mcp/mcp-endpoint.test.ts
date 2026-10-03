@@ -218,6 +218,30 @@ test('a read token sees only the read tools, and impd refuses the rest', async (
   expect(ctx.guest.requests).toEqual([]);
 });
 
+test('a token that may grant secrets forks nothing through MCP either', async () => {
+  await using ctx = await setupHttpTest();
+
+  await ctx.rootClient.imps.create({ name: 'agent-a', image: 'ubuntu' });
+  await ctx.rootClient.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-126' });
+
+  const made = await ctx.rootClient.tokens.create({
+    name: 'agent',
+    scope: 'manage',
+    imps: ['agent-*'],
+    grantable: ['gh'],
+  });
+
+  const agent = await ctx.openClient(made.secret);
+  const refused = await agent.runTool('imp_fork', { source: 'agent-a', name: 'agent-b' });
+
+  expect(refused.isError).toBe(true);
+  expect(refused.content[0]?.text).toStartWith('FORBIDDEN: ');
+
+  const imps = await ctx.rootClient.imps.list();
+
+  expect(imps.map((imp) => imp.name)).toEqual(['agent-a']);
+});
+
 test('a nameless create needs one prefix pattern, else a clear refusal', async () => {
   await using ctx = await setupHttpTest();
 

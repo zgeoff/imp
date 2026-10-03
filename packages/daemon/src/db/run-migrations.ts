@@ -1,3 +1,4 @@
+import { sql } from 'kysely';
 import type { Kysely } from 'kysely';
 import { Migrator } from 'kysely/migration';
 import type { Migration, MigrationProvider, MigrationResultSet } from 'kysely/migration';
@@ -429,6 +430,50 @@ export const MIGRATIONS: Record<string, Migration> = {
   '019_add_imp_max_memory': {
     async up(db: Kysely<DatabaseSchema>) {
       await db.schema.alterTable('imps').addColumn('max_memory_mib', 'integer').execute();
+    },
+  },
+
+  // tokens that may grant (#126): the secrets, each by name and generation;
+  // each grant's generation; and the file with each value. Existing values
+  // are in files named after their secrets.
+  '020_add_grantable_secrets': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .alterTable('tokens')
+        .addColumn('grantable', 'text', (c) => c.notNull().defaultTo('[]'))
+        .execute();
+
+      await db.schema
+        .alterTable('secrets')
+        .addColumn('generation', 'text', (c) => c.notNull().defaultTo(''))
+        .execute();
+
+      await db.schema
+        .alterTable('secrets')
+        .addColumn('value_file', 'text', (c) => c.notNull().defaultTo(''))
+        .execute();
+
+      await db.schema
+        .alterTable('grants')
+        .addColumn('secret_generation', 'text', (c) => c.notNull().defaultTo(''))
+        .execute();
+
+      // randomblob runs once per row
+      await db
+        .updateTable('secrets')
+        .set({ generation: sql`lower(hex(randomblob(16)))`, value_file: sql.ref('name') })
+        .execute();
+
+      await db
+        .updateTable('grants')
+        .set({
+          secret_generation: (eb) =>
+            eb
+              .selectFrom('secrets')
+              .select('secrets.generation')
+              .whereRef('secrets.name', '=', 'grants.secret_name'),
+        })
+        .execute();
     },
   },
 };

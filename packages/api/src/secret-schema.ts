@@ -64,6 +64,13 @@ export const SecretSchema = z.object({
 
 export type Secret = z.infer<typeof SecretSchema>;
 
+// What secrets.add answers: the secret, and the grants a rebind dropped
+export const SecretAddedSchema = SecretSchema.extend({
+  droppedGrants: z.int().nonnegative().default(0),
+});
+
+export type SecretAdded = z.infer<typeof SecretAddedSchema>;
+
 // One request the broker sent upstream with a credential. The path has no
 // query string, and no header is kept.
 export const AuditEntrySchema = z.object({
