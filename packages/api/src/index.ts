@@ -215,6 +215,17 @@ export type {
 } from './session-output-schema';
 
 export type { Session } from './session-schema';
+
+export {
+  SESSION_LOG_READ_MAX_BYTES,
+  SessionLogDeleteInputSchema,
+  SessionLogListInputSchema,
+  SessionLogReadInputSchema,
+  SessionLogReadSchema,
+  SessionLogSchema,
+} from './session-log-schema';
+
+export type { SessionLog, SessionLogRead } from './session-log-schema';
 export { SystemInfoSchema } from './system-info-schema';
 
 export {

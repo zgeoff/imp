@@ -52,6 +52,10 @@ export const AgentSessionObjectSchema = z.object({
   execution_generation: z.string().optional(),
   boot_id: z.string().optional(),
   end: z.int().nonnegative().optional(),
+
+  // a session started with log, which impd taps; left out by an agent from
+  // before session logs, and for other sessions
+  log: z.boolean().optional(),
 });
 
 const AgentSessionSchema = AgentSessionObjectSchema.readonly();

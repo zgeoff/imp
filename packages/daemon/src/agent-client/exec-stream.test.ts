@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
 import { sendActivity, sendPing, sendSessionKill } from './agent-requests';
-import { openAttachStream, openExecStream } from './exec-stream';
+import { openAttachStream, openExecStream, openTapStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
 import { startFakeAgent } from './fake-agent';
 import type { FakeAgentHandler } from './fake-agent';
@@ -374,4 +374,56 @@ test('an outer exec is the exec.outer op, which an older agent refuses as AGENT_
     argv: ['ls', '/user'],
     tty: false,
   });
+});
+
+test('a tap is the session.tap op, and a logged STARTED says the log is on', async () => {
+  const generation = 'e'.repeat(32);
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: 'boot-1',
+          execution_generation: generation,
+          buffer_start: 0,
+          end: 9,
+          offset: 9,
+          prelude: 0,
+          resume: { kind: 'exact' },
+          log: true,
+        },
+      }),
+    );
+  });
+
+  const stream = await openTapStream(vsock.path, 'main', {
+    executionGeneration: generation,
+    offset: 9,
+  });
+
+  stream.close();
+
+  expect(decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() })).toEqual({
+    op: 'session.tap',
+    session: 'main',
+    resume_from: { execution_generation: generation, offset: 9 },
+  });
+
+  expect(stream.output).toMatchObject({ offset: 9, log: { enabled: true } });
+});
+
+test('a tap on an agent from before session logs fails as AGENT_OUTDATED', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'UNKNOWN_OP', message: 'unknown op' },
+      }),
+    );
+  });
+
+  const tap = await readRejection(openTapStream(vsock.path, 'main'));
+
+  expect(tap).toMatchObject({ code: 'AGENT_OUTDATED' });
 });
