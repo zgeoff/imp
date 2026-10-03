@@ -1,9 +1,17 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { HOSTILE_GENERATIONS } from '../agent-client/test-agent-ids';
 import type { GenerationMeta } from './generation-log';
-import { findGenerationDir, readSessionLogRange } from './session-log-files';
+import {
+  findGenerationDir,
+  hasTombstone,
+  readSessionLogRange,
+  removeGenerationDir,
+  removeTombstone,
+  writeTombstone,
+} from './session-log-files';
 
 const GENERATION = 'd'.repeat(32);
 const dirs: string[] = [];
@@ -32,9 +40,49 @@ test('only a child of the logs directory named as a generation is a log', () => 
 
   expect(findGenerationDir(root, GENERATION)).toBe(join(root, GENERATION));
 
-  for (const hostile of ['../../evil', '..', '.', '', `${GENERATION}/..`, 'D'.repeat(32)]) {
-    expect(() => findGenerationDir(root, hostile)).toThrow('is not a generation');
+  for (const hostile of [...HOSTILE_GENERATIONS, `${GENERATION}/..`]) {
+    expect(() => {
+      findGenerationDir(root, hostile);
+    }).toThrow('is not a generation');
   }
+});
+
+test('no file helper touches the disk for a hostile generation', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'imp-session-log-files-'));
+
+  dirs.push(parent);
+
+  const root = join(parent, 'imps', 'x', 'session-logs');
+
+  mkdirSync(join(root, GENERATION), { recursive: true });
+  writeFileSync(join(root, GENERATION, 'meta.json'), '{}');
+  writeFileSync(join(parent, 'evil'), 'kept');
+
+  const before = readdirSync(parent, { recursive: true, encoding: 'utf8' }).toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+
+  for (const hostile of HOSTILE_GENERATIONS) {
+    expect(() => {
+      writeTombstone(root, hostile);
+    }).toThrow('is not a generation');
+
+    expect(() => {
+      removeTombstone(root, hostile);
+    }).toThrow('is not a generation');
+
+    expect(() => {
+      removeGenerationDir(root, hostile);
+    }).toThrow('is not a generation');
+
+    expect(hasTombstone(root, hostile)).toBe(false);
+  }
+
+  expect(
+    readdirSync(parent, { recursive: true, encoding: 'utf8' }).toSorted((a, b) =>
+      a.localeCompare(b),
+    ),
+  ).toEqual(before);
 });
 
 test('a segment the bound removed between the plan and the read reads as a gap', async () => {

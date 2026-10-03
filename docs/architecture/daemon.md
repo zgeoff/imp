@@ -583,8 +583,9 @@ nothing after the directory is removed.
 **Trust.** The guest is not trusted. Every generation, boot id and session name an agent reports
 goes through the form the real agent gives it (32 lowercase hex characters, a lowercase UUID or
 empty, the session name rule) before impd uses it; `activity` drops a session that fails, and a
-STARTED that fails fails its stream. A log's directory is checked once more when impd builds it, and
-must resolve to a child of the imp's `session-logs/`. A sweep every minute removes ended logs past
+STARTED that fails fails its stream. The session logs check all three again before they open a tap
+or touch the disk. A log's directory is checked once more when impd builds it, and must resolve to a
+child of the imp's `session-logs/`. A sweep every minute removes ended logs past
 `IMP_SESSION_LOG_MAX_AGE_DAYS` and ends the live logs of imps whose VM is gone, as after an impd
 restart.
 

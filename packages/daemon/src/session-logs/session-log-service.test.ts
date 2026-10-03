@@ -1,12 +1,17 @@
 import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import type { ResumeFrom, SessionOutput } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import { AgentError } from '../agent-client/agent-connection';
 import type { AgentSession } from '../agent-client/agent-requests';
 import type { ExecEvent, ExecStream } from '../agent-client/exec-stream';
+import {
+  HOSTILE_BOOT_IDS,
+  HOSTILE_GENERATIONS,
+  HOSTILE_SESSION_NAMES,
+} from '../agent-client/test-agent-ids';
 import { readGenerationMeta } from './generation-log';
 import { createSessionLogs } from './session-log-service';
 import type { SessionLogImp, SessionLogLimits, SessionLogs } from './session-log-service';
@@ -548,13 +553,38 @@ test('a restarted impd taps a live log on from its end', async () => {
   expect(after.text).toBe('+after');
 });
 
-test("a forged generation never names a path outside the imp's logs", async () => {
+// whether each place a hostile value could name exists: it must not change
+function findTargets(ctx: LogsView, values: readonly string[]) {
+  return values
+    .filter((value) => !value.includes('\0'))
+    .flatMap((value) => [
+      resolvePath(ctx.imp.sessionLogsDir, value),
+      resolvePath(ctx.imp.sessionLogsDir, value, 'meta.json'),
+      resolvePath(ctx.imp.sessionLogsDir, '.deleted', value),
+    ])
+    .map((path) => ({ path, exists: existsSync(path) }));
+}
+
+const HOSTILE_SESSIONS = [
+  ...HOSTILE_GENERATIONS.map((value) => ({ ...buildSession(GEN_A), execution_generation: value })),
+  ...HOSTILE_BOOT_IDS.map((value) => ({ ...buildSession(GEN_A), boot_id: value })),
+  ...HOSTILE_SESSION_NAMES.map((value) => ({ ...buildSession(GEN_A), name: value })),
+];
+
+const HOSTILE_VALUES = [...HOSTILE_GENERATIONS, ...HOSTILE_BOOT_IDS, ...HOSTILE_SESSION_NAMES];
+
+test('a hostile generation, boot id or session name touches neither the disk nor the agent', async () => {
   const ctx = setupLogs();
+  const before = findTargets(ctx, HOSTILE_VALUES);
   const errors: unknown[] = [];
 
-  for (const generation of ['../../../evil', '..', 'A'.repeat(32), `${'a'.repeat(31)}/`]) {
-    ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: generation, boot_id: BOOT });
+  ctx.logs.observe(ctx.imp, HOSTILE_SESSIONS);
 
+  for (const session of HOSTILE_SESSIONS) {
+    ctx.logs.tapNow(ctx.imp, session);
+  }
+
+  for (const generation of HOSTILE_GENERATIONS) {
     const refused = await ctx.logs
       .readLog(ctx.imp, { session: 'main', executionGeneration: generation, from: 0 })
       .catch((error: unknown) => error);
@@ -562,17 +592,64 @@ test("a forged generation never names a path outside the imp's logs", async () =
     errors.push(refused);
   }
 
-  await Bun.sleep(20);
+  await Bun.sleep(50);
 
   expect(ctx.calls).toEqual([]);
-  expect(readdirSync(ctx.root)).toEqual([]);
+  expect(readdirSync(ctx.root, { recursive: true })).toEqual([]);
+  expect(findTargets(ctx, HOSTILE_VALUES)).toEqual(before);
 
-  expect(errors).toMatchObject([
-    { code: 'NOT_FOUND' },
-    { code: 'NOT_FOUND' },
-    { code: 'NOT_FOUND' },
-    { code: 'NOT_FOUND' },
-  ]);
+  expect(
+    errors.filter((error) => !(error instanceof ORPCError && error.code === 'NOT_FOUND')),
+  ).toEqual([]);
+});
+
+test('a generation_changed tap that names a hostile next generation ends and makes nothing', async () => {
+  const ctx = setupLogs();
+  const first = createFakeTap(buildOutput(GEN_A, 0));
+
+  ctx.answers.push(first);
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+  await waitFor('the tap', () => ctx.calls.length === 1);
+
+  first.write('old');
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_A)?.logEnd === 3);
+
+  first.drop();
+
+  const forged = [
+    ...HOSTILE_GENERATIONS.map((generation) => ({ generation, bootId: BOOT })),
+    ...HOSTILE_BOOT_IDS.map((bootId) => ({ generation: GEN_B, bootId })),
+  ];
+
+  const before = findTargets(ctx, [...HOSTILE_GENERATIONS, ...HOSTILE_BOOT_IDS, GEN_B]);
+
+  for (const forgery of forged) {
+    const next = createFakeTap(
+      buildOutput(forgery.generation, 5, {
+        bootId: forgery.bootId,
+        resume: {
+          kind: 'generation_changed',
+          executionGeneration: forgery.generation,
+          firstOffset: 5,
+        },
+        previous: { executionGeneration: GEN_A, end: 3, exitCode: 0 },
+      }),
+    );
+
+    ctx.answers.push(next);
+
+    await waitFor('the refusal', () => {
+      ctx.logs.observe(ctx.imp, [buildSession(GEN_A)]);
+
+      return next.state.closed;
+    });
+  }
+
+  expect(readdirSync(ctx.imp.sessionLogsDir)).toEqual([GEN_A]);
+  expect(findLog(ctx, GEN_A)).toMatchObject({ state: 'live', logEnd: 3 });
+  expect(findTargets(ctx, [...HOSTILE_GENERATIONS, ...HOSTILE_BOOT_IDS, GEN_B])).toEqual(before);
 });
 
 test('a meta on disk that names another generation is not read', async () => {
