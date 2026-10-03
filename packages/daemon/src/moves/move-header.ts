@@ -31,22 +31,24 @@ export const MAX_LEASE_REMAINING_MS = 100 * 365 * 24 * 60 * 60 * 1000;
 // a lease's owner, as caller.ts names it, and its name for people
 const LeaseOwnerTextSchema = z.string().min(1).max(256);
 
+// who holds a moved lease; the source checks its own leases with it before
+// any byte goes
+export const MovedLeaseOwnerSchema = z.object({
+  principal: LeaseOwnerTextSchema,
+
+  // `hold` and a legacy hold's label too, which leases.* never writes
+  label: LeaseLabelSchema,
+  display: LeaseOwnerTextSchema,
+});
+
 // A live lease, by the time it had left on the source's clock when the
 // header was built: the target ends it that long after it reads the header,
 // so the two clocks need not agree (docs/architecture/moves.md#leases)
-const MovedLeaseSchema = z
-  .object({
-    principal: LeaseOwnerTextSchema,
-
-    // `hold` and a legacy hold's label too, which leases.* never writes
-    label: LeaseLabelSchema,
-    display: LeaseOwnerTextSchema,
-
-    // null for no end
-    remainingMs: z.int().nonnegative().max(MAX_LEASE_REMAINING_MS).nullable(),
-    createdAt: z.coerce.date(),
-  })
-  .readonly();
+const MovedLeaseSchema = MovedLeaseOwnerSchema.extend({
+  // null for no end
+  remainingMs: z.int().nonnegative().max(MAX_LEASE_REMAINING_MS).nullable(),
+  createdAt: z.coerce.date(),
+}).readonly();
 
 export type MovedLease = z.infer<typeof MovedLeaseSchema>;
 

@@ -39,6 +39,7 @@ import {
   MOVE_PATHS,
   MoveCommitReplySchema,
   MoveOfferReplySchema,
+  MovedLeaseOwnerSchema,
 } from './move-header';
 import type { MoveHeader } from './move-header';
 import { sendInParts } from './move-parts';
@@ -445,14 +446,24 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const leases = await listLeases(deps.db, at, [imp.id]);
 
-    return leases.map((lease) => ({
-      principal: lease.principal,
-      label: lease.label,
-      display: lease.display,
-      remainingMs:
-        lease.until === null ? null : Math.min(lease.until.getTime() - at, MAX_LEASE_REMAINING_MS),
-      createdAt: lease.createdAt,
-    }));
+    return leases.map((lease) => {
+      const remainingMs = lease.until === null ? null : lease.until.getTime() - at;
+
+      // a hold past what a header carries ends at the cap on the target
+      if (remainingMs !== null && remainingMs > MAX_LEASE_REMAINING_MS) {
+        deps.log(
+          `impd: move: ${imp.name}: lease ${lease.principal} ${lease.label} ends past 100 years; it moves with 100 years left`,
+        );
+      }
+
+      return {
+        principal: lease.principal,
+        label: lease.label,
+        display: lease.display,
+        remainingMs: remainingMs === null ? null : Math.min(remainingMs, MAX_LEASE_REMAINING_MS),
+        createdAt: lease.createdAt,
+      };
+    });
   };
 
   const buildHeader = async (
@@ -748,6 +759,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         `the imp has ${String(leases.length)} leases, more than a move carries (${String(MAX_MOVED_LEASES)}); release some first`,
       );
     }
+
+    // the target would refuse the header after the stream started
+    const unfit = leases.find((lease) => !MovedLeaseOwnerSchema.safeParse(lease).success);
+
+    if (unfit !== undefined) {
+      throw new OfferRefusalError(
+        `the imp's lease ${unfit.label} of ${unfit.principal.slice(0, 64)} has an owner or label a move cannot carry (at most 256 characters); release it first`,
+      );
+    }
   };
 
   const startHaltedAgain = async (imp: ImpRecord): Promise<void> => {
@@ -944,6 +964,8 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     } catch (error) {
       // the mark is this prepare's own: the lock refused a marked imp
       await removeMark(imp);
+
+      // only a running imp runs again; a sleeping one's memory is gone
 
       if (halted.delete(imp.id)) {
         await deps.imps.requireRunningImp(stopped).catch((startError: unknown) => {

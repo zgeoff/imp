@@ -12,6 +12,7 @@ import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { writeMovedBoots } from '../db/cold-boots';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
+import { emitImpWrite } from '../db/imp-write-feed';
 import {
   SlotTakenError,
   findImpById,
@@ -21,7 +22,7 @@ import {
   updateImpCommitted,
 } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
-import { writeMovedLeases } from '../db/leases';
+import { listLeases, writeMovedLeases } from '../db/leases';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
@@ -936,7 +937,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, 'the received memory snapshot is not complete');
     }
 
-    await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
+    const committed = await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
+
+    // its leases are live here only now: `held`, as an acquire says it
+    const leases = await listLeases(deps.db, deps.now(), [imp.id]);
+
+    if (leases.length > 0) {
+      emitImpWrite(deps.db, { kind: 'changed', imp: committed, reason: 'held' });
+    }
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
     deps.onCommitted(row.name);
