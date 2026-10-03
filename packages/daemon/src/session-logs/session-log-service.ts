@@ -117,6 +117,10 @@ interface LiveLog {
 
 const SEGMENTS_PER_LOG = 2;
 
+// an imp's limit is checked at least this often within a segment, so its logs
+// pass it by at most this share of one
+const LIMIT_CHECKS_PER_SEGMENT = 16;
+
 // how often an imp at its cap of live logs says so
 const CAP_NOTICE_MS = 60_000;
 
@@ -147,7 +151,10 @@ function toExitCode(code: number, signal: number): number | null {
 export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   const openTap = deps.openTap ?? openTapStream;
   const segmentBytes = Math.max(1, Math.floor(deps.limits.generationMaxBytes / SEGMENTS_PER_LOG));
+  const limitCheckBytes = Math.max(1, Math.floor(segmentBytes / LIMIT_CHECKS_PER_SEGMENT));
 
+  // the bytes each imp's logs took since its limit was last checked
+  const uncheckedBytes = new Map<string, number>();
   const live = new Map<string, LiveLog>();
 
   // each live log's tap, or `opening` while one is on its way
@@ -418,7 +425,8 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
   // detach or a dropped connection leaves it for the next look to tap again
   const runTap = async (imp: SessionLogImp, entry: LiveLog, tap: Readonly<ExecStream>) => {
     // each new segment is a new start: a log at its own bound adds one as it
-    // drops one, so its count stays the same
+    // drops one, so its count stays the same; growth within a segment counts
+    // toward the next check too
     let newest = entry.log.readMeta().segments.at(-1)?.start;
 
     try {
@@ -427,11 +435,16 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
           await entry.log.append(event.data);
 
           const start = entry.log.readMeta().segments.at(-1)?.start;
+          const unchecked = (uncheckedBytes.get(imp.id) ?? 0) + event.data.byteLength;
 
-          if (start !== newest) {
+          if (start !== newest || unchecked >= limitCheckBytes) {
             newest = start;
 
+            uncheckedBytes.set(imp.id, 0);
+
             await applyImpLimit(imp);
+          } else {
+            uncheckedBytes.set(imp.id, unchecked);
           }
         } else if (event.type === 'exit') {
           const end = readGenerationBounds(entry.log.readMeta()).logEnd;
@@ -745,6 +758,7 @@ export function createSessionLogs(deps: SessionLogDeps): SessionLogs {
       }
 
       recovered.delete(impId);
+      uncheckedBytes.delete(impId);
     },
 
     admitImp: (impId) => {

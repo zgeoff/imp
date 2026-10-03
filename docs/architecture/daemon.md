@@ -587,7 +587,8 @@ a forged agent can list any number of logged generations. A deleted live log lea
 generation is gone. A destroy marks the imp forgotten first, so a tap still being set up writes
 nothing after the directory is removed; an imp made again under its id, as on a move home, logs
 again, while work begun before the destroy still writes nothing. The imp limit is checked each time
-a log starts a segment, so a log that rolls at its own bound is counted too.
+a log starts a segment, so a log that rolls at its own bound is counted too, and again after every
+sixteenth of a segment an imp's logs take, so growth within a segment passes it by little.
 
 **Trust.** The guest is not trusted. Every generation, boot id and session name an agent reports
 goes through the form the real agent gives it (32 lowercase hex characters, a lowercase UUID or

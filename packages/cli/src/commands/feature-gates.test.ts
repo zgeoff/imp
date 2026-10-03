@@ -263,6 +263,7 @@ test('db copy asks for the feature first: an older impd gets no copy call', asyn
     { code: 1, calls: ['system/info'] },
     { code: 0, calls: ['system/info', 'system/copyDatabase'] },
   ]);
+});
 
 test('an older impd gets no console --log, only the feature check', async () => {
   await using ctx = setupTest(OLD_INFO);
