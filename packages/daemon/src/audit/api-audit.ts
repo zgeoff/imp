@@ -46,7 +46,7 @@ export function readImpName(procedure: string, input: unknown, output: unknown):
   const namespace = procedure.split('.')[0] ?? '';
 
   // a template reads its source imp's disk
-  if (procedure === 'images.add') {
+  if (procedure === 'images.add' || procedure === 'images.addStream') {
     return readField(input, 'imp');
   }
 

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
+import type { ImageBuildPhase } from '@imp/api';
 import {
   BuildContextError,
   MissingDockerfileError,
@@ -77,12 +78,25 @@ const InspectSchema = z
   )
   .length(1);
 
+// what a streamed add or build hears of: `signal` aborts when the client
+// goes, and `setPhase` hears each phase as it starts
+interface ImageOpOptions {
+  readonly signal?: AbortSignal;
+  readonly setPhase?: (phase: ImageBuildPhase) => void;
+}
+
 export interface ImageService {
-  readonly addImage: (ref: string, name?: string) => Promise<ImageRecord>;
+  // the client going stops a pull; the unpack after it runs to its end
+  readonly addImage: (
+    ref: string,
+    name?: string,
+    options?: Readonly<ImageOpOptions>,
+  ) => Promise<ImageRecord>;
   readonly buildImage: (
     contextDir: string,
     name: string,
     dockerfile?: string,
+    options?: Readonly<ImageOpOptions>,
   ) => Promise<ImageRecord>;
 
   // a context the client uploaded, as a tar file; `signal` aborts when the
@@ -285,14 +299,18 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
-  const readInspect = async (ref: string) => {
+  const readInspect = async (ref: string, signal: AbortSignal | undefined) => {
     const first = await runCommand(['docker', 'image', 'inspect', ref]);
 
     if (first.exitCode === 0) {
       return InspectSchema.parse(JSON.parse(first.stdout))[0];
     }
 
-    await runChecked(['docker', 'pull', '--quiet', ref]);
+    await runChecked(['docker', 'pull', '--quiet', ref], {
+      ...(signal !== undefined && { signal }),
+    });
+
+    signal?.throwIfAborted();
 
     const stdout = await runChecked(['docker', 'image', 'inspect', ref]);
 
@@ -398,7 +416,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
-  const createImageFromRef = async (ref: string, name?: string): Promise<ImageRecord> => {
+  const createImageFromRef = async (
+    ref: string,
+    name?: string,
+    options: Readonly<ImageOpOptions> = {},
+  ): Promise<ImageRecord> => {
     assertImageRef(ref);
 
     const imageName = NameSchema.parse(name ?? deriveImageName(ref));
@@ -407,11 +429,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     requireDockerImage(taken);
 
-    const inspect = await readInspect(ref);
+    const inspect = await readInspect(ref, options.signal);
 
     if (inspect === undefined) {
       throw new Error(`docker image inspect ${ref}: no result`);
     }
+
+    // the unpack is shared with any add of the same image: no client stops it
+    options.setPhase?.('unpack');
 
     // the tree unpacked, and the ext4 file written from it
     const buildBytes = 2 * (inspect.Size ?? 0);
@@ -631,7 +656,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
   return {
     addImage: createImageFromRef,
-    buildImage: async (contextDir, name, dockerfile) => {
+    buildImage: async (contextDir, name, dockerfile, options = {}) => {
       if (!contextDir.startsWith('/')) {
         throw new ORPCError('BAD_REQUEST', {
           message: `build context ${JSON.stringify(contextDir)} is not an absolute path`,
@@ -678,8 +703,15 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         try {
           await writeContextTar(entries, tarPath);
 
-          // nobody to abort it: the oRPC call waits for the image
-          return await buildFromContext(tarPath, name, dockerfile, new AbortController().signal);
+          options.setPhase?.('build');
+
+          // images.build has no signal: its call waits for the image
+          return await buildFromContext(
+            tarPath,
+            name,
+            dockerfile,
+            options.signal ?? new AbortController().signal,
+          );
         } finally {
           rmSync(tarPath, { force: true });
         }

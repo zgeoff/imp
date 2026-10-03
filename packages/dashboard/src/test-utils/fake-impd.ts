@@ -248,6 +248,14 @@ export function createFakeImpd(): FakeImpd {
       build: os.images.build.handler(() => {
         throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
       }),
+
+      // the dashboard adds through images.add
+      addStream: os.images.addStream.handler(() => {
+        throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
+      }),
+      buildStream: os.images.buildStream.handler(() => {
+        throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
+      }),
       delete: os.images.delete.handler((context) => {
         registerCall('images.delete', context.input);
 

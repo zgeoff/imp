@@ -48,6 +48,7 @@ test('it serves system.info from config and the database', async () => {
       grantableTokens: true,
       secretRebind: true,
       imageBuildStream: true,
+      imageOpStream: true,
     },
     ksm: null,
   });
