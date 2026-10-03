@@ -34,6 +34,7 @@ export {
 export type {
   ImageBuildEvent,
   ImageBuildPhase,
+  ImageOpEvent,
   ImageBuildProgress,
   ImageBuildQuery,
 } from './image-build-protocol';

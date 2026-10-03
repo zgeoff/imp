@@ -7,6 +7,8 @@ import type { ImageService } from '@imp/daemon/src/images/image-service';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
 import { createImpClient } from './create-imp-client';
+import { createIdleFetch, startSlowImpd } from './test-slow-impd';
+import type { SlowImpdHarness } from './test-slow-impd';
 
 // impd in-process, its build a fake that records the tar it was handed
 async function setupBuildTest(token = TEST_TOKEN) {
@@ -110,9 +112,7 @@ test('a stream with its size goes with that Content-Length', async () => {
 });
 
 // impd on a real listener, whose build takes `buildMs`
-async function setupSlowBuild(buildMs: number, keepaliveMs: number) {
-  const harness = await setupImpTest();
-
+function startSlowBuild(harness: SlowImpdHarness, buildMs: number, keepaliveMs: number) {
   const buildImageFromContext: ImageService['buildImageFromContext'] = async (_, name) => {
     await Bun.sleep(buildMs);
 
@@ -124,65 +124,7 @@ async function setupSlowBuild(buildMs: number, keepaliveMs: number) {
     });
   };
 
-  const app = buildTestApp(
-    { ...harness, images: { ...harness.images, buildImageFromContext } },
-    harness,
-    undefined,
-    {},
-    null,
-    {},
-    keepaliveMs,
-  ).app;
-
-  app.listen({ port: 0, hostname: '127.0.0.1' });
-
-  return {
-    url: `http://127.0.0.1:${String(app.server?.port)}/`,
-    [Symbol.asyncDispose]: async () => {
-      await app.stop(true);
-      await harness[Symbol.asyncDispose]();
-    },
-  };
-}
-
-// The real fetch, but one that gives up after `idleMs` without a byte, before
-// the headers or between two chunks of the body: Bun's own fetch does so
-// after 360 s, undici's after 300 s.
-function createIdleFetch(idleMs: number) {
-  return async (request: Request): Promise<Response> => {
-    const watchdog = new AbortController();
-
-    const state = { timer: setTimeout(() => {}, 0) };
-
-    const resetWatchdog = (): void => {
-      clearTimeout(state.timer);
-
-      state.timer = setTimeout(() => {
-        watchdog.abort(new DOMException('no byte came in time', 'TimeoutError'));
-      }, idleMs);
-    };
-
-    resetWatchdog();
-
-    const response = await fetch(request, { signal: watchdog.signal });
-
-    resetWatchdog();
-
-    const body = response.body?.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({
-        transform: (chunk, controller) => {
-          resetWatchdog();
-
-          controller.enqueue(chunk);
-        },
-        flush: () => {
-          clearTimeout(state.timer);
-        },
-      }),
-    );
-
-    return new Response(body ?? null, response);
-  };
+  return startSlowImpd(harness, { buildImageFromContext }, keepaliveMs);
 }
 
 // what an impd from before the stream sees: no Accept
@@ -197,7 +139,8 @@ function removeAccept(next: (request: Request) => Promise<Response>) {
 }
 
 test('a build longer than the fetch waits for a byte succeeds as a stream, and fails as JSON', async () => {
-  await using impd = await setupSlowBuild(500, 25);
+  await using harness = await setupImpTest();
+  await using impd = startSlowBuild(harness, 500, 25);
 
   const idleFetch = createIdleFetch(200);
   const progress: ImageBuildProgress[] = [];

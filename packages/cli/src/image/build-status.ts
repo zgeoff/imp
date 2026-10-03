@@ -1,34 +1,58 @@
+import type { ImageBuildPhase, ImageBuildProgress } from '@imp/api';
 import type { ProgressOutput } from '../cp/copy-progress';
 
-// The line after the upload's on a terminal: impd builds, and for how long,
-// as its progress events say. Off the terminal it prints nothing.
+// The line of a streamed image call on a terminal: what impd does, and for
+// how long, as its progress events say. Off the terminal it prints nothing.
 export interface BuildStatus {
-  // `elapsedMs` counts from the stream's start; the line, from the first call
-  readonly show: (elapsedMs: number) => void;
+  // the time counts from the first event of the phase
+  readonly show: (progress: ImageBuildProgress) => void;
   readonly finish: () => void;
 }
 
-export function formatBuildStatus(elapsedMs: number, label: string): string {
+const PHASE_WORDS: Readonly<Record<ImageBuildPhase, string>> = {
+  upload: 'uploading',
+  pack: 'packing',
+  build: 'building',
+  pull: 'pulling',
+  unpack: 'unpacking',
+  copy: 'copying',
+};
+
+export function formatBuildStatus(
+  phase: ImageBuildPhase,
+  elapsedMs: number,
+  label: string,
+): string {
   const seconds = Math.floor(elapsedMs / 1000);
   const minutes = Math.floor(seconds / 60);
   const rest = String(seconds % 60).padStart(2, '0');
 
-  return `${label}: building, ${String(minutes)}m${rest}s`;
+  return `${label}: ${PHASE_WORDS[phase]}, ${String(minutes)}m${rest}s`;
 }
 
 export function createBuildStatus(output: ProgressOutput, label: string): BuildStatus {
-  const state = { drawn: false, buildStartMs: null as number | null };
+  const state = {
+    drawn: false,
+    phase: null as ImageBuildPhase | null,
+    phaseStartMs: 0,
+  };
 
   return {
-    show: (elapsedMs) => {
+    show: (progress) => {
       if (!output.isTTY) {
         return;
       }
 
-      state.drawn = true;
-      state.buildStartMs ??= elapsedMs;
+      if (progress.phase !== state.phase) {
+        state.phase = progress.phase;
+        state.phaseStartMs = progress.elapsedMs;
+      }
 
-      output.write(`\r${formatBuildStatus(elapsedMs - state.buildStartMs, label)}\u001B[K`);
+      state.drawn = true;
+
+      const elapsedMs = progress.elapsedMs - state.phaseStartMs;
+
+      output.write(`\r${formatBuildStatus(progress.phase, elapsedMs, label)}\u001B[K`);
     },
     finish: () => {
       if (state.drawn) {

@@ -160,6 +160,9 @@ export const SystemInfoSchema = z.object({
       // POST /images/build streams build events to a client that accepts
       // them (docs/guides/images.md#build-an-image)
       imageBuildStream: z.boolean().optional(),
+
+      // images.addStream and images.buildStream
+      imageOpStream: z.boolean().optional(),
     })
     .optional(),
 });
