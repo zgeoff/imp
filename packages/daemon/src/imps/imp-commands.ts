@@ -226,9 +226,18 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
           return presenter.toApi(stopped);
         }
 
-        // the boot starts while the disk is cloned and sized: a template
-        // restore only needs the disk once its guest is parked
-        const sizing = setupNewDisk();
+        // the clone first: a ZFS disk is a mount, which a jail prepared before
+        // it never sees (#147); the boot starts while the disk is sized, as a
+        // template restore only needs it once its guest is parked
+        try {
+          await createDiskCopy();
+        } catch (error) {
+          await ops.writeFailure(imp, error);
+
+          throw error;
+        }
+
+        const sizing = growNewDisk();
 
         // handled now: the boot may fail before it looks at the disk
         void Promise.allSettled([sizing]);
@@ -244,8 +253,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
           const totalMs = Math.round(performance.now() - received);
 
-          // the server's side of `imp new`; clone and size run inside boot,
-          // and the boot's own steps are on its line
+          // the server's side of `imp new`: clone= is the time from the start
+          // to the cloned disk, before the boot; size= runs inside boot=, which
+          // waits on it, and the boot's own steps are on its line
           context.log(
             `impd: ${imp.name}: created in ${String(totalMs)}ms record=${String(recordMs)}ms clone=${String(timing.cloneMs)}ms size=${String(timing.sizeMs)}ms boot=${String(bootMs)}ms`,
           );

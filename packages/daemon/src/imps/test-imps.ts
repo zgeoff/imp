@@ -87,6 +87,10 @@ export interface ImpTestOptions {
   // a plain copy by default: the test tmpdir is not XFS
   readonly cloneDisk?: (source: string, target: string) => Promise<void>;
 
+  // the host's grow of a new disk's filesystem, after the harness records it;
+  // grown at once by default
+  readonly growFilesystem?: (disk: string) => Promise<boolean>;
+
   // sees each log line as impd writes it
   readonly onLog?: (message: string) => void;
 
@@ -299,7 +303,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
       growFilesystem: (disk) => {
         filesystemGrows.push(disk);
 
-        return Promise.resolve(true);
+        return options.growFilesystem?.(disk) ?? Promise.resolve(true);
       },
       egress,
       ipv6: options.ipv6 ?? null,

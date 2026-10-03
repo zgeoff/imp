@@ -398,9 +398,9 @@ jobs:
   # The ZFS storage backend on real pools: scripts/test-zfs.sh runs its tests
   # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
   # ships; then scripts/zfs-host-test.sh runs real imps on a second such pool
-  # through the lifecycle, checkpoints, disks and sleep suites and prints the ZFS
-  # timings. Not a required check; the fake zfs in the unit tests runs in
-  # `checks` either way.
+  # through the lifecycle, checkpoints, disks, sleep, backups and boot-templates
+  # suites and prints the ZFS timings. Not a required check; the fake zfs in
+  # the unit tests runs in `checks` either way.
   zfs:
     runs-on: ubuntu-24.04
     permissions:
@@ -416,7 +416,7 @@ jobs:
       # the tag e2e-build loads; one checkout per runner needs no tag of its own
       IMP_HOST_IMAGE: imp-host:dev
       IMP_HOST_IMAGE_READY: 1
-      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,disks,sleep,backups
+      IMP_ZFS_E2E_SUITES: lifecycle,checkpoints,disks,sleep,backups,boot-templates
       IMP_ZFS_TEST_UNIT: 0
     steps:
       - name: Checkout
