@@ -266,6 +266,7 @@ export function createDockerProxy(
         method: 'POST',
         path: '/build',
         query: routed.query,
+
         // the proxy's own Content-Type (checkBuildContentType), and no
         // client header: a build without a session reads no registry auth
         headers: { 'content-type': BUILD_CONTENT_TYPE },
