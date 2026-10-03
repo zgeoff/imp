@@ -29,8 +29,11 @@ from ([releasing](../../RELEASING.md#what-a-release-ships)).
 
 `imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
 uploads it to impd, which builds it with BuildKit on the host Docker and tags the result
-`imp/<name>`. Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside the
-context.
+`imp/<name>`. `--file <path>` names a Dockerfile inside the context. A later image can start FROM an
+image you built this way on Docker's containerd image store, where impd pins it by its content
+digest (Docker 29.8 builds from that pin, 29.7 does not; see the digest the build uses, below). The
+classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The published base,
+`ghcr.io/zgeoff/imp-base` by digest as `images/dev` names it, works on both.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -216,10 +219,13 @@ them on a running imp, and `imp logs` prints their logs ([services](./services.m
 
 ## Make your own
 
-Any image boots. FROM `imp/base` to get Docker and the usual tools:
+Any image boots. Start FROM the published base to get Docker and the usual tools. Copy its FROM line
+from `images/dev/Dockerfile`, which names it by digest. `FROM imp/base`, a base you built yourself,
+is pinned by its content digest on the containerd image store and refused on the classic store
+(#156):
 
 ```dockerfile
-FROM imp/base
+FROM ghcr.io/zgeoff/imp-base:<tag>@sha256:<digest>
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY app/ /srv/app/
