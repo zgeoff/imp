@@ -599,6 +599,15 @@ jobs:
           git checkout -B "$branch" FETCH_HEAD
           bun install
           bun run format
+          # One more pass at most (scripts/format-stable.test.ts): if the
+          # second pass still leaves changes, the formatter does not settle
+          if ! bun run format:check; then
+            bun run format
+            if ! bun run format:check; then
+              echo "::error::bun run format still changes the release pull request after two passes"
+              exit 1
+            fi
+          fi
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

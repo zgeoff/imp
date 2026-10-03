@@ -4,8 +4,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-- **images:** imp image build refuses a Dockerfile with a variable
-  ($) in FROM, such as FROM
+- **images:** imp image build refuses a Dockerfile with a variable ($) in FROM, such as FROM
   ${BASE}; write the base image literally.
 
 ### Features
