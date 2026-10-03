@@ -64,6 +64,13 @@ in host order, so the same rules in another order are the same binding.
 
 Each grant records the secret's generation, and the broker uses a grant only while the two match.
 
+A preset's hosts are part of its binding. If a later impd changes the hosts of a preset such as
+`github`, a plain `--replace` of a secret of that kind fails with `binding_changed`; add `--rebind`.
+
+The split between rotation and rebind needs impd 0.27.0 or later. An older impd takes a changed
+binding with a plain `--replace` and keeps every grant; the CLI warns when the answer shows it
+talked to one.
+
 ### Value files
 
 Each value is a file of its own, named `<name>.<random>`, that impd never writes again. The secret's
