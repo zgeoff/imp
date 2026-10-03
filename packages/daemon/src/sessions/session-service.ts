@@ -1,4 +1,4 @@
-import type { Session } from '@imp/api';
+import type { Session, SessionLog, SessionLogRead } from '@imp/api';
 import { AgentError } from '../agent-client/agent-connection';
 import { sendActivity, sendSessionKill } from '../agent-client/agent-requests';
 import { buildAgentOutdatedApiError, buildNotFoundError } from '../api-errors';
@@ -7,6 +7,9 @@ import type { ImpRecord } from '../db/imps';
 import type { ImpContext } from '../imps/imp-context';
 import type { ImpLock } from '../imps/imp-lock';
 import type { ImpRuntime } from '../imps/imp-runtime';
+import { findSessionLogImp } from '../session-logs/find-session-log-imp';
+import type { SessionLogReadRequest } from '../session-logs/session-log-files';
+import type { SessionLogTarget } from '../session-logs/session-log-service';
 import { readSeenSessions } from './count-sessions';
 import { toSeenSessions } from './session-cache';
 import { toApiSession } from './to-api-session';
@@ -17,6 +20,14 @@ import { toApiSession } from './to-api-session';
 export interface SessionService {
   readonly listSessions: (name: string) => Promise<Session[]>;
   readonly killSession: (name: string, session: string) => Promise<void>;
+
+  // the session logs live on the host: none of these wakes or boots the imp
+  readonly listSessionLogs: (name: string, session?: string) => Promise<SessionLog[]>;
+  readonly readSessionLog: (
+    name: string,
+    request: Readonly<SessionLogReadRequest>,
+  ) => Promise<SessionLogRead>;
+  readonly deleteSessionLogs: (name: string, target: Readonly<SessionLogTarget>) => Promise<number>;
 }
 
 interface SessionServiceParts {
@@ -38,6 +49,7 @@ export function createSessionService(parts: SessionServiceParts): SessionService
         const seen = toSeenSessions(activity.sessions, new Date());
 
         context.sessions.record(imp.id, seen);
+        context.sessionLogs.observe(findSessionLogImp(context.findPaths, imp), activity.sessions);
 
         return seen;
       } catch {
@@ -48,7 +60,29 @@ export function createSessionService(parts: SessionServiceParts): SessionService
     return readSeenSessions(context, imp) ?? [];
   };
 
+  const findLogImp = async (name: string) => {
+    const imp = await parts.lock.findImp(name);
+
+    return findSessionLogImp(context.findPaths, imp);
+  };
+
   return {
+    listSessionLogs: async (name, session) => {
+      const imp = await findLogImp(name);
+
+      return context.sessionLogs.listLogs(imp, session);
+    },
+    readSessionLog: async (name, request) => {
+      const imp = await findLogImp(name);
+
+      return context.sessionLogs.readLog(imp, request);
+    },
+    deleteSessionLogs: async (name, target) => {
+      const imp = await findLogImp(name);
+
+      return context.sessionLogs.deleteLogs(imp, target);
+    },
+
     listSessions: async (name) => {
       const imp = await parts.lock.findImp(name);
       const sessions = await readSessions(imp);

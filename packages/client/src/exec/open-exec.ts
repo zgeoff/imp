@@ -36,6 +36,11 @@ export interface ExecOptions {
   // was met (docs/architecture/daemon.md#output-offsets)
   readonly resumeFrom?: ResumeFrom;
 
+  // with a session this start creates: impd keeps its output on the host,
+  // for `sessions.readLog`; `started.output.log` says whether it does. Check
+  // `system.info.features.sessionLog` first (docs/guides/session-logs.md).
+  readonly log?: boolean;
+
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
@@ -107,6 +112,7 @@ export function openExec(
     ...(options.session !== undefined && { session: options.session }),
     ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
     ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
+    ...(options.log === true && { log: true }),
   });
 }
 

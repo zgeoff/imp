@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
@@ -457,3 +457,100 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
     { op: 'exec.outer', argv: ['sh'], tty: true },
   ]);
 });
+
+test('an imp destroyed and made again under its id, as on a move home, logs again', async () => {
+  await using ctx = await setupImpTest();
+
+  await ctx.createTestImage('ubuntu');
+
+  const created = await ctx.imps.createImp({ name: 'dev' });
+
+  const id = created.id;
+
+  const output = {
+    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    execution_generation: 'c'.repeat(32),
+    buffer_start: 0,
+    end: 0,
+    offset: 0,
+    prelude: 0,
+    log: true,
+  };
+
+  // a start creates the logged session; a tap gets STARTED and stays open
+  const startAgent = () => {
+    const paths = buildImpPaths(ctx.dataDir, id);
+    const identity = readVmIdentity(paths);
+
+    if (identity === null) {
+      throw new Error('no vm identity');
+    }
+
+    writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
+
+    return startFakeAgent(buildImpPaths(ctx.dataDir, id).vsockSocket, (socket, request, frames) => {
+      if (frames.length === 1) {
+        const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
+
+        socket.write(
+          encodeJsonFrame(FRAME_TYPES.started, {
+            pid: 9,
+            session: 'main',
+            created: !isTap,
+            output,
+          }),
+        );
+      }
+    });
+  };
+
+  const sessionLogsDir = buildImpPaths(ctx.dataDir, id).sessionLogsDir;
+  const generationDir = `${sessionLogsDir}/${output.execution_generation}`;
+
+  const startLogged = async () => {
+    const stream = await ctx.imps.openExec(
+      'dev',
+      { argv: ['sh'], tty: true, session: 'main', log: true },
+      'session-log',
+    );
+
+    await waitForPath(`${generationDir}/meta.json`);
+
+    stream.close();
+  };
+
+  const first = await startAgent();
+
+  await startLogged();
+
+  first.close();
+
+  await ctx.imps.destroyImp('dev');
+
+  expect(existsSync(sessionLogsDir)).toBe(false);
+
+  // the move home: the same id, made again
+  await ctx.imps.createImp({ name: 'dev', id });
+
+  const second = await startAgent();
+
+  await startLogged();
+
+  second.close();
+
+  expect(existsSync(`${generationDir}/meta.json`)).toBe(true);
+
+  await ctx.imps.destroyImp('dev');
+});
+
+async function waitForPath(path: string): Promise<void> {
+  const deadline = Date.now() + 2000;
+
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${path}`);
+    }
+
+    await Bun.sleep(5);
+  }
+}

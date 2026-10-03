@@ -1,5 +1,6 @@
 import { availableParallelism } from 'node:os';
 import type { EgressPolicy } from '@imp/api';
+import type { openTapStream } from '../agent-client/exec-stream';
 import type { Config } from '../config';
 import { TEMPLATE_BUILD_UID } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -17,6 +18,8 @@ import type { Ipv6Plan } from '../net/ipv6-plan';
 import { readGuestNetBytes } from '../net/tap-bytes';
 import type { TapDevices } from '../net/tap-devices';
 import { printLog } from '../process/print-log';
+import { createSessionLogs } from '../session-logs/session-log-service';
+import type { SessionLogs } from '../session-logs/session-log-service';
 import { createSessionCache } from '../sessions/session-cache';
 import type { SessionCache } from '../sessions/session-cache';
 import type { HostIdentity } from '../sleep/vm-identity';
@@ -116,6 +119,9 @@ export interface ImpServiceDeps {
   // holds room for its memory file while it writes
   readonly diskBudget?: DiskBudget;
 
+  // how impd taps a logged session; a test's fake agent stands in
+  readonly openTap?: typeof openTapStream;
+
   // the last usage pass's numbers for an imp (disk-usage-cache.ts)
   readonly readDiskUsage?: (impId: string) => CachedDiskUsage | undefined;
 
@@ -174,6 +180,7 @@ export interface ImpContext {
   readonly identity: HostIdentity;
   readonly tracker: ActivityTracker;
   readonly sessions: SessionCache;
+  readonly sessionLogs: SessionLogs;
   readonly findPaths: (impId: string) => ImpPaths;
   readonly findAddress: (slot: number) => SlotAddress;
 
@@ -216,6 +223,14 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
           rssMib: (readRss ?? readRssMib)(pid, apiSocket),
         });
 
+  const diskBudget =
+    deps.diskBudget ??
+    createDiskBudget({
+      storage: deps.storage,
+      reserveBytes: deps.config.diskReserveBytes,
+      log,
+    });
+
   return {
     config: deps.config,
     db: deps.db,
@@ -240,16 +255,17 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     growFilesystem: deps.growFilesystem ?? growFilesystem,
     readDiskUsage: deps.readDiskUsage ?? (() => {}),
     storageGate: deps.storageGate ?? createStorageGate(),
-    diskBudget:
-      deps.diskBudget ??
-      createDiskBudget({
-        storage: deps.storage,
-        reserveBytes: deps.config.diskReserveBytes,
-        log: deps.log ?? printLog,
-      }),
+    diskBudget,
     identity: deps.identity,
     tracker: createActivityTracker(),
     sessions: createSessionCache(),
+    sessionLogs: createSessionLogs({
+      limits: deps.config.sessionLog,
+      requireRoom: diskBudget.requireRoom,
+      now: deps.now ?? Date.now,
+      log,
+      ...(deps.openTap !== undefined && { openTap: deps.openTap }),
+    }),
     findPaths: (impId) => deps.storage.resolveImpPaths(impId),
     findAddress: (slot) => deriveSlotAddress(slot, slotPlan),
     findJailUser: (imp) =>

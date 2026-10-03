@@ -751,3 +751,17 @@ test('a started without output, from an older impd, reads as continuity none', a
 
   expect(outcome).toEqual({ kind: 'exit', code: 0, signal: null });
 });
+
+test('a log reaches impd with the session that starts', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openConsole('dev', { session: 'main', log: true });
+
+  await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(ctx.requests[0]).toMatchObject({ session: 'main', log: true });
+});

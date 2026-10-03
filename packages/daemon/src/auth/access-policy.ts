@@ -146,6 +146,12 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'sessions.list': readImp,
   'sessions.kill': execImp,
 
+  // a session's output can hold anything its program printed: reading or
+  // deleting it is for those who may attach, and each read is audited
+  'sessions.logs': readImp,
+  'sessions.readLog': execImp,
+  'sessions.deleteLog': execImp,
+
   // a service runs a command as an exec does, and its log can hold
   // anything the command prints
   'services.list': readImp,

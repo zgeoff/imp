@@ -81,6 +81,11 @@ export const ExecStartMessageSchema = z
     // with a session: the output after the last byte the client saw,
     // rather than a replay; `started.output.resume` says how it was met
     resumeFrom: ResumeFromSchema.optional(),
+
+    // with a session this start creates: impd keeps its output on the host
+    // (docs/guides/session-logs.md). An older impd drops it unread: check
+    // `system.info.features.sessionLog`, then `started.output.log`.
+    log: z.boolean().optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
@@ -89,6 +94,10 @@ export const ExecStartMessageSchema = z
   .refine((start) => start.resumeFrom === undefined || start.session !== undefined, {
     message: 'only a session resumes',
     path: ['resumeFrom'],
+  })
+  .refine((start) => start.log !== true || start.session !== undefined, {
+    message: 'only a session keeps a log',
+    path: ['log'],
   })
   .refine((start) => start.killGraceMs === undefined || !start.tty, {
     message: 'a tty exec takes no kill grace',

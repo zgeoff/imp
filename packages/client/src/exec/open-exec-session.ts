@@ -25,6 +25,9 @@ export interface ExecStart {
 
   // with a session: the output after this byte rather than a replay
   readonly resumeFrom?: ResumeFrom;
+
+  // with a session this start creates: impd keeps its output on the host
+  readonly log?: boolean;
 }
 
 // attaches to a session that runs: its replay, then live output

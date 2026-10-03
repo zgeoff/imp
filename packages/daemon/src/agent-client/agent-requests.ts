@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { AgentBootIdSchema, AgentGenerationSchema, AgentSessionNameSchema } from './agent-ids';
 import { handleUnknownOp } from './agent-outdated';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
 import type { AgentFrame } from './frame-codec';
@@ -38,7 +39,7 @@ export const AgentExitSchema = z.object({ code: z.int(), signal: z.int() }).read
 
 // a session as the agent lists it; impd adds when it saw the list
 export const AgentSessionObjectSchema = z.object({
-  name: z.string(),
+  name: AgentSessionNameSchema,
   pid: z.int(),
   argv: z.array(z.string()).readonly(),
   state: z.enum(['running', 'exited']),
@@ -49,9 +50,13 @@ export const AgentSessionObjectSchema = z.object({
   exit: AgentExitSchema.optional(),
 
   // an agent from before output offsets leaves these out
-  execution_generation: z.string().optional(),
-  boot_id: z.string().optional(),
+  execution_generation: AgentGenerationSchema.optional(),
+  boot_id: AgentBootIdSchema.optional(),
   end: z.int().nonnegative().optional(),
+
+  // a session started with log, which impd taps; left out by an agent from
+  // before session logs, and for other sessions
+  log: z.boolean().optional(),
 });
 
 const AgentSessionSchema = AgentSessionObjectSchema.readonly();
@@ -61,9 +66,20 @@ const ActivityResponseSchema = z.object({
   exec_sessions: z.int().nonnegative(),
   load1: z.number(),
 
-  // an agent from before sessions leaves it out
-  sessions: z.array(AgentSessionSchema).readonly().default([]),
+  // an agent from before sessions leaves it out. A session that does not
+  // parse is dropped, not the whole answer, which the watchdog reads as a
+  // sign of life.
+  sessions: z
+    .array(z.unknown())
+    .default([])
+    .transform((list): readonly AgentSession[] => list.flatMap((entry) => readAgentSession(entry))),
 });
+
+function readAgentSession(entry: unknown): AgentSession[] {
+  const parsed = AgentSessionSchema.safeParse(entry);
+
+  return parsed.success ? [parsed.data] : [];
+}
 
 export type AgentPing = z.infer<typeof PingResponseSchema>;
 
