@@ -59,14 +59,38 @@ context.
   build. `imp-docker-proxy` allows only this build
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
   Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
-- **Base images.** A build has no session, so BuildKit cannot ask for registry credentials. Before
-  the build, impd pulls each image a `FROM` line names outright and the host does not have yet, as
-  `imp image add` pulls it, with the credentials in impd's Docker config; BuildKit then uses the
-  local copy. It skips `scratch`, earlier stages and a `FROM` that uses an `ARG`. Such a `FROM` must
-  name a public image or one the host already has; a private one fails with `no active sessions`.
+- **Images the build names.** A build has no session, so BuildKit cannot ask for registry
+  credentials. Before the build, impd pulls each image that a `FROM`, a `COPY --from` or a
+  `RUN --mount=from=` names and the host does not have yet, as `imp image add` pulls it, with the
+  credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd then
+  refuses a `FROM` image whose config holds `ONBUILD` triggers, because they would run in this
+  build. BuildKit still asks the registry for a tag before it uses the host's copy, so impd does not
+  yet hold a build to the image it inspected.
+- **What impd refuses before the build.** impd reads the Dockerfile as the pinned frontend parses
+  it, and refuses with `BAD_REQUEST`:
+  - an `ADD` from a URL or a git remote (`http://`, `https://`, `git://`, `ssh://`,
+    `user@host:path`), which the engine would fetch from the host's network;
+  - a variable (`$`) in `FROM`, in an `ADD` source, in `COPY --from` or in `RUN --mount=from=`. impd
+    passes no build arguments, so write the image or the source literally;
+  - any `ONBUILD`, and `FROM --platform`;
+  - an ambiguous form: a quote, the escape character or a character that is not printable ASCII in a
+    `FROM` word, an `ADD` source or the flags of `FROM`, `ADD`, `COPY` and `RUN`, since the
+    frontend's lexer would read it another way than impd does.
+
+  These checks reject inputs and triggers. They do not isolate the build's network: a `RUN` step can
+  still fetch whatever it likes.
+
+- **The context impd builds.** impd writes the uploaded tar again as plain ustar, with pax records
+  only for long names, and builds that copy. The Dockerfile it checks is the one the engine reads,
+  and the lowercase `dockerfile` fallback works as in the frontend. impd refuses a context with two
+  entries at one name, a hard link, an entry under a symlink or a file, a device or a FIFO, a name
+  that is absolute or holds `..`, or a `security.*` or other xattr that is not `user.*`. It drops
+  `user.*` xattrs and sub-second mtimes. The engine applies no ignore file to the uploaded tar, so
+  the tar holds exactly the files `COPY .` sees.
 
 **CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
-reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
+reach the internet and anything the host's bridge can reach, the host's services on the bridge among
+them. impd's refusal of a remote `ADD` does not change that. Give `manage` only to callers you trust
 with that.
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
