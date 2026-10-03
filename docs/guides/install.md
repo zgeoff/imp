@@ -136,7 +136,8 @@ The phases run in order:
 - **storage:** Makes `--data-device` XFS with reflink (fstab by UUID), or creates the `--loop-file`
   on the root filesystem (fstab `loop`). Mounts it on `/var/lib/imp` with `nosuid`. With
   `/var/lib/imp` already mounted, it only checks it is XFS with reflink, and warns when it lacks
-  `nosuid`. With ZFS, see [ZFS](#zfs).
+  `nosuid`. An fstab entry an older bootstrap wrote, without `nosuid`, is kept with the same
+  warning. With ZFS, see [ZFS](#zfs).
 - **kernel:** Writes `vm.overcommit_memory = 1` and `vm.swappiness = 1` to
   `/etc/sysctl.d/90-imp.conf`, and `kvm`, `tun` and `loop` to `/etc/modules-load.d/imp.conf`, and
   applies both. Swap stays as the installer made it. With ZFS, also `zfs`, and the ARC cap in

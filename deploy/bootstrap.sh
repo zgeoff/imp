@@ -279,6 +279,21 @@ fstab_line() {
   esac
 }
 
+# fstab_entry_state FSTAB LINE: none when FSTAB has no entry for
+# /var/lib/imp, same when it has LINE, old when it has LINE as a bootstrap
+# before nosuid wrote it, other for anything else.
+fstab_entry_state() {
+  if ! grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" "$1"; then
+    echo none
+  elif grep -qxF "$2" "$1"; then
+    echo same
+  elif grep -qxF "${2/,nosuid/}" "$1"; then
+    echo old
+  else
+    echo other
+  fi
+}
+
 # ssh_ports_from_sshd_t: ports from `sshd -T` output on stdin.
 ssh_ports_from_sshd_t() { awk 'tolower($1) == "port" { print $2 }'; }
 
@@ -1206,12 +1221,12 @@ xfsprogs_version() {
 
 ensure_fstab() {
   local line=$1
-  if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
-    grep -qxF "$line" /etc/fstab \
-      || die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first"
-    return
-  fi
-  change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line"
+  case $(fstab_entry_state /etc/fstab "$line") in
+    none) change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line" ;;
+    same) ;;
+    old) warn "$DATA_DIR in /etc/fstab lacks nosuid; add it to the entry, then run: mount -o remount,nosuid $DATA_DIR" ;;
+    other) die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first" ;;
+  esac
 }
 
 append_line() { printf '%s\n' "$2" >>"$1"; }
