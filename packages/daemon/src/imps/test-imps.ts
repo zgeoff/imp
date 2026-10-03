@@ -225,12 +225,18 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   const flushed: string[] = [];
   const flushedPairs: string[] = [];
 
+  // each policy change's call to end the broker's tunnels, with its keep
+  const closedTunnels: { impId: string; keep: (host: string) => boolean }[] = [];
+
   const egress = createEgressService({
     config,
     db,
     log: printTestLog,
     isGranted: broker.isGranted,
-    closeTunnels: broker.closeTunnels,
+    closeTunnels: (impId, keep) => {
+      closedTunnels.push({ impId, keep });
+      broker.closeTunnels(impId, keep);
+    },
     runNft:
       options.runNft ??
       ((script) => {
@@ -370,6 +376,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     nftScripts,
     flushed,
     flushedPairs,
+    closedTunnels,
     bundleInstalls,
     storage,
     storageGate,

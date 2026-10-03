@@ -209,6 +209,31 @@ test('a public imp leaves only by the uplinks, and is refused the private ranges
   expect(verdicts).toEqual(['screen', 'screen']);
 });
 
+test('a change to public ends every plain tunnel, and one that stays public keeps them', async () => {
+  await using ctx = await setupImpTest();
+
+  await ctx.createTestImage('base');
+  await ctx.imps.createImp({ name: 'dev' });
+
+  const kept: boolean[] = [];
+
+  const readKeep = (): void => {
+    const keep = ctx.closedTunnels.at(-1)?.keep;
+
+    kept.push(keep?.('example.org') ?? true);
+  };
+
+  await ctx.egress.setPolicy('dev', { mode: 'public', allow: [] });
+
+  readKeep();
+
+  await ctx.egress.setPolicy('dev', { mode: 'public', allow: [] });
+
+  readKeep();
+
+  expect(kept).toEqual([false, true]);
+});
+
 test('a policy change nft does not take leaves the old policy in place', async () => {
   const state = { broken: false };
 

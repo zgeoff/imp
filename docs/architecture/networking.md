@@ -143,9 +143,9 @@ A change of policy applies at once, whatever the imp's state: the table is keyed
 nft does not take is undone, and the imp keeps its old policy. A box keeps the addresses some name
 on its new list covers. When the new policy is not `open`, impd deletes the guest's conntrack
 entries, so a flow the policy now denies ends on its next packet, and the broker closes the imp's
-plain tunnels to hosts the new policy denies: they are relays in impd, which conntrack never sees. A
-broker connection is tracked from the moment it is accepted, so one whose CONNECT arrives after the
-change is held to the new policy.
+plain tunnels to hosts the new policy denies, and all of them on a change to `public`: they are
+relays in impd, which conntrack never sees. A broker connection is tracked from the moment it is
+accepted, so one whose CONNECT arrives after the change is held to the new policy.
 
 Known limits:
 

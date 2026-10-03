@@ -623,8 +623,11 @@ export function createEgressService(deps: EgressDeps): EgressService {
         }
 
         // the guest's own flows the new policy may deny, and the broker's
-        // tunnels, which conntrack does not see
-        deps.closeTunnels(imp.id, (host) => isTunnelAllowed(policy, host));
+        // tunnels, which conntrack does not see. A tunnel is kept by its
+        // host, and one that becomes public was dialled under fewer checks.
+        const isNewlyPublic = policy.mode === 'public' && previous.mode !== 'public';
+
+        deps.closeTunnels(imp.id, (host) => !isNewlyPublic && isTunnelAllowed(policy, host));
 
         if (policy.mode !== 'open') {
           await flushConnections(imp.ip);
