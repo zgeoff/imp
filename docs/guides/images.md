@@ -10,11 +10,13 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
+| `coder/` → `imp/coder`          | the published base + Claude Code at a pinned version, no Node            |
 | `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
 ```sh
 imp image build images/dev --name dev       # FROM the published base, by digest
+imp image build images/coder --name coder   # or add the published imp-coder, below
 imp image build images/examples/hello --name hello
 imp image build images/base --name base     # optional: your own imp/base
 ```
@@ -24,6 +26,25 @@ a provenance attestation. A published tag never moves, but pin it by digest anyw
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
 `gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
 from ([releasing](../../RELEASING.md#what-a-release-ships)).
+
+## The coder image
+
+Each release also publishes `images/coder` as `ghcr.io/zgeoff/imp-coder:X.Y.Z`, linux/amd64 only,
+with a provenance attestation, so a host runs a coding agent without a build:
+
+```sh
+imp image add ghcr.io/zgeoff/imp-coder:X.Y.Z@sha256:… --name coder
+imp new work --image coder
+```
+
+It is the published base by digest plus the Claude Code binary at the exact version its Dockerfile
+pins, in `/usr/local/bin/claude`, checked against the sha256 from Anthropic's signed release
+manifest. It has no Node: the binary does not need it. The binary is owned by root in
+`/usr/local/bin`, which is what pins the version; `DISABLE_UPDATES=1` in the image keeps updates off
+by default. A release builds it FROM the base its Dockerfile pins, which is the base of an earlier
+release: the FROM line is a literal digest, since a build of the same release's base has no digest
+until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
+gives the steps to check a new Claude Code version.
 
 ## Build an image
 
