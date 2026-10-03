@@ -55,11 +55,15 @@ export function createCopyProgress(
         renderLine();
       }
     },
+
+    // ends the line once: a second call prints nothing
     finish: () => {
       if (output.isTTY && state.drawn) {
         renderLine();
 
         output.write('\n');
+
+        state.drawn = false;
       }
     },
   };
