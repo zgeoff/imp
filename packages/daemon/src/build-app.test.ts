@@ -51,6 +51,7 @@ test('it serves system.info from config and the database', async () => {
       imageBuildStream: true,
       imageOpStream: true,
       execRequire: true,
+      oauthGrants: true,
     },
     ksm: null,
   });

@@ -264,12 +264,14 @@ interface ImpdTestOptions {
 
   // the server's token is a manage token for these imps, not the root token
   readonly tokenImps?: readonly string[];
+  // impd's environment, such as the public route's
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
 export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  const harness = await setupImpTest();
+  const harness = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
 
   const guest = buildFakeGuest(options.oldAgent ?? false);
 
@@ -299,6 +301,7 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
     guest,
     client,
     rootClient: built.client,
+    publicMcp: built.publicMcp,
     peers: built.peers,
     url,
     token: TEST_TOKEN,

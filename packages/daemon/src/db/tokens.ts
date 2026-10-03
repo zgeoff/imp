@@ -74,10 +74,21 @@ export async function writeTokenRecord(
   });
 }
 
-// the token and its keys
+// the token, its keys, and the OAuth grants it approved with their tokens
 export async function removeTokenRecord(db: ImpDatabase, id: string): Promise<void> {
   await db.transaction().execute(async (trx) => {
     await trx.deleteFrom('token_ssh_keys').where('token_id', '=', id).execute();
+
+    await trx
+      .deleteFrom('oauth_tokens')
+      .where(
+        'grant_id',
+        'in',
+        trx.selectFrom('oauth_grants').select('id').where('token_id', '=', id),
+      )
+      .execute();
+
+    await trx.deleteFrom('oauth_grants').where('token_id', '=', id).execute();
     await trx.deleteFrom('tokens').where('id', '=', id).execute();
   });
 }

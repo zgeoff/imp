@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
@@ -43,6 +44,8 @@ import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { createNetworkService } from './networks/network-service';
+import { createOAuthService } from './oauth/oauth-service';
+import { startPublicListener } from './oauth/public-listener';
 import { printLog } from './process/print-log';
 import { runCommand } from './process/run-command';
 import { startTicker } from './process/ticker';
@@ -350,6 +353,16 @@ async function main(): Promise<void> {
     isFileKey: authorizedKeys.isListed,
   });
 
+  const oauth = createOAuthService({
+    db,
+    tokens,
+    revocations,
+    config: config.publicMcp,
+    now: Date.now,
+    log: printLog,
+    key: randomBytes(32),
+  });
+
   const peers = createForwardedPeers(Date.now);
 
   const tailnetNames =
@@ -404,6 +417,7 @@ async function main(): Promise<void> {
     rootToken: token,
     tokens,
     revocations,
+    oauth,
     peers,
     tailnet: buildTailnetAccess(config, readTailscale),
     imps,
@@ -449,6 +463,12 @@ async function main(): Promise<void> {
   });
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
+
+  // off unless the operator names the route's origin
+  const publicMcp =
+    config.publicMcp === null
+      ? null
+      : startPublicListener({ config: config.publicMcp, oauth, mcp: api.publicMcp }, printLog);
 
   const proxy = startWakeProxy({ config, db, imps, log: printLog, peers });
 
@@ -497,6 +517,7 @@ async function main(): Promise<void> {
 
   const tickers = [
     startTicker('idle', 2000, idle.runCheck, printLog),
+    startTicker('oauth-expiry', 3_600_000, oauth.removeExpired, printLog),
     startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
 
@@ -588,6 +609,10 @@ async function main(): Promise<void> {
     await runStopStep('ssh', readStepMs(), () => ssh?.stop() ?? Promise.resolve());
 
     api.closeExecSessions();
+
+    if (publicMcp !== null) {
+      await runStopStep('public-mcp', readStepMs(), () => publicMcp.stop());
+    }
 
     await runStopStep('api', readStepMs(), () => app.stop(true));
 

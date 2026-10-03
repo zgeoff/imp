@@ -27,6 +27,9 @@ export interface HttpTransportOptions extends McpServerOptions {
   // before the request is authenticated
   readonly isCrossOrigin: (request: Request) => boolean;
 
+  // the WWW-Authenticate a 401 carries; `Bearer` when left out
+  readonly challenge?: string;
+
   // between SSE comments, so no idle timeout ends a long call's stream
   readonly keepaliveMs?: number;
   readonly limits?: { readonly perCaller: number; readonly total: number; readonly idleMs: number };
@@ -51,6 +54,7 @@ const DEFAULT_LIMITS = { perCaller: 16, total: 256, idleMs: 3_600_000 };
 export function createHttpTransport(options: Readonly<HttpTransportOptions>): HttpTransport {
   const now = options.now ?? Date.now;
   const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
+  const challenge = options.challenge ?? 'Bearer';
 
   const sessions = createSessionStore({
     limits: options.limits ?? DEFAULT_LIMITS,
@@ -62,7 +66,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     const principal = await options.authenticate(request);
 
     if (principal === null) {
-      return buildText(401, 'unauthorized', { 'www-authenticate': 'Bearer' });
+      return buildText(401, 'unauthorized', { 'www-authenticate': challenge });
     }
 
     if (!(request.headers.get('content-type') ?? '').includes('application/json')) {
@@ -209,7 +213,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     const principal = await options.authenticate(request);
 
     if (principal === null) {
-      return buildText(401, 'unauthorized', { 'www-authenticate': 'Bearer' });
+      return buildText(401, 'unauthorized', { 'www-authenticate': challenge });
     }
 
     const found = findSession(request, principal);

@@ -128,6 +128,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     imps: null,
     grantable: [],
     tokenId: ROOT_TOKEN_ID,
+    grantId: null,
     expiresAt: null,
 
     // the root token and a root dashboard session
@@ -433,6 +434,7 @@ function toCaller(record: Readonly<TokenRecord>): Caller {
     imps: record.imps,
     grantable: record.grantable,
     tokenId: record.id,
+    grantId: null,
     expiresAt: null,
 
     // by id, not name: a deleted token's id never comes back, so a new token
