@@ -2,11 +2,14 @@
 
 ## [0.26.1](https://github.com/zgeoff/imp/compare/v0.26.0...v0.26.1) (2026-10-03)
 
-
 ### Bug Fixes
 
-* **deploy:** default the nixos module's image to its own release ([#142](https://github.com/zgeoff/imp/issues/142)) ([b90d094](https://github.com/zgeoff/imp/commit/b90d094649ca088ed55a4d5cdaa4586c26eab9ae))
-* **dev:** give each worktree its own dev image tag ([#139](https://github.com/zgeoff/imp/issues/139)) ([7f8cd32](https://github.com/zgeoff/imp/commit/7f8cd326bb8d7808cfe5a1b130bb7d17d4321da6))
+- **deploy:** default the nixos module's image to its own release
+  ([#142](https://github.com/zgeoff/imp/issues/142))
+  ([b90d094](https://github.com/zgeoff/imp/commit/b90d094649ca088ed55a4d5cdaa4586c26eab9ae))
+- **dev:** give each worktree its own dev image tag
+  ([#139](https://github.com/zgeoff/imp/issues/139))
+  ([7f8cd32](https://github.com/zgeoff/imp/commit/7f8cd326bb8d7808cfe5a1b130bb7d17d4321da6))
 
 ## [0.26.0](https://github.com/zgeoff/imp/compare/v0.25.1...v0.26.0) (2026-10-03)
 
