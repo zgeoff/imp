@@ -460,3 +460,21 @@ test("a drop-in's image counts as the units' own", async () => {
   expect(result.exitCode).toBe(0);
   expect(result.calls).toContain('systemctl restart imp-host\n');
 });
+
+test('an env file that sets IMP_HOST_IMAGE empty is refused before anything changes', async () => {
+  const envFile = 'IMP_PORT=7070\nIMP_HOST_IMAGE=\n';
+
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envImage: '',
+    envFile,
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('imp-host.env sets IMP_HOST_IMAGE= empty');
+  expect(result.envFile).toBe(envFile);
+  expect(result.calls).not.toContain('pull');
+  expect(result.calls).not.toContain('systemctl');
+});

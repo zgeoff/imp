@@ -882,6 +882,11 @@ preflight() {
   resolve_storage
   resolve_host_firewall
   resolve_ipv6
+  # --image writes the line again; without it the units would run no image
+  if [ -z "$image_set" ]; then
+    local refusal
+    refusal=$(check_env_image "$ENV_FILE" 2>&1) || die "$refusal; or pass --image"
+  fi
   if [ "$storage" = xfs ] && [ -z "$data_device" ] && [ -z "$loop_file" ] && ! mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is not mounted; give --data-device DEV or --loop-file PATH"
   fi
@@ -924,6 +929,16 @@ resolve_storage() {
   if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
     die "/etc/fstab has an entry for $DATA_DIR (XFS imps); ZFS would leave them behind"
   fi
+}
+
+# check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
+# is empty: systemd passes it over the units' own image, and docker run gets
+# none. Keep it equal to check_env_image in deploy/upgrade.sh.
+check_env_image() {
+  [ -f "$1" ] || return 0
+  [ "$(grep '^IMP_HOST_IMAGE=' "$1" | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
+  echo "$1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image" >&2
+  return 1
 }
 
 # resolve_host_firewall: the flag, else the env file, else own.
