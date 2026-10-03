@@ -9,7 +9,8 @@ meets the [host contract](../architecture/host-contract.md), as
 
 ```nix
 {
-  inputs.imp.url = "github:zgeoff/imp";
+  # a release tag: the module runs that release's image (see "The image")
+  inputs.imp.url = "github:zgeoff/imp/vX.Y.Z";
   # The module takes pkgs from your system; imp's own pin is for its checks only.
   inputs.imp.inputs.nixpkgs.follows = "nixpkgs";
 
@@ -64,8 +65,8 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   the same file ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). imp-host
   wants it and starts after it; a proxy that stops fails image work only. It closes the Docker
   socket path only: `SYS_ADMIN` still lets root out of the container. The module and the image must
-  come from the same release: pin `inputs.imp` and `image` (or `imageArchive`) together. The module
-  runs the image without `--privileged`, so an image from before that change
+  come from the same release ([the image](#the-image)). The module runs the image without
+  `--privileged`, so an image from before that change
   ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start, in `setup-storage`.
 - **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
@@ -84,6 +85,23 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
   no interface: `trustedInterfaces` would also open every host service, such as the k3s API, to imp
   traffic. `forwardDeny` drops ranges that imps may not reach through the host
   ([IPv6 and forwarding](#ipv6)).
+
+## The image
+
+`image` defaults to `ghcr.io/zgeoff/imp-host:X.Y.Z`, where `X.Y.Z` is the version in imp's
+`package.json`, so the module runs the image of its own release:
+
+- Pin `inputs.imp` to a release tag, such as `github:zgeoff/imp/vX.Y.Z`, and the image is pinned
+  with it. To upgrade, move the tag and rebuild.
+- From `main`, `package.json` holds the last release until the next one, so the default image can be
+  older than the module's code. Set `image` or `imageArchive` to an image built from the same
+  commit.
+- A release tag's image appears on ghcr.io when `release.yml` pushes it, about 30 to 60 minutes
+  after the tag. A rebuild in that window fails to pull it.
+- Set `image` to run another image. To pin a digest as well as the tag, set it to
+  `ghcr.io/zgeoff/imp-host:X.Y.Z@sha256:<digest>`.
+- `imageArchive` must hold `image`: save the archive under the versioned tag, not `:latest`, or
+  `imp-host-image.service` fails with "does not hold".
 
 ## IPv6
 
