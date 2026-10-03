@@ -56,7 +56,7 @@ import { setupSshDir } from './ssh/host-key';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { createDiskBudget } from './storage/disk-budget';
-import { createDiskUsageCache } from './storage/disk-usage-cache';
+import { CHANGES_USAGE, createDiskUsageCache } from './storage/disk-usage-cache';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { createStorageGate } from './storage/storage-gate';
@@ -277,8 +277,9 @@ async function main(): Promise<void> {
 
   // an imp that comes or goes opens or closes its proxy port and its grants
   subscribeImpWrites(db, (write) => {
-    // storage comes or goes with an imp or a checkpoint
-    if (write.kind !== 'changed') {
+    // storage comes or goes with an imp or a checkpoint, and changes when
+    // its disk grows or a stop or sleep writes it out
+    if (write.kind !== 'changed' || CHANGES_USAGE.has(write.reason)) {
       diskUsage.requestRefresh();
     }
 
