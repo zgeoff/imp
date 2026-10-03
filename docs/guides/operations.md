@@ -30,18 +30,37 @@ the host runs under compose; the default is the systemd unit. It needs `docker`,
 deploy/upgrade.sh
 ```
 
+Take `upgrade.sh` from the new image, not from the release the host runs. A host on the release
+before the Docker socket proxy must: its own `upgrade.sh` refuses the new image, whose
+`imp.host-contract` label is `socket-proxy`.
+
+```sh
+docker pull ghcr.io/zgeoff/imp-host:latest
+docker run --rm ghcr.io/zgeoff/imp-host:latest cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+bash upgrade.sh
+```
+
 1. It pulls `IMP_HOST_IMAGE` (from the environment, else `/etc/imp/imp-host.env`). It stops there
-   when the host already runs that image. It refuses an image from before the unprivileged host (no
-   `imp.host-contract` label) once the unit or compose file runs without `--privileged`.
+   when the host already runs that image. It refuses an image from before the Docker socket proxy
+   once the unit or compose file gives imp-host the proxy's socket, and an image from before the
+   unprivileged host (no `imp.host-contract` label) once it runs without `--privileged`. To go back
+   past either, run `deploy/bootstrap.sh` of that image's release.
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It installs the new image's seccomp profile in `/etc/imp/imp-host.seccomp.json` and, for the
-   systemd unit, its `imp-host.service`, so a change to the
-   [privileges](../architecture/host-contract.md#privileges) reaches the server. Keep local changes
-   to the unit in a drop-in (`imp-host.service.d/`). A compose file is the operator's: upgrade.sh
-   leaves it and says when it still runs `--privileged`.
-4. It restarts the host, waits for `/health` to report ready, prints the old image ID for a roll
-   back, prints the boot status counts from `imp info`, and lists the imps.
+   systemd unit, its `imp-host.service` and `imp-docker-proxy.service`, so a change to the
+   [privileges](../architecture/host-contract.md#privileges) or the
+   [Docker socket](../architecture/host-contract.md#the-docker-socket) reaches the server. Keep
+   local changes to a unit in a drop-in (`imp-host.service.d/`). A compose file is the operator's:
+   upgrade.sh leaves it, and says when it still runs `--privileged` or still gives imp-host the
+   host's `docker.sock`. Then take the `imp-docker-proxy` service and imp-host's volumes from this
+   release's `deploy/compose.yaml`. The proxy closes the Docker socket path only: `SYS_ADMIN` still
+   lets root out of the container.
+4. It enables and restarts `imp-docker-proxy`, then restarts the host (with compose, `up -d` of both
+   services, or of imp-host alone when the file has no proxy). It waits for `/health` to report
+   ready, prints how to roll back (`docker tag` the old image ID, then
+   `systemctl restart imp-docker-proxy imp-host`), prints the boot status counts from `imp info`,
+   and lists the imps.
 
 Imps then wake on demand. Each sleeping imp either restores its memory or boots its disk cold. The
 disk is never touched. [Snapshot identity](../architecture/sleep-and-wake.md#snapshot-identity) has
@@ -162,6 +181,9 @@ The API is `system.gc` with `{ dryRun?, orphans? }`. It returns `dryRun`, `dropp
 
 - `scripts/dev.sh logs` follows impd. Every boot, sleep and wake logs a line with its time and a
   breakdown per step.
+- `docker logs imp-docker-proxy` (`<name>-docker-proxy` for a dev instance) shows each Docker call
+  the proxy refused, with the rule
+  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
 - Each imp's serial console and Firecracker log go to `/var/lib/imp/imps/<id>/run/firecracker.log`
   in the container (`scripts/dev.sh shell`).
 - A service's output goes to `/var/log/imp/<name>.log` inside the imp. `imp logs <imp> <service>`

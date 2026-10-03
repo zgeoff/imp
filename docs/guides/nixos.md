@@ -57,10 +57,15 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 - **`imp-host.service`:** runs the image with the arguments in
   [`deploy/imp-host.args.json`](../../deploy/imp-host.args.json), the same file
   [`deploy/imp-host.service`](../../deploy/imp-host.service) comes from. Before each start it writes
-  `/etc/imp/imp-host.env` (0600), and loads `imageArchive` or pulls `image` when the image is
-  missing. With ZFS, it needs `imp-zfs-dataset.service`. The module and the image must come from the
-  same release: pin `inputs.imp` and `image` (or `imageArchive`) together. The module runs the image
-  without `--privileged`, so an image from before that change
+  `/etc/imp/imp-host.env` (0600). `imp-host-image.service` loads `imageArchive`, or pulls `image`
+  when the image is missing, before each start of either container. With ZFS, it needs
+  `imp-zfs-dataset.service`.
+- **`imp-docker-proxy.service`:** the only Docker socket imp-host sees, from the `proxy` section of
+  the same file ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). imp-host
+  wants it and starts after it; a proxy that stops fails image work only. It closes the Docker
+  socket path only: `SYS_ADMIN` still lets root out of the container. The module and the image must
+  come from the same release: pin `inputs.imp` and `image` (or `imageArchive`) together. The module
+  runs the image without `--privileged`, so an image from before that change
   ([#75](https://github.com/zgeoff/imp/issues/75)) fails at start, in `setup-storage`.
 - **Public imps:** `publicPorts`, such as `[ "443:7443" "80:7480" ]`, publishes the public
   listeners, as `IMP_PUBLIC_PORTS` does for the systemd unit
@@ -203,7 +208,7 @@ to use it ([how it works](./tailscale.md#how-it-works)):
 ## Check it
 
 ```sh
-systemctl status imp-host imp-zfs-dataset
+systemctl status imp-docker-proxy imp-host imp-zfs-dataset
 docker exec imp-host imp info
 docker exec imp-host imp new check --image ubuntu && docker exec imp-host imp exec check -- uname -a
 docker exec imp-host imp rm check
