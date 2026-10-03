@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config';
@@ -94,15 +102,17 @@ function createBuilderAnswer(onBuild: (dockerfile: string) => void, exported: Ui
   };
 }
 
-async function setupIsolatedBuild() {
-  const dataDir = join(dir, 'data');
+// exported: the builder's export, by default a tree with one file
+async function setupIsolatedBuild(exported = buildTar({ hello: 'from the builder\n' })) {
+  // one directory per setup, so a test may set up twice
+  const home = join(dir, `setup-${Bun.randomUUIDv7()}`);
+  const dataDir = join(home, 'data');
 
-  mkdirSync(dataDir);
+  mkdirSync(dataDir, { recursive: true });
 
   const db = await openDatabase(':memory:');
 
   const builtDockerfiles: string[] = [];
-  const exported = buildTar({ hello: 'from the builder\n' });
 
   const guest = createFakeGuest(
     createBuilderAnswer((dockerfile) => {
@@ -122,8 +132,8 @@ async function setupIsolatedBuild() {
   };
 
   // a host docker that logs every call: an isolated build makes none
-  const bin = join(dir, 'bin');
-  const hostLog = join(dir, 'host-docker.log');
+  const bin = join(home, 'bin');
+  const hostLog = join(home, 'host-docker.log');
 
   mkdirSync(bin);
 
@@ -203,4 +213,40 @@ test('a Dockerfile the input guard refuses boots no builder', async () => {
   expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
   expect(ctx.boots).toEqual([]);
   expect(ctx.guest.runs).toEqual([]);
+});
+
+// an export whose /etc/imp, or the image.json in it, a RUN step made a link
+// to the host path `target`
+function buildLinkedExport(linked: 'etc/imp' | 'etc/imp/image.json', target: string): Uint8Array {
+  const tree = join(dir, `tree-${Bun.randomUUIDv7()}`);
+
+  mkdirSync(join(tree, 'etc', 'imp'), { recursive: true });
+  rmSync(join(tree, linked), { recursive: true, force: true });
+  symlinkSync(target, join(tree, linked));
+
+  return Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout;
+}
+
+test("a built image's image.json link changes no host file", async () => {
+  const hostFile = join(dir, 'host-file');
+  const hostDir = join(dir, 'host-dir');
+
+  writeFileSync(hostFile, "the host's\n");
+  mkdirSync(hostDir);
+
+  const linkedFile = await setupIsolatedBuild(buildLinkedExport('etc/imp/image.json', hostFile));
+  const image = await linkedFile.runBuild('FROM base.test/a:1\nRUN true\n');
+
+  expect(image.digest).toMatch(/^imp-build-[a-f0-9]{64}$/v);
+
+  const linkedDir = await setupIsolatedBuild(buildLinkedExport('etc/imp', hostDir));
+
+  const failure = await linkedDir
+    .runBuild('FROM base.test/a:1\nRUN true\n')
+    .catch((error: unknown) => error);
+
+  expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+  expect(String(failure)).toContain("the image's /etc/imp is a symlink");
+  expect(readFileSync(hostFile, 'utf8')).toBe("the host's\n");
+  expect(existsSync(join(hostDir, 'image.json'))).toBe(false);
 });
