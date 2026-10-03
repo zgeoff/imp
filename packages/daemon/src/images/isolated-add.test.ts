@@ -539,7 +539,9 @@ test('a builder image pull that hangs fails at its timeout, naming IMP_BUILD_IMA
     `impd cannot add its builder image ${ctx.config.build.image} (IMP_BUILD_IMAGE)`,
   );
 
-  expect(String(failure)).toContain('the pull did not finish in 0.3 s');
+  expect(String(failure)).toContain(
+    `the pull did not finish in 0.3 s; on a slow link, pull ${ctx.config.build.image} on the host engine first (docker pull ${ctx.config.build.image})`,
+  );
 
   // the inspect that found no image, then the pull: nothing else on the host
   expect(ctx.readHostCalls().trim().split('\n')).toEqual([
@@ -616,4 +618,28 @@ test('a caller that goes stops waiting, and the pull it shared goes on for the o
 
   expect(builder).toMatchObject({ ref: ctx.config.build.image });
   expect(pulls).toHaveLength(1);
+});
+
+test('a builder image the host engine has already, pulled ahead by its reference, is not pulled', async () => {
+  await using ctx = await setupAdd({
+    hostDocker: (dataDir) => {
+      // the operator's own `docker pull` of IMP_BUILD_IMAGE
+      writeFileSync(join(dataDir, 'pulled'), '');
+
+      return buildBuilderHost(dataDir, HANG);
+    },
+    builderImagePullMs: 300,
+  });
+
+  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+
+  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  const pulls = ctx
+    .readHostCalls()
+    .split('\n')
+    .filter((call) => call.startsWith('pull '));
+
+  expect(builder).toMatchObject({ ref: ctx.config.build.image });
+  expect(pulls).toEqual([]);
 });
