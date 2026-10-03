@@ -22,8 +22,8 @@ const BootStatusSchema = z.object({
   }),
 });
 
-// the last pass over the public imps' DNS records, or the last read of
-// the DNS API token
+// the last pass over the public imps' DNS records, or a read of the DNS
+// API token as system info is asked for
 const PassStatusSchema = z.object({
   isOk: z.boolean(),
   error: z.string().nullable(),
@@ -33,8 +33,8 @@ const PassStatusSchema = z.object({
 const HttpsInfoSchema = z.object({
   domain: z.string(),
 
-  // null before the first read, and for a provider without a token; an
-  // error names the token file, never the token
+  // read as system info is asked for; null for a provider without a
+  // token. An error names the token file, never the token
   dnsToken: PassStatusSchema.nullable(),
 });
 

@@ -250,6 +250,28 @@ export function formatBackupStatus(status: Readonly<BackupStatus>): string {
   ].join('\n');
 }
 
+// `imp info`'s https line: the domain, and whether the DNS API token reads
+// now. No line from an impd before it.
+export function formatHttps(info: SystemInfo['https']): string[][] {
+  if (info === undefined) {
+    return [];
+  }
+
+  if (info === null) {
+    return [['https', 'off (IMP_DOMAIN unset)']];
+  }
+
+  const token = info.dnsToken;
+
+  if (token === null) {
+    return [['https', info.domain]];
+  }
+
+  const state = token.isOk ? 'DNS token ok' : `ERROR: ${token.error ?? 'the DNS token fails'}`;
+
+  return [['https', `${info.domain}, ${state}`]];
+}
+
 // what `imp info` says an upgrade left: the imps whose next wake boots
 // cold, and how many run each older part; an older impd does not count them
 export function formatBootStatus(

@@ -86,8 +86,8 @@ export interface RouterDeps {
   // the HTTPS service's public records, once it runs
   readonly publicRecords: PublicRecordsLink;
 
-  // the last read of the DNS API token; null without one
-  readonly readDnsTokenStatus: (() => DnsTokenStatus | null) | null;
+  // reads the DNS API token now; null for a provider without one
+  readonly checkDnsToken: (() => Promise<DnsTokenStatus>) | null;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
   readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
@@ -716,7 +716,7 @@ async function readSystemInfo(deps: RouterDeps): Promise<SystemInfo> {
     egress: { isEnforced: deps.egress.isEnforced() },
     ksm: readKsmInfo(deps, running, usage.headroomMib),
     public: readPublicInfo(deps.config, imps, deps.publicRecords.readStatus()),
-    https: readHttpsInfo(deps),
+    https: await readHttpsInfo(deps),
     features: SYSTEM_FEATURES,
   };
 }
@@ -742,14 +742,14 @@ function readPublicInfo(
   };
 }
 
-function readHttpsInfo(deps: RouterDeps): SystemInfo['https'] {
+async function readHttpsInfo(deps: RouterDeps): Promise<SystemInfo['https']> {
   const domain = deps.config.https?.domain;
 
   if (domain === undefined) {
     return null;
   }
 
-  const token = deps.readDnsTokenStatus?.() ?? null;
+  const token = deps.checkDnsToken === null ? null : await deps.checkDnsToken();
 
   return {
     domain,

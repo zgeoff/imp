@@ -35,12 +35,11 @@ async function readFailure(read: () => Promise<string>): Promise<string> {
 test('a token from the env is the value, always', async () => {
   const token = createDnsToken({ kind: 'value', value: SECRET }, () => 5);
 
-  expect(token.readStatus()).toBeNull();
-
   const value = await token.read();
+  const status = await token.check();
 
   expect(value).toBe(SECRET);
-  expect(token.readStatus()).toEqual({ isOk: true, error: null, at: 5 });
+  expect(status).toEqual({ isOk: true, error: null, at: 5 });
 });
 
 test('a token file is read at each use, so a new token works at once', async () => {
@@ -55,7 +54,6 @@ test('a token file is read at each use, so a new token works at once', async () 
   const second = await ctx.token.read();
 
   expect([first, second]).toEqual([SECRET, 'cf-rotated']);
-  expect(ctx.token.readStatus()).toEqual({ isOk: true, error: null, at: 1000 });
 });
 
 test('a missing file names the path and the error code', async () => {
@@ -65,7 +63,9 @@ test('a missing file names the path and the error code', async () => {
 
   expect(message).toBe(`cannot read the DNS API token from ${ctx.path}: ENOENT`);
 
-  expect(ctx.token.readStatus()).toEqual({
+  const status = await ctx.token.check();
+
+  expect(status).toEqual({
     isOk: false,
     error: `cannot read the DNS API token from ${ctx.path}: ENOENT`,
     at: 1000,
@@ -96,24 +96,24 @@ test('whitespace or = inside the token is refused, without the token in the mess
       `the DNS API token file ${ctx.path} holds whitespace or '=' inside the token`,
     );
 
+    const status = await ctx.token.check();
+
     expect(message).not.toContain(SECRET);
-    expect(ctx.token.readStatus()?.error).not.toContain(SECRET);
+    expect(status.error).not.toContain(SECRET);
   }
 });
 
-test('a failure, then a good read: the status follows the last read', async () => {
+test('a check reads the file again each time, so it shows the token as it is now', async () => {
   using ctx = setup();
 
-  await readRejection(ctx.token.read());
-
-  expect(ctx.token.readStatus()?.isOk).toBe(false);
+  const missing = await ctx.token.check();
 
   ctx.write(SECRET);
 
   ctx.clock.now = 2000;
 
-  const token = await ctx.token.read();
+  const fixed = await ctx.token.check();
 
-  expect(token).toBe(SECRET);
-  expect(ctx.token.readStatus()).toEqual({ isOk: true, error: null, at: 2000 });
+  expect(missing.isOk).toBe(false);
+  expect(fixed).toEqual({ isOk: true, error: null, at: 2000 });
 });

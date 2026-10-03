@@ -410,7 +410,7 @@ async function main(): Promise<void> {
     readTailscale,
     readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
     publicRecords,
-    readDnsTokenStatus: dnsToken?.readStatus ?? null,
+    checkDnsToken: dnsToken?.check ?? null,
     isReady: () => state.ready,
     now: Date.now,
     log: printLog,

@@ -23,6 +23,7 @@ import { openDatabase } from '../db/open-database';
 import type { ImpDatabase } from '../db/open-database';
 import { createEgressService } from '../egress/egress-service';
 import { createGovernedImps } from '../governor/create-governed-imps';
+import { createDnsToken } from '../https/dns/dns-token';
 import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { createImageService } from '../images/image-service';
@@ -486,6 +487,10 @@ export function buildTestApp(
     log: () => {},
   });
 
+  // the DNS API token as main reads it, for system info
+  const dnsTokenSource = ctx.config.https?.dns.token ?? null;
+  const dnsToken = dnsTokenSource === null ? null : createDnsToken(dnsTokenSource, ctx.now);
+
   const built = buildApp({
     config: ctx.config,
     db: ctx.db,
@@ -518,7 +523,7 @@ export function buildTestApp(
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
     readTailnetNames: null,
     publicRecords: createPublicRecordsLink(),
-    readDnsTokenStatus: null,
+    checkDnsToken: dnsToken?.check ?? null,
     isReady: () => true,
     now: ctx.now,
     log: ctx.log,

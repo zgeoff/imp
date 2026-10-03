@@ -8,7 +8,7 @@ export type DnsTokenSource =
   | { readonly kind: 'value'; readonly value: string }
   | { readonly kind: 'file'; readonly path: string };
 
-// the last read of the token; a value from the env never fails
+// whether the token reads now; a value from the env always does
 export interface DnsTokenStatus {
   readonly isOk: boolean;
 
@@ -20,32 +20,27 @@ export interface DnsTokenStatus {
 export interface DnsToken {
   // the token now; throws when the file has none
   readonly read: () => Promise<string>;
-  readonly readStatus: () => DnsTokenStatus | null;
+
+  // reads the file again, for system info: a status kept from the last DNS
+  // call would say nothing before the first, and stay stale between them
+  readonly check: () => Promise<DnsTokenStatus>;
 }
 
 export function createDnsToken(source: DnsTokenSource, now: () => number): DnsToken {
-  let status: DnsTokenStatus | null = null;
+  const read = (): Promise<string> =>
+    source.kind === 'value' ? Promise.resolve(source.value) : readTokenFile(source.path);
 
   return {
-    read: async () => {
-      if (source.kind === 'value') {
-        status = { isOk: true, error: null, at: now() };
-
-        return source.value;
-      }
-
+    read,
+    check: async () => {
       try {
-        const token = await readTokenFile(source.path);
+        await read();
 
-        status = { isOk: true, error: null, at: now() };
-
-        return token;
+        return { isOk: true, error: null, at: now() };
       } catch (error) {
-        status = { isOk: false, error: readErrorMessage(error), at: now() };
-        throw error;
+        return { isOk: false, error: readErrorMessage(error), at: now() };
       }
     },
-    readStatus: () => status,
   };
 }
 

@@ -1,6 +1,6 @@
 import type { SystemInfo } from '@imp/api';
 import { defineCommand } from '../define-command';
-import { formatBootStatus, formatJson } from '../format-output';
+import { formatBootStatus, formatHttps, formatJson } from '../format-output';
 import { runAction } from '../run-action';
 import { jsonArg } from './common-args';
 
@@ -77,29 +77,6 @@ function formatPublic(info: SystemInfo['public']): string {
   }
 
   return `${String(info.imps)} imps at ${info.ip}, ${state}`;
-}
-
-// HTTPS on the domain, and whether the DNS API token reads; no line from
-// an impd before it
-function formatHttps(info: SystemInfo['https']): string[][] {
-  if (info === undefined) {
-    return [];
-  }
-
-  if (info === null) {
-    return [['https', 'off (IMP_DOMAIN unset)']];
-  }
-
-  const token = info.dnsToken;
-  let state = '';
-
-  if (token !== null) {
-    state = token.isOk
-      ? ', DNS token ok'
-      : `, DNS token failing at ${token.at.toISOString()}: ${token.error ?? ''}`;
-  }
-
-  return [['https', `${info.domain}${state}`]];
 }
 
 // what sleeping imps take back on a wake; nothing from an impd before it

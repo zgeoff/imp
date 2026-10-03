@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
 import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
@@ -138,6 +140,39 @@ test('it reports the https URL when impd has a domain', async () => {
   expect(urls.https).toBe('https://box.imp.example.com');
 });
 
+test('without its DNS token file, the API still answers and system.info names the file as an error', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-dns-token-'));
+  const tokenPath = join(dir, 'dns-api-token');
+
+  try {
+    await using ctx = await setupTest(TEST_TOKEN, {
+      IMP_DOMAIN: 'imp.example.com',
+      IMP_DNS_PROVIDER: 'cloudflare',
+      IMP_DNS_API_TOKEN_FILE: tokenPath,
+    });
+
+    const missing = await ctx.client.system.info();
+
+    expect(missing.https?.domain).toBe('imp.example.com');
+
+    expect(missing.https?.dnsToken).toMatchObject({
+      isOk: false,
+      error: `cannot read the DNS API token from ${tokenPath}: ENOENT`,
+    });
+
+    // the operator puts the token in place; the next ask sees it, with no
+    // restart, and never shows it
+    writeFileSync(tokenPath, 'cf-secret-token\n');
+
+    const fixed = await ctx.client.system.info();
+
+    expect(fixed.https?.dnsToken?.isOk).toBe(true);
+    expect(JSON.stringify([missing, fixed])).not.toContain('cf-secret-token');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const PUBLIC_ENV = {
   IMP_DOMAIN: 'imp.example.com',
   IMP_DNS_PROVIDER: 'cloudflare',
@@ -168,7 +203,8 @@ test('expose makes an imp public with a credential shown once, and unexpose ends
   expect(imp.public).toEqual({ auth: 'basic' });
   expect(urls.public).toBe('https://web.imp.example.com');
   expect(info.public).toEqual({ ip: '203.0.113.7', imps: 1, records: null });
-  expect(info.https).toEqual({ domain: 'imp.example.com', dnsToken: null });
+  expect(info.https?.domain).toBe('imp.example.com');
+  expect(info.https?.dnsToken).toMatchObject({ isOk: true, error: null });
 
   // only a hash is kept
   const row = await ctx.db
