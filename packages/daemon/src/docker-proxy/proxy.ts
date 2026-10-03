@@ -20,9 +20,6 @@ export const PROXY_LABEL = 'imp.docker-proxy';
 // a create body from the CLI is about 2 KiB
 const CREATE_BODY_MAX_BYTES = 1024 ** 2;
 
-// headers the engine reads on the routes above; every other one is dropped
-const FORWARDED_HEADERS = ['content-type', 'x-registry-auth', 'x-registry-config'];
-
 // response headers the proxy sets itself, or that belong to one connection
 const DROPPED_RESPONSE_HEADERS = new Set([
   'connection',
@@ -140,6 +137,10 @@ interface UpstreamCall {
   readonly query?: ReadonlyMap<string, readonly string[]>;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string | ReadableStream<Uint8Array> | null;
+
+  // the client's: a client that goes ends a build, a pull or an export on
+  // the engine too
+  readonly signal?: AbortSignal;
 }
 
 export function createDockerProxy(
@@ -157,6 +158,7 @@ export function createDockerProxy(
       duplex: 'half',
       redirect: 'manual',
       decompress: false,
+      ...(call.signal !== undefined && { signal: call.signal }),
     });
   };
 
@@ -252,8 +254,9 @@ export function createDockerProxy(
         method: 'POST',
         path: '/build',
         query: routed.query,
-        headers: pickHeaders(request, FORWARDED_HEADERS),
+        headers: pickHeaders(request, ['content-type']),
         body,
+        signal: request.signal,
       });
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
@@ -291,6 +294,7 @@ export function createDockerProxy(
       path: '/images/create',
       query,
       headers: pickHeaders(request, ['x-registry-auth']),
+      signal: request.signal,
     });
   };
 
@@ -319,7 +323,11 @@ export function createDockerProxy(
       });
     }
 
-    return sendAndRelay(versionPrefix, { method: 'GET', path: `/containers/${fullId}/export` });
+    return sendAndRelay(versionPrefix, {
+      method: 'GET',
+      path: `/containers/${fullId}/export`,
+      signal: request.signal,
+    });
   };
 
   const checkRouteQuery = (routed: RoutedRequest): Check => {
