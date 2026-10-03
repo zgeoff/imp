@@ -7,11 +7,15 @@ const SleptEventSchema = z.object({
   ev: z.literal('ImpChanged'),
   reason: z.literal('slept'),
   at: z.iso.datetime(),
-  detail: z.object({ durationMs: z.int().nonnegative(), trigger: z.string().optional() }),
+  detail: z.object({
+    durationMs: z.int().nonnegative(),
+    prepareMs: z.int().nonnegative().optional(),
+    trigger: z.string().optional(),
+  }),
 });
 
-// an `imp events` line as a sleep, from the event's own time less the length
-// impd measured; null for every other event
+// an `imp events` line as a sleep, from the event's own time less what impd
+// measured before and in the pause; null for every other event
 export function parseSleepSpan(line: string): SleepSpan | null {
   const event = SleptEventSchema.safeParse(JSON.parse(line));
 
@@ -21,8 +25,11 @@ export function parseSleepSpan(line: string): SleepSpan | null {
 
   const endAt = Date.parse(event.data.at);
 
+  // an impd older than prepareMs sends none: its start then reads late
+  const prepareMs = event.data.detail.prepareMs ?? 0;
+
   return {
-    startAt: endAt - event.data.detail.durationMs,
+    startAt: endAt - event.data.detail.durationMs - prepareMs,
     endAt,
     isEnforce: event.data.detail.trigger === ENFORCE_TRIGGER,
   };
