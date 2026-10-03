@@ -302,6 +302,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
+  // per guest digest, the writers whose row is not written yet, and whether
+  // one made its rootfs or a removal waits on them: the last to end removes
+  // it if no row took it, under a lock, so no new writer finds it as it goes
+  const guestWriters = new Map<string, number>();
+  const freshRootfs = new Set<string>();
+
+  const guestRootfsLock = createKeyedMutex();
+
   const readInspect = async (ref: string, signal?: AbortSignal) => {
     const options = signal === undefined ? {} : { signal };
 
@@ -435,7 +443,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const updated = await updateImage(deps.db, existing.id, { ref, digest, sizeBytes });
 
-    await removeUnusedRootfs(existing.digest);
+    await removeIdleRootfs(existing.digest);
 
     return updated;
   };
@@ -448,6 +456,20 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       await deps.storage.removeImage(digest);
     }
   };
+
+  // removeUnusedRootfs, but while a guest build of the digest counts, which
+  // may have found the rootfs and not yet written its row, the last such
+  // build decides
+  const removeIdleRootfs = (digest: string): Promise<void> =>
+    guestRootfsLock.runExclusive(digest, async () => {
+      if (guestWriters.has(digest)) {
+        freshRootfs.add(digest);
+
+        return;
+      }
+
+      await removeUnusedRootfs(digest);
+    });
 
   // An image of the host's engine, pulled there when it lacks it: the
   // builders' own image, and every add and build under
@@ -712,14 +734,6 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
     );
 
-  // per guest digest, the writers whose row is not written yet, and whether
-  // one made its rootfs: the last to end removes one no row took, under a
-  // lock, so no new writer finds that rootfs as it goes
-  const guestWriters = new Map<string, number>();
-  const freshRootfs = new Set<string>();
-
-  const guestRootfsLock = createKeyedMutex();
-
   const writeGuestRootfsAndRow = async (guest: Readonly<GuestRootfs>): Promise<ImageRecord> => {
     const digest = guest.digest;
     const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
@@ -733,16 +747,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       guest.signal.throwIfAborted();
 
-      const sizeBytes = await createRootfsOnce(digest, async () => {
+      const sizeBytes = await createRootfsOnce(digest, () => {
         if (existsSync(rootfs)) {
-          return readDiskUsage(rootfs);
+          return Promise.resolve(readDiskUsage(rootfs));
         }
 
-        const written = await writeRootfs(guest.root, digest, guest.config);
-
+        // marked first: a write that fails after it published the rootfs, as
+        // a ZFS mount can, still leaves it to the cleanup below
         freshRootfs.add(digest);
 
-        return written;
+        return writeRootfs(guest.root, digest, guest.config);
       });
 
       // a cancel during mkfs.ext4 commits nothing
@@ -1029,7 +1043,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       await storageGate.join(async () => {
         await removeImage(deps.db, image.id);
-        await removeUnusedRootfs(image.digest);
+        await removeIdleRootfs(image.digest);
       });
     },
     resolveImage,

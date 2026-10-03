@@ -11,12 +11,14 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { KyselyPlugin } from 'kysely';
 import { loadConfig } from '../config';
 import { createImage, findImageByName, listImages } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
+import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import type { Builders } from './builder-imps';
@@ -112,6 +114,49 @@ function createBuilderAnswer(
   };
 }
 
+// Holds the result of the first select that names `name` once armed, until
+// released: a build stops there between finding its rootfs and its row.
+function createQueryGate(name: string) {
+  const state = { armed: false, held: new Set<unknown>() };
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+
+  const plugin: KyselyPlugin = {
+    transformQuery: (args) => {
+      const isNamed =
+        args.node.kind === 'SelectQueryNode' && JSON.stringify(args.node).includes(`"${name}"`);
+
+      if (state.armed && isNamed) {
+        state.armed = false;
+
+        state.held.add(args.queryId);
+      }
+
+      return args.node;
+    },
+    transformResult: async (args) => {
+      if (state.held.has(args.queryId)) {
+        reached.resolve();
+
+        await released.promise;
+      }
+
+      return args.result;
+    },
+  };
+
+  return {
+    plugin,
+    arm: () => {
+      state.armed = true;
+    },
+    reached: reached.promise,
+    release: () => {
+      released.resolve();
+    },
+  };
+}
+
 interface IsolatedBuildOptions {
   // the builder's export, by default a tree with one file
   readonly exported?: Uint8Array;
@@ -124,6 +169,11 @@ interface IsolatedBuildOptions {
   // runs as the export starts; mkfs.ext4 waits for startMkfs
   readonly onExport?: () => Promise<void>;
   readonly pauseMkfs?: boolean;
+
+  // a select of this name the gate can hold; a rootfs write that fails once
+  // published
+  readonly gatedName?: string;
+  readonly failAfterPublish?: boolean;
 }
 
 async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) {
@@ -209,10 +259,25 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     writeFileSync(mkfsReleased, '');
   };
 
+  const gate = createQueryGate(options.gatedName ?? '');
+  const xfs = createXfsBackend({ dataDir });
+
+  const storage: StorageBackend =
+    options.failAfterPublish === true
+      ? {
+          ...xfs,
+          createImage: async (digest, write) => {
+            await xfs.createImage(digest, write);
+
+            throw new Error('the mount failed');
+          },
+        }
+      : xfs;
+
   const images = createImageService({
     config: loadConfig({ ...options.env, IMP_DATA_DIR: dataDir }),
-    db,
-    storage: createXfsBackend({ dataDir }),
+    db: db.withPlugin(gate.plugin),
+    storage,
     storageGate: createStorageGate(),
     diskBudget: {
       withRoom: diskBudget.withRoom,
@@ -270,6 +335,8 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     boots,
     grows,
     live,
+    images,
+    gate,
     diskBudget,
     waitForMkfs,
     startMkfs,
@@ -450,6 +517,90 @@ test('a build whose row fails keeps the rootfs another build of the digest is wr
   expect(String(failure)).toContain('image web is a template');
   expect(image).toMatchObject({ name: 'web2' });
   expect(existsSync(buildImagePaths(ctx.dataDir, image.digest).rootfs)).toBe(true);
+});
+
+// A build of web's digest held between finding its rootfs and writing its
+// row while `imp image rm web` runs; `failRow` makes that row fail too
+async function runRemoveDuringRow(failRow: boolean) {
+  const exports = { count: 0 };
+  const holder: { arm?: () => void } = {};
+
+  // the second build's export arms the gate, after its name check
+  const ctx = await setupIsolatedBuild({
+    gatedName: 'web2',
+    onExport: () => {
+      exports.count += 1;
+
+      if (exports.count === 2) {
+        holder.arm?.();
+      }
+
+      return Promise.resolve();
+    },
+  });
+
+  holder.arm = ctx.gate.arm;
+
+  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+
+  const first = await ctx.runBuild(dockerfile);
+
+  const second = readRejection(ctx.runBuild(dockerfile, new AbortController().signal, 'web2'));
+
+  await ctx.gate.reached;
+
+  await ctx.images.removeImage('web');
+
+  if (failRow) {
+    await createImage(ctx.db, {
+      name: 'web2',
+      ref: 'imp:dev',
+      digest: `sha256:${'b'.repeat(64)}`,
+      sizeBytes: 1,
+      source: 'imp',
+      sourceImp: 'dev',
+    });
+  }
+
+  ctx.gate.release();
+
+  const end = await second;
+  const rows = await listImages(ctx.db);
+
+  const rootfs = buildImagePaths(ctx.dataDir, first.digest).rootfs;
+
+  return {
+    end,
+    rows: rows.map((row) => [row.name, row.digest]),
+    hasRootfs: existsSync(rootfs),
+    first,
+  };
+}
+
+test('an image rm while a build of its digest is between its rootfs and its row keeps that rootfs', async () => {
+  const kept = await runRemoveDuringRow(false);
+
+  expect(kept.end).toBeNull();
+  expect(kept.rows).toEqual([['web2', kept.first.digest]]);
+  expect(kept.hasRootfs).toBe(true);
+});
+
+test("that rootfs goes after all when the build's row then fails", async () => {
+  const failed = await runRemoveDuringRow(true);
+
+  expect(failed.end).toBeInstanceOf(Error);
+  expect(failed.rows).toEqual([['web2', `sha256:${'b'.repeat(64)}`]]);
+  expect(failed.hasRootfs).toBe(false);
+});
+
+test('a rootfs whose write fails after it is published goes with the build', async () => {
+  const ctx = await setupIsolatedBuild({ failAfterPublish: true });
+  const failure = await readRejection(ctx.runBuild('FROM base.test/a:1\nRUN true\n'));
+  const rows = await listImages(ctx.db);
+
+  expect(String(failure)).toContain('the mount failed');
+  expect(rows).toEqual([]);
+  expect(listBuiltRootfs(ctx.dataDir)).toEqual([]);
 });
 
 test('a client that goes while mkfs.ext4 runs leaves no row and no rootfs', async () => {
