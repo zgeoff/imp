@@ -192,9 +192,10 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 What stays open through the proxy, by design or until later work:
 
 - A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
-  through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
-  because BuildKit pulls it itself. BuildKit also pulls the pinned frontend from Docker Hub on a
-  host's first build, so a host with no route to Docker Hub cannot build.
+  through the bridge gateway. impd pulls a literal `FROM` image the host lacks before the build,
+  through the pull rule, but `FROM $BASE` with `ARG BASE=127.0.0.1:5000/x` goes around it, because
+  BuildKit pulls it itself. BuildKit also pulls the pinned frontend from Docker Hub on a host's
+  first build, so a host with no route to Docker Hub cannot build.
 - `ADD http://...` and `ADD <git url>` are fetched by dockerd itself, in the host's network
   namespace, as with the classic builder: they reach services on the host's loopback and link-local
   addresses such as `169.254.169.254`.

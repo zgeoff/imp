@@ -53,6 +53,11 @@ context.
   build. `imp-docker-proxy` allows only this build
   ([the Docker socket](../architecture/host-contract.md#the-docker-socket)). The proxy closes the
   Docker socket path only: imp-host keeps `SYS_ADMIN`, which still lets root out of the container.
+- **Base images.** A build has no session, so BuildKit cannot ask for registry credentials. Before
+  the build, impd pulls each image a `FROM` line names outright and the host does not have yet, as
+  `imp image add` pulls it, with the credentials in impd's Docker config; BuildKit then uses the
+  local copy. It skips `scratch`, earlier stages and a `FROM` that uses an `ARG`. Such a `FROM` must
+  name a public image or one the host already has; a private one fails with `no active sessions`.
 
 **CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
 reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
