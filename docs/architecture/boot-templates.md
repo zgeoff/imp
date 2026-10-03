@@ -61,9 +61,10 @@ When the shape has a template, a cold boot:
 1. Starts Firecracker in the imp's cgroup.
 2. Loads the snapshot with `resume_vm: false`, `network_overrides` (the imp's tap) and
    `vsock_override` (the imp's socket).
-3. Resumes the VM and waits for the parked ping. Meanwhile the host prepares the imp's disk: a new
-   imp's is cloned and grown; a restore from a checkpoint or a backup copies or downloads it, and
-   the parked guest waits for it.
+3. Resumes the VM and waits for the parked ping. Meanwhile the host grows a new imp's disk, and the
+   parked guest waits for it. The disk itself is cloned, copied or downloaded before step 1: on ZFS
+   it is a dataset mounted under the imp's directory, and the jail sees only the mounts made before
+   it is prepared.
 4. Points `rootfs` at the imp's disk with `PATCH /drives/rootfs` and its absolute path, once the
    disk is ready. The config change is how virtio-blk tells the guest the disk's new size.
 5. Sends `claim`, and waits for the booted agent's ping, as a cold boot does.
@@ -216,11 +217,11 @@ The `boot-templates` e2e suite times 10 `imp new` runs through the CLI and write
 impd's own part (`created in`) was 371 ms. impd logs it per create with the step spans on the boot's
 line.
 
-Since then, the disk is cloned and grown while the template restores, and the agent boots on in the
-process that parked, with its system mounts made before the template parks. impd's part is now
-276-300 ms p50. `imp new` through the compiled CLI is about 350 ms end to end: the CLI's own start
-and round trip add about 70 ms (about 100 ms for `scripts/imp`, which runs the CLI from source). The
-e2e `cli` span also counts the test process that spawns the CLI, so it reads higher.
+Since then, the disk is grown while the template restores, and the agent boots on in the process
+that parked, with its system mounts made before the template parks. impd's part is now 276-300 ms
+p50. `imp new` through the compiled CLI is about 350 ms end to end: the CLI's own start and round
+trip add about 70 ms (about 100 ms for `scripts/imp`, which runs the CLI from source). The e2e `cli`
+span also counts the test process that spawns the CLI, so it reads higher.
 
 The grow of a new disk past the image's filesystem is a known cost: with `--disk 4g`, the image's
 own size, impd's part was 272 ms before the overlap, against 345 ms with the default disk. A default
