@@ -29,7 +29,8 @@ import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import { DockerBuildError, runDockerBuild } from './docker-build';
-import { listBaseImages } from './dockerfile-bases';
+import { listBaseImages } from './dockerfile-check';
+import { DockerfileError } from './dockerfile-error';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
@@ -280,7 +281,17 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // the Dockerfile names and the host lacks is pulled first, as `imp image
   // add` does. A client that goes kills the pull, and no later one starts.
   const loadBaseImages = async (dockerfile: string, signal: AbortSignal): Promise<void> => {
-    for (const ref of listBaseImages(dockerfile)) {
+    const refs = (() => {
+      try {
+        return listBaseImages(dockerfile);
+      } catch (error) {
+        throw error instanceof DockerfileError
+          ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
+          : error;
+      }
+    })();
+
+    for (const ref of refs) {
       if (!ImageRefSchema.safeParse(ref).success) {
         throw new ORPCError('BAD_REQUEST', {
           message: `FROM ${JSON.stringify(ref)} is not an image reference`,
