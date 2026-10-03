@@ -14,7 +14,7 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
-import { REPO_ROOT } from '../lib/instance';
+import { REPO_ROOT, runChecked } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -22,6 +22,8 @@ const prefix = setupSuite('images');
 const hello = `${prefix}hello`;
 const built = `${prefix}built`;
 const caps = `${prefix}caps`;
+const onHost = `${prefix}onhost`;
+const rejected = `${prefix}rejected`;
 const HELLO_DIR = join(REPO_ROOT, 'images', 'examples', 'hello');
 
 // under the repo: scripts/dev.sh mounts it at the same path in the container,
@@ -41,7 +43,7 @@ afterAll(async () => {
     return;
   }
 
-  for (const image of [hello, built, caps]) {
+  for (const image of [hello, built, caps, onHost]) {
     await tryImp(['image', 'rm', image]);
   }
 });
@@ -149,4 +151,62 @@ test('a file capability survives the build: nobody binds port 80 with it, and no
   } finally {
     await removeImps(caps);
   }
+});
+
+// a context directory under buildDir with this Dockerfile
+function writeContext(name: string, dockerfile: string): string {
+  const dir = join(buildDir, name);
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'Dockerfile'), dockerfile);
+
+  return dir;
+}
+
+test('a build from a host path leaves out what .dockerignore drops, as an upload does', async () => {
+  const dir = writeContext('on-host', 'FROM busybox:1.37\nCOPY . /ctx/\n');
+
+  writeFileSync(join(dir, '.dockerignore'), '*.secret\n');
+  writeFileSync(join(dir, 'kept.txt'), 'kept');
+  writeFileSync(join(dir, 'dropped.secret'), 'dropped');
+
+  await runImp('image', 'build', dir, '--name', onHost, '--on-host');
+
+  const listed = await runChecked(['docker', 'run', '--rm', `imp/${onHost}:latest`, 'ls', '/ctx']);
+
+  expect(listed.trim().split('\n')).toEqual(['Dockerfile', 'kept.txt']);
+
+  await runImp('image', 'rm', onHost);
+});
+
+test('a # syntax= line cannot pick the frontend: the pinned one builds it', async () => {
+  const dir = writeContext(
+    'syntax',
+    '# syntax=example.invalid/not-a-frontend:1\nFROM busybox:1.37\nRUN --mount=type=cache,target=/c true\n',
+  );
+
+  await runImp('image', 'build', dir, '--name', onHost);
+  await runImp('image', 'rm', onHost);
+});
+
+test('a RUN step cannot ask for the host network or insecure mode', async () => {
+  const hostNet = writeContext('host-net', 'FROM busybox:1.37\nRUN --network=host true\n');
+  const insecure = writeContext('insecure', 'FROM busybox:1.37\nRUN --security=insecure true\n');
+
+  const netResult = await tryImp(['image', 'build', hostNet, '--name', rejected]);
+  const insecureResult = await tryImp(['image', 'build', insecure, '--name', rejected]);
+
+  expect(netResult.exitCode).not.toBe(0);
+  expect(netResult.stderr).toContain('network.host is not allowed');
+  expect(insecureResult.exitCode).not.toBe(0);
+
+  // docker/dockerfile:1.19 keeps --security in its labs channel; later ones parse it, and the
+  // engine refuses the entitlement
+  expect(insecureResult.stderr).toMatch(
+    /security\.insecure is not allowed|unknown flag: --security/v,
+  );
+
+  const images = await listImageNames();
+
+  expect(images).not.toContain(rejected);
 });

@@ -1,4 +1,6 @@
 import { afterAll, expect, test } from 'bun:test';
+import * as z from 'zod';
+import { DOCKERFILE_FRONTEND } from '../../../packages/daemon/src/docker-proxy/dockerfile-frontend';
 import { resolveImageName } from '../lib/fixtures';
 import { runImp, runInImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
@@ -35,9 +37,37 @@ async function readRefusal(script: string): Promise<string> {
   return result.stderr;
 }
 
-// a classic build of FROM busybox with these -t flags
-function buildScript(tags: string): string {
-  return `printf 'FROM busybox\\n' | DOCKER_BUILDKIT=0 docker build -q ${tags} -`;
+// POST /build to the proxy as root in the container, with a context of
+// FROM busybox; each param is [key, value], sent as given. Prints the
+// answer's body, then its status.
+function buildScript(params: readonly (readonly [string, string])[], path = '/build'): string {
+  const query = new URLSearchParams();
+
+  for (const [key, value] of params) {
+    query.append(key, value);
+  }
+
+  return [
+    String.raw`d=$(mktemp -d) && printf "FROM busybox\n" >"$d/Dockerfile" &&`,
+    `tar -C "$d" -c Dockerfile | curl -sS --unix-socket /run/imp-docker/docker.sock`,
+    `-X POST -H 'Content-Type: application/x-tar' --data-binary @-`,
+    `-w ' %{http_code}' 'http://docker${path}?${query.toString()}'`,
+  ].join(' ');
+}
+
+const PIN = ['buildargs', JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })] as const;
+const RefusalSchema = z.object({ message: z.string() });
+
+// a build through the proxy that it must refuse; returns the refusal
+async function readBuildRefusal(
+  params: readonly (readonly [string, string])[],
+  path?: string,
+): Promise<string> {
+  const result = await runInContainer(['sh', '-c', buildScript(params, path)]);
+
+  expect(result.stdout).toEndWith(' 403');
+
+  return RefusalSchema.parse(JSON.parse(result.stdout.slice(0, -' 403'.length))).message;
 }
 
 test('the dev container has no docker.sock of the host, and its Docker is the proxy', async () => {
@@ -98,8 +128,14 @@ test('an export or rm of a container the proxy did not create is refused', async
 });
 
 test("a build may not tag outside imp/, nor retag the host's image", async () => {
-  const ubuntu = await readRefusal(buildScript('-t ubuntu:latest'));
-  const second = await readRefusal(buildScript(`-t imp/e2e-sock:latest -t ${hostImage}`));
+  const ubuntu = await readBuildRefusal([['t', 'ubuntu:latest'], ['version', '2'], PIN]);
+
+  const second = await readBuildRefusal([
+    ['t', 'imp/e2e-sock:latest'],
+    ['t', hostImage],
+    ['version', '2'],
+    PIN,
+  ]);
 
   expect(ubuntu).toContain('param t');
   expect(second).toContain('param t');
@@ -126,7 +162,7 @@ test('a build with a form body, which would replace or add to its checked query,
     '/run/imp-docker/docker.sock',
     '-X',
     'POST',
-    'http://docker/build?t=imp%2Fe2e-sock%3Alatest&q=1&version=1',
+    `http://docker/build?${new URLSearchParams([['t', 'imp/e2e-sock:latest'], ['version', '2'], PIN]).toString()}`,
     '-H',
     'Content-Type: application/x-www-form-urlencoded',
     '--data-binary',
@@ -137,6 +173,32 @@ test('a build with a form body, which would replace or add to its checked query,
 
   expect(status).toBe('403');
   expect(answer).toContain('imp-docker-proxy: a build body is a tar context');
+});
+
+test('a build runs BuildKit with the pinned frontend, and no session', async () => {
+  const tag = ['t', 'imp/e2e-sock:latest'] as const;
+
+  const classic = await readBuildRefusal([tag, ['version', '1'], PIN]);
+  const unpinned = await readBuildRefusal([tag, ['version', '2']]);
+
+  const byTag = await readBuildRefusal([
+    tag,
+    ['version', '2'],
+    ['buildargs', JSON.stringify({ BUILDKIT_SYNTAX: 'docker/dockerfile:1' })],
+  ]);
+
+  const session = await readBuildRefusal([tag, ['version', '2'], PIN, ['session', 'x']]);
+  const hostNet = await readBuildRefusal([tag, ['version', '2'], PIN, ['networkmode', 'host']]);
+  const grpc = await readBuildRefusal([], '/grpc');
+  const sessionRoute = await readBuildRefusal([], '/session');
+
+  expect(classic).toContain('param version is "1"');
+  expect(unpinned).toContain('param buildargs is missing');
+  expect(byTag).toContain('sets BUILDKIT_SYNTAX');
+  expect(session).toContain('param session is not allowed');
+  expect(hostNet).toContain('param networkmode is not allowed');
+  expect(grpc).toContain('is not a call impd makes');
+  expect(sessionRoute).toContain('is not a call impd makes');
 });
 
 test("a pull of the host's repository is refused, so its tag cannot move", async () => {
