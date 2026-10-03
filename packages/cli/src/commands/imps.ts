@@ -22,6 +22,7 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
+import { requireFeature } from '../require-feature';
 import { formatError, printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
@@ -46,7 +47,10 @@ export const newCommand = defineCommand({
     },
     disk: { type: 'string', description: 'disk size, with a unit (64g); 32g by default' },
     'http-port': { type: 'string', description: 'guest port the proxy forwards to (default 8080)' },
-    policy: { type: 'string', description: 'egress policy: open (default), box or none' },
+    policy: {
+      type: 'string',
+      description: 'egress policy: open (default), public (the internet only), box or none',
+    },
     allow: {
       type: 'string',
       description: 'what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated',
@@ -227,6 +231,10 @@ async function runNew(client: ImpClient, request: NewRequest, placed: SavedTarge
       // a refusal, as impd's own would be: exit 1, not a usage error
       throw new Error('--public needs a token with manage scope on the host; this one is limited');
     }
+  }
+
+  if (input.policy?.mode === 'public') {
+    await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
   }
 
   const { networks, ...fields } = input;
@@ -458,11 +466,11 @@ export const urlCommand = defineCommand({
 export const policyCommand = defineCommand({
   meta: {
     name: 'policy',
-    description: "Show or set an imp's egress policy: open, box with --allow, or none",
+    description: "Show or set an imp's egress policy: open, public, box with --allow, or none",
   },
   args: {
     name: nameArg,
-    mode: { type: 'positional', description: 'open, box or none', required: false },
+    mode: { type: 'positional', description: 'open, public, box or none', required: false },
     allow: {
       type: 'string',
       description: 'what a box may reach: hosts, *.domains, IP addresses or CIDRs, comma-separated',
@@ -472,6 +480,10 @@ export const policyCommand = defineCommand({
   run: (context) =>
     runAction(context.host, async (client) => {
       const policy = parsePolicy(context.args.mode, context.args.allow);
+
+      if (policy?.mode === 'public') {
+        await requireFeature(client, 'publicEgress', 'refuse the public egress policy');
+      }
 
       const current =
         policy === undefined

@@ -146,7 +146,7 @@ function findRefusal(probe: HostProbe, request: PlaceRequest): string | null {
     (info.storage.isLow ? 'its storage is low' : null) ??
     findCpuRefusal(info.cpu?.hostCpus, request.cpuLimit) ??
     findImageRefusal(probe.images, request.image ?? info.defaults.image) ??
-    findPolicyRefusal(info.egress.isEnforced, request.policyMode) ??
+    findPolicyRefusal(info, request.policyMode) ??
     findNetworkRefusal(probe.networks, request.networks)
   );
 }
@@ -195,8 +195,12 @@ function findImageRefusal(images: readonly string[], image: string | null): stri
   return images.includes(image) ? null : `it has no image ${image}`;
 }
 
-function findPolicyRefusal(isEnforced: boolean, mode: EgressMode | null): string | null {
-  return mode === null || mode === 'open' || isEnforced
+function findPolicyRefusal(info: SystemInfo, mode: EgressMode | null): string | null {
+  if (mode === 'public' && info.features?.publicEgress !== true) {
+    return `impd ${info.version} predates the public egress policy`;
+  }
+
+  return mode === null || mode === 'open' || info.egress?.isEnforced === true
     ? null
     : `it cannot enforce a ${mode} egress policy`;
 }
