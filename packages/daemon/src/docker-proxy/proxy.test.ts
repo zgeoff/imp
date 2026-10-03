@@ -2,9 +2,9 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readRefusalError } from '../images/run-docker';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
+import { readProxyRefusal } from './refusal';
 
 const TOKEN = 'test-token';
 const OWN_ID = 'a'.repeat(64);
@@ -394,9 +394,9 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
   expect(seen[0]?.headers['x-registry-auth']).toBe('e30=');
 });
 
-// #173: impd answers a refusal as the client's BAD_REQUEST, with the
-// proxy's message alone, both from its body and from the CLI's stderr
-test('a loopback registry is refused, and impd reads the refusal as BAD_REQUEST', async () => {
+// #173: impd reads the proxy's message alone back out of its body and out
+// of the CLI's stderr, and answers it as the client's BAD_REQUEST
+test('a loopback registry is refused, and the refusal reads back alone', async () => {
   const pulled = await sendToProxy(
     'POST',
     '/v1.55/images/create?fromImage=localhost%3A5320%2Fx&tag=1',
@@ -413,10 +413,7 @@ test('a loopback registry is refused, and impd reads the refusal as BAD_REQUEST'
 
   for (const body of [await pulled.text(), await created.text()]) {
     for (const output of [body, `Error response from daemon: ${body}`]) {
-      expect(readRefusalError('docker create', output)).toMatchObject({
-        code: 'BAD_REQUEST',
-        message,
-      });
+      expect(readProxyRefusal(output)).toBe(message);
     }
   }
 });

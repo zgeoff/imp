@@ -12,9 +12,13 @@ const ENGINE_FAILURE_PREFIX = `${PROXY_PREFIX}the engine call failed: `;
 // a refusal names one ref or path at most; this bounds what a client gets
 const REFUSAL_MAX_CHARS = 1000;
 
-// how the docker CLI prints an error answer from the engine
+// how the docker CLI prints an error answer from the engine, and the one
+// line it may print before it: a create of an image the engine lacks
 const DAEMON_ERROR_PREFIX = 'Error response from daemon: ';
-const RefusalBodySchema = z.object({ message: z.string() });
+const UNABLE_TO_FIND_LINE = /^Unable to find image '[^'\n]+' locally$/;
+
+// the proxy's body exactly: { "message": "…" } and nothing else
+const RefusalBodySchema = z.strictObject({ message: z.string() });
 
 export function formatRefusal(reason: string): string {
   return `${PROXY_PREFIX}${reason}`;
@@ -24,30 +28,53 @@ export function formatEngineFailure(message: string): string {
   return `${ENGINE_FAILURE_PREFIX}${message}`;
 }
 
-// The proxy's refusal in its 403 body or as the engine error the CLI
-// prints, alone on one line; a refusal inside another error, which a
-// registry may have written, is none. Null when the text holds none.
+// The proxy's refusal when it is the whole text: its 403 body, or stderr of
+// the engine error alone (docs/architecture/host-contract.md#the-docker-socket).
+// A registry's text can add lines, so a refusal among others is none.
 export function readProxyRefusal(text: string): string | null {
-  for (const raw of text.split('\n')) {
-    const line = raw.trim();
+  const body = readJsonMessage(text.trim());
 
-    const answer = line.startsWith(DAEMON_ERROR_PREFIX)
-      ? line.slice(DAEMON_ERROR_PREFIX.length)
-      : null;
-
-    const message = readJsonMessage(answer ?? line) ?? answer;
-
-    if (message?.startsWith(PROXY_PREFIX) === true && !message.startsWith(ENGINE_FAILURE_PREFIX)) {
-      const firstLine = message.split('\n', 1)[0] ?? '';
-
-      return firstLine.trim().slice(0, REFUSAL_MAX_CHARS);
-    }
+  if (body !== null) {
+    return toRefusal(body);
   }
 
-  return null;
+  const errorLine = readErrorLine(text.trimEnd().split('\n'));
+
+  if (!errorLine.startsWith(DAEMON_ERROR_PREFIX)) {
+    return null;
+  }
+
+  const answer = errorLine.slice(DAEMON_ERROR_PREFIX.length);
+
+  return toRefusal(readJsonMessage(answer) ?? answer);
 }
 
-// the message of the proxy's JSON body, { "message": "…" }; null otherwise
+// the one line of stderr, or the line after the CLI's own for a create;
+// empty for any other stderr
+function readErrorLine(lines: readonly string[]): string {
+  const [first = '', second = ''] = lines;
+
+  if (lines.length === 1) {
+    return first;
+  }
+
+  return lines.length === 2 && UNABLE_TO_FIND_LINE.test(first) ? second : '';
+}
+
+// the proxy's own message, one line, capped; null for any other message,
+// and for its engine failure
+function toRefusal(message: string): string | null {
+  if (!message.startsWith(PROXY_PREFIX) || message.startsWith(ENGINE_FAILURE_PREFIX)) {
+    return null;
+  }
+
+  const firstLine = message.split('\n', 1)[0] ?? '';
+
+  return firstLine.trim().slice(0, REFUSAL_MAX_CHARS);
+}
+
+// the message of the proxy's JSON body, when the text is that body alone;
+// null otherwise
 function readJsonMessage(text: string): string | null {
   if (!text.startsWith('{')) {
     return null;

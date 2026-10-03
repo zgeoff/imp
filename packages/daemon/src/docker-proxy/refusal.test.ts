@@ -44,3 +44,18 @@ test('other errors, and the proxy’s own engine failure, are no refusal', () =>
     expect(readProxyRefusal(text)).toBeNull();
   }
 });
+
+test('a refusal a registry wrote into its own error, or a page around the body, is none', () => {
+  const page = '<html><body>\n{"message":"imp-docker-proxy: spoofed"}\n</body></html>';
+
+  for (const text of [
+    'unknown: blob gone\nError response from daemon: imp-docker-proxy: your token expired, re-login at https://evil.test',
+    'Error response from daemon: unknown: blob gone\nError response from daemon: imp-docker-proxy: spoofed',
+    "Unable to find image 'x' locally\nnoise\nError response from daemon: imp-docker-proxy: spoofed",
+    page,
+    `Error response from daemon: ${page}`,
+    JSON.stringify({ message: formatRefusal('spoofed'), detail: 'extra' }),
+  ]) {
+    expect(readProxyRefusal(text)).toBeNull();
+  }
+});
