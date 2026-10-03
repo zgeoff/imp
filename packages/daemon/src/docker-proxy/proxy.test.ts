@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
-import { loadOwnedImages } from './owned-images';
+import { loadOwnedReferences } from './owned-references';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
+import { normalizeReference } from './rules';
 
 const TOKEN = 'test-token';
 const OWN_ID = 'a'.repeat(64);
@@ -29,34 +30,57 @@ const dir = mkdtempSync(join(tmpdir(), 'imp-docker-proxy-'));
 const engineSocket = join(dir, 'engine.sock');
 const proxySocket = join(dir, 'proxy.sock');
 const seen: Seen[] = [];
-const ownedPath = join(dir, 'owned-images.json');
-const ownedImages = loadOwnedImages(ownedPath);
+const ownedPath = join(dir, 'owned-references.json');
+
+const ownedReferences = loadOwnedReferences(ownedPath, (message) => {
+  logged.push(message);
+});
+
 const logged: string[] = [];
 const HOST_IMAGE = 'ghcr.io/zgeoff/imp-host:latest';
 
-// the engine's images: each ID and its tags
-const engineImages = new Map<string, string[]>();
+// the engine's references: the image each names, and when it was set
+const engineTags = new Map<string, { readonly id: string; readonly taggedAt: string }>();
+
+const clock = { tick: 0 };
 
 // references the engine refuses to remove, as when a container uses them
 const inUse = new Set<string>();
 
-function findEngineImageId(name: string): string | undefined {
-  for (const [id, tags] of engineImages) {
-    if (id === name || tags.includes(name)) {
-      return id;
+// sets `tag` to `id`, as a pull, a build or a `docker tag` does: the engine
+// keeps one tag time per image, which every name on it then shows
+function writeEngineTag(tag: string, id: string): void {
+  clock.tick += 1;
+
+  const taggedAt = `2026-10-04T00:00:${String(clock.tick).padStart(2, '0')}Z`;
+
+  for (const [name, value] of engineTags) {
+    if (value.id === id) {
+      engineTags.set(name, { id, taggedAt });
     }
   }
 
-  return undefined;
+  engineTags.set(tag, { id, taggedAt });
 }
 
-// moves `tag` to `id`, as a pull or a build does
-function writeEngineTag(tag: string, id: string): void {
-  for (const tags of engineImages.values()) {
-    tags.splice(0, tags.length, ...tags.filter((one) => one !== tag));
+function listTags(id: string): string[] {
+  return [...engineTags].filter(([, value]) => value.id === id).map(([tag]) => tag);
+}
+
+function readEngineImage(name: string): Response {
+  const tagged = engineTags.get(name);
+  const id = tagged?.id ?? [...engineTags.values()].find((value) => value.id === name)?.id;
+
+  if (id === undefined) {
+    return new Response('no such image', { status: 404 });
   }
 
-  engineImages.set(id, [...(engineImages.get(id) ?? []), tag]);
+  return Response.json({
+    Id: id,
+    RepoTags: listTags(id),
+    RepoDigests: [],
+    Metadata: { LastTagTime: tagged?.taggedAt ?? null },
+  });
 }
 
 function buildImageId(fill: string): string {
@@ -100,19 +124,13 @@ const engine = Bun.serve({
     const inspected = /\/images\/(?<name>.+)\/json$/v.exec(url.pathname)?.groups?.['name'];
 
     if (request.method === 'GET' && inspected !== undefined) {
-      const id = findEngineImageId(inspected);
-
-      return id === undefined
-        ? new Response('no such image', { status: 404 })
-        : Response.json({ Id: id, RepoTags: engineImages.get(id), RepoDigests: [] });
+      return readEngineImage(inspected);
     }
 
     const removed = /\/images\/(?<name>.+)$/v.exec(url.pathname)?.groups?.['name'];
 
     if (request.method === 'DELETE' && removed !== undefined) {
-      const id = findEngineImageId(removed);
-
-      if (id === undefined) {
+      if (!engineTags.has(removed)) {
         return new Response('no such image', { status: 404 });
       }
 
@@ -120,13 +138,7 @@ const engine = Bun.serve({
         return Response.json({ message: 'image is being used by a container' }, { status: 409 });
       }
 
-      const tags = (engineImages.get(id) ?? []).filter((tag) => tag !== removed);
-
-      if (tags.length === 0 || removed === id) {
-        engineImages.delete(id);
-      } else {
-        engineImages.set(id, tags);
-      }
+      engineTags.delete(removed);
 
       return Response.json([{ Untagged: removed }]);
     }
@@ -140,7 +152,10 @@ const engine = Bun.serve({
 
     const built = url.searchParams.get('t');
 
-    if (url.pathname.endsWith('/build') && built !== null && built !== 'imp/slow:latest') {
+    // imp/slow never ends, and imp/fail fails, leaving its tag as it was
+    const movesTag = built !== null && built !== 'imp/slow:latest' && built !== 'imp/fail:latest';
+
+    if (url.pathname.endsWith('/build') && built !== null && movesTag) {
       const fill = built === 'imp/x:latest' ? 'd' : 'e';
 
       writeEngineTag(built, buildImageId(fill));
@@ -179,7 +194,7 @@ const proxy = Bun.serve({
     token: TOKEN,
     hostImage: HOST_IMAGE,
     buildContextMaxBytes: CONTEXT_MAX_BYTES,
-    ownedImages,
+    ownedReferences,
     log: (message) => {
       logged.push(message);
     },
@@ -204,7 +219,7 @@ beforeEach(() => {
   seen.length = 0;
   logged.length = 0;
 
-  engineImages.clear();
+  engineTags.clear();
   inUse.clear();
 });
 
@@ -323,12 +338,15 @@ test('a build streams its context and forwards no client header', async () => {
 
   const answer: unknown = await response.json();
 
+  // the proxy looks the tag up before and after: the build is the one POST
+  const build = seen.find((request) => request.method === 'POST');
+
   expect(answer).toEqual({ received: context.length });
-  expect(seen[0]?.target).toBe(BUILD_PATH);
-  expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
-  expect(seen[0]?.headers['x-registry-config']).toBeUndefined();
-  expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
-  expect(seen[0]?.headers['cookie']).toBeUndefined();
+  expect(build?.target).toBe(BUILD_PATH);
+  expect(build?.headers['content-type']).toBe('application/x-tar');
+  expect(build?.headers['x-registry-config']).toBeUndefined();
+  expect(build?.headers['x-registry-auth']).toBeUndefined();
+  expect(build?.headers['cookie']).toBeUndefined();
 });
 
 test('a build without a Content-Type reaches the engine as a tar', async () => {
@@ -340,7 +358,10 @@ test('a build without a Content-Type reaches the engine as a tar', async () => {
   await response.text();
 
   expect(response.status).toBe(200);
-  expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
+
+  expect(seen.find((request) => request.method === 'POST')?.headers['content-type']).toBe(
+    'application/x-tar',
+  );
 });
 
 // a form body would replace or add to the checked query: the engine reads r.Form
@@ -487,96 +508,181 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
   expect(pulls[0]?.headers['x-registry-auth']).toBe('e30=');
 });
 
-// the IDs in the proxy's state file, as a restart would read them
-function readOwnedIds(): string[] {
-  return loadOwnedImages(ownedPath).has(buildImageId('c')) ? [buildImageId('c')] : [];
+// what the proxy's state file holds for a reference, as a restart reads it
+function readOwned(reference: string) {
+  return loadOwnedReferences(ownedPath, () => {}).read(reference);
 }
 
-test('a pull of an image the engine lacked is the proxy’s: an rm removes it, without force', async () => {
-  const pulled = await sendToProxy('POST', '/v1.55/images/create?fromImage=busybox&tag=1.37');
+async function sendPull(fromImage: string, tag: string): Promise<void> {
+  const pulled = await sendToProxy(
+    'POST',
+    `/v1.55/images/create?fromImage=${fromImage}&tag=${tag}`,
+  );
 
   await pulled.text();
+}
 
-  expect(readOwnedIds()).toEqual([buildImageId('c')]);
+test('a pull of a reference the engine lacked is the proxy’s: an rm removes it, without force', async () => {
+  await sendPull('busybox', '1.36');
 
-  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.37');
+  expect(readOwned('docker.io/library/busybox:1.36')).toMatchObject({ id: buildImageId('c') });
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
 
   expect(removed.status).toBe(200);
-  expect(seen.at(-2)?.target).toBe('/v1.55/images/busybox:1.37?force=0&noprune=1');
-  expect(engineImages.size).toBe(0);
-  expect(readOwnedIds()).toEqual([]);
+  expect(seen.at(-1)?.target).toBe('/v1.55/images/busybox:1.36?force=0&noprune=1');
+  expect(engineTags.size).toBe(0);
+  expect(readOwned('docker.io/library/busybox:1.36')).toBeUndefined();
 });
 
-test('an image the engine had before the pull stays the owner’s', async () => {
-  writeEngineTag('busybox:1.37', buildImageId('c'));
+test('a reference the engine had before the pull stays the owner’s', async () => {
+  writeEngineTag('busybox:1.36', buildImageId('c'));
 
-  const pulled = await sendToProxy('POST', '/v1.55/images/create?fromImage=busybox&tag=1.37');
+  await sendPull('busybox', '1.36');
 
-  await pulled.text();
-
-  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.37');
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
 
   expect(removed.status).toBe(403);
   expect(seen.some((request) => request.method === 'DELETE')).toBe(false);
-  expect(engineImages.size).toBe(1);
+  expect(engineTags.has('busybox:1.36')).toBe(true);
 });
 
-test('a build’s tag is the proxy’s, and so is the image a rebuild leaves untagged, by its ID', async () => {
+test('the owner’s tag on an image the proxy pulled stays, by its name or by the ID', async () => {
+  // the owner had alpine:3.20; the proxy pulled alpine:3.20.3, the same image
+  writeEngineTag('alpine:3.20', buildImageId('c'));
+
+  await sendPull('alpine', '3.20.3');
+
+  const statuses = [];
+
+  for (const target of ['/v1.55/images/alpine:3.20', `/v1.55/images/${buildImageId('c')}`]) {
+    const response = await sendToProxy('DELETE', target);
+
+    statuses.push(response.status);
+  }
+
+  expect(statuses).toEqual([403, 403]);
+  expect(seen.some((request) => request.method === 'DELETE')).toBe(false);
+
+  // the proxy's own name goes; the owner's keeps the image
+  const own = await sendToProxy('DELETE', '/v1.55/images/alpine:3.20.3');
+
+  expect(own.status).toBe(200);
+  expect([...engineTags.keys()]).toEqual(['alpine:3.20']);
+});
+
+test('a tag the owner sets after the proxy’s pull keeps the image, under both names', async () => {
+  await sendPull('busybox', '1.36');
+
+  writeEngineTag('mine:1', buildImageId('c'));
+
+  const statuses = [];
+
+  for (const target of ['/v1.55/images/busybox:1.36', `/v1.55/images/${buildImageId('c')}`]) {
+    const response = await sendToProxy('DELETE', target);
+
+    statuses.push(response.status);
+  }
+
+  expect(statuses).toEqual([403, 403]);
+  expect([...engineTags.keys()].toSorted()).toEqual(['busybox:1.36', 'mine:1']);
+});
+
+test('two references the proxy pulled for one image are both its own', async () => {
+  await sendPull('alpine', '3.20.3');
+  await sendPull('alpine', '3.20');
+
+  const removed = await sendToProxy('DELETE', `/v1.55/images/${buildImageId('c')}`);
+
+  expect(removed.status).toBe(200);
+  expect(engineTags.size).toBe(0);
+});
+
+test('a reference the owner removed and pulled again is the owner’s', async () => {
+  await sendPull('busybox', '1.36');
+
+  // outside the proxy: the same name and image, set again
+  engineTags.delete('busybox:1.36');
+
+  writeEngineTag('busybox:1.36', buildImageId('c'));
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
+
+  expect(removed.status).toBe(403);
+  expect(engineTags.has('busybox:1.36')).toBe(true);
+  expect(readOwned('docker.io/library/busybox:1.36')).toBeUndefined();
+});
+
+test('a build’s tag is the proxy’s; by ID, an image passes only when every tag is', async () => {
   const built = await sendToProxy('POST', BUILD_PATH, { body: new Uint8Array(512) });
 
   await built.text();
 
-  // a rebuild moves the tag: the first image keeps no tag
-  writeEngineTag('imp/x:latest', buildImageId('f'));
+  expect(readOwned('docker.io/imp/x:latest')).toMatchObject({ id: buildImageId('d') });
 
-  const removed = await sendToProxy('DELETE', `/v1.55/images/${buildImageId('d')}`);
+  const byId = await sendToProxy('DELETE', `/v1.55/images/${buildImageId('d')}`);
 
-  expect(removed.status).toBe(200);
-  expect(findEngineImageId(buildImageId('d'))).toBeUndefined();
-
-  // the rebuilt image came from no build through the proxy
-  const rebuilt = await sendToProxy('DELETE', '/v1.55/images/imp/x:latest');
-
-  expect(rebuilt.status).toBe(403);
+  expect(byId.status).toBe(200);
+  expect(engineTags.size).toBe(0);
 });
 
-test('an owned ID the engine dropped by itself leaves the set when impd removes it', async () => {
-  const goneId = buildImageId('7');
+test('a build that leaves its tag as it was makes nothing the proxy’s', async () => {
+  // the tag before the build, and a build that fails without moving it
+  writeEngineTag('imp/fail:latest', buildImageId('e'));
 
-  ownedImages.add(goneId);
+  const failing = `/v1.55/build?${new URLSearchParams({
+    t: 'imp/fail:latest',
+    version: '2',
+    buildargs: JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }),
+  }).toString()}`;
 
-  const removed = await sendToProxy('DELETE', `/v1.55/images/${goneId}`);
+  const built = await sendToProxy('POST', failing, { body: new Uint8Array(512) });
+
+  await built.text();
+
+  expect(readOwned('docker.io/imp/fail:latest')).toBeUndefined();
+});
+
+test('a reference the engine dropped leaves the record when impd removes it', async () => {
+  await sendPull('busybox', '1.36');
+
+  engineTags.delete('busybox:1.36');
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
 
   expect(removed.status).toBe(404);
-  expect(loadOwnedImages(ownedPath).has(goneId)).toBe(false);
+  expect(readOwned('docker.io/library/busybox:1.36')).toBeUndefined();
 });
 
 test('an image a container uses stays, with the engine’s 409, and stays the proxy’s', async () => {
-  const pulled = await sendToProxy('POST', '/v1.55/images/create?fromImage=busybox&tag=1.37');
+  await sendPull('busybox', '1.36');
 
-  await pulled.text();
+  inUse.add('busybox:1.36');
 
-  inUse.add('busybox:1.37');
-
-  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.37');
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
 
   expect(removed.status).toBe(409);
-  expect(readOwnedIds()).toEqual([buildImageId('c')]);
+  expect(readOwned('docker.io/library/busybox:1.36')).toBeDefined();
 
-  ownedImages.remove(buildImageId('c'));
+  ownedReferences.remove('docker.io/library/busybox:1.36');
 });
 
 test('force, the frontend’s and imp-host’s repositories and an image the engine lacks are refused', async () => {
   const frontendId = buildImageId('9');
-  const hostId = buildImageId('8');
 
   writeEngineTag(DOCKERFILE_FRONTEND, frontendId);
   writeEngineTag('mine:1', frontendId);
-  writeEngineTag(HOST_IMAGE, hostId);
+  writeEngineTag(HOST_IMAGE, buildImageId('8'));
 
-  // owned as far as the proxy's set goes, kept all the same
-  ownedImages.add(frontendId);
-  ownedImages.add(hostId);
+  // recorded as the proxy's, refused all the same
+  for (const [reference, id] of [
+    ['mine:1', frontendId],
+    [HOST_IMAGE, buildImageId('8')],
+  ] as const) {
+    const tagged = engineTags.get(reference);
+
+    ownedReferences.write(normalizeReference(reference), { id, taggedAt: tagged?.taggedAt ?? '' });
+  }
 
   const statuses = [];
 
@@ -596,8 +702,8 @@ test('force, the frontend’s and imp-host’s repositories and an image the eng
   expect(statuses).toEqual([403, 403, 403, 403, 403, 404]);
   expect(seen.some((request) => request.method === 'DELETE')).toBe(false);
 
-  ownedImages.remove(frontendId);
-  ownedImages.remove(hostId);
+  ownedReferences.remove(normalizeReference('mine:1'));
+  ownedReferences.remove(normalizeReference(HOST_IMAGE));
 });
 
 test('an Upgrade, a refused route and a refused param never reach the engine', async () => {

@@ -144,18 +144,19 @@ call would.
 
 impd boots an imp from the rootfs it exported, not from the image in the host's Docker engine. When
 the last image row that names an engine image goes (`imp image rm`, or an add or a rebuild that
-replaces a row), impd removes that image from the engine with `docker image rm`, without force: its
-reference, then its ID, which a rebuild leaves untagged. imp-docker-proxy lets it remove only an
-image the proxy itself pulled or built ([the docker socket](../architecture/host-contract.md)): a
-pull of a reference the engine did not have, or a build's `imp/<name>:latest`. An image you pulled
-on the host yourself stays. The engine keeps an image a container uses, or one another reference
-shares. impd logs a refusal and removes the row all the same.
+replaces a row), impd removes it from the engine with `docker image rm`, without force: its
+reference, then its ID. imp-docker-proxy lets it remove only a reference the proxy itself made
+([the docker socket](../architecture/host-contract.md)): a pull of a reference the engine did not
+have, or a build's `imp/<name>:latest`, as long as nobody pulled or tagged that name again since. An
+image ID passes only when every tag on it is such a reference. So an image you pulled on the host
+stays, and so does an image impd pulled that you tagged under a name of your own. The engine keeps
+an image a container uses. impd logs a refusal and removes the row all the same.
 
 These stay on the engine: the pinned Dockerfile frontend, which every build uses, and the images a
-build pulls for its `FROM` lines. Images made before the proxy kept its record are in none, so impd
-never removes them; remove them with `docker image rm` on the host once. An image impd pulled is
-impd's even if you later pull the same reference on the host, since that pull changes nothing on the
-engine: run a container from it, or tag it, to keep it.
+build pulls for its `FROM` lines. An untagged image is never removed by its ID: on Docker's classic
+image store, the image a rebuild leaves untagged stays (the containerd store drops it by itself).
+References made before the proxy kept its record are in none, so impd never removes them; remove
+them with `docker image rm` on the host once.
 
 ## What the guest takes from the image
 

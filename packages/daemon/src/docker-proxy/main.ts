@@ -6,7 +6,7 @@ import { chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { printLog } from '../process/print-log';
 import { loadOrCreateToken } from '../token';
-import { loadOwnedImages } from './owned-images';
+import { loadOwnedReferences } from './owned-references';
 import { createDockerProxy } from './proxy';
 
 // headers and a create body on top of the largest build context
@@ -51,7 +51,7 @@ function main(): void {
     token: loadOrCreateToken(stateDir),
     hostImage,
     buildContextMaxBytes,
-    ownedImages: loadOwnedImages(join(stateDir, 'owned-images.json')),
+    ownedReferences: loadOwnedReferences(join(stateDir, 'owned-references.json'), printLog),
     log: printLog,
   });
 

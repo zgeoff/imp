@@ -174,6 +174,19 @@ export function readImageReference(reference: string): ImageReference {
   };
 }
 
+// A reference in one spelling, as the engine resolves it: busybox:1.37 and
+// docker.io/library/busybox:1.37 are one name; no tag is latest
+export function normalizeReference(reference: string): string {
+  const image = readImageReference(reference);
+  const [withoutDigest = '', digest] = reference.split('@');
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const tagColon = withoutDigest.indexOf(':', lastSlash + 1);
+  const tag = tagColon === -1 ? 'latest' : withoutDigest.slice(tagColon + 1);
+  const repository = `${image.registry}/${image.path}`;
+
+  return digest === undefined ? `${repository}:${tag}` : `${repository}@${digest}`;
+}
+
 function readRegistryHost(registry: string): string {
   // [::1]:5000 and [fe80::1]
   if (registry.startsWith('[')) {

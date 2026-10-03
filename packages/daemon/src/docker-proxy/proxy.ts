@@ -3,7 +3,7 @@
 // out of imp-host (docs/architecture/host-contract.md).
 
 import { z } from 'zod';
-import type { OwnedImages } from './owned-images';
+import type { OwnedReferences } from './owned-references';
 import { findRequestRoute, formatQuery } from './router';
 import type { RoutedRequest } from './router';
 import {
@@ -16,6 +16,7 @@ import {
   checkPullQuery,
   checkRemovableImage,
   checkRemoveQuery,
+  normalizeReference,
 } from './rules';
 import type { Check } from './rules';
 
@@ -40,11 +41,16 @@ const ContainerSchema = z.object({
   Config: z.object({ Labels: LabelsSchema }),
 });
 
-const ImageSchema = z.object({
-  Id: z.string().regex(/^sha256:[a-f0-9]{64}$/v),
-  RepoTags: z.array(z.string()).nullish(),
-  RepoDigests: z.array(z.string()).nullish(),
-});
+const ImageSchema = z
+  .object({
+    Id: z.string().regex(/^sha256:[a-f0-9]{64}$/v),
+    RepoTags: z.array(z.string()).readonly().nullish(),
+    RepoDigests: z.array(z.string()).readonly().nullish(),
+
+    // the last time the engine set any name on the image
+    Metadata: z.object({ LastTagTime: z.string().nullish() }).readonly().nullish(),
+  })
+  .readonly();
 
 type EngineImage = z.infer<typeof ImageSchema>;
 
@@ -66,8 +72,8 @@ export interface DockerProxyOptions {
   readonly hostImage: string;
   readonly buildContextMaxBytes: number;
 
-  // the images this proxy pulled or built, the only ones impd may remove
-  readonly ownedImages: OwnedImages;
+  // the references this proxy pulled or built, the only ones impd may remove
+  readonly ownedReferences: OwnedReferences;
   readonly log: (message: string) => void;
 }
 
@@ -120,6 +126,22 @@ function createByteLimit(maxBytes: number): TransformStream<Uint8Array, Uint8Arr
       controller.enqueue(chunk);
     },
   });
+}
+
+function readTaggedAt(image: Readonly<EngineImage>): string {
+  return image.Metadata?.LastTagTime ?? '';
+}
+
+// the same image under the same tag, set at the same time
+function isSameTag(before: Readonly<EngineImage>, after: Readonly<EngineImage>): boolean {
+  return before.Id === after.Id && readTaggedAt(before) === readTaggedAt(after);
+}
+
+// `name` is the image's ID, whole or a prefix of its hex, rather than a name
+function isImageIdName(name: string, id: string): boolean {
+  const hex = name.replace(/^sha256:/v, '');
+
+  return /^[a-f0-9]+$/v.test(hex) && id.slice('sha256:'.length).startsWith(hex);
 }
 
 function readMessage(error: unknown): string {
@@ -209,7 +231,10 @@ export function createDockerProxy(
   ): Promise<Response> => {
     const upstream = await sendUpstream(versionPrefix, call);
 
-    return toClientResponse(upstream, onEnd);
+    // a pull or a build the engine refused made nothing
+    const afterEnd = upstream.ok ? onEnd : undefined;
+
+    return toClientResponse(upstream, afterEnd);
   };
 
   const findImage = async (versionPrefix: string, name: string): Promise<ImageLookup> => {
@@ -231,18 +256,67 @@ export function createDockerProxy(
     return image.success ? { kind: 'found', image: image.data } : { kind: 'unknown' };
   };
 
-  // Records the image `name` now names as one this proxy made. A failure
-  // is logged: the image then stays on the engine, which is the safe side.
-  const registerOwnedImage = async (versionPrefix: string, name: string): Promise<void> => {
+  // Records `reference` as one this proxy made, when the engine shows it
+  // other than `before`: a new name, or one that moved. A failure is logged,
+  // and the image then stays on the engine, which is the safe side.
+  const registerReference = async (
+    versionPrefix: string,
+    reference: string,
+    before: ImageLookup,
+  ): Promise<void> => {
     try {
-      const found = await findImage(versionPrefix, name);
+      const after = await findImage(versionPrefix, reference);
 
-      if (found.kind === 'found') {
-        options.ownedImages.add(found.image.Id);
+      if (after.kind !== 'found' || before.kind === 'unknown') {
+        return;
       }
+
+      if (before.kind === 'found' && isSameTag(before.image, after.image)) {
+        return;
+      }
+
+      options.ownedReferences.write(normalizeReference(reference), {
+        id: after.image.Id,
+        taggedAt: readTaggedAt(after.image),
+      });
     } catch (error) {
-      options.log(`could not record ${name} as the proxy's: ${readMessage(error)}`);
+      options.log(`could not record ${reference} as the proxy's: ${readMessage(error)}`);
     }
+  };
+
+  // Whether the engine still shows `reference` as this proxy made it. A
+  // record the engine no longer matches is dropped: the name is gone, or a
+  // name set on the image since (the owner's) moved its tag time.
+  const findOwnership = async (
+    versionPrefix: string,
+    reference: string,
+  ): Promise<'owned' | 'not-owned' | 'absent' | 'unknown'> => {
+    const key = normalizeReference(reference);
+    const owned = options.ownedReferences.read(key);
+
+    const found = await findImage(versionPrefix, reference);
+
+    if (found.kind === 'unknown') {
+      return 'unknown';
+    }
+
+    if (found.kind === 'absent') {
+      options.ownedReferences.remove(key);
+
+      return 'absent';
+    }
+
+    if (owned === undefined) {
+      return 'not-owned';
+    }
+
+    if (owned.id !== found.image.Id || owned.taggedAt !== readTaggedAt(found.image)) {
+      options.ownedReferences.remove(key);
+
+      return 'not-owned';
+    }
+
+    return 'owned';
   };
 
   const buildRefusal = (request: Request, path: string, reason: string): Response => {
@@ -336,10 +410,15 @@ export function createDockerProxy(
     const limit = createByteLimit(options.buildContextMaxBytes);
     const body = request.body === null ? null : request.body.pipeThrough(limit);
 
-    // the image each tag names once the build ends is the build's own
+    // each tag the build moved is the build's own; one it left as it was
+    // (a failed build) is not
+    const tags = routed.query.get('t') ?? [];
+
+    const before = await Promise.all(tags.map((tag) => findImage(routed.versionPrefix, tag)));
+
     const registerBuiltTags = async (): Promise<void> => {
-      for (const tag of routed.query.get('t') ?? []) {
-        await registerOwnedImage(routed.versionPrefix, tag);
+      for (const [index, tag] of tags.entries()) {
+        await registerReference(routed.versionPrefix, tag, before[index] ?? { kind: 'unknown' });
       }
     };
 
@@ -399,7 +478,7 @@ export function createDockerProxy(
 
     const registerPulled =
       before.kind === 'absent'
-        ? () => registerOwnedImage(routed.versionPrefix, reference)
+        ? () => registerReference(routed.versionPrefix, reference, before)
         : undefined;
 
     return sendAndRelay(
@@ -447,9 +526,19 @@ export function createDockerProxy(
     });
   };
 
-  // DELETE /images/{name}: an image this proxy pulled or built, in no
-  // repository it keeps, removed without force, so the engine refuses one
-  // a container uses or another reference shares
+  const sendImageRemove = (versionPrefix: string, reference: string): Promise<Response> =>
+    sendUpstream(versionPrefix, {
+      method: 'DELETE',
+      path: `/images/${reference}`,
+      query: new Map([
+        ['force', ['0']],
+        ['noprune', ['1']],
+      ]),
+    });
+
+  // DELETE /images/{name}: a reference this proxy made, as it made it, or an
+  // ID whose every tag is one, never in a kept repository. Each goes by its
+  // reference, without force (docs/architecture/host-contract.md)
   const handleImageRemove = async (
     request: Request,
     versionPrefix: string,
@@ -458,10 +547,9 @@ export function createDockerProxy(
   ): Promise<Response> => {
     const found = await findImage(versionPrefix, name);
 
-    // an engine on the containerd store drops an image a rebuild untags
-    // by itself: its ID leaves the set too
     if (found.kind === 'absent') {
-      options.ownedImages.remove(name);
+      // a reference the engine no longer has leaves the record
+      options.ownedReferences.remove(normalizeReference(name));
 
       return buildJsonResponse(404, `No such image: ${name}`);
     }
@@ -471,41 +559,53 @@ export function createDockerProxy(
     }
 
     const image = found.image;
-
-    const names = [name, ...(image.RepoTags ?? []), ...(image.RepoDigests ?? [])].filter(
-      (one) => !one.startsWith('sha256:'),
-    );
-
+    const tags = image.RepoTags ?? [];
+    const isId = isImageIdName(name, image.Id);
+    const names = [...(isId ? [] : [name]), ...tags, ...(image.RepoDigests ?? [])];
     const kept = checkRemovableImage(names, options.hostImage);
 
     if (!kept.isOk) {
       return buildRefusal(request, path, kept.reason);
     }
 
-    if (!options.ownedImages.has(image.Id)) {
-      return buildRefusal(request, path, `image ${name} was not pulled or built by this proxy`);
+    // an untagged image could be the owner's: only a tag says who made it
+    const references = isId ? tags : [name];
+
+    if (references.length === 0) {
+      return buildRefusal(request, path, `image ${name} has no tag the proxy made`);
     }
 
-    const upstream = await sendUpstream(versionPrefix, {
-      method: 'DELETE',
-      path: `/images/${name}`,
-      query: new Map([
-        ['force', ['0']],
-        ['noprune', ['1']],
-      ]),
-    });
+    for (const reference of references) {
+      const ownership = await findOwnership(versionPrefix, reference);
 
-    const body = await upstream.text();
-
-    if (upstream.ok) {
-      const after = await findImage(versionPrefix, image.Id);
-
-      if (after.kind === 'absent') {
-        options.ownedImages.remove(image.Id);
+      if (ownership !== 'owned') {
+        return buildRefusal(
+          request,
+          path,
+          `image ${reference} was not pulled or built by this proxy`,
+        );
       }
     }
 
-    return toClientResponse(new Response(body, upstream));
+    const answers: Response[] = [];
+
+    for (const reference of references) {
+      const upstream = await sendImageRemove(versionPrefix, reference);
+
+      answers.push(upstream);
+
+      if (!upstream.ok) {
+        break;
+      }
+
+      options.ownedReferences.remove(normalizeReference(reference));
+    }
+
+    const last = answers.at(-1) ?? buildJsonResponse(500, 'no image removed');
+
+    const body = await last.text();
+
+    return toClientResponse(new Response(body, last));
   };
 
   const checkRouteQuery = (routed: RoutedRequest): Check => {
