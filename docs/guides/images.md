@@ -166,6 +166,34 @@ disk; without it, impd holds the whole limit. It reads the answer as a stream an
 with each progress event; an impd from before the stream answers JSON at the end, and sends no
 progress. It throws an `ORPCError` as a contract call would.
 
+## Long calls
+
+A pull, an unpack, an on-host build or a template copy can take longer than a client's fetch waits
+for a byte: Bun's fetch gives up after 360 s, Node's (undici) after 300 s. The upload build streams
+its answer ([the answer](#build-an-image)); the oRPC calls have streamed twins:
+
+| Procedure            | Same input as  | Phases, in order                        |
+| -------------------- | -------------- | --------------------------------------- |
+| `images.addStream`   | `images.add`   | `pull`, `unpack`; `copy` for a template |
+| `images.buildStream` | `images.build` | `pack`, `build`                         |
+
+Each yields a progress event (`{ type: "progress", phase, elapsedMs }`) as it starts, at each new
+phase and every 15 s, then `{ type: "image", image }`. A failure throws its `ORPCError` through the
+iterator. oRPC also sends a keepalive comment every 5 s. impd writes the audit row as the work ends,
+with its outcome; a refused call is audited at once, as any refused call. `system.info` lists
+`imageOpStream` among the features of an impd that has them. `imp image add`,
+`imp image build --on-host` and `imp template create` use them when impd does, and show the phase
+and its time on a terminal; with an older impd they call `images.add` or `images.build`, which
+answer only at the end. The dashboard calls `images.add`.
+
+When the client goes, impd stops what it can:
+
+- an on-host build stops, as an upload build does, and frees its disk room;
+- an add stops its pull, but an unpack that has started runs to its end, since another add of the
+  same image may wait on it, and the image is added;
+- a template copy runs to its end, as it does for `images.add`
+  ([templates](./templates.md#making-a-template)).
+
 ## What the guest takes from the image
 
 - **The filesystem.** Everything in the image, as it is, except `/run`, which is a fresh tmpfs.
