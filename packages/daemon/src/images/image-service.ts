@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
+import { MissingDockerfileError, countTarBytes, listContextEntries } from '@imp/local-tar';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
@@ -17,12 +18,14 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
-import { buildImagePaths } from '../storage/data-layout';
+import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { DockerBuildError, runDockerBuild } from './docker-build';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { writeExportedTree } from './unpack-export';
+import { writeContextTar } from './write-context-tar';
 
 const GIB = 1024 ** 3;
 
@@ -34,24 +37,7 @@ const ROOTFS_SPARE_BYTES = 2 * GIB;
 // mkfs.ext4's default: one inode per 16 KiB
 const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
-
-// pins the Dockerfile frontend, so a `# syntax=` line cannot pull another one
-const PINNED_FRONTEND = 'BUILDKIT_SYNTAX=docker/dockerfile:1';
 const SEED_REF = 'ubuntu:24.04';
-
-// The classic builder, said outright: imp-host has no buildx, and a CLI that
-// drops the automatic fallback would fail every build instead.
-function buildDockerBuildEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-
-  return { ...env, DOCKER_BUILDKIT: '0' };
-}
 
 const InspectSchema = z
   .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
@@ -65,8 +51,8 @@ export interface ImageService {
     dockerfile?: string,
   ) => Promise<ImageRecord>;
 
-  // a context the client uploaded: a tar file docker build reads on stdin;
-  // `signal` aborts when the client goes, and kills the build
+  // a context the client uploaded, as a tar file; `signal` aborts when the
+  // client goes, and ends the build
   readonly buildImageFromContext: (
     tarPath: string,
     name: string,
@@ -277,6 +263,39 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
+  // nothing from the client reaches the engine but the tag's name and the
+  // Dockerfile's path in the context, both validated by the API schemas
+  // and again by imp-docker-proxy
+  const buildFromContext = async (
+    tarPath: string,
+    name: string,
+    dockerfile: string | undefined,
+    signal: AbortSignal,
+  ): Promise<ImageRecord> => {
+    const tag = `imp/${NameSchema.parse(name)}:latest`;
+    const tarBytes = statSync(tarPath).size;
+
+    try {
+      // the engine keeps its own copy of the context while it builds
+      await deps.diskBudget.withRoom(tarBytes, () =>
+        runDockerBuild({ socketPath: deps.config.dockerSocket, tarPath, tag, dockerfile, signal }),
+      );
+    } catch (error) {
+      // nobody waits for the image: the build was stopped, or its tag is left
+      signal.throwIfAborted();
+
+      if (error instanceof DockerBuildError) {
+        throw new ORPCError('BAD_REQUEST', { message: error.message });
+      }
+
+      throw error;
+    }
+
+    signal.throwIfAborted();
+
+    return createImageFromRef(tag, name);
+  };
+
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
     const image =
       name === undefined ? await findDefaultImage() : await findImageByName(deps.db, name);
@@ -306,52 +325,35 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
       }
 
-      const tag = `imp/${NameSchema.parse(name)}:latest`;
-      const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
-
-      await runChecked(['docker', 'build', '--quiet', '-t', tag, ...fileArgs, contextDir], {
-        env: buildDockerBuildEnv(),
-      });
-
-      return createImageFromRef(tag, name);
-    },
-
-    // a fixed argv: nothing from the client but the tag's name and the
-    // Dockerfile's path in the context, both validated by the API schemas
-    buildImageFromContext: async (tarPath, name, dockerfile, signal) => {
-      const tag = `imp/${NameSchema.parse(name)}:latest`;
-      const tarBytes = statSync(tarPath).size;
-
-      const argv = [
-        'docker',
-        'build',
-        '--quiet',
-        '--build-arg',
-        PINNED_FRONTEND,
-        '-t',
-        tag,
-        '-f',
-        dockerfile ?? 'Dockerfile',
-        '-',
-      ];
-
-      // docker keeps its own copy of the context while it builds
-      const result = await deps.diskBudget.withRoom(tarBytes, () =>
-        runCommand(argv, { env: buildDockerBuildEnv(), stdinFile: tarPath, signal }),
+      // packed here as the CLI packs an upload: the engine does not read
+      // .dockerignore from a context sent as the body
+      const entries = await listContextEntries(contextDir, dockerfile ?? 'Dockerfile').catch(
+        (error: unknown) => {
+          throw error instanceof MissingDockerfileError
+            ? new ORPCError('BAD_REQUEST', { message: error.message })
+            : error;
+        },
       );
 
-      // nobody waits for the image: the build was killed, or its tag is left
-      signal.throwIfAborted();
+      const uploadsDir = buildUploadsDir(deps.config.dataDir);
+      const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
 
-      // the client's Dockerfile failed: its output is the client's to read
-      if (result.exitCode !== 0) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: `docker build failed: ${(result.stderr.trim() || result.stdout.trim()).slice(-4000)}`,
-        });
-      }
+      mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
 
-      return createImageFromRef(tag, name);
+      const tarBytes = await countTarBytes(entries);
+
+      return deps.diskBudget.withRoom(tarBytes, async () => {
+        try {
+          await writeContextTar(entries, tarPath);
+
+          // nobody to abort it: the oRPC call waits for the image
+          return await buildFromContext(tarPath, name, dockerfile, new AbortController().signal);
+        } finally {
+          rmSync(tarPath, { force: true });
+        }
+      });
     },
+    buildImageFromContext: buildFromContext,
     listImages: () => listImages(deps.db),
     removeImage: async (name) => {
       const image = await findImageByName(deps.db, name);

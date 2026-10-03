@@ -77,3 +77,26 @@ test('a rootfs is its tree plus room to spare, in whole GiB, at least 4 GiB', ()
   // node_modules: many small files need more inodes than 16 KiB each gives
   expect(planRootfs({ bytes: GIB, inodes: 400_000 })).toEqual({ bytes: 4 * GIB, inodes: 800_000 });
 });
+
+test('a build context on the impd host with no Dockerfile is the client’s mistake', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
+
+  try {
+    const db = await openDatabase(':memory:');
+
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      db,
+      storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
+    });
+
+    const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+    expect(String(failure)).toContain('there is no Dockerfile');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});

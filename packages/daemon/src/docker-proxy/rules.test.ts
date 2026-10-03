@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { parseQuery } from './router';
 import {
   checkBuildContentType,
@@ -12,11 +13,9 @@ import {
 
 const HOST_IMAGE = 'ghcr.io/zgeoff/imp-host:latest';
 
-// the query `docker build` 29.8 sends for each of impd's two build routes
-const BUILD_FROM_DIR = 'dockerfile=Dockerfile&q=1&t=imp%2Fx%3Alatest&version=1';
-
-const BUILD_FROM_UPLOAD =
-  'buildargs=%7B%22BUILDKIT_SYNTAX%22%3A%22docker%2Fdockerfile%3A1%22%7D&dockerfile=Dockerfile&q=1&t=imp%2Fx%3Alatest&version=1';
+// the query impd sends for a build: one tag, the frontend pinned
+const BUILD_ARGS = encodeURIComponent(JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }));
+const BUILD = `t=imp%2Fx%3Alatest&version=2&buildargs=${BUILD_ARGS}`;
 
 // the body `docker create busybox /bin/true` 29.8 sends
 const CREATE_BODY = {
@@ -61,7 +60,7 @@ const CREATE_BODY = {
 };
 
 function buildArgsQuery(value: Readonly<Record<string, string>>): string {
-  return `t=imp%2Fx%3Alatest&version=1&buildargs=${encodeURIComponent(JSON.stringify(value))}`;
+  return `t=imp%2Fx%3Alatest&version=2&buildargs=${encodeURIComponent(JSON.stringify(value))}`;
 }
 
 function checkBuild(raw: string): string {
@@ -86,30 +85,31 @@ function checkCreate(
 }
 
 describe('a build query', () => {
-  test('passes as impd sends it, from a directory and from an upload', () => {
-    expect(checkBuild(BUILD_FROM_DIR)).toBe('ok');
-    expect(checkBuild(BUILD_FROM_UPLOAD)).toBe('ok');
-    expect(checkBuild(`${BUILD_FROM_DIR}&rm=1&forcerm=0`)).toBe('ok');
+  test('passes as impd sends it, with or without a dockerfile', () => {
+    expect(checkBuild(BUILD)).toBe('ok');
+    expect(checkBuild(`${BUILD}&dockerfile=sub%2FDockerfile.dev`)).toBe('ok');
   });
 
-  test('fails with a tag that is not imp/<name>:latest, even as a second -t', () => {
-    expect(checkBuild('t=imp-host%3Alatest&version=1')).toContain('param t');
-
-    expect(checkBuild(`${BUILD_FROM_DIR}&t=ghcr.io%2Fzgeoff%2Fimp-host%3Alatest`)).toContain(
+  test('fails with a tag that is not imp/<name>:latest, or a second tag', () => {
+    expect(checkBuild(`t=imp-host%3Alatest&version=2&buildargs=${BUILD_ARGS}`)).toContain(
       'param t',
     );
 
-    expect(checkBuild('t=imp%2Fx%3Av2&version=1')).toContain('param t');
-    expect(checkBuild('version=1')).toBe('param t is missing');
+    expect(checkBuild(`t=imp%2Fx%3Av2&version=2&buildargs=${BUILD_ARGS}`)).toContain('param t');
+    expect(checkBuild(`version=2&buildargs=${BUILD_ARGS}`)).toBe('param t is missing');
+    expect(checkBuild(`${BUILD}&t=imp%2Fy%3Alatest`)).toBe('param t is given 2 times');
   });
 
-  test('fails without version=1: BuildKit needs a session the proxy refuses', () => {
-    expect(checkBuild('t=imp%2Fx%3Alatest')).toBe('param version is missing');
-    expect(checkBuild('t=imp%2Fx%3Alatest&version=2')).toBe('param version is "2"');
-
-    expect(checkBuild('t=imp%2Fx%3Alatest&version=1&version=1')).toBe(
-      'param version is given 2 times',
+  test('fails without version=2: the classic builder takes no frontend pin', () => {
+    expect(checkBuild(`t=imp%2Fx%3Alatest&buildargs=${BUILD_ARGS}`)).toBe(
+      'param version is missing',
     );
+
+    expect(checkBuild(`t=imp%2Fx%3Alatest&version=1&buildargs=${BUILD_ARGS}`)).toBe(
+      'param version is "1"',
+    );
+
+    expect(checkBuild(`${BUILD}&version=2`)).toBe('param version is given 2 times');
   });
 
   test('fails with a dockerfile outside the context', () => {
@@ -120,44 +120,68 @@ describe('a build query', () => {
       '.%2FDockerfile',
       'a%2F%2Fb',
     ]) {
-      expect(checkBuild(`t=imp%2Fx%3Alatest&version=1&dockerfile=${path}`)).toContain(
-        'not a path inside the context',
+      expect(checkBuild(`${BUILD}&dockerfile=${path}`)).toContain('not a path inside the context');
+    }
+  });
+
+  test('fails without the pinned frontend: missing, by tag only, or another one', () => {
+    expect(checkBuild('t=imp%2Fx%3Alatest&version=2')).toBe('param buildargs is missing');
+    expect(checkBuild(buildArgsQuery({}))).toBe('param buildargs does not set BUILDKIT_SYNTAX');
+
+    for (const frontend of [
+      'docker/dockerfile:1',
+      'docker/dockerfile:1.19',
+      'docker/dockerfile@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6',
+      'evil/frontend:1',
+    ]) {
+      expect(checkBuild(buildArgsQuery({ BUILDKIT_SYNTAX: frontend }))).toContain(
+        'sets BUILDKIT_SYNTAX',
       );
     }
 
-    expect(checkBuild('t=imp%2Fx%3Alatest&version=1&dockerfile=sub%2FDockerfile.dev')).toBe('ok');
-  });
-
-  test('fails with a build arg impd does not send, or another syntax frontend', () => {
-    expect(checkBuild(buildArgsQuery({ BUILDKIT_SYNTAX: 'evil/frontend:1' }))).toContain(
-      'sets BUILDKIT_SYNTAX',
-    );
-
-    expect(checkBuild(buildArgsQuery({ HTTP_PROXY: 'http://x' }))).toContain('sets HTTP_PROXY');
-
-    expect(checkBuild('t=imp%2Fx%3Alatest&version=1&buildargs=nope')).toBe(
+    expect(checkBuild(`t=imp%2Fx%3Alatest&version=2&buildargs=nope`)).toBe(
       'param buildargs is not JSON',
     );
+
+    expect(checkBuild(`t=imp%2Fx%3Alatest&version=2&buildargs=%5B%5D`)).toBe(
+      'param buildargs is not an object',
+    );
   });
 
-  test('fails with any other param: remote, memory, network, cache, labels', () => {
-    for (const extra of [
-      'remote=https%3A%2F%2Fx',
-      'memory=1',
-      'networkmode=host',
-      'cachefrom=%5B%5D',
-      'labels=%7B%7D',
-      'extrahosts=a',
-      'session=abc',
-      'target=x',
-      'outputs=x',
-    ]) {
-      expect(checkBuild(`${BUILD_FROM_DIR}&${extra}`)).toContain('is not allowed');
+  test('fails with a build arg beside the pin', () => {
+    for (const extra of ['HTTP_PROXY', 'BUILDKIT_CONTEXT_KEEP_GIT_DIR', 'BUILDKIT_INLINE_CACHE']) {
+      expect(
+        checkBuild(buildArgsQuery({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND, [extra]: '1' })),
+      ).toBe(`param buildargs sets ${extra}="1"`);
+    }
+  });
+
+  test('fails with each param that needs a session or moves the build', () => {
+    for (const [key, value] of [
+      ['session', 'abc'],
+      ['remote', 'https://x'],
+      ['networkmode', 'host'],
+      ['buildid', 'x'],
+      ['outputs', '[{"Type":"local"}]'],
+      ['platform', 'linux/arm64'],
+      ['pull', '1'],
+      ['cachefrom', '["x"]'],
+      ['target', 'x'],
+      ['nocache', '1'],
+      ['labels', '{}'],
+      ['extrahosts', 'a:1.2.3.4'],
+      ['shmsize', '1'],
+      ['memory', '1'],
+      ['q', '1'],
+    ] as const) {
+      expect(checkBuild(`${BUILD}&${key}=${encodeURIComponent(value)}`)).toBe(
+        `param ${key} is not allowed`,
+      );
     }
   });
 
   test('fails with a refused param given twice', () => {
-    expect(checkBuild(`${BUILD_FROM_DIR}&networkmode=host&networkmode=host`)).toBe(
+    expect(checkBuild(`${BUILD}&networkmode=host&networkmode=host`)).toBe(
       'param networkmode is not allowed',
     );
   });

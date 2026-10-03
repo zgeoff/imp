@@ -1,5 +1,7 @@
-// What imp-docker-proxy accepts in a query or a body: the values impd's
-// `docker` CLI sends (recorded in the tests), and nothing else.
+// What imp-docker-proxy accepts in a query or a body: the values impd and
+// its `docker` CLI send (recorded in the tests), and nothing else.
+
+import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 
 export type Check = { readonly isOk: true } | { readonly isOk: false; readonly reason: string };
 
@@ -14,10 +16,8 @@ const BUILD_TAG = /^imp\/[a-z0-9][a-z0-9_.\-]{0,62}:latest$/v;
 
 // the one build arg impd sends, at the one value it sends
 const BUILD_ARGS: Readonly<Record<string, string>> = {
-  BUILDKIT_SYNTAX: 'docker/dockerfile:1',
+  BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND,
 };
-
-const ZERO_OR_ONE = new Set(['0', '1']);
 
 interface ParamRule {
   readonly isRequired?: boolean;
@@ -98,26 +98,30 @@ function checkBuildArgs(value: string): string | null {
     }
   }
 
+  // the pin is what keeps a `# syntax=` line from picking the frontend
+  for (const key of Object.keys(BUILD_ARGS)) {
+    if (!Object.hasOwn(parsed, key)) {
+      return `does not set ${key}`;
+    }
+  }
+
   return null;
 }
 
-// POST /build: impd's two `docker build` routes, with every tag imp's own,
-// so a second -t cannot retag an image the host runs, imp-host's included
+// POST /build: impd's BuildKit build with no session, the context as the
+// body; one tag, imp's own, so imp-host's cannot move. Every other param
+// (session, remote, outputs, networkmode, ...) is refused.
 const BUILD_RULES: Readonly<Record<string, ParamRule>> = {
   t: {
     isRequired: true,
-    isRepeatable: true,
     check: (value) =>
       BUILD_TAG.test(value) ? null : `${JSON.stringify(value)} is not imp/<name>:latest`,
   },
-  q: { check: checkOneOf(ZERO_OR_ONE) },
   dockerfile: { check: checkDockerfilePath },
 
-  // 1 is the classic builder; 2, BuildKit, needs a session the proxy refuses
-  version: { isRequired: true, check: checkOneOf(new Set(['1'])) },
-  buildargs: { check: checkBuildArgs },
-  rm: { check: checkOneOf(ZERO_OR_ONE) },
-  forcerm: { check: checkOneOf(ZERO_OR_ONE) },
+  // 2 is BuildKit; 1, the classic builder, takes no frontend pin
+  version: { isRequired: true, check: checkOneOf(new Set(['2'])) },
+  buildargs: { isRequired: true, check: checkBuildArgs },
 };
 
 export function checkBuildQuery(query: ReadonlyMap<string, readonly string[]>): Check {
