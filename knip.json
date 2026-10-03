@@ -9,6 +9,11 @@
     "packages/*": {
       "project": ["src/**/*.ts"]
     },
+    "packages/daemon": {
+      // imp-docker-proxy, which host/Dockerfile compiles beside impd
+      "entry": ["src/docker-proxy/main.ts"],
+      "project": ["src/**/*.ts"]
+    },
     "packages/dashboard": {
       "entry": ["augment-bun-test.ts", "e2e/*.e2e.ts"],
       "project": ["src/**/*.{ts,tsx}", "e2e/**/*.ts"]
