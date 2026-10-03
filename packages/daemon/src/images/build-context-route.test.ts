@@ -439,6 +439,8 @@ const IMAGE_DOCKER = [
   `    base.test/arm:1) ${buildInspect([`base.test/arm@${DIGEST_A}`], { Architecture: 'aarch64' })} ;;`,
   `    base.test/arm32:1) ${buildInspect([`base.test/arm32@${DIGEST_A}`], { Architecture: 'arm' })} ;;`,
   `    base.test/private:1) ${buildInspect([`localhost:5000/x@${DIGEST_A}`, `10.0.0.5:5000/y@${DIGEST_B}`])} ;;`,
+  '    base.test/moving:1) n=$(cat "$pulled" 2>/dev/null || echo 0); echo $((n + 1)) >"$pulled"',
+  `      if [ "$n" = 0 ]; then ${buildInspect([`base.test/moving@${DIGEST_A}`])}; else ${buildInspect([`base.test/moving@${DIGEST_B}`])}; fi ;;`,
   `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
   `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
   `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
@@ -578,6 +580,43 @@ test('the engine builds the Dockerfile with each image pinned and the platform n
       `COPY --from=tools.test/b@${DIGEST_B} /x /x`,
       `FROM other.test/x@${DIGEST_B}`,
       `RUN --mount=from=build,target=/b --mount=from=base.test/a@${DIGEST_A},target=/a true`,
+      '',
+    ].join('\n'),
+  ]);
+});
+
+test('the frontend runs the triggers of COPY --from and mount images too, so impd refuses them', async () => {
+  const copied = await sendFakeDockerBuild('FROM scratch\nCOPY --from=base.test/onbuild:1 / /\n');
+
+  const mounted = await sendFakeDockerBuild(
+    'FROM base.test/a:1\nRUN --mount=from=base.test/onbuild:1,target=/m true\n',
+  );
+
+  expect(copied.body).toMatchObject({
+    message: 'COPY --from base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
+  });
+
+  expect(mounted.body).toMatchObject({
+    message: 'RUN --mount from base.test/onbuild:1 has ONBUILD triggers, which impd refuses',
+  });
+
+  expect([copied.built, mounted.built]).toEqual([[], []]);
+});
+
+test('a ref the build names twice is inspected and pinned once, so a moving tag gives one image', async () => {
+  const sent = await sendFakeDockerBuild(
+    'FROM base.test/moving:1\nCOPY --from=base.test/moving:1 /x /x\nRUN --mount=from=base.test/moving:1,target=/m true\n',
+  );
+
+  const inspects = sent.calls.filter((call) => call.startsWith('image inspect'));
+
+  expect(inspects).toEqual(['image inspect --format PIN base.test/moving:1']);
+
+  expect(sent.built).toEqual([
+    [
+      `FROM base.test/moving@${DIGEST_A}`,
+      `COPY --from=base.test/moving@${DIGEST_A} /x /x`,
+      `RUN --mount=from=base.test/moving@${DIGEST_A},target=/m true`,
       '',
     ].join('\n'),
   ]);

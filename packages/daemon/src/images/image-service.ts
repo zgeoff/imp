@@ -208,10 +208,11 @@ function pickPin(
     });
   }
 
-  // a base's triggers run in this build, where impd cannot check them
-  if (image.use === 'FROM' && (inspect.OnBuild ?? []).length > 0) {
+  // the frontend runs the triggers of every image the build reaches, a
+  // COPY --from or a mount's too, where impd cannot check them
+  if ((inspect.OnBuild ?? []).length > 0) {
     throw new ORPCError('BAD_REQUEST', {
-      message: `FROM ${ref} has ONBUILD triggers, which impd refuses`,
+      message: `${image.use} ${ref} has ONBUILD triggers, which impd refuses`,
     });
   }
 
@@ -440,7 +441,13 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const stores = new Set<ImageStore>();
 
-    for (const image of images) {
+    // each ref inspected and pinned once, whatever its uses: a tag that
+    // moves between two inspects would give the build two images
+    const distinct = images.filter(
+      (candidate, index) => images.findIndex((other) => other.ref === candidate.ref) === index,
+    );
+
+    for (const image of distinct) {
       if (!ImageRefSchema.safeParse(image.ref).success) {
         throw new ORPCError('BAD_REQUEST', {
           message: `${image.use} ${JSON.stringify(image.ref)} is not an image reference`,
@@ -463,8 +470,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       const pin = pickPin(image, inspect, platform);
 
       pins.set(image.ref, pin);
-      used.push({ use: image.use, ref: image.ref, pin });
       stores.add(readImageStore(inspect));
+    }
+
+    for (const image of images) {
+      used.push({ use: image.use, ref: image.ref, pin: pins.get(image.ref) ?? '' });
     }
 
     const store = [...stores].find((candidate) => candidate !== 'unknown') ?? 'unknown';

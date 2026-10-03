@@ -64,8 +64,8 @@ context.
   `RUN --mount=from=` names and the host does not have yet, as `imp image add` pulls it, with the
   credentials in impd's Docker config. It skips `scratch` and the Dockerfile's own stages. impd
   inspects each image once, for the engine's platform, and refuses an image the host has for another
-  platform, and a `FROM` image whose config holds `ONBUILD` triggers, because they would run in this
-  build.
+  platform, and any image the build names whose config holds `ONBUILD` triggers: the frontend runs
+  the triggers of a `COPY --from` or a `RUN --mount=from=` image too, in this build.
 - **The digest the build uses.** The Dockerfile the engine gets names each of those images by the
   registry digest of the image impd inspected: `FROM busybox:1.37` becomes `FROM busybox@sha256:…`,
   so a tag that moves in the registry after the pull does not change the build. impd picks the

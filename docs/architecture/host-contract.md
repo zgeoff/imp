@@ -224,10 +224,11 @@ What stays open through the proxy, by design or until later work:
   remote, which dockerd would fetch in the host's network namespace, where it reaches services on
   the host's `127.0.0.1` and link-local addresses such as `169.254.169.254`. It refuses `$` in
   `FROM`, so `FROM $BASE` with `ARG BASE=127.0.0.1:5000/x` no longer goes around the pull rule. It
-  refuses `ONBUILD`, and it pulls the images of `COPY --from` and `RUN --mount=from=` through the
-  pull rule, as it pulls a `FROM` image. impd parses the Dockerfile with a port of the pinned
-  frontend's parser and refuses forms the two could read differently; `scripts/dockerfile-difftest`
-  checks the port against the Go parser on each frontend bump.
+  refuses `ONBUILD` in the Dockerfile and in the config of every image the build names, and it pulls
+  the images of `COPY --from` and `RUN --mount=from=` through the pull rule, as it pulls a `FROM`
+  image. impd parses the Dockerfile with a port of the pinned frontend's parser and refuses forms
+  the two could read differently; `scripts/dockerfile-difftest` checks the port against the Go
+  parser on each frontend bump.
 - impd holds the build to the images it inspected: the Dockerfile the engine gets names each
   external image by its registry digest, and `FROM --platform` by the engine's platform. An image
   with no registry digest, which the classic image store gives an image built on the host, is
