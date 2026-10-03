@@ -115,3 +115,22 @@ test('a missing Dockerfile is a MissingDockerfileError', async () => {
   expect(failure).toBeInstanceOf(MissingDockerfileError);
   expect(String(failure)).toContain('there is no Dockerfile');
 });
+
+test('a lowercase dockerfile stands in for a missing Dockerfile, with its own ignore file', async () => {
+  using ctx = createContext({
+    dockerfile: 'FROM scratch',
+    'dockerfile.dockerignore': '*\n',
+    '.dockerignore': '',
+    'app.js': '',
+  });
+
+  using both = createContext({ Dockerfile: 'FROM scratch', dockerfile: 'FROM scratch' });
+
+  const lower = await listNames(ctx.root);
+  const dotted = await listNames(ctx.root, './Dockerfile');
+  const upper = await listNames(both.root);
+
+  expect(lower).toEqual(['dockerfile']);
+  expect(dotted).toEqual(['dockerfile']);
+  expect(upper).toEqual(['Dockerfile', 'dockerfile']);
+});

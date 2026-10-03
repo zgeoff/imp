@@ -3,6 +3,7 @@ import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import ignore from '@balena/dockerignore';
 import type { LocalEntry } from './pack-local-path';
+import { listDockerfileCandidates } from './write-build-context';
 
 export class MissingDockerfileError extends Error {
   override readonly name = 'MissingDockerfileError';
@@ -17,14 +18,24 @@ const ENTRY_KINDS = [
 // The context as `docker buildx build <dir>` sends it, by path in the context, parents first.
 // The ignore file is `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, and
 // it may leave itself out. The Dockerfile always goes: docker reads it from the tar.
-export async function listContextEntries(
+export function listContextEntries(
   root: string,
   dockerfile: string,
 ): Promise<readonly LocalEntry[]> {
-  if (!existsSync(join(root, dockerfile))) {
-    throw new MissingDockerfileError(`there is no ${dockerfile} in ${root}`);
+  // the frontend reads `dockerfile` beside a missing `Dockerfile`
+  const found = listDockerfileCandidates(posix.normalize(dockerfile)).find((candidate) =>
+    existsSync(join(root, candidate)),
+  );
+
+  // a rejection, not a throw: callers catch on the promise
+  if (found === undefined) {
+    return Promise.reject(new MissingDockerfileError(`there is no ${dockerfile} in ${root}`));
   }
 
+  return listEntries(root, found);
+}
+
+async function listEntries(root: string, dockerfile: string): Promise<readonly LocalEntry[]> {
   const ignoreName = existsSync(join(root, `${dockerfile}.dockerignore`))
     ? `${dockerfile}.dockerignore`
     : '.dockerignore';
