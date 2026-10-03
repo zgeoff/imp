@@ -107,6 +107,32 @@ test('an exec in the agent sends outer through to impd', async () => {
   });
 });
 
+test('a required broker goes to impd, and its refusal names the cause', async () => {
+  const detail = 'the imp has no grant, so impd sets no broker variables';
+
+  await using impd = startFakeImpd((peer) => {
+    peer.send({
+      type: 'error',
+      code: 'PRECONDITION_FAILED',
+      message: `the broker is not ready for this exec: ${detail}`,
+      data: { reason: 'broker_not_ready', detail },
+    });
+  });
+
+  const ctx = setupIo(impd);
+
+  const exitCode = await runExec({ ...BOX, require: ['broker'] }, ctx.io);
+
+  expect(exitCode).toBe(255);
+  expect(impd.received[0]).toMatchObject({ type: 'start', require: ['broker'] });
+
+  expect(ctx.readErrors()).toEqual([
+    `imp: PRECONDITION_FAILED: the broker is not ready for this exec: ${detail}`,
+  ]);
+
+  expect(ctx.output).toEqual([]);
+});
+
 test('it exits 128 + n for a signal, a numbered one included', async () => {
   for (const [signal, expected] of [
     ['SIGKILL', 137],

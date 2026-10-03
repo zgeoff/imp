@@ -6,6 +6,7 @@ const FEATURE_VERSIONS = {
   grantableTokens: '0.27.0',
   secretRebind: '0.27.0',
   databaseCopy: '0.30.0',
+  execRequire: '0.30.0',
 } as const;
 
 type Feature = keyof typeof FEATURE_VERSIONS;

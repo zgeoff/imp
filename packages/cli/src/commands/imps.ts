@@ -1,5 +1,6 @@
 import type { ExposeResult, ForkResult, Imp } from '@imp/api';
-import { CONSOLE_SHELL } from '@zgeoff/imp-client';
+import { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@zgeoff/imp-client';
+import type { ExecRequirement } from '@zgeoff/imp-client';
 import type { CliConfig } from '../cli-config';
 import { createImpClient } from '../create-imp-client';
 import type { ImpClient } from '../create-imp-client';
@@ -22,6 +23,7 @@ import { parsePublicAuth } from '../parse-public-auth';
 import { parseCount, parseSize } from '../parse-size';
 import { buildRanking, createPlaced, readHostProbe } from '../place-imp';
 import type { PlaceRequest } from '../place-imp';
+import { requireFeature } from '../require-feature';
 import { formatError, printError, runAction } from '../run-action';
 import { UsageError } from '../usage-error';
 import { detachKeyArg, jsonArg, nameArg, readDetachKey, readSessionName } from './common-args';
@@ -536,6 +538,11 @@ export const execCommand = defineCommand({
       description:
         "run as root in the imp's agent, outside its container, with busybox (host-wide manage scope)",
     },
+    require: {
+      type: 'string',
+      description:
+        'start the command only if impd can ensure these, or fail and run nothing: broker (comma-separated)',
+    },
   },
   run: async (context) => {
     const argv = splitCommand(process.argv, context.args._.slice(1));
@@ -545,6 +552,17 @@ export const execCommand = defineCommand({
       process.exit(2);
     }
 
+    const requirements = parseRequire(context.args.require, context.args.agent === true);
+
+    if (requirements === null) {
+      process.exit(2);
+    }
+
+    // an older impd would drop the list and run the command anyway
+    if (requirements !== undefined && !(await checkExecRequire(context.host))) {
+      process.exit(1);
+    }
+
     const code = await runExec({
       host: context.host,
       name: context.args.name,
@@ -552,11 +570,59 @@ export const execCommand = defineCommand({
       tty: context.args.tty === true,
       ...(context.args.tty === true && { env: readTermEnv() }),
       ...(context.args.agent === true && { outer: true }),
+      ...(requirements !== undefined && { require: requirements }),
     });
 
     process.exit(code);
   },
 });
+
+// --require 'broker': what impd must ensure first; undefined when unset, and
+// null once a bad list is reported
+function parseRequire(
+  text: string | undefined,
+  isAgent: boolean,
+): ExecRequirement[] | null | undefined {
+  if (text === undefined) {
+    return undefined;
+  }
+
+  const names = text
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+
+  const known = new Set<string>(EXEC_REQUIREMENTS);
+
+  const bad = names.find((name) => !known.has(name));
+
+  if (names.length === 0 || bad !== undefined) {
+    console.error(`imp: --require takes ${EXEC_REQUIREMENTS.join(', ')}; not ${bad ?? text}`);
+
+    return null;
+  }
+
+  if (isAgent) {
+    console.error('imp: --require does not go with --agent: an exec in the agent gets no broker');
+
+    return null;
+  }
+
+  return EXEC_REQUIREMENTS.filter((name) => names.includes(name));
+}
+
+// false once the failed check is reported
+async function checkExecRequire(host: string | null): Promise<boolean> {
+  const checked = { ok: false };
+
+  await runAction(host, async (client) => {
+    await requireFeature(client, 'execRequire', 'run the command without checking --require');
+
+    checked.ok = true;
+  });
+
+  return checked.ok;
+}
 
 // `--no-session` parses to session: false. With no terminal on stdin, as
 // in a script, the shell runs without a session unless one is named.
