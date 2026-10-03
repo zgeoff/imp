@@ -21,8 +21,10 @@ IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
 # with this checkout's path, so `scripts/dev.sh prune` can find it once the
 # checkout is gone.
 build_host_image() {
-  docker build -q -t "$IMP_HOST_IMAGE" --label "imp.worktree=$IMP_ROOT" --target dev \
-    -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
+  # no provenance: its build timestamp gives every rebuild a new image id,
+  # and start_proxy's stamp would then replace the proxy on every up
+  docker build -q --provenance=false -t "$IMP_HOST_IMAGE" --label "imp.worktree=$IMP_ROOT" \
+    --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
 }
 
 # ensure_host_image builds the host container image unless it exists.
