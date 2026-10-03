@@ -4,6 +4,8 @@ export type {
   DetachReason,
   Identity,
   Image,
+  ImageBuildPhase,
+  ImageBuildProgress,
   Imp,
   ImpEvent,
   ImpState,
