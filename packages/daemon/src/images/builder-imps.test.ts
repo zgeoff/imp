@@ -12,10 +12,12 @@ import type { FakeAnswer, FakeRun } from './fake-guest';
 import { writeGuestTree } from './guest-build';
 
 // failedDestroys: how many destroyImp calls fail; the ones after wait for
-// releaseDestroys. answer: the builder's engine, once it is up
+// releaseDestroys. answer: the builder's engine, once it is up; openDelayMs:
+// how long opening an exec of each argv takes
 async function setupBuilderTest(
   failedDestroys = 0,
   answer: (run: FakeRun) => FakeAnswer = () => ({ stdout: 'ok' }),
+  openDelayMs: (argv: readonly string[]) => number = () => 0,
 ) {
   const ctx = await setupImpTest({ env: { IMP_BUILD_MEMORY_MIB: '512', IMP_BUILD_DISK_GIB: '4' } });
 
@@ -48,7 +50,11 @@ async function setupBuilderTest(
     db: ctx.db,
     imps: {
       ...ctx.imps,
-      openBuilderExec: (_name, request) => guest.open(request),
+      openBuilderExec: async (_name, request) => {
+        await Bun.sleep(openDelayMs(request.argv));
+
+        return guest.open(request);
+      },
       destroyImp: async (name) => {
         if (destroys.failed < failedDestroys) {
           destroys.failed += 1;
@@ -248,6 +254,57 @@ test('an export that stalls past a limit ends, and its builder goes, with no cli
       .catch((error: unknown) => error);
 
     expect(String(failure)).toContain('is over 1 files');
+
+    const left = await listImps(ctx.db);
+
+    expect(left).toEqual([]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an export stopped while its exec opens ends, and its builder goes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'imp-builder-open-'));
+
+  await using ctx = await setupBuilderTest(
+    0,
+    (run) => {
+      const command = run.argv.slice(1, 3).join(' ');
+
+      if (command === 'image inspect') {
+        return { stdout: '{}' };
+      }
+
+      if (command.startsWith('create ')) {
+        return { stdout: 'e'.repeat(64) };
+      }
+
+      return { stall: true };
+    },
+    (argv) => (argv[1] === 'export' ? 50 : 0),
+  );
+
+  try {
+    mkdirSync(join(dir, 'root'));
+
+    // the export's idle stop fires at 20 ms, while its exec takes 50 to open
+    const failure = await ctx.builders
+      .withBuilder(new AbortController().signal, (exec) =>
+        writeGuestTree(
+          exec,
+          join(dir, 'root'),
+          { maxBytes: 1024 ** 3, maxFiles: 1000, idleMs: 20 },
+          new AbortController().signal,
+        ),
+      )
+      .catch((error: unknown) => error);
+
+    expect(String(failure)).toContain('docker export in the builder sent nothing in 0.02 s');
+
+    expect(ctx.guest.runs.at(-1)).toMatchObject({
+      argv: ['docker', 'export', 'e'.repeat(64)],
+      closed: true,
+    });
 
     const left = await listImps(ctx.db);
 

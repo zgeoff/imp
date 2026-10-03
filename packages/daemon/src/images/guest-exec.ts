@@ -88,6 +88,12 @@ export function createGuestExec(
 
     const stream = await open({ argv: [...argv], tty: false, user: '0' });
 
+    // an abort while the exec opened came before its listener
+    if (options.signal.aborted) {
+      stream.close();
+      options.signal.throwIfAborted();
+    }
+
     const stopStep = () => {
       stream.sendSignal(SIGKILL);
       stream.close();
