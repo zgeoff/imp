@@ -20,8 +20,19 @@ export interface SecretFiles {
   readonly read: (file: string) => string | null;
   readonly remove: (file: string) => void;
 
-  // every file not in `keep`, and every temp file a crash left
-  readonly removeExcept: (keep: ReadonlySet<string>) => void;
+  // moves every file not in `keep`, temp files a crash left included, into
+  // ORPHANED_DIR/<at> (0700), and returns their names
+  readonly keepOrphansExcept: (keep: ReadonlySet<string>, at: Date) => KeptOrphans;
+}
+
+// where the start puts value files no row names, as after a restore from an
+// older database (docs/guides/connectors.md#value-files)
+const ORPHANED_DIR = '.orphaned';
+
+interface KeptOrphans {
+  // null when there were none, and no directory was made
+  readonly dir: string | null;
+  readonly files: readonly string[];
 }
 
 // A new file for each value: a replace writes the new value beside the old,
@@ -64,12 +75,27 @@ export function createSecretFiles(dataDir: string): SecretFiles {
     remove: (file) => {
       rmSync(join(dir, file), { force: true });
     },
-    removeExcept: (keep) => {
-      for (const file of readdirSync(dir)) {
-        if (!keep.has(file)) {
-          rmSync(join(dir, file), { force: true });
-        }
+    keepOrphansExcept: (keep, at) => {
+      const files = readdirSync(dir)
+        .filter((file) => file !== ORPHANED_DIR && !keep.has(file))
+        .toSorted();
+
+      if (files.length === 0) {
+        return { dir: null, files };
       }
+
+      // a time a path can hold: no colons
+      const target = join(dir, ORPHANED_DIR, at.toISOString().replaceAll(':', '-'));
+
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      chmodSync(join(dir, ORPHANED_DIR), 0o700);
+      chmodSync(target, 0o700);
+
+      for (const file of files) {
+        renameSync(join(dir, file), join(target, file));
+      }
+
+      return { dir: target, files };
     },
   };
 }
