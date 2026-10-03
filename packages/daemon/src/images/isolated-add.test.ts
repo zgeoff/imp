@@ -34,6 +34,10 @@ interface AddTestOptions {
 
   // the builders get impd's own add of their image, not a test image
   readonly isRealBuilderImage?: boolean;
+
+  // sh lines the host docker runs after it logs its call; by default none,
+  // so every call fails
+  readonly hostDocker?: (dataDir: string) => string;
 }
 
 // the error `adding` rejects with, or null
@@ -131,9 +135,15 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
 
   mkdirSync(bin);
 
-  writeFileSync(join(bin, 'docker'), `#!/bin/sh\necho "$*" >>'${hostLog}'\nexit 1\n`, {
-    mode: 0o755,
-  });
+  const hostLines = options.hostDocker?.(ctx.dataDir) ?? '';
+
+  writeFileSync(
+    join(bin, 'docker'),
+    `#!/bin/sh\necho "$*" >>'${hostLog}'\n${hostLines}\nexit 1\n`,
+    {
+      mode: 0o755,
+    },
+  );
 
   const holder: { images: ReturnType<typeof createImageService> | null } = { images: null };
 
@@ -381,6 +391,52 @@ test('a builder image the host engine cannot give fails the add with a clear err
   const imps = await listImps(ctx.db);
 
   expect(imps).toEqual([]);
+});
+
+// The host engine as the proxy's lock leaves it: the builder image pulls by
+// its digest, and create and export serve a small tree
+function buildBuilderHost(dataDir: string): string {
+  const tar = join(dataDir, 'builder.tar');
+
+  writeFileSync(tar, buildTar(dataDir, { dockerd: 'builder\n' }));
+
+  const inspect = JSON.stringify([{ Id: `sha256:${'f'.repeat(64)}`, Config: {}, Size: 4096 }]);
+
+  return [
+    `pulled='${dataDir}/pulled'`,
+    'case "$1 $2" in',
+    `  "image inspect") [ -f "$pulled" ] && { echo '${inspect}'; exit 0; } ;;`,
+    '  "pull --quiet") touch "$pulled"; exit 0 ;;',
+    `  "create "*) echo '${CONTAINER_ID}'; exit 0 ;;`,
+    `  "export "*) cat '${tar}'; exit 0 ;;`,
+    '  "rm -f") exit 0 ;;',
+    'esac',
+  ].join('\n');
+}
+
+test('an IMP_BUILD_IMAGE bump adds the new builder image once, by its digest, and moves the row', async () => {
+  await using ctx = await setupAdd({ hostDocker: buildBuilderHost });
+
+  // the builder image of an older release
+  await ctx.createTestImage(BUILDER_IMAGE);
+
+  // what each add and build calls first; the second finds the row current
+  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+  await ctx.withHostDocker(() => ctx.addImages.ensureBuilderImage());
+
+  const builder = await findImageByName(ctx.db, BUILDER_IMAGE);
+
+  expect(builder).toMatchObject({
+    ref: ctx.config.build.image,
+    digest: `sha256:${'f'.repeat(64)}`,
+  });
+
+  const pulls = ctx
+    .readHostCalls()
+    .split('\n')
+    .filter((call) => call.startsWith('pull '));
+
+  expect(pulls).toEqual([`pull --quiet ${ctx.config.build.image}`]);
 });
 
 test('the first-start seed goes through a builder too', async () => {
