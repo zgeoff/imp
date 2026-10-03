@@ -4,6 +4,9 @@ import { runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
 
 interface DockerOptions {
+  // the whole environment of the CLI; impd's own by default
+  readonly env?: Readonly<Record<string, string>> | undefined;
+
   // kills the child when it aborts
   readonly signal?: AbortSignal;
 }
@@ -29,7 +32,10 @@ export async function runDocker(
   argv: readonly string[],
   options: DockerOptions = {},
 ): Promise<CommandResult> {
-  const result = await runCommand(['docker', ...argv], options);
+  const result = await runCommand(['docker', ...argv], {
+    ...(options.env !== undefined && { env: options.env }),
+    ...(options.signal !== undefined && { signal: options.signal }),
+  });
 
   if (result.exitCode !== 0) {
     const refused = readRefusalError(`docker ${argv[0] ?? ''}`, result.stderr);

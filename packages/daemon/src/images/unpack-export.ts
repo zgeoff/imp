@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { ORPCError } from '@orpc/server';
 import { runCommand } from '../process/run-command';
 import type { CommandResult } from '../process/run-command';
-import { readRefusalError } from './run-docker';
 
 // CAP_SETFCAP's bit in /proc/<pid>/status (linux/capability.h)
 const CAP_SETFCAP_BIT = 31n;
@@ -35,12 +34,6 @@ export async function writeExportedTree(containerId: string, root: string): Prom
 // binary that lost its capability would fail later, in the imp, with EPERM
 export function assertUnpacked(result: CommandResult): void {
   if (result.exitCode !== 0) {
-    const refused = readRefusalError('docker export', result.stderr);
-
-    if (refused !== null) {
-      throw refused;
-    }
-
     throw new Error(
       `docker export | tar exited ${String(result.exitCode)}: ${result.stderr.trim() || result.stdout.trim()}`,
     );

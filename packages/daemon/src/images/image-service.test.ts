@@ -42,16 +42,15 @@ test('it refuses refs and build contexts that docker could read as flags', async
   }
 });
 
-// #173: the docker CLI prints the proxy's 403 body after its own words;
-// impd answers BAD_REQUEST with the proxy's message, and nothing else of
-// the CLI's output (its argv, the ref's other output) reaches the client
+// #173: the docker CLI prints the proxy's message after its own line for a
+// create; impd answers BAD_REQUEST with that message, and nothing else of
+// the CLI's output reaches the client
 test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the create', async () => {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
   const bin = join(dataDir, 'fake-bin');
   const refusal = "imp-docker-proxy: registry localhost:5320 is the host's own";
-  const stderr = `Unable to find image locally\nError response from daemon: ${JSON.stringify({ message: refusal })}`;
+  const stderr = `Unable to find image 'localhost:5320/x:1' locally\nError response from daemon: ${refusal}`;
   const inspect = JSON.stringify([{ Id: `sha256:${'c'.repeat(64)}`, Config: {}, Size: 1 }]);
-  const savedPath = process.env['PATH'];
 
   mkdirSync(bin);
   writeFileSync(join(dataDir, 'stderr'), stderr);
@@ -72,8 +71,6 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
     { mode: 0o755 },
   );
 
-  process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
-
   try {
     const images = createImageService({
       config: loadConfig({ IMP_DATA_DIR: dataDir }),
@@ -81,6 +78,9 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
       diskBudget: { withRoom: (_bytes, task) => task() },
+
+      // the fake docker first, for these calls only
+      dockerEnv: { PATH: `${bin}:${process.env['PATH'] ?? ''}` },
     });
 
     for (const ref of ['localhost:5320/pulled:1', 'localhost:5320/local:1']) {
@@ -89,8 +89,6 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
       expect(failure).toMatchObject({ code: 'BAD_REQUEST', message: refusal });
     }
   } finally {
-    process.env['PATH'] = savedPath;
-
     rmSync(dataDir, { recursive: true, force: true });
   }
 });
