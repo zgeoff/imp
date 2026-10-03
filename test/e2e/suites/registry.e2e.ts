@@ -13,6 +13,7 @@ import { setupSuite } from '../lib/setup-suite';
 const prefix = setupSuite('registry');
 const mutable = `${prefix}mutable`;
 const multi = `${prefix}multi`;
+const copied = `${prefix}copied`;
 const REGISTRY_NAME = process.env['E2E_REGISTRY_NAME'] ?? 'imp-e2e-registry.test';
 const CONTAINER = `${prefix}registry-${String(process.pid)}`;
 
@@ -24,6 +25,13 @@ async function checkRegistryName(): Promise<boolean> {
   const sudo = await runCommand(['sudo', '--non-interactive', 'true']);
 
   if (resolved?.address !== '127.0.0.1' || sudo.exitCode !== 0) {
+    // CI sets both up; a broken step must not pass as a skip
+    if (process.env['CI'] !== undefined) {
+      throw new Error(
+        `CI is set, but ${REGISTRY_NAME} does not resolve to 127.0.0.1 or sudo needs a password`,
+      );
+    }
+
     console.log(
       `    skipped: the suite needs ${REGISTRY_NAME} to resolve to 127.0.0.1 and sudo with no password, as CI has; E2E_REGISTRY_NAME=imp-e2e.127.0.0.1.nip.io names one through DNS`,
     );
@@ -136,7 +144,7 @@ afterAll(async () => {
     await runCommand(['sudo', '--non-interactive', 'rm', '-rf', buildCertsDir()]);
   }
 
-  for (const name of [mutable, multi]) {
+  for (const name of [mutable, multi, copied]) {
     await tryImp(['image', 'rm', name]);
   }
 });
@@ -177,14 +185,16 @@ async function readBusyboxDigest(): Promise<string> {
   return own;
 }
 
-// builds the context for one platform as tag, and pushes it
-async function buildPushedImage(dir: string, tag: string, platform = 'linux/amd64'): Promise<void> {
+// builds the context as tag, for the engine's platform unless given one,
+// and pushes it
+async function buildPushedImage(dir: string, tag: string, platform?: string): Promise<void> {
+  const platformArgs = platform === undefined ? [] : ['--platform', platform];
+
   await runChecked([
     'docker',
     'build',
     '--quiet',
-    '--platform',
-    platform,
+    ...platformArgs,
     '--provenance=false',
     '--sbom=false',
     '--tag',
@@ -219,68 +229,137 @@ async function listManifestRequests(repository: string): Promise<string[]> {
   );
 }
 
-async function readFileInImage(name: string): Promise<string> {
-  const output = await runChecked(['docker', 'run', '--rm', `imp/${name}:latest`, 'cat', '/v']);
+async function readFileInImage(name: string, path: string): Promise<string> {
+  const output = await runChecked(['docker', 'run', '--rm', `imp/${name}:latest`, 'cat', path]);
 
   return output.trim();
+}
+
+// the engine's architecture, as image configs name it
+async function readHostArch(): Promise<string> {
+  const arch = await runChecked(['docker', 'version', '--format', '{{.Server.Arch}}']);
+
+  return arch.trim();
+}
+
+interface MovedTag {
+  readonly tag: string;
+  readonly kept: string;
+  readonly pinned: string;
+}
+
+// A tag the host has on old content, which the registry moved to new: the
+// pin must keep the build on the old.
+async function setupMovedTag(repository: string): Promise<MovedTag> {
+  const busybox = await readBusyboxDigest();
+
+  const tag = `${registry}/${repository}:1`;
+  const from = `FROM ${busybox}\nCOPY v /v\n`;
+
+  await buildPushedImage(writeContext(`${repository}-old`, from, 'old'), tag);
+
+  // the containerd store drops an image whose last tag moves
+  const kept = `${registry}/${repository}:kept`;
+
+  await runChecked(['docker', 'tag', tag, kept]);
+
+  const repoDigests = await readRepoDigests(tag);
+
+  const pinned = repoDigests.find((digest) => digest.startsWith(`${registry}/${repository}@`));
+
+  if (pinned === undefined) {
+    throw new Error(`${tag} has no RepoDigest under its repository: ${repoDigests.join(', ')}`);
+  }
+
+  await buildPushedImage(writeContext(`${repository}-new`, from, 'new'), tag);
+  await runChecked(['docker', 'tag', kept, tag]);
+
+  return { tag, kept, pinned };
+}
+
+// builds the context as name, and returns the manifest references the
+// registry saw during the build
+async function buildAndListRequests(
+  repository: string,
+  dockerfile: string,
+  name: string,
+): Promise<string[]> {
+  const before = await listManifestRequests(repository);
+
+  await runImp('image', 'build', writeContext(`build-${name}`, dockerfile, ''), '--name', name);
+
+  const after = await listManifestRequests(repository);
+
+  const seen = after.slice(before.length);
+
+  console.log(
+    `    the registry saw ${String(seen.length)} manifest requests during the build: ${seen.join(', ')}`,
+  );
+
+  return seen;
+}
+
+// the engine may use the host's copy and ask nothing, or ask for the pin;
+// never for the tag
+function checkRequests(moved: Readonly<MovedTag>, seen: readonly string[]): void {
+  const digest = moved.pinned.slice(moved.pinned.indexOf('@') + 1);
+
+  expect(seen.filter((reference) => reference !== digest)).toEqual([]);
 }
 
 test.skipIf(!REGISTRY_READY)(
   'a tag moved in the registry after the host pulled it builds the content impd inspected',
   async () => {
-    const busybox = await readBusyboxDigest();
-
     const repository = 'e2e/mutable';
-    const tag = `${registry}/${repository}:1`;
-    const from = `FROM ${busybox}\nCOPY v /v\n`;
 
-    await buildPushedImage(writeContext('old', from, 'old'), tag);
-
-    // the containerd store drops an image whose last tag moves
-    const kept = `${registry}/${repository}:kept`;
-
-    await runChecked(['docker', 'tag', tag, kept]);
-
-    const repoDigests = await readRepoDigests(tag);
-
-    const pinned = repoDigests.find((digest) => digest.startsWith(`${registry}/${repository}@`));
-
-    // the registry's tag moves to new content; the host's stays on the old
-    await buildPushedImage(writeContext('new', from, 'new'), tag);
-    await runChecked(['docker', 'tag', kept, tag]);
-
-    const before = await listManifestRequests(repository);
+    const moved = await setupMovedTag(repository);
 
     try {
-      await runImp(
-        'image',
-        'build',
-        writeContext('build-mutable', `FROM ${tag}\nRUN cat /v\n`, ''),
-        '--name',
+      const seen = await buildAndListRequests(
+        repository,
+        `FROM ${moved.tag}\nRUN cat /v\n`,
         mutable,
       );
+
+      checkRequests(moved, seen);
     } finally {
-      await runCommand(['docker', 'rmi', tag, kept]);
+      await runCommand(['docker', 'rmi', moved.tag, moved.kept]);
     }
 
-    const after = await listManifestRequests(repository);
-
-    const seen = after.slice(before.length);
-
-    console.log(
-      `    the registry saw ${String(seen.length)} manifest requests during the build: ${seen.join(', ')}`,
-    );
-
-    expect(pinned).toBeDefined();
-
-    const content = await readFileInImage(mutable);
+    const content = await readFileInImage(mutable, '/v');
 
     expect(content).toBe('old');
+  },
+);
 
-    // only the pinned digest, never the tag
-    for (const reference of seen) {
-      expect(`${registry}/${repository}@${reference}`).toBe(pinned ?? '');
+test.skipIf(!REGISTRY_READY)(
+  'COPY --from and RUN --mount from= a moved tag use the content impd inspected',
+  async () => {
+    const busybox = await readBusyboxDigest();
+
+    const repository = 'e2e/source';
+
+    const moved = await setupMovedTag(repository);
+
+    const dockerfile = [
+      `FROM ${busybox}`,
+      `COPY --from=${moved.tag} /v /copied`,
+      `RUN --mount=from=${moved.tag},target=/m cp /m/v /mounted`,
+      '',
+    ].join('\n');
+
+    try {
+      const seen = await buildAndListRequests(repository, dockerfile, copied);
+
+      checkRequests(moved, seen);
+    } finally {
+      await runCommand(['docker', 'rmi', moved.tag, moved.kept]);
     }
+
+    const fromCopy = await readFileInImage(copied, '/copied');
+    const fromMount = await readFileInImage(copied, '/mounted');
+
+    expect([fromCopy, fromMount]).toEqual(['old', 'old']);
   },
 );
 
@@ -288,24 +367,30 @@ test.skipIf(!REGISTRY_READY)(
   'a multi-platform image binds the host’s variant, whose ONBUILD-free config impd inspected',
   async () => {
     const busybox = await readBusyboxDigest();
+    const hostArch = await readHostArch();
 
+    const otherArch = hostArch === 'arm64' ? 'amd64' : 'arm64';
     const repository = 'e2e/multi';
     const index = `${registry}/${repository}:1`;
-    const amd64 = `${registry}/${repository}:amd64`;
-    const arm64 = `${registry}/${repository}:arm64`;
+    const host = `${registry}/${repository}:${hostArch}`;
+    const other = `${registry}/${repository}:${otherArch}`;
 
-    await buildPushedImage(writeContext('amd64', `FROM ${busybox}\nCOPY v /v\n`, 'amd64'), amd64);
+    await buildPushedImage(
+      writeContext('host', `FROM ${busybox}\nCOPY v /v\n`, hostArch),
+      host,
+      `linux/${hostArch}`,
+    );
 
     // a trigger impd would refuse, and that fails the build if it ran
     await buildPushedImage(
-      writeContext('arm64', `FROM ${busybox}\nCOPY v /v\nONBUILD RUN false\n`, 'arm64'),
-      arm64,
-      'linux/arm64',
+      writeContext('other', `FROM ${busybox}\nCOPY v /v\nONBUILD RUN false\n`, otherArch),
+      other,
+      `linux/${otherArch}`,
     );
 
-    await runChecked(['docker', 'manifest', 'create', '--insecure', index, amd64, arm64]);
+    await runChecked(['docker', 'manifest', 'create', '--insecure', index, host, other]);
     await runChecked(['docker', 'manifest', 'push', '--insecure', '--purge', index]);
-    await runChecked(['docker', 'rmi', amd64, arm64]);
+    await runChecked(['docker', 'rmi', host, other]);
 
     try {
       await runImp(
@@ -319,9 +404,9 @@ test.skipIf(!REGISTRY_READY)(
       await runCommand(['docker', 'rmi', index]);
     }
 
-    const content = await readFileInImage(multi);
+    const content = await readFileInImage(multi, '/v');
 
-    expect(content).toBe('amd64');
+    expect(content).toBe(hostArch);
 
     const references = await listManifestRequests(repository);
 
