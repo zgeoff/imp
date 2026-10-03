@@ -263,4 +263,23 @@ test('db copy asks for the feature first: an older impd gets no copy call', asyn
     { code: 1, calls: ['system/info'] },
     { code: 0, calls: ['system/info', 'system/copyDatabase'] },
   ]);
+
+test('an older impd gets no console --log, only the feature check', async () => {
+  await using ctx = setupTest(OLD_INFO);
+
+  const result = await ctx.run(['console', 'dev', '--session', 'main', '--log']);
+
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain('this impd has no session logs');
+  expect(ctx.calls).toEqual(['system/info']);
+});
+
+test('console --log without a session is a usage error', async () => {
+  await using ctx = setupTest(NEW_INFO);
+
+  const result = await ctx.run(['console', 'dev', '--no-session', '--log']);
+
+  expect(result.code).toBe(2);
+  expect(result.stderr).toContain('--log needs a session');
+  expect(ctx.calls).toEqual([]);
 });
