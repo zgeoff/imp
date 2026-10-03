@@ -493,8 +493,9 @@ render_env() {
     NETWORK=$([ "$9" != on ] || echo "--network $HOST_NETWORK") \
     awk '
       function set(key, value) { print key "=" value; done[key] = 1 }
+      function trim(s) { sub(/\r$/, "", s); gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
       /^IMP_HOST_IMAGE=/ && ENVIRON["IMG_SET"] != "" { set("IMP_HOST_IMAGE", ENVIRON["IMG"]); next }
-      $0 == ENVIRON["LEGACY_IMAGE"] { print "# IMP_HOST_IMAGE=" ENVIRON["IMG"]; next }
+      trim($0) == ENVIRON["LEGACY_IMAGE"] { print "# IMP_HOST_IMAGE=" ENVIRON["IMG"]; next }
       /^IMP_STORAGE_BACKEND=/ { set("IMP_STORAGE_BACKEND", ENVIRON["STORAGE"]); next }
       /^IMP_ZFS_ROOT=/ && ENVIRON["ZFS_ROOT"] != "" { set("IMP_ZFS_ROOT", ENVIRON["ZFS_ROOT"]); next }
       /^IMP_HOST_FIREWALL=/ { set("IMP_HOST_FIREWALL", ENVIRON["HOST_FIREWALL"]); next }
@@ -931,12 +932,20 @@ resolve_storage() {
   fi
 }
 
+# trim_lines: stdin without a trailing \r or the blanks around each line, as
+# an env file edited on another system may have them
+trim_lines() { awk '{ sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print }'; }
+
+# strip_markers: stdin without the release-please marker lines, which only
+# the repo's copies need
+strip_markers() { grep -vE '^# x-release-please-(start-[a-z]+|end)$' || true; }
+
 # check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
 # is empty: systemd passes it over the units' own image, and docker run gets
 # none. Keep it equal to check_env_image in deploy/upgrade.sh.
 check_env_image() {
   [ -f "$1" ] || return 0
-  [ "$(grep '^IMP_HOST_IMAGE=' "$1" | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
+  [ "$(trim_lines <"$1" | grep '^IMP_HOST_IMAGE=' | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
   echo "$1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image" >&2
   return 1
 }
@@ -1706,7 +1715,7 @@ ensure_imp() {
   fi
 
   local env changed=
-  env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template)" "$budget" "$image" "$image_set" \
+  env=$(BOOTSTRAP_AUTHKEY=$key render_env "$existing" "$(env_template | strip_markers)" "$budget" "$image" "$image_set" \
     "$storage" "$zfs_root" "$host_firewall" "$ipv6" "$ipv6_subnet" "$ksm")
   # An operator's value stays (render_env), so the floor binds the formula only.
   local refusal
@@ -1718,7 +1727,7 @@ ensure_imp() {
   # Checked before anything is written: the units run imp-docker-proxy from
   # the image and give imp-host no docker.sock, and an older image, such as
   # a stale pin that ensure_image keeps, has neither.
-  if grep -qxF "$LEGACY_IMAGE_LINE" <<<"$existing" && [ -z "$image_set" ]; then
+  if trim_lines <<<"$existing" | grep -qxF "$LEGACY_IMAGE_LINE" && [ -z "$image_set" ]; then
     log "$ENV_FILE: $LEGACY_IMAGE_LINE was the old template's line, not a pin; it becomes a comment"
   fi
   local run_image
@@ -1729,10 +1738,10 @@ ensure_imp() {
     refusal=$(check_image_contract "$run_image" 2>&1) || die "$refusal"
   fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
-  put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
+  put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host | strip_markers)" && changed=1
   # imp-host reaches Docker through this proxy only (docs/architecture/host-contract.md#the-docker-socket)
   local proxy_changed=
-  put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy)" && proxy_changed=1
+  put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy | strip_markers)" && proxy_changed=1
   if [ "$storage" = zfs ]; then
     put_file /etc/systemd/system/imp-host.service.d/zfs.conf 644 "$(unit_imp_host_zfs)" && changed=1
   fi

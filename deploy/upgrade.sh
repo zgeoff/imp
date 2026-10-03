@@ -10,10 +10,11 @@
 #   docker run --rm <new image> cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
 #
 # 1. Pulls the image: this script's own release, unless IMP_HOST_IMAGE (the
-#    environment, then the env file) names another. Nothing happens when the
-#    host already runs it. Refuses an image that the restarted units would
-#    not run. Refuses
-#    an image older than the Docker socket proxy (imp.host-contract other
+#    environment, then with --compose the compose .env, then the env file)
+#    names another. When the host already runs it, only the image lines of
+#    step 3 change. Refuses an image that the restarted units would not run
+#    (drop-ins count), and an env file with IMP_HOST_IMAGE= empty. Refuses an
+#    image older than the Docker socket proxy (imp.host-contract other
 #    than socket-proxy) once the unit or compose file gives imp-host the
 #    proxy's socket, and an image with no label once it runs without
 #    --privileged: only deploy/bootstrap.sh of that image's release puts its
@@ -26,11 +27,13 @@
 #    --compose, the compose file is the operator's and stays), restarts
 #    imp-docker-proxy, then the host, on the new image and waits for impd.
 #    Local changes to a unit belong in a drop-in (imp-host.service.d/),
-#    which stays. An env file line IMP_HOST_IMAGE=...:latest, as every env
-#    file had before the units named their release, is the old template's,
-#    not a pin: it becomes a comment, and the file before is kept as .bak.
-#    With --compose, IMP_HOST_IMAGE goes to the .env next to the compose
-#    file (its .bak too), so a later `docker compose up -d` keeps the image.
+#    which stays. First, an env file line IMP_HOST_IMAGE=...:latest, as every
+#    env file had before the units named their release, is the old
+#    template's, not a pin: it becomes a comment, and the file before is kept
+#    as .bak-<time>. With --compose, IMP_HOST_IMAGE goes to the .env next to
+#    the compose file (a .bak-<time> too), so a later `docker compose up -d`
+#    keeps the image. Installed units and files lose the release-please
+#    marker lines.
 # 4. Prints how many imps will boot cold and how many run outdated parts, then
 #    lists the imps: a NOTE says which boot cold on their next wake, and why
 #    (docs/guides/operations.md#upgrade).
@@ -74,37 +77,68 @@ case ${1:-} in
   *) usage ;;
 esac
 
+# trim_lines FILE: FILE without a trailing \r or the blanks around each line,
+# as an env file edited on another system may have them
+trim_lines() {
+  awk '{ sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); print }' "$1" 2>/dev/null || true
+}
+
+# strip_markers: stdin without the release-please marker lines, which only
+# the repo's copies need; deploy/bootstrap.sh strips them too
+strip_markers() { grep -vE '^# x-release-please-(start-[a-z]+|end)$' || true; }
+
 # the env file's pin, or nothing: its last non-empty IMP_HOST_IMAGE line
 # that is not the legacy one, which migrate_env_file turns into a comment
 pinned_image() {
   local line
-  line=$(grep -E '^IMP_HOST_IMAGE=.' "$env_file" 2>/dev/null | grep -vxF "$legacy_image_line" | tail -n 1 || true)
+  line=$(trim_lines "$env_file" | grep -E '^IMP_HOST_IMAGE=.' | grep -vxF "$legacy_image_line" | tail -n 1 || true)
   echo "${line#IMP_HOST_IMAGE=}"
+}
+
+# the .env next to the compose file, which compose reads at every `up`
+compose_env_file() {
+  echo "$(dirname "$compose_file")/.env"
+}
+
+# the compose .env's IMP_HOST_IMAGE, without the quotes compose allows
+compose_env_image() {
+  local line
+  line=$(trim_lines "$(compose_env_file)" | grep -E '^IMP_HOST_IMAGE=.' | tail -n 1 || true)
+  line=${line#IMP_HOST_IMAGE=}
+  line=${line#[\"\']}
+  echo "${line%[\"\']}"
 }
 
 # check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
 # is empty: systemd passes it over the units' own image, and docker run gets
-# none. Keep it equal to check_env_image in deploy/bootstrap.sh.
+# none. deploy/bootstrap.sh has the same check.
 check_env_image() {
-  [ -f "$1" ] || return 0
-  [ "$(grep '^IMP_HOST_IMAGE=' "$1" | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
+  [ "$(trim_lines "$1" | grep '^IMP_HOST_IMAGE=' | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
   echo "upgrade: $1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image; nothing changed" >&2
   return 1
 }
 
-# the image to move to: the environment, then the env file's pin, then this
-# script's release
+# the image to move to: the environment, then (with --compose) the compose
+# .env, then the env file's pin, then this script's release
 read_image() {
   if [ -n "${IMP_HOST_IMAGE:-}" ]; then
     echo "$IMP_HOST_IMAGE"
     return
   fi
-  pinned_image | grep . || echo "$release_image"
+  { [ -z "$compose_file" ] || compose_env_image; pinned_image; } | grep . | head -n 1 \
+    || echo "$release_image"
 }
 
-# the image the units run after the restart: the env file's pin, else the
-# default of UNIT (the new one when the image gives it) or of a drop-in,
-# which systemd reads after it; empty when none names one
+# the IMP_HOST_IMAGE that the Environment= lines of FILE... set, the last
+# one winning. A line may set several, each one in double quotes or not.
+environment_image() {
+  sed -n 's/^Environment=//p' "$@" 2>/dev/null | xargs -n 1 2>/dev/null \
+    | sed -n 's/^IMP_HOST_IMAGE=//p' | tail -n 1 || true
+}
+
+# unit_image UNIT INSTALLED: the image a unit runs after the restart: the env
+# file's pin, else the default that UNIT (the new one when the image gives
+# it) or a drop-in of INSTALLED sets; empty when none sets one
 unit_image() {
   local pin
   pin=$(pinned_image)
@@ -112,18 +146,19 @@ unit_image() {
     echo "$pin"
     return
   fi
-  { cat "$1"; cat "$unit_file".d/*.conf 2>/dev/null || true; } \
-    | sed -n 's/^Environment=IMP_HOST_IMAGE=//p' | tail -n 1
+  environment_image "$1" "$2".d/*.conf
 }
 
 # rewrite_file PATH AWK_PROGRAM [AWK_ARGS...]: PATH through awk, by rename,
-# with the old PATH kept as PATH.bak. Copies keep PATH's mode: the env file
-# holds secrets. Exits on a failure, before anything restarts.
+# with the old PATH kept as PATH.bak-<time>, named in $backup. Copies keep
+# PATH's mode: the env file holds secrets. Exits on a failure, before
+# anything restarts.
 rewrite_file() {
   local path=$1
   shift
-  if ! { cp -p "$path" "$path.bak" && cp -p "$path" "$path.new" \
-    && awk "$@" "$path.bak" >"$path.new" && mv "$path.new" "$path"; }; then
+  backup=$path.bak-$(date +%Y%m%d-%H%M%S)
+  if ! { cp -p "$path" "$backup" && cp -p "$path" "$path.new" \
+    && awk "$@" "$backup" >"$path.new" && mv "$path.new" "$path"; }; then
     rm -f "$path.new"
     echo "upgrade: cannot rewrite $path; nothing restarted, the host still runs $old" >&2
     exit 1
@@ -133,27 +168,28 @@ rewrite_file() {
 # The legacy line becomes the commented pin, as in the env template: the
 # units then run their release's image. Any other value is a pin and stays.
 migrate_env_file() {
-  [ -f "$env_file" ] && grep -qxF "$legacy_image_line" "$env_file" || return 0
+  trim_lines "$env_file" | grep -qxF "$legacy_image_line" || return 0
   # shellcheck disable=SC2016 # an awk program
-  rewrite_file "$env_file" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" \
-    '$0 == legacy { print pin; next } { print }'
-  echo "upgrade: $env_file: $legacy_image_line was the old template's line, not a pin; it is a comment now, and the units run their release's image (the file before: $env_file.bak)"
+  rewrite_file "$env_file" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" '
+    { line = $0; sub(/\r$/, "", line); gsub(/^[ \t]+|[ \t]+$/, "", line) }
+    line == legacy { print pin; next }
+    { print }'
+  echo "upgrade: $env_file: $legacy_image_line was the old template's line, not a pin; it is a comment now, and the units run their release's image (the file before: $backup)"
 }
 
-# IMP_HOST_IMAGE=$image in the .env next to the compose file, which compose
-# reads at every `up`: without it, a later `up -d` runs the file's default
+# IMP_HOST_IMAGE=$image in the compose .env: without it, a later `up -d`
+# runs the compose file's default
 write_compose_env() {
   local env
-  env=$(dirname "$compose_file")/.env
+  env=$(compose_env_file)
   if [ ! -f "$env" ]; then
     echo "IMP_HOST_IMAGE=$image" >"$env"
-  elif grep -qxF "IMP_HOST_IMAGE=$image" "$env" && [ "$(grep -c '^IMP_HOST_IMAGE=' "$env")" = 1 ]; then
-    return
-  else
+    echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env"
+  elif [ "$(compose_env_image)" != "$image" ]; then
     rewrite_file "$env" -v line="IMP_HOST_IMAGE=$image" \
-      '/^IMP_HOST_IMAGE=/ { if (!done) print line; done = 1; next } { print } END { if (!done) print line }'
+      '/^[ \t]*IMP_HOST_IMAGE=/ { if (!done) print line; done = 1; next } { print } END { if (!done) print line }'
+    echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env (the file before: $backup)"
   fi
-  echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env"
 }
 
 imp() {
@@ -206,7 +242,7 @@ deploy_file() {
 # leaves no PATH.new, when the image cannot give it or gives it empty. Its
 # caller tests it, so set -e is off in here: each step is checked.
 fetch_file() {
-  if ! docker run --rm "$image" cat "$image_deploy/$1" >"$2.new" || [ ! -s "$2.new" ]; then
+  if ! docker run --rm "$image" cat "$image_deploy/$1" | strip_markers >"$2.new" || [ ! -s "$2.new" ]; then
     rm -f "$2.new"
     echo "upgrade: cannot read $image_deploy/$1 from $image; nothing changed, the host still runs $old" >&2
     return 1
@@ -278,7 +314,11 @@ docker pull -q "$image" >/dev/null
 old=$(docker inspect -f '{{.Image}}' "$container")
 new=$(docker image inspect -f '{{.Id}}' "$image")
 
+# The env file and the compose .env still get their image lines: a host on
+# :latest may run this release's image already.
 if [ "$old" = "$new" ]; then
+  migrate_env_file
+  [ -z "$compose_file" ] || write_compose_env
   echo "upgrade: $container already runs $new"
   exit 0
 fi
@@ -322,11 +362,16 @@ done
 # The units take the image from the env file, else their own default: one
 # from the environment alone would pull here, then restart into another.
 if [ -z "$compose_file" ]; then
-  unit_runs=$(unit_image "$([ -f "$unit_file.new" ] && echo "$unit_file.new" || echo "$unit_file")")
-  if [ -n "$unit_runs" ] && [ "$unit_runs" != "$image" ]; then
-    echo "upgrade: the units would run $unit_runs, not $image; pin IMP_HOST_IMAGE=$image in $env_file and run again. Nothing changed." >&2
-    exit 1
-  fi
+  units=("$unit_file")
+  [ "$new_contract" != socket-proxy ] || units+=("$proxy_unit_file")
+  for f in "${units[@]}"; do
+    [ -f "$f.new" ] || [ -f "$f" ] || continue
+    unit_runs=$(unit_image "$([ -f "$f.new" ] && echo "$f.new" || echo "$f")" "$f")
+    if [ -n "$unit_runs" ] && [ "$unit_runs" != "$image" ]; then
+      echo "upgrade: $(basename "$f") would run $unit_runs, not $image; pin IMP_HOST_IMAGE=$image in $env_file and run again. Nothing changed." >&2
+      exit 1
+    fi
+  done
 fi
 
 # its own line: a failed `imp ls` stops the script before anything restarts
@@ -340,6 +385,8 @@ for name in $awake; do
   echo "upgrade: $name asleep"
 done
 
+# before the units: a failed rewrite stops here, with the old units in place
+migrate_env_file
 unit_changed=
 for f in "${new_files[@]}"; do
   if install_file "$f" && [ "$f" != "$seccomp_file" ]; then
@@ -347,7 +394,6 @@ for f in "${new_files[@]}"; do
   fi
 done
 [ -z "$unit_changed" ] || systemctl daemon-reload
-migrate_env_file
 restart_host
 wait_ready
 

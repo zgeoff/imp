@@ -541,3 +541,21 @@ test('an env file whose last IMP_HOST_IMAGE is empty is refused, naming the file
   expect(runEnvImageCheck('IMP_HOST_IMAGE=\nIMP_HOST_IMAGE=imp-host:1\n').exitCode).toBe(0);
   expect(runEnvImageCheck(`# IMP_HOST_IMAGE=${releaseImage}\n`).exitCode).toBe(0);
 });
+
+test('the old template line is migrated with a CR and blanks around it', () => {
+  const existing = template.replace(`# IMP_HOST_IMAGE=${releaseImage}`, `  ${legacyImageLine}\r`);
+
+  expect(renderEnv({ existing })).toBe(renderEnv({ existing: template }));
+  expect(runEnvImageCheck('IMP_HOST_IMAGE= \r\n').exitCode).toBe(1);
+});
+
+test('the installed units and env file carry no release-please markers', () => {
+  for (const fn of ['unit_imp_host', 'unit_imp_docker_proxy', 'env_template']) {
+    const raw = runFunction(fn);
+    const installed = runFunction('strip_markers', [], { stdin: raw });
+
+    expect(raw).toContain('x-release-please-start-version');
+    expect(installed).not.toContain('x-release-please');
+    expect(installed).toContain(releaseImage);
+  }
+});

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -65,6 +66,10 @@ interface Host {
   // the new image's unit, UNPRIVILEGED_UNIT unless set, and a drop-in for it
   readonly newUnit?: string;
   readonly dropIn?: string;
+  readonly proxyDropIn?: string;
+
+  // the pulled image is the one the container runs already
+  readonly sameImage?: boolean;
 }
 
 // Fakes docker, systemctl and curl: each call lands in calls, the running
@@ -87,7 +92,7 @@ echo "docker $*" >>'${calls}'
 case "$*" in
   "inspect -f {{.Image}} imp-host") echo sha256:old ;;
   "inspect imp-host" | "pull -q ${image}") ;;
-  "image inspect -f {{.Id}} ${image}") echo sha256:new ;;
+  "image inspect -f {{.Id}} ${image}") echo sha256:${host.sameImage === true ? 'old' : 'new'} ;;
   "image inspect -f "*" sha256:old") echo '${host.oldLabel}' ;;
   "image inspect -f "*) echo '${host.newLabel}' ;;
   "run --rm ${image} cat "*${host.failCat ?? 'none'}) exit 1 ;;
@@ -123,9 +128,14 @@ esac
     writeFileSync(composeFile, host.compose);
   }
 
-  if (host.dropIn !== undefined) {
-    mkdirSync(`${unitFile}.d`);
-    writeFileSync(join(`${unitFile}.d`, 'image.conf'), host.dropIn);
+  for (const [file, dropIn] of [
+    [unitFile, host.dropIn],
+    [proxyUnitFile, host.proxyDropIn],
+  ] as const) {
+    if (dropIn !== undefined) {
+      mkdirSync(`${file}.d`);
+      writeFileSync(join(`${file}.d`, 'image.conf'), dropIn);
+    }
   }
 
   if (host.envFile !== undefined) {
@@ -170,17 +180,34 @@ esac
       existsSync(`${file}.new`),
     ),
     envFile: readIfThere(envFile),
-    envFileBackup: readIfThere(`${envFile}.bak`),
-    envFileModes: [envFile, `${envFile}.bak`].map((file) =>
-      existsSync(file) ? statSync(file).mode & 0o777 : null,
+    envFileBackup: readBackup(dir, 'imp-host.env'),
+    envFileModes: [envFile, findBackup(dir, 'imp-host.env')].map((file) =>
+      file !== null && existsSync(file) ? statSync(file).mode & 0o777 : null,
     ),
     composeEnv: readIfThere(composeEnv),
-    composeEnvBackup: readIfThere(`${composeEnv}.bak`),
+    composeEnvBackup: readBackup(dir, '.env'),
   };
 }
 
 function readIfThere(file: string): string | null {
   return existsSync(file) ? readFileSync(file, 'utf8') : null;
+}
+
+// NAME.bak-<time>, the one backup a run makes of NAME
+function findBackup(dir: string, name: string): string | null {
+  const backups = readdirSync(dir).filter(
+    (file) => /^(?<name>.+)\.bak-\d{8}-\d{6}$/v.exec(file)?.groups?.['name'] === name,
+  );
+
+  expect(backups.length).toBeLessThanOrEqual(1);
+
+  return backups[0] === undefined ? null : join(dir, backups[0]);
+}
+
+function readBackup(dir: string, name: string): string | null {
+  const file = findBackup(dir, name);
+
+  return file === null ? null : readFileSync(file, 'utf8');
 }
 
 test('an upgrade to the unprivileged host installs its unit before the restart', async () => {
@@ -408,7 +435,7 @@ test('an image from the environment that the units would not run is refused befo
   });
 
   expect(result.exitCode).toBe(1);
-  expect(result.output).toContain(`the units would run ${RELEASE_IMAGE}, not ${IMAGE}`);
+  expect(result.output).toContain(`imp-host.service would run ${RELEASE_IMAGE}, not ${IMAGE}`);
   expect(result.unit).toBe(PROXY_UNIT);
   expect(result.envFile).toBe(`${LEGACY_IMAGE_LINE}\n`);
   expect(result.leftovers).toEqual([]);
@@ -448,17 +475,118 @@ test('compose without a .env gets one that names the image', async () => {
   expect(result.composeEnvBackup).toBeNull();
 });
 
-test("a drop-in's image counts as the units' own", async () => {
-  const result = await runUpgrade({
+test("a drop-in's image counts as its unit's own, for imp-host and the proxy alike", async () => {
+  const dropIn = `[Service]\nEnvironment=IMP_HOST_IMAGE=${IMAGE}\n`;
+
+  const host = {
     newLabel: 'socket-proxy',
     oldLabel: 'socket-proxy',
     unit: PROXY_UNIT,
     newUnit: buildReleaseUnit(RELEASE_IMAGE),
-    dropIn: `[Service]\nEnvironment=IMP_HOST_IMAGE=${IMAGE}\n`,
+    dropIn,
+  };
+
+  const hostOnly = await runUpgrade(host);
+
+  expect(hostOnly.exitCode).toBe(1);
+  expect(hostOnly.output).toContain(`imp-docker-proxy.service would run ${RELEASE_IMAGE}`);
+  expect(hostOnly.calls).not.toContain('systemctl');
+
+  const both = await runUpgrade({ ...host, proxyDropIn: dropIn });
+
+  expect(both.exitCode).toBe(0);
+  expect(both.calls).toContain('systemctl restart imp-host\n');
+});
+
+test('a quoted Environment= line that sets several variables names the unit image', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    newUnit: `Environment="IMP_X=1" "IMP_HOST_IMAGE=${RELEASE_IMAGE}"\n${PROXY_UNIT}`,
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain(`imp-host.service would run ${RELEASE_IMAGE}, not ${IMAGE}`);
+});
+
+test('installed units lose the release-please marker lines', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envImage: '',
+    image: RELEASE_IMAGE,
+    newUnit: `# x-release-please-start-version\n${buildReleaseUnit(RELEASE_IMAGE)}# x-release-please-end\n`,
   });
 
   expect(result.exitCode).toBe(0);
-  expect(result.calls).toContain('systemctl restart imp-host\n');
+  expect(result.unit).toBe(buildReleaseUnit(RELEASE_IMAGE));
+});
+
+test('a legacy line with a CR and blanks around it is migrated too', async () => {
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envImage: '',
+    image: RELEASE_IMAGE,
+    envFile: `IMP_PORT=7070\r\n  ${LEGACY_IMAGE_LINE} \r\n`,
+    newUnit: buildReleaseUnit(RELEASE_IMAGE),
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toContain(`docker pull -q ${RELEASE_IMAGE}\n`);
+  expect(result.envFile).toBe(`IMP_PORT=7070\r\n# IMP_HOST_IMAGE=${RELEASE_IMAGE}\n`);
+});
+
+test('compose keeps the pin in its .env and moves to that image', async () => {
+  const composeEnv = 'IMP_DOCKER_GID=999\nIMP_HOST_IMAGE="imp-host:pinned"\n';
+
+  const result = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: 'services:\n  imp-host:\n    image: x\n',
+    envImage: '',
+    image: 'imp-host:pinned',
+    composeEnv,
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.calls).toContain('docker pull -q imp-host:pinned\n');
+  expect(result.composeEnv).toBe(composeEnv);
+  expect(result.composeEnvBackup).toBeNull();
+});
+
+test('a host that runs the image already still gets its image lines', async () => {
+  const systemd = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    envImage: '',
+    image: RELEASE_IMAGE,
+    envFile: `${LEGACY_IMAGE_LINE}\n`,
+    sameImage: true,
+  });
+
+  expect(systemd.exitCode).toBe(0);
+  expect(systemd.output).toContain('already runs');
+  expect(systemd.envFile).toBe(`# IMP_HOST_IMAGE=${RELEASE_IMAGE}\n`);
+  expect(systemd.envFileBackup).toBe(`${LEGACY_IMAGE_LINE}\n`);
+  expect(systemd.calls).not.toContain('systemctl');
+
+  const compose = await runUpgrade({
+    newLabel: 'socket-proxy',
+    oldLabel: 'socket-proxy',
+    unit: PROXY_UNIT,
+    compose: 'services:\n  imp-host:\n    image: x\n',
+    sameImage: true,
+  });
+
+  expect(compose.exitCode).toBe(0);
+  expect(compose.composeEnv).toBe(`IMP_HOST_IMAGE=${IMAGE}\n`);
+  expect(compose.calls).not.toContain('compose');
 });
 
 test('an env file that sets IMP_HOST_IMAGE empty is refused before anything changes', async () => {
