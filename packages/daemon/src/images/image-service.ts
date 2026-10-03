@@ -25,6 +25,7 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
+import { createKeyedMutex } from '../imps/keyed-mutex';
 import { runChecked, runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
@@ -711,6 +712,62 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
     );
 
+  // per guest digest, the writers whose row is not written yet, and whether
+  // one made its rootfs: the last to end removes one no row took, under a
+  // lock, so no new writer finds that rootfs as it goes
+  const guestWriters = new Map<string, number>();
+  const freshRootfs = new Set<string>();
+
+  const guestRootfsLock = createKeyedMutex();
+
+  const writeGuestRootfsAndRow = async (guest: Readonly<GuestRootfs>): Promise<ImageRecord> => {
+    const digest = guest.digest;
+    const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
+
+    await guestRootfsLock.runExclusive(digest, () => {
+      guestWriters.set(digest, (guestWriters.get(digest) ?? 0) + 1);
+
+      return Promise.resolve();
+    });
+
+    try {
+      guest.signal.throwIfAborted();
+
+      const sizeBytes = await createRootfsOnce(digest, async () => {
+        if (existsSync(rootfs)) {
+          return readDiskUsage(rootfs);
+        }
+
+        const written = await writeRootfs(guest.root, digest, guest.config);
+
+        freshRootfs.add(digest);
+
+        return written;
+      });
+
+      // a cancel during mkfs.ext4 commits nothing
+      guest.signal.throwIfAborted();
+
+      return await writeImageRow(guest.imageName, guest.ref, digest, sizeBytes);
+    } finally {
+      await guestRootfsLock.runExclusive(digest, async () => {
+        const left = (guestWriters.get(digest) ?? 1) - 1;
+
+        if (left > 0) {
+          guestWriters.set(digest, left);
+
+          return;
+        }
+
+        guestWriters.delete(digest);
+
+        if (freshRootfs.delete(digest)) {
+          await removeUnusedRootfs(digest);
+        }
+      });
+    }
+  };
+
   // the built image, streamed out of its builder into a rootfs and a row
   const writeGuestImage = (
     exec: GuestExec,
@@ -736,16 +793,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
             grow,
           );
 
-          const digest = exported.digest;
-          const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
-
-          const sizeBytes = await createRootfsOnce(digest, () =>
-            existsSync(rootfs)
-              ? Promise.resolve(readDiskUsage(rootfs))
-              : writeRootfs(root, digest, exported.config),
-          );
-
-          return await writeImageRow(imageName, ref, digest, sizeBytes);
+          return await writeGuestRootfsAndRow({
+            root,
+            digest: exported.digest,
+            config: exported.config,
+            imageName,
+            ref,
+            signal,
+          });
         } finally {
           rmSync(workDir.work, { recursive: true, force: true });
         }
@@ -1033,6 +1088,16 @@ function assertImageRef(ref: string): void {
       message: `invalid image reference ${JSON.stringify(ref)}`,
     });
   }
+}
+
+// a builder's export, unpacked at root, on its way to a rootfs and a row
+interface GuestRootfs {
+  readonly root: string;
+  readonly digest: string;
+  readonly config: unknown;
+  readonly imageName: string;
+  readonly ref: string;
+  readonly signal: AbortSignal;
 }
 
 interface RootfsPlan {
