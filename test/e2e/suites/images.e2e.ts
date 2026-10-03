@@ -200,11 +200,8 @@ test('a RUN step cannot ask for the host network or insecure mode', async () => 
   expect(netResult.stderr).toContain('network.host is not allowed');
   expect(insecureResult.exitCode).not.toBe(0);
 
-  // docker/dockerfile:1.19 keeps --security in its labs channel; later ones parse it, and the
-  // engine refuses the entitlement
-  expect(insecureResult.stderr).toMatch(
-    /security\.insecure is not allowed|unknown flag: --security/v,
-  );
+  // the pinned stable frontend has no --security; the engine never sees the step
+  expect(insecureResult.stderr).toContain('unknown flag: --security');
 
   const images = await listImageNames();
 
