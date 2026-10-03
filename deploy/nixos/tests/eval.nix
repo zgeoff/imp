@@ -142,7 +142,10 @@ let
   proxyUnit = zfsCfg.systemd.services.imp-docker-proxy;
   ownCfg = ownFirewall.config;
   hostArgs = lib.importJSON ../../imp-host.args.json;
-  # the image release.yml pushes for this checkout's version
+  # The default image is the tag for package.json's version. The checks below
+  # stop a return to :latest and keep the default tied to package.json; the
+  # release chain makes that image exist (release-please bumps package.json,
+  # release.yml pushes the tag, host/check-release-image.sh checks it).
   releaseImage = "ghcr.io/zgeoff/imp-host:${(lib.importJSON (self + "/package.json")).version}";
   # the env words ($IMP_PUBLIC_PORTS) are options, empty here
   sharedArgs = lib.escapeShellArgs (
