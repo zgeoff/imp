@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.25.0](https://github.com/zgeoff/imp/compare/v0.24.0...v0.25.0) (2026-10-03)
+
+### Features
+
+- **daemon:** add imp-docker-proxy, a filtering docker socket proxy
+  ([8aaad24](https://github.com/zgeoff/imp/commit/8aaad24bb895a926a1437eda8594b38d378bbb75))
+- **deploy:** reach docker through imp-docker-proxy, not the host socket
+  ([3b9a784](https://github.com/zgeoff/imp/commit/3b9a784e6d36e0cb82af42b780d2fd48386db169))
+
+### Bug Fixes
+
+- **daemon:** require a tag on a pull through the proxy
+  ([b42698e](https://github.com/zgeoff/imp/commit/b42698e3a8d5eec2a2898db8933de80bac0681b2))
+- **deploy:** check the image label before bootstrap writes anything
+  ([2931f67](https://github.com/zgeoff/imp/commit/2931f67121795ff3b0a65c9609beed77562e007f))
+
 ## [0.24.0](https://github.com/zgeoff/imp/compare/v0.23.0...v0.24.0) (2026-10-03)
 
 ### Features
