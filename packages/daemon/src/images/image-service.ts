@@ -45,6 +45,7 @@ import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from
 import type { ImageStore, Pin, PinInspect } from './image-pin';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
+import { writeImageConfig } from './write-image-config';
 
 const GIB = 1024 ** 3;
 
@@ -249,12 +250,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // (docs/architecture/storage.md#images-any-oci-image); returns the rootfs
   // size on disk
   const writeRootfs = async (root: string, digest: string, ociConfig: unknown): Promise<number> => {
-    mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-
-    writeFileSync(
-      join(root, 'etc', 'imp', 'image.json'),
-      JSON.stringify(buildImageRuntimeConfig(ociConfig)),
-    );
+    writeImageConfig(root, JSON.stringify(buildImageRuntimeConfig(ociConfig)));
 
     const usage = await readTreeUsage(root);
 
