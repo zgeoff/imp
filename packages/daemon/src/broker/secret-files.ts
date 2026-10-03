@@ -67,7 +67,7 @@ export function createSecretFiles(dataDir: string): SecretFiles {
     removeExcept: (keep) => {
       for (const file of readdirSync(dir)) {
         if (!keep.has(file)) {
-          rmSync(join(dir, file), { force: true, recursive: true });
+          rmSync(join(dir, file), { force: true });
         }
       }
     },

@@ -257,3 +257,64 @@ test('a restart between the stages of a replace leaves only the value the row na
   expect(afterCommit).toMatchObject({ files: [next], named: 'v3' });
   expect(afterCleanup).toEqual(afterCommit);
 });
+
+test('a cleanup that fails after the commit is logged, and the next start removes the file', async () => {
+  await using ctx = await setupTest();
+
+  const real = createSecretFiles(ctx.dataDir);
+  const logs: string[] = [];
+  const state = { failRemove: false };
+
+  // the old file's removal fails once the replace has committed
+  const broker = await createBroker({
+    config: ctx.config,
+    db: ctx.db,
+    log: (message) => {
+      logs.push(message);
+    },
+    secretFiles: {
+      ...real,
+      remove: (file) => {
+        if (state.failRemove) {
+          throw new Error(`EBUSY: cannot remove ${file}`);
+        }
+
+        real.remove(file);
+      },
+    },
+  });
+
+  try {
+    await broker.addSecret({ name: 'api', kind: 'custom', value: 'v1', rules: RULES_AB });
+    await broker.addGrant('dev', 'api');
+
+    const before = await ctx.readFiles('api');
+
+    state.failRemove = true;
+
+    const rotated = await broker.addSecret({
+      name: 'api',
+      kind: 'custom',
+      value: 'v2',
+      rules: RULES_AB,
+      replace: true,
+    });
+
+    const after = await ctx.readFiles('api');
+
+    expect(rotated.name).toBe('api');
+    expect(logs.join('\n')).toContain('could not remove an old secret value file');
+    expect(after.named).toBe('v2');
+    expect(after.files).toContain(before.secret?.valueFile ?? '');
+    expect(after.files).toHaveLength(2);
+  } finally {
+    await broker.stop();
+  }
+
+  await ctx.startBrokerAgain();
+
+  const swept = await ctx.readFiles('api');
+
+  expect(swept.files).toEqual([swept.secret?.valueFile ?? '']);
+  expect(swept.named).toBe('v2');
+});

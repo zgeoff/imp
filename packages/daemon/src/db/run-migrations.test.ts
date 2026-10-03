@@ -1,10 +1,15 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler, sql } from 'kysely';
 import { Migrator } from 'kysely/migration';
+import { createSecretFiles } from '../broker/secret-files';
 import { BunSqliteDriver } from './bun-sqlite-driver';
 import { MIGRATIONS } from './run-migrations';
 import type { DatabaseSchema } from './schema';
+import { listGrantedRules } from './secrets';
 
 function openUnmigrated(): Kysely<DatabaseSchema> {
   const sqlite = new Database(':memory:');
@@ -65,10 +70,20 @@ test('the grantable migration gives each secret its own generation and its old f
 
   await migrator.migrateTo('019_add_imp_max_memory');
 
+  const rules = JSON.stringify([
+    { host: 'api.example.com', header: 'authorization', scheme: 'bearer' },
+  ]);
+
   for (const name of ['gh', 'npm']) {
     await sql`INSERT INTO secrets (name, kind, rules, created_at)
-      VALUES (${name}, 'custom', '[]', 0)`.execute(db);
+      VALUES (${name}, 'custom', ${rules}, 0)`.execute(db);
   }
+
+  // an older impd kept each value in a file named after its secret
+  const dataDir = mkdtempSync(join(tmpdir(), 'imp-migrate-'));
+  const files = createSecretFiles(dataDir);
+
+  files.write('gh', 'old-value');
 
   await sql`INSERT INTO images (id, name, ref, digest, size_bytes, created_at)
     VALUES ('img', 'base', 'imp/base:latest', 'sha256:0', 1, 0)`.execute(db);
@@ -107,6 +122,13 @@ test('the grantable migration gives each secret its own generation and its old f
 
   expect(secrets[0]?.generation).not.toBe(secrets[1]?.generation);
   expect(token).toEqual({ grantable: '[]' });
+
+  // the broker reads the old file through the migrated row
+  const granted = await listGrantedRules(db, 'imp');
+
+  expect(granted.map((each) => files.read(each.valueFile))).toEqual(['old-value']);
+
+  rmSync(dataDir, { recursive: true, force: true });
 
   await db.destroy();
 });

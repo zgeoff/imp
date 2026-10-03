@@ -60,6 +60,7 @@ import {
 } from './guest-trust';
 import type { InstallBundle, TrustedImp } from './guest-trust';
 import { buildValueFile, createSecretFiles } from './secret-files';
+import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
 import { createUpstreamResolver } from './test-upstreams';
 import { resolveTunnelTarget } from './tunnel-target';
@@ -143,8 +144,10 @@ export interface BrokerDeps {
   // the IPv6 impd resolved at start; without it, tunnels dial IPv4 only
   readonly ipv6?: Ipv6Plan | null;
 
-  // tests hold a request between its rule read and its value read
+  // tests hold a request between its rule read and its value read, and
+  // stand in for the value files
   readonly afterRuleRead?: () => Promise<void>;
+  readonly secretFiles?: SecretFiles;
 }
 
 // how long the container's own IPv6 prefixes stay read
@@ -188,7 +191,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     return resolveTunnelTarget(host, { isBlocked6 });
   };
 
-  const files = createSecretFiles(config.dataDir);
+  const files = deps.secretFiles ?? createSecretFiles(config.dataDir);
 
   // a value no row names: a write whose row never came, or a file a replace
   // or a delete displaced and impd stopped before removing
