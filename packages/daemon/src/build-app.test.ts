@@ -42,7 +42,13 @@ test('it serves system.info from config and the database', async () => {
     egress: { isEnforced: true },
     public: null,
     https: null,
-    features: { sessionOffsets: true, leases: true, grantableTokens: true, secretRebind: true },
+    features: {
+      sessionOffsets: true,
+      leases: true,
+      grantableTokens: true,
+      secretRebind: true,
+      execRequire: true,
+    },
     ksm: null,
   });
 });
