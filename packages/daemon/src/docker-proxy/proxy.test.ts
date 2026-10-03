@@ -283,6 +283,59 @@ test('a build with a form body, which would replace or add to its query, never r
   expect(logged).toHaveLength(4);
 });
 
+// the query passes as impd sends it; the body, encoded as fetch encodes a
+// form, would move the build to the host's network, a remote context, a tag
+// outside imp/ and the classic builder, which takes no frontend pin
+test('a BuildKit build with an urlencoded or a multipart form body never reaches the engine', async () => {
+  const fields: [string, string][] = [
+    ['networkmode', 'host'],
+    ['remote', 'http://127.0.0.1:9/ctx.tar'],
+    ['t', 'evil:latest'],
+    ['version', '1'],
+  ];
+
+  const multipart = new FormData();
+
+  for (const [key, value] of fields) {
+    multipart.append(key, value);
+  }
+
+  const statuses: number[] = [];
+  const contentTypes: string[] = [];
+
+  for (const form of [new URLSearchParams(fields), multipart]) {
+    // fetch's own encoding, with its Content-Type and multipart boundary
+    const encoded = new Request('http://docker/', { method: 'POST', body: form });
+
+    const contentType = encoded.headers.get('content-type') ?? '';
+
+    const body = await encoded.bytes();
+
+    contentTypes.push(contentType);
+
+    const response = await sendToProxy('POST', BUILD_PATH, {
+      headers: { 'content-type': contentType },
+      body,
+    });
+
+    statuses.push(response.status);
+
+    const refusal: unknown = await response.json();
+
+    expect(refusal).toEqual({
+      message: `imp-docker-proxy: a build body is a tar context, and Content-Type ${JSON.stringify(contentType)} is not application/x-tar`,
+    });
+  }
+
+  expect(contentTypes.map((value) => value.split(';')[0])).toEqual([
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+  ]);
+
+  expect(statuses).toEqual([403, 403]);
+  expect(seen).toEqual([]);
+});
+
 test('a client that goes ends its build on the engine', async () => {
   const client = new AbortController();
 

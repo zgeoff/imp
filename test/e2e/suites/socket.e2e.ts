@@ -141,38 +141,53 @@ test("a build may not tag outside imp/, nor retag the host's image", async () =>
   expect(second).toContain('param t');
 });
 
-// the engine reads a build's params from r.Form, where a form body replaces
-// or adds to the query: this body would give RUN the host's network, a
-// remote context and a tag outside imp/
+// the engine reads a build's params from r.Form, where an urlencoded body
+// replaces the query and a multipart body adds to it: these bodies would give
+// RUN the host's network, a remote context and a tag outside imp/
 test('a build with a form body, which would replace or add to its checked query, is refused', async () => {
   const evil = `${prefix}evil:latest`;
 
-  const body = new URLSearchParams({
-    networkmode: 'host',
-    remote: 'http://127.0.0.1:9/ctx.tar',
-    t: evil,
-  }).toString();
+  const fields: [string, string][] = [
+    ['networkmode', 'host'],
+    ['remote', 'http://127.0.0.1:9/ctx.tar'],
+    ['t', evil],
+  ];
 
-  const sent = await runInContainer([
-    'curl',
-    '-sS',
-    '-w',
-    '\n%{http_code}',
-    '--unix-socket',
-    '/run/imp-docker/docker.sock',
-    '-X',
-    'POST',
-    `http://docker/build?${new URLSearchParams([['t', 'imp/e2e-sock:latest'], ['version', '2'], PIN]).toString()}`,
+  const query = new URLSearchParams([['t', 'imp/e2e-sock:latest'], ['version', '2'], [...PIN]]);
+
+  const urlencoded = [
     '-H',
     'Content-Type: application/x-www-form-urlencoded',
     '--data-binary',
-    body,
-  ]);
+    new URLSearchParams(fields).toString(),
+  ];
 
-  const [answer, status] = sent.stdout.trim().split('\n');
+  // curl sends -F fields as multipart/form-data, with its own boundary
+  const multipart = fields.flatMap(([key, value]) => ['-F', `${key}=${value}`]);
 
-  expect(status).toBe('403');
-  expect(answer).toContain('imp-docker-proxy: a build body is a tar context');
+  for (const form of [urlencoded, multipart]) {
+    const sent = await runInContainer([
+      'curl',
+      '-sS',
+      '-w',
+      '\n%{http_code}',
+      '--unix-socket',
+      '/run/imp-docker/docker.sock',
+      '-X',
+      'POST',
+      `http://docker/build?${query.toString()}`,
+      ...form,
+    ]);
+
+    const [answer, status] = sent.stdout.trim().split('\n');
+
+    expect(status).toBe('403');
+    expect(answer).toContain('imp-docker-proxy: a build body is a tar context');
+  }
+
+  const tagged = await runCommand(['docker', 'image', 'inspect', evil]);
+
+  expect(tagged.exitCode).not.toBe(0);
 });
 
 test('a build runs BuildKit with the pinned frontend, and no session', async () => {
