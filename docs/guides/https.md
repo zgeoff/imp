@@ -43,9 +43,37 @@ You need a domain in a Cloudflare zone and an API token for it.
 The host must be on a tailnet (`TAILSCALE_AUTHKEY`). Without one, impd still gets the certificate,
 but the HTTPS listeners answer only on loopback inside the host container.
 
-**WARNING:** The token can change every DNS record in its zone. Keep it in the env file, which only
-root can read. impd never logs it and never puts it in an error message. Do not pass it on a command
-line.
+**WARNING:** The token can change every DNS record in its zone. Keep it in the env file, or in a
+token file, which only root can read. impd never logs it and never puts it in an error message. Do
+not pass it on a command line.
+
+### The token in a file
+
+`IMP_DNS_API_TOKEN_FILE` names a file that holds the token, in place of `IMP_DNS_API_TOKEN`. A
+secrets manager or other infrastructure as code can then own the token and drop it in place, and the
+env file holds no secret. Set one of the two, not both: both is a start error.
+
+```sh
+IMP_DNS_API_TOKEN_FILE=/etc/imp/dns-api-token
+```
+
+The container sees `/etc/imp` read-only, so a file there (root, mode 0400) needs no extra mount. On
+NixOS, set `services.imp.dnsApiTokenFile` instead ([NixOS](./nixos.md#the-dns-api-token)).
+
+- The file holds the token alone. impd trims leading and trailing whitespace, and refuses a token
+  with whitespace or `=` inside it (such as a pasted `IMP_DNS_API_TOKEN=...` line).
+- impd reads the file at each Cloudflare API call: each certificate attempt, each pass over the
+  records. A new token works at the next call, without a restart.
+- A file that is missing, empty or refused does not stop impd. impd starts, logs the path and what
+  is wrong (never the file's contents), and each DNS call reads the file again. Certificate attempts
+  back off as for any DNS failure (below), the certificate on disk keeps serving, and the records
+  stay as they are. `imp info` shows the last read on its `https` line:
+
+  ```text
+  https       imp.example.com, DNS token failing at 2026-10-03T12:00:00.000Z: the DNS API token file /etc/imp/dns-api-token is empty
+  ```
+
+- Without `IMP_DOMAIN`, the file is unused, and impd logs a warning at start.
 
 ## How it works
 

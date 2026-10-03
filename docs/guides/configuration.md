@@ -89,17 +89,18 @@ those, never the rest of its environment.
 With `IMP_DOMAIN` set, impd serves every imp at `https://<name>.<domain>` on the tailnet
 ([HTTPS](./https.md)). Without it, impd ignores the rest of these.
 
-| Variable             | Default        | Meaning                                                                                      |
-| -------------------- | -------------- | -------------------------------------------------------------------------------------------- |
-| `IMP_DOMAIN`         | none           | The domain: imps at `<name>.<domain>`, impd's API at `<domain>`.                             |
-| `IMP_DNS_PROVIDER`   | none           | `cloudflare`, or `challtestsrv` with `IMP_E2E=1` in tests. Needed with `IMP_DOMAIN`.         |
-| `IMP_DNS_API_TOKEN`  | none           | The provider's API token; a secret ([HTTPS](./https.md#set-it-up)). Needed for Cloudflare.   |
-| `IMP_DNS_API_URL`    | the provider's | The provider's API, https unless on loopback. Needed for `challtestsrv`: its management URL. |
-| `IMP_ACME_DIRECTORY` | Let's Encrypt  | The ACME directory URL. Staging is `https://acme-staging-v02.api.letsencrypt.org/directory`. |
-| `IMP_ACME_EMAIL`     | none           | The contact on the ACME account.                                                             |
-| `IMP_ACME_CA_FILE`   | none           | A PEM file the ACME server's own TLS chains to, for a test CA such as Pebble.                |
-| `IMP_HTTPS_PORT`     | `443`          | The HTTPS port on the tailnet IP and loopback.                                               |
-| `IMP_HTTP_PORT`      | `80`           | The port that redirects to HTTPS.                                                            |
+| Variable                 | Default        | Meaning                                                                                                                                                             |
+| ------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMP_DOMAIN`             | none           | The domain: imps at `<name>.<domain>`, impd's API at `<domain>`.                                                                                                    |
+| `IMP_DNS_PROVIDER`       | none           | `cloudflare`, or `challtestsrv` with `IMP_E2E=1` in tests. Needed with `IMP_DOMAIN`.                                                                                |
+| `IMP_DNS_API_TOKEN`      | none           | The provider's API token; a secret ([HTTPS](./https.md#set-it-up)). Cloudflare needs it or `IMP_DNS_API_TOKEN_FILE`.                                                |
+| `IMP_DNS_API_TOKEN_FILE` | none           | A file that holds the token, read at each API call, so a new token works without a restart ([HTTPS](./https.md#the-token-in-a-file)). Not with `IMP_DNS_API_TOKEN`. |
+| `IMP_DNS_API_URL`        | the provider's | The provider's API, https unless on loopback. Needed for `challtestsrv`: its management URL.                                                                        |
+| `IMP_ACME_DIRECTORY`     | Let's Encrypt  | The ACME directory URL. Staging is `https://acme-staging-v02.api.letsencrypt.org/directory`.                                                                        |
+| `IMP_ACME_EMAIL`         | none           | The contact on the ACME account.                                                                                                                                    |
+| `IMP_ACME_CA_FILE`       | none           | A PEM file the ACME server's own TLS chains to, for a test CA such as Pebble.                                                                                       |
+| `IMP_HTTPS_PORT`         | `443`          | The HTTPS port on the tailnet IP and loopback.                                                                                                                      |
+| `IMP_HTTP_PORT`          | `80`           | The port that redirects to HTTPS.                                                                                                                                   |
 
 [Public imps](./https.md#public-imps) need `IMP_DOMAIN` too. Without `IMP_PUBLIC_IP`, every imp is
 tailnet-only and `imp expose` fails.
