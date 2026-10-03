@@ -9,6 +9,7 @@ import {
   readImpUrls,
   requireImp,
   runImp,
+  runInImp,
   runShellInImp,
   tryImp,
 } from '../lib/imp-cli';
@@ -20,6 +21,7 @@ import { waitFor } from '../lib/wait-for';
 const prefix = setupSuite('images');
 const hello = `${prefix}hello`;
 const built = `${prefix}built`;
+const caps = `${prefix}caps`;
 const HELLO_DIR = join(REPO_ROOT, 'images', 'examples', 'hello');
 
 // under the repo: scripts/dev.sh mounts it at the same path in the container,
@@ -29,15 +31,17 @@ const CACHE_DIR = join(REPO_ROOT, '.cache', 'e2e');
 mkdirSync(CACHE_DIR, { recursive: true });
 
 const buildDir = mkdtempSync(join(CACHE_DIR, 'build-'));
+const capsDir = mkdtempSync(join(CACHE_DIR, 'caps-'));
 
 afterAll(async () => {
   rmSync(buildDir, { recursive: true, force: true });
+  rmSync(capsDir, { recursive: true, force: true });
 
   if (config.keep) {
     return;
   }
 
-  for (const image of [hello, built]) {
+  for (const image of [hello, built, caps]) {
     await tryImp(['image', 'rm', image]);
   }
 });
@@ -113,4 +117,35 @@ test('an image in use cannot be removed; once unused it can', async () => {
   const after = await listImageNames();
 
   expect(after).not.toContain(built);
+});
+
+test('a file capability survives the build: nobody binds port 80 with it, and not without', async () => {
+  // busybox runs the applet its name ends in, so a copy named busybox-* still works
+  writeFileSync(
+    join(capsDir, 'Dockerfile'),
+    'FROM alpine:3.20\nRUN apk add --no-cache libcap && cp /bin/busybox /usr/local/bin/busybox-lowbind && setcap cap_net_bind_service+ep /usr/local/bin/busybox-lowbind\n',
+  );
+
+  await runImp('image', 'build', capsDir, '--name', caps);
+  await createImp(caps, '--image', caps, '--memory', '512');
+
+  const getcap = await runInImp(caps, 'getcap', '/usr/local/bin/busybox-lowbind');
+
+  // nc listens until timeout's TERM, 143 in busybox; a refused bind exits 1
+  const tryBind = (binary: string) =>
+    runShellInImp(
+      caps,
+      `su -s /bin/sh nobody -c 'timeout 1 ${binary} nc -l -p 80' 2>&1; echo "exit=$?"`,
+    );
+
+  const withCap = await tryBind('busybox-lowbind');
+  const without = await tryBind('busybox');
+
+  expect(getcap).toBe('/usr/local/bin/busybox-lowbind cap_net_bind_service=ep');
+  expect(withCap).not.toContain('Permission denied');
+  expect(withCap).toContain('exit=143');
+  expect(without).toContain('nc: bind: Permission denied');
+
+  await removeImps(caps);
+  await runImp('image', 'rm', caps);
 });
