@@ -308,6 +308,10 @@ down() {
 prune() {
   local machine ref id labels dir from
   machine=$(read_machine_id)
+  if [ -z "$machine" ]; then
+    echo "dev.sh: prune needs a machine id in ${IMP_MACHINE_ID_FILE:-/etc/machine-id}" >&2
+    exit 1
+  fi
   docker image ls --filter label=imp.worktree --format '{{.Repository}}:{{.Tag}} {{.ID}}' |
     while read -r ref id; do
       [[ $ref == *'<none>'* ]] && continue
@@ -318,7 +322,8 @@ prune() {
       fi
       dir=${labels%%$'\t'*}
       from=${labels#*$'\t'}
-      # an empty label names no checkout, so it cannot be gone
+      # an empty label names no checkout, so it cannot be gone; an image
+      # without this machine's id belongs to another machine or to none
       if [ -z "$dir" ] || [ -d "$dir" ] || [ "$from" != "$machine" ]; then continue; fi
       if [ "$ref" != "$(dev_image_tag "$dir")" ]; then
         echo "dev.sh: keeping $ref: not the tag of $dir"

@@ -13,10 +13,11 @@ dev_image_tag() {
   printf 'imp-host:dev-%s-%s\n' "${name:0:40}" "${hash:0:8}"
 }
 
-# read_machine_id prints this machine's id, or nothing: Docker Desktop shares
-# one daemon across WSL distros and devcontainers, whose paths differ.
+# read_machine_id prints this machine's id (IMP_MACHINE_ID_FILE, default
+# /etc/machine-id), or nothing: Docker Desktop shares one daemon across WSL
+# distros and devcontainers, whose paths differ.
 read_machine_id() {
-  cat /etc/machine-id 2>/dev/null || true
+  cat "${IMP_MACHINE_ID_FILE:-/etc/machine-id}" 2>/dev/null || true
 }
 
 IMP_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -30,10 +31,13 @@ IMP_BUILD=${IMP_BUILD:-$IMP_ROOT/build}
 # with this checkout's path and this machine's id, so `scripts/dev.sh prune`
 # can find it once the checkout is gone.
 build_host_image() {
+  local machine labels=(--label "imp.worktree=$IMP_ROOT_PHYSICAL")
+  machine=$(read_machine_id)
+  # without a machine id, no machine label: prune never touches the image
+  [ -n "$machine" ] && labels+=(--label "imp.machine=$machine")
   # no provenance: its build timestamp gives every rebuild a new image id,
   # and start_proxy's stamp would then replace the proxy on every up
-  docker build -q --provenance=false -t "$IMP_HOST_IMAGE" \
-    --label "imp.worktree=$IMP_ROOT_PHYSICAL" --label "imp.machine=$(read_machine_id)" \
+  docker build -q --provenance=false -t "$IMP_HOST_IMAGE" "${labels[@]}" \
     --target dev -f "$IMP_ROOT/host/Dockerfile" "$IMP_ROOT" >/dev/null
 }
 

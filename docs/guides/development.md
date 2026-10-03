@@ -177,11 +177,13 @@ e2e run. `IMP_HOST_IMAGE` overrides the tag, as CI does.
 stays behind. `scripts/dev.sh prune` removes the images whose checkout directory is gone and that no
 container uses, and the untagged images that rebuilds leave. It finds them by two labels: the
 checkout's path (`imp.worktree`) and the machine's `/etc/machine-id` (`imp.machine`), because Docker
-Desktop shares one daemon across WSL distros and devcontainers. It removes only the checkout's own
-tag, keeps every live checkout's image, and never touches an image without the labels. An image
-built under an `IMP_HOST_IMAGE` override keeps that tag, so prune leaves it; remove it by hand, as
-you would an `imp-host:<worktree>-dev` tag from the old workaround. An `imp-host:dev` image from
-before the per-checkout tags has no label, so remove it by hand too: `docker image rm imp-host:dev`.
+Desktop shares one daemon across WSL distros and devcontainers. Without a machine id, a build gets
+no `imp.machine` label, so no prune ever removes it, and prune itself stops with an error. It
+removes only the checkout's own tag, keeps every live checkout's image, and never touches an image
+without the labels. An image built under an `IMP_HOST_IMAGE` override keeps that tag, so prune
+leaves it; remove it by hand, as you would an `imp-host:<worktree>-dev` tag from the old workaround.
+An `imp-host:dev` image from before the per-checkout tags has no label, so remove it by hand too:
+`docker image rm imp-host:dev`.
 
 ## Daemon tests
 

@@ -1,5 +1,13 @@
 import { afterAll, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 const DEV = new URL('dev.sh', import.meta.url).pathname;
@@ -8,8 +16,11 @@ const LIB = new URL('lib.sh', import.meta.url).pathname;
 const dir = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-prune-'));
 const calls = join(dir, 'calls');
 
-// what prune compares the labels to, as lib.sh reads them
-const machine = readLib('read_machine_id').trim();
+// this machine's id, as prune reads it from IMP_MACHINE_ID_FILE
+const machine = 'fake-machine-id';
+const machineIdFile = join(dir, 'machine-id');
+
+writeFileSync(machineIdFile, `${machine}\n`);
 
 afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -42,13 +53,15 @@ case "$*" in
     printf '%s\\n' '${readTag('/nonexistent/stuck')} id-stuck' '${readTag('/nonexistent/gone')} id-gone' \\
       'imp-host:pinned id-gone' 'imp-host:dev-live-2 id-live' '${readTag('/nonexistent/used')} id-used' \\
       '${readTag('/nonexistent/other')} id-other' 'imp-host:dev-empty-4 id-empty' \\
-      'imp-host:dev-broken-5 id-broken' '<none>:<none> id-dangling' ;;
+      'imp-host:dev-broken-5 id-broken' '${readTag('/nonexistent/unmarked')} id-unmarked' \\
+      '<none>:<none> id-dangling' ;;
   "image inspect -f "*" id-gone") ${printLabels('/nonexistent/gone')} ;;
   "image inspect -f "*" id-live") ${printLabels(dir)} ;;
   "image inspect -f "*" id-used") ${printLabels('/nonexistent/used')} ;;
   "image inspect -f "*" id-stuck") ${printLabels('/nonexistent/stuck')} ;;
   "image inspect -f "*" id-other") ${printLabels('/nonexistent/other', 'another-machine')} ;;
   "image inspect -f "*" id-empty") ${printLabels('')} ;;
+  "image inspect -f "*" id-unmarked") ${printLabels('/nonexistent/unmarked', '')} ;;
   "image inspect -f "*) exit 1 ;;
   "ps -aq --filter ancestor=id-used") echo c0ffee ;;
   "ps -aq --filter ancestor="*) ;;
@@ -67,8 +80,21 @@ esac
   return `${binDir}:${process.env['PATH'] ?? ''}`;
 }
 
+test('prune without a machine id stops before it removes anything', () => {
+  const result = Bun.spawnSync([DEV, 'prune'], {
+    env: { PATH: writeFakeDocker(), IMP_MACHINE_ID_FILE: join(dir, 'no-machine-id') },
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString()).toContain('prune needs a machine id');
+  expect(existsSync(calls)).toBeFalse();
+});
+
 test('prune removes only the own tag of a gone checkout on this machine, then leftovers', () => {
-  const result = Bun.spawnSync([DEV, 'prune'], { env: { PATH: writeFakeDocker() } });
+  const result = Bun.spawnSync([DEV, 'prune'], {
+    env: { PATH: writeFakeDocker(), IMP_MACHINE_ID_FILE: machineIdFile },
+  });
+
   const stdout = result.stdout.toString();
 
   expect(result.exitCode).toBe(0);
@@ -85,4 +111,5 @@ test('prune removes only the own tag of a gone checkout on this machine, then le
   expect(stdout).toContain(`keeping ${readTag('/nonexistent/used')}: a container uses it`);
   expect(stdout).toContain('keeping imp-host:dev-broken-5: docker image inspect failed');
   expect(stdout).not.toContain(readTag('/nonexistent/other'));
+  expect(stdout).not.toContain(readTag('/nonexistent/unmarked'));
 });
