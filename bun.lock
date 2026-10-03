@@ -78,6 +78,7 @@
       "version": "0.25.1",
       "dependencies": {
         "@imp/api": "workspace:*",
+        "@imp/local-tar": "workspace:*",
         "@imp/mcp": "workspace:*",
         "@opentelemetry/api": "catalog:",
         "@opentelemetry/exporter-metrics-otlp-proto": "catalog:",

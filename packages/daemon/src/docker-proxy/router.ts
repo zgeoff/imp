@@ -1,5 +1,6 @@
-// The Docker API routes imp-docker-proxy lets through: the calls impd's
-// `docker` CLI makes (docs/architecture/host-contract.md#the-docker-socket).
+// The Docker API routes imp-docker-proxy lets through: the calls impd and
+// its `docker` CLI make (docs/architecture/host-contract.md#the-docker-socket).
+// No BuildKit /session or /grpc: a build sends its context as the body.
 
 type Route =
   | { readonly kind: 'ping' }

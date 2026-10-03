@@ -1,4 +1,4 @@
-// imp-docker-proxy's handler: a call impd's `docker` CLI makes, checked and
+// imp-docker-proxy's handler: a call impd or its `docker` CLI makes, checked and
 // rebuilt. It closes the Docker socket path only; SYS_ADMIN still lets root
 // out of imp-host (docs/architecture/host-contract.md).
 

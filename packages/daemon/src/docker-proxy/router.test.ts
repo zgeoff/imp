@@ -18,7 +18,7 @@ test('every call impd makes finds its route, with or without a version prefix', 
   );
 
   expect(findKind('POST', '/v1.55/images/create?fromImage=busybox&tag=latest')).toBe('pull');
-  expect(findKind('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1')).toBe('build');
+  expect(findKind('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=2')).toBe('build');
   expect(findKind('POST', '/v1.55/containers/create')).toBe('create');
   expect(findKind('GET', `/v1.55/containers/${ID}/export`)).toBe('export');
   expect(findKind('DELETE', `/v1.55/containers/${ID}?force=1`)).toBe('remove');
@@ -34,6 +34,10 @@ test('a call impd does not make is refused', () => {
     ['POST', '/v1.55/images/busybox/tag'],
     ['DELETE', '/v1.55/images/busybox'],
     ['POST', '/v1.55/session'],
+    ['POST', '/session'],
+    ['POST', '/v1.55/grpc'],
+    ['POST', '/grpc'],
+    ['PRI', '*'],
     ['POST', '/v1.55/volumes/create'],
     ['POST', '/v1.55/plugins/pull'],
     ['GET', '/v1.55/build'],

@@ -2,12 +2,20 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
 
 const TOKEN = 'test-token';
 const OWN_ID = 'a'.repeat(64);
 const OTHER_ID = 'b'.repeat(64);
 const CONTEXT_MAX_BYTES = 4 * 1024 ** 2;
+
+// a build as impd sends it
+const BUILD_PATH = `/v1.55/build?${new URLSearchParams({
+  t: 'imp/x:latest',
+  version: '2',
+  buildargs: JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }),
+}).toString()}`;
 
 interface Seen {
   readonly method: string;
@@ -200,7 +208,7 @@ test('an export or rm of another container, even one whose image sets the label,
 test('a build streams its context and keeps only the registry headers', async () => {
   const context = new Uint8Array(2 * 1024 ** 2).fill(7);
 
-  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1', {
+  const response = await sendToProxy('POST', BUILD_PATH, {
     headers: { 'content-type': 'application/x-tar', 'x-registry-config': 'e30=', cookie: 'c=1' },
     body: context,
   });
@@ -208,7 +216,7 @@ test('a build streams its context and keeps only the registry headers', async ()
   const answer: unknown = await response.json();
 
   expect(answer).toEqual({ received: context.length });
-  expect(seen[0]?.target).toBe('/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1');
+  expect(seen[0]?.target).toBe(BUILD_PATH);
   expect(seen[0]?.headers['x-registry-config']).toBe('e30=');
   expect(seen[0]?.headers['cookie']).toBeUndefined();
 });
@@ -226,7 +234,7 @@ test('a build context over the limit, sent chunked, is cut off', async () => {
     },
   });
 
-  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+  const response = await sendToProxy('POST', BUILD_PATH, {
     body: stream,
   });
 
@@ -254,16 +262,12 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
 });
 
 test('an Upgrade, a refused route and a refused param never reach the engine', async () => {
-  const upgrade = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+  const upgrade = await sendToProxy('POST', BUILD_PATH, {
     headers: { upgrade: 'h2c', connection: 'Upgrade' },
   });
 
   const start = await sendToProxy('POST', `/v1.55/containers/${OWN_ID}/start`);
-
-  const remote = await sendToProxy(
-    'POST',
-    '/v1.55/build?t=imp%2Fx%3Alatest&version=1&remote=https%3A%2F%2Fx',
-  );
+  const remote = await sendToProxy('POST', `${BUILD_PATH}&remote=https%3A%2F%2Fx`);
 
   expect([upgrade.status, start.status, remote.status]).toEqual([403, 403, 403]);
 
