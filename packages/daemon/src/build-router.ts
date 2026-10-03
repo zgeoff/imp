@@ -1,5 +1,5 @@
 import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
-import type { Image, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
+import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
 import { buildForbiddenError } from './api-errors';
@@ -11,6 +11,7 @@ import {
   findForkAuthority,
   findGrantAuthority,
   isAuditedProcedure,
+  isRefusalAudited,
 } from './auth/access-policy';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
@@ -44,6 +45,8 @@ import type { DnsTokenStatus } from './https/dns/dns-token';
 import { createExposureService } from './https/exposure-service';
 import type { RecordsStatus } from './https/https-service';
 import type { PublicRecordsLink } from './https/public-records-link';
+import { runImageOp } from './images/image-op-stream';
+import type { ImageOpStreamOptions } from './images/image-op-stream';
 import type { ImageService } from './images/image-service';
 import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
@@ -104,6 +107,16 @@ export interface RouterDeps {
   readonly log: (message: string) => void;
   readonly audit: ApiAudit;
   readonly tokens: TokenStore;
+
+  // the gap between progress events of a streamed image add or build
+  readonly imageKeepaliveMs: number;
+}
+
+// what a streamed image call's options are made from
+interface ImageOpCall {
+  readonly context: RpcContext;
+  readonly input: unknown;
+  readonly signal?: AbortSignal | undefined;
 }
 
 // what each call gets from build-app: who made it, and a signal that aborts
@@ -146,16 +159,6 @@ export function buildRouter(deps: RouterDeps) {
         }
       };
 
-      if (!isAuditedProcedure(procedure)) {
-        try {
-          await requireAccess();
-
-          return await options.next();
-        } catch (error) {
-          throw toCallerError(error, caller);
-        }
-      }
-
       const startedAt = deps.now();
 
       const buildCall = (output: unknown) => ({
@@ -164,6 +167,24 @@ export function buildRouter(deps: RouterDeps) {
         impName: readImpName(procedure, input, output),
         startedAt,
       });
+
+      if (!isAuditedProcedure(procedure)) {
+        try {
+          await requireAccess();
+        } catch (error) {
+          if (isRefusalAudited(procedure)) {
+            deps.audit.record(buildCall(null), error);
+          }
+
+          throw toCallerError(error, caller);
+        }
+
+        try {
+          return await options.next();
+        } catch (error) {
+          throw toCallerError(error, caller);
+        }
+      }
 
       try {
         await requireAccess();
@@ -188,6 +209,28 @@ export function buildRouter(deps: RouterDeps) {
     const at = new Date(deps.now());
 
     return imps.map((imp) => ({ v: EVENT_VERSION, at, ev: 'ImpAdded', reason: 'snapshot', imp }));
+  };
+
+  // A streamed image call audits itself as its work ends, so the row holds
+  // the outcome rather than the stream's opening (access-policy.ts)
+  const buildImageOpOptions = (
+    call: Readonly<ImageOpCall>,
+    procedure: string,
+    firstPhase: ImageBuildPhase,
+  ): ImageOpStreamOptions => {
+    const startedAt = deps.now();
+
+    return {
+      firstPhase,
+      signal: call.signal ?? new AbortController().signal,
+      keepaliveMs: deps.imageKeepaliveMs,
+      now: deps.now,
+      record: (failure) => {
+        const impName = readImpName(procedure, call.input, null);
+
+        deps.audit.record({ procedure, actor: call.context.caller, impName, startedAt }, failure);
+      },
+    };
   };
 
   // one for every stream: each event is checked once, whoever reads it
@@ -479,6 +522,39 @@ export function buildRouter(deps: RouterDeps) {
 
         return toApiImage(image);
       }),
+      addStream: os.images.addStream.handler((context) => {
+        const input = context.input;
+        const firstPhase = 'imp' in input ? 'copy' : 'pull';
+
+        return runImageOp(
+          async (signal, setPhase) => {
+            // a template copies an imp's disk under its lock: no client
+            // stops it, as with images.add
+            const image =
+              'imp' in input
+                ? await deps.templates.createTemplate(input.imp, input.name)
+                : await deps.images.addImage(input.ref, input.name, { signal, setPhase });
+
+            return toApiImage(image);
+          },
+          buildImageOpOptions(context, 'images.addStream', firstPhase),
+        );
+      }),
+      buildStream: os.images.buildStream.handler((context) =>
+        runImageOp(
+          async (signal, setPhase) => {
+            const image = await deps.images.buildImage(
+              context.input.contextDir,
+              context.input.name,
+              context.input.dockerfile,
+              { signal, setPhase },
+            );
+
+            return toApiImage(image);
+          },
+          buildImageOpOptions(context, 'images.buildStream', 'pack'),
+        ),
+      ),
       build: os.images.build.handler(async (context) => {
         const image = await deps.images.buildImage(
           context.input.contextDir,
@@ -738,6 +814,7 @@ const SYSTEM_FEATURES = {
   secretRebind: true,
   databaseCopy: true,
   imageBuildStream: true,
+  imageOpStream: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

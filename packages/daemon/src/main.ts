@@ -437,6 +437,7 @@ async function main(): Promise<void> {
       now: Date.now,
       keepaliveMs: BUILD_KEEPALIVE_MS,
     }),
+    imageKeepaliveMs: BUILD_KEEPALIVE_MS,
     moves,
   });
 

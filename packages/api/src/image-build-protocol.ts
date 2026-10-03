@@ -31,8 +31,10 @@ export type ImageBuildQuery = z.infer<typeof ImageBuildQuerySchema>;
 export const ImageBuildResultSchema = ImageSchema.extend({ createdAt: z.coerce.date() });
 export const ImageBuildErrorSchema = z.object({ code: z.string(), message: z.string() });
 
-// what impd is doing: reading the upload, or building it
-const ImageBuildPhaseSchema = z.enum(['upload', 'build']);
+// what impd is doing: reading an upload, packing an on-host context,
+// building, pulling a ref, unpacking it into a disk, or copying an imp's disk
+// into a template
+const ImageBuildPhaseSchema = z.enum(['upload', 'pack', 'build', 'pull', 'unpack', 'copy']);
 
 // A stream starts with a progress event and repeats one while the build runs;
 // it ends with the image or the error. A client skips an event it does not
@@ -48,6 +50,15 @@ export const ImageBuildEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('image'), image: ImageBuildResultSchema }),
   ImageBuildErrorSchema.extend({ type: z.literal('error') }),
 ]);
+
+// what images.addStream and images.buildStream yield: the same progress, and
+// the image last; a failure throws through the iterator, as any oRPC error
+export const ImageOpEventSchema = z.discriminatedUnion('type', [
+  ImageBuildProgressSchema,
+  z.object({ type: z.literal('image'), image: ImageSchema }),
+]);
+
+export type ImageOpEvent = z.infer<typeof ImageOpEventSchema>;
 
 export type ImageBuildPhase = z.infer<typeof ImageBuildPhaseSchema>;
 

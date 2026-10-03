@@ -11,7 +11,7 @@ import { CheckpointSchema } from './checkpoint-schema';
 import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
 import { ExposeInputSchema, ExposeResultSchema } from './exposure-schema';
-import { DockerfilePathSchema } from './image-build-protocol';
+import { DockerfilePathSchema, ImageOpEventSchema } from './image-build-protocol';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
@@ -86,6 +86,15 @@ const ImageAddInputSchema = z.union([
   z.object({ ref: ImageRefSchema, name: NameSchema.optional() }),
   z.object({ imp: NameSchema, name: NameSchema }),
 ]);
+
+// contextDir is a path on the imp host, handed to `docker build`; a context
+// on the client's machine streams to IMAGE_BUILD_PATH instead
+const ImageBuildInputSchema = z.object({
+  // absolute, so docker build cannot read it as a flag
+  contextDir: z.string().startsWith('/'),
+  name: NameSchema,
+  dockerfile: DockerfilePathSchema.optional(),
+});
 
 export const impContract = {
   imps: {
@@ -347,18 +356,14 @@ export const impContract = {
     // name made again points at the new disk; imps made before keep theirs.
     add: base.input(ImageAddInputSchema).output(ImageSchema),
 
-    // contextDir is a path on the imp host, handed to `docker build`; a
-    // context on the client's machine streams to IMAGE_BUILD_PATH instead
-    build: base
-      .input(
-        z.object({
-          // absolute, so docker build cannot read it as a flag
-          contextDir: z.string().startsWith('/'),
-          name: NameSchema,
-          dockerfile: DockerfilePathSchema.optional(),
-        }),
-      )
-      .output(ImageSchema),
+    // from a directory on the imp host (ImageBuildInputSchema)
+    build: base.input(ImageBuildInputSchema).output(ImageSchema),
+
+    // add and build as progress, then the image, for a call longer than a
+    // client's fetch waits (docs/guides/images.md#long-calls); an impd with
+    // `features.imageOpStream` has them
+    addStream: base.input(ImageAddInputSchema).output(eventIterator(ImageOpEventSchema)),
+    buildStream: base.input(ImageBuildInputSchema).output(eventIterator(ImageOpEventSchema)),
 
     delete: base.input(NameInputSchema).output(EmptySchema),
   },

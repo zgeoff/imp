@@ -9,7 +9,10 @@ import { hasScope } from './scopes';
 interface HostAccess {
   readonly scope: Scope;
   readonly on: 'host';
-  readonly audit?: false;
+
+  // 'refusals': the router audits only a refusal, and the handler the call
+  // itself, as its work ends
+  readonly audit?: false | 'refusals';
 }
 
 // the imps these input fields name, each within the caller's patterns; a
@@ -138,6 +141,10 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'images.list': readAny,
   'images.add': manageHost,
   'images.build': manageHost,
+
+  // audited as the work ends, with its outcome (build-router.ts)
+  'images.addStream': { scope: 'manage', on: 'host', audit: 'refusals' },
+  'images.buildStream': { scope: 'manage', on: 'host', audit: 'refusals' },
   'images.delete': manageHost,
 
   // the exec it is for is audited as the socket opens
@@ -204,7 +211,12 @@ export function findAccess(procedure: string): Access | null {
 export function isAuditedProcedure(procedure: string): boolean {
   const access = findAccess(procedure);
 
-  return access === null || (access.scope !== 'read' && access.audit !== false);
+  return access === null || (access.scope !== 'read' && access.audit === undefined);
+}
+
+// a call that audits itself as it ends, whose refusal the router audits
+export function isRefusalAudited(procedure: string): boolean {
+  return findAccess(procedure)?.audit === 'refusals';
 }
 
 // Why the caller may not make the call, or null when it may. The checks

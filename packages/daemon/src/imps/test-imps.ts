@@ -442,7 +442,7 @@ export function buildTestApp(
     >
   > = {},
 
-  // the gap between a streamed build's progress lines
+  // the gap between the progress events of a streamed image call
   buildKeepaliveMs = BUILD_KEEPALIVE_MS,
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
@@ -542,6 +542,7 @@ export function buildTestApp(
     log: ctx.log,
     audit,
     buildContexts,
+    imageKeepaliveMs: buildKeepaliveMs,
     moves,
   });
 
