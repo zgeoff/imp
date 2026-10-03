@@ -1,14 +1,25 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { IMAGE_BUILD_PATH, ImageBuildResultSchema } from '@imp/api';
 import type { Scope } from '@imp/api';
+import * as z from 'zod';
 import { createApiAudit } from '../audit/api-audit';
 import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import { buildUploadsDir } from '../storage/data-layout';
 import { createBuildContextRoute } from './build-context-route';
+import { PIN_INSPECT_FORMAT } from './image-pin';
 import type { ImageService } from './image-service';
 
 interface BuildCall {
@@ -321,7 +332,11 @@ function writeFakeDocker(
 }
 
 function writeHangingDocker(dir: string): { readonly log: string; readonly path: string } {
-  return writeFakeDocker(dir, ['[ "$1" = pull ] && exec sleep 30', 'exit 1']);
+  return writeFakeDocker(dir, [
+    `[ "$1" = version ] && echo '"linux" "amd64"' && exit 0`,
+    '[ "$1" = pull ] && exec sleep 30',
+    'exit 1',
+  ]);
 }
 
 // a tar of a context holding only this Dockerfile
@@ -390,22 +405,70 @@ test('a client that goes during a base image pull ends it, starts no other and f
   }
 });
 
-// base.test images are on the host; the rest are pulled, but mnt.test's
-// pull fails, which ends the build before the engine is asked
+const DIGEST_A = `sha256:${'a'.repeat(64)}`;
+const DIGEST_B = `sha256:${'b'.repeat(64)}`;
+
+// what the fake docker's inspect answers for an image: on amd64, with these
+// RepoDigests, and no triggers unless given
+function buildInspect(
+  repoDigests: readonly string[],
+  extra: Readonly<Record<string, unknown>> = {},
+) {
+  const inspect = { RepoDigests: repoDigests, Os: 'linux', Architecture: 'amd64', OnBuild: null };
+
+  return `echo '${JSON.stringify({ ...inspect, ...extra })}'`;
+}
+
+// An amd64 engine. base.test images are on the host; the rest are pulled
+// and then inspected, but mnt.test's pull fails.
 const IMAGE_DOCKER = [
-  'case "$*" in',
-  `  "image inspect --format {{json .Config.OnBuild}} base.test/onbuild:1") echo '["RUN id"]' ;;`,
-  '  "image inspect --format {{json .Config.OnBuild}} "*) echo null ;;',
-  '  "image inspect base.test/"*) ;;',
-  '  "image inspect "*) exit 1 ;;',
-  '  "pull --quiet mnt.test/"*) echo "no such registry" >&2; exit 1 ;;',
-  '  "pull "*) ;;',
+  'for last; do :; done',
+  'pulled="$(dirname "$0")/pulled-$(echo "$last" | tr "/:@" "___")"',
+  'case "$1 $2" in',
+  `  "version --format") echo '"linux" "x86_64"' ;;`,
+  '  "image inspect") case "$last" in',
+  `    base.test/onbuild:1) ${buildInspect([`base.test/onbuild@${DIGEST_A}`], { OnBuild: ['RUN id'] })} ;;`,
+  `    base.test/local:1) ${buildInspect([])} ;;`,
+  `    base.test/arm:1) ${buildInspect([`base.test/arm@${DIGEST_A}`], { Architecture: 'aarch64' })} ;;`,
+  `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
+  `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
+  `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
+  '  esac ;;',
+  '  "pull --quiet") case "$last" in',
+  '    mnt.test/*) echo "no such registry" >&2; exit 1 ;;',
+  '    *) touch "$pulled" ;;',
+  '  esac ;;',
   '  *) exit 1 ;;',
   'esac',
 ];
 
+// the fake docker's argv, with the inspect format named
+function readCalls(log: string): string[] {
+  return readLog(log).map((line) => line.replace(PIN_INSPECT_FORMAT, 'PIN'));
+}
+
+// A build through the image service, with the fake docker on PATH and a
+// fake engine that records the context it gets and fails the build.
 async function sendFakeDockerBuild(dockerfile: string) {
-  await using ctx = await setupTest({ build: 'image-service' });
+  const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
+  const socket = join(socketDir, 'docker.sock');
+  const contexts: Uint8Array[] = [];
+
+  const engine = Bun.serve({
+    unix: socket,
+    fetch: async (request) => {
+      const context = await request.arrayBuffer();
+
+      contexts.push(new Uint8Array(context));
+
+      return new Response(`${JSON.stringify({ error: 'the fake engine builds nothing' })}\n`);
+    },
+  });
+
+  await using ctx = await setupTest({
+    build: 'image-service',
+    env: { DOCKER_HOST: `unix://${socket}` },
+  });
 
   const docker = writeFakeDocker(ctx.harness.config.dataDir, IMAGE_DOCKER);
   const tar = buildDockerfileTar(ctx.harness.config.dataDir, dockerfile);
@@ -417,9 +480,24 @@ async function sendFakeDockerBuild(dockerfile: string) {
     const response = await ctx.sendBuild('name=web', new Blob([tar]).stream());
     const body: unknown = await response.json();
 
-    return { status: response.status, body, calls: readLog(docker.log) };
+    // the Dockerfile in the context the engine got
+    const built = contexts.map(
+      (context) =>
+        Bun.spawnSync(['tar', '-xO', '-f', '-', 'Dockerfile'], { stdin: context }).stdout,
+    );
+
+    return {
+      status: response.status,
+      body,
+      calls: readCalls(docker.log),
+      built: built.map((bytes) => new TextDecoder().decode(bytes)),
+    };
   } finally {
     process.env['PATH'] = savedPath;
+
+    await engine.stop(true);
+
+    rmSync(socketDir, { recursive: true, force: true });
   }
 }
 
@@ -433,18 +511,18 @@ test('a base image with ONBUILD triggers is refused once the host has it', async
   });
 
   expect(sent.calls).toEqual([
-    'image inspect base.test/onbuild:1',
-    'image inspect --format {{json .Config.OnBuild}} base.test/onbuild:1',
+    'version --format {{json .Server.Os}} {{json .Server.Arch}}',
+    'image inspect --format PIN base.test/onbuild:1',
   ]);
+
+  expect(sent.built).toEqual([]);
 });
 
 test('COPY --from and RUN --mount images are pulled first, like a FROM, by tag or digest', async () => {
-  const digest = `sha256:${'d'.repeat(64)}`;
-
   const sent = await sendFakeDockerBuild(
     [
       'FROM base.test/a:1 AS build',
-      `COPY --from=tools.test/b@${digest} /x /x`,
+      `COPY --from=tools.test/b@${DIGEST_B} /x /x`,
       'COPY --from=build /x /y',
       'RUN --mount=type=bind,from=mnt.test/c:3,target=/m true',
     ].join('\n'),
@@ -457,13 +535,88 @@ test('COPY --from and RUN --mount images are pulled first, like a FROM, by tag o
   });
 
   expect(sent.calls).toEqual([
-    'image inspect base.test/a:1',
-    'image inspect --format {{json .Config.OnBuild}} base.test/a:1',
-    `image inspect tools.test/b@${digest}`,
-    `pull --quiet tools.test/b@${digest}`,
-    'image inspect mnt.test/c:3',
+    'version --format {{json .Server.Os}} {{json .Server.Arch}}',
+    'image inspect --format PIN base.test/a:1',
+    `image inspect --format PIN tools.test/b@${DIGEST_B}`,
+    `pull --quiet tools.test/b@${DIGEST_B}`,
+    `image inspect --format PIN tools.test/b@${DIGEST_B}`,
+    'image inspect --format PIN mnt.test/c:3',
     'pull --quiet mnt.test/c:3',
   ]);
+});
+
+test('the engine builds the Dockerfile with each image pinned and the platform named', async () => {
+  const sent = await sendFakeDockerBuild(
+    [
+      'FROM --platform=$BUILDPLATFORM base.test/a:1 AS build',
+      'COPY --from=pulled.test/p:2 /x /x',
+      'FROM base.test/retag:1',
+      'RUN --mount=from=build,target=/b --mount=from=base.test/a:1,target=/a true',
+      '',
+    ].join('\n'),
+  );
+
+  expect(sent.body).toMatchObject({
+    message: 'docker build failed: the fake engine builds nothing',
+  });
+
+  expect(sent.built).toEqual([
+    [
+      `FROM --platform=linux/amd64 base.test/a@${DIGEST_A} AS build`,
+      `COPY --from=tools.test/b@${DIGEST_B} /x /x`,
+      `FROM other.test/x@${DIGEST_B}`,
+      `RUN --mount=from=build,target=/b --mount=from=base.test/a@${DIGEST_A},target=/a true`,
+      '',
+    ].join('\n'),
+  ]);
+});
+
+test('an image with no registry digest, or for another platform, is refused before the build', async () => {
+  const local = await sendFakeDockerBuild('FROM base.test/local:1\n');
+  const copied = await sendFakeDockerBuild('FROM scratch\nCOPY --from=base.test/local:1 / /\n');
+  const arm = await sendFakeDockerBuild('FROM base.test/arm:1\n');
+
+  expect(local.body).toMatchObject({
+    message:
+      'FROM base.test/local:1: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).',
+  });
+
+  expect(copied.body).toMatchObject({
+    message:
+      'COPY --from base.test/local:1: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; name a registry image by tag or digest. Local base images are not supported yet (#156).',
+  });
+
+  expect(arm.body).toMatchObject({
+    message:
+      'FROM base.test/arm:1: the host has this image for linux/arm64, and builds for linux/amd64',
+  });
+
+  expect([local.built, copied.built, arm.built]).toEqual([[], [], []]);
+});
+
+function readMessage(body: unknown): string {
+  return z.object({ message: z.string() }).parse(body).message;
+}
+
+test('a platform variable set by ARG, or another --platform, is refused before any pull', async () => {
+  const global = await sendFakeDockerBuild(
+    'ARG BUILDPLATFORM=linux/arm64\nFROM --platform=$BUILDPLATFORM base.test/a:1\n',
+  );
+
+  const staged = await sendFakeDockerBuild('FROM base.test/a:1\nARG TARGETPLATFORM\n');
+
+  const braced = await sendFakeDockerBuild(
+    ['FROM --platform=$', '{BUILDPLATFORM} base.test/a:1\n'].join(''),
+  );
+
+  expect(readMessage(global.body)).toContain('line 1: ARG BUILDPLATFORM is refused');
+  expect(readMessage(staged.body)).toContain('line 2: ARG TARGETPLATFORM is refused');
+
+  expect(readMessage(braced.body)).toContain(
+    ['FROM --platform=$', '{BUILDPLATFORM} is refused'].join(''),
+  );
+
+  expect([global.calls, staged.calls, braced.calls]).toEqual([[], [], []]);
 });
 
 test('a failed build answers its error and removes the upload', async () => {
