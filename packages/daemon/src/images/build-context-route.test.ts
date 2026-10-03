@@ -23,8 +23,8 @@ interface TestOptions {
   // holds every build until it resolves
   readonly gate?: Promise<void>;
 
-  // replaces the fake build
-  readonly build?: ImageService['buildImageFromContext'];
+  // replaces the fake build; 'image-service' builds as impd does
+  readonly build?: ImageService['buildImageFromContext'] | 'image-service';
 }
 
 // impd with a fake build that records what reached it
@@ -63,7 +63,12 @@ async function setupTest(options: TestOptions = {}) {
     });
   };
 
-  const images = { ...harness.images, buildImageFromContext: options.build ?? writeBuildCall };
+  const build =
+    options.build === 'image-service'
+      ? harness.images.buildImageFromContext
+      : (options.build ?? writeBuildCall);
+
+  const images = { ...harness.images, buildImageFromContext: build };
   const root = buildTestApp({ ...harness, images }, harness);
 
   const sendBuild = (
@@ -294,6 +299,79 @@ test('a client that goes mid-build stops the build, frees its slot and its file'
   const next = await ctx.readStatus('name=web', 'tar');
 
   expect(next).toBe(200);
+});
+
+// a docker on PATH whose pulls hang, and which logs its argv; a pull execs
+// its sleep, so killing it leaves nothing holding its pipes
+function writeHangingDocker(dir: string): { readonly log: string; readonly path: string } {
+  const bin = join(dir, 'fake-bin');
+  const log = join(dir, 'docker.log');
+
+  mkdirSync(bin, { recursive: true });
+
+  writeFileSync(
+    join(bin, 'docker'),
+    ['#!/bin/sh', `echo "$*" >>'${log}'`, '[ "$1" = pull ] && exec sleep 30', 'exit 1'].join('\n'),
+    { mode: 0o755 },
+  );
+
+  return { log, path: `${bin}:${process.env['PATH'] ?? ''}` };
+}
+
+function readLog(log: string): string[] {
+  return existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
+}
+
+test('a client that goes during a base image pull ends it, starts no other and frees its slot', async () => {
+  await using ctx = await setupTest({ build: 'image-service' });
+
+  const docker = writeHangingDocker(ctx.harness.config.dataDir);
+  const contextDir = join(ctx.harness.config.dataDir, 'context');
+
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM first.test/a:1\nFROM second.test/b:1\n');
+
+  const tar = Bun.spawnSync(['tar', '-C', contextDir, '-c', 'Dockerfile']);
+  const savedPath = process.env['PATH'];
+
+  process.env['PATH'] = docker.path;
+
+  try {
+    const clients = [1, 2, 3, 4].map(() => new AbortController());
+
+    const builds = clients.map((client, n) =>
+      ctx.sendBuild(
+        `name=pull${String(n)}`,
+        new Blob([tar.stdout]).stream(),
+        TEST_TOKEN,
+        {},
+        client.signal,
+      ),
+    );
+
+    while (readLog(docker.log).filter((line) => line.startsWith('pull')).length < 4) {
+      await Bun.sleep(5);
+    }
+
+    for (const client of clients) {
+      client.abort();
+    }
+
+    // the pulls sleep 30 s: only their kill settles the builds in time
+    await Promise.allSettled(builds);
+
+    const pulls = readLog(docker.log).filter((line) => line.startsWith('pull'));
+
+    expect(pulls).toEqual(Array.from({ length: 4 }, () => 'pull --quiet first.test/a:1'));
+    expect(ctx.listUploads()).toEqual([]);
+
+    // not a tar: refused by the build, not for want of a slot
+    const next = await ctx.readStatus('name=web', 'not a tar');
+
+    expect(next).toBe(400);
+  } finally {
+    process.env['PATH'] = savedPath;
+  }
 });
 
 test('a failed build answers its error and removes the upload', async () => {

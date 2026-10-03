@@ -276,10 +276,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     return undefined;
   };
 
-  // A sessionless build cannot ask impd for registry credentials: each
-  // image the Dockerfile names outright and the host lacks is pulled first,
-  // as `imp image add` pulls; BuildKit then finds it locally.
-  const loadBaseImages = async (tarPath: string, dockerfile: string): Promise<void> => {
+  // A sessionless build cannot ask impd for registry credentials: each image
+  // the Dockerfile names and the host lacks is pulled first, as `imp image
+  // add` does. A client that goes kills the pull, and no later one starts.
+  const loadBaseImages = async (
+    tarPath: string,
+    dockerfile: string,
+    signal: AbortSignal,
+  ): Promise<void> => {
     const text = await readTarFile(tarPath, dockerfile, DOCKERFILE_MAX_BYTES).catch(
       (error: unknown) => {
         throw new ORPCError('BAD_REQUEST', { message: readErrorMessage(error) });
@@ -299,10 +303,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
       }
 
-      const local = await runCommand(['docker', 'image', 'inspect', ref]);
+      signal.throwIfAborted();
+
+      const local = await runCommand(['docker', 'image', 'inspect', ref], { signal });
 
       if (local.exitCode !== 0) {
-        const pulled = await runCommand(['docker', 'pull', '--quiet', ref]);
+        signal.throwIfAborted();
+
+        const pulled = await runCommand(['docker', 'pull', '--quiet', ref], { signal });
+
+        signal.throwIfAborted();
 
         if (pulled.exitCode !== 0) {
           throw new ORPCError('BAD_REQUEST', {
@@ -326,7 +336,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const tarBytes = statSync(tarPath).size;
     const dockerfile = normalizeDockerfilePath(givenDockerfile);
 
-    await loadBaseImages(tarPath, dockerfile);
+    await loadBaseImages(tarPath, dockerfile, signal);
 
     signal.throwIfAborted();
 
