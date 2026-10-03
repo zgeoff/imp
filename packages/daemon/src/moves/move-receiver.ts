@@ -12,6 +12,7 @@ import { buildCheckpointId } from '../checkpoints/checkpoint-service';
 import { createCheckpoint } from '../db/checkpoints';
 import { writeMovedBoots } from '../db/cold-boots';
 import { createImage, findImageByDigest, findImageByName } from '../db/images';
+import { emitImpWrite } from '../db/imp-write-feed';
 import {
   SlotTakenError,
   findImpById,
@@ -21,6 +22,7 @@ import {
   updateImpCommitted,
 } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { listLeases, writeMovedLeases } from '../db/leases';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
 import type { Imps } from '../imps/imp-service';
@@ -51,7 +53,7 @@ import {
   MoveHeaderSchema,
   MoveOfferSchema,
 } from './move-header';
-import type { MoveHeader } from './move-header';
+import type { MoveHeader, MovedLease } from './move-header';
 import { PART_WAIT_MS, createPartPipe } from './move-parts';
 import type { PartPipe } from './move-parts';
 import {
@@ -502,6 +504,10 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const header = MoveHeaderSchema.parse(readJsonPayload(first.payload));
 
+    // each lease ends this long after now: the time it had left when the
+    // source built the header, however long the disk then takes
+    const headerAt = deps.now();
+
     if (header.imp.name !== row.name) {
       throw new MoveRequestError(403, `the ticket is for ${row.name}, not ${header.imp.name}`);
     }
@@ -608,6 +614,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
         // the staged imp's own rows: they go with it if the stream fails
         await writeMovedBoots(deps.db, header.imp.id, header.imp.coldBoots, deps.now());
+        await writeLeases(header, headerAt);
 
         if (header.warm !== null) {
           await writeWarmFiles(header.imp.id, header.warm, reader, count, temp, (file) => {
@@ -733,6 +740,40 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
   };
 
+  // The leases as of the header, less any that ended while the disk came.
+  // An older source sends none: the imp arrives unleased.
+  const writeLeases = async (header: MoveHeader, headerAt: number): Promise<void> => {
+    if (header.imp.leases === undefined) {
+      deps.log(
+        `impd: move: ${header.imp.name}: the source's impd predates moving leases; it arrives with none`,
+      );
+
+      return;
+    }
+
+    const now = deps.now();
+
+    const live = header.imp.leases.flatMap((lease) => {
+      const until = readMovedLeaseEnd(lease, headerAt);
+
+      if (until !== null && until.getTime() <= now) {
+        return [];
+      }
+
+      return [
+        {
+          principal: lease.principal,
+          label: lease.label,
+          display: lease.display,
+          until,
+          createdAt: lease.createdAt,
+        },
+      ];
+    });
+
+    await writeMovedLeases(deps.db, header.imp.id, live);
+  };
+
   // only an imp a move staged here, never a live one of the same name
   const removeStaged = async (name: string, impId: string): Promise<void> => {
     const staged = await findImpById(deps.db, impId);
@@ -764,6 +805,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       needsSystemDrive,
       storage: deps.storage.kind,
       keepsMaxMemory: true,
+      keepsLeases: true,
     });
   };
 
@@ -895,7 +937,14 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       throw new MoveRequestError(409, 'the received memory snapshot is not complete');
     }
 
-    await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
+    const committed = await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
+
+    // its leases are live here only now: `held`, as an acquire says it
+    const leases = await listLeases(deps.db, deps.now(), [imp.id]);
+
+    if (leases.length > 0) {
+      emitImpWrite(deps.db, { kind: 'changed', imp: committed, reason: 'held' });
+    }
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
     deps.onCommitted(row.name);
@@ -1170,6 +1219,10 @@ function readDataInFile(payload: Uint8Array, size: number): ReturnType<typeof re
   }
 
   return data;
+}
+
+function readMovedLeaseEnd(lease: Readonly<MovedLease>, headerAt: number): Date | null {
+  return lease.remainingMs === null ? null : new Date(headerAt + lease.remainingMs);
 }
 
 // a policy this impd cannot read comes as none, never more open

@@ -1,4 +1,4 @@
-import { ColdBootCauseSchema, ImageSourceSchema, WarmMoveSchema } from '@imp/api';
+import { ColdBootCauseSchema, ImageSourceSchema, LeaseLabelSchema, WarmMoveSchema } from '@imp/api';
 import * as z from 'zod';
 import { SnapshotMetaSchema } from '../sleep/snapshot-meta';
 import { VmIdentitySchema } from '../sleep/vm-identity';
@@ -21,6 +21,36 @@ const CheckpointSchema = z
 const MovedBootSchema = z
   .object({ bootId: z.uuid(), cause: ColdBootCauseSchema, at: z.iso.datetime() })
   .readonly();
+
+// the most leases a header carries, and the longest one it carries; past
+// these a header is refused as malformed (an imp has a few, and a hold can
+// last years, never centuries)
+export const MAX_MOVED_LEASES = 1024;
+export const MAX_LEASE_REMAINING_MS = 100 * 365 * 24 * 60 * 60 * 1000;
+
+// a lease's owner, as caller.ts names it, and its name for people
+const LeaseOwnerTextSchema = z.string().min(1).max(256);
+
+// who holds a moved lease; the source checks its own leases with it before
+// any byte goes
+export const MovedLeaseOwnerSchema = z.object({
+  principal: LeaseOwnerTextSchema,
+
+  // `hold` and a legacy hold's label too, which leases.* never writes
+  label: LeaseLabelSchema,
+  display: LeaseOwnerTextSchema,
+});
+
+// A live lease, by the time it had left on the source's clock when the
+// header was built: the target ends it that long after it reads the header,
+// so the two clocks need not agree (docs/architecture/moves.md#leases)
+const MovedLeaseSchema = MovedLeaseOwnerSchema.extend({
+  // null for no end
+  remainingMs: z.int().nonnegative().max(MAX_LEASE_REMAINING_MS).nullable(),
+  createdAt: z.coerce.date(),
+}).readonly();
+
+export type MovedLease = z.infer<typeof MovedLeaseSchema>;
 
 const ImpSchema = z
   .object({
@@ -52,6 +82,10 @@ const ImpSchema = z
     // before the move finds its own boot among them. A warm move's wake on
     // the target finds the boot it slept in. Left out by an older source.
     coldBoots: z.array(MovedBootSchema).max(4).readonly().default([]),
+
+    // its live leases; left out by a source from before leases moved, which
+    // the target logs
+    leases: z.array(MovedLeaseSchema).max(MAX_MOVED_LEASES).readonly().optional(),
   })
   .readonly();
 
@@ -141,6 +175,10 @@ export const MoveOfferReplySchema = z.object({
   // the target keeps an elastic imp's max memory; a target from before
   // elastic memory leaves it out, and would land the imp at a fixed size
   keepsMaxMemory: z.boolean().default(false),
+
+  // the target keeps the imp's leases; a target from before leases moved
+  // leaves it out, and would drop them
+  keepsLeases: z.boolean().default(false),
 });
 
 // `/move/commit` and `/move/abort`: whether the target's copy is live

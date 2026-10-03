@@ -401,6 +401,7 @@ export function buildRouter(deps: RouterDeps) {
       prepare: os.moves.prepare.handler((context) =>
         deps.moves.prepare(context.input.name, {
           stop: context.input.stop === true,
+          force: context.input.force === true,
           targetStorage: context.input.targetStorage ?? 'xfs',
           target: context.input.target ?? null,
         }),

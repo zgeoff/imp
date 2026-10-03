@@ -113,7 +113,7 @@ is:
 ```sh
 imp move dev big-box            # dev, stopped, from the current host to the saved host big-box
 imp move dev big-box            # dev, sleeping: with its memory, when big-box can load it
-imp move dev big-box --stop     # stop it first if it runs or sleeps: a cold move
+imp move dev big-box --stop     # stop it first if it runs or sleeps, ending its leases: a cold move
 imp --host small move dev big-box   # from a host other than the current one
 ```
 
@@ -149,13 +149,42 @@ holds no lock on storage for its length: other imps, backups and `imp gc` go on.
 | The egress policy                                              | Grants of a secret the target has no secret by that name for |
 | Grants, for each secret the target has by the same name        | The audit logs and the event history                         |
 | A template copy's owed identity reset                          | Public exposure: a public imp does not move                  |
-| The last 4 cold boots, so a client knows what ended its output |                                                              |
+| The last 4 cold boots, so a client knows what ended its output | Leases from `leases.*`, with `--stop` (see below)            |
+| Live leases and holds, each with the time it had left          |                                                              |
 
 The image goes by digest, as files. A target with the digest uses its own; one without it gets the
 image in the stream and files it under a digest of what arrived, never the source's claim: the
 source's digest names an OCI config the target cannot check against a built rootfs. When the target
 has an image by that name with another digest, the moved image's name gets a `-<8 hex>` suffix. A
 [template](./templates.md) stays a template, with the name of the imp it came from.
+
+### Leases
+
+A move carries the imp's live [leases](./leases.md) and holds. Each one ends on the target as long
+after the target reads the stream's header as it had left when the source built it, so the two
+hosts' clocks need not agree. One that ends while the disk streams is left out. The target writes
+the leases after the disk arrives, and shows them on the `receiving` imp from then on. Its idle loop
+and governor respect them once it commits, and the commit emits `ImpChanged` with reason `held` for
+an imp with a live lease.
+
+- `imp move --stop` of a running or sleeping imp ends its leases from `leases.*`, as `imp stop`
+  does: it passes `force`. Without `force`, `moves.prepare` with `stop` fails with `LEASED` before
+  it stops anything. A hold and a legacy hold go along either way.
+- A move ends the leases only once the imp is stopped and marked. A prepare that fails before that
+  keeps them, and a running imp it stopped runs again.
+- A warm move, and a cold move of a stopped imp, stop nothing, so they never meet `LEASED`.
+- While the imp is marked, every lease call on it fails with `MOVING`, so nobody can renew a lease
+  during a long stream. Release or renew one before the move if it would end too soon.
+- An owner keeps its lease on the target by its principal. A tailnet node, a tailnet user and a key
+  are the same identity there and can renew it; the target's root counts as the source's. A token's
+  ID exists on one host only: its lease protects the imp until it ends, its owner gets
+  `LEASE_NOT_HELD` on a renew, and can acquire a new lease with a token of the target.
+- A target from before moving leases would drop them. The source refuses to send an imp with any
+  live lease to it, a hold or a legacy hold too, before any byte goes: upgrade the target, or
+  release the leases. A source from before moving leases sends none, and the target logs that the
+  imp arrives unleased: upgrade the source too.
+- A running imp that `--stop` stopped runs again after such a refusal, without the leases its stop
+  ended. A sleeping imp that `--stop` stopped stays stopped: its memory is gone.
 
 ### Warm moves
 

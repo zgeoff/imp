@@ -26,10 +26,10 @@ pools.
 
 | Step | Call                                                | Host   | What it does                                                                                                                                                                               |
 | ---- | --------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1    | `moves.prepare {name, stop?}`                       | source | Stops the imp when asked, marks it `sending`, counts its data bytes.                                                                                                                       |
+| 1    | `moves.prepare {name, stop?, force?}`               | source | Stops the imp when asked, marks it `sending`, counts its data bytes. A stop checks and ends leases as `imps.stop` does ([leases](#leases)).                                                |
 | 2    | `moves.receive {name, bytes}`                       | target | Checks the name and room for twice the bytes, then issues a ticket. The stream reserves twice the bytes for files, and the bytes plus the image for ZFS streams, which skip the temp file. |
 | 3    | `moves.send {name, to, ticket}`                     | source | Starts the send in the background; `moves.status` follows it.                                                                                                                              |
-| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest.                                                                                                                                                |
+| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest, and what it keeps (`keepsMaxMemory`, `keepsLeases`).                                                                                           |
 | 5    | `POST /move/receive`, one per part, then the finish | target | Reads the stream into a staged imp marked `receiving`; answers the receipt.                                                                                                                |
 | 6    | `POST /move/commit`                                 | target | Takes the mark off. The source then destroys its copy.                                                                                                                                     |
 
@@ -156,6 +156,32 @@ The commit is idempotent: a target that committed answers a second commit, and a
 never cross. The commit takes the mark off and marks the tickets in one transaction; an imp that is
 here unmarked counts as committed, and a ticket whose copy is gone never does. An abort removes the
 tickets under the lock, so no commit follows it, then the staged imp.
+
+## Leases
+
+The header's `imp.leases` lists the imp's live leases: `principal`, `label`, `display`, `createdAt`
+and `remainingMs`, the time left at the source's now when it built the header, or null for no end.
+The target notes its own now when it parses the header and ends each lease `remainingMs` after it,
+so clock skew between the hosts has no effect; only the network's latency adds to a lease. The disk
+can take long: the target writes the leases after it, beside the cold boots, and leaves out one that
+ended meanwhile. The rows belong to the staged imp, so a failed or aborted receive, and a restart
+that removes a staged imp, delete them with it. The commit writes nothing more; for an imp with a
+live lease it emits `ImpChanged` with reason `held`, as an acquire does.
+
+The header bounds them: at most 1024 leases, `remainingMs` a whole number up to 100 years, a label
+by the lease API's rules, and a principal and a display of 1 to 256 characters. The source checks
+its own leases against these bounds at the offer, and refuses before the stream; a lease that ends
+past 100 years moves with 100 years left, and the source logs it. A source from before moving leases
+leaves `leases` out; the target logs that the imp arrives with none.
+
+On the source, `prepare` with `stop` checks `LEASED` before it halts a running or sleeping imp, and
+with `force` ends the leases from `leases.*` after its mark is on, under the same lock. A failure
+between the halt and the mark keeps the leases and starts a running imp again. The rows stay until
+the commit destroys the imp; a failed or aborted send leaves them, less any that `force` ended.
+
+The offer reply's `keepsLeases` says the target writes them. A target from before it leaves it out.
+The source then refuses a send of an imp with any live lease, before the stream, and starts again an
+imp that its prepare halted, as it does when a target lacks `keepsMaxMemory`.
 
 ## Recovery
 

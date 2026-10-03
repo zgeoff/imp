@@ -78,10 +78,12 @@ do, and they outlast it.
 - With `force: true` they sleep or stop the imp, then end every such lease on it and emit
   `ImpChanged` with reason `released` and `detail.released`, the count. A sleep or stop that fails
   keeps the leases. A renew after a release gets `LEASE_NOT_HELD`.
-- `imp sleep` and `imp stop` pass `force`, because a person typed them. The dashboard, the MCP tools
-  and older CLIs cannot pass it; they meet `LEASED` only on an imp that a client leased through
-  `leases.*`.
+- `imp sleep`, `imp stop` and `imp move --stop` pass `force`, because a person typed them. The
+  dashboard, the MCP tools and older CLIs cannot pass it; they meet `LEASED` only on an imp that a
+  client leased through `leases.*`.
 - `imps.destroy` ends every lease with the imp.
+- A move carries the leases to the target, each with the time it had left; a cold move with `stop`
+  checks `LEASED` as a stop does ([moves](./hosts.md#leases)).
 - impd's shutdown pass still sleeps a leased imp, since stopping the container ends its VM, and
   keeps the leases. The watchdog's restart and a checkpoint restore keep them too.
 

@@ -207,3 +207,21 @@ test('an abort the target answers with its commit says the move is complete', as
 
   expect(ctx.printed).toEqual(['dev: b had committed it already; the move is complete']);
 });
+
+test('a move with --stop passes force, as imp stop does', async () => {
+  const ctx = setupRun(
+    'move',
+    {
+      prepare: { bytes: 10, checkpoints: 0, warm: null },
+      send: IDLE,
+      status: { ...IDLE, isDone: true },
+    },
+    { receive: { ticket: 't.s', expiresAt: new Date(0), peerUrl: 'http://100.64.0.2:7070' } },
+  );
+
+  await runMove({ ...ctx.run, stop: true });
+
+  expect(ctx.calls[1]).toBe(
+    'a prepare {"name":"dev","stop":true,"force":true,"targetStorage":"xfs"}',
+  );
+});
