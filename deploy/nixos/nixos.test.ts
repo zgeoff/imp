@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -247,4 +255,11 @@ test('a missing or empty source never replaces a staged token, and never fails t
 
   expect(runStage(source, stageDir).exitCode).toBe(0);
   expect(readFileSync(staged, 'utf8')).toBe('cf-good\n');
+
+  // a source that cannot be read, such as a directory in its place
+  mkdirSync(source);
+
+  expect(runStage(source, stageDir).exitCode).toBe(0);
+  expect(readFileSync(staged, 'utf8')).toBe('cf-good\n');
+  expect(readdirSync(stageDir)).toEqual(['token']);
 });
