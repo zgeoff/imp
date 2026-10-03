@@ -92,8 +92,10 @@ alone took about 75 seconds in the last acceptance run.
 
 The moves suites start a second instance, `<IMP_DEV_NAME>-mv-b`, with its data in
 `<IMP_DEV_DATA>-mv-b`, and reboot the run's instance onto a network of their own and back. Each
-instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's memory.
-`moves-tailnet` needs a Tailscale key, as the tailscale suite does.
+instance gets a 2 GiB RAM budget there, so a run stays inside one ordinary run's memory. On ZFS the
+second instance uses the dataset `<IMP_ZFS_ROOT>-mv-b`, which `scripts/zfs-host-test.sh` makes: a
+manual run needs it made the same way (`zfs create -o mountpoint=legacy`). `moves-tailnet` needs a
+Tailscale key, as the tailscale suite does.
 
 The per-imp names case of the tailscale suite skips unless `IMP_E2E_TAILNET_NAMES=1`: it needs the
 Tailscale Services OAuth client in 1Password (`IMP_TAILNET_OAUTH_REF`, default

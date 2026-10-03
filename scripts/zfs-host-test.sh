@@ -45,9 +45,16 @@ export IMP_STORAGE_BACKEND=zfs
 export IMP_ZFS_ROOT=$pool/imp
 
 # The results stay in $work; the pool file goes unless the pool will not.
+# The moves suites' B and its network go first, as a killed run leaves them
+# up, with B's dataset busy in the pool.
 cleanup() {
   docker logs "$IMP_DEV_NAME" >"$work/impd.log" 2>&1 || true
+  if docker container inspect "$IMP_DEV_NAME-mv-b" >/dev/null 2>&1; then
+    docker logs "$IMP_DEV_NAME-mv-b" >"$work/impd-mv-b.log" 2>&1 || true
+  fi
+  IMP_DEV_NAME=$IMP_DEV_NAME-mv-b "$IMP_ROOT/scripts/dev.sh" down || true
   "$IMP_ROOT/scripts/dev.sh" down || true
+  docker network rm "$IMP_DEV_NAME-mv" >/dev/null 2>&1 || true
   if sudo zpool list "$pool" >/dev/null 2>&1 && ! sudo zpool destroy -f "$pool"; then
     echo "zfs-host-test: could not destroy $pool; its file stays at $work/bench.img" >&2
     return
@@ -86,7 +93,7 @@ report() {
   grep -E '^ +(newPlusExecMs|checkpointMs|restoreMs|forkCheckpointMs|forkLiveMs|idleToSleepMs|wakeOnHttpMs|backup[A-Za-z]+): ' \
     "$work/e2e.log" || true
   echo
-  sudo zfs list -r -o name,used,refer,compressratio,recordsize "$pool"
+  sudo zfs list -r -t all -o name,used,refer,compressratio,recordsize "$pool"
 }
 
 # A failed suite still gets its report; the script then exits with the
