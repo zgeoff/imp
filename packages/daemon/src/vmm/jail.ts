@@ -41,7 +41,7 @@ interface JailPlan {
   // chroot: the template's placeholder disk on a restore
   readonly scratchFiles?: readonly string[];
 
-  // a restore starts before its disk is cloned: setupDiskOwner later
+  // a restore starts before its disk is sized: setupDiskOwner once it is ready
   readonly isDiskLate?: boolean;
 }
 

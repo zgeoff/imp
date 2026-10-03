@@ -305,7 +305,7 @@ export async function loadTemplateVm(
 
     const diskBytes = await plan.diskReady;
 
-    // the clone made the disk as root's, after the prepare
+    // the clone made the disk as root's, and the prepare left it so
     if (plan.jail !== null) {
       jails.setupDiskOwner(plan.paths, plan.jail);
     }

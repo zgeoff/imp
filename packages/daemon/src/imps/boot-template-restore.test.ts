@@ -32,10 +32,12 @@ const JAIL_CGROUPS: CpuCgroups = {
   readCpuStat: () => null,
 };
 
-// `cloneFails` turns every disk clone away until a test sets it back; with
-// `isJailed`, every VM runs under the jailer
+// `cloneFails` turns every disk clone away until a test sets it back;
+// `clone.delayMs` holds each clone back and `clone.onDone` sees it land;
+// with `isJailed`, every VM runs under the jailer
 async function setupRestoreTest(isJailed = false) {
   const cloneFails = { isOn: false };
+  const clone: { delayMs: number; onDone?: () => void } = { delayMs: 0 };
 
   const harness = await setupImpTest({
     ...(isJailed && { cgroups: JAIL_CGROUPS }),
@@ -45,14 +47,15 @@ async function setupRestoreTest(isJailed = false) {
       IMP_DEFAULT_VCPUS: '1',
       IMP_JAILER: String(isJailed),
     },
-    cloneDisk: (source, target) => {
+    cloneDisk: async (source, target) => {
+      await Bun.sleep(clone.delayMs);
+
       if (cloneFails.isOn) {
-        return Promise.reject(new Error('clone failed: no space'));
+        throw new Error('clone failed: no space');
       }
 
       copyFileSync(source, target);
-
-      return Promise.resolve();
+      clone.onDone?.();
     },
   });
 
@@ -68,7 +71,7 @@ async function setupRestoreTest(isJailed = false) {
   // the template a first boot started in the background
   const waitForTemplate = () => templates.buildTemplate(SHAPE);
 
-  return { ...harness, client: app.client, templates, waitForTemplate, cloneFails };
+  return { ...harness, client: app.client, templates, waitForTemplate, cloneFails, clone };
 }
 
 test('the second boot of a shape builds its template; the next restores it', async () => {
@@ -161,7 +164,7 @@ test('a restore that fails after the claim keeps the template for the next imp',
   expect(ctx.fake.templateBuilds).toHaveLength(1);
 });
 
-test('a disk that fails after the resume fails the create, and costs the template nothing', async () => {
+test('a clone that fails fails the create before any restore, and costs the template nothing', async () => {
   await using ctx = await setupRestoreTest();
 
   await ctx.client.imps.create({ name: 'first' });
@@ -180,7 +183,8 @@ test('a disk that fails after the resume fails the create, and costs the templat
 
   const key = buildTemplateKey(ctx.readIdentity(), SHAPE);
 
-  // the restored VMs ended, none booted the kernel, and the template stays
+  // no VM started, none booted the kernel, and the template stays
+  expect(ctx.fake.restorePlans).toEqual([]);
   expect(ctx.fake.alive.size).toBe(aliveBefore);
   expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first']);
   expect(readdirSync(join(ctx.dataDir, 'templates'))).toContain(key);
@@ -251,4 +255,27 @@ test('a jailed restore runs as the imp, with the template and its drive bound in
   expect(plan?.systemDrivePath).toBe(ctx.readIdentity().systemDrivePath);
   expect(plan?.placeholderPath).toBe(join(dir, 'placeholder.ext4'));
   expect(plan?.cgroup?.procsPath).toBe(`/cg/${second?.id ?? ''}/cgroup.procs`);
+});
+
+// On ZFS the disk is a dataset mounted on imps/<id>/disk. A jail sees only
+// the mounts made before its prepare, so a restore that starts first finds
+// an empty mountpoint (#147). A late clone stands in for that mount.
+test('a jailed restore starts only once the clone is in place', async () => {
+  await using ctx = await setupRestoreTest(true);
+
+  await ctx.client.imps.create({ name: 'first' });
+  await ctx.waitForTemplate();
+
+  const restoresAtClone: number[] = [];
+
+  ctx.clone.delayMs = 50;
+
+  ctx.clone.onDone = () => {
+    restoresAtClone.push(ctx.fake.restorePlans.length);
+  };
+
+  await ctx.client.imps.create({ name: 'second' });
+
+  expect(restoresAtClone).toEqual([0]);
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['second']);
 });

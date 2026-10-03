@@ -10,6 +10,7 @@ import {
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import * as z from 'zod';
+import { findBootFallbacks } from './lib/boot-fallbacks';
 import { config } from './lib/config';
 import { createMissingImages } from './lib/fixtures';
 import { listImageNames, readInfo, runImp } from './lib/imp-cli';
@@ -21,6 +22,7 @@ import {
   getHostImage,
   instance,
   readHostImage,
+  readImpdLogSince,
   readImpdLogTail,
   readToken,
   runChecked,
@@ -262,6 +264,8 @@ function stopRun(signal: NodeJS.Signals): void {
 }
 
 async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
+  const started = new Date();
+
   const proc = Bun.spawn([...buildSuiteArgv(process.execPath, name)], {
     cwd: REPO_ROOT,
     detached: true,
@@ -288,12 +292,28 @@ async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
     console.log(`== impd log tail\n${tail}`);
   }
 
+  const isClean = await checkNoBootFallbacks(name, started);
+
   // --bail skips the suite's afterAll; scale's imps stay for restart
   if (exitCode !== 0 && !args.keep && !(name === 'scale' && args.suites.includes('restart'))) {
     await removeSuiteImps(name);
   }
 
-  return exitCode === 0;
+  return exitCode === 0 && isClean;
+}
+
+// A template restore that fell back still creates the imp, so the suite
+// passes; the fallback is a failure all the same
+async function checkNoBootFallbacks(name: string, since: Readonly<Date>): Promise<boolean> {
+  const log = await readImpdLogSince(since);
+
+  const fallbacks = findBootFallbacks(log);
+
+  if (fallbacks.length > 0) {
+    console.log(`== ${name}: a boot template fell back to the kernel\n${fallbacks.join('\n')}`);
+  }
+
+  return fallbacks.length === 0;
 }
 
 async function removeSuiteImps(name: string): Promise<void> {
