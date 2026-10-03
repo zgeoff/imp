@@ -8,7 +8,8 @@
 #                            stays in .data/dev
 #   scripts/dev.sh reboot    down, then up: imps come back asleep and wake on demand
 #   scripts/dev.sh logs      follow the container log
-#   scripts/dev.sh restart   restart impd only (SIGHUP); running VMs survive and are re-adopted
+#   scripts/dev.sh restart   restart impd (SIGHUP), and the proxy if its code changed;
+#                            running VMs survive and are re-adopted
 #   scripts/dev.sh shell     open a shell in the container
 #   scripts/dev.sh token     print the API token (for IMP_TOKEN)
 #
@@ -117,21 +118,30 @@ is_running() {
   [ "$(docker inspect -f '{{.State.Running}}' "${1:-$name}" 2>/dev/null || true)" = true ]
 }
 
-# start_proxy runs imp-docker-proxy, compiled from the repo as the release
-# image compiles it (host/Dockerfile), with the deploy's privileges and
-# command, and waits for its socket. The socket's directory and the
-# proxy's token are volumes of their own, which take the image's
-# directories, owned by the proxy's user (host/Dockerfile).
+# start_proxy runs imp-docker-proxy, compiled from the repo with the image's
+# own bun, as the release image compiles it (host/Dockerfile), with the
+# deploy's privileges and command, and waits for its socket. It compiles on
+# every call and replaces a running proxy only when the binary changed, so
+# up and restart never leave an old proxy running. The socket's directory
+# and the proxy's token are volumes of their own, which take the image's
+# directories, owned by the proxy's user (host/Dockerfile); the token
+# outlives a replaced proxy, so containers it made stay its own.
 start_proxy() {
-  if is_running "$proxy"; then
+  mkdir -p "$data"
+  docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$IMP_ROOT:/src:ro" -v "$data:/out" -w /src "$IMP_HOST_IMAGE" \
+    bun build --compile packages/daemon/src/docker-proxy/main.ts \
+    --outfile /out/imp-docker-proxy.new >/dev/null
+
+  if is_running "$proxy" && cmp -s "$data/imp-docker-proxy.new" "$data/imp-docker-proxy"; then
+    rm -f "$data/imp-docker-proxy.new"
     return
   fi
+
+  mv -f "$data/imp-docker-proxy.new" "$data/imp-docker-proxy"
   docker rm -f "$proxy" >/dev/null 2>&1 || true
   local privileges context=()
   mapfile -t privileges < <(read_proxy_privileges)
-  mkdir -p "$data"
-  bun build --compile "$IMP_ROOT/packages/daemon/src/docker-proxy/main.ts" \
-    --outfile "$data/imp-docker-proxy" >/dev/null
   [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
   docker run -d --name "$proxy" "${privileges[@]}" \
     --group-add "$(stat -c %g /var/run/docker.sock)" \
@@ -276,6 +286,8 @@ case ${1:-} in
     ;;
   logs) docker logs -f "$name" ;;
   restart)
+    # the proxy first: a changed proxy is replaced before impd comes back
+    start_proxy
     # SIGHUP: impd exits without sleeping the VMs; the entrypoint restarts it.
     # Wait for the old pid to go, so /health answers from the new impd.
     old=$(docker exec "$name" pgrep -f 'bun .*/daemon/src/main.ts' || true)

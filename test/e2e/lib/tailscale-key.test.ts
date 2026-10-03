@@ -17,8 +17,11 @@ function writeFakeBin(binDir: string, opBehaviour: 'key' | 'fail'): string {
       ? `#!/bin/sh\necho call >> '${opCalls}'\necho '${SECRET}'\n`
       : `#!/bin/sh\necho call >> '${opCalls}'\nexit 1\n`;
 
+  // the proxy's compile writes its binary into the data dir, and its run
+  // passes; every other run fails
   const docker =
-    '#!/bin/sh\ncase "$*" in *bin/imp-docker-proxy) exit 0 ;; esac\n' +
+    '#!/bin/sh\ncase "$*" in *imp-docker-proxy.new) : > "$IMP_DEV_DATA/imp-docker-proxy.new"; exit 0 ;; esac\n' +
+    'case "$*" in *bin/imp-docker-proxy) exit 0 ;; esac\n' +
     'case "$1" in run|inspect) exit 1 ;; esac\nexit 0\n';
 
   for (const [name, script] of [
