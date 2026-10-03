@@ -143,6 +143,17 @@ export function buildRuleset(input: RulesetInput): string {
     // a tap with no slot
     '    goto deny',
     '  }',
+
+    // A guest's IPv6 to the host container itself: neighbour discovery
+    // only, as setup-net.sh's ip6tables INPUT, which may be missing, says.
+    // IPv4 is left to iptables.
+    '  chain input {',
+    '    type filter hook input priority filter - 1; policy accept;',
+    '    iifname != "imp*" accept',
+    '    meta nfproto ipv4 accept',
+    '    icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 accept',
+    '    drop',
+    '  }',
     '  chain dns {',
     '    type nat hook prerouting priority dstnat - 1; policy accept;',
 

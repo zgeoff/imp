@@ -51,7 +51,10 @@ container's own network namespace and never touch the host's.
 - `ip6tables INPUT -i imp+` drops everything but router solicitations and neighbour solicitations
   and advertisements with a hop limit of 255. The taps have IPv6 addresses, and impd's API and proxy
   listen on IPv6 too; without this rule a guest reaches them over its tap. A guest's router
-  advertisement or redirect is dropped here, and the taps ignore both anyway ([IPv6](#ipv6)).
+  advertisement or redirect is dropped here, and the taps ignore both anyway ([IPv6](#ipv6)). impd's
+  nft table holds the same rule in an `input` chain, under every policy, so it holds where ip6tables
+  is missing or `ip6tables -S INPUT` fails and setup-net.sh adds none. If impd cannot write its
+  table, no `public`, `box` or `none` imp starts.
 - `ip6tables FORWARD`: no imp-to-imp traffic; a tap may send out of the container's IPv6 default
   route; to a tap, only replies and related ICMPv6, such as packet-too-big. Anything else to or from
   a tap is dropped. The `raw` rpfilter rule is set for IPv6 as well.
@@ -193,9 +196,10 @@ registries (2025-10-09) mark not globally reachable, and multicast; a unit test 
 The anycast services in `2001::/23` that are globally reachable stay reachable.
 
 The host container itself is never reached from a tap: `INPUT -i imp+` drops everything but the
-broker's and the resolver's ports, under every policy ([iptables](#iptables)). The public chain
-covers what the container forwards: the Docker host behind the bridge gateway, the networks past it,
-and the tailnet.
+broker's and the resolver's ports, and IPv6 gets neighbour discovery only, from setup-net.sh's
+ip6tables and from impd's nft `input` chain, under every policy ([iptables](#iptables)). The public
+chain covers what the container forwards: the Docker host behind the bridge gateway, the networks
+past it, and the tailnet.
 
 | Path                                                                | How it closes                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -217,12 +221,17 @@ Known limits:
   and networks in `IMP_EGRESS_DENY`. While a public imp exists and `IMP_HOST_ADDRESSES` is empty,
   impd logs `impd: egress: WARNING: a public imp exists and IMP_HOST_ADDRESSES is empty`, whatever
   `IMP_EGRESS_DENY` holds.
+- The public sets are only as complete as the host data they get. A host address given without its
+  prefix (counted as a /32 or /128), or a network the host joins after the start, stays reachable
+  until `IMP_HOST_ADDRESSES` or `IMP_EGRESS_DENY` covers it. This holds for the broker too: a public
+  imp's plain tunnel is refused the same lists, and reaches what they miss.
 - The addresses are read only when imp-host starts. An IPv6 privacy address that rotates inside the
   same /64 stays covered by the prefix, but an address on a new network (a new DHCP lease elsewhere,
   a new SLAAC prefix from the router) is reachable until `systemctl restart imp-host`. A timer would
   not help: the container's environment is fixed at its start.
-- A route on the Docker host that sends a global address to a private service is outside impd's
-  view. Only `IMP_EGRESS_DENY` closes it.
+- Routing on the Docker host is the operator's boundary. If the host itself routes, NATs or DNATs a
+  global address to a private service (a VPN, a port forward, a load balancer's backend), the public
+  chain and the broker see only the global address and allow it. Only `IMP_EGRESS_DENY` closes it.
 - A host a [grant](../guides/connectors.md) covers is reached through the broker, whatever its
   address, as under every policy.
 - The resolver forwards every name, so a name in a private zone of `IMP_DNS` gets an answer, with

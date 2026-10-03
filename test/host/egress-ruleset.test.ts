@@ -448,3 +448,57 @@ reach g3 2606:4700::1111
     'g3>2606:4700::1111 no',
   ]);
 });
+
+test.skipIf(!canUnshare)(
+  'packets: with no ip6tables rules, a guest reaches the host container over IPv6 only for neighbour discovery',
+  () => {
+    const slots: readonly FirewallSlot[] = [0, 3].map((slot) => ({
+      slot,
+      tap: `imp${String(slot)}`,
+      guestIp: `10.66.0.${String(slot * 4 + 2)}`,
+      guestIp6: `fd12:3456:789a::${String(slot)}:2`,
+      mode: slot === 0 ? 'open' : 'public',
+      cidrs: [],
+      addresses: [],
+    }));
+
+    const table = buildRuleset({ ...BASE, slots, uplinks4: ['up0'], uplinks6: ['up0'] });
+
+    // the namespace has no ip6tables rules, as a container without ip6tables;
+    // the gateway's link-local address and its own on the tap, then IPv4 and
+    // the internet as controls (neighbour discovery must still pass)
+    const result = Bun.spawnSync(
+      [
+        ...buildUnshare(true),
+        'bash',
+        '-euo',
+        'pipefail',
+        '-c',
+        `${PUBLIC_NET}
+quick() { ip netns exec "$1" ping -c 1 -W 1 "$2" >/dev/null 2>&1 && echo "$1>$3 yes" || echo "$1>$3 no"; }
+for n in 0 3; do
+  local6=$(ip -6 addr show dev imp$n scope link | awk '/inet6/ { sub("/.*", "", $2); print $2 }')
+  quick g$n "$local6%eth0" link-local
+  quick g$n fd12:3456:789a::$n:1 tap6
+  quick g$n 10.66.0.$((n * 4 + 1)) tap4
+  reach g$n 2606:4700::1111
+done
+`,
+      ],
+      { env: { ...process.env, TABLE: table } },
+    );
+
+    expect(result.stderr.toString()).toBe('');
+
+    expect(result.stdout.toString().trim().split('\n')).toEqual([
+      'g0>link-local no',
+      'g0>tap6 no',
+      'g0>tap4 yes',
+      'g0>2606:4700::1111 yes',
+      'g3>link-local no',
+      'g3>tap6 no',
+      'g3>tap4 yes',
+      'g3>2606:4700::1111 yes',
+    ]);
+  },
+);

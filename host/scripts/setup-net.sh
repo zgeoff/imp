@@ -105,7 +105,7 @@ if ip6tables -S INPUT >/dev/null 2>&1 && [ -d /proc/sys/net/ipv6 ]; then
   # (and link-local, which its tap's own fe80::/64 route passes)
   rule6 raw PREROUTING -i imp+ -m rpfilter --invert -j DROP
 else
-  echo "setup-net: no ip6tables; impd gives imps no IPv6, and guests' link-local IPv6 to the host is not filtered" >&2
+  echo "setup-net: no ip6tables; impd gives imps no IPv6, and only impd's nft input chain keeps guests' link-local IPv6 from the host container" >&2
 fi
 
 # A guest may not send from another imp's address: the credential broker
