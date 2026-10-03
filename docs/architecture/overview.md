@@ -75,7 +75,10 @@ This page gives the shape and the main decisions. The other architecture pages g
   and its **own** network namespace. That stops accidents, not an escape: root in it can still
   become root on the host. Taps, routes and iptables never touch the host's network. The same image
   runs on bare metal.
-- The host Docker socket is mounted, so impd can build and export OCI images.
+- impd builds and exports OCI images through `imp-docker-proxy`, a second container that holds the
+  host's Docker socket and lets through only the calls impd makes
+  ([the Docker socket](./host-contract.md#the-docker-socket)). That closes the Docker socket path
+  only: `SYS_ADMIN` still lets root out of the container.
 - Data lives in `/var/lib/imp`, backed by a host bind mount
   ([storage](./storage.md#the-data-directory)).
 - The container entrypoint (`host/entrypoint`) sets up storage, the network and Tailscale, then runs

@@ -45,6 +45,9 @@ option (`zfs.arcMaxMiB`) and works out the budget at each start.
   them into [`deploy/imp-host.service`](../../deploy/imp-host.service) and `bootstrap.sh`, the NixOS
   module reads the file, and a test fails when the unit differs from it. With ZFS it starts after
   the pool is imported.
+- `imp-docker-proxy.service`, which imp-host wants and starts after: the only Docker socket imp-host
+  sees ([the Docker socket](#the-docker-socket)). Its arguments are the `proxy` section of the same
+  file.
 - The image: pulled, or loaded from an archive.
 - The Tailscale join, inside the container. The node comes back from its saved state in
   `/var/lib/imp/tailscale` when it can, and joins with the key only when it has no state or the
@@ -111,9 +114,9 @@ The rest of the list:
 **CAUTION:** The container is not a security boundary. Root in it can become root on the host by
 more than one path, so treat code that gets root in the container as root on the host:
 
-- **The Docker socket.** It can start a privileged container. A socket proxy that allows only the
-  calls impd makes ([#83](https://github.com/zgeoff/imp/issues/83)) would close this path, and only
-  this one.
+- **The Docker socket: closed by [the proxy](#the-docker-socket).** imp-host has no `docker.sock` of
+  the host's. Its socket is imp-docker-proxy's, which refuses a privileged container, a bind mount
+  and every other call impd does not make. That closes this path, and only this one.
 - **`SYS_ADMIN` in the host's user namespace.** With AppArmor unconfined and Docker's default
   seccomp, which allows `mount` under `SYS_ADMIN`, root can mount a new procfs or sysfs. It can then
   write `kernel.core_pattern` or `uevent_helper` there, and the host kernel runs that program as
@@ -124,6 +127,59 @@ cannot load kernel modules (`SYS_MODULE`), cannot do raw I/O (`SYS_RAWIO`), cann
 their modes by handle (`DAC_READ_SEARCH`), and cannot write the host's sysctls or cgroups by
 mistake. A real boundary needs the container to run without `SYS_ADMIN` in the host's user
 namespace, which the jailer's mounts need today.
+
+## The Docker socket
+
+impd builds, pulls and exports images with the `docker` CLI. imp-host does not mount the host's
+`/var/run/docker.sock`. A second container from the same image, `imp-docker-proxy`, holds it and
+serves `/run/imp-docker/docker.sock`. imp-host mounts `/run/imp-docker` read-only and sets
+`DOCKER_HOST` to that socket.
+
+**CAUTION:** The proxy closes the Docker socket path only. imp-host keeps `SYS_ADMIN`, and root in
+it can still become root on the host through a new procfs and `core_pattern`
+([privileges](#privileges)). The container is still no security boundary.
+
+The proxy, [`packages/daemon/src/docker-proxy/`](../../packages/daemon/src/docker-proxy/), lets
+through the calls impd's CLI makes and refuses every other with a 403 and a log line:
+
+| Call                                                     | What passes                                                                                                                                                                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HEAD`/`GET /_ping`, `/version`                          | As they are                                                                                                                                                                                                                  |
+| `GET /images/{name}/json`                                | As it is                                                                                                                                                                                                                     |
+| `POST /images/create` (pull)                             | `fromImage` and `tag` only, an empty body. Not a registry on `localhost`, an IP address or link-local, and not the repository of `IMP_HOST_IMAGE`, so a pull cannot move the tag both containers run                         |
+| `POST /build`                                            | The classic builder (`version=1`). Every `t` is `imp/<name>:latest`; `dockerfile` is a path in the context; `buildargs` holds only `BUILDKIT_SYNTAX=docker/dockerfile:1`; `q`, `rm`, `forcerm`. Every other param is refused |
+| `POST /containers/create`                                | Only `<image> /bin/true` at the CLI's defaults. The engine gets a body the proxy builds: that image, `/bin/true`, network `none`, and a label with the proxy's token                                                         |
+| `GET /containers/{id}/export`, `DELETE /containers/{id}` | Only a container whose label holds the proxy's token, by its full ID. `rm` forwards `force=1&v=1`                                                                                                                            |
+
+- **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
+  that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
+  engine a new request with that same path, the checked query, and only `Content-Type`,
+  `X-Registry-Auth` and `X-Registry-Config`.
+- **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach, exec or
+  BuildKit session.
+- **The token:** made once, in `/var/lib/imp-docker-proxy/token` (0600), which only the proxy
+  mounts. An image cannot carry it, because imp-host never sees it.
+- **Bodies:** a build context streams through, up to `IMP_BUILD_CONTEXT_MAX_MIB`; a create body is
+  capped at 1 MiB, chunked or not. A 500 MB context and a 3.2 GB export take the same time through
+  the proxy as direct, and the proxy stays near 43 MB of memory.
+- **The container:** the same image, as uid and gid 65534 plus the group of the host's socket, with
+  `--cap-drop ALL`, `no-new-privileges`, a read-only root and `--network none`. It gets
+  `IMP_HOST_IMAGE` and `IMP_BUILD_CONTEXT_MAX_MIB` by name, never the env file and its Tailscale
+  key. `/run/imp-docker` (0700) belongs to 65534; imp-host's root reaches the 0600 socket through
+  `DAC_OVERRIDE`. If the socket's group does not let the proxy in, its unit fails to start.
+- **Units:** `imp-host.service` has `Wants=` and `After=` on the proxy, not `BindsTo=`. A proxy that
+  stops fails image work only; running imps keep running. The proxy unit waits up to 30 s for its
+  socket and restarts always. Compose has a healthcheck and `depends_on`; the NixOS module loads the
+  image in `imp-host-image.service`, which both units need.
+
+What stays open through the proxy, by design or until later work:
+
+- A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
+  through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
+  because the classic builder pulls it itself.
+- A build has no memory limit and may use all host RAM; a pull can fill the disk.
+- The classic builder is deprecated upstream. When the engine drops it, builds stop; BuildKit
+  through the proxy is later work.
 
 ## Firewall
 

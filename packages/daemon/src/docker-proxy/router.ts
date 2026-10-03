@@ -106,9 +106,9 @@ function findRoute(method: string, path: string): Route | null {
   return null;
 }
 
-// `target` is the request target as the client sent it: the path and query,
-// not decoded. A path with an escape, a dot segment or an empty segment is
-// refused rather than normalised, so no two spellings reach one route.
+// `target` is the path and query, not decoded; Bun's URL has already
+// resolved dot segments and `\`. One left, an escape or an empty segment is
+// refused, so the proxy checks and forwards one spelling.
 export function findRequestRoute(method: string, target: string): RouteResult {
   const queryStart = target.indexOf('?');
   const rawPath = queryStart === -1 ? target : target.slice(0, queryStart);

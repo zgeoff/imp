@@ -262,10 +262,10 @@ next.
 or a push to `main` changes `deploy/` or the test ([Bootstrap a server](./install.md#test-it)). It
 is not a required check.
 
-`deploy/imp-host.args.json` holds the imp-host container's `docker run` arguments. After an edit,
-`bun run render:deploy` writes them into `deploy/imp-host.service` and `bootstrap.sh`'s copy, and
-`bun test` fails until it has (`scripts/render-imp-host.test.ts`). The NixOS module reads the file
-itself.
+`deploy/imp-host.args.json` holds the `docker run` arguments of imp-host and, under `proxy`, of
+imp-docker-proxy. After an edit, `bun run render:deploy` writes them into both units, their copies
+in `bootstrap.sh` and the privileges blocks of `deploy/compose.yaml`, and `bun test` fails until it
+has (`scripts/render-imp-host.test.ts`). The NixOS module reads the file itself.
 
 `.github/workflows/nix.yml` checks the format of the `.nix` files and runs `nix flake check` when
 `flake.nix`, `flake.lock`, `deploy/` or `tailscale-up.sh` change: the NixOS module's eval check, and

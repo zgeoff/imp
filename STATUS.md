@@ -122,8 +122,12 @@ From the milestone work:
   OOM report, a restart and a rollback to `IMP_JAILER=false`. The host container runs without
   `--privileged` ([#75](https://github.com/zgeoff/imp/issues/75)), on an explicit capability list
   ([privileges](./docs/architecture/host-contract.md#privileges)). That stops accidents, not an
-  escape: root in the container can still become root on the host, through the Docker socket or
-  through `SYS_ADMIN` (a new procfs, then `core_pattern`), so it is no security boundary.
+  escape: root in the container can still become root on the host through `SYS_ADMIN` (a new procfs,
+  then `core_pattern`), so it is no security boundary. The Docker socket path is closed
+  ([#83](https://github.com/zgeoff/imp/issues/83)): imp-host reaches Docker only through
+  `imp-docker-proxy`, which lets through the calls impd makes
+  ([the Docker socket](./docs/architecture/host-contract.md#the-docker-socket)), and the `socket`
+  e2e suite checks the refusals. Builds use Docker's deprecated classic builder through it.
 - Credential connectors ([#15](https://github.com/zgeoff/imp/issues/15)) reach execs only: services
   in `/etc/imp/services.d` get no broker variables, and a tool that ignores `HTTPS_PROXY` or keeps
   its own trust store bypasses the broker ([connectors](./docs/guides/connectors.md#limits)).

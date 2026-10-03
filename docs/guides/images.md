@@ -43,8 +43,11 @@ Later images can say `FROM imp/base`. `--file <path>` names a Dockerfile inside 
   build leaves an audit row.
 - **What the build may do.** impd runs one fixed command:
   `docker build --quiet --build-arg BUILDKIT_SYNTAX=docker/dockerfile:1 -t imp/<name> -f <file> -`.
-  The client cannot pass build arguments, secrets, `--network` or `--allow`, and the pinned frontend
-  overrides a `# syntax=` line. The Dockerfile path must stay inside the context.
+  The client cannot pass build arguments, secrets, `--network` or `--allow`. The Dockerfile path
+  must stay inside the context. The image has no buildx, so the build runs on Docker's classic
+  builder, which ignores `BUILDKIT_SYNTAX` and a `# syntax=` line, and has no `RUN --mount`.
+  `imp-docker-proxy` allows only that builder
+  ([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
 
 **CAUTION:** A `RUN` step runs on the impd host's Docker with the default bridge network. It can
 reach the internet and anything the host's bridge can reach. Give `manage` only to callers you trust
