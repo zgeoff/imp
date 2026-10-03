@@ -14,6 +14,9 @@ const RESERVATION_TTL_MS = 20_000;
 // use may pass the budget until the next pass sleeps an imp.
 export const ENFORCE_INTERVAL_MS = 5000;
 
+// the trigger of an enforce pass's sleeps, as the slept event's detail.trigger
+export const ENFORCE_TRIGGER = 'RAM over budget';
+
 interface AwakeImp {
   readonly id: string;
   readonly name: string;
@@ -492,7 +495,7 @@ export function createRamGovernor(deps: RamGovernorDeps): RamGovernor {
       admission.run(async () => {
         const room = await makeRoom(
           null,
-          'RAM over budget',
+          ENFORCE_TRIGGER,
           'sleepAll',
           (usage) => usage.usedMib - deps.budgetMib,
         );

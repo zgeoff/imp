@@ -13,7 +13,19 @@ test('a slept event is a sleep from its time less its duration', () => {
 
   const endAt = Date.parse('2026-10-03T00:02:54.584Z');
 
-  expect(parseSleepSpan(line)).toEqual({ startAt: endAt - 1145, endAt });
+  expect(parseSleepSpan(line)).toEqual({ startAt: endAt - 1145, endAt, isEnforce: false });
+});
+
+test('a sleep by the enforce pass says so', () => {
+  const line = JSON.stringify({
+    v: 1,
+    at: '2026-10-03T00:02:54.584Z',
+    ev: 'ImpChanged',
+    reason: 'slept',
+    detail: { trigger: 'RAM over budget', durationMs: 900 },
+  });
+
+  expect(parseSleepSpan(line)?.isEnforce).toBe(true);
 });
 
 test('every other event is no sleep', () => {

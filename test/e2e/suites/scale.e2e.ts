@@ -70,6 +70,9 @@ interface BudgetMonitor {
 // null for a sample lost to a busy impd, which is not a budget violation; a
 // bad smaps read throws, and stop() rethrows it
 async function readBudgetSample(): Promise<BudgetSample | null> {
+  // before the reads, so an overshoot never looks shorter than it was
+  const at = Date.now();
+
   const info = await readInfo().catch(() => null);
 
   if (info === null) {
@@ -81,7 +84,7 @@ async function readBudgetSample(): Promise<BudgetSample | null> {
   const memory = parseFirecrackerMemory(smaps.stdout);
 
   return {
-    at: Date.now(),
+    at,
     ramUsedMib: info.ramUsedMib,
     awake: info.awakeCount,
     firecrackerPssMib: memory.pssMib,
@@ -123,18 +126,19 @@ async function startBudgetMonitor(): Promise<BudgetMonitor> {
 }
 
 // A guest grows past its boot reserve after admission, so use may pass the
-// budget until a governor sleep ends; the next enforce pass starts one
-// (findBudgetBreaches has the rules).
-const OVERSHOOT_LIMITS: OvershootLimits = {
-  budgetMib: config.ramBudgetMib,
-  maxStartMs: ENFORCE_INTERVAL_MS + BUDGET_SAMPLE_MS,
-  maxOverMib: Math.ceil(
-    (config.scaleMemoryMib *
-      loadConfig({ IMP_BOOT_RESERVE_PERCENT: process.env['IMP_BOOT_RESERVE_PERCENT'] })
-        .bootReservePercent) /
-      100,
-  ),
-};
+// budget until a governor sleep ends (findBudgetBreaches has the rules). Read
+// at run time: the ksm suite changes IMP_BOOT_RESERVE_PERCENT.
+function readOvershootLimits(): OvershootLimits {
+  const reservePercent = loadConfig({
+    IMP_BOOT_RESERVE_PERCENT: process.env['IMP_BOOT_RESERVE_PERCENT'],
+  }).bootReservePercent;
+
+  return {
+    budgetMib: config.ramBudgetMib,
+    maxStartMs: ENFORCE_INTERVAL_MS + BUDGET_SAMPLE_MS,
+    maxOverMib: Math.ceil((config.scaleMemoryMib * (100 - reservePercent)) / 100),
+  };
+}
 
 // impd's figure, and what the VMs own read from smaps here so a wrong figure
 // from impd cannot hide a breach; full PSS adds clean file pages the governor
@@ -148,7 +152,7 @@ function findViolations(monitor: BudgetMonitor): readonly string[] {
   return BUDGET_SERIES.flatMap(([name, read]) => {
     const usage = monitor.samples.map((sample) => ({ at: sample.at, usedMib: read(sample) }));
 
-    return findBudgetBreaches(usage, monitor.sleeps, OVERSHOOT_LIMITS).map(
+    return findBudgetBreaches(usage, monitor.sleeps, readOvershootLimits()).map(
       (breach) => `${name} ${String(breach.maxOverMib)} MiB over the budget: ${breach.why}`,
     );
   });
