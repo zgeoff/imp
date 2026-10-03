@@ -104,3 +104,21 @@ test('an overshoot past the most a guest grows over its reserve fails, sleep or 
     },
   ]);
 });
+
+test("a dead enforce loop's overshoot still open at the end fails the final check", () => {
+  // the last sample is inside the grace a running check gives a sleep under way
+  const samples = buildSamples([2700, ...buildOver(12)]);
+  const admission = { startAt: 0, endAt: 1000, isEnforce: false };
+
+  expect(findBudgetBreaches(samples, [admission], LIMITS)).toBeEmpty();
+
+  expect(findBudgetBreaches(samples, [admission], LIMITS, 'final')).toEqual([
+    { startAt: 700, maxOverMib: 14, why: 'still over the budget when the run ended' },
+  ]);
+});
+
+test('the final check passes a run that ends under the budget', () => {
+  const samples = buildSamples([2700, 2825, 2600]);
+
+  expect(findBudgetBreaches(samples, [], LIMITS, 'final')).toBeEmpty();
+});
