@@ -762,12 +762,11 @@ test('a start that requires the broker passes it to impd', async () => {
   expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
 });
 
-test('an impd without execRequire gets no start that requires anything', async () => {
-  await using ctx = await setupExecTest();
-
+// impd answers system.info as an older one would: execRequire is not true;
+// `calls` holds the path of each request
+function buildOlderFetch() {
   const calls: string[] = [];
 
-  // impd answers as an older one would: execRequire is not true
   const readAsOlder = async (request: Request): Promise<Response> => {
     const path = new URL(request.url).pathname;
 
@@ -784,19 +783,52 @@ test('an impd without execRequire gets no start that requires anything', async (
     return new Response(text.replace('"execRequire":true', '"execRequire":false'), response);
   };
 
-  const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: readAsOlder });
+  return { calls, fetch: readAsOlder };
+}
 
-  const refused = await client
-    .openExec('dev', ['tick'], { require: ['broker'] })
-    .catch((error: unknown) => error);
+test('an impd without execRequire gets no start that requires anything', async () => {
+  await using ctx = await setupExecTest();
+
+  const older = buildOlderFetch();
+  const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: older.fetch });
+
+  const handle = await client.openExec('dev', ['tick'], { require: ['broker'] });
+  const refused = await handle.exit.catch((error: unknown) => error);
 
   expect(refused).toBeInstanceOf(ExecError);
 
   expect(refused).toMatchObject({
     code: 'PRECONDITION_FAILED',
-    data: { reason: 'broker_not_ready' },
+    data: { reason: 'impd_outdated' },
   });
 
-  expect(calls).toEqual(['/rpc/system/info']);
+  expect(older.calls).toContain('/rpc/system/info');
+  expect(ctx.requests).toEqual([]);
+});
+
+test('a session opened directly asks impd before it sends a start that requires anything', async () => {
+  await using ctx = await setupExecTest();
+
+  const older = buildOlderFetch();
+
+  const session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['tick'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: older.fetch,
+  });
+
+  const outcome = await session.outcome;
+
+  expect(outcome).toMatchObject({
+    kind: 'failed',
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'impd_outdated' },
+  });
+
+  expect(older.calls).toEqual(['/rpc/system/info']);
   expect(ctx.requests).toEqual([]);
 });
