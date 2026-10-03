@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import { getThroughProxy } from '../lib/http';
@@ -14,7 +15,7 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
-import { REPO_ROOT, runChecked, runCommand } from '../lib/instance';
+import { REPO_ROOT, instance, readToken, runChecked, runCommand } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -231,4 +232,202 @@ test('a FROM image the host lacks is pulled by impd, under the proxy’s pull ru
 
   expect(result.exitCode).not.toBe(0);
   expect(result.stderr).toContain("registry localhost:5000 is the host's own");
+});
+
+// #145: what the engine would fetch on its own is refused before the build,
+// and a listener on the host's loopback, which the test owns, sees nothing
+test('an ADD from a URL is refused, in every spelling, and its listener sees no request', async () => {
+  const requests: string[] = [];
+
+  using listener = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: (request) => {
+      requests.push(request.url);
+
+      return new Response('probe');
+    },
+  });
+
+  const url = `http://127.0.0.1:${String(listener.port)}/probe`;
+
+  const spellings = [
+    `ADD ${url} /probe`,
+    `ADD ["${url}", "/probe"]`,
+    `ADD h"ttp:"//127.0.0.1:${String(listener.port)}/probe /probe`,
+    `ADD git@127.0.0.1:org/repo.git /src`,
+  ];
+
+  const stderrs: string[] = [];
+
+  for (const [index, line] of spellings.entries()) {
+    const dir = writeContext(`add-url-${String(index)}`, `FROM busybox:1.37\n${line}\n`);
+
+    const result = await tryImp(['image', 'build', dir, '--name', rejected]);
+
+    expect(result.exitCode).not.toBe(0);
+
+    stderrs.push(result.stderr);
+  }
+
+  expect(stderrs[0]).toContain(`ADD ${url} is refused`);
+  expect(stderrs[1]).toContain(`ADD ${url} is refused`);
+  expect(stderrs[2]).toContain('an ambiguous form: the ADD source');
+  expect(stderrs[3]).toContain('ADD git@127.0.0.1:org/repo.git is refused');
+  expect(requests).toEqual([]);
+});
+
+test('ONBUILD is refused, also in a local stage a later FROM runs', async () => {
+  const dir = writeContext(
+    'onbuild',
+    'FROM busybox:1.37 AS base\nONBUILD RUN echo trigger > /t\nFROM base\nRUN true\n',
+  );
+
+  const result = await tryImp(['image', 'build', dir, '--name', rejected]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('ONBUILD is refused');
+});
+
+test('a local ADD of a tar still extracts, COPY --from a stage and an image by digest still build', async () => {
+  await runChecked(['docker', 'pull', '--quiet', 'busybox:1.37']);
+
+  const inspected = await runChecked([
+    'docker',
+    'image',
+    'inspect',
+    '--format',
+    '{{index .RepoDigests 0}}',
+    'busybox:1.37',
+  ]);
+
+  const repoDigest = inspected.trim();
+
+  const dir = writeContext(
+    'local-add',
+    [
+      'FROM busybox:1.37 AS build',
+      'RUN echo staged > /staged',
+      'FROM busybox:1.37',
+      'ADD files.tar /extracted/',
+      'COPY --from=build /staged /staged',
+      `COPY --from=${repoDigest} /bin/busybox /copied-busybox`,
+      'RUN --mount=type=bind,from=busybox:1.37,target=/m test -x /m/bin/busybox',
+    ].join('\n'),
+  );
+
+  writeFileSync(join(dir, 'inner.txt'), 'inside the tar\n');
+
+  await runChecked(['tar', '-C', dir, '-cf', join(dir, 'files.tar'), 'inner.txt']);
+
+  try {
+    await runImp('image', 'build', dir, '--name', onHost);
+
+    const seen = await runChecked([
+      'docker',
+      'run',
+      '--rm',
+      `imp/${onHost}:latest`,
+      'sh',
+      '-c',
+      'cat /extracted/inner.txt /staged; test -x /copied-busybox && echo copied',
+    ]);
+
+    expect(seen.trim().split('\n')).toEqual(['inside the tar', 'staged', 'copied']);
+  } finally {
+    await tryImp(['image', 'rm', onHost]);
+  }
+});
+
+// a raw upload, as an SDK sends it: the CLI packs only the Dockerfile it
+// was told to, so the frontend's fallbacks need a tar of our own
+async function sendRawBuild(
+  dir: string,
+  files: readonly string[],
+  name: string,
+): Promise<Response> {
+  const tar = await runChecked([
+    'sh',
+    '-c',
+    `tar -C '${dir}' -cf - ${files.join(' ')} | base64 -w0`,
+  ]);
+
+  const token = await readToken();
+
+  return fetch(`${instance.apiUrl}${IMAGE_BUILD_PATH}?name=${name}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-tar' },
+    body: Buffer.from(tar.trim(), 'base64'),
+  });
+}
+
+test('a context with only a lowercase dockerfile builds it, as the frontend falls back to it', async () => {
+  const dir = join(buildDir, 'lowercase');
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'dockerfile'), 'FROM busybox:1.37\nRUN echo lower > /which\n');
+
+  try {
+    const response = await sendRawBuild(dir, ['dockerfile'], onHost);
+
+    expect(response.status).toBe(200);
+
+    const which = await runChecked([
+      'docker',
+      'run',
+      '--rm',
+      `imp/${onHost}:latest`,
+      'cat',
+      '/which',
+    ]);
+
+    expect(which.trim()).toBe('lower');
+  } finally {
+    await tryImp(['image', 'rm', onHost]);
+  }
+});
+
+// the engine reads neither ignore file from a context sent as the body: what
+// impd checks is every file the tar holds (the CLI applies them as it packs)
+test('the engine applies no ignore file to an uploaded context, Dockerfile.dockerignore included', async () => {
+  const dir = writeContext('ignore-names', 'FROM busybox:1.37\nCOPY . /ctx/\n');
+
+  writeFileSync(join(dir, 'Dockerfile.dockerignore'), 'by-dockerfile.txt\n');
+  writeFileSync(join(dir, '.dockerignore'), 'by-default.txt\n');
+  writeFileSync(join(dir, 'by-dockerfile.txt'), 'x');
+  writeFileSync(join(dir, 'by-default.txt'), 'y');
+
+  try {
+    const files = [
+      'Dockerfile',
+      'Dockerfile.dockerignore',
+      '.dockerignore',
+      'by-dockerfile.txt',
+      'by-default.txt',
+    ];
+
+    const response = await sendRawBuild(dir, files, onHost);
+
+    expect(response.status).toBe(200);
+
+    const listed = await runChecked([
+      'docker',
+      'run',
+      '--rm',
+      `imp/${onHost}:latest`,
+      'ls',
+      '-A',
+      '/ctx',
+    ]);
+
+    expect(listed.trim().split('\n')).toEqual([
+      '.dockerignore',
+      'Dockerfile',
+      'Dockerfile.dockerignore',
+      'by-default.txt',
+      'by-dockerfile.txt',
+    ]);
+  } finally {
+    await tryImp(['image', 'rm', onHost]);
+  }
 });
