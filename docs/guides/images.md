@@ -60,10 +60,11 @@ with that.
 
 `--on-host` builds from a directory on the impd host instead, and uploads nothing. The path must be
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
-impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`.
-An image you built with plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes
-`--build-arg BASE=...` to stack on another base; use `docker build` and `imp image add` for that. An
-imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
+impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`,
+and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An image you built with
+plain `docker build` goes in with `imp image add <ref>`. `images/dev` takes `--build-arg BASE=...`
+to stack on another base; use `docker build` and `imp image add` for that. An imp's own disk can be
+an image too: a [template](./templates.md) copies a set-up imp into new ones.
 
 The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
 `context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
