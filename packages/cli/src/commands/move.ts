@@ -57,6 +57,10 @@ export async function runMove(run: MoveRun): Promise<void> {
   const plan = await run.from.moves.prepare({
     name: run.name,
     stop: run.stop,
+
+    // a person typed --stop: the imp's leases end rather than refuse it, as
+    // with imp stop
+    ...(run.stop && { force: true }),
     targetStorage: info.storage.backend,
     ...(facts !== null && { target: facts }),
   });
@@ -173,7 +177,10 @@ export const moveCommand = defineCommand({
   args: {
     name: nameArg,
     to: { type: 'positional', description: 'saved host to move it to', required: true },
-    stop: { type: 'boolean', description: 'stop a running or sleeping imp first: a cold move' },
+    stop: {
+      type: 'boolean',
+      description: 'stop a running or sleeping imp first, ending its leases: a cold move',
+    },
     resume: { type: 'boolean', description: 'commit a move the target verified' },
     abort: { type: 'boolean', description: 'end a move; the imp stays here' },
   },
