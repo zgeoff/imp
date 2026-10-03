@@ -38,6 +38,20 @@ const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 const PINNED_FRONTEND = 'BUILDKIT_SYNTAX=docker/dockerfile:1';
 const SEED_REF = 'ubuntu:24.04';
 
+// The classic builder, said outright: imp-host has no buildx, and a CLI that
+// drops the automatic fallback would fail every build instead.
+function buildDockerBuildEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+
+  return { ...env, DOCKER_BUILDKIT: '0' };
+}
+
 const InspectSchema = z
   .array(z.object({ Id: z.string(), Config: z.unknown(), Size: z.number().optional() }))
   .length(1);
@@ -299,7 +313,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       const tag = `imp/${NameSchema.parse(name)}:latest`;
       const fileArgs = dockerfile === undefined ? [] : ['-f', join(contextDir, dockerfile)];
 
-      await runChecked(['docker', 'build', '--quiet', '-t', tag, ...fileArgs, contextDir]);
+      await runChecked(['docker', 'build', '--quiet', '-t', tag, ...fileArgs, contextDir], {
+        env: buildDockerBuildEnv(),
+      });
 
       return createImageFromRef(tag, name);
     },
@@ -325,7 +341,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       // docker keeps its own copy of the context while it builds
       const result = await deps.diskBudget.withRoom(tarBytes, () =>
-        runCommand(argv, { stdinFile: tarPath, signal }),
+        runCommand(argv, { env: buildDockerBuildEnv(), stdinFile: tarPath, signal }),
       );
 
       // nobody waits for the image: the build was killed, or its tag is left
