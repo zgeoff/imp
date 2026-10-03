@@ -19,9 +19,12 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 
 The image, `impd --version`, `imp --version` and every `package.json` carry the same version: the
 tag without the `v`. The NixOS module defaults its image to `imp-host:<root package.json version>`,
-so a flake pinned to `vX.Y.Z` runs the `X.Y.Z` image ([NixOS](docs/guides/nixos.md#the-image)). The
-host image, the kernel and the drive are x86_64 only, because Firecracker in the image and the guest
-kernel config are.
+so a flake pinned to `vX.Y.Z` runs the `X.Y.Z` image ([NixOS](docs/guides/nixos.md#the-image)).
+`deploy/bootstrap.sh`, `deploy/upgrade.sh`, both units, the env template, `deploy/compose.yaml` and
+the image lines of the install and operations guides name `imp-host:X.Y.Z` too: the release PR bumps
+them through release-please `generic` markers
+([run the release image](docs/guides/install.md#get-it)). The host image, the kernel and the drive
+are x86_64 only, because Firecracker in the image and the guest kernel config are.
 
 Check an asset or the image:
 

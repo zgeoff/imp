@@ -38,19 +38,26 @@ deploy/upgrade.sh
 
 Take `upgrade.sh` from the new image, not from the release the host runs. A host on the release
 before the Docker socket proxy must: its own `upgrade.sh` refuses the new image, whose
-`imp.host-contract` label is `socket-proxy`.
+`imp.host-contract` label is `socket-proxy`. Each release's `upgrade.sh` moves the host to that
+release, so pick the release in the image you take it from:
+
+<!-- x-release-please-start-version -->
 
 ```sh
-docker pull ghcr.io/zgeoff/imp-host:latest
-docker run --rm ghcr.io/zgeoff/imp-host:latest cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+docker pull ghcr.io/zgeoff/imp-host:0.26.0
+docker run --rm ghcr.io/zgeoff/imp-host:0.26.0 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
 bash upgrade.sh
 ```
 
-1. It pulls `IMP_HOST_IMAGE` (from the environment, else `/etc/imp/imp-host.env`). It stops there
-   when the host already runs that image. It refuses an image from before the Docker socket proxy
-   once the unit or compose file gives imp-host the proxy's socket, and an image from before the
-   unprivileged host (no `imp.host-contract` label) once it runs without `--privileged`. To go back
-   past either, run `deploy/bootstrap.sh` of that image's release.
+<!-- x-release-please-end -->
+
+1. It pulls the image of its own release, unless `IMP_HOST_IMAGE` names another: from the
+   environment, else a pin in `/etc/imp/imp-host.env`. It stops there when the host already runs
+   that image. With the systemd unit, it refuses an image from the environment that the new units
+   would not run: pin it in the env file instead. It refuses an image from before the Docker socket
+   proxy once the unit or compose file gives imp-host the proxy's socket, and an image from before
+   the unprivileged host (no `imp.host-contract` label) once it runs without `--privileged`. To go
+   back past either, run `deploy/bootstrap.sh` of that image's release.
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It installs the new image's seccomp profile in `/etc/imp/imp-host.seccomp.json` and, for the
@@ -62,6 +69,17 @@ bash upgrade.sh
    host's `docker.sock`. Then take the `imp-docker-proxy` service and imp-host's volumes from this
    release's `deploy/compose.yaml`. The proxy closes the Docker socket path only: `SYS_ADMIN` still
    lets root out of the container.
+
+   An env file line `IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest`, which every env file had before
+   the units named their release, is the old template's and no pin. It becomes the commented pin, so
+   the units run their release's image; the file before stays as `imp-host.env.bak`. Any other value
+   is a pin and stays. To follow `latest` on purpose, pin `IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host`,
+   which Docker reads as `latest`.
+
+   With compose, it writes `IMP_HOST_IMAGE` to the `.env` next to the compose file, and keeps the
+   file before as `.env.bak`. Compose reads that `.env` at each `up`, so a later
+   `docker compose up -d` keeps the new image, not the default of an older compose file.
+
 4. It enables and restarts `imp-docker-proxy`, then restarts the host (with compose, `up -d` of both
    services, or of imp-host alone when the file has no proxy). It waits for `/health` to report
    ready, prints how to roll back (`docker tag` the old image ID, then

@@ -9,7 +9,10 @@
 #
 #   docker run --rm <new image> cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
 #
-# 1. Pulls the image. Nothing happens when the host already runs it. Refuses
+# 1. Pulls the image: this script's own release, unless IMP_HOST_IMAGE (the
+#    environment, then the env file) names another. Nothing happens when the
+#    host already runs it. Refuses an image that the restarted units would
+#    not run. Refuses
 #    an image older than the Docker socket proxy (imp.host-contract other
 #    than socket-proxy) once the unit or compose file gives imp-host the
 #    proxy's socket, and an image with no label once it runs without
@@ -23,16 +26,20 @@
 #    --compose, the compose file is the operator's and stays), restarts
 #    imp-docker-proxy, then the host, on the new image and waits for impd.
 #    Local changes to a unit belong in a drop-in (imp-host.service.d/),
-#    which stays.
+#    which stays. An env file line IMP_HOST_IMAGE=...:latest, as every env
+#    file had before the units named their release, is the old template's,
+#    not a pin: it becomes a comment, and the file before is kept as .bak.
+#    With --compose, IMP_HOST_IMAGE goes to the .env next to the compose
+#    file (its .bak too), so a later `docker compose up -d` keeps the image.
 # 4. Prints how many imps will boot cold and how many run outdated parts, then
 #    lists the imps: a NOTE says which boot cold on their next wake, and why
 #    (docs/guides/operations.md#upgrade).
 #
 # Needs docker, curl and jq on the host.
 #
-# Env: IMP_HOST_IMAGE (default: from IMP_HOST_ENV_FILE, else
-#      ghcr.io/zgeoff/imp-host:latest) must be the image the unit or the
-#      compose file runs. IMP_HOST_ENV_FILE defaults to /etc/imp/imp-host.env.
+# Env: IMP_HOST_IMAGE (default: from IMP_HOST_ENV_FILE, else this script's
+#      release) must be the image the unit or the compose file runs.
+#      IMP_HOST_ENV_FILE defaults to /etc/imp/imp-host.env.
 #      IMP_HOST_UNIT_FILE defaults to /etc/systemd/system/imp-host.service,
 #      IMP_DOCKER_PROXY_UNIT_FILE to /etc/systemd/system/imp-docker-proxy.service,
 #      IMP_HOST_SECCOMP_FILE to /etc/imp/imp-host.seccomp.json. With
@@ -47,6 +54,11 @@ seccomp_file=${IMP_HOST_SECCOMP_FILE:-/etc/imp/imp-host.seccomp.json}
 image_deploy=/usr/local/share/imp/deploy
 health=http://127.0.0.1:7070/health
 compose_file=
+# The image of this script's release, as its units name it; release-please
+# bumps it.
+readonly release_image=ghcr.io/zgeoff/imp-host:0.26.0 # x-release-please-version
+# The image line every env file had before the units named their release.
+readonly legacy_image_line=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
 
 usage() {
   echo "usage: $0 [--compose <file>]" >&2
@@ -62,15 +74,76 @@ case ${1:-} in
   *) usage ;;
 esac
 
-# the image the deploy files run: the environment, then the env file
+# the env file's pin, or nothing: its last non-empty IMP_HOST_IMAGE line
+# that is not the legacy one, which migrate_env_file turns into a comment
+pinned_image() {
+  local line
+  line=$(grep -E '^IMP_HOST_IMAGE=.' "$env_file" 2>/dev/null | grep -vxF "$legacy_image_line" | tail -n 1 || true)
+  echo "${line#IMP_HOST_IMAGE=}"
+}
+
+# the image to move to: the environment, then the env file's pin, then this
+# script's release
 read_image() {
   if [ -n "${IMP_HOST_IMAGE:-}" ]; then
     echo "$IMP_HOST_IMAGE"
     return
   fi
-  local line
-  line=$(grep -E '^IMP_HOST_IMAGE=.' "$env_file" 2>/dev/null | tail -n 1 || true)
-  echo "${line#IMP_HOST_IMAGE=}" | grep . || echo ghcr.io/zgeoff/imp-host:latest
+  pinned_image | grep . || echo "$release_image"
+}
+
+# the image the units run after the restart: the env file's pin, else the
+# default of UNIT (the new one when the image gives it) or of a drop-in,
+# which systemd reads after it; empty when none names one
+unit_image() {
+  local pin
+  pin=$(pinned_image)
+  if [ -n "$pin" ]; then
+    echo "$pin"
+    return
+  fi
+  { cat "$1"; cat "$unit_file".d/*.conf 2>/dev/null || true; } \
+    | sed -n 's/^Environment=IMP_HOST_IMAGE=//p' | tail -n 1
+}
+
+# rewrite_file PATH AWK_PROGRAM [AWK_ARGS...]: PATH through awk, by rename,
+# with the old PATH kept as PATH.bak. Copies keep PATH's mode: the env file
+# holds secrets. Exits on a failure, before anything restarts.
+rewrite_file() {
+  local path=$1
+  shift
+  if ! { cp -p "$path" "$path.bak" && cp -p "$path" "$path.new" \
+    && awk "$@" "$path.bak" >"$path.new" && mv "$path.new" "$path"; }; then
+    rm -f "$path.new"
+    echo "upgrade: cannot rewrite $path; nothing restarted, the host still runs $old" >&2
+    exit 1
+  fi
+}
+
+# The legacy line becomes the commented pin, as in the env template: the
+# units then run their release's image. Any other value is a pin and stays.
+migrate_env_file() {
+  [ -f "$env_file" ] && grep -qxF "$legacy_image_line" "$env_file" || return 0
+  # shellcheck disable=SC2016 # an awk program
+  rewrite_file "$env_file" -v legacy="$legacy_image_line" -v pin="# IMP_HOST_IMAGE=$release_image" \
+    '$0 == legacy { print pin; next } { print }'
+  echo "upgrade: $env_file: $legacy_image_line was the old template's line, not a pin; it is a comment now, and the units run their release's image (the file before: $env_file.bak)"
+}
+
+# IMP_HOST_IMAGE=$image in the .env next to the compose file, which compose
+# reads at every `up`: without it, a later `up -d` runs the file's default
+write_compose_env() {
+  local env
+  env=$(dirname "$compose_file")/.env
+  if [ ! -f "$env" ]; then
+    echo "IMP_HOST_IMAGE=$image" >"$env"
+  elif grep -qxF "IMP_HOST_IMAGE=$image" "$env" && [ "$(grep -c '^IMP_HOST_IMAGE=' "$env")" = 1 ]; then
+    return
+  else
+    rewrite_file "$env" -v line="IMP_HOST_IMAGE=$image" \
+      '/^IMP_HOST_IMAGE=/ { if (!done) print line; done = 1; next } { print } END { if (!done) print line }'
+  fi
+  echo "upgrade: wrote IMP_HOST_IMAGE=$image to $env"
 }
 
 imp() {
@@ -150,6 +223,7 @@ install_file() {
 # needs its socket
 restart_host() {
   if [ -n "$compose_file" ]; then
+    write_compose_env
     local services=(imp-host)
     ! grep -q '^  imp-docker-proxy:' "$compose_file" || services=(imp-docker-proxy imp-host)
     IMP_DOCKER_GID=${IMP_DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || true)} \
@@ -232,6 +306,16 @@ for f in "${new_files[@]}"; do
   fetch_file "$deploy_name" "$f" || exit 1
 done
 
+# The units take the image from the env file, else their own default: one
+# from the environment alone would pull here, then restart into another.
+if [ -z "$compose_file" ]; then
+  unit_runs=$(unit_image "$([ -f "$unit_file.new" ] && echo "$unit_file.new" || echo "$unit_file")")
+  if [ -n "$unit_runs" ] && [ "$unit_runs" != "$image" ]; then
+    echo "upgrade: the units would run $unit_runs, not $image; pin IMP_HOST_IMAGE=$image in $env_file and run again. Nothing changed." >&2
+    exit 1
+  fi
+fi
+
 # its own line: a failed `imp ls` stops the script before anything restarts
 awake=$(list_awake)
 
@@ -250,6 +334,7 @@ for f in "${new_files[@]}"; do
   fi
 done
 [ -z "$unit_changed" ] || systemctl daemon-reload
+migrate_env_file
 restart_host
 wait_ready
 

@@ -9,10 +9,58 @@
   "packages": {
     ".": {
       "extra-files": [
-        { "type": "json", "path": "packages/api/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "packages/cli/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "packages/client/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "packages/daemon/package.json", "jsonpath": "$.version" }
+        {
+          "type": "json",
+          "path": "packages/api/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/cli/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/client/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "packages/daemon/package.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/bootstrap.sh"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/upgrade.sh"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/imp-host.service"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/imp-docker-proxy.service"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/imp-host.env.example"
+        },
+        {
+          "type": "generic",
+          "path": "deploy/compose.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "docs/guides/install.md"
+        },
+        {
+          "type": "generic",
+          "path": "docs/guides/operations.md"
+        }
       ]
     }
   }
