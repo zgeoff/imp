@@ -38,7 +38,12 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
 `imp-base` is the base that other images build `FROM`. Consumers pin it by digest
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`), so a published tag never moves: the release does
 not overwrite one and has no `latest` for it. Its own base, `ubuntu:24.04`, is pinned by digest in
-`images/base/Dockerfile`; bumping that digest is a reviewed dependency change.
+`images/base/Dockerfile`; bumping that digest is a reviewed dependency change. Docker's packages
+ship no copyright file, so the image build copies upstream's `LICENSE` and `NOTICE` from the source
+tag of each installed version into `/usr/share/doc/<package>/`, checked against sums in the
+Dockerfile. When upstream changes one, the `base` job fails with the new sum and the rest of the
+release goes out. Review the new text and update the sum on `main`. A republish builds the tag's
+sources with the old sum, so that release has no `imp-base`, and the next release publishes one.
 
 ## Flow
 
@@ -165,8 +170,10 @@ It builds and checks everything for the current `main` as a release would, pushe
 `ghcr.io/zgeoff/imp-host:dryrun-<sha>` and `imp-base:dryrun-<sha>` and attests them and the assets,
 and leaves the assets as the `release-assets` workflow artifact. It uploads nothing to a release and
 leaves `latest` alone. The version it checks is the one in `package.json`. A second dry run of the
-same commit leaves `imp-base:dryrun-<sha>` as the first one pushed it. Delete old `dryrun-` tags in
-the package settings.
+same commit leaves `imp-base:dryrun-<sha>` as the first one pushed it. The first dry run after the
+`base` job lands must show its tag check answering `not found` for the new `imp-base` package and
+the push going through; a 401 or 403 there fails the job, and the check then needs a fix. Delete old
+`dryrun-` tags in the package settings.
 
 Locally, with no push:
 

@@ -22,4 +22,26 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* /var/cache/apt/*.bin /var/log/apt /var/log/dpkg.log \
       /var/log/alternatives.log /var/cache/debconf/*-old /var/lib/dpkg/*-old
 
+# Docker's packages ship no copyright file, so copy the upstream LICENSE and
+# NOTICE from the source tag of each installed version. The sums pin the
+# text: when upstream changes a file, the build fails until a reviewer reads
+# the new text and updates its sum here.
+RUN set -eu; \
+    notice() { \
+      version=$(dpkg-query -W -f '${Version}' "$1" | sed 's/^[0-9]*://; s/-.*//'); \
+      url="https://raw.githubusercontent.com/$2/$3$version/$4"; \
+      dest="/usr/share/doc/$1/$4"; \
+      mkdir -p "/usr/share/doc/$1"; \
+      curl -fsSL "$url" -o "$dest"; \
+      if ! echo "$5  $dest" | sha256sum -c --status; then \
+        echo "$url changed upstream: review it, then pin $(sha256sum "$dest" | cut -d' ' -f1)" >&2; \
+        exit 1; \
+      fi; \
+    }; \
+    notice docker-ce moby/moby docker-v LICENSE 7c87873291f289713ac5df48b1f2010eb6963752bbd6b530416ab99fc37914a8; \
+    notice docker-ce moby/moby docker-v NOTICE a249c4197359eee43031d16cecb172326f92ee7b6701af99dfe5c3e5b3d5eca9; \
+    notice docker-ce-cli docker/cli v LICENSE 2d81ea060825006fc8f3fe28aa5dc0ffeb80faf325b612c955229157b8c10dc0; \
+    notice docker-ce-cli docker/cli v NOTICE a8c869fbda819afb8d80e0ac19bac52e766bc6c19cb38cf94f52d64c4be2aab6; \
+    notice docker-buildx-plugin docker/buildx v LICENSE cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30
+
 COPY rootfs/ /

@@ -1,8 +1,9 @@
 #!/bin/bash
 # Check a built imp base image (images/base) before it is pushed: it is
-# linux/amd64, it carries the Docker service and config, its tools run, and
-# it holds nothing of imp's own beyond that service file. The agent comes
-# from the system drive at boot, so a copy in the image would be stale.
+# linux/amd64, it carries the Docker service, config and licence notices, its
+# tools run, and it holds nothing of imp's own beyond that service file. The
+# agent comes from the system drive at boot, so a copy in the image would be
+# stale.
 #
 #   host/check-base-image.sh IMAGE
 #
@@ -31,7 +32,17 @@ in_image() {
   docker run --rm --network none --entrypoint sh "$image" -c "$1"
 }
 
-for file in /etc/imp/services.d/docker.json /etc/docker/daemon.json; do
+# Docker's packages ship no copyright file; the Dockerfile adds upstream's
+files=(
+  /etc/imp/services.d/docker.json
+  /etc/docker/daemon.json
+  /usr/share/doc/docker-ce/LICENSE
+  /usr/share/doc/docker-ce/NOTICE
+  /usr/share/doc/docker-ce-cli/LICENSE
+  /usr/share/doc/docker-ce-cli/NOTICE
+  /usr/share/doc/docker-buildx-plugin/LICENSE
+)
+for file in "${files[@]}"; do
   in_image "test -f $file" || fail "$file is missing"
 done
 
