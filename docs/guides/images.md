@@ -68,12 +68,12 @@ classic store refuses it ([#156](https://github.com/zgeoff/imp/issues/156)). The
   that streams. The CLI asks for the stream and reads JSON from an impd that answers JSON.
 
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
-  with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
-  `TOO_MANY_REQUESTS`. impd refuses the build with its real HTTP status when it can tell before it
-  answers: auth, the query, a Content-Length over the limit, and a fifth build. A stream answers 200
-  first, so a context that grows past the limit as it uploads, or a failed build, ends the stream
-  with an error event. The disk budget holds room for the tar, for Docker's copy of it, and for the
-  image ([storage](../architecture/storage.md#disk-budget)).
+  with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once, uploads and on-host builds
+  together; a fifth gets `TOO_MANY_REQUESTS`. impd refuses the build with its real HTTP status when
+  it can tell before it answers: auth, the query, a Content-Length over the limit, and a fifth
+  build. A stream answers 200 first, so a context that grows past the limit as it uploads, or a
+  failed build, ends the stream with an error event. The disk budget holds room for the tar, for
+  Docker's copy of it, and for the image ([storage](../architecture/storage.md#disk-budget)).
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
   build leaves an audit row.
 - **What the build may do.** impd sends one fixed BuildKit build, `POST /build?version=2`, with the
