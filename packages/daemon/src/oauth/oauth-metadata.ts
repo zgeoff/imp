@@ -8,8 +8,8 @@ export const AUTHORIZE_PATH = '/oauth/authorize';
 export const TOKEN_PATH = '/oauth/token';
 export const REVOKE_PATH = '/oauth/revoke';
 
-// what a client may ask for; offline_access is left out, as the MCP spec
-// asks, and every grant gets a refresh token anyway
+// what a client may ask for; offline_access is left out: every grant gets a
+// refresh token already
 const SCOPES = ['read', 'exec', 'manage'];
 
 export function buildProtectedResourceMetadata(issuer: string, resource: string) {
