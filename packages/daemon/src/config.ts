@@ -64,6 +64,7 @@ const EnvSchema = z.object({
   // and how long an ended generation's log stays
   IMP_SESSION_LOG_MAX_MIB: CountSchema.default(16),
   IMP_SESSION_LOG_IMP_MAX_MIB: CountSchema.default(64),
+  IMP_SESSION_LOG_IMP_MAX_LIVE: CountSchema.default(8),
   IMP_SESSION_LOG_MAX_AGE_DAYS: CountSchema.default(7),
 
   // the engine, as the docker CLI reads it; impd's own builds go there too
@@ -396,6 +397,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     sessionLog: {
       generationMaxBytes: parsed.IMP_SESSION_LOG_MAX_MIB * 1024 ** 2,
       impMaxBytes: parsed.IMP_SESSION_LOG_IMP_MAX_MIB * 1024 ** 2,
+      impMaxLive: parsed.IMP_SESSION_LOG_IMP_MAX_LIVE,
       maxAgeMs: parsed.IMP_SESSION_LOG_MAX_AGE_DAYS * 86_400_000,
     },
     dockerHost: parsed.DOCKER_HOST ?? null,
