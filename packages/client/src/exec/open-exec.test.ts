@@ -832,3 +832,31 @@ test('a session opened directly asks impd before it sends a start that requires 
   expect(older.calls).toEqual(['/rpc/system/info']);
   expect(ctx.requests).toEqual([]);
 });
+
+test('a resize while a start that requires anything waits on impd goes after the start', async () => {
+  await using ctx = await setupExecTest();
+
+  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
+
+  // the resize lands after the socket opened, while the feature check runs
+  const readResizing = (request: Request): Promise<Response> => {
+    held.session?.resize(100, 40);
+
+    return fetch(request);
+  };
+
+  held.session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: readResizing,
+  });
+
+  const outcome = await held.session.outcome;
+
+  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
+  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
+});
