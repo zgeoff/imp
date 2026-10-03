@@ -47,14 +47,15 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
 `/rpc`, the exec WebSocket at `/exec`, the tunnel WebSocket at `/tunnel`, and `POST /images/build`,
-which takes a build context as a streamed tar ([images](../guides/images.md#build-an-image)). Each
-takes a bearer token in an `Authorization` header, or a tailnet identity. A browser cannot set that
-header on a WebSocket, so `/exec` also takes a `ticket` query parameter: `exec.ticket` gives a
-single-use ticket for one existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the
-CLI opens it. The token itself is never accepted in a URL, where logs and browser history would keep
-it. impd keeps at most 32 live tickets per caller, and 1024 in all. The router maps each procedure
-of the contract in `packages/api` to a service call. Errors come from the contract: `NOT_FOUND`,
-`CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
+which takes a build context as a streamed tar and, to a client that accepts it, answers as a stream
+of build events ([images](../guides/images.md#build-an-image)). Each takes a bearer token in an
+`Authorization` header, or a tailnet identity. A browser cannot set that header on a WebSocket, so
+`/exec` also takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket for one
+existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The token
+itself is never accepted in a URL, where logs and browser history would keep it. impd keeps at most
+32 live tickets per caller, and 1024 in all. The router maps each procedure of the contract in
+`packages/api` to a service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`,
+`INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
 [disk reserve](./storage.md#disk-budget), `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
 call outside the caller's scope or imps (a grant or a revoke says why in `data.reason`,
 [granting secrets](../guides/tokens.md#granting-secrets)), `PRECONDITION_FAILED` when the host is

@@ -10,7 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IMAGE_BUILD_PATH, ImageBuildResultSchema } from '@imp/api';
+import {
+  IMAGE_BUILD_PATH,
+  IMAGE_BUILD_STREAM_TYPE,
+  ImageBuildEventSchema,
+  ImageBuildResultSchema,
+} from '@imp/api';
 import type { Scope } from '@imp/api';
 import * as z from 'zod';
 import { createApiAudit } from '../audit/api-audit';
@@ -18,8 +23,12 @@ import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
+import { findFreePorts } from '../net/test-free-ports';
+import { createForwardedPeers } from '../proxy/forwarded-peers';
+import { startWakeProxy } from '../proxy/wake-proxy';
 import { buildUploadsDir } from '../storage/data-layout';
 import { createBuildContextRoute } from './build-context-route';
+import { BUILD_KEEPALIVE_MS } from './build-event-stream';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import type { ImageService } from './image-service';
 
@@ -37,7 +46,15 @@ interface TestOptions {
 
   // replaces the fake build; 'image-service' builds as impd does
   readonly build?: ImageService['buildImageFromContext'] | 'image-service';
+
+  // the gap between a streamed build's progress lines
+  readonly keepaliveMs?: number;
 }
+
+// the headers of a client that reads the build as a stream of events
+const STREAM = { accept: IMAGE_BUILD_STREAM_TYPE };
+
+type BuildEvent = z.infer<typeof ImageBuildEventSchema>;
 
 // impd with a fake build that records what reached it
 async function setupTest(options: TestOptions = {}) {
@@ -81,7 +98,16 @@ async function setupTest(options: TestOptions = {}) {
       : (options.build ?? writeBuildCall);
 
   const images = { ...harness.images, buildImageFromContext: build };
-  const root = buildTestApp({ ...harness, images }, harness);
+
+  const root = buildTestApp(
+    { ...harness, images },
+    harness,
+    undefined,
+    {},
+    null,
+    {},
+    options.keepaliveMs,
+  );
 
   const sendBuild = (
     query: string,
@@ -139,6 +165,7 @@ async function setupTest(options: TestOptions = {}) {
 
   return {
     harness,
+    app: root.app,
     calls,
     stopped,
     sendBuild,
@@ -147,6 +174,39 @@ async function setupTest(options: TestOptions = {}) {
     readOutcomes,
     listUploads: () => readdirSync(buildUploadsDir(harness.config.dataDir)),
     [Symbol.asyncDispose]: () => harness[Symbol.asyncDispose](),
+  };
+}
+
+// every event of a streamed answer, to its end
+async function readEvents(response: Response): Promise<BuildEvent[]> {
+  const text = await response.text();
+
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+}
+
+// free ports for impd's API and its proxy, outside the imp ports of the
+// 64-slot subnet the env names
+function pickApiPorts(): { readonly api: number; readonly env: Record<string, string> } {
+  const ports = findFreePorts(3);
+  const api = ports.take();
+  const proxy = ports.take();
+  const base = ports.take();
+
+  if ([api, proxy].some((port) => port >= base && port < base + 64)) {
+    return pickApiPorts();
+  }
+
+  return {
+    api,
+    env: {
+      IMP_API_PORT: String(api),
+      IMP_PROXY_PORT: String(proxy),
+      IMP_PORT_BASE: String(base),
+      IMP_SUBNET: '10.99.0.0/24',
+    },
   };
 }
 
@@ -185,6 +245,126 @@ test('a streamed context builds, answers the image and leaves no file behind', a
   const outcomes = await ctx.readOutcomes(1);
 
   expect(outcomes).toEqual(['ok']);
+});
+
+test('a client that accepts the stream gets the headers at once, progress while it builds, then the image', async () => {
+  const gate = Promise.withResolvers<void>();
+
+  await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
+
+  // answered while the build still waits on the gate
+  const response = await ctx.sendBuild('name=web', 'tar bytes', TEST_TOKEN, STREAM);
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe(IMAGE_BUILD_STREAM_TYPE);
+
+  while (ctx.calls.length === 0) {
+    await Bun.sleep(1);
+  }
+
+  await Bun.sleep(50);
+
+  gate.resolve();
+
+  const events = await readEvents(response);
+
+  const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
+
+  expect(phases[0]).toBe('upload');
+  expect(phases.filter((phase) => phase === 'build').length).toBeGreaterThan(2);
+  expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'web' } });
+  expect(ctx.listUploads()).toEqual([]);
+
+  const outcomes = await ctx.readOutcomes(1);
+
+  expect(outcomes).toEqual(['ok']);
+});
+
+// impd on a real socket behind the wake proxy, as a build over HTTPS reaches
+// it: the first line comes back while the upload still holds its rest
+test('through the proxy, a progress line arrives before the upload ends', async () => {
+  const ports = pickApiPorts();
+  const gate = Promise.withResolvers<void>();
+
+  await using ctx = await setupTest({ env: ports.env, gate: gate.promise, keepaliveMs: 10 });
+
+  ctx.app.listen({ port: ports.api, hostname: '127.0.0.1' });
+
+  const proxy = startWakeProxy({
+    config: ctx.harness.config,
+    db: ctx.harness.db,
+    imps: ctx.harness.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  const rest = Promise.withResolvers<void>();
+  const upload = { ended: false };
+
+  const encoder = new TextEncoder();
+
+  const body = new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      controller.enqueue(encoder.encode('first half, '));
+
+      await rest.promise;
+
+      controller.enqueue(encoder.encode('second half'));
+
+      upload.ended = true;
+
+      controller.close();
+    },
+  });
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${String(apex.port)}${IMAGE_BUILD_PATH}?name=web`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TEST_TOKEN}`, ...STREAM },
+        body,
+        duplex: 'half',
+      },
+    );
+
+    const lines = response.body?.pipeThrough(new TextDecoderStream()).getReader();
+
+    const first = await lines?.read();
+
+    expect(upload.ended).toBe(false);
+
+    expect(JSON.parse(first?.value?.split('\n')[0] ?? 'null')).toMatchObject({
+      type: 'progress',
+      phase: 'upload',
+    });
+
+    rest.resolve();
+    gate.resolve();
+
+    const parts = [first?.value ?? ''];
+
+    for (let chunk = await lines?.read(); chunk?.done === false; chunk = await lines?.read()) {
+      parts.push(chunk.value);
+    }
+
+    const last = ImageBuildEventSchema.parse(
+      JSON.parse(parts.join('').trim().split('\n').at(-1) ?? 'null'),
+    );
+
+    expect(last).toMatchObject({ type: 'image', image: { name: 'web' } });
+    expect(ctx.calls.map((call) => call.bytes)).toEqual(['first half, second half']);
+  } finally {
+    await apex.stop(true);
+    await proxy.stop();
+    await ctx.app.stop(true);
+  }
 });
 
 test('only a manage caller for the whole host may build', async () => {
@@ -249,6 +429,28 @@ test('a context over the limit gets 413, by its Content-Length or by the bytes t
   expect(body).toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
   expect(ctx.listUploads()).toEqual([]);
 
+  // a stream refuses a Content-Length with its status; bytes past the limit
+  // come after its 200, so its last line says so
+  const declaredStream = await ctx.readStatus('name=web', 'x', TEST_TOKEN, {
+    ...STREAM,
+    'content-length': String(2 * 1024 ** 2),
+  });
+
+  expect(declaredStream).toBe(413);
+
+  const overStream = await ctx.sendBuild(
+    'name=web',
+    createByteStream(1024 ** 2 + 1),
+    TEST_TOKEN,
+    STREAM,
+  );
+
+  const events = await readEvents(overStream);
+
+  expect(overStream.status).toBe(200);
+  expect(events.at(-1)).toMatchObject({ type: 'error', code: 'PAYLOAD_TOO_LARGE' });
+  expect(ctx.listUploads()).toEqual([]);
+
   // exactly the limit is fine
   const atLimit = await ctx.readStatus('name=web', createByteStream(1024 ** 2));
 
@@ -268,8 +470,9 @@ test('a fifth build while four upload or run gets 429', async () => {
   }
 
   const fifth = await ctx.readStatus('name=web5', 'tar');
+  const fifthStream = await ctx.readStatus('name=web5', 'tar', TEST_TOKEN, STREAM);
 
-  expect(fifth).toBe(429);
+  expect([fifth, fifthStream]).toEqual([429, 429]);
 
   gate.resolve();
 
@@ -282,36 +485,46 @@ test('a fifth build while four upload or run gets 429', async () => {
   expect(sixth).toBe(200);
 });
 
-test('a client that goes mid-build stops the build, frees its slot and its file', async () => {
-  const gate = Promise.withResolvers<void>();
+test.each([
+  ['JSON', {}],
+  ['a stream', STREAM],
+])(
+  'a client that goes mid-build, answered as %s, stops the build, frees its slot and its file',
+  async (_, headers) => {
+    const gate = Promise.withResolvers<void>();
 
-  await using ctx = await setupTest({ gate: gate.promise });
+    await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
 
-  const clients = [1, 2, 3, 4].map(() => new AbortController());
+    const clients = [1, 2, 3, 4].map(() => new AbortController());
 
-  const builds = clients.map((client, n) =>
-    ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, {}, client.signal),
-  );
+    const builds = clients.map((client, n) =>
+      ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, headers, client.signal),
+    );
 
-  while (ctx.calls.length < 4) {
-    await Bun.sleep(1);
-  }
+    while (ctx.calls.length < 4) {
+      await Bun.sleep(1);
+    }
 
-  for (const client of clients) {
-    client.abort();
-  }
+    for (const client of clients) {
+      client.abort();
+    }
 
-  await Promise.allSettled(builds);
+    await Promise.allSettled(builds);
 
-  expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
-  expect(ctx.listUploads()).toEqual([]);
+    // a stream answered before its build ended: the build's audit row comes
+    // after its file is gone
+    await ctx.readOutcomes(4);
 
-  gate.resolve();
+    expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
+    expect(ctx.listUploads()).toEqual([]);
 
-  const next = await ctx.readStatus('name=web', 'tar');
+    gate.resolve();
 
-  expect(next).toBe(200);
-});
+    const next = await ctx.readStatus('name=web', 'tar');
+
+    expect(next).toBe(200);
+  },
+);
 
 // a docker on PATH whose pulls hang, and which logs its argv; a pull execs
 // its sleep, so killing it leaves nothing holding its pipes
@@ -812,6 +1025,21 @@ test('a failed build answers its error and removes the upload', async () => {
   expect(response.status).toBe(500);
   expect(body).toEqual({ code: 'INTERNAL_SERVER_ERROR', message: 'disk on fire' });
   expect(ctx.listUploads()).toEqual([]);
+
+  const streamed = await ctx.sendBuild('name=web', 'tar', TEST_TOKEN, STREAM);
+  const events = await readEvents(streamed);
+
+  expect(events.at(-1)).toEqual({
+    type: 'error',
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'disk on fire',
+  });
+
+  expect(ctx.listUploads()).toEqual([]);
+
+  const outcomes = await ctx.readOutcomes(2);
+
+  expect(outcomes).toEqual(['INTERNAL_SERVER_ERROR', 'INTERNAL_SERVER_ERROR']);
 });
 
 test('a new route clears what an earlier impd left in the uploads directory', async () => {
@@ -828,6 +1056,7 @@ test('a new route clears what an earlier impd left in the uploads directory', as
     images: harness.images,
     diskBudget: harness.diskBudget,
     audit: createApiAudit({ db: harness.db, now: harness.now, log: () => {} }),
+    keepaliveMs: BUILD_KEEPALIVE_MS,
     now: harness.now,
   });
 
