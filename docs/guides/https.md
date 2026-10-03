@@ -60,15 +60,17 @@ IMP_DNS_API_TOKEN_FILE=/etc/imp/dns-api-token
 The container sees `/etc/imp` read-only, so a file there (root, mode 0400) needs no extra mount. On
 NixOS, set `services.imp.dnsApiTokenFile` instead ([NixOS](./nixos.md#the-dns-api-token)).
 
-- The file holds the token alone. impd trims leading and trailing whitespace, and refuses a token
-  with whitespace or `=` inside it (such as a pasted `IMP_DNS_API_TOKEN=...` line).
+- The file holds the token alone, in ASCII. impd trims leading and trailing whitespace, and refuses
+  a token with any character outside letters, digits and `._~+/-`: a pasted `IMP_DNS_API_TOKEN=...`
+  line, two tokens, or a UTF-16 file.
 - impd reads the file at each Cloudflare API call: each certificate attempt, each pass over the
   records. A new token works at the next call, without a restart.
 - A file that is missing, empty or refused does not stop impd. impd starts, logs the path and what
   is wrong (never the file's contents), and each DNS call reads the file again. Certificate attempts
   back off as for any DNS failure (below), the certificate on disk keeps serving, and the records
   stay as they are. `imp info` (and `system.info` in the API) reads the file again each time you
-  ask, and shows an error on its `https` line:
+  ask, and shows an error on its `https` line (`DNS token file readable` once it reads; with
+  `IMP_DNS_API_TOKEN` there is no file to check, and the line shows the domain alone):
 
   ```text
   https       imp.example.com, ERROR: the DNS API token file /etc/imp/dns-api-token is empty
