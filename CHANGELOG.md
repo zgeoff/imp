@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.27.0](https://github.com/zgeoff/imp/compare/v0.26.2...v0.27.0) (2026-10-03)
+
+### Features
+
+- **security:** let scoped tokens manage selected secret grants
+  ([#154](https://github.com/zgeoff/imp/issues/154))
+  ([9145ae6](https://github.com/zgeoff/imp/commit/9145ae68e1afc2cb4a4f6775e50466cce4e06ae1))
+
+### Bug Fixes
+
+- **deploy:** run the image of the deploy files' own release
+  ([#153](https://github.com/zgeoff/imp/issues/153))
+  ([a84a70c](https://github.com/zgeoff/imp/commit/a84a70cf4147ad2e1d76ccbd1c17780d663f09d5))
+
 ## [0.26.2](https://github.com/zgeoff/imp/compare/v0.26.1...v0.26.2) (2026-10-03)
 
 ### Bug Fixes
