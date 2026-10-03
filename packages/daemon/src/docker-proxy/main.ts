@@ -16,11 +16,24 @@ function readEnv(name: string, fallback: string): string {
   return value === undefined || value === '' ? fallback : value;
 }
 
+// No default: a fallback tag could name another repository than the image the
+// proxy runs from, and the rule that keeps a pull off that repository would
+// guard the wrong one. Every unit and compose file sets it.
+function requireEnv(name: string): string {
+  const value = process.env[name];
+
+  if (value === undefined || value === '') {
+    throw new Error(`${name} is not set; set it to the image this proxy runs from`);
+  }
+
+  return value;
+}
+
 function main(): void {
   const listen = readEnv('IMP_DOCKER_PROXY_LISTEN', '/run/imp-docker/docker.sock');
   const upstreamSocket = readEnv('IMP_DOCKER_PROXY_UPSTREAM', '/var/run/docker.sock');
   const stateDir = readEnv('IMP_DOCKER_PROXY_STATE', '/var/lib/imp-docker-proxy');
-  const hostImage = readEnv('IMP_HOST_IMAGE', 'ghcr.io/zgeoff/imp-host:latest');
+  const hostImage = requireEnv('IMP_HOST_IMAGE');
   const contextMib = Number(readEnv('IMP_BUILD_CONTEXT_MAX_MIB', '1024'));
 
   if (!Number.isInteger(contextMib) || contextMib <= 0) {
