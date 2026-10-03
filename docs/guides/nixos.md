@@ -101,7 +101,9 @@ Use a kernel that the system's ZFS builds for. The module's checks use nixpkgs' 
 - Set `image` to run another image. To pin a digest as well as the tag, set it to
   `ghcr.io/zgeoff/imp-host:X.Y.Z@sha256:<digest>`.
 - `imageArchive` must hold `image`: save the archive under the versioned tag, not `:latest`, or
-  `imp-host-image.service` fails with "does not hold".
+  `imp-host-image.service` fails with "does not hold". With `imageArchive`, set `image` to the tag
+  only: a `docker load` into the classic overlay2 store records no digest, so a `tag@sha256` ref
+  fails that check.
 
 ## IPv6
 
