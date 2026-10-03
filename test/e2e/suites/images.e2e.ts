@@ -24,6 +24,7 @@ import {
   readToken,
   runChecked,
   runCommand,
+  runInContainer,
 } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
@@ -516,6 +517,94 @@ test('an isolated build reaches the internet but not the host, impd or a private
   const kinds = z.array(z.object({ kind: z.string().optional() })).parse(listed);
 
   expect(kinds.filter((imp) => imp.kind === 'builder')).toEqual([]);
+});
+
+// The host container's own IPv6 addresses, every scope but loopback
+async function readContainerAddresses6(): Promise<string[]> {
+  const shown = await runInContainer(['ip', '-6', '-o', 'addr', 'show']);
+
+  return [
+    ...shown.stdout.matchAll(/ inet6 (?<address>[\da-f:]+)\/\d+ scope (?:global|link)/gv),
+  ].map((match) => match.groups?.['address'] ?? '');
+}
+
+// #156 and #180: a RUN step has no IPv6 of its own; what IPv6 it reaches
+// goes through the broker on the builder's gateway, its second hop after the
+// engine's bridge, and the public policy holds the broker to the internet.
+test("an isolated build's broker tunnel reaches the internet, but not the host, its taps or impd", async () => {
+  const requests: string[] = [];
+
+  using listener = Bun.serve({
+    hostname: '0.0.0.0',
+    port: 0,
+    fetch: (request) => {
+      requests.push(request.url);
+
+      return new Response('probe');
+    },
+  });
+
+  const gateway = await readContainerGateway();
+  const own6 = await readContainerAddresses6();
+  const route6 = await runInContainer(['ip', '-6', 'route', 'show', 'default']);
+
+  const hasIpv6 = route6.stdout.trim() !== '';
+
+  const refused = [
+    `${gateway}:${String(listener.port)}`,
+    '10.66.0.1:7070',
+    'GW:7070',
+    '127.0.0.1:7070',
+    '[::1]:7070',
+    '[fe80::1]:7070',
+    '169.254.169.254:80',
+    ...own6.map((address) => `[${address}]:7070`),
+  ];
+
+  const allowed = ['example.com:80', ...(hasIpv6 ? ['[2606:4700:4700::1111]:80'] : [])];
+
+  const dir = writeContext(
+    'broker',
+    [
+      'FROM busybox:1.37',
+      "RUN gw=$(traceroute -n -m 2 -w 2 1.1.1.1 2>/dev/null | awk '$1 == 2 { print $2 }'); \\",
+      '    awk \'$6 != "lo" { print "ipv6 " $6 }\' /proc/net/if_inet6 > /probe.txt; \\',
+      '    if wget -T 3 -q -O /dev/null "http://$gw:7070/"; then echo "direct open"; else echo "direct closed"; fi >> /probe.txt; \\',
+      `    for t in ${[...refused, ...allowed].join(' ')}; do \\`,
+      '      d=$(echo "$t" | sed "s/^GW:/$gw:/"); \\',
+      '      reply=$( (printf \'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n\' "$d" "$d"; sleep 3) | nc -w 5 "$gw" 7081 | head -1 | cut -d \' \' -f 2); \\',
+      '      echo "$t $reply"; \\',
+      '    done >> /probe.txt',
+      '',
+    ].join('\n'),
+  );
+
+  const name = `${prefix}broker`;
+
+  await runImp('image', 'build', dir, '--name', name);
+
+  try {
+    await createImp(name, '--image', name);
+
+    const probe = await runInImp(name, 'cat', '/probe.txt');
+
+    if (!hasIpv6) {
+      console.log(
+        '    the host container has no IPv6 default route; the public IPv6 fetch is skipped',
+      );
+    }
+
+    expect(probe.split('\n')).toEqual([
+      'direct closed',
+      ...refused.map((target) => `${target} 403`),
+      ...allowed.map((target) => `${target} 200`),
+    ]);
+
+    expect(requests).toEqual([]);
+  } finally {
+    await removeImps(name);
+    await tryImp(['image', 'rm', name]);
+  }
 });
 
 test('a FROM whose registry name resolves to a private address fails in the builder', async () => {
