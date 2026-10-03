@@ -59,6 +59,14 @@ function parseKind(kind: string): SecretKind {
   return parsed.data;
 }
 
+// the grants a rebind dropped; null from an impd from before rebinds, which
+// leaves the field out (the client applies no default)
+function readDroppedGrants(
+  answer: Readonly<{ droppedGrants?: number | undefined }>,
+): number | null {
+  return answer.droppedGrants ?? null;
+}
+
 const addCommand = defineCommand({
   meta: {
     name: 'add',
@@ -104,10 +112,14 @@ const addCommand = defineCommand({
         ...(context.args.rebind === true && { rebind: true }),
       });
 
-      if (secret.droppedGrants > 0) {
+      const dropped = readDroppedGrants(secret);
+
+      if (dropped === null && context.args.replace === true) {
         console.error(
-          `imp: ${secret.name} rebound; revoked from ${String(secret.droppedGrants)} imp(s)`,
+          'imp: this impd does not tell a rotation from a rebind: --replace may have changed the hosts and kept every grant',
         );
+      } else if (dropped !== null && dropped > 0) {
+        console.error(`imp: ${secret.name} rebound; revoked from ${String(dropped)} imp(s)`);
       }
 
       console.log(formatOutput(secret, context.args.json, (one) => formatSecrets([one])));

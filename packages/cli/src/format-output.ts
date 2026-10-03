@@ -398,14 +398,20 @@ export function formatNetworks(networks: readonly Network[]): string {
   );
 }
 
-export function formatTokens(tokens: readonly Token[]): string {
+// a token or an identity as any impd answers: one from before grantable
+// lists leaves the field out, and the client applies no schema default
+type WithOptionalGrantable<T> = Omit<T, 'grantable'> & {
+  readonly grantable?: readonly string[] | undefined;
+};
+
+export function formatTokens(tokens: readonly WithOptionalGrantable<Token>[]): string {
   return formatTable(
     ['NAME', 'SCOPE', 'IMPS', 'GRANTABLE', 'SSH KEYS', 'CREATED'],
     tokens.map((token) => [
       token.name,
       token.scope,
       token.imps === null ? '*' : token.imps.join(','),
-      token.grantable.length === 0 ? '-' : token.grantable.join(','),
+      formatGrantable(token, '-'),
       String(token.sshKeys.length),
       token.createdAt.toISOString(),
     ]),
@@ -417,13 +423,22 @@ export function formatSshKey(key: SshKey): string {
   return key.comment === '' ? key.fingerprint : `${key.fingerprint} ${key.comment}`;
 }
 
-export function formatIdentity(identity: Identity): string {
+export function formatIdentity(identity: WithOptionalGrantable<Identity>): string {
   const imps = identity.imps === null ? 'every imp' : identity.imps.join(',');
-
-  const grants =
-    identity.grantable.length === 0 ? '' : `; may grant ${identity.grantable.join(',')}`;
+  const names = formatGrantable(identity, '');
+  const grants = names === '' ? '' : `; may grant ${names}`;
 
   return `${identity.kind} ${identity.name}: ${identity.scope} on ${imps}${grants}`;
+}
+
+// the secrets it may grant, comma-separated, or `none`
+function formatGrantable(
+  entry: Readonly<{ grantable?: readonly string[] | undefined }>,
+  none: string,
+): string {
+  const names = entry.grantable ?? [];
+
+  return names.length === 0 ? none : names.join(',');
 }
 
 export function formatAudit(entries: readonly AuditEntry[]): string {
