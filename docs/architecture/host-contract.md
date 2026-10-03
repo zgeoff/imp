@@ -268,7 +268,8 @@ host's firewall never sees them.
 The [public MCP route](../guides/mcp.md#public-route), when an operator turns it on, adds a
 plain-HTTP listener on 7071. Publish it on the host's loopback only, for the operator's TLS front,
 never on a public address. Inside the container it listens on every address, as the API does: a
-tailnet peer that reaches it gets the same `Host` check and needs the same OAuth token.
+tailnet peer that reaches it directly skips the front and its TLS, but gets the same `Host` check
+and needs the same OAuth token.
 
 `IMP_HOST_FIREWALL` says who owns the host's inbound firewall:
 

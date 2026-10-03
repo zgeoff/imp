@@ -240,7 +240,7 @@ route, client and grant, never per address. impd logs no code, token or query.
 
 Approve only a sign-in you started: anyone can open the page for a client impd knows, and ask you to
 approve its code. The code is 8 symbols of 32 (40 bits), lasts 10 minutes, and only a named token
-can try one: after 20 codes that match nothing, impd takes one every 3 s.
+can try one: after 20 codes from one token that match nothing, impd takes one every 3 s.
 
 A grant is never wider than the token that approved it:
 
@@ -248,7 +248,8 @@ A grant is never wider than the token that approved it:
   `read`;
 - each of its patterns is an imp name or a prefix and a trailing `*`, and equals one of the token's,
   or one of the token's is `p*` and the pattern starts with `p`. `--imps` defaults to the token's;
-- it grants no secrets.
+- it grants and revokes no secrets, and meets every refusal its token meets: a token that may grant
+  secrets may not fork or move an imp, and neither may its grants.
 
 impd checks the grant and its token on every request. The root token and a tailnet identity cannot
 approve: neither can be removed on its own, so neither could end its grants.
@@ -270,12 +271,27 @@ A grant ends with `imp oauth grant rm <id>`, `imp token rm` of the token that ap
 commands stop as a cancel stops them, its unused exec tickets open nothing, and its next request
 gets 401. A replay is a code exchanged again, or a spent refresh token, presented in full by its own
 client: a wrong secret, an unknown token or another client's request gets `invalid_grant` and
-revokes nothing. Two refreshes of one token at once count as a replay too.
+revokes nothing.
+
+A refresh token is strictly single use, with no grace window. Two refreshes of one token at once
+count as a replay: one gets new tokens, and the other ends the grant. A client must send one refresh
+at a time. After a lost response or a reuse failure, it signs in again.
 
 A restart ends the sign-ins in progress and their codes, not the grants.
 
 ### Limits
 
-64 open requests; 10 sign-ins in a burst, then one every 6 s; 30 token requests per client, then one
-every 2 s; 16 sessions per grant. Past one, impd answers 429 with `Retry-After`. A form is at most
-16 KiB, and an idle request ends after 30 s, except on `/mcp`.
+- 64 open requests; a tool call's stream counts until it ends.
+- 10 sign-ins per client in a burst, then one every 6 s.
+- 30 failed token requests per client, then one every 2 s; past them a failure answers `slow_down`.
+  A valid code exchange or refresh never counts. Requests that name no known client share one such
+  burst.
+- 20 approval codes that match nothing per token, then one every 3 s.
+- 16 sessions per grant.
+
+Past a limit, impd answers 429 with `Retry-After`. A form is at most 16 KiB, and an idle request
+ends after 30 s, except on `/mcp`.
+
+impd sees only the front's connection, never the client's address, so it cannot limit one source.
+Client IDs are public: a flood that names a client can hold back that client's sign-ins and token
+requests, though never a valid exchange or refresh. Rate limits by address belong at the front.
