@@ -224,3 +224,45 @@ test('a token made able to grant may not fork or move, even with every entry sta
 
   expect(allowed).toEqual([null, null, null]);
 });
+
+// whether a call is refused, and why, leaving out the caller's name
+async function readDecision(path: string, caller: Readonly<Caller>, input: unknown) {
+  const refusal = await readRefusal(path, caller, input);
+
+  return refusal === null ? 'allowed' : `refused: ${String(refusal.reason)}`;
+}
+
+test('an OAuth grant gets the same answer as a token with its scope and imps, on every procedure', async () => {
+  const paths = Object.keys(PROCEDURE_ACCESS);
+  const inputs: readonly unknown[] = [{ name: 'dev-a' }, { name: 'web' }, {}];
+  const differences: string[] = [];
+
+  const cases = (['read', 'exec', 'manage'] as const).flatMap((scope) =>
+    [null, ['dev-*']].map((imps) => ({ scope, imps })),
+  );
+
+  for (const limits of cases) {
+    const token = buildTestCaller(limits);
+
+    const grant = buildTestCaller({
+      ...limits,
+      kind: 'oauth',
+      name: 'conn/grant-a',
+      grantId: 'grant-a',
+      principal: 'grant:grant-a',
+    });
+
+    for (const path of paths) {
+      for (const input of inputs) {
+        const forToken = await readDecision(path, token, input);
+        const forGrant = await readDecision(path, grant, input);
+
+        if (forToken !== forGrant) {
+          differences.push(`${path} ${limits.scope}: ${forToken} / ${forGrant}`);
+        }
+      }
+    }
+  }
+
+  expect(differences).toEqual([]);
+});
