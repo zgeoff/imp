@@ -476,6 +476,20 @@ export const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // the sessions started with `require: ['broker']`, by execution generation
+  // (docs/guides/connectors.md#requiring-the-broker)
+  '021_add_broker_sessions': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('broker_sessions')
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addColumn('generation', 'text', (c) => c.notNull())
+        .addColumn('at', 'integer', (c) => c.notNull())
+        .addPrimaryKeyConstraint('broker_sessions_pk', ['imp_id', 'generation'])
+        .execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

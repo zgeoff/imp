@@ -1,45 +1,69 @@
+import type { AgentSession } from '../agent-client/agent-requests';
+import type { ExecStream } from '../agent-client/exec-stream';
+import { isBrokerSession, writeBrokerSession } from '../db/broker-sessions';
+import type { ImpDatabase } from '../db/open-database';
 import { buildBrokerNotReadyError } from './exec-require';
 
-// The sessions each imp's current boot started with `require: ['broker']`.
-// A start that requires the broker and attaches to a running session passes
-// only when that session was one of them.
-export interface BrokerSessions {
-  // after the agent opened a session: a new one is recorded (boot set, as
-  // the start required the broker) or dropped (boot null); an attach that
-  // requires the broker is refused unless the record covers it
-  readonly note: (
-    impId: string,
-    name: string,
-    created: boolean,
-    boot: string | null,
-  ) => Error | null;
+// A start that requires the broker and names a session passes to a session
+// that runs only when that session's run started with the requirement
+// (db/broker-sessions.ts).
+
+// Before the open, from the agent's session list: a refusal here never
+// reaches the agent, so the session's viewer keeps it.
+export function checkBrokerAttach(
+  db: ImpDatabase,
+  impId: string,
+  name: string,
+  sessions: readonly AgentSession[],
+): Promise<Error | null> {
+  const running = sessions.find((session) => session.name === name && session.state === 'running');
+
+  if (running === undefined) {
+    return Promise.resolve(null);
+  }
+
+  return isCovered(db, impId, running.execution_generation, name);
 }
 
-export function createBrokerSessions(): BrokerSessions {
-  const byImp = new Map<string, { readonly boot: string; readonly names: Set<string> }>();
+// After the open: records a session the start created; an attach to one
+// that started between the list and the open is refused here instead.
+export async function checkOpenedSession(
+  db: ImpDatabase,
+  impId: string,
+  name: string,
+  stream: Pick<ExecStream, 'created' | 'output'>,
+  sessions: readonly AgentSession[],
+): Promise<Error | null> {
+  const output = stream.output;
+  const generation = output?.continuity === 'offsets' ? output.executionGeneration : undefined;
 
-  return {
-    note: (impId, name, created, boot) => {
-      const known = byImp.get(impId);
+  if (!stream.created) {
+    return isCovered(db, impId, generation, name);
+  }
 
-      if (created) {
-        if (boot === null) {
-          known?.names.delete(name);
-        } else {
-          const names = known?.boot === boot ? known.names : new Set<string>();
+  // an agent from before output offsets names no generation: its sessions
+  // never pass an attach that requires the broker
+  if (generation !== undefined) {
+    const running = sessions
+      .filter((session) => session.state === 'running')
+      .flatMap((session) => session.execution_generation ?? []);
 
-          names.add(name);
-          byImp.set(impId, { boot, names });
-        }
+    await writeBrokerSession(db, impId, generation, running);
+  }
 
-        return null;
-      }
+  return null;
+}
 
-      if (boot === null || (known?.boot === boot && known.names.has(name))) {
-        return null;
-      }
+async function isCovered(
+  db: ImpDatabase,
+  impId: string,
+  generation: string | undefined,
+  name: string,
+): Promise<Error | null> {
+  const isRecorded =
+    generation === undefined ? false : await isBrokerSession(db, impId, generation);
 
-      return buildBrokerNotReadyError(`session ${name} was started without the broker requirement`);
-    },
-  };
+  return isRecorded
+    ? null
+    : buildBrokerNotReadyError(`session ${name} was started without the broker requirement`);
 }

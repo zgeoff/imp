@@ -7,7 +7,7 @@ import {
 } from '../agent-client/agent-outdated';
 import type { AgentFeature } from '../agent-client/agent-outdated';
 import { sendActivity, sendPing } from '../agent-client/agent-requests';
-import type { AgentActivity } from '../agent-client/agent-requests';
+import type { AgentActivity, AgentSession } from '../agent-client/agent-requests';
 import { openDialStream } from '../agent-client/dial-stream';
 import type { DialStream, DialTarget } from '../agent-client/dial-stream';
 import { openAttachStream, openExecStream } from '../agent-client/exec-stream';
@@ -18,7 +18,7 @@ import { buildInvalidStateError, isDiskFullError } from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
-import { createBrokerSessions } from '../exec/broker-sessions';
+import { checkBrokerAttach, checkOpenedSession } from '../exec/broker-sessions';
 import { buildBrokerNotReadyError, checkBrokerReady, isBrokerRequired } from '../exec/exec-require';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
@@ -158,7 +158,6 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
   const ops = parts.ops;
   const reconciler = createVmReconciler(context, ops);
   const lastDiskFull: { error: Error | null } = { error: null };
-  const brokerSessions = createBrokerSessions();
 
   // An elastic guest may hold more than its memory, and a new impd's cgroup
   // writer knows nothing of it: the limit covers what the guest holds, or the
@@ -361,24 +360,47 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
             await requireSameBoot(context, target);
           }
 
+          const session = request.session;
+
+          // the agent's sessions, for a start that requires the broker and
+          // may attach: a refused attach must not reach the agent
+          const listed: AgentSession[] = [];
+
+          if (requiresBroker && session !== undefined) {
+            const activity = await sendActivity(paths.vsockSocket);
+
+            listed.push(...activity.sessions);
+
+            const refused = await checkBrokerAttach(context.db, target.id, session, listed);
+
+            if (refused !== null) {
+              throw refused;
+            }
+          }
+
           const opening = openExecStream(paths.vsockSocket, {
             ...request,
             ...(env.length > 0 && { env }),
           });
 
-          const session = request.session;
-
           if (session === undefined) {
             return opening;
           }
 
-          // the boot a session that requires the broker started in
-          const boot = requiresBroker && broker.kind === 'ready' ? broker.boot : null;
-
           const openNoted = async (): Promise<ExecStream> => {
             const stream = await opening;
 
-            const refused = brokerSessions.note(target.id, session, stream.created, boot);
+            if (!requiresBroker) {
+              return stream;
+            }
+
+            const refused = await checkOpenedSession(
+              context.db,
+              target.id,
+              session,
+              stream,
+              listed,
+            );
 
             if (refused !== null) {
               stream.close();

@@ -107,16 +107,15 @@ export interface TrustedImp {
 // writes the bundle into the guest from buildInstallInput's text
 export type InstallBundle = (vsockPath: string, input: string) => Promise<void>;
 
-// whether the bundle is in this boot of the guest, and the boot's id; the
-// failure's text when not
+// whether the bundle is in this boot of the guest; the failure's text when not
 type TrustOutcome =
-  | { readonly installed: true; readonly boot: string }
+  | { readonly installed: true }
   | { readonly installed: false; readonly detail: string };
 
 // The broker's part of an exec's environment: the variables once the bundle
-// is in this boot, with the boot's id, or why there are none.
+// is in this boot, or why there are none.
 export type BrokerExecEnv =
-  | { readonly kind: 'ready'; readonly env: readonly string[]; readonly boot: string }
+  | { readonly kind: 'ready'; readonly env: readonly string[] }
   | { readonly kind: 'ungranted' }
   | { readonly kind: 'untrusted'; readonly detail: string };
 
@@ -189,7 +188,7 @@ export function createGuestTrust(
         try {
           await install(vsockPath, input);
 
-          return { installed: true, boot: boot.id };
+          return { installed: true };
         } catch (error) {
           const detail = readErrorMessage(error);
 
