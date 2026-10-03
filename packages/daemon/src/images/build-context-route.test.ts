@@ -23,6 +23,9 @@ import { listApiCalls } from '../db/api-audit';
 import { createImage } from '../db/images';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
+import { findFreePorts } from '../net/test-free-ports';
+import { createForwardedPeers } from '../proxy/forwarded-peers';
+import { startWakeProxy } from '../proxy/wake-proxy';
 import { buildUploadsDir } from '../storage/data-layout';
 import { createBuildContextRoute } from './build-context-route';
 import { BUILD_KEEPALIVE_MS } from './build-event-stream';
@@ -162,6 +165,7 @@ async function setupTest(options: TestOptions = {}) {
 
   return {
     harness,
+    app: root.app,
     calls,
     stopped,
     sendBuild,
@@ -181,6 +185,29 @@ async function readEvents(response: Response): Promise<BuildEvent[]> {
     .trim()
     .split('\n')
     .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+}
+
+// free ports for impd's API and its proxy, outside the imp ports of the
+// 64-slot subnet the env names
+function pickApiPorts(): { readonly api: number; readonly env: Record<string, string> } {
+  const ports = findFreePorts(3);
+  const api = ports.take();
+  const proxy = ports.take();
+  const base = ports.take();
+
+  if ([api, proxy].some((port) => port >= base && port < base + 64)) {
+    return pickApiPorts();
+  }
+
+  return {
+    api,
+    env: {
+      IMP_API_PORT: String(api),
+      IMP_PROXY_PORT: String(proxy),
+      IMP_PORT_BASE: String(base),
+      IMP_SUBNET: '10.99.0.0/24',
+    },
+  };
 }
 
 // a body with no Content-Length: the route can only count what arrives
@@ -251,6 +278,93 @@ test('a client that accepts the stream gets the headers at once, progress while 
   const outcomes = await ctx.readOutcomes(1);
 
   expect(outcomes).toEqual(['ok']);
+});
+
+// impd on a real socket behind the wake proxy, as a build over HTTPS reaches
+// it: the first line comes back while the upload still holds its rest
+test('through the proxy, a progress line arrives before the upload ends', async () => {
+  const ports = pickApiPorts();
+  const gate = Promise.withResolvers<void>();
+
+  await using ctx = await setupTest({ env: ports.env, gate: gate.promise, keepaliveMs: 10 });
+
+  ctx.app.listen({ port: ports.api, hostname: '127.0.0.1' });
+
+  const proxy = startWakeProxy({
+    config: ctx.harness.config,
+    db: ctx.harness.db,
+    imps: ctx.harness.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  const rest = Promise.withResolvers<void>();
+  const upload = { ended: false };
+
+  const encoder = new TextEncoder();
+
+  const body = new ReadableStream<Uint8Array>({
+    start: async (controller) => {
+      controller.enqueue(encoder.encode('first half, '));
+
+      await rest.promise;
+
+      controller.enqueue(encoder.encode('second half'));
+
+      upload.ended = true;
+
+      controller.close();
+    },
+  });
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${String(apex.port)}${IMAGE_BUILD_PATH}?name=web`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${TEST_TOKEN}`, ...STREAM },
+        body,
+        duplex: 'half',
+      },
+    );
+
+    const lines = response.body?.pipeThrough(new TextDecoderStream()).getReader();
+
+    const first = await lines?.read();
+
+    expect(upload.ended).toBe(false);
+
+    expect(JSON.parse(first?.value?.split('\n')[0] ?? 'null')).toMatchObject({
+      type: 'progress',
+      phase: 'upload',
+    });
+
+    rest.resolve();
+    gate.resolve();
+
+    const parts = [first?.value ?? ''];
+
+    for (let chunk = await lines?.read(); chunk?.done === false; chunk = await lines?.read()) {
+      parts.push(chunk.value);
+    }
+
+    const last = ImageBuildEventSchema.parse(
+      JSON.parse(parts.join('').trim().split('\n').at(-1) ?? 'null'),
+    );
+
+    expect(last).toMatchObject({ type: 'image', image: { name: 'web' } });
+    expect(ctx.calls.map((call) => call.bytes)).toEqual(['first half, second half']);
+  } finally {
+    await apex.stop(true);
+    await proxy.stop();
+    await ctx.app.stop(true);
+  }
 });
 
 test('only a manage caller for the whole host may build', async () => {
