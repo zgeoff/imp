@@ -369,6 +369,33 @@ test('a client that goes ends the pull in the builder, and the builder with it',
   expect(box).toBeUndefined();
 });
 
+test('a registry on the host itself or at an IP literal is refused before any builder boots', async () => {
+  await using ctx = await setupAdd();
+
+  for (const [ref, problem] of [
+    [
+      '203.0.113.5:5000/x:1',
+      'image 203.0.113.5:5000/x:1: registry 203.0.113.5:5000 is an IP address',
+    ],
+    ['localhost:5000/x:1', "image localhost:5000/x:1: registry localhost:5000 is the host's own"],
+    ['registry.localhost/x:1', "registry registry.localhost is the host's own"],
+
+    // a bracketed IPv6 literal is no reference the schema takes
+    ['[2001:db8::1]:5000/x:1', 'invalid image reference'],
+  ] as const) {
+    const failure = await readFailure(ctx.withHostDocker(() => ctx.addImages.addImage(ref, 'box')));
+
+    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+    expect(String(failure)).toContain(problem);
+  }
+
+  const imps = await listImps(ctx.db);
+
+  expect(ctx.guest.runs).toEqual([]);
+  expect(imps).toEqual([]);
+  expect(ctx.readHostCalls()).toBe('');
+});
+
 test('a builder the governor refuses fails the add, with no host engine call', async () => {
   await using ctx = await setupAdd({ env: { IMP_RAM_BUDGET_MIB: '256' } });
 

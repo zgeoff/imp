@@ -483,6 +483,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   ): Promise<ImageRecord> => {
     assertImageRef(ref);
 
+    // the proxy holds this rule for a host pull; a builder's pull would
+    // reach a literal address under imp isolation, so impd holds it for both
+    const registryProblem = checkReferenceRegistry(ref);
+
+    if (registryProblem !== null) {
+      throw new ORPCError('BAD_REQUEST', { message: `image ${ref}: ${registryProblem}` });
+    }
+
     const givenName = name ?? deriveImageName(ref);
     const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
 
