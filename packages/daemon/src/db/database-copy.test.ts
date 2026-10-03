@@ -1,9 +1,10 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler, sql } from 'kysely';
+import { createDiskBudget } from '../storage/disk-budget';
 import { BunSqliteDriver } from './bun-sqlite-driver';
 import { writeConsistentCopy, writeDatabaseCopy } from './database-copy';
 import { openDatabase } from './open-database';
@@ -11,6 +12,16 @@ import { MIGRATIONS, runMigrationsTo } from './run-migrations';
 import type { DatabaseSchema } from './schema';
 
 const MIGRATION_NAMES = Object.keys(MIGRATIONS).toSorted();
+const GIB = 1024 ** 3;
+
+// a disk with `availableBytes` free and a 1 GiB reserve
+function buildBudget(availableBytes: number) {
+  return createDiskBudget({
+    storage: { readUsage: () => Promise.resolve({ usedBytes: GIB, availableBytes }) },
+    reserveBytes: GIB,
+    log: () => {},
+  });
+}
 
 function setupDataDir() {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-db-copy-`);
@@ -72,7 +83,7 @@ test('a copy taken while writes run is whole, and holds a prefix of them', async
     );
 
     const [copy] = await Promise.all([
-      writeDatabaseCopy(db, dir.dataDir, 'busy', Date.now),
+      writeDatabaseCopy(db, buildBudget(10 * GIB), dir.dataDir, 'busy', Date.now),
       ...writes,
     ]);
 
@@ -149,4 +160,38 @@ test('the shared copy step writes into an empty file that exists', async () => {
   } finally {
     await db.destroy();
   }
+});
+
+test('a copy past the disk reserve is refused, and leaves no file', async () => {
+  using dir = setupDataDir();
+
+  const db = await openDatabase(join(dir.dataDir, 'imp.sqlite'));
+
+  try {
+    // the reserve and not a byte more: the copy needs room past it
+    const refused = await writeDatabaseCopy(db, buildBudget(GIB), dir.dataDir, 'full', Date.now)
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect(refused).toMatchObject({ code: 'DISK_FULL' });
+    expect(readdirSync(join(dir.dataDir, 'db-copies'))).toEqual([]);
+  } finally {
+    await db.destroy();
+  }
+});
+
+test('an existing copies directory is made owner-only', async () => {
+  using dir = setupDataDir();
+
+  mkdirSync(join(dir.dataDir, 'db-copies'), { mode: 0o755 });
+
+  const db = await openDatabase(join(dir.dataDir, 'imp.sqlite'));
+
+  try {
+    await writeDatabaseCopy(db, buildBudget(10 * GIB), dir.dataDir, 'mode', Date.now);
+  } finally {
+    await db.destroy();
+  }
+
+  expect(statSync(join(dir.dataDir, 'db-copies')).mode & 0o777).toBe(0o700);
 });

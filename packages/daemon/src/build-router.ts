@@ -97,7 +97,7 @@ export interface RouterDeps {
   readonly checkDnsToken: (() => Promise<DnsTokenStatus>) | null;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
-  readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
+  readonly diskBudget: Pick<DiskBudget, 'readStatus' | 'withRoom'>;
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly log: (message: string) => void;
@@ -671,6 +671,7 @@ export function buildRouter(deps: RouterDeps) {
       copyDatabase: os.system.copyDatabase.handler(async (context) => {
         const copy = await writeDatabaseCopy(
           deps.db,
+          deps.diskBudget,
           deps.config.dataDir,
           context.input.name ?? buildCopyName(deps.now()),
           deps.now,
