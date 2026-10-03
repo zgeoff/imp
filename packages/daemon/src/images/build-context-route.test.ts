@@ -69,8 +69,10 @@ async function setupTest(options: TestOptions = {}) {
     tarPath,
     name,
     dockerfile,
-    signal,
+    buildOptions,
   ) => {
+    const signal = buildOptions.signal;
+
     calls.push({ bytes: readFileSync(tarPath, 'utf8'), name, dockerfile });
 
     const gone = Promise.withResolvers<void>();
@@ -1061,4 +1063,96 @@ test('a new route clears what an earlier impd left in the uploads directory', as
   });
 
   expect(existsSync(leftover)).toBe(false);
+});
+
+test('an on-host build reports its unpack, after the engine built the image', async () => {
+  const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
+  const socket = join(socketDir, 'docker.sock');
+  const builtId = `sha256:${'e'.repeat(64)}`;
+
+  // the engine builds the image at once
+  const engine = Bun.serve({
+    unix: socket,
+    fetch: async (request) => {
+      await request.arrayBuffer();
+
+      return new Response(`${JSON.stringify({ id: 'moby.image.id', aux: { ID: builtId } })}\n`);
+    },
+  });
+
+  await using ctx = await setupTest({
+    build: 'image-service',
+    env: { DOCKER_HOST: `unix://${socket}` },
+  });
+
+  const dataDir = ctx.harness.config.dataDir;
+  const contextDir = join(dataDir, 'context');
+  const inspect = JSON.stringify([{ Id: builtId, Config: {}, Size: 1 }]);
+
+  // the frontend and the built tag are on the host; the unpack's create fails
+  const docker = writeFakeDocker(dataDir, [
+    'for last; do :; done',
+    'case "$1 $2 $last" in',
+    `  "version --format "*) echo '"linux" "x86_64"' ;;`,
+    `  "image inspect docker/dockerfile:"*) echo ${builtId} ;;`,
+    `  "image inspect imp/web:latest") echo '${inspect}' ;;`,
+    '  *) echo "no $1 in this test" >&2; exit 1 ;;',
+    'esac',
+  ]);
+
+  mkdirSync(contextDir);
+  writeFileSync(join(contextDir, 'Dockerfile'), 'FROM scratch\n');
+
+  const phases: string[] = [];
+  const savedPath = process.env['PATH'];
+
+  process.env['PATH'] = docker.path;
+
+  try {
+    const failure = await ctx.harness.images
+      .buildImage(contextDir, 'web', undefined, {
+        setPhase: (phase) => {
+          phases.push(phase);
+        },
+      })
+      .catch((error: unknown) => error);
+
+    expect(String(failure)).toContain('no create in this test');
+    expect(phases).toEqual(['build', 'unpack']);
+  } finally {
+    process.env['PATH'] = savedPath;
+
+    await engine.stop(true);
+
+    rmSync(socketDir, { recursive: true, force: true });
+  }
+});
+
+test('on-host builds and uploads share the four build slots', async () => {
+  await using ctx = await setupTest();
+
+  const held = [1, 2, 3, 4].map(() => ctx.harness.images.claimBuildSlot());
+
+  // an on-host build waits for no slot: it is refused at once, before any check
+  const onHost = await ctx.harness.images
+    .buildImage('relative/path', 'web')
+    .catch((error: unknown) => error);
+
+  const upload = await ctx.readStatus('name=web', 'tar');
+
+  expect(onHost).toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+  expect(upload).toBe(429);
+
+  // a slot freed lets the next one through to its own checks
+  held[0]?.();
+
+  const next = await ctx.harness.images
+    .buildImage('relative/path', 'web')
+    .catch((error: unknown) => error);
+
+  expect(next).toMatchObject({ code: 'BAD_REQUEST' });
+
+  for (const release of held.slice(1)) {
+    release();
+  }
 });

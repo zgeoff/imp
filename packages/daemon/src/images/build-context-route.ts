@@ -15,8 +15,6 @@ import type { DiskBudget } from '../storage/disk-budget';
 import { createBuildEventStream } from './build-event-stream';
 import type { ImageService } from './image-service';
 
-// builds that may stream at once; each holds up to buildContextMaxBytes on disk
-const MAX_BUILDS = 4;
 const PROCEDURE = 'images.build';
 
 function readNoSecret(): Promise<null> {
@@ -34,7 +32,7 @@ export interface BuildContextRoute {
 
 export interface BuildContextDeps {
   readonly config: Pick<Config, 'dataDir' | 'buildContextMaxBytes'>;
-  readonly images: Pick<ImageService, 'buildImageFromContext'>;
+  readonly images: Pick<ImageService, 'buildImageFromContext' | 'claimBuildSlot'>;
 
   // holds room for the uploaded tar while it is on disk
   readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
@@ -66,24 +64,6 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
   rmSync(uploadsDir, { recursive: true, force: true });
   mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
 
-  const running = { count: 0 };
-
-  // a build slot, held from before the upload until the build ends; the
-  // answer frees it
-  const claimSlot = (): (() => void) => {
-    if (running.count >= MAX_BUILDS) {
-      throw new ORPCError('TOO_MANY_REQUESTS', {
-        message: `${String(MAX_BUILDS)} image builds are already uploading or running; try again`,
-      });
-    }
-
-    running.count += 1;
-
-    return () => {
-      running.count -= 1;
-    };
-  };
-
   const runBuild = async (
     request: Request,
     query: ImageBuildQuery,
@@ -101,7 +81,10 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
 
         setPhase('build');
 
-        return deps.images.buildImageFromContext(tarPath, query.name, query.dockerfile, signal);
+        return deps.images.buildImageFromContext(tarPath, query.name, query.dockerfile, {
+          signal,
+          setPhase,
+        });
       });
     } finally {
       rmSync(tarPath, { force: true });
@@ -147,7 +130,7 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       try {
         reserved = {
           limitBytes: readLimit(request, deps.config.buildContextMaxBytes),
-          release: claimSlot(),
+          release: deps.images.claimBuildSlot(),
         };
       } catch (error) {
         return sendFailure(error);

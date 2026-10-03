@@ -32,6 +32,7 @@ import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { createBuildSlots } from './build-slots';
 import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
@@ -105,8 +106,12 @@ export interface ImageService {
     tarPath: string,
     name: string,
     dockerfile: string | undefined,
-    signal: AbortSignal,
+    options: Readonly<ImageOpOptions> & { readonly signal: AbortSignal },
   ) => Promise<ImageRecord>;
+
+  // one of the build slots an upload and an on-host build share;
+  // TOO_MANY_REQUESTS when all are taken
+  readonly claimBuildSlot: () => () => void;
   readonly listImages: () => Promise<ImageRecord[]>;
   readonly removeImage: (name: string) => Promise<void>;
 
@@ -298,6 +303,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
+
+  const buildSlots = createBuildSlots();
 
   const readInspect = async (ref: string, signal: AbortSignal | undefined) => {
     const first = await runCommand(['docker', 'image', 'inspect', ref]);
@@ -563,8 +570,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     tarPath: string,
     name: string,
     givenDockerfile: string | undefined,
-    signal: AbortSignal,
+    options: Readonly<ImageOpOptions> & { readonly signal: AbortSignal },
   ): Promise<ImageRecord> => {
+    const signal = options.signal;
     const tag = `imp/${NameSchema.parse(name)}:latest`;
     const tarBytes = statSync(tarPath).size;
     const dockerfilePath = normalizeDockerfilePath(givenDockerfile);
@@ -640,7 +648,76 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     signal.throwIfAborted();
 
-    return createImageFromRef(tag, name);
+    // the tag is the engine's now: no pull, only the unpack
+    return createImageFromRef(tag, name, {
+      ...(options.setPhase !== undefined && { setPhase: options.setPhase }),
+    });
+  };
+
+  // packed on the impd host, as the CLI packs an upload; holds a build slot
+  // from the first check to the image
+  const buildOnHost = async (
+    contextDir: string,
+    name: string,
+    dockerfile: string | undefined,
+    options: Readonly<ImageOpOptions>,
+  ): Promise<ImageRecord> => {
+    if (!contextDir.startsWith('/')) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `build context ${JSON.stringify(contextDir)} is not an absolute path`,
+      });
+    }
+
+    // The CLI sends a path on its own machine. impd sees it only when the
+    // two share a filesystem (the dev container mounts the repo); a host
+    // running the release image does not.
+    if (!existsSync(contextDir)) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `build context ${contextDir} does not exist on the impd host; build the image there and use \`imp image add\``,
+      });
+    }
+
+    // packed here as the CLI packs an upload: the engine does not read
+    // .dockerignore from a context sent as the body
+    const entries = await listContextEntries(contextDir, normalizeDockerfilePath(dockerfile)).catch(
+      (error: unknown) => {
+        throw error instanceof MissingDockerfileError
+          ? new ORPCError('BAD_REQUEST', { message: error.message })
+          : error;
+      },
+    );
+
+    const tarBytes = await countTarBytes(entries);
+
+    const maxBytes = deps.config.buildContextMaxBytes;
+
+    // the limit an upload has, and the proxy's
+    if (tarBytes > maxBytes) {
+      throw new ORPCError('BAD_REQUEST', {
+        message: `the build context is ${String(tarBytes)} bytes, over the limit of ${String(Math.floor(maxBytes / 1024 ** 2))} MiB (IMP_BUILD_CONTEXT_MAX_MIB)`,
+      });
+    }
+
+    const uploadsDir = buildUploadsDir(deps.config.dataDir);
+    const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
+
+    mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
+
+    return deps.diskBudget.withRoom(tarBytes, async () => {
+      try {
+        await writeContextTar(entries, tarPath);
+
+        options.setPhase?.('build');
+
+        // images.build has no signal: its call waits for the image
+        return await buildFromContext(tarPath, name, dockerfile, {
+          signal: options.signal ?? new AbortController().signal,
+          ...(options.setPhase !== undefined && { setPhase: options.setPhase }),
+        });
+      } finally {
+        rmSync(tarPath, { force: true });
+      }
+    });
   };
 
   const resolveImage = async (name?: string): Promise<ImageRecord> => {
@@ -657,67 +734,16 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   return {
     addImage: createImageFromRef,
     buildImage: async (contextDir, name, dockerfile, options = {}) => {
-      if (!contextDir.startsWith('/')) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: `build context ${JSON.stringify(contextDir)} is not an absolute path`,
-        });
+      const release = buildSlots.claim();
+
+      try {
+        return await buildOnHost(contextDir, name, dockerfile, options);
+      } finally {
+        release();
       }
-
-      // The CLI sends a path on its own machine. impd sees it only when the
-      // two share a filesystem (the dev container mounts the repo); a host
-      // running the release image does not.
-      if (!existsSync(contextDir)) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: `build context ${contextDir} does not exist on the impd host; build the image there and use \`imp image add\``,
-        });
-      }
-
-      // packed here as the CLI packs an upload: the engine does not read
-      // .dockerignore from a context sent as the body
-      const entries = await listContextEntries(
-        contextDir,
-        normalizeDockerfilePath(dockerfile),
-      ).catch((error: unknown) => {
-        throw error instanceof MissingDockerfileError
-          ? new ORPCError('BAD_REQUEST', { message: error.message })
-          : error;
-      });
-
-      const tarBytes = await countTarBytes(entries);
-
-      const maxBytes = deps.config.buildContextMaxBytes;
-
-      // the limit an upload has, and the proxy's
-      if (tarBytes > maxBytes) {
-        throw new ORPCError('BAD_REQUEST', {
-          message: `the build context is ${String(tarBytes)} bytes, over the limit of ${String(Math.floor(maxBytes / 1024 ** 2))} MiB (IMP_BUILD_CONTEXT_MAX_MIB)`,
-        });
-      }
-
-      const uploadsDir = buildUploadsDir(deps.config.dataDir);
-      const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
-
-      mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
-
-      return deps.diskBudget.withRoom(tarBytes, async () => {
-        try {
-          await writeContextTar(entries, tarPath);
-
-          options.setPhase?.('build');
-
-          // images.build has no signal: its call waits for the image
-          return await buildFromContext(
-            tarPath,
-            name,
-            dockerfile,
-            options.signal ?? new AbortController().signal,
-          );
-        } finally {
-          rmSync(tarPath, { force: true });
-        }
-      });
     },
     buildImageFromContext: buildFromContext,
+    claimBuildSlot: buildSlots.claim,
     listImages: () => listImages(deps.db),
     removeImage: async (name) => {
       const image = await findImageByName(deps.db, name);
