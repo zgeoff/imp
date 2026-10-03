@@ -120,7 +120,7 @@ test('an image in use cannot be removed; once unused it can', async () => {
 });
 
 test('a file capability survives the build: nobody binds port 80 with it, and not without', async () => {
-  // busybox runs the applet its name ends in, so a copy named busybox-* still works
+  // a copy named busybox-* still takes the applet as its first argument
   writeFileSync(
     join(capsDir, 'Dockerfile'),
     'FROM alpine:3.20\nRUN apk add --no-cache libcap && cp /bin/busybox /usr/local/bin/busybox-lowbind && setcap cap_net_bind_service+ep /usr/local/bin/busybox-lowbind\n',
@@ -129,23 +129,24 @@ test('a file capability survives the build: nobody binds port 80 with it, and no
   await runImp('image', 'build', capsDir, '--name', caps);
   await createImp(caps, '--image', caps, '--memory', '512');
 
-  const getcap = await runInImp(caps, 'getcap', '/usr/local/bin/busybox-lowbind');
+  try {
+    const getcap = await runInImp(caps, 'getcap', '/usr/local/bin/busybox-lowbind');
 
-  // nc listens until timeout's TERM, 143 in busybox; a refused bind exits 1
-  const tryBind = (binary: string) =>
-    runShellInImp(
-      caps,
-      `su -s /bin/sh nobody -c 'timeout 1 ${binary} nc -l -p 80' 2>&1; echo "exit=$?"`,
-    );
+    // nc listens until timeout's TERM, 143 in busybox; a refused bind exits 1
+    const tryBind = (binary: string) =>
+      runShellInImp(
+        caps,
+        `su -s /bin/sh nobody -c 'timeout 1 ${binary} nc -l -p 80' 2>&1; echo "exit=$?"`,
+      );
 
-  const withCap = await tryBind('busybox-lowbind');
-  const without = await tryBind('busybox');
+    const withCap = await tryBind('busybox-lowbind');
+    const without = await tryBind('busybox');
 
-  expect(getcap).toBe('/usr/local/bin/busybox-lowbind cap_net_bind_service=ep');
-  expect(withCap).not.toContain('Permission denied');
-  expect(withCap).toContain('exit=143');
-  expect(without).toContain('nc: bind: Permission denied');
-
-  await removeImps(caps);
-  await runImp('image', 'rm', caps);
+    expect(getcap).toBe('/usr/local/bin/busybox-lowbind cap_net_bind_service=ep');
+    expect(withCap).not.toContain('Permission denied');
+    expect(withCap).toContain('exit=143');
+    expect(without).toContain('nc: bind: Permission denied');
+  } finally {
+    await removeImps(caps);
+  }
 });
