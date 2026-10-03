@@ -6,17 +6,30 @@ import { createImpClient } from './create-imp-client';
 import { createIdleFetch, startSlowImpd } from './test-slow-impd';
 import type { SlowImpdHarness } from './test-slow-impd';
 
-// impd whose add and on-host build each take `workMs`
-function startSlowOps(harness: SlowImpdHarness, workMs: number, keepaliveMs: number) {
-  const makeImage = async (name: string) => {
-    await Bun.sleep(workMs);
+// impd whose add and on-host build each take `workMs`; `onWork` hears each
+// one, which goes on after its client gave up, so the test can wait for it
+// before the database closes
+function startSlowOps(
+  harness: SlowImpdHarness,
+  workMs: number,
+  keepaliveMs: number,
+  onWork: (made: Promise<unknown>) => void,
+) {
+  const makeImage = (name: string) => {
+    const made = (async () => {
+      await Bun.sleep(workMs);
 
-    return createImage(harness.db, {
-      name,
-      ref: `imp/${name}:latest`,
-      digest: 'sha256:x',
-      sizeBytes: 1,
-    });
+      return createImage(harness.db, {
+        name,
+        ref: `imp/${name}:latest`,
+        digest: 'sha256:x',
+        sizeBytes: 1,
+      });
+    })();
+
+    onWork(made);
+
+    return made;
   };
 
   return startSlowImpd(
@@ -30,8 +43,13 @@ function startSlowOps(harness: SlowImpdHarness, workMs: number, keepaliveMs: num
 }
 
 test('an add or an on-host build longer than the fetch waits for a byte succeeds as a stream, and fails as one answer', async () => {
+  const work: Promise<unknown>[] = [];
+
   await using harness = await setupImpTest();
-  await using impd = startSlowOps(harness, 500, 25);
+
+  await using impd = startSlowOps(harness, 500, 25, (made) => {
+    work.push(made);
+  });
 
   const client = createImpClient({ url: impd.url, token: TEST_TOKEN, fetch: createIdleFetch(200) });
   const phases: ImageBuildPhase[] = [];
@@ -66,4 +84,11 @@ test('an add or an on-host build longer than the fetch waits for a byte succeeds
   ]);
 
   expect(failures).toMatchObject([{ name: 'TimeoutError' }, { name: 'TimeoutError' }]);
+
+  // impd still runs the two it was given; their images land
+  await Promise.all(work);
+
+  const after = await client.images.list();
+
+  expect(after.map((image) => image.name).toSorted()).toEqual(['box', 'box2', 'web', 'web2']);
 });
