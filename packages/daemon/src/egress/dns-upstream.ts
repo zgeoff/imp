@@ -1,4 +1,5 @@
 import { connect } from 'node:net';
+import { readErrorMessage } from '../read-error-message';
 
 // how long one upstream has to answer before the next is asked
 const UPSTREAM_TIMEOUT_MS = 2000;
@@ -65,6 +66,14 @@ async function sendUdp(server: string, port: number, query: Uint8Array): Promise
         if (address === server && data[0] === query[0] && data[1] === query[1]) {
           reply.resolve(new Uint8Array(data));
         }
+      },
+
+      // an upstream that refuses, as ICMP: the next one gets the query.
+      // Bun 1.4.2 passes the error alone, not after the socket its types name.
+      error: (...args: readonly unknown[]) => {
+        const message = readErrorMessage(args.at(-1));
+
+        reply.reject(new Error(message));
       },
     },
   });

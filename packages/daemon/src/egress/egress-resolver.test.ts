@@ -6,7 +6,7 @@ import { parseSubnet } from '../net/addressing';
 import { findFreePorts } from '../net/test-free-ports';
 import { createDnsForward } from './dns-upstream';
 import { createQueryHandler, startResolverServer } from './egress-resolver';
-import type { QueryVerdict, ResolverDeps } from './egress-resolver';
+import type { QueryHandler, QueryVerdict, ResolverDeps } from './egress-resolver';
 import type { AddressAnswer } from './egress-sets';
 import { resolveNetworkName } from './network-names';
 
@@ -621,4 +621,72 @@ test('with IPv6, an allowed AAAA goes in as an A does; without, it gets an empty
 
   expect(empty.answers).toEqual([]);
   expect(without.admitted).toEqual([]);
+});
+
+test('a guest that goes before its reply leaves the resolver up: the ICMP error is not a crash', async () => {
+  const ports = findFreePorts(1);
+  const replied: string[] = [];
+
+  // slow enough that the first client has closed its port by the reply
+  const writeSlowReply: QueryHandler = async (_source, message) => {
+    await Bun.sleep(50);
+
+    replied.push('reply');
+
+    return message;
+  };
+
+  const server = await startResolverServer(
+    ports.take(),
+    parseSubnet('127.0.0.0/16'),
+    writeSlowReply,
+  );
+
+  try {
+    const gone = await Bun.udpSocket({ hostname: '127.0.0.2' });
+
+    gone.send(buildQuery('a.example'), server.port, '127.0.0.1');
+    gone.close();
+
+    while (replied.length === 0) {
+      await Bun.sleep(5);
+    }
+
+    // the ICMP port unreachable comes back to the resolver's socket now
+    await Bun.sleep(50);
+
+    const reply = Promise.withResolvers<Uint8Array>();
+
+    const client = await Bun.udpSocket({
+      hostname: '127.0.0.2',
+      socket: {
+        data: (_socket, data) => {
+          reply.resolve(new Uint8Array(data));
+        },
+      },
+    });
+
+    client.send(buildQuery('b.example'), server.port, '127.0.0.1');
+
+    const answered = await reply.promise;
+
+    client.close();
+
+    expect(answered.byteLength).toBeGreaterThan(0);
+  } finally {
+    server.stop();
+  }
+});
+
+test('an upstream that refuses with ICMP fails over at once, and ends nothing', async () => {
+  const forward = createDnsForward(['127.0.0.1'], findFreePorts(1).take());
+  const started = Date.now();
+
+  const failure = await forward(buildQuery('a.example')).catch((error: unknown) => error);
+
+  expect(String(failure)).toContain(
+    'no upstream resolver answered (127.0.0.1: ECONNREFUSED: connection refused, recv)',
+  );
+
+  expect(Date.now() - started).toBeLessThan(1000);
 });
