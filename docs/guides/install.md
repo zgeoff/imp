@@ -559,3 +559,9 @@ An image from a public registry goes in with `imp image add <ref>`, which pulls 
 
 Until an image named `IMP_DEFAULT_IMAGE` (default `base`) exists, `imp new` uses `ubuntu` and impd
 logs a warning at start.
+
+On a new host, impd's first start pulls its builder image (`IMP_BUILD_IMAGE`, the published
+`imp-base`, about 700 MB unpacked) by digest onto the host's Docker engine, the one pull
+`imp-docker-proxy` lets through, and adds it as `imp-builder`. It then adds `ubuntu` in a builder
+imp. Both took 34 to 41 s on a home link. If the builder image does not pull, every add and build
+fails with an error that names `IMP_BUILD_IMAGE`; none falls back to the host's engine.
