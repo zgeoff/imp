@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.28.1](https://github.com/zgeoff/imp/compare/v0.28.0...v0.28.1) (2026-10-03)
+
+### Bug Fixes
+
+- **images:** build dev and hello on the published base by digest
+  ([#160](https://github.com/zgeoff/imp/issues/160))
+  ([e73c42b](https://github.com/zgeoff/imp/commit/e73c42b54965255d53d882f40bb2650a8484613c))
+
 ## [0.28.0](https://github.com/zgeoff/imp/compare/v0.27.0...v0.28.0) (2026-10-03)
 
 ### Features
