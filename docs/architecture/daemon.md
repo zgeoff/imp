@@ -622,12 +622,14 @@ a new imp. [Storage](./storage.md#checkpoints-restores-and-forks) covers the fil
 
 The image service turns an OCI image into a sparse ext4 rootfs, once per image ID. It runs a
 BuildKit build for `imp image build` (`images/docker-build.ts`): a sessionless `POST /build` to the
-Docker socket, with a context the client uploaded or a directory on the host that impd packs. The
-build route streams an upload to a temp file, checks its size as the bytes come, holds disk room for
-it, and lets 4 builds run at once. A client that goes aborts the build request. It checks the caller
-and writes the audit row itself, as the router does for an oRPC call. For `imp image add` it uses
-the image the host Docker has, and pulls it when it is missing. Then it exports the filesystem and
-writes the image config for the agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
+Docker socket, with a context the client uploaded or a directory on the host that impd packs. First
+it pulls the literal `FROM` images the host lacks (`images/dockerfile-bases.ts`), since a build with
+no session cannot ask for registry credentials. The build route streams an upload to a temp file,
+checks its size as the bytes come, holds disk room for it, and lets 4 builds run at once. A client
+that goes aborts the build request. It checks the caller and writes the audit row itself, as the
+router does for an oRPC call. For `imp image add` it uses the image the host Docker has, and pulls
+it when it is missing. Then it exports the filesystem and writes the image config for the agent.
+When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
 The template service (`images/template-service.ts`) makes an image from an imp's disk instead, for
