@@ -1,6 +1,6 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
-import type { AuditEntry, BrokerRule, Secret, SecretAdded, SecretKind } from '@imp/api';
+import type { AuditEntry, BrokerRule, EgressMode, Secret, SecretAdded, SecretKind } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import {
   buildConflictError,
@@ -36,9 +36,11 @@ import type {
   SecretRecord,
 } from '../db/secrets';
 import { deriveSlotAddress } from '../net/addressing';
+import { readConnectedPrefixes4 } from '../net/host-routes';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
-import { BLOCKED_RANGES6, createRangeChecker6 } from '../net/ranges6';
+import { createRangeChecker } from '../net/range-checker';
+import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, createRangeChecker6 } from '../net/ranges6';
 import { readErrorMessage } from '../read-error-message';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import { startBrokerFront } from './broker-front';
@@ -138,7 +140,7 @@ export interface BrokerDeps {
   // tests stand in for the guest install and for the network
   readonly installBundle?: InstallBundle;
   readonly fetch?: UpstreamFetch;
-  readonly resolveTunnelTarget?: (host: string) => Promise<string>;
+  readonly resolveTunnelTarget?: (host: string, mode: EgressMode) => Promise<string>;
   readonly dialTunnel?: (address: string, port: number) => Socket;
 
   // the IPv6 impd resolved at start; without it, tunnels dial IPv4 only
@@ -150,7 +152,7 @@ export interface BrokerDeps {
   readonly secretFiles?: SecretFiles;
 }
 
-// how long the container's own IPv6 prefixes stay read
+// how long the container's own prefixes stay read
 const CONNECTED_CACHE_MS = 30_000;
 
 export async function createBroker(deps: BrokerDeps): Promise<Broker> {
@@ -185,10 +187,39 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     return blocked6.check;
   };
 
-  const resolveTarget = async (host: string): Promise<string> => {
+  const publicRefused: { check: (address: string) => boolean; readAt: number } = {
+    check: () => true,
+    readAt: 0,
+  };
+
+  // what a public imp's tunnel may not dial beyond every tunnel's ranges,
+  // as its firewall refuses it: the container's IPv4 networks, which can be
+  // public ones, IMP_EGRESS_DENY and the IPv6 documentation ranges
+  const readPublicRefused = async (): Promise<(address: string) => boolean> => {
+    if (publicRefused.readAt === 0 || Date.now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
+      const connected = await readConnectedPrefixes4();
+
+      const deny = config.egressDeny;
+
+      publicRefused.check = createRangeChecker(
+        [...connected, ...deny.filter((cidr) => !cidr.includes(':'))],
+        [...DOCUMENTATION_RANGES6, ...deny.filter((cidr) => cidr.includes(':'))],
+      );
+
+      publicRefused.readAt = Date.now();
+    }
+
+    return publicRefused.check;
+  };
+
+  const resolveTarget = async (host: string, mode: EgressMode): Promise<string> => {
     const isBlocked6 = await readBlocked6();
 
-    return resolveTunnelTarget(host, { isBlocked6 });
+    if (mode !== 'public') {
+      return resolveTunnelTarget(host, { isBlocked6 });
+    }
+
+    return resolveTunnelTarget(host, { isBlocked6, isRefusedMore: await readPublicRefused() });
   };
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);

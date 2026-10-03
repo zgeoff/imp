@@ -86,6 +86,33 @@ test('IP literals and the host itself are checked without DNS', async () => {
   expect(literal).toBe('140.82.112.3');
 });
 
+test("a public imp's tunnel is refused its own ranges too, whichever answer holds one", async () => {
+  const answers: Record<string, readonly string[]> = {
+    'public.test': ['140.82.112.3'],
+    'host.test': ['140.82.112.3', '8.8.4.4'],
+    'mapped.test': ['::ffff:8.8.4.4'],
+  };
+
+  const deps = {
+    resolve: (host: string) => Promise.resolve(answers[host] ?? []),
+    readHostAddresses: () => HOST_ADDRESSES,
+    isRefusedMore: (address: string) => address === '8.8.4.4',
+  };
+
+  const target = await resolveTunnelTarget('public.test', deps);
+
+  expect(target).toBe('140.82.112.3');
+
+  for (const host of ['host.test', 'mapped.test', '8.8.4.4']) {
+    const failure = await resolveTunnelTarget(host, deps).catch((error: unknown) => error);
+
+    expect({ host, refused: failure instanceof TunnelRefusedError }).toEqual({
+      host,
+      refused: true,
+    });
+  }
+});
+
 const isBlocked6 = createRangeChecker6([...BLOCKED_RANGES6, 'fd12:3456:789a::/64']);
 
 test('with IPv6, a public IPv6 address passes and the blocked ranges and host do not', () => {

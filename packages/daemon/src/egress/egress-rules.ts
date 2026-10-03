@@ -66,10 +66,11 @@ export function isAddressAllowed(rules: AllowRules, address: string): boolean {
 }
 
 // What the broker's plain tunnel may reach, by the host the CONNECT names:
-// a box allows its names, and an address literal its ranges allow.
+// a box allows its names, and an address literal its ranges allow. Open and
+// public allow any: the broker itself dials only checked public addresses.
 export function isTunnelAllowed(policy: EgressPolicy, host: string): boolean {
   if (policy.mode !== 'box') {
-    return policy.mode === 'open';
+    return policy.mode === 'open' || policy.mode === 'public';
   }
 
   const rules = buildAllowRules(policy.allow);

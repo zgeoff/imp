@@ -106,3 +106,26 @@ test('a refused tunnel target is a 403 that says why', async () => {
   expect(reply).toStartWith('HTTP/1.1 403');
   expect(reply).toContain('resolves to 10.0.0.1');
 });
+
+test("a public imp's plain tunnel is resolved under its policy, and refused what it refuses", async () => {
+  const modes: string[] = [];
+
+  await using ctx = await setupFront({
+    findPeer: () =>
+      Promise.resolve({ id: 'imp-1', name: 'dev', egress: { mode: 'public', allow: [] } }),
+    resolveTunnelTarget: (_host, mode) => {
+      modes.push(mode);
+
+      return Promise.reject(new TunnelRefusedError('host.test resolves to 8.8.4.4'));
+    },
+  });
+
+  const socket = await openGuestSocket(ctx.port);
+
+  socket.write('CONNECT host.test:443 HTTP/1.1\r\n\r\n');
+
+  const reply = await readUntilClose(socket);
+
+  expect(modes).toEqual(['public']);
+  expect(reply).toStartWith('HTTP/1.1 403');
+});

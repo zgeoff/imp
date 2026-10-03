@@ -172,6 +172,43 @@ test('a tighter policy flushes the guest, prunes the set and refreshes the table
   expect(ctx.nftScripts.at(-1)).not.toContain('allow0');
 });
 
+test('a public imp leaves only by the uplinks, and is refused the private ranges, the host and IMP_EGRESS_DENY', async () => {
+  await using ctx = await setupImpTest({
+    env: { IMP_EGRESS_DENY: '8.8.4.4,2a01:4f8::7/128' },
+  });
+
+  await ctx.createTestImage('base');
+  await ctx.imps.createImp({ name: 'dev' });
+
+  // open, then public: tighter, so the guest's flows go
+  await ctx.egress.setPolicy('dev', { mode: 'public', allow: [] });
+
+  const table = ctx.nftScripts.at(-1) ?? '';
+
+  expect(table).toContain(
+    '    oifname != @uplinks goto deny\n    ip daddr @public4 goto deny\n    ip6 daddr @public6 goto deny\n    accept\n',
+  );
+
+  expect(table).toContain('set uplinks {\n    type ifname\n    elements = { "eth0" }');
+
+  // the private ranges, IMP_SUBNET, the host's networks and IMP_EGRESS_DENY
+  expect(table).toMatch(
+    /set public4 \{[^\}]*elements = \{ 0\.0\.0\.0\/8, [^\}]*10\.66\.0\.0\/16, 172\.17\.0\.0\/16, 172\.17\.0\.2\/32, 44\.0\.0\.0\/24, 8\.8\.4\.4\/32 \}/v,
+  );
+
+  expect(table).toMatch(/set public6 \{[^\}]*2001:db8::\/32, 3fff::\/20, 2a01:4f8::7\/128 \}/v);
+  expect(table).toMatch(/set dns_taps \{\n {4}type ifname\n {4}elements = \{ "imp0" \}/v);
+  expect(ctx.flushed).toEqual(['10.66.0.2']);
+
+  // any name, screened
+  const verdicts = [
+    await ctx.egress.checkName(0, 'example.com'),
+    await ctx.egress.checkName(0, 'rebind.test'),
+  ];
+
+  expect(verdicts).toEqual(['screen', 'screen']);
+});
+
 test('a policy change nft does not take leaves the old policy in place', async () => {
   const state = { broken: false };
 

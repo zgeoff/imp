@@ -1,4 +1,4 @@
-import type { Network, NetworkJoin } from '@imp/api';
+import type { EgressMode, Network, NetworkJoin } from '@imp/api';
 import { buildConflictError, buildNotFoundError } from '../api-errors';
 import { listEgressSlots } from '../db/egress';
 import { findImpByName } from '../db/imps';
@@ -53,6 +53,9 @@ export interface NetworkService {
   readonly removeEmptyNetworks: (names: readonly string[]) => Promise<void>;
 }
 
+const TRUSTS_OPEN = 'a public, box or none imp trusts its open peers';
+const TRUSTS_PUBLIC = 'a box or none imp trusts its public peers';
+
 export function createNetworkService(deps: NetworkDeps): NetworkService {
   const db = deps.db;
 
@@ -97,7 +100,8 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
     }
   };
 
-  // An open member reaches anything, and can relay for a box or none one:
+  // An open member reaches anything, and can relay for any other one; a
+  // public member reaches the internet, and can relay for a box or none one:
   // a network is a trust boundary. Null when the network mixes no policies.
   const readTrustWarning = async (networkName: string, impName: string): Promise<string | null> => {
     const network = await requireNetwork(networkName);
@@ -106,16 +110,26 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
     const modes = new Map(slots.map((slot) => [slot.name, slot.policy.mode]));
 
     const others = network.imps.filter((name) => name !== impName);
+    const mode = modes.get(impName);
     const open = others.filter((name) => modes.get(name) === 'open');
     const closed = others.filter((name) => modes.get(name) !== 'open');
-    const mode = modes.get(impName);
+    const publics = others.filter((name) => modes.get(name) === 'public');
+    const boxed = others.filter((name) => isBoxOrNone(modes.get(name)));
 
     if (mode !== 'open' && open.length > 0) {
-      return `${impName} is ${String(mode)}, but ${open.join(', ')} on ${networkName} ${open.length === 1 ? 'is' : 'are'} open and can relay for it: a box or none imp trusts its open peers`;
+      return `${impName} is ${String(mode)}, but ${open.join(', ')} on ${networkName} ${open.length === 1 ? 'is' : 'are'} open and can relay for it: ${TRUSTS_OPEN}`;
     }
 
     if (mode === 'open' && closed.length > 0) {
-      return `${impName} is open, so ${closed.join(', ')} on ${networkName} can reach anything through it: a box or none imp trusts its open peers`;
+      return `${impName} is open, so ${closed.join(', ')} on ${networkName} can reach anything through it: ${TRUSTS_OPEN}`;
+    }
+
+    if (isBoxOrNone(mode) && publics.length > 0) {
+      return `${impName} is ${String(mode)}, but ${publics.join(', ')} on ${networkName} ${publics.length === 1 ? 'is' : 'are'} public and can relay for it to the internet: ${TRUSTS_PUBLIC}`;
+    }
+
+    if (mode === 'public' && boxed.length > 0) {
+      return `${impName} is public, so ${boxed.join(', ')} on ${networkName} can reach the internet through it: ${TRUSTS_PUBLIC}`;
     }
 
     return null;
@@ -270,4 +284,8 @@ export function createNetworkService(deps: NetworkDeps): NetworkService {
 
 function toApiNetwork(network: Readonly<NetworkRecord>): Network {
   return { name: network.name, imps: network.imps, createdAt: network.createdAt };
+}
+
+function isBoxOrNone(mode: EgressMode | undefined): boolean {
+  return mode === 'box' || mode === 'none';
 }

@@ -13,6 +13,7 @@ test('it fills every setting from its default when the env is empty', () => {
     sshAuthorizedKeys: true,
     brokerPort: 7081,
     egressDnsPort: 7053,
+    egressDeny: [],
     brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
     idleTimeoutS: 60,
@@ -206,6 +207,35 @@ test('IMP_PUBLIC_IP turns on the public listeners, on ports of their own', () =>
   );
 
   expect(() => loadConfig({ ...env, IMP_PUBLIC_IP: 'example.com' })).toThrow();
+});
+
+test('IMP_EGRESS_DENY takes addresses and CIDRs of both families, with IMP_PUBLIC_IP', () => {
+  const deny = loadConfig({
+    IMP_EGRESS_DENY: '198.51.100.7, 44.0.0.9/24,2001:DB8::1/64,2a01:4f8::7',
+  });
+
+  expect(deny.egressDeny).toEqual([
+    '198.51.100.7/32',
+    '44.0.0.0/24',
+    '2001:db8::/64',
+    '2a01:4f8::7/128',
+  ]);
+
+  const withPublic = loadConfig({
+    IMP_DOMAIN: 'imp.example.com',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN: 'cf-token',
+    IMP_PUBLIC_IP: '203.0.113.7',
+    IMP_EGRESS_DENY: '203.0.113.7',
+  });
+
+  expect(withPublic.egressDeny).toEqual(['203.0.113.7/32']);
+
+  expect(() => loadConfig({ IMP_EGRESS_DENY: 'host.example.com' })).toThrow(
+    'IMP_EGRESS_DENY: host.example.com is not an IPv4 or IPv6 address or CIDR',
+  );
+
+  expect(() => loadConfig({ IMP_EGRESS_DENY: '10.0.0.0/33' })).toThrow('IMP_EGRESS_DENY');
 });
 
 test('it leaves HTTPS off without IMP_DOMAIN, whatever else is set', () => {

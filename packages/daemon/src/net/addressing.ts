@@ -173,6 +173,21 @@ export function formatSubnet(subnet: Subnet): string {
   return `${formatIpv4(subnet.network)}/${String(subnet.prefixLength)}`;
 }
 
+// `a.b.c.d` or `a.b.c.d/n` as its network, host bits cleared
+// (`172.17.0.2/16` is `172.17.0.0/16`); an address alone is a /32. Null for
+// anything else.
+export function formatCidr4(text: string): string | null {
+  const [address = '', prefixText = '32', ...rest] = text.split('/');
+  const ip = parseIpv4(address);
+  const prefix = Number(prefixText);
+
+  if (ip === null || rest.length > 0 || !/^\d{1,2}$/.test(prefixText) || prefix > 32) {
+    return null;
+  }
+
+  return formatSubnet({ network: ip - (ip % 2 ** (32 - prefix)), prefixLength: prefix });
+}
+
 function isDecimal(text: string): boolean {
   return /^\d{1,3}$/.test(text);
 }

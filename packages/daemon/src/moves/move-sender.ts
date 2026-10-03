@@ -610,6 +610,15 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     await requireLeasesKept(imp, reply.keepsLeases);
 
+    // a move never changes the policy, either way
+    const policy = await deps.egress.readPolicy(imp.name);
+
+    if (policy.mode === 'public' && !reply.keepsPublicEgress) {
+      throw new OfferRefusalError(
+        "the target's impd predates the public egress policy and would receive the imp as none; upgrade it first",
+      );
+    }
+
     const warm = meta === null ? null : { meta, isDriveIncluded: reply.needsSystemDrive };
 
     const opened = await openParts(imp, target.mode, reply.needsImage, warm);

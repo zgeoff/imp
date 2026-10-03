@@ -1,6 +1,7 @@
 import { createConnection, createServer } from 'node:net';
 import type { Server, Socket } from 'node:net';
 import { pipeline } from 'node:stream';
+import type { EgressMode } from '@imp/api';
 import type { BrokerPeer } from '../db/secrets';
 import { isTunnelAllowed } from '../egress/egress-rules';
 import { findPeerSlot } from '../net/addressing';
@@ -28,7 +29,10 @@ export interface BrokerFrontDeps {
   readonly findPeer: (slot: number) => Promise<BrokerPeer | undefined>;
   readonly isGranted: (impId: string, host: string) => Promise<boolean>;
   readonly openTerminator: (key: TerminatorKey) => Promise<string>;
-  readonly resolveTunnelTarget: (host: string) => Promise<string>;
+
+  // the address to dial for a host, checked against what the imp's policy
+  // refuses beyond every tunnel's ranges
+  readonly resolveTunnelTarget: (host: string, mode: EgressMode) => Promise<string>;
   readonly log: (message: string) => void;
 
   // opens a plain tunnel's upstream socket; tests point it at a local server
@@ -293,7 +297,7 @@ async function runConnection(
   let address: string;
 
   try {
-    address = await deps.resolveTunnelTarget(head.host);
+    address = await deps.resolveTunnelTarget(head.host, current.egress.mode);
   } catch (error) {
     const status = error instanceof TunnelRefusedError ? 403 : 502;
 

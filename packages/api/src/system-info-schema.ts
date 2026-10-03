@@ -131,8 +131,8 @@ export const SystemInfoSchema = z.object({
   // from before it.
   defaults: z.object({ memoryMib: z.int().positive(), image: z.string().nullable() }).optional(),
 
-  // whether nft enforces the box and none egress policies; an impd that
-  // cannot refuses them. Optional for an impd from before it.
+  // whether nft enforces the public, box and none egress policies; an impd
+  // that cannot refuses them. Optional for an impd from before it.
   egress: z.object({ isEnforced: z.boolean() }).optional(),
 
   // public imps (docs/guides/https.md#public-imps): the IP their records
@@ -156,6 +156,9 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // the `public` egress policy; an older impd refuses the mode
+      publicEgress: z.boolean().optional(),
     })
     .optional(),
 });

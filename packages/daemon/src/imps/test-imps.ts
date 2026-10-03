@@ -258,6 +258,8 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     now: readClock,
     ipv6: options.ipv6 ?? null,
     readConnected6: () => Promise.resolve(['2001:db8:a::/64']),
+    readConnected4: () => Promise.resolve(['172.17.0.0/16', '172.17.0.2/32', '44.0.0.0/24']),
+    readUplinks: () => Promise.resolve(['eth0']),
   });
 
   // a system drive file, as setupSystemFiles installs it

@@ -48,6 +48,7 @@ test('a tunnel follows the mode: open allows, none refuses, box checks the list'
   const box = { mode: 'box', allow: ['github.com', '172.17.0.1'] } as const;
 
   expect(isTunnelAllowed({ mode: 'open', allow: [] }, 'example.org')).toBeTrue();
+  expect(isTunnelAllowed({ mode: 'public', allow: [] }, 'example.org')).toBeTrue();
   expect(isTunnelAllowed({ mode: 'none', allow: [] }, 'github.com')).toBeFalse();
   expect(isTunnelAllowed(box, 'github.com')).toBeTrue();
   expect(isTunnelAllowed(box, '172.17.0.1')).toBeTrue();

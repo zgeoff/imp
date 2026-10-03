@@ -54,4 +54,9 @@ test('only a box policy takes an allow-list', () => {
   expect(EgressPolicySchema.parse({ mode: 'open' })).toEqual({ mode: 'open', allow: [] });
   expect(EgressPolicySchema.safeParse({ mode: 'box', allow: ['github.com'] }).success).toBeTrue();
   expect(EgressPolicySchema.safeParse({ mode: 'none', allow: ['github.com'] }).success).toBeFalse();
+  expect(EgressPolicySchema.parse({ mode: 'public' })).toEqual({ mode: 'public', allow: [] });
+
+  expect(
+    EgressPolicySchema.safeParse({ mode: 'public', allow: ['10.0.0.0/8'] }).success,
+  ).toBeFalse();
 });
