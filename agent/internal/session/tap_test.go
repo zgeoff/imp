@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
 )
@@ -101,6 +102,7 @@ func TestTapLeavesTheExitForAViewer(t *testing.T) {
 // A tap resumes by offset with the ring's rules: exact, and a gap below the
 // ring's start.
 func TestTapResumes(t *testing.T) {
+	shortenTapWait(t, 100*time.Millisecond)
 	m := newTestManager(t)
 	total := uint64(ringSize + 1000)
 	out := startLoggedQuiet(t, m, "job", "head -c "+strconv.FormatUint(total, 10)+" /dev/zero | tr '\\0' x", total)
@@ -144,6 +146,7 @@ func TestTapRefusals(t *testing.T) {
 // A tap that stops reading is dropped as a slow viewer is; the viewer keeps
 // its live output.
 func TestSlowTapIsDropped(t *testing.T) {
+	shortenTapWait(t, 100*time.Millisecond)
 	m := newTestManager(t)
 	viewer := startLogged(t, m, "main", "while :; do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done")
 	viewer.started(t)
@@ -183,6 +186,43 @@ func TestSlowTapIsDropped(t *testing.T) {
 			return
 		}
 	}
+}
+
+func shortenTapWait(t *testing.T, d time.Duration) {
+	old := tapWait
+	tapWait = d
+	t.Cleanup(func() { tapWait = old })
+}
+
+// A logged session's output waits for its first tap rather than let the
+// ring drop bytes no tap took: a tap that comes late still reads from 0.
+func TestLoggedSessionWaitsForItsTap(t *testing.T) {
+	m := newTestManager(t)
+	total := 4 * ringSize
+	h := startLogged(t, m, "job", "stty -opost -echo; head -c "+strconv.Itoa(total)+" /dev/zero | tr '\\0' x; exec sleep 60")
+	h.started(t)
+	h.detach(t)
+	time.Sleep(300 * time.Millisecond)
+	if info, _ := find(m, "job"); info.End > ringSize {
+		t.Fatalf("end %d before a tap, want at most the ring, %d", info.End, ringSize)
+	}
+
+	tp := tap(t, m, "job", nil)
+	_, out := tp.output(t)
+	if out.Offset != 0 {
+		t.Fatalf("tap starts at %d, want 0", out.Offset)
+	}
+	if got := tp.data(t, total); len(got) != total || !bytes.Equal(got, bytes.Repeat([]byte("x"), total)) {
+		t.Fatalf("tap read %d bytes, want %d x's", len(got), total)
+	}
+}
+
+// With no tap within tapWait, the session runs on untapped.
+func TestLoggedSessionRunsOnWithoutATap(t *testing.T) {
+	shortenTapWait(t, 100*time.Millisecond)
+	m := newTestManager(t)
+	total := uint64(4 * ringSize)
+	startLoggedQuiet(t, m, "job", "head -c "+strconv.FormatUint(total, 10)+" /dev/zero | tr '\\0' x", total)
 }
 
 // startLoggedQuiet is startQuiet for a logged session.

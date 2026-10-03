@@ -22,6 +22,18 @@ const historyLimit = 256 << 10
 // exec: a background child that keeps the pty open cannot hold the session.
 const drainGrace = 500 * time.Millisecond
 
+// tapWait bounds how long a logged session's output waits for a tap
+// before the ring overwrites bytes no tap took: past it the session runs on,
+// and the bytes the ring drops are a gap in impd's log. A variable so tests
+// can shorten it.
+var tapWait = 5 * time.Second
+
+// tapPoll is how often a waiting pump looks at its taps again.
+const tapPoll = 5 * time.Millisecond
+
+// readSize is one read of the pty.
+const readSize = 32 << 10
+
 // stdinQueue bounds the STDIN frames waiting for the pty, at most
 // proto.MaxPayload each. Past it the viewer's input loop waits, which pushes
 // back on the host.
@@ -59,8 +71,15 @@ type session struct {
 	raw    *ring
 	viewer *viewer
 	// taps read the raw output beside the viewer: they take no input, never
-	// take the viewer over, and get the EXIT without delivering it
-	taps       map[*viewer]struct{}
+	// take the viewer over, and get the EXIT without delivering it. tapStart
+	// is the offset each began at; tapped the furthest offset a tap wrote out.
+	taps     map[*viewer]struct{}
+	tapStart map[*viewer]uint64
+	tapped   uint64
+	// tapless is set once a pump gave up waiting for a tap, until one attaches
+	tapless bool
+	// tapWait is the package's, as the session started
+	tapWait    time.Duration
 	cols, rows uint16
 	exit       *proto.Exit
 	// delivered is set once the EXIT was written to a viewer; the session is
@@ -100,6 +119,8 @@ func newSession(name string, req proto.Request, r run) *session {
 		screen:     newHistory(historyLimit),
 		raw:        newRing(ringSize),
 		taps:       make(map[*viewer]struct{}),
+		tapStart:   make(map[*viewer]uint64),
+		tapWait:    tapWait,
 		cols:       cols,
 		rows:       rows,
 	}
@@ -116,7 +137,12 @@ func (s *session) run() {
 	safe.Go("session "+s.name+" stdin", s.writeStdin, nil)
 
 	st := <-s.proc.Done
-	s.master.SetReadDeadline(time.Now().Add(drainGrace))
+	// a logged session's pump may be waiting for its tap
+	grace := drainGrace
+	if s.log {
+		grace += s.tapWait
+	}
+	s.master.SetReadDeadline(time.Now().Add(grace))
 	<-pumped
 	s.master.Close()
 
@@ -127,7 +153,7 @@ func (s *session) run() {
 		s.deliverExit(s.viewer)
 	}
 	for t := range s.taps {
-		delete(s.taps, t)
+		s.dropTap(t)
 		t.stop(s.exitFrame(nil), false)
 	}
 	s.mu.Unlock()
@@ -137,8 +163,9 @@ func (s *session) run() {
 // pump reads the pty until EOF, EIO (every slave fd closed), or the drain
 // deadline.
 func (s *session) pump() {
-	buf := make([]byte, 32<<10)
+	buf := make([]byte, readSize)
 	for {
+		s.waitForTap()
 		n, err := s.master.Read(buf)
 		if n > 0 {
 			s.output(buf[:n])
@@ -162,10 +189,45 @@ func (s *session) output(p []byte) {
 	// the offset it has, and learns of the gap from the ring
 	for t := range s.taps {
 		if !t.push(frame{typ: proto.TypeStdout, payload: append([]byte(nil), p...)}) {
-			delete(s.taps, t)
+			s.dropTap(t)
 			t.stop(&frame{typ: proto.TypeDetached, payload: mustJSON(proto.Detached{Reason: proto.DetachSlow})}, true)
 		}
 	}
+}
+
+// waitForTap holds a logged session's next read while it could overwrite
+// ring bytes that no tap wrote out, so impd's log misses nothing it taps in
+// time: the program waits on the pty as on a slow terminal. After tapWait
+// with no progress it reads on, untapped, until a tap attaches.
+func (s *session) waitForTap() {
+	if !s.log {
+		return
+	}
+	deadline := time.Now().Add(s.tapWait)
+	for {
+		s.mu.Lock()
+		behind := s.untapped()
+		if behind+readSize <= ringSize || s.tapless {
+			s.mu.Unlock()
+			return
+		}
+		if time.Now().After(deadline) {
+			s.tapless = true
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+		time.Sleep(tapPoll)
+	}
+}
+
+// untapped counts the bytes past the furthest offset a tap wrote out. The
+// caller holds mu.
+func (s *session) untapped() uint64 {
+	for t := range s.taps {
+		s.tapped = max(s.tapped, s.tapStart[t]+t.written.Load())
+	}
+	return s.raw.End() - s.tapped
 }
 
 // tap adds t as a tap of a logged session: STARTED, the raw output from
@@ -198,6 +260,8 @@ func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
 		return nil
 	}
 	s.taps[t] = struct{}{}
+	s.tapStart[t] = out.Offset
+	s.tapless = false
 	return nil
 }
 
@@ -205,8 +269,17 @@ func (s *session) tap(t *viewer, resume *proto.ResumeFrom) *proto.Error {
 func (s *session) untap(t *viewer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.taps, t)
+	s.dropTap(t)
 	t.stop(nil, false)
+}
+
+// dropTap removes t, keeping how far it read. The caller holds mu.
+func (s *session) dropTap(t *viewer) {
+	if start, ok := s.tapStart[t]; ok {
+		s.tapped = max(s.tapped, start+t.written.Load())
+	}
+	delete(s.taps, t)
+	delete(s.tapStart, t)
 }
 
 // exitFrame is the EXIT as a last frame; written runs once it is out. The
