@@ -356,12 +356,33 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+// A create from `builderImage` by its digest, as impd's `docker create` of
+// IMP_BUILD_IMAGE names it; a create of another image would reach a pull
+function checkCreateOnly(image: string, builderImage: string): Check {
+  const named = readImageReference(image);
+  const only = readImageReference(builderImage);
+  const digest = builderImage.split('@')[1] ?? '';
+
+  if (
+    named.registry === only.registry &&
+    named.path === only.path &&
+    image.split('@')[1] === digest
+  ) {
+    return OK;
+  }
+
+  return buildFailure(
+    `a create from ${image} is refused: under IMP_BUILD_ISOLATION=imp the proxy creates only from IMP_BUILD_IMAGE, ${builderImage}`,
+  );
+}
+
 // POST /containers/create: `docker create <image> /bin/true` and nothing
-// more. The proxy forwards a body of its own; this decides only whether the
-// client may have one. Returns the image.
+// more, from `builderImage` alone when it is set. The proxy forwards a body
+// of its own; this decides whether the client may have one.
 export function checkCreateBody(
   body: unknown,
   hostImage: string,
+  builderImage: string | null,
 ): Check & { readonly image?: string } {
   if (!isRecord(body)) {
     return buildFailure('the body is not a JSON object');
@@ -397,5 +418,11 @@ export function checkCreateBody(
 
   const reference = checkImageReference(image, hostImage);
 
-  return reference.isOk ? { isOk: true, image } : reference;
+  if (!reference.isOk) {
+    return reference;
+  }
+
+  const only = builderImage === null ? OK : checkCreateOnly(image, builderImage);
+
+  return only.isOk ? { isOk: true, image } : only;
 }
