@@ -260,6 +260,34 @@ export function checkRemoveQuery(query: ReadonlyMap<string, readonly string[]>):
   return checkQuery(query, { force: { check: checkOneOf(new Set(['0', '1', 'true', 'false'])) } });
 }
 
+// DELETE /images/{name}: the CLI sends none; never force, which would remove
+// an image a container uses, or one under several references
+export function checkImageRemoveQuery(query: ReadonlyMap<string, readonly string[]>): Check {
+  const no = checkOneOf(new Set(['0', 'false']));
+
+  return checkQuery(query, {
+    force: { check: no },
+    noprune: { check: checkOneOf(new Set(['0', '1', 'true', 'false'])) },
+  });
+}
+
+// The names an image goes by, its tags and digests: none may be in the
+// Dockerfile frontend's repository, which stays cached for every build, or
+// the one imp-host and the proxy run from
+export function checkRemovableImage(names: readonly string[], hostImage: string): Check {
+  const kept = [DOCKERFILE_FRONTEND, hostImage].map((reference) => readImageReference(reference));
+
+  for (const name of names) {
+    const image = readImageReference(name);
+
+    if (kept.some((repo) => repo.registry === image.registry && repo.path === image.path)) {
+      return buildFailure(`image ${name} is in a repository the proxy keeps`);
+    }
+  }
+
+  return OK;
+}
+
 // no params anywhere else: GET routes and a create take none (no name)
 export function checkNoQuery(query: ReadonlyMap<string, readonly string[]>): Check {
   return checkQuery(query, {});

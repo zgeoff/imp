@@ -3,8 +3,10 @@
 // root out of imp-host (docs/architecture/host-contract.md).
 
 import { chmodSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { printLog } from '../process/print-log';
 import { loadOrCreateToken } from '../token';
+import { loadOwnedImages } from './owned-images';
 import { createDockerProxy } from './proxy';
 
 // headers and a create body on top of the largest build context
@@ -49,6 +51,7 @@ function main(): void {
     token: loadOrCreateToken(stateDir),
     hostImage,
     buildContextMaxBytes,
+    ownedImages: loadOwnedImages(join(stateDir, 'owned-images.json')),
     log: printLog,
   });
 

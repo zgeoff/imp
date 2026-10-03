@@ -3,6 +3,7 @@
 // out of imp-host (docs/architecture/host-contract.md).
 
 import { z } from 'zod';
+import type { OwnedImages } from './owned-images';
 import { findRequestRoute, formatQuery } from './router';
 import type { RoutedRequest } from './router';
 import {
@@ -10,8 +11,10 @@ import {
   checkBuildContentType,
   checkBuildQuery,
   checkCreateBody,
+  checkImageRemoveQuery,
   checkNoQuery,
   checkPullQuery,
+  checkRemovableImage,
   checkRemoveQuery,
 } from './rules';
 import type { Check } from './rules';
@@ -37,6 +40,21 @@ const ContainerSchema = z.object({
   Config: z.object({ Labels: LabelsSchema }),
 });
 
+const ImageSchema = z.object({
+  Id: z.string().regex(/^sha256:[a-f0-9]{64}$/v),
+  RepoTags: z.array(z.string()).nullish(),
+  RepoDigests: z.array(z.string()).nullish(),
+});
+
+type EngineImage = z.infer<typeof ImageSchema>;
+
+// what the engine said of an image: it has it, it has none (404), or it
+// gave no clear answer, which never counts as absent
+type ImageLookup =
+  | { readonly kind: 'found'; readonly image: EngineImage }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unknown' };
+
 export interface DockerProxyOptions {
   // the engine's socket
   readonly upstreamSocket: string;
@@ -47,6 +65,9 @@ export interface DockerProxyOptions {
   // the image imp-host runs from, whose repository a pull may not move
   readonly hostImage: string;
   readonly buildContextMaxBytes: number;
+
+  // the images this proxy pulled or built, the only ones impd may remove
+  readonly ownedImages: OwnedImages;
   readonly log: (message: string) => void;
 }
 
@@ -101,6 +122,15 @@ function createByteLimit(maxBytes: number): TransformStream<Uint8Array, Uint8Arr
   });
 }
 
+function readMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// the reference a pull of fromImage and tag fetches; a tag can be a digest
+function formatPulledReference(fromImage: string, tag: string): string {
+  return tag.startsWith('sha256:') ? `${fromImage}@${tag}` : `${fromImage}:${tag}`;
+}
+
 function pickHeaders(request: Request, names: readonly string[]): Record<string, string> {
   const headers: Record<string, string> = {};
 
@@ -115,7 +145,10 @@ function pickHeaders(request: Request, names: readonly string[]): Record<string,
   return headers;
 }
 
-function toClientResponse(upstream: Response): Response {
+// The engine's answer for the client. `onEnd` runs once its body has
+// ended, as a pull or a build streams its progress and ends with it; a
+// client that goes first never runs it.
+function toClientResponse(upstream: Response, onEnd?: () => Promise<void>): Response {
   const headers = new Headers();
 
   for (const [name, value] of upstream.headers) {
@@ -124,7 +157,12 @@ function toClientResponse(upstream: Response): Response {
     }
   }
 
-  return new Response(upstream.body, {
+  const body =
+    onEnd === undefined || upstream.body === null
+      ? upstream.body
+      : upstream.body.pipeThrough(new TransformStream({ flush: onEnd }));
+
+  return new Response(body, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers,
@@ -164,10 +202,47 @@ export function createDockerProxy(
     });
   };
 
-  const sendAndRelay = async (versionPrefix: string, call: UpstreamCall): Promise<Response> => {
+  const sendAndRelay = async (
+    versionPrefix: string,
+    call: UpstreamCall,
+    onEnd?: () => Promise<void>,
+  ): Promise<Response> => {
     const upstream = await sendUpstream(versionPrefix, call);
 
-    return toClientResponse(upstream);
+    return toClientResponse(upstream, onEnd);
+  };
+
+  const findImage = async (versionPrefix: string, name: string): Promise<ImageLookup> => {
+    const inspected = await sendUpstream(versionPrefix, {
+      method: 'GET',
+      path: `/images/${name}/json`,
+    });
+
+    if (!inspected.ok) {
+      await inspected.body?.cancel();
+
+      return inspected.status === 404 ? { kind: 'absent' } : { kind: 'unknown' };
+    }
+
+    const body: unknown = await inspected.json();
+
+    const image = ImageSchema.safeParse(body);
+
+    return image.success ? { kind: 'found', image: image.data } : { kind: 'unknown' };
+  };
+
+  // Records the image `name` now names as one this proxy made. A failure
+  // is logged: the image then stays on the engine, which is the safe side.
+  const registerOwnedImage = async (versionPrefix: string, name: string): Promise<void> => {
+    try {
+      const found = await findImage(versionPrefix, name);
+
+      if (found.kind === 'found') {
+        options.ownedImages.add(found.image.Id);
+      }
+    } catch (error) {
+      options.log(`could not record ${name} as the proxy's: ${readMessage(error)}`);
+    }
   };
 
   const buildRefusal = (request: Request, path: string, reason: string): Response => {
@@ -261,18 +336,29 @@ export function createDockerProxy(
     const limit = createByteLimit(options.buildContextMaxBytes);
     const body = request.body === null ? null : request.body.pipeThrough(limit);
 
-    try {
-      return await sendAndRelay(routed.versionPrefix, {
-        method: 'POST',
-        path: '/build',
-        query: routed.query,
+    // the image each tag names once the build ends is the build's own
+    const registerBuiltTags = async (): Promise<void> => {
+      for (const tag of routed.query.get('t') ?? []) {
+        await registerOwnedImage(routed.versionPrefix, tag);
+      }
+    };
 
-        // the proxy's own Content-Type (checkBuildContentType), and no
-        // client header: a build without a session reads no registry auth
-        headers: { 'content-type': BUILD_CONTENT_TYPE },
-        body,
-        signal: request.signal,
-      });
+    try {
+      return await sendAndRelay(
+        routed.versionPrefix,
+        {
+          method: 'POST',
+          path: '/build',
+          query: routed.query,
+
+          // the proxy's own Content-Type (checkBuildContentType), and no
+          // client header: a build without a session reads no registry auth
+          headers: { 'content-type': BUILD_CONTENT_TYPE },
+          body,
+          signal: request.signal,
+        },
+        registerBuiltTags,
+      );
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
         return buildJsonResponse(
@@ -296,21 +382,37 @@ export function createDockerProxy(
       return buildRefusal(request, path, 'a pull takes no body');
     }
 
-    const query = new Map([['fromImage', routed.query.get('fromImage') ?? []]]);
+    const fromImage = routed.query.get('fromImage') ?? [];
+    const tag = routed.query.get('tag') ?? [];
 
-    const tag = routed.query.get('tag');
+    const query = new Map([
+      ['fromImage', fromImage],
+      ['tag', tag],
+    ]);
 
-    if (tag !== undefined) {
-      query.set('tag', tag);
-    }
+    // checkPullQuery requires both, once each
+    const reference = formatPulledReference(fromImage[0] ?? '', tag[0] ?? '');
 
-    return sendAndRelay(routed.versionPrefix, {
-      method: 'POST',
-      path: '/images/create',
-      query,
-      headers: pickHeaders(request, ['x-registry-auth']),
-      signal: request.signal,
-    });
+    // only a reference the engine did not have is the proxy's to remove:
+    // one the host owner pulled stays theirs
+    const before = await findImage(routed.versionPrefix, reference);
+
+    const registerPulled =
+      before.kind === 'absent'
+        ? () => registerOwnedImage(routed.versionPrefix, reference)
+        : undefined;
+
+    return sendAndRelay(
+      routed.versionPrefix,
+      {
+        method: 'POST',
+        path: '/images/create',
+        query,
+        headers: pickHeaders(request, ['x-registry-auth']),
+        signal: request.signal,
+      },
+      registerPulled,
+    );
   };
 
   const handleOwnContainer = async (
@@ -345,6 +447,67 @@ export function createDockerProxy(
     });
   };
 
+  // DELETE /images/{name}: an image this proxy pulled or built, in no
+  // repository it keeps, removed without force, so the engine refuses one
+  // a container uses or another reference shares
+  const handleImageRemove = async (
+    request: Request,
+    versionPrefix: string,
+    path: string,
+    name: string,
+  ): Promise<Response> => {
+    const found = await findImage(versionPrefix, name);
+
+    // an engine on the containerd store drops an image a rebuild untags
+    // by itself: its ID leaves the set too
+    if (found.kind === 'absent') {
+      options.ownedImages.remove(name);
+
+      return buildJsonResponse(404, `No such image: ${name}`);
+    }
+
+    if (found.kind === 'unknown') {
+      return buildRefusal(request, path, `the engine gave no image for ${name}`);
+    }
+
+    const image = found.image;
+
+    const names = [name, ...(image.RepoTags ?? []), ...(image.RepoDigests ?? [])].filter(
+      (one) => !one.startsWith('sha256:'),
+    );
+
+    const kept = checkRemovableImage(names, options.hostImage);
+
+    if (!kept.isOk) {
+      return buildRefusal(request, path, kept.reason);
+    }
+
+    if (!options.ownedImages.has(image.Id)) {
+      return buildRefusal(request, path, `image ${name} was not pulled or built by this proxy`);
+    }
+
+    const upstream = await sendUpstream(versionPrefix, {
+      method: 'DELETE',
+      path: `/images/${name}`,
+      query: new Map([
+        ['force', ['0']],
+        ['noprune', ['1']],
+      ]),
+    });
+
+    const body = await upstream.text();
+
+    if (upstream.ok) {
+      const after = await findImage(versionPrefix, image.Id);
+
+      if (after.kind === 'absent') {
+        options.ownedImages.remove(image.Id);
+      }
+    }
+
+    return toClientResponse(new Response(body, upstream));
+  };
+
   const checkRouteQuery = (routed: RoutedRequest): Check => {
     const kind = routed.route.kind;
 
@@ -358,6 +521,10 @@ export function createDockerProxy(
 
     if (kind === 'remove') {
       return checkRemoveQuery(routed.query);
+    }
+
+    if (kind === 'image-remove') {
+      return checkImageRemoveQuery(routed.query);
     }
 
     return checkNoQuery(routed.query);
@@ -402,6 +569,10 @@ export function createDockerProxy(
         return handleCreate(request, prefix, path);
       }
 
+      case 'image-remove': {
+        return handleImageRemove(request, prefix, path, route.name);
+      }
+
       case 'export':
       case 'remove': {
         return handleOwnContainer(request, prefix, path, route.id);
@@ -430,7 +601,7 @@ export function createDockerProxy(
     try {
       return await handleRouted(request, routed.request, url.pathname);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = readMessage(error);
 
       options.log(`error on ${request.method} ${url.pathname}: ${message}`);
 

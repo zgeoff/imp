@@ -6,6 +6,7 @@ type Route =
   | { readonly kind: 'ping' }
   | { readonly kind: 'version' }
   | { readonly kind: 'image-inspect'; readonly name: string }
+  | { readonly kind: 'image-remove'; readonly name: string }
   | { readonly kind: 'pull' }
   | { readonly kind: 'build' }
   | { readonly kind: 'create' }
@@ -90,6 +91,18 @@ function findRoute(method: string, path: string): Route | null {
 
   if (method === 'GET' && image !== undefined && IMAGE_NAME.test(image)) {
     return { kind: 'image-inspect', name: image };
+  }
+
+  // a reference or an image ID; the proxy checks the image it names
+  const removedImage = /^\/images\/(?<name>.+)$/v.exec(path)?.groups?.['name'];
+
+  if (
+    method === 'DELETE' &&
+    removedImage !== undefined &&
+    IMAGE_NAME.test(removedImage) &&
+    /[A-Za-z0-9]$/v.test(removedImage)
+  ) {
+    return { kind: 'image-remove', name: removedImage };
   }
 
   const exported = /^\/containers\/(?<id>[^\/]+)\/export$/v.exec(path)?.groups?.['id'];

@@ -22,6 +22,10 @@ test('every call impd makes finds its route, with or without a version prefix', 
   expect(findKind('POST', '/v1.55/containers/create')).toBe('create');
   expect(findKind('GET', `/v1.55/containers/${ID}/export`)).toBe('export');
   expect(findKind('DELETE', `/v1.55/containers/${ID}?force=1`)).toBe('remove');
+
+  // the proxy checks the image it names before the engine sees the call
+  expect(findKind('DELETE', '/v1.55/images/busybox:1.37')).toBe('image-remove');
+  expect(findKind('DELETE', `/v1.55/images/sha256:${'a'.repeat(64)}`)).toBe('image-remove');
 });
 
 test('a call impd does not make is refused', () => {
@@ -32,7 +36,8 @@ test('a call impd does not make is refused', () => {
     ['GET', '/v1.55/containers/json'],
     ['POST', '/v1.55/images/load'],
     ['POST', '/v1.55/images/busybox/tag'],
-    ['DELETE', '/v1.55/images/busybox'],
+    ['DELETE', '/v1.55/images/busybox:1.37/'],
+    ['DELETE', '/v1.55/images/'],
     ['POST', '/v1.55/session'],
     ['POST', '/session'],
     ['POST', '/v1.55/grpc'],
