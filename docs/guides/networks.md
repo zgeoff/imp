@@ -21,8 +21,8 @@ network the imp is not on do nothing.
 ## What a network allows
 
 - Every member reaches every other member on any port, over TCP, UDP and ICMP, whatever either one's
-  [egress policy](../architecture/networking.md#egress) is. The firewall still holds a `box` or
-  `none` imp to its policy for every address outside the network.
+  [egress policy](../architecture/networking.md#egress) is. The firewall still holds a `public`,
+  `box` or `none` imp to its policy for every address outside the network.
 - A non-member reaches no member, and no member reaches it. A packet between two imps that share no
   network is refused: TCP gets a reset, the rest ICMP admin-prohibited.
 - IPv4 only: two members do not reach each other over IPv6, and names answer A records only.
@@ -36,15 +36,17 @@ network the imp is not on do nothing.
 
 ## A network is a trust boundary
 
-A network weakens the egress policy of a `box` or `none` member whenever an `open` imp is on it too.
-The open peer reaches anything, so it can relay for the others: a proxy, a port forward or a tunnel
-on it carries the box imp's traffic anywhere. A `box` or `none` imp on a network trusts every open
-peer on it with its egress.
+A network weakens the egress policy of a member whenever an imp that reaches more is on it too. An
+`open` peer reaches anything, so it can relay for the others: a proxy, a port forward or a tunnel on
+it carries a box imp's traffic anywhere. A `public` peer does the same to the internet for a `box`
+or `none` member. A `public`, `box` or `none` imp on a network trusts every open peer on it with its
+egress, and a `box` or `none` imp trusts every public peer.
 
-`imp net join` warns when a join puts a `box` or `none` imp on a network with an `open` one, from
-either side, and `--json` carries the same text in `warning`. `imp new --net` and `imp policy` print
-the same warning on stderr, one for each of the imp's networks that mixes them; the API gives them
-with `networks.warnings`. To keep a box imp boxed, keep every imp on its networks `box` or `none`.
+`imp net join` warns when a join puts a `public`, `box` or `none` imp on a network with an `open`
+one, or a `box` or `none` imp with a `public` one, from either side, and `--json` carries the same
+text in `warning`. `imp new --net` and `imp policy` print the same warning on stderr, one for each
+of the imp's networks that mixes them; the API gives them with `networks.warnings`. To keep a box
+imp boxed, keep every imp on its networks `box` or `none`.
 
 ## Names
 
