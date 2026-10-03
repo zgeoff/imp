@@ -194,11 +194,14 @@ command, so no restore, reboot or sleep can replace the guest in between. Such a
 behind a locked operation, such as a restore under way.
 
 A `start` that names a session that already runs attaches to it. With `require: ['broker']`, the
-attach passes only when that session was itself started with `require: ['broker']` in this boot of
-the guest. Otherwise impd closes the attach before the client sees it and refuses with
-`broker_not_ready` and the detail `session <name> was started without the broker requirement`. impd
-keeps that record in memory, so after an impd restart such an attach is refused until the session is
-started again. Like any attach, the refused one takes the session over from a client attached to it.
+attach passes only when that run of the session was itself started with `require: ['broker']`. impd
+records each such run by its execution generation (one run of a session's process) in its database,
+so the record holds across sleeps, wakes and impd restarts, and a cold boot or a session started
+again without the requirement is a new run it does not cover. impd reads the agent's session list
+before it opens anything, so a refused attach never reaches the agent and the client attached to the
+session keeps it. The refusal is `broker_not_ready` with the detail
+`session <name> was started without the broker requirement`. A session on an agent from before
+output offsets, which names no generation, and one an imp brought from another host, never pass.
 
 The boundary is exactly this: impd set the broker's variables and the CA bundle for this boot before
 it started the command. It does not prove that the process uses them: a command can unset
