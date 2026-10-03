@@ -12,6 +12,8 @@
 #                            running VMs survive and are re-adopted
 #   scripts/dev.sh shell     open a shell in the container
 #   scripts/dev.sh token     print the API token (for IMP_TOKEN)
+#   scripts/dev.sh prune     remove the dev host images of worktrees that are
+#                            gone, and the untagged images rebuilds leave
 #
 # Env: IMP_DEV_NAME (default imp-dev) names the container; IMP_DEV_PORT_OFFSET
 #      (default 0) shifts every published port, so parallel dev instances (one
@@ -23,7 +25,7 @@
 #      cache makes that a no-op when the agent is unchanged.
 #      Both are repo-relative or absolute paths under the repo.
 #      IMP_HOST_IMAGE (default imp-host:dev-<dir>-<hash>, one per checkout:
-#      dev_image_tag in scripts/lib.sh) tags the host image.
+#      dev_image_tag in scripts/lib.sh) tags the host image; down keeps it.
 #      IMP_HOST_IMAGE_READY=1 uses the host image as it is instead of building
 #      it (CI builds and loads it first, with its own cache).
 #      Tuning passed through to impd when set: IMP_IDLE_TIMEOUT_S,
@@ -297,6 +299,29 @@ down() {
   docker volume rm "$name-docker" "$name-docker-proxy" >/dev/null 2>&1 || true
 }
 
+# prune removes the dev host images (labelled imp.worktree by
+# build_host_image) whose checkout directory is gone and that no container
+# uses, by tag, so an image another tag still names stays. Then the untagged
+# ones rebuilds leave. Images of live checkouts stay as build caches; only
+# labelled images are touched, never another project's.
+prune() {
+  local ref id dir
+  docker image ls --filter label=imp.worktree --format '{{.Repository}}:{{.Tag}} {{.ID}}' |
+    while read -r ref id; do
+      [[ $ref == *'<none>'* ]] && continue
+      dir=$(docker image inspect -f '{{index .Config.Labels "imp.worktree"}}' "$id")
+      # an empty label names no checkout, so it cannot be gone
+      if [ -z "$dir" ] || [ -d "$dir" ]; then continue; fi
+      if [ -n "$(docker ps -aq --filter "ancestor=$id")" ]; then
+        echo "dev.sh: keeping $ref: a container uses it"
+        continue
+      fi
+      docker image rm "$ref" >/dev/null
+      echo "dev.sh: removed $ref ($dir is gone)"
+    done
+  docker image prune -f --filter label=imp.worktree
+}
+
 case ${1:-} in
   up) up ;;
   down) down ;;
@@ -325,8 +350,9 @@ case ${1:-} in
     ;;
   shell) docker exec -it "$name" bash ;;
   token) docker exec "$name" cat /var/lib/imp/token ;;
+  prune) prune ;;
   *)
-    echo "usage: $0 up|down|reboot|logs|restart|shell|token" >&2
+    echo "usage: $0 up|down|reboot|logs|restart|shell|token|prune" >&2
     exit 2
     ;;
 esac
