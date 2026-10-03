@@ -566,4 +566,5 @@ On a new host, impd's first start pulls its builder image (`IMP_BUILD_IMAGE`, th
 imp. Both took 34 to 41 s on a home link. If the builder image does not pull, every add and build
 fails with an error that names `IMP_BUILD_IMAGE`; none falls back to the host's engine. The pull has
 10 minutes; one that hangs fails then, and the next add or build pulls again. A client that goes
-stops waiting for the pull, which goes on for the others.
+stops waiting for the pull, which goes on for the others. On a slow link, run `docker pull` with
+that exact reference on the host engine first, and impd uses the image without a pull.
