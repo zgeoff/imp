@@ -18,6 +18,7 @@ import { buildInvalidStateError, isDiskFullError } from '../api-errors';
 import { listColdBoots, writeUnknownBoot } from '../db/cold-boots';
 import { findImpById, findImpByName, listImps, updateImpActivity } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { buildBrokerNotReadyError, checkBrokerReady, isBrokerRequired } from '../exec/exec-require';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
 import { toSeenSessions } from '../sessions/session-cache';
@@ -40,9 +41,9 @@ import type { ShutdownGate } from './shutdown-gate';
 // need: imps woken on demand, put to sleep in the background, and the
 // connections that keep them awake.
 export interface ImpRuntime {
-  // the imp must be running; exec runs outside the lifecycle lock, so a
-  // long console session never blocks stop or destroy. `feature` fails the
-  // exec with AGENT_OUTDATED when the imp's agent is older than it.
+  // the imp must be running; exec runs outside the lifecycle lock (one that
+  // requires the broker holds it only until the start), so a console never
+  // blocks stop. `feature`: AGENT_OUTDATED when the agent is older than it.
   readonly openExec: (
     name: string,
     request: AgentExecRequest,
@@ -316,7 +317,15 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
 
   return {
     openExec: (name, request, feature) =>
-      openStream(name, 'exec', async (paths, imp) => {
+      openStream(name, 'exec', (paths, imp) => {
+        const requiresBroker = isBrokerRequired(request.require);
+
+        // the egress broker's variables are for the imp's own code, not the
+        // agent's world
+        if (requiresBroker && request.outer === true) {
+          throw buildBrokerNotReadyError('an exec in the agent gets no broker variables');
+        }
+
         // an old agent would run a session's command as a plain exec
         if (request.session !== undefined) {
           requireFeature(paths, 'sessions');
@@ -326,24 +335,52 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           requireFeature(paths, feature);
         }
 
-        // the egress broker's variables are for the imp's own code, not the
-        // agent's world
         if (request.outer === true) {
           requireFeature(paths, 'outer-exec');
 
           return openExecStream(paths.vsockSocket, request);
         }
 
-        const base = await context.readExecEnv(imp, paths.vsockSocket);
+        // the broker's variables under the caller's own; a command that
+        // requires the broker starts only with them as impd set them
+        const startWithBroker = async (target: ImpRecord): Promise<ExecStream> => {
+          const broker = await context.readExecEnv(target, paths.vsockSocket);
 
-        const env = mergeEnv(base, request.env ?? []);
+          const base = broker.kind === 'ready' ? broker.env : [];
+          const env = mergeEnv(base, request.env ?? []);
 
-        const opening = openExecStream(paths.vsockSocket, {
-          ...request,
-          ...(env.length > 0 && { env }),
+          if (requiresBroker) {
+            const refused = checkBrokerReady(broker, env);
+
+            if (refused !== null) {
+              throw refused;
+            }
+
+            await requireSameBoot(context, target);
+          }
+
+          const opening = openExecStream(paths.vsockSocket, {
+            ...request,
+            ...(env.length > 0 && { env }),
+          });
+
+          return request.session === undefined ? opening : withColdBoots(context, target, opening);
+        };
+
+        if (!requiresBroker) {
+          return startWithBroker(imp);
+        }
+
+        // Under the lock no restore, reboot or sleep replaces the guest
+        // between the bundle step and the start, so the bundle is in the
+        // boot the command starts in. It may wait behind a locked operation.
+        return lock.withImp(name, (locked) => {
+          if (locked.state !== 'running') {
+            throw buildBrokerNotReadyError(`the imp is ${locked.state}, not running`);
+          }
+
+          return startWithBroker(locked);
         });
-
-        return request.session === undefined ? opening : withColdBoots(context, imp, opening);
       }),
     openAttach: (name, request) =>
       openStream(
@@ -566,6 +603,16 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
     bootTemplates: context.templates,
     readDiskFullError: () => lastDiskFull.error,
   };
+}
+
+// The guest the bundle step ran in is the one the command starts in: the
+// caller holds the lock, and this catches any write that got past it.
+async function requireSameBoot(context: ImpContext, imp: ImpRecord): Promise<void> {
+  const fresh = await findImpById(context.db, imp.id);
+
+  if (fresh?.state !== 'running' || fresh.pid !== imp.pid) {
+    throw buildBrokerNotReadyError('the imp booted again after the broker CA step');
+  }
 }
 
 // A session's output, and NO_SESSION, name the imp's cold boots, read after

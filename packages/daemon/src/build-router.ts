@@ -815,6 +815,7 @@ const SYSTEM_FEATURES = {
   databaseCopy: true,
   imageBuildStream: true,
   imageOpStream: true,
+  execRequire: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

@@ -891,3 +891,36 @@ test('an outer exec with a session or a tool is a bad message', async () => {
     expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
   }
 });
+
+test('a start passes its requirements to the backend, and a refusal keeps its data', async () => {
+  const peer = buildFakePeer();
+  const opened: unknown[] = [];
+  const data = { reason: 'broker_not_ready', detail: 'the imp has no grant' };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (_name, request) => {
+        opened.push(request);
+
+        return Promise.reject(new ORPCError('PRECONDITION_FAILED', { message: 'not ready', data }));
+      },
+    }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['true'],
+    tty: false,
+    require: ['broker'],
+  });
+
+  await Bun.sleep(5);
+
+  expect(opened).toEqual([{ argv: ['true'], tty: false, require: ['broker'] }]);
+
+  expect(peer.sent).toEqual([
+    { type: 'error', code: 'PRECONDITION_FAILED', message: 'not ready', data },
+  ]);
+});

@@ -19,6 +19,9 @@ const GUEST_ROOT_PATHS = [
 // between the broker CA and the host's roots on the install's stdin
 const ROOTS_MARKER = '# imp: host roots';
 
+// the variable an exec that requires the broker must get as impd set it
+export const PROXY_VARIABLE = 'HTTPS_PROXY';
+
 // the variables each TLS stack reads for its trust store
 const CA_VARIABLES = [
   'SSL_CERT_FILE',
@@ -44,7 +47,7 @@ export function buildBrokerEnv(input: BrokerEnvInput): readonly string[] {
   const local = 'localhost,127.0.0.1,::1';
 
   return [
-    `HTTPS_PROXY=${input.proxyUrl}`,
+    `${PROXY_VARIABLE}=${input.proxyUrl}`,
     `https_proxy=${input.proxyUrl}`,
     `NO_PROXY=${local}`,
     `no_proxy=${local}`,
@@ -103,10 +106,22 @@ export interface TrustedImp {
 // writes the bundle into the guest from buildInstallInput's text
 export type InstallBundle = (vsockPath: string, input: string) => Promise<void>;
 
+// whether the bundle is in this boot of the guest; the failure's text when not
+export type TrustOutcome =
+  | { readonly installed: true }
+  | { readonly installed: false; readonly detail: string };
+
+// The broker's part of an exec's environment: the variables once the bundle
+// is in this boot, or why there are none.
+export type BrokerExecEnv =
+  | { readonly kind: 'ready'; readonly env: readonly string[] }
+  | { readonly kind: 'ungranted' }
+  | { readonly kind: 'untrusted'; readonly detail: string };
+
 export interface GuestTrust {
-  // true once the bundle is in this boot of the imp; one install runs per
-  // boot however many execs wait on it
-  readonly ensure: (imp: TrustedImp, vsockPath: string) => Promise<boolean>;
+  // installed once the bundle is in this boot of the imp; one install runs
+  // per boot however many execs wait on it
+  readonly ensure: (imp: TrustedImp, vsockPath: string) => Promise<TrustOutcome>;
 
   // drops what it knows of imps that no longer exist
   readonly forgetExcept: (impIds: ReadonlySet<string>) => void;
@@ -119,7 +134,7 @@ export function createGuestTrust(
 ): GuestTrust {
   const installs = new Map<
     string,
-    { readonly pid: number | null; readonly done: Promise<boolean> }
+    { readonly pid: number | null; readonly done: Promise<TrustOutcome> }
   >();
 
   return {
@@ -130,27 +145,29 @@ export function createGuestTrust(
         return known.done;
       }
 
-      const entry: { pid: number | null; done: Promise<boolean> } = {
+      const entry: { pid: number | null; done: Promise<TrustOutcome> } = {
         pid: imp.pid,
-        done: Promise.resolve(false),
+        done: Promise.resolve({ installed: false, detail: 'the install has not run' }),
       };
 
       // a failure is forgotten, so the next exec tries again
-      const runInstall = async (): Promise<boolean> => {
+      const runInstall = async (): Promise<TrustOutcome> => {
         try {
           await install(vsockPath, input);
 
-          return true;
+          return { installed: true };
         } catch (error) {
+          const detail = readErrorMessage(error);
+
           log(
-            `impd: ${imp.name}: broker CA not installed, so this exec runs without the broker: ${readErrorMessage(error)}`,
+            `impd: ${imp.name}: broker CA not installed, so this exec gets no broker variables: ${detail}`,
           );
 
           if (installs.get(imp.id) === entry) {
             installs.delete(imp.id);
           }
 
-          return false;
+          return { installed: false, detail };
         }
       };
 

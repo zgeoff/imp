@@ -84,7 +84,12 @@ test('a failed install is tried again on the next exec, and a success is kept', 
   const second = await trust.ensure(imp, '/vsock');
   const third = await trust.ensure(imp, '/vsock');
 
-  expect([first, second, third]).toEqual([false, true, true]);
+  expect([first, second, third]).toEqual([
+    { installed: false, detail: 'no sh' },
+    { installed: true },
+    { installed: true },
+  ]);
+
   expect(calls).toHaveLength(2);
   expect(logs.join('\n')).toContain('no sh');
 });
