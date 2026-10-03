@@ -8,20 +8,26 @@ import { buildImagePaths } from '../storage/data-layout';
 const OLD_ID = `sha256:${'1'.repeat(64)}`;
 const NEW_ID = `sha256:${'2'.repeat(64)}`;
 
-// impd with a docker on PATH that logs each `image rm` and runs `lines`
+// impd with a docker on PATH that logs each `image rm` and runs `lines`;
+// an image's tag and digest counts come from `names`, 0 0 when it is unset
 async function setupTest(lines: readonly string[] = []) {
   const harness = await setupImpTest();
 
   const bin = join(harness.config.dataDir, 'fake-bin');
   const log = join(harness.config.dataDir, 'docker.log');
+  const names = join(harness.config.dataDir, 'names');
 
   mkdirSync(bin, { recursive: true });
 
   writeFileSync(
     join(bin, 'docker'),
-    ['#!/bin/sh', `[ "$1 $2" = "image rm" ] && echo "$3" >>'${log}'`, ...lines, 'exit 0'].join(
-      '\n',
-    ),
+    [
+      '#!/bin/sh',
+      `[ "$1 $2" = "image rm" ] && echo "$3" >>'${log}'`,
+      `if [ "$1 $2 $3" = "image inspect --format" ]; then cat '${names}' 2>/dev/null || echo '0 0'; exit 0; fi`,
+      ...lines,
+      'exit 0',
+    ].join('\n'),
     { mode: 0o755 },
   );
 
@@ -31,6 +37,9 @@ async function setupTest(lines: readonly string[] = []) {
 
   return {
     harness,
+    writeNames: (counts: string) => {
+      writeFileSync(names, counts);
+    },
     readRemoved: () => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : []),
     [Symbol.asyncDispose]: async () => {
       process.env['PATH'] = savedPath;
@@ -55,6 +64,29 @@ test('the engine image goes with the last row that names it: its reference, then
   await ctx.harness.images.removeImage('two');
 
   expect(ctx.readRemoved()).toEqual(['busybox:1.37', OLD_ID]);
+});
+
+test('a tag the host owner set on the image keeps it, after impd removes its own reference', async () => {
+  await using ctx = await setupTest();
+
+  const logs = spyOn(console, 'log').mockImplementation(() => {});
+
+  // one tag left on the image once impd's reference goes: the owner's
+  ctx.writeNames('1 0');
+
+  await createImage(ctx.harness.db, {
+    name: 'one',
+    ref: 'busybox:1.37',
+    digest: OLD_ID,
+    sizeBytes: 1,
+  });
+
+  await ctx.harness.images.removeImage('one');
+
+  expect(ctx.readRemoved()).toEqual(['busybox:1.37']);
+  expect(logs.mock.calls.flat().join('\n')).toContain(`kept the engine image ${OLD_ID}`);
+
+  logs.mockRestore();
 });
 
 test('a template names no engine image', async () => {

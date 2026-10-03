@@ -183,8 +183,9 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 - **References it owns:** the proxy keeps the references it made in
   `<IMP_DOCKER_PROXY_STATE>/owned-references.json`, each with the image it named and the image's
   last tag time (`Metadata.LastTagTime`): a pull of a reference the engine did not have before (it
-  inspects the reference first), and a build's tag when the build moved it. impd's images table
-  never adds to the record, so impd cannot remove a name or an image it did not make:
+  inspects the reference first), and a build's tag when the build moved it to the image its
+  `moby.image.id` line names; a build that ends on an error makes nothing. impd's images table never
+  adds to the record, so impd cannot remove a name or an image it did not make:
   - a reference passes only while the engine shows it as the proxy left it. The engine keeps one tag
     time per image, so any name the host owner sets on the image later moves it: the proxy drops the
     records for that image and refuses them, and the image stays. A reference the proxy makes moves

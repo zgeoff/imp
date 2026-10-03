@@ -152,13 +152,16 @@ const engine = Bun.serve({
 
     const built = url.searchParams.get('t');
 
-    // imp/slow never ends, and imp/fail fails, leaving its tag as it was
-    const movesTag = built !== null && built !== 'imp/slow:latest' && built !== 'imp/fail:latest';
-
-    if (url.pathname.endsWith('/build') && built !== null && movesTag) {
+    // imp/slow never ends. imp/fail moves its tag and ends on an error, and
+    // imp/raced says it made d while its tag moved to e
+    if (url.pathname.endsWith('/build') && built !== null && built !== 'imp/slow:latest') {
       const fill = built === 'imp/x:latest' ? 'd' : 'e';
 
       writeEngineTag(built, buildImageId(fill));
+
+      const madeFill = built === 'imp/fail:latest' ? undefined : 'd';
+
+      return buildBuildAnswer(body.length, madeFill);
     }
 
     if (url.pathname.endsWith('/_ping')) {
@@ -185,6 +188,27 @@ const engine = Bun.serve({
     return Response.json({ received: body.length });
   },
 });
+
+// a BuildKit build's answer: a trace line, then its end, split mid-line
+function buildBuildAnswer(received: number, madeFill: string | undefined): Response {
+  const end =
+    madeFill === undefined
+      ? { error: 'exit code: 1', errorDetail: { message: 'exit code: 1' } }
+      : { id: 'moby.image.id', aux: { ID: buildImageId(madeFill) } };
+
+  const text = `${JSON.stringify({ id: 'moby.buildkit.trace', aux: 'e30=', received })}\n${JSON.stringify(end)}\n`;
+  const split = text.length - 20;
+
+  return new Response(
+    new ReadableStream({
+      start: (controller) => {
+        controller.enqueue(new TextEncoder().encode(text.slice(0, split)));
+        controller.enqueue(new TextEncoder().encode(text.slice(split)));
+        controller.close();
+      },
+    }),
+  );
+}
 
 const proxy = Bun.serve({
   unix: proxySocket,
@@ -336,12 +360,12 @@ test('a build streams its context and forwards no client header', async () => {
     body: context,
   });
 
-  const answer: unknown = await response.json();
+  const answer = await response.text();
 
   // the proxy looks the tag up before and after: the build is the one POST
   const build = seen.find((request) => request.method === 'POST');
 
-  expect(answer).toEqual({ received: context.length });
+  expect(answer).toContain(`"received":${String(context.length)}`);
   expect(build?.target).toBe(BUILD_PATH);
   expect(build?.headers['content-type']).toBe('application/x-tar');
   expect(build?.headers['x-registry-config']).toBeUndefined();
@@ -626,9 +650,9 @@ test('a build’s tag is the proxy’s; by ID, an image passes only when every t
   expect(engineTags.size).toBe(0);
 });
 
-test('a build that leaves its tag as it was makes nothing the proxy’s', async () => {
-  // the tag before the build, and a build that fails without moving it
-  writeEngineTag('imp/fail:latest', buildImageId('e'));
+test('a failed build over the owner’s tag makes nothing the proxy’s', async () => {
+  // the owner's tag before the build, which the failed build moves
+  writeEngineTag('imp/fail:latest', buildImageId('f'));
 
   const failing = `/v1.55/build?${new URLSearchParams({
     t: 'imp/fail:latest',
@@ -641,6 +665,20 @@ test('a build that leaves its tag as it was makes nothing the proxy’s', async 
   await built.text();
 
   expect(readOwned('docker.io/imp/fail:latest')).toBeUndefined();
+});
+
+test('a tag that moved to an image other than the one the build made is not the proxy’s', async () => {
+  const raced = `/v1.55/build?${new URLSearchParams({
+    t: 'imp/raced:latest',
+    version: '2',
+    buildargs: JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }),
+  }).toString()}`;
+
+  const built = await sendToProxy('POST', raced, { body: new Uint8Array(512) });
+
+  await built.text();
+
+  expect(readOwned('docker.io/imp/raced:latest')).toBeUndefined();
 });
 
 test('a reference the engine dropped leaves the record when impd removes it', async () => {

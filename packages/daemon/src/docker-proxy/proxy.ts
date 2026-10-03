@@ -41,9 +41,11 @@ const ContainerSchema = z.object({
   Config: z.object({ Labels: LabelsSchema }),
 });
 
+const ImageIdSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/v);
+
 const ImageSchema = z
   .object({
-    Id: z.string().regex(/^sha256:[a-f0-9]{64}$/v),
+    Id: ImageIdSchema,
     RepoTags: z.array(z.string()).readonly().nullish(),
     RepoDigests: z.array(z.string()).readonly().nullish(),
 
@@ -53,6 +55,12 @@ const ImageSchema = z
   .readonly();
 
 type EngineImage = z.infer<typeof ImageSchema>;
+
+// a BuildKit build's last line: the image it made, or the error it ended on
+const BuildEndSchema = z.union([
+  z.object({ id: z.literal('moby.image.id'), aux: z.object({ ID: ImageIdSchema }) }),
+  z.object({ error: z.string() }),
+]);
 
 // what the engine said of an image: it has it, it has none (404), or it
 // gave no clear answer, which never counts as absent
@@ -167,10 +175,75 @@ function pickHeaders(request: Request, names: readonly string[]): Record<string,
   return headers;
 }
 
-// The engine's answer for the client. `onEnd` runs once its body has
-// ended, as a pull or a build streams its progress and ends with it; a
-// client that goes first never runs it.
-function toClientResponse(upstream: Response, onEnd?: () => Promise<void>): Response {
+// What a relay does with the engine's answer: `onChunk` sees each chunk,
+// and `onEnd` runs once the body has ended, as a pull or a build streams
+// its progress and ends with it; a client that goes first never runs it.
+interface RelayWatch {
+  readonly onChunk?: (chunk: Uint8Array) => void;
+  readonly onEnd: () => Promise<void>;
+}
+
+// Reads a build's progress for the image it made: the ID on its
+// `moby.image.id` line, unless an error line came. Only those two lines
+// are parsed; the trace lines between them are not.
+function createBuildEndReader(): {
+  readonly read: (chunk: Uint8Array) => void;
+  readonly find: () => string | undefined;
+} {
+  const decoder = new TextDecoder();
+
+  let partial = '';
+  let imageId: string | undefined;
+  let failed = false;
+
+  const readLine = (line: string): void => {
+    if (!line.includes('"moby.image.id"') && !line.includes('"error"')) {
+      return;
+    }
+
+    const parsed = BuildEndSchema.safeParse(parseJson(line));
+
+    if (!parsed.success) {
+      return;
+    }
+
+    if ('error' in parsed.data) {
+      failed = true;
+    } else {
+      imageId = parsed.data.aux.ID;
+    }
+  };
+
+  return {
+    read: (chunk) => {
+      const lines = (partial + decoder.decode(chunk, { stream: true })).split('\n');
+
+      partial = lines.pop() ?? '';
+
+      for (const line of lines) {
+        readLine(line);
+      }
+    },
+    find: () => {
+      readLine(partial + decoder.decode());
+
+      partial = '';
+
+      return failed ? undefined : imageId;
+    },
+  };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+// The engine's answer for the client, with `watch` on its body
+function toClientResponse(upstream: Response, watch?: Readonly<RelayWatch>): Response {
   const headers = new Headers();
 
   for (const [name, value] of upstream.headers) {
@@ -180,9 +253,17 @@ function toClientResponse(upstream: Response, onEnd?: () => Promise<void>): Resp
   }
 
   const body =
-    onEnd === undefined || upstream.body === null
+    watch === undefined || upstream.body === null
       ? upstream.body
-      : upstream.body.pipeThrough(new TransformStream({ flush: onEnd }));
+      : upstream.body.pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform: (chunk, controller) => {
+              watch.onChunk?.(chunk);
+              controller.enqueue(chunk);
+            },
+            flush: watch.onEnd,
+          }),
+        );
 
   return new Response(body, {
     status: upstream.status,
@@ -227,14 +308,14 @@ export function createDockerProxy(
   const sendAndRelay = async (
     versionPrefix: string,
     call: UpstreamCall,
-    onEnd?: () => Promise<void>,
+    watch?: Readonly<RelayWatch>,
   ): Promise<Response> => {
     const upstream = await sendUpstream(versionPrefix, call);
 
     // a pull or a build the engine refused made nothing
-    const afterEnd = upstream.ok ? onEnd : undefined;
+    const watched = upstream.ok ? watch : undefined;
 
-    return toClientResponse(upstream, afterEnd);
+    return toClientResponse(upstream, watched);
   };
 
   const findImage = async (versionPrefix: string, name: string): Promise<ImageLookup> => {
@@ -256,18 +337,23 @@ export function createDockerProxy(
     return image.success ? { kind: 'found', image: image.data } : { kind: 'unknown' };
   };
 
-  // Records `reference` as one this proxy made, when the engine shows it
-  // other than `before`: a new name, or one that moved. A failure is logged,
-  // and the image then stays on the engine, which is the safe side.
+  // Records `reference` as the proxy's when the engine shows it other than
+  // `before`, and on `madeId`, the image a build said it made. A failure is
+  // logged, and the image then stays on the engine, the safe side.
   const registerReference = async (
     versionPrefix: string,
     reference: string,
     before: ImageLookup,
+    madeId?: string,
   ): Promise<void> => {
     try {
       const after = await findImage(versionPrefix, reference);
 
       if (after.kind !== 'found' || before.kind === 'unknown') {
+        return;
+      }
+
+      if (madeId !== undefined && after.image.Id !== madeId) {
         return;
       }
 
@@ -410,15 +496,25 @@ export function createDockerProxy(
     const limit = createByteLimit(options.buildContextMaxBytes);
     const body = request.body === null ? null : request.body.pipeThrough(limit);
 
-    // each tag the build moved is the build's own; one it left as it was
-    // (a failed build) is not
+    // a tag is the build's own only when the build ended on the image it
+    // made, and the tag moved to that image: a failed build makes nothing
     const tags = routed.query.get('t') ?? [];
 
     const before = await Promise.all(tags.map((tag) => findImage(routed.versionPrefix, tag)));
 
+    const buildEnd = createBuildEndReader();
+
     const registerBuiltTags = async (): Promise<void> => {
+      const madeId = buildEnd.find();
+
+      if (madeId === undefined) {
+        return;
+      }
+
       for (const [index, tag] of tags.entries()) {
-        await registerReference(routed.versionPrefix, tag, before[index] ?? { kind: 'unknown' });
+        const tagBefore = before[index] ?? { kind: 'unknown' };
+
+        await registerReference(routed.versionPrefix, tag, tagBefore, madeId);
       }
     };
 
@@ -436,7 +532,7 @@ export function createDockerProxy(
           body,
           signal: request.signal,
         },
-        registerBuiltTags,
+        { onChunk: buildEnd.read, onEnd: registerBuiltTags },
       );
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
@@ -478,7 +574,7 @@ export function createDockerProxy(
 
     const registerPulled =
       before.kind === 'absent'
-        ? () => registerReference(routed.versionPrefix, reference, before)
+        ? { onEnd: () => registerReference(routed.versionPrefix, reference, before) }
         : undefined;
 
     return sendAndRelay(

@@ -136,6 +136,32 @@ async function removeEngineImage(name: string): Promise<void> {
   }
 }
 
+// Removes the image by ID only once no name is left on it: by ID, the
+// engine removes an image with one tag left, and that tag may be the
+// owner's. The proxy refuses an ID with a tag it did not make, too.
+async function removeUnnamedEngineImage(id: string): Promise<void> {
+  const names = await runCommand([
+    'docker',
+    'image',
+    'inspect',
+    '--format',
+    '{{len .RepoTags}} {{len .RepoDigests}}',
+    id,
+  ]);
+
+  if (names.exitCode !== 0) {
+    return;
+  }
+
+  if (names.stdout.trim() !== '0 0') {
+    console.log(`impd: kept the engine image ${id}: it still has a name`);
+
+    return;
+  }
+
+  await removeEngineImage(id);
+}
+
 // the engine's platform, which a build without one runs for
 async function readHostPlatform(signal: AbortSignal): Promise<string> {
   const version = await runCommand(
@@ -413,7 +439,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
 
     if ((await countImageDigestUses(deps.db, image.digest)) === 0) {
-      await removeEngineImage(image.digest);
+      await removeUnnamedEngineImage(image.digest);
     }
   };
 
