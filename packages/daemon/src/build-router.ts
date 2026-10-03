@@ -111,6 +111,9 @@ export interface RouterDeps {
 
   // the gap between progress events of a streamed image add or build
   readonly imageKeepaliveMs: number;
+
+  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
+  readonly oauth: OAuthService;
 }
 
 // what a streamed image call's options are made from
@@ -118,9 +121,6 @@ interface ImageOpCall {
   readonly context: RpcContext;
   readonly input: unknown;
   readonly signal?: AbortSignal | undefined;
-
-  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
-  readonly oauth: OAuthService;
 }
 
 // what each call gets from build-app: who made it, and a signal that aborts

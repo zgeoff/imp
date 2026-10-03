@@ -706,3 +706,76 @@ test('with every slot held, a cancel still gets through, stops its tool and free
   expect(large.status).toBe(429);
   expect(ended.status).toBe(204);
 }, 30_000);
+
+test('with every slot held, at most 16 bodies are read at once for the allowance', async () => {
+  await using ctx = await setupTest();
+
+  const config = ctx.config.publicMcp;
+
+  if (config === null) {
+    throw new Error('the public route is off');
+  }
+
+  // an MCP endpoint whose calls never end, so 64 of them hold every slot
+  const mcp = {
+    handle: () => {
+      const body = new ReadableStream<Uint8Array>({ start: () => {} });
+
+      return Promise.resolve(new Response(body));
+    },
+    close: () => Promise.resolve(),
+    readCallEnd: () => new Promise<void>(() => {}),
+  };
+
+  const handle = createPublicHandler({ config, oauth: ctx.oauth, mcp });
+
+  for (let index = 0; index < 64; index += 1) {
+    const response = await handle(
+      new Request(`${ORIGIN}/mcp`, { method: 'POST', headers: { host: HOST } }),
+      null,
+    );
+
+    await response.body?.cancel();
+  }
+
+  // 33 bodies that never finish; each records whether anything read it
+  const reads: boolean[] = [];
+  const outcomes: (number | 'waiting')[] = [];
+
+  for (let index = 0; index < 33; index += 1) {
+    reads.push(false);
+
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull: () => {
+          reads[index] = true;
+
+          return new Promise<void>(() => {});
+        },
+      },
+      { highWaterMark: 0 },
+    );
+
+    const request = new Request(`${ORIGIN}/mcp`, {
+      method: 'POST',
+      headers: { host: HOST, 'content-type': 'application/json' },
+      body,
+    });
+
+    outcomes.push('waiting');
+
+    const writeOutcome = async () => {
+      const response = await handle(request, null);
+
+      outcomes[index] = response.status;
+    };
+
+    void writeOutcome();
+  }
+
+  await Bun.sleep(50);
+
+  expect(outcomes.slice(0, 16)).toEqual(Array.from({ length: 16 }, () => 'waiting'));
+  expect(outcomes.slice(16)).toEqual(Array.from({ length: 17 }, () => 429));
+  expect(reads.slice(16).some(Boolean)).toBeFalse();
+});

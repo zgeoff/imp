@@ -264,6 +264,7 @@ interface ImpdTestOptions {
 
   // the server's token is a manage token for these imps, not the root token
   readonly tokenImps?: readonly string[];
+
   // impd's environment, such as the public route's
   readonly env?: Readonly<Record<string, string>>;
 }
