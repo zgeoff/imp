@@ -124,6 +124,22 @@ export function checkBuildQuery(query: ReadonlyMap<string, readonly string[]>): 
   return checkQuery(query, BUILD_RULES);
 }
 
+// the one Content-Type `docker build` sends: a tar context
+export const BUILD_CONTENT_TYPE = 'application/x-tar';
+
+// A build body is a tar, never a form: the engine reads params from r.Form,
+// where a form body replaces or adds to the query checked above. The proxy
+// sends its own Content-Type either way.
+export function checkBuildContentType(value: string | null): Check {
+  if (value === null || value === BUILD_CONTENT_TYPE) {
+    return OK;
+  }
+
+  return buildFailure(
+    `a build body is a tar context, and Content-Type ${JSON.stringify(value)} is not ${BUILD_CONTENT_TYPE}`,
+  );
+}
+
 export interface ImageReference {
   // the registry host, with its port, or docker.io when the name has none
   readonly registry: string;

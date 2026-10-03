@@ -105,6 +105,40 @@ test("a build may not tag outside imp/, nor retag the host's image", async () =>
   expect(second).toContain('param t');
 });
 
+// the engine reads a build's params from r.Form, where a form body replaces
+// or adds to the query: this body would give RUN the host's network, a
+// remote context and a tag outside imp/
+test('a build with a form body, which would replace or add to its checked query, is refused', async () => {
+  const evil = `${prefix}evil:latest`;
+
+  const body = new URLSearchParams({
+    networkmode: 'host',
+    remote: 'http://127.0.0.1:9/ctx.tar',
+    t: evil,
+  }).toString();
+
+  const sent = await runInContainer([
+    'curl',
+    '-sS',
+    '-w',
+    '\n%{http_code}',
+    '--unix-socket',
+    '/run/imp-docker/docker.sock',
+    '-X',
+    'POST',
+    'http://docker/build?t=imp%2Fe2e-sock%3Alatest&q=1&version=1',
+    '-H',
+    'Content-Type: application/x-www-form-urlencoded',
+    '--data-binary',
+    body,
+  ]);
+
+  const [answer, status] = sent.stdout.trim().split('\n');
+
+  expect(status).toBe('403');
+  expect(answer).toContain('imp-docker-proxy: a build body is a tar context');
+});
+
 test("a pull of the host's repository is refused, so its tag cannot move", async () => {
   const refusal = await readRefusal(`docker pull ${hostRepo}:e2e-socket`);
 

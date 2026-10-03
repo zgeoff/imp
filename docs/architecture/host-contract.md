@@ -153,8 +153,14 @@ through the calls impd's CLI makes and refuses every other with a 403 and a log 
 
 - **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
   that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
-  engine a new request with that same path, the checked query, and only `Content-Type`,
-  `X-Registry-Auth` and `X-Registry-Config`.
+  engine a new request with that same path and the checked query. Of the client's headers, a pull
+  keeps only `X-Registry-Auth` and a build only `X-Registry-Config`; no other header passes.
+- **Headers:** the engine reads a build's params from `r.Form`, where Go puts an urlencoded body
+  ahead of the query and appends a multipart body after it, so a form body would replace or add
+  params the checked query does not allow, such as `networkmode`, `remote` and `t`. A build whose
+  `Content-Type` is present and is not exactly `application/x-tar` gets the 403: a form (urlencoded
+  or multipart), and a tar with a parameter, too. The proxy sends `Content-Type: application/x-tar`
+  itself. A create's body and type are the proxy's own; a pull takes no body.
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach, exec or
   BuildKit session.
 - **The token:** made once, in `/var/lib/imp-docker-proxy/token` (0600), which only the proxy
@@ -177,6 +183,9 @@ What stays open through the proxy, by design or until later work:
 - A build runs any Dockerfile steps in a default build container. `RUN curl` reaches the host
   through the bridge gateway, and `FROM 127.0.0.1:5000/x` in a Dockerfile goes around the pull rule,
   because the classic builder pulls it itself.
+- `ADD http://...` and `ADD <git url>` in a Dockerfile make dockerd download in the host's own
+  network, so a build can reach a service on the host's `127.0.0.1`, impd's published loopback port
+  among them, and a link-local address ([#145](https://github.com/zgeoff/imp/issues/145)).
 - The pull rule reads the registry's name, not its address. The engine resolves a hostname that
   points into `127.0.0.0/8` and treats that registry as insecure, so a pull from such a name reaches
   a registry on the host's loopback.

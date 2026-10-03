@@ -201,7 +201,12 @@ test('a build streams its context and keeps only the registry headers', async ()
   const context = new Uint8Array(2 * 1024 ** 2).fill(7);
 
   const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1', {
-    headers: { 'content-type': 'application/x-tar', 'x-registry-config': 'e30=', cookie: 'c=1' },
+    headers: {
+      'content-type': 'application/x-tar',
+      'x-registry-config': 'e30=',
+      'x-registry-auth': 'e30=',
+      cookie: 'c=1',
+    },
     body: context,
   });
 
@@ -209,8 +214,48 @@ test('a build streams its context and keeps only the registry headers', async ()
 
   expect(answer).toEqual({ received: context.length });
   expect(seen[0]?.target).toBe('/v1.55/build?t=imp%2Fx%3Alatest&q=1&version=1');
+  expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
   expect(seen[0]?.headers['x-registry-config']).toBe('e30=');
+  expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
   expect(seen[0]?.headers['cookie']).toBeUndefined();
+});
+
+test('a build without a Content-Type reaches the engine as a tar', async () => {
+  const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+    body: new Blob([new Uint8Array(512)]).stream(),
+  });
+
+  expect(response.status).toBe(200);
+  expect(seen[0]?.headers['content-type']).toBe('application/x-tar');
+});
+
+// a form body would replace or add to the checked query: the engine reads r.Form
+test('a build with a form body, which would replace or add to its query, never reaches the engine', async () => {
+  const statuses: number[] = [];
+
+  for (const contentType of [
+    'application/x-www-form-urlencoded',
+    'application/x-www-form-urlencoded; charset=utf-8',
+    'multipart/form-data; boundary=x',
+    'application/x-tar; charset=utf-8',
+  ]) {
+    const response = await sendToProxy('POST', '/v1.55/build?t=imp%2Fx%3Alatest&version=1', {
+      headers: { 'content-type': contentType },
+      body: 'networkmode=host&remote=http%3A%2F%2F127.0.0.1%3A9%2Fctx.tar&t=evil%3Alatest',
+    });
+
+    statuses.push(response.status);
+
+    const refusal: unknown = await response.json();
+
+    expect(refusal).toEqual({
+      message: `imp-docker-proxy: a build body is a tar context, and Content-Type ${JSON.stringify(contentType)} is not application/x-tar`,
+    });
+  }
+
+  expect(statuses).toEqual([403, 403, 403, 403]);
+  expect(seen).toEqual([]);
+  expect(logged).toHaveLength(4);
 });
 
 test('a build context over the limit, sent chunked, is cut off', async () => {
