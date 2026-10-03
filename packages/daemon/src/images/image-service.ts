@@ -22,6 +22,7 @@ import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
+import { writeExportedTree } from './unpack-export';
 
 const GIB = 1024 ** 3;
 
@@ -124,17 +125,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const containerId = created.trim();
 
     try {
-      // root here, so tar keeps numeric owners as they are in the image
-      await runChecked([
-        'bash',
-        '-o',
-        'pipefail',
-        '-c',
-        'docker export "$1" | tar --numeric-owner --xattrs -xpf - -C "$2"',
-        'export',
-        containerId,
-        root,
-      ]);
+      await writeExportedTree(containerId, root);
 
       mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
 
