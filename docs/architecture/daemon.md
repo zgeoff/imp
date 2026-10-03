@@ -666,32 +666,33 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code
 (`db/run-migrations.ts`). Its tables are `images`, `imps`, `checkpoints`, the broker's `secrets`,
-`grants` and `broker_audit`, `api_audit`, `tokens`, `token_ssh_keys` and `imp_cold_boots`. SQLite
-has one connection, so a promise-chain mutex gives it to one caller at a time. Timestamps are
-integer milliseconds since the epoch.
+`grants`, `broker_audit` and `broker_sessions`, `api_audit`, `tokens`, `token_ssh_keys` and
+`imp_cold_boots`. SQLite has one connection, so a promise-chain mutex gives it to one caller at a
+time. Timestamps are integer milliseconds since the epoch.
 
 The migrations, in order:
 
-| Migration                   | What it adds                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                                 |
-| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                                     |
-| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                                  |
-| `004_add_api_audit`         | `api_audit`                                                                                                        |
-| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB                     |
-| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                               |
-| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                       |
-| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                                     |
-| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                           |
-| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies        |
-| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps                |
-| `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                     |
-| `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy` |
-| `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                     |
-| `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))       |
-| `016_add_imp_jail_uid`      | `imps.jail_uid`, the uid each imp's [jailed](#the-jailer) Firecracker runs as                                      |
-| `017_add_move_slots`        | `move_tickets.slot`, the slot a warm move keeps                                                                    |
-| `018_add_warm_moves`        | `move_sends.warm`, and `imps.trust_pending` until a warm-moved imp's first wake                                    |
+| Migration                   | What it adds                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                                                  |
+| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                                                      |
+| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                                                   |
+| `004_add_api_audit`         | `api_audit`                                                                                                                         |
+| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB                                      |
+| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                                                |
+| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                                        |
+| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                                                      |
+| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                                            |
+| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies                         |
+| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps                                 |
+| `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                                      |
+| `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy`                  |
+| `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                                      |
+| `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))                        |
+| `016_add_imp_jail_uid`      | `imps.jail_uid`, the uid each imp's [jailed](#the-jailer) Firecracker runs as                                                       |
+| `017_add_move_slots`        | `move_tickets.slot`, the slot a warm move keeps                                                                                     |
+| `018_add_warm_moves`        | `move_sends.warm`, and `imps.trust_pending` until a warm-moved imp's first wake                                                     |
+| `021_add_broker_sessions`   | `broker_sessions`, the session runs started with `require: ['broker']` ([connectors](../guides/connectors.md#requiring-the-broker)) |
 
 ### Other modules
 
