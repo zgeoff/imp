@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.19@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6
-# imp host container: impd, Firecracker and tailscaled.
+# imp host container: impd, Firecracker and tailscaled; the same image runs
+# imp-docker-proxy, the only Docker socket imp-host sees.
 # Run with the privileges of deploy/imp-host.args.json, not --privileged
 # (docs/architecture/host-contract.md#privileges), and its own network namespace.
 #
@@ -89,9 +90,13 @@ COPY host/scripts/ /usr/local/lib/imp/
 # tailscale-up.sh starts tailscaled from saved node state with no key, so
 # deploy/bootstrap.sh may blank a spent key in the env file.
 LABEL imp.tailscale-keyless="1"
-# Runs without --privileged under deploy/imp-host.service's privileges;
+# Runs without --privileged under deploy/imp-host.service's privileges, and
+# reaches Docker through imp-docker-proxy, not the host's socket;
 # deploy/upgrade.sh refuses an image without this once the unit drops it.
-LABEL imp.host-contract="unprivileged"
+LABEL imp.host-contract="socket-proxy"
+# imp-docker-proxy's socket directory and state, as a compose volume copies
+# them: its user (65534) owns both, and nothing else gets in.
+RUN install -d -m 0700 -o 65534 -g 65534 /run/imp-docker /var/lib/imp-docker-proxy
 COPY host/entrypoint /usr/local/bin/imp-entrypoint
 
 EXPOSE 7070 7080
@@ -238,6 +243,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 # --external cpu-features: ssh2 loads this optional native module in a
 # try/catch, and --ignore-scripts leaves its .node file unbuilt.
 RUN bun build --compile --external cpu-features packages/daemon/src/main.ts --outfile /out/impd \
+ && bun build --compile packages/daemon/src/docker-proxy/main.ts --outfile /out/imp-docker-proxy \
  && bun build --compile packages/cli/src/main.ts --outfile /out/imp
 
 # --- dashboard: the web dashboard's static files. Its own stage: the build
@@ -264,11 +270,13 @@ LABEL org.opencontainers.image.title="imp-host" \
       org.opencontainers.image.version="${IMP_VERSION}"
 
 COPY --from=system-files / /usr/local/share/imp/
-COPY --from=compile /out/impd /out/imp /usr/local/bin/
+COPY --from=compile /out/impd /out/imp-docker-proxy /out/imp /usr/local/bin/
 COPY --from=dashboard /src/packages/dashboard/dist /usr/local/share/imp/dashboard
-# deploy/bootstrap.sh and deploy/upgrade.sh install the unit and seccomp
-# profile of the image they run
-COPY deploy/imp-host.service deploy/imp-host.seccomp.json /usr/local/share/imp/deploy/
+# deploy/bootstrap.sh and deploy/upgrade.sh install the units and seccomp
+# profile of the image they run; a host on an older release gets upgrade.sh
+# from here (docs/guides/operations.md)
+COPY deploy/imp-host.service deploy/imp-docker-proxy.service deploy/imp-host.seccomp.json \
+     deploy/upgrade.sh /usr/local/share/imp/deploy/
 # the CLI in the container finds impd's token with no IMP_TOKEN
 RUN mkdir -p /root/.config/imp && ln -s /var/lib/imp/token /root/.config/imp/token
 

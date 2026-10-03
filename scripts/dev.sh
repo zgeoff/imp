@@ -1,9 +1,11 @@
 #!/bin/bash
-# Run impd in one long-lived dev host container (imp-dev).
+# Run impd in one long-lived dev host container (imp-dev), with its Docker
+# socket proxy beside it (imp-dev-docker-proxy), as the deploy runs them.
 #
 #   scripts/dev.sh up        build what is missing, start the container, wait for impd
 #   scripts/dev.sh down      stop the container (impd sleeps every imp first, so
-#                            memory survives) and remove it; data stays in .data/dev
+#                            memory survives) and its proxy, and remove them; data
+#                            stays in .data/dev
 #   scripts/dev.sh reboot    down, then up: imps come back asleep and wake on demand
 #   scripts/dev.sh logs      follow the container log
 #   scripts/dev.sh restart   restart impd only (SIGHUP); running VMs survive and are re-adopted
@@ -59,6 +61,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib.sh"
 
 name=${IMP_DEV_NAME:-imp-dev}
+proxy=$name-docker-proxy
 offset=${IMP_DEV_PORT_OFFSET:-0}
 data=${IMP_DEV_DATA:-$IMP_ROOT/.data/dev}
 publish=${IMP_DEV_PUBLISH:-1}
@@ -111,7 +114,37 @@ read_uplink_mtu() {
 }
 
 is_running() {
-  [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)" = true ]
+  [ "$(docker inspect -f '{{.State.Running}}' "${1:-$name}" 2>/dev/null || true)" = true ]
+}
+
+# start_proxy runs imp-docker-proxy from the repo, with the deploy's
+# privileges, and waits for its socket. The socket's directory and the
+# proxy's token are volumes of their own, which take the image's
+# directories, owned by the proxy's user (host/Dockerfile).
+start_proxy() {
+  if is_running "$proxy"; then
+    return
+  fi
+  docker rm -f "$proxy" >/dev/null 2>&1 || true
+  local privileges context=()
+  mapfile -t privileges < <(read_proxy_privileges)
+  [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
+  docker run -d --name "$proxy" "${privileges[@]}" \
+    --group-add "$(stat -c %g /var/run/docker.sock)" \
+    -e HOME=/tmp -e "IMP_HOST_IMAGE=$IMP_HOST_IMAGE" "${context[@]}" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$name-docker:/run/imp-docker" -v "$name-docker-proxy:/var/lib/imp-docker-proxy" \
+    -v "$IMP_ROOT:/src:ro" \
+    "$IMP_HOST_IMAGE" bun /src/packages/daemon/src/docker-proxy/main.ts >/dev/null
+  local deadline=$((SECONDS + 30))
+  until docker exec "$proxy" test -S /run/imp-docker/docker.sock 2>/dev/null; do
+    if ! is_running "$proxy" || [ $SECONDS -ge $deadline ]; then
+      echo "dev.sh: $proxy has no socket; last log lines:" >&2
+      docker logs --tail 20 "$proxy" >&2 || true
+      return 1
+    fi
+    sleep 0.2
+  done
 }
 
 # wait_ready waits until /health reports ready (default image seeded).
@@ -148,6 +181,7 @@ up() {
   fi
   [ -f "$system" ] || { echo "dev.sh: no system drive at $system" >&2; exit 1; }
 
+  start_proxy
   if is_running; then
     echo "dev.sh: $name already running"
   else
@@ -201,7 +235,8 @@ up() {
       --device /dev/loop-control --device-cgroup-rule 'b 7:* rmw' \
       --dns 1.1.1.1 --dns 8.8.8.8 "${env_file[@]}" "${network[@]}" \
       -v "$IMP_ROOT:/src" -v "$IMP_ROOT:$IMP_ROOT" -v "$data:/data" \
-      -v /var/run/docker.sock:/var/run/docker.sock \
+      -v "$name-docker:/run/imp-docker:ro" \
+      -e DOCKER_HOST=unix:///run/imp-docker/docker.sock \
       "${ports[@]}" \
       -e IMP_STORAGE_GIB="${IMP_STORAGE_GIB:-200}" \
       -e IMP_UPLINK_MTU="${IMP_UPLINK_MTU:-$(read_uplink_mtu)}" \
@@ -224,7 +259,8 @@ down() {
     docker stop -t 120 "$name" >/dev/null
     docker logs --tail 5 "$name" 2>&1 | grep 'every imp asleep' || true
   fi
-  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker rm -f "$name" "$proxy" >/dev/null 2>&1 || true
+  docker volume rm "$name-docker" "$name-docker-proxy" >/dev/null 2>&1 || true
 }
 
 case ${1:-} in

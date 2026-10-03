@@ -13,8 +13,8 @@
 # changes instead of making them.
 #
 # The script is self-contained, so it runs on a server without a checkout:
-# it embeds deploy/imp-host.service and deploy/imp-host.env.example (a test
-# keeps the copies equal to those files).
+# it embeds deploy/imp-host.service, deploy/imp-docker-proxy.service and
+# deploy/imp-host.env.example (a test keeps the copies equal to those files).
 #
 # The Tailscale key comes from --tailscale-authkey-file or TAILSCALE_AUTHKEY
 # and goes only to /etc/imp/imp-host.env (0600). It is never printed and
@@ -506,9 +506,9 @@ unit_imp_host() {
 # imp host as a systemd service. One of the two supported ways to run the
 # release image; deploy/compose.yaml is the other. Run one, not both.
 #
-#   install -m 0644 deploy/imp-host.service /etc/systemd/system/
+#   install -m 0644 deploy/imp-host.service deploy/imp-docker-proxy.service /etc/systemd/system/
 #   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
-#   systemctl daemon-reload && systemctl enable --now imp-host
+#   systemctl daemon-reload && systemctl enable --now imp-docker-proxy imp-host
 #   deploy/upgrade.sh   to a new image
 #
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
@@ -516,8 +516,10 @@ unit_imp_host() {
 Description=imp host (impd, Firecracker, tailscaled)
 Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
 Requires=docker.service
-After=docker.service network-online.target
-Wants=network-online.target
+After=docker.service network-online.target imp-docker-proxy.service
+# impd reaches Docker through the proxy's socket. Wants, not BindsTo: a
+# proxy that stops fails image work only, and the imps keep running.
+Wants=network-online.target imp-docker-proxy.service
 # With XFS, /var/lib/imp is a host mount; never start before it is there.
 RequiresMountsFor=/var/lib/imp
 
@@ -558,7 +560,8 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --env-file /etc/imp/imp-host.env \
   $IMP_HOST_NETWORK \
   -v /var/lib/imp:/var/lib/imp \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /run/imp-docker:/run/imp-docker:ro \
+  -e DOCKER_HOST=unix:///run/imp-docker/docker.sock \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   $IMP_PUBLIC_PORTS \
@@ -570,6 +573,69 @@ ExecStop=/usr/bin/docker stop -t 120 imp-host
 TimeoutStopSec=150
 Restart=on-failure
 RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+unit_imp_docker_proxy() {
+  cat <<'EOF'
+# imp-docker-proxy: the only Docker socket imp-host sees. It passes the
+# calls impd makes (pull, build, create, export, rm) and refuses every other
+# (docs/architecture/host-contract.md#the-docker-socket). It closes the
+# Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
+# out of the container.
+#
+#   install -m 0644 deploy/imp-docker-proxy.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now imp-docker-proxy
+#
+# imp-host.service wants this unit and starts after it; deploy/bootstrap.sh
+# and deploy/upgrade.sh install both.
+[Unit]
+Description=imp Docker socket proxy (the Docker API calls impd makes)
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host-contract.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=exec
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# IMP_HOST_IMAGE, whose repository a pull may not move, and
+# IMP_BUILD_CONTEXT_MAX_MIB. Only those two reach the container (-e NAME);
+# it never sees the rest of the file, such as TAILSCALE_AUTHKEY.
+EnvironmentFile=/etc/imp/imp-host.env
+ExecStartPre=-/usr/bin/docker rm -f imp-docker-proxy
+# The socket's directory and the proxy's token, owned by the proxy's user.
+# Not RuntimeDirectory=: a stop would remove the directory under imp-host's
+# bind mount.
+ExecStartPre=/usr/bin/install -d -m 0700 -o 65534 -g 65534 /run/imp-docker /var/lib/imp-docker-proxy
+# a socket left by a crash would pass the wait below before the proxy binds
+ExecStartPre=/bin/rm -f /run/imp-docker/docker.sock
+# The proxy runs as 65534 and joins the group of the host's socket, read
+# here as IMP_DOCKER_GID; systemd reads the file again for ExecStart.
+RuntimeDirectory=imp-docker-proxy
+EnvironmentFile=-/run/imp-docker-proxy/gid.env
+ExecStartPre=/bin/sh -c 'echo "IMP_DOCKER_GID=$$(stat -c %%g /var/run/docker.sock)" >/run/imp-docker-proxy/gid.env'
+# The arguments come from the proxy section of deploy/imp-host.args.json:
+# edit that, then run bun run render:deploy (the NixOS module reads the same
+# file).
+ExecStart=/usr/bin/docker run --rm --name imp-docker-proxy \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp \
+  --network none \
+  --user 65534:65534 \
+  --group-add $IMP_DOCKER_GID \
+  -e IMP_HOST_IMAGE -e IMP_BUILD_CONTEXT_MAX_MIB \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /run/imp-docker:/run/imp-docker \
+  -v /var/lib/imp-docker-proxy:/var/lib/imp-docker-proxy \
+  ${IMP_HOST_IMAGE} /usr/local/bin/imp-docker-proxy
+# Up once the socket is there, so impd's first docker call finds it.
+ExecStartPost=/bin/sh -c 'for i in $$(seq 300); do [ -S /run/imp-docker/docker.sock ] && exit 0; sleep 0.1; done; echo "imp-docker-proxy: no socket after 30 s" >&2; exit 1'
+ExecStop=/usr/bin/docker stop -t 10 imp-docker-proxy
+Restart=always
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
@@ -1590,6 +1656,9 @@ ensure_imp() {
   fi
   put_file "$ENV_FILE" 600 "$env" && changed=1
   put_file /etc/systemd/system/imp-host.service 644 "$(unit_imp_host)" && changed=1
+  # imp-host reaches Docker through this proxy only (docs/architecture/host-contract.md#the-docker-socket)
+  local proxy_changed=
+  put_file /etc/systemd/system/imp-docker-proxy.service 644 "$(unit_imp_docker_proxy)" && proxy_changed=1
   if [ "$storage" = zfs ]; then
     put_file /etc/systemd/system/imp-host.service.d/zfs.conf 644 "$(unit_imp_host_zfs)" && changed=1
   fi
@@ -1598,6 +1667,12 @@ ensure_imp() {
   local run_image
   run_image=$(sed -n 's/^IMP_HOST_IMAGE=//p' <<<"$env" | tail -n 1)
   ensure_image "${run_image:-$DEFAULT_IMAGE}"
+  # The units run imp-docker-proxy from the image, and imp-host has no
+  # docker.sock: an older image has neither.
+  if ! dry || docker image inspect "${run_image:-$DEFAULT_IMAGE}" >/dev/null 2>&1; then
+    [ "$(docker image inspect -f '{{index .Config.Labels "imp.host-contract"}}' "${run_image:-$DEFAULT_IMAGE}")" = socket-proxy ] \
+      || die "${run_image:-$DEFAULT_IMAGE} predates the Docker socket proxy; run the bootstrap.sh of its own release"
+  fi
   # The unit's seccomp profile, from the image it runs: Docker's default plus
   # pivot_root for the jailer (docs/architecture/host-contract.md#privileges).
   # A dry run pulls nothing, so it may have no image to read.
@@ -1610,9 +1685,13 @@ ensure_imp() {
     put_file "$SECCOMP_FILE" 644 "$seccomp" && changed=1
   fi
 
-  if [ -n "$changed" ]; then
+  # The proxy first: imp-host starts after it, and impd's first docker call
+  # needs its socket.
+  if [ -n "$proxy_changed$changed" ]; then
+    change "restart imp-docker-proxy" reload_unit imp-docker-proxy
     change "restart imp-host" reload_unit imp-host
   else
+    ensure_service imp-docker-proxy
     ensure_service imp-host
   fi
 }

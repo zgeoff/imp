@@ -1,5 +1,5 @@
 {
-  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/module.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host-contract.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md).",
+  "$comment": "The docker run arguments of the imp-host container, one array per line of the unit, without the image. bun run render:deploy writes them into deploy/imp-host.service, bootstrap.sh's copy and deploy/compose.yaml; deploy/nixos/module.nix and scripts/dev.sh read this file. privileges replaces --privileged (docs/architecture/host-contract.md#privileges). Each probed entry's args go in only where its path exists on the host. A word $NAME (unbraced) in lines is zero or more words from the env file in the unit, and a module option in Nix. --hostname: restic's backup locks name the host (docs/architecture/backups.md). proxy is the imp-docker-proxy container (deploy/imp-docker-proxy.service): imp-host reaches Docker through its socket only, never the host's.",
   "privileges": [
     ["--init", "--cgroupns=private", "--cap-drop", "ALL"],
     ["--cap-add", "SYS_ADMIN", "--cap-add", "NET_ADMIN", "--cap-add", "MKNOD"],
@@ -35,9 +35,27 @@
     ["--env-file", "/etc/imp/imp-host.env"],
     ["$IMP_HOST_NETWORK"],
     ["-v", "/var/lib/imp:/var/lib/imp"],
-    ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
+    ["-v", "/run/imp-docker:/run/imp-docker:ro"],
+    ["-e", "DOCKER_HOST=unix:///run/imp-docker/docker.sock"],
     ["-v", "/etc/imp:/etc/imp:ro"],
     ["-p", "127.0.0.1:7070:7070", "-p", "127.0.0.1:7080:7080"],
     ["$IMP_PUBLIC_PORTS"]
-  ]
+  ],
+  "proxy": {
+    "privileges": [
+      ["--cap-drop", "ALL", "--security-opt", "no-new-privileges"],
+      ["--read-only", "--tmpfs", "/tmp"],
+      ["--network", "none"],
+      ["--user", "65534:65534"]
+    ],
+    "lines": [
+      ["--rm", "--name", "imp-docker-proxy"],
+      ["--group-add", "$IMP_DOCKER_GID"],
+      ["-e", "IMP_HOST_IMAGE", "-e", "IMP_BUILD_CONTEXT_MAX_MIB"],
+      ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
+      ["-v", "/run/imp-docker:/run/imp-docker"],
+      ["-v", "/var/lib/imp-docker-proxy:/var/lib/imp-docker-proxy"]
+    ],
+    "command": ["/usr/local/bin/imp-docker-proxy"]
+  }
 }

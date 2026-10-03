@@ -9,9 +9,50 @@
 # or, with IMP_STORAGE_BACKEND=zfs, IMP_ZFS_ROOT a legacy-mounted dataset the
 # container mounts itself (docs/architecture/storage.md#zfs). The container
 # refuses to start otherwise.
+#
+# imp-host reaches Docker through imp-docker-proxy, never the host's socket
+# (docs/architecture/host-contract.md#the-docker-socket). That closes the
+# Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
+# out of the container. The proxy joins the group of /var/run/docker.sock:
+# set IMP_DOCKER_GID to `stat -c %g /var/run/docker.sock` in the shell or a
+# .env next to this file (deploy/upgrade.sh --compose sets it).
 name: imp
 
 services:
+  imp-docker-proxy:
+    image: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:latest}
+    container_name: imp-docker-proxy
+    command: ['/usr/local/bin/imp-docker-proxy']
+    # proxy privileges: from deploy/imp-host.args.json (bun run render:deploy)
+    read_only: true
+    network_mode: 'none'
+    user: '65534:65534'
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges
+    tmpfs:
+      - /tmp
+    # end of proxy privileges
+    group_add:
+      - ${IMP_DOCKER_GID:?set IMP_DOCKER_GID to the group of /var/run/docker.sock (stat -c %g
+        /var/run/docker.sock)}
+    # not the env file, which holds the Tailscale key: set a different
+    # IMP_BUILD_CONTEXT_MAX_MIB here too, in the shell or .env
+    environment:
+      IMP_HOST_IMAGE: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:latest}
+      IMP_BUILD_CONTEXT_MAX_MIB: ${IMP_BUILD_CONTEXT_MAX_MIB:-1024}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # new volumes take the image's directories, owned by the proxy's user
+      - imp-docker:/run/imp-docker
+      - imp-docker-proxy:/var/lib/imp-docker-proxy
+    healthcheck:
+      test: ['CMD', 'test', '-S', '/run/imp-docker/docker.sock']
+      interval: 2s
+      retries: 15
+    restart: unless-stopped
+
   imp-host:
     image: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:latest}
     container_name: imp-host
@@ -55,10 +96,15 @@ services:
     env_file:
       - path: ${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
         required: true
+    # impd pulls and builds imp images through the proxy's socket
+    environment:
+      DOCKER_HOST: unix:///run/imp-docker/docker.sock
+    depends_on:
+      imp-docker-proxy:
+        condition: service_healthy
     volumes:
       - ${IMP_HOST_DATA:-/var/lib/imp}:/var/lib/imp
-      # impd pulls and builds imp images with the host's docker
-      - /var/run/docker.sock:/var/run/docker.sock
+      - imp-docker:/run/imp-docker:ro
       # the restic password file for backups (docs/architecture/backups.md)
       - /etc/imp:/etc/imp:ro
     # Local only: the tailnet reaches impd and every imp through the
@@ -80,6 +126,10 @@ services:
     # the time (docs/guides/operations.md).
     stop_grace_period: 120s
     restart: unless-stopped
+
+volumes:
+  imp-docker:
+  imp-docker-proxy:
 
 # The same network as create_host_network in deploy/bootstrap.sh and the
 # ExecStartPre of deploy/imp-host.service; keep the three equal.

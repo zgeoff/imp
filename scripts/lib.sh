@@ -31,6 +31,12 @@ read_host_privileges() {
     done
 }
 
+# read_proxy_privileges prints the imp-docker-proxy container's privilege
+# arguments (the proxy section of deploy/imp-host.args.json), one word per line.
+read_proxy_privileges() {
+  jq -r '.proxy.privileges[][]' "$IMP_ROOT/deploy/imp-host.args.json"
+}
+
 # load_tailscale_authkey exports TAILSCALE_AUTHKEY from the first source that
 # has one and returns 1 when none does: the env var; then a 1Password read of
 # IMP_TAILSCALE_AUTHKEY_REF (default op://cloud/imp-tailscale-authkey/credential)

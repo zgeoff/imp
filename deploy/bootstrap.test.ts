@@ -33,8 +33,9 @@ function readDeployFile(name: string): string {
   return readFileSync(path.join(import.meta.dir, name), 'utf8');
 }
 
-test('it embeds deploy/imp-host.service and the env template unchanged', () => {
+test('it embeds both units and the env template unchanged', () => {
   expect(runFunction('unit_imp_host')).toBe(readDeployFile('imp-host.service'));
+  expect(runFunction('unit_imp_docker_proxy')).toBe(readDeployFile('imp-docker-proxy.service'));
   expect(runFunction('env_template')).toBe(readDeployFile('imp-host.env.example'));
 });
 
