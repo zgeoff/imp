@@ -8,6 +8,7 @@ import {
   findProxyDrift,
   findSocketDrift,
   readExpectedPrivileges,
+  readExpectedProxy,
 } from './privileges';
 
 const seccompJson = readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.seccomp.json'), 'utf8');
@@ -126,6 +127,10 @@ describe('findSocketDrift', () => {
     expect(
       findSocketDrift([{ Source: '/var/run/docker.sock', Destination: '/var/run/docker.sock' }]),
     ).toContain('mounts /var/run/docker.sock');
+
+    for (const dir of ['/var/run', '/run', '/var', '/']) {
+      expect(findSocketDrift([{ Source: dir, Destination: '/host' }])).toContain(`mounts ${dir}`);
+    }
   });
 });
 
@@ -144,27 +149,31 @@ describe('findProxyDrift', () => {
     },
   };
 
-  test('passes the deploy proxy', () => {
-    expect(findProxyDrift(proxy)).toBeNull();
+  const deployProxy = readExpectedProxy(
+    readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.args.json'), 'utf8'),
+  );
+
+  test('passes the proxy as deploy/imp-host.args.json runs it', () => {
+    expect(findProxyDrift(proxy, deployProxy)).toBeNull();
   });
 
   test('flags a capability, a network, a writable root or root', () => {
-    expect(findProxyDrift({ ...proxy, host: { ...proxy.host, CapAdd: ['SYS_ADMIN'] } })).toContain(
-      'capabilities',
-    );
+    expect(
+      findProxyDrift({ ...proxy, host: { ...proxy.host, CapAdd: ['SYS_ADMIN'] } }, deployProxy),
+    ).toContain('keeps capabilities');
 
-    expect(findProxyDrift({ ...proxy, host: { ...proxy.host, NetworkMode: 'bridge' } })).toContain(
-      'network bridge',
-    );
+    expect(
+      findProxyDrift({ ...proxy, host: { ...proxy.host, NetworkMode: 'bridge' } }, deployProxy),
+    ).toContain('network bridge');
 
-    expect(findProxyDrift({ ...proxy, host: { ...proxy.host, ReadonlyRootfs: false } })).toContain(
-      'writable',
-    );
+    expect(
+      findProxyDrift({ ...proxy, host: { ...proxy.host, ReadonlyRootfs: false } }, deployProxy),
+    ).toContain('writable');
 
-    expect(findProxyDrift({ ...proxy, user: '' })).toContain('user root');
+    expect(findProxyDrift({ ...proxy, user: '' }, deployProxy)).toContain('runs as root');
 
-    expect(findProxyDrift({ ...proxy, host: { ...proxy.host, SecurityOpt: [] } })).toContain(
-      'no-new-privileges',
-    );
+    expect(
+      findProxyDrift({ ...proxy, host: { ...proxy.host, SecurityOpt: [] } }, deployProxy),
+    ).toContain('security options');
   });
 });

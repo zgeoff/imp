@@ -117,8 +117,9 @@ is_running() {
   [ "$(docker inspect -f '{{.State.Running}}' "${1:-$name}" 2>/dev/null || true)" = true ]
 }
 
-# start_proxy runs imp-docker-proxy from the repo, with the deploy's
-# privileges, and waits for its socket. The socket's directory and the
+# start_proxy runs imp-docker-proxy, compiled from the repo as the release
+# image compiles it (host/Dockerfile), with the deploy's privileges and
+# command, and waits for its socket. The socket's directory and the
 # proxy's token are volumes of their own, which take the image's
 # directories, owned by the proxy's user (host/Dockerfile).
 start_proxy() {
@@ -128,14 +129,17 @@ start_proxy() {
   docker rm -f "$proxy" >/dev/null 2>&1 || true
   local privileges context=()
   mapfile -t privileges < <(read_proxy_privileges)
+  mkdir -p "$data"
+  bun build --compile "$IMP_ROOT/packages/daemon/src/docker-proxy/main.ts" \
+    --outfile "$data/imp-docker-proxy" >/dev/null
   [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
   docker run -d --name "$proxy" "${privileges[@]}" \
     --group-add "$(stat -c %g /var/run/docker.sock)" \
-    -e HOME=/tmp -e "IMP_HOST_IMAGE=$IMP_HOST_IMAGE" "${context[@]}" \
+    -e "IMP_HOST_IMAGE=$IMP_HOST_IMAGE" "${context[@]}" \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$name-docker:/run/imp-docker" -v "$name-docker-proxy:/var/lib/imp-docker-proxy" \
-    -v "$IMP_ROOT:/src:ro" \
-    "$IMP_HOST_IMAGE" bun /src/packages/daemon/src/docker-proxy/main.ts >/dev/null
+    -v "$data/imp-docker-proxy:/usr/local/bin/imp-docker-proxy:ro" \
+    "$IMP_HOST_IMAGE" /usr/local/bin/imp-docker-proxy >/dev/null
   local deadline=$((SECONDS + 30))
   until docker exec "$proxy" test -S /run/imp-docker/docker.sock 2>/dev/null; do
     if ! is_running "$proxy" || [ $SECONDS -ge $deadline ]; then
