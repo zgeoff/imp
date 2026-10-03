@@ -85,14 +85,15 @@ function createVerifier(): { readonly verifier: string; readonly challenge: stri
   return { verifier, challenge };
 }
 
-function sendForm(path: string, fields: Readonly<Record<string, string>>, origin?: string) {
+function sendForm(
+  path: string,
+  fields: Readonly<Record<string, string>>,
+  headers: Readonly<Record<string, string>> = {},
+) {
   return fetch(`${ORIGIN}${path}`, {
     method: 'POST',
     redirect: 'manual',
-    headers: {
-      'content-type': 'application/x-www-form-urlencoded',
-      ...(origin !== undefined && { origin }),
-    },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers },
     body: new URLSearchParams(fields).toString(),
   });
 }
@@ -116,7 +117,7 @@ async function runSignIn(scope: string) {
   const page = await opened.text();
 
   expect(opened.status).toBe(200);
-  expect(opened.headers.get('referrer-policy')).toBe('no-referrer');
+  expect(opened.headers.get('referrer-policy')).toBe('same-origin');
 
   const code = /imp oauth approve (?<code>[A-Z0-9-]+)/u.exec(page)?.groups?.['code'] ?? '';
   const id = /name="id" value="(?<id>[^"]+)"/u.exec(page)?.groups?.['id'] ?? '';
@@ -130,11 +131,18 @@ async function runSignIn(scope: string) {
   expect(approved.stderr).toContain(`client:       ${CLIENT}`);
   expect(approved.stderr).toContain(`returns to:   ${REDIRECT}`);
 
-  const allowed = await sendForm('/oauth/authorize', { id, signature, action: 'allow' }, ORIGIN);
+  // as a browser posts it from a page whose referrer policy is same-origin
+  // or stricter: Origin null, and Sec-Fetch-Site it sets itself
+  const allowed = await sendForm(
+    '/oauth/authorize',
+    { id, signature, action: 'allow' },
+    { origin: 'null', 'sec-fetch-site': 'same-origin' },
+  );
 
   const location = new URL(allowed.headers.get('location') ?? '');
 
   expect(allowed.status).toBe(302);
+  expect(allowed.headers.get('referrer-policy')).toBe('no-referrer');
   expect(location.searchParams.get('iss')).toBe(ORIGIN);
   expect(location.searchParams.get('state')).toBe('e2e');
 

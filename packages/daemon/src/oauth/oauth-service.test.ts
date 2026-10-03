@@ -4,6 +4,7 @@ import type { Scope } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { Caller } from '../auth/caller';
 import { buildTestCaller } from '../auth/test-callers';
+import { createSecret } from '../db/secrets';
 import { TEST_TOKEN, setupImpTest } from '../imps/test-imps';
 import { ACCESS_TOKEN_MS, REFRESH_TOKEN_MS } from './oauth-service';
 import type { AuthorizeOutcome, AuthorizeParams, TokenOutcome } from './oauth-service';
@@ -47,8 +48,9 @@ async function setupTest() {
     name: string,
     scope: Scope = 'manage',
     imps: readonly string[] | null = null,
+    grantable: readonly string[] = [],
   ): Promise<Caller> => {
-    const made = await harness.tokens.create({ name, scope, imps });
+    const made = await harness.tokens.create({ name, scope, imps, grantable });
 
     const caller = harness.tokens.authenticate(made.secret);
 
@@ -473,6 +475,44 @@ test('approval codes that match nothing are limited to a burst', async () => {
   expect([...outcomes]).toEqual(['NOT_FOUND', 'TOO_MANY_REQUESTS']);
 });
 
+test('each token has its own burst of codes that match nothing', async () => {
+  await using ctx = await setupTest();
+
+  const first = await ctx.createApprover('first');
+  const second = await ctx.createApprover('second');
+
+  for (let index = 0; index < 25; index += 1) {
+    readErrorCode(() => ctx.oauth.readApproval('AAAAAAAA', first));
+  }
+
+  const forFirst = readErrorCode(() => ctx.oauth.readApproval('AAAAAAAA', first));
+  const forSecond = readErrorCode(() => ctx.oauth.readApproval('AAAAAAAA', second));
+
+  expect(forFirst).toBe('TOO_MANY_REQUESTS');
+  expect(forSecond).toBe('NOT_FOUND');
+});
+
+test('failed token requests are limited, and a valid refresh never pays for them', async () => {
+  await using ctx = await setupTest();
+
+  const approver = await ctx.createApprover('laptop');
+  const tokens = await ctx.createGrant(approver);
+
+  const errors = new Set<string>();
+
+  for (let index = 0; index < 35; index += 1) {
+    const outcome = await ctx.sendRefresh(`imprt_guess.${String(index)}`);
+
+    errors.add(readError(outcome));
+  }
+
+  expect([...errors]).toEqual(['invalid_grant', 'slow_down']);
+
+  const refreshed = await ctx.sendRefresh(tokens.refresh);
+
+  expect(refreshed.status).toBe(200);
+});
+
 test('a flood of sign-ins drops unapproved ones before an approved one', async () => {
   await using ctx = await setupTest();
 
@@ -791,7 +831,14 @@ test('two grants from one token stay apart until the token goes', async () => {
 
   expect(caller3).not.toBeNull();
 
+  const before = await ctx.oauth.listGrants();
+
   await ctx.harness.tokens.remove('laptop');
+
+  // each grant's own signal ends too, not only the token's
+  for (const grant of before) {
+    expect(ctx.harness.revocations.isRevoked(grant.id)).toBeTrue();
+  }
 
   const caller4 = await ctx.oauth.resolveAccess(c.access);
 
@@ -953,4 +1000,17 @@ test('clients are added once and their redirect URIs change in place', async () 
 
   expect(unknownClient).toContain('not found');
   expect(unknownGrant).toContain('not found');
+});
+
+test('a grant carries its token’s grantable list, so it meets the same refusals', async () => {
+  await using ctx = await setupTest();
+
+  await createSecret(ctx.harness.db, { name: 'gh', kind: 'github', rules: [], valueFile: 'gh' });
+
+  const approver = await ctx.createApprover('granter', 'manage', ['dev-*'], ['gh']);
+  const tokens = await ctx.createGrant(approver, { scope: 'exec' });
+  const caller = await ctx.oauth.resolveAccess(tokens.access);
+
+  expect(caller?.grantable).toEqual(approver.grantable);
+  expect(caller?.grantable).toHaveLength(1);
 });

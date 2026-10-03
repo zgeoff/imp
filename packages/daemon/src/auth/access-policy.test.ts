@@ -232,14 +232,19 @@ async function readDecision(path: string, caller: Readonly<Caller>, input: unkno
   return refusal === null ? 'allowed' : `refused: ${String(refusal.reason)}`;
 }
 
-test('an OAuth grant gets the same answer as a token with its scope and imps, on every procedure', async () => {
+test('an OAuth grant gets its token’s answer on every procedure, and grants no secret', async () => {
   const paths = Object.keys(PROCEDURE_ACCESS);
-  const inputs: readonly unknown[] = [{ name: 'dev-a' }, { name: 'web' }, {}];
+  const inputs: readonly unknown[] = [{ name: 'dev-a', secret: 'gh' }, { name: 'web' }, {}];
   const differences: string[] = [];
 
-  const cases = (['read', 'exec', 'manage'] as const).flatMap((scope) =>
-    [null, ['dev-*']].map((imps) => ({ scope, imps })),
-  );
+  const cases = [
+    ...(['read', 'exec', 'manage'] as const).flatMap((scope) =>
+      [null, ['dev-*']].map((imps) => ({ scope, imps, grantable: [] })),
+    ),
+
+    // a token that may grant gh to its imps, which therefore may not fork
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: GRANTER.grantable },
+  ];
 
   for (const limits of cases) {
     const token = buildTestCaller(limits);
@@ -253,11 +258,15 @@ test('an OAuth grant gets the same answer as a token with its scope and imps, on
     });
 
     for (const path of paths) {
+      const isSecretGrant = findAccess(path)?.on === 'grant';
+
       for (const input of inputs) {
         const forToken = await readDecision(path, token, input);
         const forGrant = await readDecision(path, grant, input);
 
-        if (forToken !== forGrant) {
+        const isRight = isSecretGrant ? forGrant.startsWith('refused') : forGrant === forToken;
+
+        if (!isRight) {
           differences.push(`${path} ${limits.scope}: ${forToken} / ${forGrant}`);
         }
       }
@@ -265,4 +274,11 @@ test('an OAuth grant gets the same answer as a token with its scope and imps, on
   }
 
   expect(differences).toEqual([]);
+
+  // the fork a grantable token may not make, its grant may not make either
+  const forkGrant = buildTestCaller({ ...GRANTER, kind: 'oauth', grantId: 'grant-b' });
+
+  const fork = await check('imps.fork', forkGrant, { source: 'dev-a', name: 'dev-b' });
+
+  expect(fork).toContain('may not fork');
 });

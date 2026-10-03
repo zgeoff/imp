@@ -99,8 +99,7 @@ export function createPublicHandler(
     }
 
     if (method === 'POST' && path === AUTHORIZE_PATH) {
-      // a form a page on another origin posts never counts
-      if (request.headers.get('origin') !== issuer) {
+      if (!isSameOriginForm(request, issuer)) {
         return buildAuthorizeResponse(
           { kind: 'error-page', error: 'bad_request' },
           deps.config.host,
@@ -165,12 +164,82 @@ export function createPublicHandler(
 
     state.open += 1;
 
-    try {
-      return await handleRequest(request, server);
-    } finally {
+    const release = createRelease(request, () => {
       state.open -= 1;
+    });
+
+    try {
+      const response = await handleRequest(request, server);
+
+      return holdUntilSent(response, release);
+    } catch (error) {
+      release();
+      throw error;
     }
   };
+}
+
+// `release` once: when the response is sent, or the client goes first
+function createRelease(request: Request, release: () => void): () => void {
+  const state = { isReleased: false };
+
+  const runReleaseOnce = (): void => {
+    if (!state.isReleased) {
+      state.isReleased = true;
+
+      release();
+    }
+  };
+
+  request.signal.addEventListener('abort', runReleaseOnce, { once: true });
+
+  return runReleaseOnce;
+}
+
+// A request counts until its body is sent: a tool call's SSE stream can
+// run for minutes after the handler returns it
+function holdUntilSent(response: Response, release: () => void): Response {
+  if (response.body === null) {
+    release();
+
+    return response;
+  }
+
+  const source: ReadableStream<Uint8Array> = response.body;
+  const reader = source.getReader();
+
+  const held = new ReadableStream<Uint8Array>({
+    pull: async (controller) => {
+      try {
+        const read = await reader.read();
+
+        if (read.done) {
+          release();
+
+          controller.close();
+
+          return;
+        }
+
+        controller.enqueue(read.value);
+      } catch (error) {
+        release();
+
+        controller.error(error);
+      }
+    },
+    cancel: async (reason) => {
+      release();
+
+      await reader.cancel(reason);
+    },
+  });
+
+  return new Response(held, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export function startPublicListener(
@@ -273,6 +342,19 @@ async function readForm(request: Request): Promise<URLSearchParams | null> {
   }
 
   return new URLSearchParams(new TextDecoder().decode(Buffer.concat(chunks)));
+}
+
+// A form a page on another origin posts never counts. A browser names the
+// page's origin, or sends Origin null with Sec-Fetch-Site, which it sets
+// itself and no page can change.
+function isSameOriginForm(request: Request, issuer: string): boolean {
+  const origin = request.headers.get('origin');
+
+  if (origin === issuer) {
+    return true;
+  }
+
+  return origin === 'null' && request.headers.get('sec-fetch-site') === 'same-origin';
 }
 
 function buildJson(body: unknown): Response {

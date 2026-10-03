@@ -75,21 +75,28 @@ export async function writeTokenRecord(
 }
 
 // the token, its keys, and the OAuth grants it approved with their tokens
-export async function removeTokenRecord(db: ImpDatabase, id: string): Promise<void> {
-  await db.transaction().execute(async (trx) => {
+// the token, its keys, and the OAuth grants it approved with their tokens;
+// returns the grants' ids, for their revocation
+export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]> {
+  return db.transaction().execute(async (trx) => {
     await trx.deleteFrom('token_ssh_keys').where('token_id', '=', id).execute();
 
-    await trx
-      .deleteFrom('oauth_tokens')
-      .where(
-        'grant_id',
-        'in',
-        trx.selectFrom('oauth_grants').select('id').where('token_id', '=', id),
-      )
+    const grants = await trx
+      .selectFrom('oauth_grants')
+      .select('id')
+      .where('token_id', '=', id)
       .execute();
 
-    await trx.deleteFrom('oauth_grants').where('token_id', '=', id).execute();
+    const grantIds = grants.map((grant) => grant.id);
+
+    if (grantIds.length > 0) {
+      await trx.deleteFrom('oauth_tokens').where('grant_id', 'in', grantIds).execute();
+      await trx.deleteFrom('oauth_grants').where('id', 'in', grantIds).execute();
+    }
+
     await trx.deleteFrom('tokens').where('id', '=', id).execute();
+
+    return grantIds;
   });
 }
 
