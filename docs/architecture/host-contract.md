@@ -91,15 +91,17 @@ instead of calling `chroot`.
 only warns, so impd fails the image add or build with an error that names `CAP_SETFCAP`, and logs a
 warning at start. What it adds: root in imp-host can write a file capability, any capability at all,
 onto a file it can write. `DAC_OVERRIDE` already lets it write every file on its mounts, so it can
-stamp, for instance, `cap_sys_admin+ep` on a binary under `/var/lib/imp`. A process that runs that
-file gets those capabilities within its bounding set. In imp-host that set is the list above, so it
-gains nothing root there lacks. On the host it is the full set, so the host keeps such files inert:
-bootstrap mounts `/var/lib/imp` with `nosuid`, which ignores setuid bits and file capabilities, and
-warns when an existing mount lacks it; the NixOS guide asks for the same option. On ZFS, the
-datasets are mounted inside the container, where the host's mount table does not see them. impd
-unpacks an image in a 0700 directory, so no host user reaches its files during a build. imp-host is
-not a security boundary against its own root; `SETFCAP` adds one more way for that root to leave the
-host a privileged file, next to the setuid files it can already write.
+stamp, for instance, `cap_sys_admin+ep` on a binary under `/var/lib/imp`. The bounding set does not
+limit what is written: the file's metadata can name any capability. It limits only what a process
+gains when it runs the file. In imp-host that set is the list above, so a process there gains
+nothing root there lacks. A process outside imp-host has its own bounding set, the full set for a
+host process, so the host keeps such files inert: bootstrap mounts `/var/lib/imp` with `nosuid`,
+which ignores setuid bits and file capabilities, and warns when an existing mount lacks it; the
+NixOS guide asks for the same option. On ZFS, the datasets are mounted inside the container, where
+the host's mount table does not see them. impd unpacks an image in a 0700 directory, so no host user
+reaches its files during a build. imp-host is not a security boundary against its own root;
+`SETFCAP` adds one more way for that root to leave the host a privileged file, next to the setuid
+files it can already write.
 
 The rest of the list:
 
