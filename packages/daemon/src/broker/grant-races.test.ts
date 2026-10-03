@@ -134,7 +134,7 @@ test('a grant on a fork while its source’s grants are copied skips the clashin
   // the copy as a fork makes it, a grant on the fork, and a grant on the
   // source, all at once
   const codes = await Promise.all([
-    readCode(ctx.broker.createForkGrants('dev', 'copy')),
+    readCode(ctx.broker.createForkGrants('dev', 'copy', null)),
     readCode(ctx.client.grants.add({ name: 'copy', secret: 'gh-api' })),
     readCode(ctx.client.grants.add({ name: 'dev', secret: 'npm' })),
   ]);

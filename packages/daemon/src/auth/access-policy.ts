@@ -1,6 +1,6 @@
 import { SecretNameSchema, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
-import type { GrantAuthority } from '../db/secrets';
+import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
 import { hasScope } from './scopes';
@@ -19,8 +19,8 @@ interface ImpAccess {
   readonly on: 'imp';
   readonly fields: readonly string[];
 
-  // refused to a token made able to grant secrets: the call could carry
-  // grants it may not make to an imp, and v1 does not follow them there
+  // refused to a token made able to grant secrets: a move carries grants it
+  // may not make, and v1 keeps forks refused with it (#168)
   readonly noGrantable?: true;
   readonly audit?: false;
 }
@@ -276,6 +276,13 @@ export function findGrantAuthority(
   }
 
   return { tokenId: caller.tokenId, generation: entry.generation };
+}
+
+// What a fork's copy of its source's grants checks in its transaction: null
+// for a host-wide caller, whose fork gets every grant; else the token and
+// its grantable list, so the fork gets only grants the caller could make
+export function findForkAuthority(caller: Readonly<Caller>): ForkAuthority | null {
+  return caller.imps === null ? null : { tokenId: caller.tokenId, grantable: caller.grantable };
 }
 
 function findOutsideImp(

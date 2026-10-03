@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { BrokerRuleSchema, SecretKindSchema } from '@imp/api';
-import type { BrokerRule, EgressPolicy, SecretKind } from '@imp/api';
+import type { BrokerRule, EgressPolicy, GrantNotCopied, SecretKind } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
+import type { GrantableSecret } from './tokens';
 
 // Secrets and grants: what the credential broker may add, and for which
 // imps. Values are not here; broker/secret-files.ts keeps them.
@@ -281,34 +282,62 @@ export async function listValueFiles(db: ImpDatabase): Promise<Set<string>> {
   return new Set(rows.map((row) => row.value_file));
 }
 
-// A fork gets its source's grants, checked in one transaction against what
-// it holds by then: one that clashes with a grant made on the fork since is
-// skipped. The names of the skipped secrets.
+// A fork's copy through a caller with imp patterns: only the secrets its
+// grantable list names, at the generation the list holds, while its token
+// exists (docs/guides/tokens.md#imp-patterns). Null for a host-wide caller.
+export interface ForkAuthority {
+  readonly tokenId: string | null;
+  readonly grantable: readonly GrantableSecret[];
+}
+
+// what a fork's copy did: the source's grants it skipped, or that the
+// caller's token was gone and it copied none
+export type ForkGrantsOutcome =
+  | { readonly kind: 'copied'; readonly notCopied: readonly GrantNotCopied[] }
+  | { readonly kind: 'no-token' };
+
+// A fork gets its source's grants, checked in one transaction: one the
+// authority could not make, or one that clashes with a grant made on the
+// fork since, is skipped (a null authority makes any).
 export function createForkGrants(
   db: ImpDatabase,
   fromImpId: string,
   toImpId: string,
-): Promise<string[]> {
+  authority: Readonly<ForkAuthority> | null,
+): Promise<ForkGrantsOutcome> {
   return db.transaction().execute(async (trx) => {
     const names = await listGrantNames(trx, fromImpId);
 
-    const skipped: string[] = [];
+    // an empty list copies nothing whatever the token, so it needs no read
+    if (
+      authority !== null &&
+      authority.grantable.length > 0 &&
+      (authority.tokenId === null || !(await hasToken(trx, authority.tokenId)))
+    ) {
+      return { kind: 'no-token' };
+    }
+
+    const notCopied: GrantNotCopied[] = [];
 
     for (const name of names) {
       const secret = await findSecret(trx, name);
 
-      if (secret === undefined) {
-        continue;
-      }
+      const entry = authority?.grantable.find((each) => each.name === name);
 
-      if ((await findClash(trx, toImpId, name, secret.rules)) === null) {
+      if (authority !== null && (entry === undefined || secret?.generation !== entry.generation)) {
+        notCopied.push({ secret: name, reason: 'not-grantable' });
+      } else if (secret === undefined) {
+        // listGrantNames joins the live secret in this transaction, so none
+        // is gone today; the reason stays in the contract all the same
+        notCopied.push({ secret: name, reason: 'no-secret' });
+      } else if ((await findClash(trx, toImpId, name, secret.rules)) === null) {
         await writeGrant(trx, toImpId, secret);
       } else {
-        skipped.push(name);
+        notCopied.push({ secret: name, reason: 'clash' });
       }
     }
 
-    return skipped;
+    return { kind: 'copied', notCopied };
   });
 }
 
@@ -400,17 +429,21 @@ async function checkAuthority(
     return null;
   }
 
-  const token = await db
-    .selectFrom('tokens')
-    .select('id')
-    .where('id', '=', authority.tokenId)
-    .executeTakeFirst();
-
-  if (token === undefined) {
+  if (!(await hasToken(db, authority.tokenId))) {
     return 'no-token';
   }
 
   return secret?.generation === authority.generation ? null : 'not-grantable';
+}
+
+async function hasToken(db: ImpDatabase, tokenId: string): Promise<boolean> {
+  const token = await db
+    .selectFrom('tokens')
+    .select('id')
+    .where('id', '=', tokenId)
+    .executeTakeFirst();
+
+  return token !== undefined;
 }
 
 // a grant made again takes the secret's generation now
