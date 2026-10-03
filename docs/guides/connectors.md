@@ -167,7 +167,8 @@ sends in the header and sets the real value.
    or the distro's path, CAs the guest added included) plus the broker CA. A guest with no root
    bundle gets the host's roots instead. The exec leaves the file alone when it already holds that
    bundle. If it fails (an image with no `/bin/sh`), that exec runs without the broker's variables
-   instead of with a CA nothing trusts, impd logs why, and the next exec tries again.
+   instead of with a CA nothing trusts, impd logs why, and the next exec tries again. An exec that
+   [requires the broker](#requiring-the-broker) is refused instead.
 
 ### One CA for the host
 
@@ -178,6 +179,42 @@ has its own server, and it serves only the credential granted to that imp. The C
 `<data>/broker/ca/ca.pem`, with its key in `ca.key` (0600, in a 0700 directory). Leaves last one
 year and are issued again 30 days before they end. Each leaf has a SAN, `serverAuth` and the CA's
 key id, so strict verifiers such as Python 3.13 accept it.
+
+### Requiring the broker
+
+An exec without the broker's variables still keeps the credential out of the guest, but its command
+then runs with no credential at all. A caller that must never start a command without the broker
+sets `require: ['broker']` on the `/exec` `start`: `imp exec --require broker`, the SDK's
+`openExec(name, argv, { require: ['broker'] })`, or `require` on the MCP `imp_exec` tool. The SSH
+gateway takes no requirement.
+
+impd checks it at each exec, after the CA bundle step and before the command starts, in the same
+step that adds the variables. It refuses the exec with `PRECONDITION_FAILED`,
+`data.reason: 'broker_not_ready'` and a `data.detail` that names the cause when:
+
+- the imp has no grant, so impd sets no broker variables;
+- the CA bundle step failed for this boot (the detail carries its error). A step that has not run
+  for this boot yet runs first;
+- the exec's own `env` sets a variable the broker sets, such as `HTTPS_PROXY` or `SSL_CERT_FILE`;
+- the variables lack `HTTPS_PROXY` for any other reason;
+- it is an exec in the agent (`outer`), which never gets the broker's variables. The protocol
+  refuses `require` with `outer` or a `tool` before that.
+
+The command never starts then. A new Firecracker process is a new boot: after a wake, a resume, a
+live restore, a snapshot restore or a checkpoint restore, the next exec runs the bundle step again.
+impd holds the imp's lock from the bundle step until the agent starts the command, so no restore,
+reboot or sleep can replace the guest in between. Such an exec can wait behind a locked operation,
+such as a restore under way.
+
+The boundary is exactly this: impd set the broker's variables and the CA bundle for this boot before
+it started the command. It does not prove that the process uses them: a command can unset
+`HTTPS_PROXY`, or ignore it, and then it reaches the network without the broker, and without the
+credential.
+
+`system.info().features.execRequire` is `true` on an impd that checks requirements (0.30.0). An
+older impd drops `require` unread and runs the command, so the CLI and the SDK check the feature
+first and fail with `PRECONDITION_FAILED` (`broker_not_ready`) without starting anything. A client
+that sends the `start` itself must do the same.
 
 ## Where secrets are
 
