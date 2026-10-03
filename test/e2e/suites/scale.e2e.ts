@@ -1,8 +1,8 @@
 import { beforeAll, expect, test } from 'bun:test';
 import { loadConfig } from '../../../packages/daemon/src/config';
 import { ENFORCE_INTERVAL_MS } from '../../../packages/daemon/src/governor/ram-governor';
-import { findBudgetBreaches, findOvershoots } from '../lib/budget-overshoot';
-import type { Overshoot, OvershootLimits, SleepSpan } from '../lib/budget-overshoot';
+import { findBudgetBreaches, findOvershoots, readMaxOpenMs } from '../lib/budget-overshoot';
+import type { BudgetCheck, Overshoot, OvershootLimits, SleepSpan } from '../lib/budget-overshoot';
 import { config } from '../lib/config';
 import {
   FIRECRACKER_MEMORY_SCRIPT,
@@ -148,11 +148,11 @@ const BUDGET_SERIES = [
   ['Firecracker owned', (sample: BudgetSample) => sample.firecrackerOwnedMib],
 ] as const;
 
-function findViolations(monitor: BudgetMonitor): readonly string[] {
+function findViolations(monitor: BudgetMonitor, check: BudgetCheck = 'running'): readonly string[] {
   return BUDGET_SERIES.flatMap(([name, read]) => {
     const usage = monitor.samples.map((sample) => ({ at: sample.at, usedMib: read(sample) }));
 
-    return findBudgetBreaches(usage, monitor.sleeps, readOvershootLimits()).map(
+    return findBudgetBreaches(usage, monitor.sleeps, readOvershootLimits(), check).map(
       (breach) => `${name} ${String(breach.maxOverMib)} MiB over the budget: ${breach.why}`,
     );
   });
@@ -161,6 +161,23 @@ function findViolations(monitor: BudgetMonitor): readonly string[] {
 // from the first sample over the budget to the last
 function readOvershootMs(overshoot: Overshoot): number {
   return (overshoot.samples.at(-1)?.at ?? 0) - (overshoot.samples[0]?.at ?? 0);
+}
+
+// Samples on until neither figure is over the budget, for at most as long as
+// an open overshoot may wait for its sleep, so the final check judges a
+// closed one.
+async function waitForUnderBudget(monitor: BudgetMonitor): Promise<void> {
+  const deadline = Date.now() + readMaxOpenMs(readOvershootLimits());
+
+  const isOver = () => {
+    const last = monitor.samples.at(-1);
+
+    return BUDGET_SERIES.some(([, read]) => last !== undefined && read(last) > config.ramBudgetMib);
+  };
+
+  while (isOver() && Date.now() < deadline) {
+    await Bun.sleep(BUDGET_SAMPLE_MS);
+  }
 }
 
 function buildName(index: number): string {
@@ -384,11 +401,13 @@ test(`${String(config.scaleCount)} imps stay inside the RAM budget and wake on r
     await assertBootReserveRefused();
 
     await Bun.sleep(2000);
+
+    await waitForUnderBudget(monitor);
   } finally {
     await monitor.stop();
   }
 
-  expect(findViolations(monitor)).toBeEmpty();
+  expect(findViolations(monitor, 'final')).toBeEmpty();
 
   const maxUsed = Math.max(...monitor.samples.map((sample) => sample.ramUsedMib));
   const maxPss = Math.max(...monitor.samples.map((sample) => sample.firecrackerPssMib));

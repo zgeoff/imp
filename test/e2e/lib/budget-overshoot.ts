@@ -27,6 +27,16 @@ export interface OvershootLimits {
 // a sleep longer than this has hung
 const MAX_SLEEP_MS = 30_000;
 
+// `running`: an overshoot still open may wait on a sleep under way. `final`:
+// the run has ended, so one still open is a breach.
+export type BudgetCheck = 'running' | 'final';
+
+// how long an open overshoot may wait for its sleep: sample until none is
+// open, for at most this, before the final check
+export function readMaxOpenMs(limits: OvershootLimits): number {
+  return limits.maxStartMs + MAX_SLEEP_MS;
+}
+
 export interface Overshoot {
   // the samples over the budget, in a row
   readonly samples: readonly UsageSample[];
@@ -84,9 +94,14 @@ export function findBudgetBreaches(
   samples: readonly UsageSample[],
   sleeps: readonly SleepSpan[],
   limits: OvershootLimits,
+  check: BudgetCheck = 'running',
 ): readonly BudgetBreach[] {
   return findOvershoots(samples, limits.budgetMib).flatMap((overshoot) => {
-    const why = checkOvershoot(overshoot, sleeps, limits);
+    const why =
+      check === 'final' && overshoot.isOpen
+        ? 'still over the budget when the run ended'
+        : checkOvershoot(overshoot, sleeps, limits);
+
     const [first] = overshoot.samples;
 
     return why === null || first === undefined
