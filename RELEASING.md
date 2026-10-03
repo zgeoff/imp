@@ -10,6 +10,7 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 | Where                                          | What                                                                                  |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `ghcr.io/zgeoff/imp-host:X.Y.Z` and `:latest`  | The host image (`host/build-release.sh`), linux/amd64, with a provenance attestation. |
+| `ghcr.io/zgeoff/imp-base:X.Y.Z`                | The base image (`images/base`), linux/amd64, with a provenance attestation.           |
 | GitHub release `vX.Y.Z`: `imp-<os>-<arch>`     | The CLI for `linux-x64`, `linux-arm64`, `darwin-x64` and `darwin-arm64`.              |
 | GitHub release `vX.Y.Z`: `vmlinux`             | The guest kernel, x86_64.                                                             |
 | GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
@@ -34,6 +35,11 @@ gh attestation verify imp-linux-x64 -R zgeoff/imp
 gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
 ```
 
+`imp-base` is the base that other images build `FROM`. Consumers pin it by digest
+(`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`), so a published tag never moves: the release does
+not overwrite one and has no `latest` for it. Its own base, `ubuntu:24.04`, is pinned by digest in
+`images/base/Dockerfile`; bumping that digest is a reviewed dependency change.
+
 ## Flow
 
 1. A `feat:` or `fix:` commit lands on `main`. After the gates pass, the `release-please` job opens
@@ -51,6 +57,10 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
      `host/check-release-image.sh`, which fails when `impd` or `imp` in the image reports another
      version, or when the image's kernel or drive differs from `SHA256SUMS`. Then it pushes
      `imp-host:X.Y.Z` and attests the image and every asset.
+   - **base:** after every smoke check passes, builds `images/base`, runs `host/check-base-image.sh`
+     and pushes and attests `imp-base:X.Y.Z`. When `imp-base:X.Y.Z` exists already, it builds and
+     pushes nothing and prints a notice with the tag's digest. publish does not wait for it:
+     consumers pin a digest, so a base failure does not hold up a release.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
@@ -83,8 +93,9 @@ the PR once its required checks pass; without it, at once. To set it up:
 The release itself starts with `GITHUB_TOKEN`: a workflow dispatch is the one `GITHUB_TOKEN` event
 that starts a workflow.
 
-The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
-settings, so a server pulls it without a login.
+The first push creates the `imp-host` and `imp-base` packages on GHCR as private. Make each public
+once in the package settings, so a server pulls it without a login, and link `imp-base` to
+`zgeoff/imp`.
 
 ## Homebrew tap
 
@@ -151,9 +162,11 @@ gh workflow run release.yml
 ```
 
 It builds and checks everything for the current `main` as a release would, pushes
-`ghcr.io/zgeoff/imp-host:dryrun-<sha>` and attests it and the assets, and leaves the assets as the
-`release-assets` workflow artifact. It uploads nothing to a release and leaves `latest` alone. The
-version it checks is the one in `package.json`. Delete old `dryrun-` tags in the package settings.
+`ghcr.io/zgeoff/imp-host:dryrun-<sha>` and `imp-base:dryrun-<sha>` and attests them and the assets,
+and leaves the assets as the `release-assets` workflow artifact. It uploads nothing to a release and
+leaves `latest` alone. The version it checks is the one in `package.json`. A second dry run of the
+same commit leaves `imp-base:dryrun-<sha>` as the first one pushed it. Delete old `dryrun-` tags in
+the package settings.
 
 Locally, with no push:
 
@@ -176,5 +189,7 @@ gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 It builds the tag's sources, not `main`'s. It replaces the release assets (`--clobber`) and the
-`X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes the client
-when npm does not have that version yet. A fix to the sources needs a new release, not a republish.
+`imp-host:X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes
+the client when npm does not have that version yet. It publishes `imp-base:X.Y.Z` when the release
+has none, for example a release from before `imp-base` existed. When the tag exists, the `base` job
+leaves it alone and says so in a notice. A fix to the sources needs a new release, not a republish.
