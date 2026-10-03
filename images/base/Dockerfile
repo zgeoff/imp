@@ -12,6 +12,10 @@ ARG DOCKER_CE_CLI_VERSION=5:29.8.2-1~ubuntu.24.04~noble
 ARG CONTAINERD_VERSION=2.3.6-1~ubuntu.24.04~noble
 ARG BUILDX_VERSION=0.37.1-1~ubuntu.24.04~noble
 
+# sha256 of Docker's apt signing key (fingerprint 9DC8 5822 9FC7 DD38 854A
+# E2D8 8D81 803C 0EBF CD88), the key apt trusts for the packages above
+ARG DOCKER_APT_GPG_SHA256=1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570
+
 ARG DEBIAN_FRONTEND=noninteractive
 
 # git stays: coding agents clone and commit, and it costs about 20 MB.
@@ -21,6 +25,7 @@ RUN apt-get update \
       openssh-client git \
  && install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+ && echo "$DOCKER_APT_GPG_SHA256  /etc/apt/keyrings/docker.asc" | sha256sum -c - \
  && echo "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
       > /etc/apt/sources.list.d/docker.list \
  && apt-get update \

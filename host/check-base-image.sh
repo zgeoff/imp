@@ -64,10 +64,31 @@ for tool in docker git curl; do
   in_image "$tool --version > /dev/null" || fail "$tool --version fails"
 done
 
-agents=$(in_image 'find / -xdev -name "imp-agent*" 2> /dev/null || true')
-if [ -n "$agents" ]; then
+if ! agents=$(in_image 'find / -xdev -name "imp-agent*"'); then
+  fail "cannot search the image for imp-agent"
+elif [ -n "$agents" ]; then
   fail "the image carries imp-agent: $(paste -sd ' ' <<<"$agents")"
 fi
+
+# What a published image must not carry: a machine identity, host keys,
+# Docker's state, or the build's apt and dpkg leftovers. Each test prints
+# what it finds, and nothing for a clean image; `true` ends the test in the
+# container, so only a failed docker run fails in_image.
+leftovers=(
+  'machine-id:test -s /etc/machine-id && echo /etc/machine-id'
+  'SSH host keys:ls /etc/ssh/ssh_host_* 2> /dev/null'
+  'Docker state:find /var/lib/docker /var/lib/containerd -mindepth 1 -maxdepth 1 2> /dev/null'
+  'apt lists:find /var/lib/apt/lists -mindepth 1 -maxdepth 1 2> /dev/null'
+  'install logs:ls /var/log/alternatives.log /var/log/dpkg.log /var/log/apt 2> /dev/null'
+  'dpkg and debconf backups:ls /var/lib/dpkg/*-old /var/cache/debconf/*-old 2> /dev/null'
+)
+for leftover in "${leftovers[@]}"; do
+  if ! found=$(in_image "${leftover#*:}; true"); then
+    fail "cannot check the image for ${leftover%%:*}"
+  elif [ -n "$found" ]; then
+    fail "the image carries ${leftover%%:*}: $(paste -sd ' ' <<<"$found")"
+  fi
+done
 
 imp_files=$(in_image 'find /etc/imp -mindepth 1 ! -type d 2> /dev/null | sort')
 if [ "$imp_files" != /etc/imp/services.d/docker.json ]; then
