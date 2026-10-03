@@ -189,7 +189,9 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   - a reference passes only while the engine shows it as the proxy left it. The engine keeps one tag
     time per image, so any name the host owner sets on the image later moves it: the proxy drops the
     records for that image and refuses them, and the image stays. A reference the proxy makes moves
-    the time on its other references to that image;
+    the time on its other references to that image, but only on those that matched the image's time
+    as the proxy read it before its pull or build; an older one stays stale. An engine that gives no
+    tag time gets no record, and a record with none is refused;
   - an image ID passes only when it has tags and every tag passes, so an image that also carries an
     owner's tag stays, and an untagged image, whoever made it, is never removed by ID;
   - the proxy removes each one by its reference, without force: the engine keeps an image a
@@ -198,6 +200,12 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   The proxy drops a reference once the engine no longer has it. It writes the record through a
   synced temporary file, and changes its memory only after the write. A record it cannot read at
   start leaves it with none: it logs the error and removes nothing it made before.
+
+  An accepted race: the check and the engine's change are separate calls, and the engine gives no
+  way to make them one. A host owner who pulls or tags the same reference while the proxy's pull or
+  build runs, or between the proxy's inspect and the delete it forwards, can have that name treated
+  as the proxy's and removed. Closing it needs engine support, such as a delete conditional on the
+  image ID and tag time.
 
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach or exec.
 - **No BuildKit session:** `/session` and `/grpc` are refused, and so are the build params that need

@@ -175,6 +175,13 @@ function pickHeaders(request: Request, names: readonly string[]): Record<string,
   return headers;
 }
 
+// What the engine showed before a pull or a build: the reference itself,
+// and the tag time of each image the record names
+interface RegisterStart {
+  readonly before: ImageLookup;
+  readonly imageTimes: ReadonlyMap<string, string>;
+}
+
 // What a relay does with the engine's answer: `onChunk` sees each chunk,
 // and `onEnd` runs once the body has ended, as a pull or a build streams
 // its progress and ends with it; a client that goes first never runs it.
@@ -337,19 +344,44 @@ export function createDockerProxy(
     return image.success ? { kind: 'found', image: image.data } : { kind: 'unknown' };
   };
 
+  // the tag time of each image the record names, read before a pull or a
+  // build; an image the engine gives no clear answer for is left out
+  const readOwnedImageTimes = async (versionPrefix: string): Promise<Map<string, string>> => {
+    const times = new Map<string, string>();
+
+    for (const id of options.ownedReferences.listImageIds()) {
+      const found = await findImage(versionPrefix, id);
+
+      if (found.kind === 'found') {
+        times.set(id, readTaggedAt(found.image));
+      }
+    }
+
+    return times;
+  };
+
   // Records `reference` as the proxy's when the engine shows it other than
-  // `before`, and on `madeId`, the image a build said it made. A failure is
-  // logged, and the image then stays on the engine, the safe side.
+  // `start.before`, and on `madeId`, the image a build said it made. A
+  // failure is logged, and the image then stays on the engine, the safe side.
   const registerReference = async (
     versionPrefix: string,
     reference: string,
-    before: ImageLookup,
+    start: Readonly<RegisterStart>,
     madeId?: string,
   ): Promise<void> => {
+    const before = start.before;
+
     try {
       const after = await findImage(versionPrefix, reference);
 
       if (after.kind !== 'found' || before.kind === 'unknown') {
+        return;
+      }
+
+      // with no tag time, a tag the owner set later would not show
+      if (readTaggedAt(after.image) === '') {
+        options.log(`could not record ${reference} as the proxy's: the engine gave no tag time`);
+
         return;
       }
 
@@ -361,10 +393,11 @@ export function createDockerProxy(
         return;
       }
 
-      options.ownedReferences.write(normalizeReference(reference), {
-        id: after.image.Id,
-        taggedAt: readTaggedAt(after.image),
-      });
+      options.ownedReferences.write(
+        normalizeReference(reference),
+        { id: after.image.Id, taggedAt: readTaggedAt(after.image) },
+        start.imageTimes.get(after.image.Id),
+      );
     } catch (error) {
       options.log(`could not record ${reference} as the proxy's: ${readMessage(error)}`);
     }
@@ -396,7 +429,9 @@ export function createDockerProxy(
       return 'not-owned';
     }
 
-    if (owned.id !== found.image.Id || owned.taggedAt !== readTaggedAt(found.image)) {
+    const taggedAt = readTaggedAt(found.image);
+
+    if (owned.id !== found.image.Id || taggedAt === '' || owned.taggedAt !== taggedAt) {
       options.ownedReferences.remove(key);
 
       return 'not-owned';
@@ -501,6 +536,7 @@ export function createDockerProxy(
     const tags = routed.query.get('t') ?? [];
 
     const before = await Promise.all(tags.map((tag) => findImage(routed.versionPrefix, tag)));
+    const imageTimes = await readOwnedImageTimes(routed.versionPrefix);
 
     const buildEnd = createBuildEndReader();
 
@@ -514,7 +550,12 @@ export function createDockerProxy(
       for (const [index, tag] of tags.entries()) {
         const tagBefore = before[index] ?? { kind: 'unknown' };
 
-        await registerReference(routed.versionPrefix, tag, tagBefore, madeId);
+        await registerReference(
+          routed.versionPrefix,
+          tag,
+          { before: tagBefore, imageTimes },
+          madeId,
+        );
       }
     };
 
@@ -571,10 +612,13 @@ export function createDockerProxy(
     // only a reference the engine did not have is the proxy's to remove:
     // one the host owner pulled stays theirs
     const before = await findImage(routed.versionPrefix, reference);
+    const imageTimes = await readOwnedImageTimes(routed.versionPrefix);
 
     const registerPulled =
       before.kind === 'absent'
-        ? { onEnd: () => registerReference(routed.versionPrefix, reference, before) }
+        ? {
+            onEnd: () => registerReference(routed.versionPrefix, reference, { before, imageTimes }),
+          }
         : undefined;
 
     return sendAndRelay(

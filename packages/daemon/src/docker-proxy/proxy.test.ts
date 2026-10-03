@@ -67,19 +67,22 @@ function listTags(id: string): string[] {
   return [...engineTags].filter(([, value]) => value.id === id).map(([tag]) => tag);
 }
 
-function readEngineImage(name: string): Response {
-  const tagged = engineTags.get(name);
-  const id = tagged?.id ?? [...engineTags.values()].find((value) => value.id === name)?.id;
+// an engine that leaves out each image's tag time, as an older one may
+const engineQuirks = { omitsTagTime: false };
 
-  if (id === undefined) {
+function readEngineImage(name: string): Response {
+  const tagged =
+    engineTags.get(name) ?? [...engineTags.values()].find((value) => value.id === name);
+
+  if (tagged === undefined) {
     return new Response('no such image', { status: 404 });
   }
 
   return Response.json({
-    Id: id,
-    RepoTags: listTags(id),
+    Id: tagged.id,
+    RepoTags: listTags(tagged.id),
     RepoDigests: [],
-    Metadata: { LastTagTime: tagged?.taggedAt ?? null },
+    ...(!engineQuirks.omitsTagTime && { Metadata: { LastTagTime: tagged.taggedAt } }),
   });
 }
 
@@ -89,6 +92,12 @@ function buildImageId(fill: string): string {
 
 // a slow build on the engine: it started, and its client went
 const slowBuild = { started: Promise.withResolvers<void>(), gone: Promise.withResolvers<void>() };
+
+// a build that waits for the test, then fails without moving its tag
+const heldBuild = {
+  started: Promise.withResolvers<void>(),
+  release: Promise.withResolvers<void>(),
+};
 
 function readContainer(id: string): Response {
   const labels = id === OWN_ID ? { [PROXY_LABEL]: TOKEN } : { [PROXY_LABEL]: '1' };
@@ -154,6 +163,14 @@ const engine = Bun.serve({
 
     // imp/slow never ends. imp/fail moves its tag and ends on an error, and
     // imp/raced says it made d while its tag moved to e
+    if (url.pathname.endsWith('/build') && built === 'imp/held:latest') {
+      heldBuild.started.resolve();
+
+      await heldBuild.release.promise;
+
+      return buildBuildAnswer(body.length, undefined);
+    }
+
     if (url.pathname.endsWith('/build') && built !== null && built !== 'imp/slow:latest') {
       const fill = built === 'imp/x:latest' ? 'd' : 'e';
 
@@ -245,6 +262,8 @@ beforeEach(() => {
 
   engineTags.clear();
   inUse.clear();
+
+  engineQuirks.omitsTagTime = false;
 });
 
 afterAll(async () => {
@@ -622,6 +641,72 @@ test('two references the proxy pulled for one image are both its own', async () 
   expect(engineTags.size).toBe(0);
 });
 
+test('a stale reference stays stale when the proxy pulls another name for its image', async () => {
+  await sendPull('busybox', '1.36');
+
+  // outside the proxy: the same name and image, set again
+  engineTags.delete('busybox:1.36');
+
+  writeEngineTag('busybox:1.36', buildImageId('c'));
+
+  await sendPull('busybox', '1');
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
+
+  expect(removed.status).toBe(403);
+  expect(engineTags.has('busybox:1.36')).toBe(true);
+});
+
+test('a failed build of the owner’s tag is not the proxy’s, though a pull moved the image’s time', async () => {
+  writeEngineTag('imp/held:latest', buildImageId('c'));
+
+  const held = `/v1.55/build?${new URLSearchParams({
+    t: 'imp/held:latest',
+    version: '2',
+    buildargs: JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND }),
+  }).toString()}`;
+
+  const building = sendToProxy('POST', held, { body: new Uint8Array(512) });
+
+  await heldBuild.started.promise;
+
+  // a pull of another name for the same image, while the build runs
+  await sendPull('busybox', 'alias');
+
+  heldBuild.release.resolve();
+
+  const answer = await building;
+
+  await answer.text();
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/imp/held:latest');
+
+  expect(readOwned('docker.io/imp/held:latest')).toBeUndefined();
+  expect(removed.status).toBe(403);
+  expect(engineTags.has('imp/held:latest')).toBe(true);
+});
+
+test('an engine that gives no tag time makes no reference the proxy’s', async () => {
+  engineQuirks.omitsTagTime = true;
+
+  await sendPull('busybox', '1.36');
+
+  expect(readOwned('docker.io/library/busybox:1.36')).toBeUndefined();
+  expect(logged.join('\n')).toContain('the engine gave no tag time');
+
+  // a record from before, while the engine gave a time, is refused too
+  ownedReferences.write(
+    'docker.io/library/busybox:1.36',
+    { id: buildImageId('c'), taggedAt: '' },
+    undefined,
+  );
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
+
+  expect(removed.status).toBe(403);
+  expect(engineTags.has('busybox:1.36')).toBe(true);
+});
+
 test('a reference the owner removed and pulled again is the owner’s', async () => {
   await sendPull('busybox', '1.36');
 
@@ -719,7 +804,11 @@ test('force, the frontend’s and imp-host’s repositories and an image the eng
   ] as const) {
     const tagged = engineTags.get(reference);
 
-    ownedReferences.write(normalizeReference(reference), { id, taggedAt: tagged?.taggedAt ?? '' });
+    ownedReferences.write(
+      normalizeReference(reference),
+      { id, taggedAt: tagged?.taggedAt ?? '' },
+      undefined,
+    );
   }
 
   const statuses = [];

@@ -22,9 +22,15 @@ type OwnedReference = z.infer<typeof OwnedReferenceSchema>;
 export interface OwnedReferences {
   readonly read: (reference: string) => OwnedReference | undefined;
 
-  // records `reference`, and moves every other one on the same image to
-  // its new tag time, since the proxy's own tag moved it
-  readonly write: (reference: string, owned: Readonly<OwnedReference>) => void;
+  // the images the references name, each once
+  readonly listImageIds: () => readonly string[];
+
+  // records `reference`; see toMovedReference for the others on its image
+  readonly write: (
+    reference: string,
+    owned: Readonly<OwnedReference>,
+    imageTimeBefore: string | undefined,
+  ) => void;
   readonly remove: (reference: string) => void;
 }
 
@@ -47,6 +53,25 @@ function readSaved(path: string, log: (message: string) => void): Map<string, Ow
 
     return new Map();
   }
+}
+
+// The proxy's own tag moved the image's time, from `imageTimeBefore` to
+// `owned.taggedAt`. A record of the image that was valid at either time
+// moves with it; one older than both is stale (the owner set a name since).
+function toMovedReference(
+  value: Readonly<OwnedReference>,
+  owned: Readonly<OwnedReference>,
+  imageTimeBefore: string | undefined,
+): OwnedReference | undefined {
+  if (value.id !== owned.id) {
+    return value;
+  }
+
+  const isValid =
+    value.taggedAt !== '' &&
+    (value.taggedAt === imageTimeBefore || value.taggedAt === owned.taggedAt);
+
+  return isValid ? { id: value.id, taggedAt: owned.taggedAt } : undefined;
 }
 
 // Kept in `path`, keyed by the reference in one spelling
@@ -82,11 +107,13 @@ export function loadOwnedReferences(path: string, log: (message: string) => void
 
   return {
     read: (reference) => references.get(reference),
-    write: (reference, owned) => {
-      const moved = [...references].map(([key, value]): [string, OwnedReference] => [
-        key,
-        value.id === owned.id ? { id: value.id, taggedAt: owned.taggedAt } : value,
-      ]);
+    listImageIds: () => [...new Set([...references.values()].map((value) => value.id))],
+    write: (reference, owned, imageTimeBefore) => {
+      const moved = [...references].flatMap(([key, value]): [string, OwnedReference][] => {
+        const next = toMovedReference(value, owned, imageTimeBefore);
+
+        return next === undefined ? [] : [[key, next]];
+      });
 
       setReferences(new Map([...moved, [reference, { id: owned.id, taggedAt: owned.taggedAt }]]));
     },
