@@ -50,6 +50,10 @@ An add costs a builder boot and a cold pull, about 6 to 10 s for a small image. 
 as `pull=… image=…`, with the platform and the registry's digest. The first-start `ubuntu` seed is
 an add too.
 
+Before the first add or build, impd pulls its builder image (`IMP_BUILD_IMAGE`) onto the host's
+engine and gives that pull 10 minutes; on a slow link, run `docker pull <IMP_BUILD_IMAGE>` on the
+host first, with the exact reference, and impd uses that image without a pull.
+
 An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
 way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
 engine, as before 0.30.0, for one release only, with the credentials in impd's Docker config. impd

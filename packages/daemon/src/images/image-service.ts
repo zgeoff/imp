@@ -187,6 +187,11 @@ interface HostImageOptions {
   readonly signal?: AbortSignal | undefined;
 }
 
+// the pull's limit as the error names it: 10 minutes, or seconds in a test
+function formatPullLimit(pullMs: number): string {
+  return pullMs >= 60_000 ? `${String(pullMs / 60_000)} minutes` : `${String(pullMs / 1000)} s`;
+}
+
 // `pulling`, or the abort of the caller's signal, whichever comes first
 async function waitForPull(pulling: Promise<unknown>, signal: AbortSignal | undefined) {
   if (signal === undefined) {
@@ -565,7 +570,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         return await createImageOnHost(ref, BUILDER_IMAGE, { signal: timeout });
       } catch (error) {
         const reason = timeout.aborted
-          ? `the pull did not finish in ${String(pullMs / 1000)} s`
+          ? `the pull did not finish in ${formatPullLimit(pullMs)}; on a slow link, pull ${ref} on the host engine first (docker pull ${ref}), and impd takes it from there`
           : readErrorMessage(error);
 
         throw new ORPCError('SERVICE_UNAVAILABLE', {
