@@ -169,16 +169,19 @@ should be fast; record the host's `uname -r` with the result.
 Each checkout of the repo, the main one or a git worktree, runs a dev instance of its own: give it
 an `IMP_DEV_NAME` and an `IMP_DEV_PORT_OFFSET`. Its host image is its own too. `scripts/dev.sh` tags
 it `imp-host:dev-<dir>-<hash>`, where `<dir>` is the checkout's directory name and `<hash>` the
-first 8 hex characters of the sha256 of its path (`dev_image_tag` in `scripts/lib.sh`). One
-worktree's build never replaces the image under another's running instance or e2e run.
-`IMP_HOST_IMAGE` overrides the tag, as CI does.
+first 8 hex characters of the sha256 of its path without symlinks (`dev_image_tag` in
+`scripts/lib.sh`). One worktree's build never replaces the image under another's running instance or
+e2e run. `IMP_HOST_IMAGE` overrides the tag, as CI does.
 
 `dev.sh down` keeps the image, so the next `up` starts at once. Once a worktree is gone, its image
 stays behind. `scripts/dev.sh prune` removes the images whose checkout directory is gone and that no
-container uses, and the untagged images that rebuilds leave. It finds them by their `imp.worktree`
-label, which holds the checkout's path; it keeps every live checkout's image and never touches an
-image without the label. An `imp-host:dev` image from before the per-checkout tags has no label, so
-remove it by hand: `docker image rm imp-host:dev`.
+container uses, and the untagged images that rebuilds leave. It finds them by two labels: the
+checkout's path (`imp.worktree`) and the machine's `/etc/machine-id` (`imp.machine`), because Docker
+Desktop shares one daemon across WSL distros and devcontainers. It removes only the checkout's own
+tag, keeps every live checkout's image, and never touches an image without the labels. An image
+built under an `IMP_HOST_IMAGE` override keeps that tag, so prune leaves it; remove it by hand, as
+you would an `imp-host:<worktree>-dev` tag from the old workaround. An `imp-host:dev` image from
+before the per-checkout tags has no label, so remove it by hand too: `docker image rm imp-host:dev`.
 
 ## Daemon tests
 
@@ -243,10 +246,11 @@ seconds with the reason. The job then:
    GitHub Actions cache (scope `system-files`): the kernel rebuilds only when `kernel/version` or
    the kernel config files change, or after GitHub evicts the cache (7 days unused, or the repo's 10
    GB quota). A cold kernel build takes about 10 minutes, so the job's timeout is 25.
-2. builds the dev host image as `imp-host:dev` with a cache of its own (scope `imp-dev`) and sets
-   `IMP_HOST_IMAGE=imp-host:dev` and `IMP_HOST_IMAGE_READY=1`, so `scripts/dev.sh` uses it instead
-   of building it again. Only runs on `main` write these caches; pull requests only read them. Steps
-   1 and 2 are the composite action `.github/actions/e2e-build`, which the `zfs` job uses too.
+2. builds the dev host image as `imp-host:dev` with a cache of its own (scope `imp-dev`). The `e2e`
+   and `zfs` jobs in `ci.yml` set `IMP_HOST_IMAGE=imp-host:dev` and `IMP_HOST_IMAGE_READY=1`, so
+   `scripts/dev.sh` uses that image instead of building it again. Only runs on `main` write these
+   caches; pull requests only read them. Steps 1 and 2 are the composite action
+   `.github/actions/e2e-build`, which the `zfs` job uses too.
 3. restores the Playwright browser cache (`~/.cache/ms-playwright`), keyed on the Playwright version
    in `bun.lock`, which pins the Chromium build. The dashboard suite installs that Chromium's
    headless shell when the cache misses.
