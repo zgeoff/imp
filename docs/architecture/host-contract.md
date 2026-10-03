@@ -167,6 +167,7 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
 | `POST /build`                                            | BuildKit (`version=2`) with no session: the context is the body. One `t`, `imp/<name>:latest`; `dockerfile` is a path in the context; `buildargs` is exactly `BUILDKIT_SYNTAX` at the pinned frontend. Every other param is refused |
 | `POST /containers/create`                                | Only `<image> /bin/true` at the CLI's defaults. The engine gets a body the proxy builds: that image, `/bin/true`, network `none`, and a label with the proxy's token                                                                |
 | `GET /containers/{id}/export`, `DELETE /containers/{id}` | Only a container whose label holds the proxy's token, by its full ID. `rm` forwards `force=1&v=1`                                                                                                                                   |
+| `DELETE /images/{name}`                                  | Only an image this proxy pulled or built (below), by a reference or its ID. No `force`. Never an image with a name in the pinned frontend's repository or the repository of `IMP_HOST_IMAGE`. Forwards `force=0&noprune=1`          |
 
 - **Paths:** Bun resolves `.`, `..` and `\` before the proxy sees a path. The proxy refuses a path
   that still has `%` or `//`, strips one `/v1.NN` prefix, and checks what is left. It sends the
@@ -179,6 +180,13 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   `Content-Type` is present and is not exactly `application/x-tar` gets the 403: a form (urlencoded
   or multipart), and a tar with a parameter, too. The proxy sends `Content-Type: application/x-tar`
   itself. A create's body and type are the proxy's own; a pull takes no body.
+- **Images it owns:** the proxy keeps the IDs of the images it made in
+  `<IMP_DOCKER_PROXY_STATE>/owned-images.json`: a pull of a reference the engine did not have before
+  (it inspects the reference first), and the image a build's tag names once the build ends. An image
+  the host owner pulled stays theirs, and impd's images table never adds to the set, so impd cannot
+  remove an image it did not make. Without force, the engine also refuses to remove an image a
+  container uses or another reference shares, and only untags a reference when the image has
+  another. The proxy drops an ID once the engine no longer has it.
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach or exec.
 - **No BuildKit session:** `/session` and `/grpc` are refused, and so are the build params that need
   a session or move the build: `session`, `remote`, `outputs`, `cachefrom`, `pull`, `platform`,

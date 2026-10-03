@@ -140,6 +140,23 @@ The SDK has the same upload: `client.buildImage(name, context, { dockerfile, siz
 only that much disk; without it, impd holds the whole limit. It throws an `ORPCError` as a contract
 call would.
 
+## Engine images
+
+impd boots an imp from the rootfs it exported, not from the image in the host's Docker engine. When
+the last image row that names an engine image goes (`imp image rm`, or an add or a rebuild that
+replaces a row), impd removes that image from the engine with `docker image rm`, without force: its
+reference, then its ID, which a rebuild leaves untagged. imp-docker-proxy lets it remove only an
+image the proxy itself pulled or built ([the docker socket](../architecture/host-contract.md)): a
+pull of a reference the engine did not have, or a build's `imp/<name>:latest`. An image you pulled
+on the host yourself stays. The engine keeps an image a container uses, or one another reference
+shares. impd logs a refusal and removes the row all the same.
+
+These stay on the engine: the pinned Dockerfile frontend, which every build uses, and the images a
+build pulls for its `FROM` lines. Images made before the proxy kept its record are in none, so impd
+never removes them; remove them with `docker image rm` on the host once. An image impd pulled is
+impd's even if you later pull the same reference on the host, since that pull changes nothing on the
+engine: run a container from it, or tag it, to keep it.
+
 ## What the guest takes from the image
 
 - **The filesystem.** Everything in the image, as it is, except `/run`, which is a fresh tmpfs.
