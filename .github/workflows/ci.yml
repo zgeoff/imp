@@ -399,8 +399,8 @@ jobs:
   # on a throwaway pool in a sparse file, with the zfs module Ubuntu's kernel
   # ships; then scripts/zfs-host-test.sh runs real imps on a second such pool
   # through the lifecycle, checkpoints, disks, sleep, backups and boot-templates
-  # suites and prints the ZFS timings. Not a required check; the fake zfs in the unit tests runs in
-  # `checks` either way.
+  # suites and prints the ZFS timings. Not a required check; the fake zfs in
+  # the unit tests runs in `checks` either way.
   zfs:
     runs-on: ubuntu-24.04
     permissions:

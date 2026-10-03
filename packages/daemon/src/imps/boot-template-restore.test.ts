@@ -38,7 +38,8 @@ async function setupRestoreTest(isJailed = false) {
   // turns every disk clone away
   const cloneFails = { isOn: false };
 
-  // `isEmpty` lands no disk, so the grow after the clone fails
+  // `isEmpty` lands no disk, so the grow after the clone fails; a failed
+  // filesystem grow is only logged, and the guest grows it at boot
   const clone: { delayMs: number; isEmpty: boolean; onDone?: () => void } = {
     delayMs: 0,
     isEmpty: false,
