@@ -167,7 +167,12 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
   const ws = options.connect(url.href, headers);
   const outcome = Promise.withResolvers<ExecOutcome>();
-  const state = { opened: false, started: false, finished: false, refused: false };
+  const state = { opened: false, sentOpen: false, started: false, finished: false, refused: false };
+
+  // what the caller sent after the socket opened and before the open
+  // message went, as while a start that requires anything waits on impd:
+  // impd refuses a resize, a signal or stdin before the start
+  const held: (string | Uint8Array<ArrayBuffer>)[] = [];
 
   ws.binaryType = 'arraybuffer';
 
@@ -196,9 +201,15 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     });
   }, OPEN_TIMEOUT_MS);
 
-  const sendControl = (text: string): void => {
-    if (!state.finished && ws.readyState === WebSocket.OPEN) {
-      ws.send(text);
+  const sendControl = (data: string | Uint8Array<ArrayBuffer>): void => {
+    if (state.finished || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    if (state.sentOpen) {
+      ws.send(data);
+    } else {
+      held.push(data);
     }
   };
 
@@ -293,7 +304,17 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       }
     }
 
-    sendControl(JSON.stringify(buildOpenMessage(start)));
+    if (state.finished || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    ws.send(JSON.stringify(buildOpenMessage(start)));
+
+    state.sentOpen = true;
+
+    for (const data of held.splice(0)) {
+      ws.send(data);
+    }
   };
 
   ws.addEventListener('open', () => {
@@ -383,9 +404,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     outcome: outcome.promise,
     isStarted: () => state.started,
     sendStdin: (data) => {
-      if (!state.finished && ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeExecFrame(EXEC_CHANNELS.stdin, data));
-      }
+      sendControl(encodeExecFrame(EXEC_CHANNELS.stdin, data));
 
       return ws.bufferedAmount <= HIGH_WATER_BYTES;
     },
