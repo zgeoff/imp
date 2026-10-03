@@ -17,6 +17,7 @@ import {
   checkRemovableImage,
   checkRemoveQuery,
   normalizeReference,
+  readRepository,
 } from './rules';
 import type { Check } from './rules';
 
@@ -55,6 +56,9 @@ const ImageSchema = z
   .readonly();
 
 type EngineImage = z.infer<typeof ImageSchema>;
+
+const ListedImageSchema = z.object({ RepoDigests: z.array(z.string()).nullish() });
+const ImageListSchema = z.array(ListedImageSchema);
 
 // a BuildKit build's last line: the image it made, or the error it ended on
 const BuildEndSchema = z.union([
@@ -152,6 +156,23 @@ function isImageIdName(name: string, id: string): boolean {
   return /^[a-f0-9]+$/v.test(hex) && id.slice('sha256:'.length).startsWith(hex);
 }
 
+// the digest references a removal of `references` can take with it: those
+// of the same repositories, or every one when the image goes by its ID
+function findRemovedDigests(
+  image: Readonly<EngineImage>,
+  references: readonly string[],
+  isId: boolean,
+): string[] {
+  const repositories = new Set(references.map((reference) => readRepository(reference)));
+  const removed = new Set(references.map((reference) => normalizeReference(reference)));
+
+  return (image.RepoDigests ?? []).filter(
+    (digest) =>
+      (isId || repositories.has(readRepository(digest))) &&
+      !removed.has(normalizeReference(digest)),
+  );
+}
+
 function readMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -180,6 +201,9 @@ function pickHeaders(request: Request, names: readonly string[]): Record<string,
 interface RegisterStart {
   readonly before: ImageLookup;
   readonly imageTimes: ReadonlyMap<string, string>;
+
+  // a pull's: every digest reference the engine had, when it listed them
+  readonly digestsBefore?: ReadonlySet<string> | undefined;
 }
 
 // What a relay does with the engine's answer: `onChunk` sees each chunk,
@@ -360,6 +384,38 @@ export function createDockerProxy(
     return times;
   };
 
+  // every digest reference on the engine, before a pull: one the pull adds
+  // is the proxy's, and one it had is not
+  const readEngineDigests = async (
+    versionPrefix: string,
+  ): Promise<ReadonlySet<string> | undefined> => {
+    try {
+      const listed = await sendUpstream(versionPrefix, { method: 'GET', path: '/images/json' });
+
+      if (!listed.ok) {
+        await listed.body?.cancel();
+
+        return undefined;
+      }
+
+      const body: unknown = await listed.json();
+
+      const images = ImageListSchema.safeParse(body);
+
+      if (!images.success) {
+        return undefined;
+      }
+
+      return new Set(
+        images.data.flatMap((image) =>
+          (image.RepoDigests ?? []).map((digest) => normalizeReference(digest)),
+        ),
+      );
+    } catch {
+      return undefined;
+    }
+  };
+
   // Records `reference` as the proxy's when the engine shows it other than
   // `start.before`, and on `madeId`, the image a build said it made. A
   // failure is logged, and the image then stays on the engine, the safe side.
@@ -393,11 +449,21 @@ export function createDockerProxy(
         return;
       }
 
-      options.ownedReferences.write(
-        normalizeReference(reference),
-        { id: after.image.Id, taggedAt: readTaggedAt(after.image) },
-        start.imageTimes.get(after.image.Id),
-      );
+      const owned = { id: after.image.Id, taggedAt: readTaggedAt(after.image) };
+      const imageTimeBefore = start.imageTimes.get(after.image.Id);
+
+      options.ownedReferences.write(normalizeReference(reference), owned, imageTimeBefore);
+
+      // the digest references the pull added; the engine removes them with
+      // the repository's last tag
+      const digestsBefore = start.digestsBefore ?? new Set<string>();
+      const digests = start.digestsBefore === undefined ? [] : (after.image.RepoDigests ?? []);
+
+      for (const digest of digests.map((one) => normalizeReference(one))) {
+        if (!digestsBefore.has(digest)) {
+          options.ownedReferences.write(digest, owned, imageTimeBefore);
+        }
+      }
     } catch (error) {
       options.log(`could not record ${reference} as the proxy's: ${readMessage(error)}`);
     }
@@ -613,11 +679,17 @@ export function createDockerProxy(
     // one the host owner pulled stays theirs
     const before = await findImage(routed.versionPrefix, reference);
     const imageTimes = await readOwnedImageTimes(routed.versionPrefix);
+    const digestsBefore = await readEngineDigests(routed.versionPrefix);
 
     const registerPulled =
       before.kind === 'absent'
         ? {
-            onEnd: () => registerReference(routed.versionPrefix, reference, { before, imageTimes }),
+            onEnd: () =>
+              registerReference(routed.versionPrefix, reference, {
+                before,
+                imageTimes,
+                digestsBefore,
+              }),
           }
         : undefined;
 
@@ -727,6 +799,22 @@ export function createDockerProxy(
       }
     }
 
+    // the engine removes a repository's digest references with its last
+    // tag, and all of them with the image: each must be the proxy's too
+    const digests = findRemovedDigests(image, references, isId);
+
+    for (const digest of digests) {
+      const ownership = await findOwnership(versionPrefix, digest);
+
+      if (ownership !== 'owned') {
+        return buildRefusal(
+          request,
+          path,
+          `image ${name} carries ${digest}, which this proxy did not pull`,
+        );
+      }
+    }
+
     const answers: Response[] = [];
 
     for (const reference of references) {
@@ -742,6 +830,13 @@ export function createDockerProxy(
     }
 
     const last = answers.at(-1) ?? buildJsonResponse(500, 'no image removed');
+
+    // a digest the engine removed with its tag leaves the record
+    if (last.ok) {
+      for (const digest of digests) {
+        await findOwnership(versionPrefix, digest);
+      }
+    }
 
     const body = await last.text();
 

@@ -150,8 +150,8 @@ reference the proxy itself made ([the docker socket](../architecture/host-contra
 reference the engine did not have, or a build's `imp/<name>:latest` when the build ended on the
 image it tagged, as long as nobody pulled or tagged that image again since. An image ID passes only
 when every tag on it is such a reference. So an image you pulled on the host stays, and so does an
-image impd pulled that you tagged under a name of your own. The engine keeps an image a container
-uses. impd logs a refusal and removes the row all the same.
+image impd pulled that you tagged under a name of your own or pulled by digest. The engine keeps an
+image a container uses. impd logs a refusal and removes the row all the same.
 
 These stay on the engine: the pinned Dockerfile frontend, which every build uses, and the images a
 build pulls for its `FROM` lines. An untagged image is never removed by its ID: on Docker's classic

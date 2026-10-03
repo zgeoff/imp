@@ -63,8 +63,44 @@ function writeEngineTag(tag: string, id: string): void {
   engineTags.set(tag, { id, taggedAt });
 }
 
+// the digest a pull of image c brings with it, per repository
+const PULLED_DIGEST = `sha256:${'d'.repeat(64)}`;
+
+function listNames(id: string): string[] {
+  return [...engineTags].filter(([, value]) => value.id === id).map(([name]) => name);
+}
+
 function listTags(id: string): string[] {
-  return [...engineTags].filter(([, value]) => value.id === id).map(([tag]) => tag);
+  return listNames(id).filter((name) => !name.includes('@'));
+}
+
+function listDigests(id: string): string[] {
+  return listNames(id).filter((name) => name.includes('@'));
+}
+
+// removes `name` as the engine does: a repository's last tag on the image
+// takes the repository's digest references with it
+function removeEngineName(name: string): void {
+  const removed = engineTags.get(name);
+
+  engineTags.delete(name);
+
+  if (removed === undefined || name.includes('@')) {
+    return;
+  }
+
+  const repository = name.slice(0, name.lastIndexOf(':'));
+  const tags = listTags(removed.id).filter((tag) => tag.startsWith(`${repository}:`));
+
+  if (tags.length > 0) {
+    return;
+  }
+
+  for (const digest of listDigests(removed.id)) {
+    if (digest.startsWith(`${repository}@`)) {
+      engineTags.delete(digest);
+    }
+  }
 }
 
 // an engine that leaves out each image's tag time, as an older one may
@@ -81,7 +117,7 @@ function readEngineImage(name: string): Response {
   return Response.json({
     Id: tagged.id,
     RepoTags: listTags(tagged.id),
-    RepoDigests: [],
+    RepoDigests: listDigests(tagged.id),
     ...(!engineQuirks.omitsTagTime && { Metadata: { LastTagTime: tagged.taggedAt } }),
   });
 }
@@ -130,6 +166,14 @@ const engine = Bun.serve({
         : new Response('no such container', { status: 404 });
     }
 
+    if (request.method === 'GET' && url.pathname.endsWith('/images/json')) {
+      const ids = new Set([...engineTags.values()].map((value) => value.id));
+
+      return Response.json(
+        [...ids].map((id) => ({ Id: id, RepoTags: listTags(id), RepoDigests: listDigests(id) })),
+      );
+    }
+
     const inspected = /\/images\/(?<name>.+)\/json$/v.exec(url.pathname)?.groups?.['name'];
 
     if (request.method === 'GET' && inspected !== undefined) {
@@ -147,7 +191,7 @@ const engine = Bun.serve({
         return Response.json({ message: 'image is being used by a container' }, { status: 409 });
       }
 
-      engineTags.delete(removed);
+      removeEngineName(removed);
 
       return Response.json([{ Untagged: removed }]);
     }
@@ -157,6 +201,7 @@ const engine = Bun.serve({
       const tag = url.searchParams.get('tag') ?? '';
 
       writeEngineTag(`${fromImage}:${tag}`, buildImageId('c'));
+      writeEngineTag(`${fromImage}@${PULLED_DIGEST}`, buildImageId('c'));
     }
 
     const built = url.searchParams.get('t');
@@ -573,9 +618,28 @@ test('a pull of a reference the engine lacked is the proxy’s: an rm removes it
   const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
 
   expect(removed.status).toBe(200);
-  expect(seen.at(-1)?.target).toBe('/v1.55/images/busybox:1.36?force=0&noprune=1');
+
+  expect(seen.findLast((request) => request.method === 'DELETE')?.target).toBe(
+    '/v1.55/images/busybox:1.36?force=0&noprune=1',
+  );
+
   expect(engineTags.size).toBe(0);
   expect(readOwned('docker.io/library/busybox:1.36')).toBeUndefined();
+  expect(readOwned(`docker.io/library/busybox@${PULLED_DIGEST}`)).toBeUndefined();
+});
+
+test('a digest the host pulled stays when the proxy pulls a tag of its image', async () => {
+  writeEngineTag(`busybox@${PULLED_DIGEST}`, buildImageId('c'));
+
+  await sendPull('busybox', '1.36');
+
+  const removed = await sendToProxy('DELETE', '/v1.55/images/busybox:1.36');
+  const byId = await sendToProxy('DELETE', `/v1.55/images/${buildImageId('c')}`);
+
+  expect([removed.status, byId.status]).toEqual([403, 403]);
+  expect(readOwned(`docker.io/library/busybox@${PULLED_DIGEST}`)).toBeUndefined();
+  expect(engineTags.has(`busybox@${PULLED_DIGEST}`)).toBe(true);
+  expect(engineTags.has('busybox:1.36')).toBe(true);
 });
 
 test('a reference the engine had before the pull stays the owner’s', async () => {
@@ -611,7 +675,7 @@ test('the owner’s tag on an image the proxy pulled stays, by its name or by th
   const own = await sendToProxy('DELETE', '/v1.55/images/alpine:3.20.3');
 
   expect(own.status).toBe(200);
-  expect([...engineTags.keys()]).toEqual(['alpine:3.20']);
+  expect([...engineTags.keys()].toSorted()).toEqual([`alpine:3.20`, `alpine@${PULLED_DIGEST}`]);
 });
 
 test('a tag the owner sets after the proxy’s pull keeps the image, under both names', async () => {
@@ -628,7 +692,12 @@ test('a tag the owner sets after the proxy’s pull keeps the image, under both 
   }
 
   expect(statuses).toEqual([403, 403]);
-  expect([...engineTags.keys()].toSorted()).toEqual(['busybox:1.36', 'mine:1']);
+
+  expect([...engineTags.keys()].toSorted()).toEqual([
+    'busybox:1.36',
+    `busybox@${PULLED_DIGEST}`,
+    'mine:1',
+  ]);
 });
 
 test('two references the proxy pulled for one image are both its own', async () => {

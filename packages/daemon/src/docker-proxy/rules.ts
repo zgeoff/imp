@@ -187,6 +187,13 @@ export function normalizeReference(reference: string): string {
   return digest === undefined ? `${repository}:${tag}` : `${repository}@${digest}`;
 }
 
+// the repository a reference names, in normalizeReference's spelling
+export function readRepository(reference: string): string {
+  const image = readImageReference(reference);
+
+  return `${image.registry}/${image.path}`;
+}
+
 function readRegistryHost(registry: string): string {
   // [::1]:5000 and [fe80::1]
   if (registry.startsWith('[')) {

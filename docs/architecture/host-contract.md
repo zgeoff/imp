@@ -192,6 +192,10 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
     the time on its other references to that image, but only on those that matched the image's time
     as the proxy read it before its pull or build; an older one stays stale. An engine that gives no
     tag time gets no record, and a record with none is refused;
+  - the engine removes a repository's digest references (`repo@sha256:…`) with its last tag on the
+    image, and every one with the image. A pull records the digest references it added (the proxy
+    lists them before), so a delete passes only when each digest it can take is the proxy's: a
+    `repo@sha256:…` the host owner pulled keeps the image;
   - an image ID passes only when it has tags and every tag passes, so an image that also carries an
     owner's tag stays, and an untagged image, whoever made it, is never removed by ID;
   - the proxy removes each one by its reference, without force: the engine keeps an image a
