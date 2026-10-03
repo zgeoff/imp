@@ -8,4 +8,5 @@ export {
 } from './pack-local-path';
 
 export type { LocalEntry, PackProgress } from './pack-local-path';
-export { readTarFile } from './read-tar-file';
+export { BuildContextError, writeBuildContext } from './write-build-context';
+export type { CheckedContext } from './write-build-context';

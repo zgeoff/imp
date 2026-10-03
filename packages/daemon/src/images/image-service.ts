@@ -2,10 +2,11 @@ import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, posix } from 'node:path';
 import { ImageRefSchema, NameSchema } from '@imp/api';
 import {
+  BuildContextError,
   MissingDockerfileError,
   countTarBytes,
   listContextEntries,
-  readTarFile,
+  writeBuildContext,
 } from '@imp/local-tar';
 import { ORPCError } from '@orpc/server';
 import * as z from 'zod';
@@ -23,7 +24,6 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { runChecked, runCommand } from '../process/run-command';
-import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -279,24 +279,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // A sessionless build cannot ask impd for registry credentials: each image
   // the Dockerfile names and the host lacks is pulled first, as `imp image
   // add` does. A client that goes kills the pull, and no later one starts.
-  const loadBaseImages = async (
-    tarPath: string,
-    dockerfile: string,
-    signal: AbortSignal,
-  ): Promise<void> => {
-    const text = await readTarFile(tarPath, dockerfile, DOCKERFILE_MAX_BYTES).catch(
-      (error: unknown) => {
-        throw new ORPCError('BAD_REQUEST', { message: readErrorMessage(error) });
-      },
-    );
-
-    if (text === null) {
-      throw new ORPCError('BAD_REQUEST', {
-        message: `there is no ${dockerfile} in the build context`,
-      });
-    }
-
-    for (const ref of listBaseImages(text)) {
+  const loadBaseImages = async (dockerfile: string, signal: AbortSignal): Promise<void> => {
+    for (const ref of listBaseImages(dockerfile)) {
       if (!ImageRefSchema.safeParse(ref).success) {
         throw new ORPCError('BAD_REQUEST', {
           message: `FROM ${JSON.stringify(ref)} is not an image reference`,
@@ -334,17 +318,38 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   ): Promise<ImageRecord> => {
     const tag = `imp/${NameSchema.parse(name)}:latest`;
     const tarBytes = statSync(tarPath).size;
-    const dockerfile = normalizeDockerfilePath(givenDockerfile);
-
-    await loadBaseImages(tarPath, dockerfile, signal);
-
-    signal.throwIfAborted();
+    const dockerfilePath = normalizeDockerfilePath(givenDockerfile);
+    const rewrittenPath = `${tarPath}.rewritten`;
 
     try {
-      // the engine keeps its own copy of the context while it builds
-      await deps.diskBudget.withRoom(tarBytes, () =>
-        runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
-      );
+      // the rewrite is the context again, with pax headers for long names
+      await deps.diskBudget.withRoom(tarBytes, async () => {
+        const context = await writeBuildContext(
+          tarPath,
+          rewrittenPath,
+          dockerfilePath,
+          DOCKERFILE_MAX_BYTES,
+        ).catch((error: unknown) => {
+          throw error instanceof BuildContextError
+            ? new ORPCError('BAD_REQUEST', { message: error.message })
+            : error;
+        });
+
+        await loadBaseImages(context.dockerfile, signal);
+
+        signal.throwIfAborted();
+
+        // the engine keeps its own copy of the context while it builds
+        await deps.diskBudget.withRoom(statSync(rewrittenPath).size, () =>
+          runDockerBuild({
+            dockerHost: deps.config.dockerHost,
+            tarPath: rewrittenPath,
+            tag,
+            dockerfile: context.dockerfilePath,
+            signal,
+          }),
+        );
+      });
     } catch (error) {
       // nobody waits for the image: the build was stopped, or its tag is left
       signal.throwIfAborted();
@@ -354,6 +359,8 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
 
       throw error;
+    } finally {
+      rmSync(rewrittenPath, { force: true });
     }
 
     signal.throwIfAborted();
