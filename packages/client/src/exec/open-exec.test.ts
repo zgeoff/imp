@@ -860,3 +860,49 @@ test('a resize while a start that requires anything waits on impd goes after the
   expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
   expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
 });
+
+test('stdin held while a start that requires anything waits on impd counts toward backpressure', async () => {
+  await using ctx = await setupExecTest();
+
+  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
+
+  const seen: { accepted: boolean | null; drainedEarly: boolean | null } = {
+    accepted: null,
+    drainedEarly: null,
+  };
+
+  // more than the high-water mark lands while the feature check runs
+  const readFlooding = async (request: Request): Promise<Response> => {
+    const session = held.session;
+
+    if (session !== null) {
+      seen.accepted = session.sendStdin(new Uint8Array(1_048_577));
+
+      seen.drainedEarly = await Promise.race([
+        session.waitForDrain().then(() => true),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(false);
+          }, 50);
+        }),
+      ]);
+    }
+
+    return fetch(request);
+  };
+
+  held.session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: readFlooding,
+  });
+
+  const outcome = await held.session.outcome;
+
+  expect(seen).toEqual({ accepted: false, drainedEarly: false });
+  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
+});
