@@ -3,17 +3,29 @@ import * as z from 'zod';
 // What impd reads of an image the build names, through one inspect
 // format, so nothing else of the image reaches impd's logs.
 export const PIN_INSPECT_FORMAT =
-  '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"OnBuild":{{json .Config.OnBuild}}}';
+  '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"Config":{{json .Config}}}';
 
-export const PinInspectSchema = z.object({
-  Id: z.string(),
-  RepoDigests: z.array(z.string()).readonly().nullable(),
-  Os: z.string(),
-  Architecture: z.string(),
-  OnBuild: z.array(z.unknown()).readonly().nullable(),
-});
+// The docker CLI renders a config with no triggers without the key, and a
+// template that names it fails, so impd reads the whole config.
+const ConfigSchema = z.object({ OnBuild: z.array(z.unknown()).readonly().nullish() }).nullable();
 
-export type PinInspect = z.infer<typeof PinInspectSchema>;
+export const PinInspectSchema = z
+  .object({
+    Id: z.string(),
+    RepoDigests: z.array(z.string()).readonly().nullable(),
+    Os: z.string(),
+    Architecture: z.string(),
+    Config: ConfigSchema,
+  })
+  .transform((inspect) => ({
+    Id: inspect.Id,
+    RepoDigests: inspect.RepoDigests,
+    Os: inspect.Os,
+    Architecture: inspect.Architecture,
+    OnBuild: inspect.Config?.OnBuild ?? null,
+  }));
+
+export type PinInspect = z.output<typeof PinInspectSchema>;
 
 // the architecture names containerd's platforms.Normalize maps
 const ARCHITECTURES = new Map([

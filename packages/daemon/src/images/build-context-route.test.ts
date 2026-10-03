@@ -413,13 +413,14 @@ const DIGEST_B = `sha256:${'b'.repeat(64)}`;
 function buildInspect(
   repoDigests: readonly string[],
   extra: Readonly<Record<string, unknown>> = {},
+  onBuild: readonly string[] | null = null,
 ) {
   const inspect = {
     Id: `sha256:${'c'.repeat(64)}`,
     RepoDigests: repoDigests,
     Os: 'linux',
     Architecture: 'amd64',
-    OnBuild: null,
+    Config: onBuild === null ? { Env: ['PATH=/bin'] } : { OnBuild: onBuild },
   };
 
   return `echo '${JSON.stringify({ ...inspect, ...extra })}'`;
@@ -433,7 +434,7 @@ const IMAGE_DOCKER = [
   'case "$1 $2" in',
   `  "version --format") echo '"linux" "x86_64"' ;;`,
   '  "image inspect") case "$last" in',
-  `    base.test/onbuild:1) ${buildInspect([`base.test/onbuild@${DIGEST_A}`], { OnBuild: ['RUN id'] })} ;;`,
+  `    base.test/onbuild:1) ${buildInspect([`base.test/onbuild@${DIGEST_A}`], {}, ['RUN id'])} ;;`,
   `    base.test/local:1) ${buildInspect([])} ;;`,
   `    base.test/arm:1) ${buildInspect([`base.test/arm@${DIGEST_A}`], { Architecture: 'aarch64' })} ;;`,
   `    base.test/arm32:1) ${buildInspect([`base.test/arm32@${DIGEST_A}`], { Architecture: 'arm' })} ;;`,
