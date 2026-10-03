@@ -20,6 +20,13 @@ import type { PublicMcpConfig } from './public-mcp-config';
 // requests open at once
 const MAX_OPEN = 64;
 
+// with every slot taken, requests that start no work, at once: a session's
+// DELETE, or a notification such as notifications/cancelled
+const MAX_CONTROL = 16;
+
+// such a notification; a cancel is a few hundred bytes
+const MAX_CONTROL_BYTES = 16 * 1024;
+
 // a JSON-RPC message, a file write's content included (4 MiB as text)
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
@@ -46,7 +53,7 @@ export interface PublicListener {
 export function createPublicHandler(
   deps: Readonly<PublicListenerDeps>,
 ): (request: Request, server: Pick<Bun.Server<undefined>, 'timeout'> | null) => Promise<Response> {
-  const state = { open: 0 };
+  const state = { open: 0, control: 0 };
   const issuer = deps.oauth.issuer;
   const host = deps.config.host.toLowerCase();
 
@@ -157,9 +164,28 @@ export function createPublicHandler(
     return buildNotFound();
   };
 
+  // Every slot taken: only a request that starts no work gets through, on
+  // its own allowance, so a cancel can still stop a call and free a slot.
+  // It keeps the idle timeout: it is short, and made again here.
+  const handleControl = async (request: Request): Promise<Response> => {
+    const control = state.control < MAX_CONTROL ? await readControlRequest(request) : null;
+
+    if (control === null || state.control >= MAX_CONTROL) {
+      return buildTooMany();
+    }
+
+    state.control += 1;
+
+    try {
+      return await handleRequest(control, null);
+    } finally {
+      state.control -= 1;
+    }
+  };
+
   return async (request, server) => {
     if (state.open >= MAX_OPEN) {
-      return new Response('too many requests', { status: 429, headers: { 'retry-after': '1' } });
+      return handleControl(request);
     }
 
     state.open += 1;
@@ -341,7 +367,18 @@ function buildTokenReply(outcome: Readonly<TokenOutcome>): Response {
 async function readForm(request: Request): Promise<URLSearchParams | null> {
   const type = request.headers.get('content-type') ?? '';
 
-  if (!type.startsWith('application/x-www-form-urlencoded') || request.body === null) {
+  if (!type.startsWith('application/x-www-form-urlencoded')) {
+    return null;
+  }
+
+  const text = await readBodyText(request, MAX_FORM_BYTES);
+
+  return text === null ? null : new URLSearchParams(text);
+}
+
+// the body as text, of at most `max` bytes; null for none or a larger one
+async function readBodyText(request: Request, max: number): Promise<string | null> {
+  if (request.body === null) {
     return null;
   }
 
@@ -353,14 +390,67 @@ async function readForm(request: Request): Promise<URLSearchParams | null> {
   for await (const chunk of body) {
     total += chunk.byteLength;
 
-    if (total > MAX_FORM_BYTES) {
+    if (total > max) {
       return null;
     }
 
     chunks.push(chunk);
   }
 
-  return new URLSearchParams(new TextDecoder().decode(Buffer.concat(chunks)));
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+// A request to /mcp that starts no work: a DELETE, or a POST of one
+// JSON-RPC notification (a method and no id). Its body is read here, so the
+// request is made again for the transport; null for any other.
+async function readControlRequest(request: Request): Promise<Request | null> {
+  if (new URL(request.url).pathname !== MCP_PATH) {
+    return null;
+  }
+
+  if (request.method === 'DELETE') {
+    return request;
+  }
+
+  if (request.method !== 'POST') {
+    return null;
+  }
+
+  const text = await readBodyText(request, MAX_CONTROL_BYTES);
+
+  if (text === null || !isNotification(text)) {
+    return null;
+  }
+
+  return new Request(request.url, {
+    method: 'POST',
+    headers: request.headers,
+    body: text,
+    signal: request.signal,
+  });
+}
+
+function isNotification(text: string): boolean {
+  let message: unknown;
+
+  try {
+    message = JSON.parse(text);
+  } catch {
+    return false;
+  }
+
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    !Array.isArray(message) &&
+    !('id' in message) &&
+    'method' in message &&
+    typeof message.method === 'string'
+  );
+}
+
+function buildTooMany(): Response {
+  return new Response('too many requests', { status: 429, headers: { 'retry-after': '1' } });
 }
 
 // A form a page on another origin posts never counts. A browser names the
