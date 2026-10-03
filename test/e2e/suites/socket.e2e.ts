@@ -1,10 +1,19 @@
-import { afterAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../../../packages/daemon/src/docker-proxy/dockerfile-frontend';
 import { resolveImageName } from '../lib/fixtures';
 import { runImp, runInImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
-import { getHostImage, instance, runChecked, runCommand, runInContainer } from '../lib/instance';
+import {
+  REPO_ROOT,
+  getHostImage,
+  instance,
+  runChecked,
+  runCommand,
+  runInContainer,
+} from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -21,7 +30,58 @@ const hostRepo = hostImage.split(':')[0] ?? hostImage;
 // a container the harness makes on the host's own Docker, not through the proxy
 const outsider = { id: '' };
 
+// The dev proxy, under IMP_BUILD_ISOLATION=imp, refuses every build; a host
+// build's rules are checked on a second proxy of the same binary under host
+// isolation, on a socket beside the dev proxy's.
+const hostModeProxy = `${proxy}-host-mode`;
+const PROXY_SOCKET = '/run/imp-docker/docker.sock';
+const HOST_MODE_SOCKET = '/run/imp-docker/host-mode.sock';
+const PrivilegesSchema = z.array(z.array(z.string()));
+const ProxyArgsSchema = z.object({ proxy: z.object({ privileges: PrivilegesSchema }) });
+
+beforeAll(async () => {
+  const argsText = readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.args.json'), 'utf8');
+  const args = ProxyArgsSchema.parse(JSON.parse(argsText));
+
+  const gid = await runChecked(['stat', '-c', '%g', '/var/run/docker.sock']);
+
+  await runCommand(['docker', 'rm', '-f', hostModeProxy]);
+
+  await runChecked([
+    'docker',
+    'run',
+    '-d',
+    '--name',
+    hostModeProxy,
+    ...args.proxy.privileges.flat(),
+    '--group-add',
+    gid.trim(),
+    '-e',
+    `IMP_HOST_IMAGE=${hostImage}`,
+    '-e',
+    'IMP_BUILD_ISOLATION=host',
+    '-e',
+    `IMP_DOCKER_PROXY_LISTEN=${HOST_MODE_SOCKET}`,
+    '-e',
+    'IMP_DOCKER_PROXY_STATE=/tmp',
+    '-v',
+    '/var/run/docker.sock:/var/run/docker.sock',
+    '-v',
+    `${instance.container}-docker:/run/imp-docker`,
+    '-v',
+    `${join(instance.dataDir, 'imp-docker-proxy')}:/usr/local/bin/imp-docker-proxy:ro`,
+    hostImage,
+    '/usr/local/bin/imp-docker-proxy',
+  ]);
+
+  await waitFor('the host-mode proxy socket', () =>
+    runChecked(['docker', 'exec', instance.container, 'test', '-S', HOST_MODE_SOCKET]),
+  );
+});
+
 afterAll(async () => {
+  await runCommand(['docker', 'rm', '-f', hostModeProxy]);
+
   if (outsider.id !== '') {
     await runCommand(['docker', 'rm', '-f', outsider.id]);
   }
@@ -37,10 +97,14 @@ async function readRefusal(script: string): Promise<string> {
   return result.stderr;
 }
 
-// POST /build to the proxy as root in the container, with a context of
+// POST /build to a proxy as root in the container, with a context of
 // FROM busybox; each param is [key, value], sent as given. Prints the
 // answer's body, then its status.
-function buildScript(params: readonly (readonly [string, string])[], path = '/build'): string {
+function buildScript(
+  params: readonly (readonly [string, string])[],
+  path = '/build',
+  socket = HOST_MODE_SOCKET,
+): string {
   const query = new URLSearchParams();
 
   for (const [key, value] of params) {
@@ -49,7 +113,7 @@ function buildScript(params: readonly (readonly [string, string])[], path = '/bu
 
   return [
     String.raw`d=$(mktemp -d) && printf "FROM busybox\n" >"$d/Dockerfile" &&`,
-    `tar -C "$d" -c Dockerfile | curl -sS --unix-socket /run/imp-docker/docker.sock`,
+    `tar -C "$d" -c Dockerfile | curl -sS --unix-socket ${socket}`,
     `-X POST -H 'Content-Type: application/x-tar' --data-binary @-`,
     `-w ' %{http_code}' 'http://docker${path}?${query.toString()}'`,
   ].join(' ');
@@ -58,12 +122,14 @@ function buildScript(params: readonly (readonly [string, string])[], path = '/bu
 const PIN = ['buildargs', JSON.stringify({ BUILDKIT_SYNTAX: DOCKERFILE_FRONTEND })] as const;
 const RefusalSchema = z.object({ message: z.string() });
 
-// a build through the proxy that it must refuse; returns the refusal
+// a build through a proxy, the host-mode one by default, that it must
+// refuse; returns the refusal
 async function readBuildRefusal(
   params: readonly (readonly [string, string])[],
   path?: string,
+  socket?: string,
 ): Promise<string> {
-  const result = await runInContainer(['sh', '-c', buildScript(params, path)]);
+  const result = await runInContainer(['sh', '-c', buildScript(params, path, socket)]);
 
   expect(result.stdout).toEndWith(' 403');
 
@@ -127,6 +193,19 @@ test('an export or rm of a container the proxy did not create is refused', async
   expect(state.trim()).toBe('created');
 });
 
+// #169: impd builds in builder imps then, so no build reaches the engine
+test('under IMP_BUILD_ISOLATION=imp every build is refused, even one a host build may send', async () => {
+  const refusal = await readBuildRefusal(
+    [['t', 'imp/e2e-sock:latest'], ['version', '2'], PIN],
+    '/build',
+    PROXY_SOCKET,
+  );
+
+  expect(refusal).toBe(
+    'imp-docker-proxy: a build is refused: under IMP_BUILD_ISOLATION=imp impd builds in builder imps',
+  );
+});
+
 test("a build may not tag outside imp/, nor retag the host's image", async () => {
   const ubuntu = await readBuildRefusal([['t', 'ubuntu:latest'], ['version', '2'], PIN]);
 
@@ -173,7 +252,7 @@ test('a build with a form body, which would replace or add to its checked query,
       '-w',
       '\n%{http_code}',
       '--unix-socket',
-      '/run/imp-docker/docker.sock',
+      HOST_MODE_SOCKET,
       '-X',
       'POST',
       `http://docker/build?${query.toString()}`,

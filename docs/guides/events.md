@@ -109,7 +109,9 @@ each exec, console, attach and SSH session as it opens (`exec-agent` for `imp ex
 `imp proxy` tunnel as `tunnel:<port>`, and each reverse forward as `reverse:<path or port>`
 (`reverse:auto` for a socket the agent names). A row has the time, the procedure, the caller, the
 imp it named, the outcome (`ok` or the error code) and how long the call took. It never holds the
-call's input, so a secret's value never reaches it.
+call's input, so a secret's value never reaches it. An `images.add` from a registry also keeps, as
+its detail, the reference the pull resolved by digest (`busybox@sha256:…`), so an add of a moving
+tag such as `:latest` names the bytes it took.
 
 ```sh
 imp audit --kind api          # every imp, newest first

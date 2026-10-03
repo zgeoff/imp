@@ -113,6 +113,11 @@ export interface RpcContext {
   readonly ends: AbortSignal | null;
 }
 
+// what a handler resolved that the call's audit row keeps
+interface AuditDetail {
+  value: string | null;
+}
+
 export function buildRouter(deps: RouterDeps) {
   const exposure = createExposureService({
     db: deps.db,
@@ -155,11 +160,14 @@ export function buildRouter(deps: RouterDeps) {
         }
       };
 
+      // what a handler resolved for the audit row, such as an add's pull
+      const auditDetail: AuditDetail = { value: null };
+
       if (!isAuditedProcedure(procedure)) {
         try {
           await requireAccess();
 
-          return await options.next();
+          return await options.next({ context: { auditDetail } });
         } catch (error) {
           throw toCallerError(error, caller);
         }
@@ -172,12 +180,13 @@ export function buildRouter(deps: RouterDeps) {
         actor: caller,
         impName: readImpName(procedure, input, output),
         startedAt,
+        detail: auditDetail.value,
       });
 
       try {
         await requireAccess();
 
-        const result = await options.next();
+        const result = await options.next({ context: { auditDetail } });
 
         deps.audit.record(buildCall(result.output), null);
 
@@ -471,13 +480,21 @@ export function buildRouter(deps: RouterDeps) {
 
         return images.map((image) => toApiImage(image));
       }),
+
+      // a client that goes, or whose token ends, ends a pull and its builder
       add: os.images.add.handler(async (context) => {
         const input = context.input;
+        const signal = mergeSignals(context.signal, context.context.ends);
+
+        // the reference the pull resolved goes in the audit row
+        const onResolved = (reference: string): void => {
+          context.context.auditDetail.value = reference;
+        };
 
         const image =
           'imp' in input
             ? await deps.templates.createTemplate(input.imp, input.name)
-            : await deps.images.addImage(input.ref, input.name);
+            : await deps.images.addImage(input.ref, input.name, { signal, onResolved });
 
         return toApiImage(image);
       }),

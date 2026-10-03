@@ -32,6 +32,7 @@ test('the log keeps the newest rows up to its cap, and one imp’s on request', 
     impName: 'new',
     outcome: 'CONFLICT',
     durationMs: 12,
+    detail: null,
   });
 
   const count = await ctx.db
@@ -74,6 +75,7 @@ test('with imp patterns, it lists only calls that named a matching imp', async (
       impName,
       outcome: 'ok',
       durationMs: 1,
+      detail: null,
     });
   }
 
@@ -82,4 +84,25 @@ test('with imp patterns, it lists only calls that named a matching imp', async (
 
   expect(matching.map((call) => call.imp)).toEqual(['dev-b', 'dev-a']);
   expect(all).toHaveLength(4);
+});
+
+test("an image add's row keeps the reference its pull resolved", async () => {
+  await using ctx = await setupTestDatabase();
+
+  const pulled = `docker.io/library/busybox@sha256:${'b'.repeat(64)}`;
+
+  await writeApiCall(ctx.db, {
+    at: new Date(1),
+    procedure: 'images.add',
+    actor: 'token',
+    actorName: 'ci',
+    impName: null,
+    outcome: 'ok',
+    durationMs: 9000,
+    detail: pulled,
+  });
+
+  const calls = await listApiCalls(ctx.db, null, 10, null);
+
+  expect(calls.map((call) => call.detail)).toEqual([pulled]);
 });

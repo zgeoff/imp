@@ -15,6 +15,7 @@ export interface NewApiCall {
   readonly impName: string | null;
   readonly outcome: string;
   readonly durationMs: number;
+  readonly detail: string | null;
 }
 
 // One insert, then the rows past the cap by id: ids only grow, so the cut is
@@ -30,6 +31,7 @@ export async function writeApiCall(db: ImpDatabase, call: NewApiCall): Promise<v
       imp_name: call.impName,
       outcome: call.outcome,
       duration_ms: call.durationMs,
+      detail: call.detail,
     })
     .returning('id')
     .executeTakeFirstOrThrow();
@@ -79,6 +81,10 @@ function toApiCall(row: Readonly<Selectable<ApiAuditTable>>): ApiCall {
 
   if (row.imp_name !== null) {
     call.imp = row.imp_name;
+  }
+
+  if (row.detail !== null) {
+    call.detail = row.detail;
   }
 
   return call;

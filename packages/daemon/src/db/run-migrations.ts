@@ -487,6 +487,14 @@ export const MIGRATIONS: Record<string, Migration> = {
         .execute();
     },
   },
+
+  // image adds in builder imps (#169): the reference a pull resolved, so an
+  // add of a moving tag can be traced to the bytes it took
+  '025_add_api_audit_detail': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema.alterTable('api_audit').addColumn('detail', 'text').execute();
+    },
+  },
 };
 
 const PROVIDER: MigrationProvider = {

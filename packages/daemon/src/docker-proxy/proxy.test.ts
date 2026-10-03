@@ -96,6 +96,7 @@ const proxy = Bun.serve({
     upstreamSocket: engineSocket,
     token: TOKEN,
     hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+    builderImage: null,
     buildContextMaxBytes: CONTEXT_MAX_BYTES,
     log: (message) => {
       logged.push(message);
@@ -391,6 +392,72 @@ test('a pull forwards fromImage and tag only, and a pull with a body is refused'
   ]);
 
   expect(seen[0]?.headers['x-registry-auth']).toBe('e30=');
+});
+
+test('under IMP_BUILD_ISOLATION=imp only IMP_BUILD_IMAGE by digest pulls or creates, and no build passes', async () => {
+  const digest = `sha256:${'d'.repeat(64)}`;
+  const lockedSocket = join(dir, 'locked.sock');
+
+  using locked = Bun.serve({
+    unix: lockedSocket,
+    fetch: createDockerProxy({
+      upstreamSocket: engineSocket,
+      token: TOKEN,
+      hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+      builderImage: `ghcr.io/zgeoff/imp-base:0.29.0@${digest}`,
+      buildContextMaxBytes: CONTEXT_MAX_BYTES,
+      log: (message) => {
+        logged.push(message);
+      },
+    }),
+  });
+
+  const sendToLocked = (target: string) =>
+    fetch(`http://docker${target}`, { method: 'POST', unix: lockedSocket });
+
+  // a create, which reaches a pull when the engine lacks its image
+  const createFrom = (image: string) =>
+    fetch('http://docker/v1.55/containers/create', {
+      method: 'POST',
+      unix: lockedSocket,
+      body: JSON.stringify({ Image: image, Cmd: ['/bin/true'] }),
+    });
+
+  const createBusybox = await createFrom('busybox:1.37');
+  const createBuilder = await createFrom(`ghcr.io/zgeoff/imp-base:0.29.0@${digest}`);
+
+  expect([createBusybox.status, createBuilder.status]).toEqual([403, 200]);
+  expect(seen.map((request) => request.target)).toEqual(['/v1.55/containers/create']);
+
+  seen.length = 0;
+
+  const busybox = await sendToLocked('/v1.55/images/create?fromImage=busybox&tag=1.37');
+
+  const builder = await sendToLocked(
+    `/v1.55/images/create?fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${digest}`,
+  );
+
+  // a build as impd sends it under host isolation, its context the body
+  const build = await fetch(`http://docker${BUILD_PATH}`, {
+    method: 'POST',
+    unix: lockedSocket,
+    headers: { 'content-type': 'application/x-tar' },
+    body: 'context',
+  });
+
+  const refusal: unknown = await build.json();
+
+  expect(locked.url).toBeDefined();
+  expect([busybox.status, builder.status, build.status]).toEqual([403, 200, 403]);
+
+  expect(refusal).toEqual({
+    message:
+      'imp-docker-proxy: a build is refused: under IMP_BUILD_ISOLATION=imp impd builds in builder imps',
+  });
+
+  expect(seen.map((request) => request.target)).toEqual([
+    `/v1.55/images/create?fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${encodeURIComponent(digest)}`,
+  ]);
 });
 
 test('an Upgrade, a refused route and a refused param never reach the engine', async () => {
