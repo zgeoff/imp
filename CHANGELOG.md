@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.23.0](https://github.com/zgeoff/imp/compare/v0.22.0...v0.23.0) (2026-10-03)
+
+### Features
+
+- **cli:** say in imp info when cgroup limits are off
+  ([20e82ec](https://github.com/zgeoff/imp/commit/20e82ec4a2194716a9a0b670d21650662769982a)), closes
+  [#75](https://github.com/zgeoff/imp/issues/75)
+- **deploy:** install the image's unit on upgrade, refuse a rollback
+  ([5dc5392](https://github.com/zgeoff/imp/commit/5dc5392b6e47fb967a0a096269aee024d08249da)), closes
+  [#75](https://github.com/zgeoff/imp/issues/75)
+- **host:** run imp-host without --privileged
+  ([4d12944](https://github.com/zgeoff/imp/commit/4d12944f314751e30105f1d6448de1dceab5f42b)), closes
+  [#75](https://github.com/zgeoff/imp/issues/75)
+
+### Bug Fixes
+
+- **deploy:** stop an upgrade whose unit cannot be installed
+  ([12afa32](https://github.com/zgeoff/imp/commit/12afa32bb6fc37109bf99d94dfeb57d2cb2db487)), closes
+  [#75](https://github.com/zgeoff/imp/issues/75) [#75](https://github.com/zgeoff/imp/issues/75)
+- **host:** check reflink by a clone, not xfs_info
+  ([623d453](https://github.com/zgeoff/imp/commit/623d4531ecd8ccca80c6d52d7648f23024586e73)), closes
+  [#75](https://github.com/zgeoff/imp/issues/75)
+
 ## [0.22.0](https://github.com/zgeoff/imp/compare/v0.21.0...v0.22.0) (2026-10-03)
 
 ### Features
