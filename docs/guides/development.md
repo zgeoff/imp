@@ -226,7 +226,7 @@ Lefthook installs the hooks with `bun install`.
 | `cli`        | yes      | Compiles the CLI for every platform and runs the linux-x64 one; builds the release image's compile stage.                                                         |
 | `client`     | yes      | Packs `@zgeoff/imp-client`, installs it on the oldest Node it supports, and smokes it under Node, Bun and a compiled Bun binary.                                  |
 | `e2e`        | yes      | The `fast` end-to-end set on real microVMs (below).                                                                                                               |
-| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep and backups suites.                 |
+| `zfs`        | no       | `scripts/test-zfs.sh`, then real imps on a ZFS pool: `scripts/zfs-host-test.sh` with the lifecycle, checkpoints, disks, sleep, backups and moves suites.          |
 
 The `checks` job also runs `bun run lint:docs`, which fails when a code comment cites a docs page or
 heading that does not exist.

@@ -251,8 +251,8 @@ export async function assertState(
   }
 }
 
-export async function readInfo(): Promise<SystemInfo> {
-  const stdout = await runImp('info', '--json');
+export async function readInfo(target: DevInstance = instance): Promise<SystemInfo> {
+  const stdout = await runImpWith({ target }, 'info', '--json');
 
   return SystemInfoSchema.parse(JSON.parse(stdout));
 }

@@ -111,10 +111,20 @@ function buildHostEnv(
   };
 }
 
+// On ZFS, B's own dataset beside A's (scripts/zfs-host-test.sh makes it):
+// B inherits A's IMP_ZFS_ROOT otherwise, and two impds on one dataset would
+// take each other's disks. Empty on XFS.
+function readHostBZfsRoot(): string | null {
+  const root = process.env['IMP_ZFS_ROOT'] ?? '';
+
+  return process.env['IMP_STORAGE_BACKEND'] === 'zfs' && root !== '' ? `${root}-mv-b` : null;
+}
+
 // B as the options make it, for starting it and for its teardown
 function buildHostB(options: MoveHostsOptions): DevInstance {
   const names = buildNames();
   const network = buildMoveNetwork(readOffset());
+  const zfsRoot = readHostBZfsRoot();
 
   return createInstance({
     container: names.container,
@@ -126,6 +136,7 @@ function buildHostB(options: MoveHostsOptions): DevInstance {
 
       // off the tailnet, unless the suite moves over it under B's own name
       ...(options.tailnet ? { IMP_TAILSCALE_HOSTNAME: names.container } : { IMP_DEV_TAILNET: '0' }),
+      ...(zfsRoot !== null && { IMP_ZFS_ROOT: zfsRoot }),
     },
   });
 }

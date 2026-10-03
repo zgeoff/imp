@@ -18,7 +18,8 @@
 # Env: IMP_DEV_PORT_OFFSET (default 300) for the dev instance imp-zfs;
 #      IMP_ZFS_BENCH_GIB (default 40) sizes the second pool's file;
 #      IMP_ZFS_E2E_SUITES (default checkpoints,sleep) picks the suites (CI adds
-#      lifecycle, disks, backups and boot-templates);
+#      lifecycle, disks, backups, boot-templates and moves, whose second impd
+#      gets a dataset of its own);
 #      IMP_ZFS_TEST_UNIT=0 skips part 1 (the zfs CI job runs it on its own).
 #      The summary is also written to <dir>/summary.txt.
 set -euo pipefail
@@ -61,6 +62,8 @@ truncate -s "${gib}G" "$work/bench.img"
 sudo zpool create -O mountpoint=none -O compression=lz4 -O atime=off -O xattr=sa \
   "$pool" "$work/bench.img"
 sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT"
+# the moves suites' second impd, B, on a dataset of its own (test/e2e/lib/move-hosts.ts)
+sudo zfs create -o mountpoint=legacy "$IMP_ZFS_ROOT-mv-b"
 
 # summarize LABEL REGEX: count, min, median and max of the ms in each match
 summarize() {

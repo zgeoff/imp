@@ -11,6 +11,7 @@ import {
   assertState,
   findImp,
   readImpEnv,
+  readInfo,
   requireImp,
   runImp,
   runImpWith,
@@ -222,6 +223,16 @@ afterAll(async () => {
 
   await stopMoveHosts(hosts);
 }, 900_000);
+
+// both hosts on the run's backend, so the moves send what that pair sends:
+// files from XFS, `zfs send` streams between two ZFS hosts
+test('both hosts run the storage backend the run asked for', async () => {
+  const backend = process.env['IMP_STORAGE_BACKEND'] === 'zfs' ? 'zfs' : 'xfs';
+
+  const [infoA, infoB] = await Promise.all([readInfo(hosts.a), readInfo(hosts.b)]);
+
+  expect([infoA.storage.backend, infoB.storage.backend]).toEqual([backend, backend]);
+});
 
 test('a stopped imp moves cold with its disk and checkpoint, and boots on the target', async () => {
   await createImp(cold, '--image', TINY, '--memory', '256');
