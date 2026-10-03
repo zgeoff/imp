@@ -259,7 +259,7 @@ test('a restart between the stages of a replace leaves only the value the row na
   expect(afterCleanup).toEqual(afterCommit);
 });
 
-test('a cleanup that fails after the commit is logged, and the next start sets the file aside', async () => {
+test('a cleanup that fails after the commit is logged, and the next start removes the file', async () => {
   await using ctx = await setupTest();
 
   const real = createSecretFiles(ctx.dataDir);
@@ -318,9 +318,9 @@ test('a cleanup that fails after the commit is logged, and the next start sets t
 
   const swept = await ctx.readFiles('api');
 
-  const kept = readdirSync(join(ctx.dir, '.orphaned'), { recursive: true, encoding: 'utf8' });
-
+  // the replace recorded the file it displaced, so it is not kept aside
   expect(swept.files).toEqual([swept.secret?.valueFile ?? '']);
+  expect(swept.files).not.toContain(displaced.file);
   expect(swept.named).toBe('v2');
-  expect(kept.some((path) => path.endsWith(displaced.file))).toBe(true);
+  expect(readdirSync(ctx.dir)).not.toContain('.orphaned');
 });

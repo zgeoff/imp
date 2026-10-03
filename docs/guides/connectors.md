@@ -97,16 +97,17 @@ the old value, or the new with the new. If the file is gone by then, the request
 (a 403); the broker never falls back to another file.
 
 impd removes the file a replace or a delete displaced once the transaction commits, and only that
-file, so a deleted secret's value does not stay on disk. A failed commit removes its new file and
-leaves the old one in place.
+file, so a deleted secret's value does not stay on disk. The transaction also records that file, and
+the record goes once the file does: if impd stops in between, or the removal fails, the next start
+removes the file. A failed commit removes its new file and leaves the old one in place.
 
-At start, impd never deletes a value file that no row names. It moves each one, temp files a crash
-left included, into `<data>/secrets/.orphaned/<start time>/` (mode 0700) and logs
+At start, impd never deletes a value file that no row and no such record names. It moves each one,
+temp files a crash left included, into `<data>/secrets/.orphaned/<start time>/` (mode 0700) and logs
 `impd: broker: kept secret value file <file>, which no database row names, in <dir>`. Such a file is
-the value of a secret added after the database copy a restore put back, a write whose row never
-came, or a file a removal failed to delete. impd does not read these files again and never removes
-them: check each one, add back with `imp secret add` any value you still need, then delete the
-directory.
+the value of a secret added after the database copy a restore put back, or of an add or a replace
+that impd stopped in before its commit: that value was never stored, but its file was written. impd
+does not read these files again: check each one, add back with `imp secret add` any value you still
+need, then delete the directory.
 
 ### Restores
 
