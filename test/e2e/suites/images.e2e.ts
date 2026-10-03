@@ -13,7 +13,7 @@ import {
   tryImp,
 } from '../lib/imp-cli';
 import { createImp, removeImps } from '../lib/imps';
-import { REPO_ROOT, runChecked } from '../lib/instance';
+import { REPO_ROOT, runChecked, runCommand } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
 
@@ -134,7 +134,8 @@ test('a build from a host path leaves out what .dockerignore drops, as an upload
   writeFileSync(join(dir, 'kept.txt'), 'kept');
   writeFileSync(join(dir, 'dropped.secret'), 'dropped');
 
-  await runImp('image', 'build', dir, '--name', onHost, '--on-host');
+  // ./ and the default name: impd sends the proxy one spelling
+  await runImp('image', 'build', dir, '--name', onHost, '--on-host', '--file', './Dockerfile');
 
   const listed = await runChecked(['docker', 'run', '--rm', `imp/${onHost}:latest`, 'ls', '/ctx']);
 
@@ -170,4 +171,28 @@ test('a RUN step cannot ask for the host network or insecure mode', async () => 
   const images = await listImageNames();
 
   expect(images).not.toContain(rejected);
+});
+
+test('a FROM image only the host has builds without a pull', async () => {
+  const local = 'e2e-img-localbase:1';
+  const dir = writeContext('local-base', `FROM ${local}\nRUN echo local > /m\n`);
+
+  await runChecked(['docker', 'pull', '--quiet', 'busybox:1.37']);
+  await runChecked(['docker', 'tag', 'busybox:1.37', local]);
+
+  try {
+    await runImp('image', 'build', dir, '--name', onHost);
+    await runImp('image', 'rm', onHost);
+  } finally {
+    await runCommand(['docker', 'rmi', local]);
+  }
+});
+
+test('a FROM image the host lacks is pulled by impd, under the proxy’s pull rules', async () => {
+  const dir = writeContext('missing-base', 'FROM localhost:5000/e2e-missing:1\n');
+
+  const result = await tryImp(['image', 'build', dir, '--name', rejected]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain("registry localhost:5000 is the host's own");
 });
