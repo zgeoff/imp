@@ -93,6 +93,7 @@ test('a stopped imp moves with its id, its checkpoints and its disk', async () =
   expect(readFileSync(disk, 'utf8').startsWith('world')).toBe(true);
   expect(readFileSync(checkpointDisk ?? '', 'utf8').startsWith('hello')).toBe(true);
   expect(left).toBeUndefined();
+  expect(ctx.commits).toEqual(['dev']);
 });
 
 test('a marked imp fails fast with MOVING and Retry-After, and an abort before the stream undoes the mark', async () => {
@@ -247,6 +248,33 @@ test('a commit lost after the receipt holds both copies until resume commits', a
 
   expect(gone).toBeUndefined();
   expect(live.state).toBe('running');
+});
+
+// #167: main counts the received disk on this hook, so a repeat must not
+// fire it again
+test('a commit whose answer was lost fires onCommitted once, not again on resume', async () => {
+  const lost = { answers: 1 };
+
+  await using ctx = await setupMoveTest(async (request, forward) => {
+    const response = await forward();
+
+    if (request.url.endsWith(MOVE_PATHS.commit) && lost.answers > 0) {
+      lost.answers -= 1;
+      throw new Error('the network dropped the answer');
+    }
+
+    return response;
+  });
+
+  const status = await ctx.runMove();
+
+  expect(status.error).toContain('dropped the answer');
+  expect(ctx.commits).toEqual(['dev']);
+
+  const resumed = await ctx.sourceApp.client.moves.resume({ name: 'dev' });
+
+  expect(resumed.isDone).toBe(true);
+  expect(ctx.commits).toEqual(['dev']);
 });
 
 test('an abort after the target committed destroys the source copy instead', async () => {
