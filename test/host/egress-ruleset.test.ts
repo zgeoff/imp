@@ -405,3 +405,43 @@ for target in 10.250.77.1 44.0.0.2 8.8.4.4 1.2.3.4 2001:db8:77::1; do reach g0 $
     'g0>2001:db8:77::1 yes',
   ]);
 });
+
+test.skipIf(!canUnshare)('packets: with no default route, a public imp reaches nothing', () => {
+  const table = buildRuleset({
+    ...BASE,
+    slots: [
+      {
+        slot: 3,
+        tap: 'imp3',
+        guestIp: '10.66.0.14',
+        guestIp6: 'fd12:3456:789a::3:2',
+        mode: 'public',
+        cidrs: [],
+        addresses: [],
+      },
+    ],
+    uplinks: [],
+  });
+
+  const result = Bun.spawnSync(
+    [
+      ...buildUnshare(true),
+      'bash',
+      '-euo',
+      'pipefail',
+      '-c',
+      `${PUBLIC_NET}
+reach g3 93.184.215.14
+reach g3 2606:4700::1111
+`,
+    ],
+    { env: { ...process.env, TABLE: table } },
+  );
+
+  expect(result.stderr.toString()).toBe('');
+
+  expect(result.stdout.toString().trim().split('\n')).toEqual([
+    'g3>93.184.215.14 no',
+    'g3>2606:4700::1111 no',
+  ]);
+});
