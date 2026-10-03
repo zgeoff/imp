@@ -156,9 +156,15 @@ let
   # release chain makes that image exist (release-please bumps package.json,
   # release.yml pushes the tag, host/check-release-image.sh checks it).
   releaseImage = "ghcr.io/zgeoff/imp-host:${(lib.importJSON (self + "/package.json")).version}";
-  # the env words ($IMP_PUBLIC_PORTS) are options, empty here
+  # the env words ($IMP_PUBLIC_PORTS) are options, empty here; the env file
+  # carries IMP_HOST_ADDRESSES, so the module leaves out the unit's -e
+  addressesLine = [
+    "-e"
+    "IMP_HOST_ADDRESSES"
+  ];
+  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
   sharedArgs = lib.escapeShellArgs (
-    lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten hostArgs.lines)
+    lib.filter (word: !(lib.hasPrefix "$" word)) (lib.flatten sharedLines)
   );
 
   expect = name: cond: if cond then name else throw "eval check failed: ${name}";
@@ -239,6 +245,9 @@ let
       && lib.hasInfix " ${sharedArgs} " unit.serviceConfig.ExecStart
     ))
     (expect "no --privileged" (!(lib.hasInfix "--privileged" unit.serviceConfig.ExecStart)))
+    (expect "the env file, not -e, carries IMP_HOST_ADDRESSES" (
+      !(lib.hasInfix "-e IMP_HOST_ADDRESSES" unit.serviceConfig.ExecStart)
+    ))
     (expect "the privileges come from deploy/imp-host.args.json" (
       lib.hasInfix "--cap-drop ALL --cap-add SYS_ADMIN" unit.serviceConfig.ExecStart
     ))

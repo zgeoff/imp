@@ -44,6 +44,13 @@ let
       hostNetwork
     ];
   };
+  # The unit passes IMP_HOST_ADDRESSES from its probe file with a bare -e;
+  # here imp-host-env.sh writes it into the env file, which docker reads.
+  addressesLine = [
+    "-e"
+    "IMP_HOST_ADDRESSES"
+  ];
+  sharedLines = lib.filter (line: line != addressesLine) hostArgs.lines;
   sharedArgs = lib.concatMap (
     word:
     if lib.hasPrefix "$" word then
@@ -51,7 +58,7 @@ let
         or (throw "services.imp: deploy/imp-host.args.json has ${word}, which the module has no option for")
     else
       [ word ]
-  ) (lib.flatten hostArgs.lines);
+  ) (lib.flatten sharedLines);
   # The unit probes for each path; the module knows from its config. A new
   # probed path fails evaluation here until it gets a condition.
   probedWhen = {

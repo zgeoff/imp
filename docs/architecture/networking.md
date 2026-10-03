@@ -173,11 +173,16 @@ Its slot chain checks, in order:
    no default route, everything is.
 3. `public4`: every range the broker refuses (`REFUSED_RANGES`), `IMP_SUBNET`, the container's IPv4
    networks (each on-link route, and each address as its prefix and as a /32), the IPv4 entries of
-   `IMP_EGRESS_DENY`, and each IPv4 address of `IMP_HOST_ADDRESSES` as a /32.
+   `IMP_EGRESS_DENY`, and each IPv4 network of `IMP_HOST_ADDRESSES`, prefix kept.
 4. `public6`: the [blocked IPv6 ranges](#blocked-ranges), the imps' prefix, the container's IPv6
    prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, the IPv6 entries of
-   `IMP_EGRESS_DENY`, and each IPv6 address of `IMP_HOST_ADDRESSES` as a /128. An imp with no IPv6
-   address drops all IPv6.
+   `IMP_EGRESS_DENY`, and each IPv6 network of `IMP_HOST_ADDRESSES`, prefix kept. An imp with no
+   IPv6 address drops all IPv6.
+
+imp-host runs in a network namespace of its own, so the Docker host's LAN is in none of the
+container's prefixes: a global IPv6 /64, or a VPS's public IPv4 subnet, would be open to a public
+imp. `IMP_HOST_ADDRESSES` keeps each address's prefix for that reason, and denies the whole network,
+the host's neighbours on it included.
 
 impd writes these sets only while some imp is public, and reads the container's routes for them at
 each table build. A read that fails fails closed: impd logs
@@ -199,7 +204,7 @@ and the tailnet.
 | IPv4-mapped, IPv4-compatible and IPv4-translated IPv6               | `::ffff:0:0/96`, `::/96` and `::ffff:0:0:0/96` are refused. The broker dials a mapped answer as the IPv4 address it holds, under the IPv4 checks.                                                                                                                                      |
 | A global address routed to a private service: a subnet route, a VPN | It leaves by another interface than the default route's.                                                                                                                                                                                                                               |
 | A global address on the container's own network                     | `public4` and `public6` hold the container's networks.                                                                                                                                                                                                                                 |
-| The Docker host's own public address                                | `IMP_HOST_ADDRESSES` and `IMP_EGRESS_DENY`, which always holds `IMP_PUBLIC_IP` (see the limits below). A packet to it leaves by the uplink and reaches the host from the container's address, which a host firewall may trust.                                                         |
+| The Docker host's own addresses and the networks they are on        | `IMP_HOST_ADDRESSES` and `IMP_EGRESS_DENY`, which always holds `IMP_PUBLIC_IP` (see the limits below). A packet to them leaves by the uplink and reaches the host from the container's address, which a host firewall may trust.                                                       |
 | DNS rebinding                                                       | Nothing opens: the firewall refuses by address, whatever a name resolved to. The resolver removes inside answers, so a guest tries the next address at once.                                                                                                                           |
 | The credential broker                                               | It dials from the host container, which this firewall does not filter, as for every policy. A plain tunnel is refused every range above, every address of the host container, and an address that `ip route get` sends out by an interface other than a default route's of its family. |
 
@@ -207,11 +212,15 @@ Known limits:
 
 - impd cannot see the Docker host's addresses from inside the container. `deploy/imp-host.service`
   (which `bootstrap.sh` installs) and the NixOS module read them at each start into
-  `IMP_HOST_ADDRESSES`: every global-scope address, IPv4 and IPv6 (`ip -o addr show scope global`).
-  `deploy/compose.yaml` does not; there, list them in `IMP_EGRESS_DENY`. An address that neither
-  holds is reachable, such as one the host gains after the start. While a public imp exists and both
-  are empty, impd logs
-  `impd: egress: WARNING: a public imp exists and IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty`.
+  `IMP_HOST_ADDRESSES`: every global-scope address with its prefix, IPv4 and IPv6
+  (`ip -o addr show scope global`). `deploy/compose.yaml` does not; there, list the host's addresses
+  and networks in `IMP_EGRESS_DENY`. While a public imp exists and `IMP_HOST_ADDRESSES` is empty,
+  impd logs `impd: egress: WARNING: a public imp exists and IMP_HOST_ADDRESSES is empty`, whatever
+  `IMP_EGRESS_DENY` holds.
+- The addresses are read only when imp-host starts. An IPv6 privacy address that rotates inside the
+  same /64 stays covered by the prefix, but an address on a new network (a new DHCP lease elsewhere,
+  a new SLAAC prefix from the router) is reachable until `systemctl restart imp-host`. A timer would
+  not help: the container's environment is fixed at its start.
 - A route on the Docker host that sends a global address to a private service is outside impd's
   view. Only `IMP_EGRESS_DENY` closes it.
 - A host a [grant](../guides/connectors.md) covers is reached through the broker, whatever its

@@ -174,7 +174,7 @@ test('a tighter policy flushes the guest, prunes the set and refreshes the table
 
 test('a public imp leaves only by the uplinks, and is refused the private ranges, the host and IMP_EGRESS_DENY', async () => {
   await using ctx = await setupImpTest({
-    env: { IMP_EGRESS_DENY: '8.8.4.4,2a01:4f8::7/128' },
+    env: { IMP_EGRESS_DENY: '8.8.4.4,2a01:4f8::7/128', IMP_HOST_ADDRESSES: '2a01:4f8:1::5/64' },
   });
 
   await ctx.createTestImage('base');
@@ -196,7 +196,11 @@ test('a public imp leaves only by the uplinks, and is refused the private ranges
     /set public4 \{[^\}]*elements = \{ 0\.0\.0\.0\/8, [^\}]*10\.66\.0\.0\/16, 172\.17\.0\.0\/16, 172\.17\.0\.2\/32, 44\.0\.0\.0\/24, 8\.8\.4\.4\/32 \}/v,
   );
 
-  expect(table).toMatch(/set public6 \{[^\}]*2001:db8::\/32, 3fff::\/20, 2a01:4f8::7\/128 \}/v);
+  // the host's own LAN /64 too, not only its address
+  expect(table).toMatch(
+    /set public6 \{[^\}]*2001:db8::\/32, 3fff::\/20, 2a01:4f8::7\/128, 2a01:4f8:1::\/64 \}/v,
+  );
+
   expect(table).toMatch(/set dns_taps \{\n {4}type ifname\n {4}elements = \{ "imp0" \}/v);
   expect(ctx.flushed).toEqual(['10.66.0.2']);
 
@@ -275,21 +279,21 @@ test('a public policy whose routes cannot be read is refused, and leaves the imp
 });
 
 function countDenyWarnings(logs: readonly string[]): number {
-  return logs.filter((line) => line.includes('IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty'))
-    .length;
+  return logs.filter((line) => line.includes('IMP_HOST_ADDRESSES is empty')).length;
 }
 
-test('a public imp with no deny list logs a warning once, and none with one', async () => {
+test('a public imp without the host addresses logs a warning once, whatever IMP_EGRESS_DENY holds', async () => {
   await using bare = await setupImpTest();
+  await using denyOnly = await setupImpTest({ env: { IMP_EGRESS_DENY: '203.0.113.7' } });
   await using listed = await setupImpTest({ env: { IMP_HOST_ADDRESSES: '203.0.113.9/24' } });
 
-  for (const ctx of [bare, listed]) {
+  for (const ctx of [bare, denyOnly, listed]) {
     await ctx.createTestImage('base');
     await ctx.imps.createImp({ name: 'a', policy: { mode: 'public', allow: [] } });
     await ctx.imps.createImp({ name: 'b', policy: { mode: 'public', allow: [] } });
   }
 
-  expect([countDenyWarnings(bare.logs), countDenyWarnings(listed.logs)]).toEqual([1, 0]);
+  expect([bare, denyOnly, listed].map((ctx) => countDenyWarnings(ctx.logs))).toEqual([1, 1, 0]);
 });
 
 test('a policy change nft does not take leaves the old policy in place', async () => {

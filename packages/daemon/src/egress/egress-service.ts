@@ -49,7 +49,10 @@ const CLOSED_RATE: RateLimit = { burst: 500, perSecond: 100 };
 const OPEN_RATE: RateLimit = { burst: 2000, perSecond: 1000 };
 
 export interface EgressDeps {
-  readonly config: Pick<Config, 'subnet' | 'dns' | 'egressDnsPort' | 'egressDeny'>;
+  readonly config: Pick<
+    Config,
+    'subnet' | 'dns' | 'egressDnsPort' | 'egressDeny' | 'hostAddresses'
+  >;
   readonly db: ImpDatabase;
   readonly log: (message: string) => void;
 
@@ -271,15 +274,16 @@ export function createEgressService(deps: EgressDeps): EgressService {
     }
   };
 
-  // the deny list a public imp needs for the Docker host's own addresses,
-  // missing: logged once each time a public imp appears without it
+  // the Docker host's own networks, missing for a public imp: logged once
+  // each time one appears with IMP_HOST_ADDRESSES empty, whatever
+  // IMP_EGRESS_DENY holds (it always holds IMP_PUBLIC_IP)
   const checkDenyList = (views: ReadonlyMap<number, SlotView>): void => {
     const hasPublic = [...views.values()].some((view) => view.entry.policy.mode === 'public');
-    const isMissing = hasPublic && deps.config.egressDeny.length === 0;
+    const isMissing = hasPublic && deps.config.hostAddresses.length === 0;
 
     if (isMissing && !state.denyListMissing) {
       deps.log(
-        "impd: egress: WARNING: a public imp exists and IMP_EGRESS_DENY and IMP_HOST_ADDRESSES are empty, so it can reach the Docker host's own public addresses; set them (docs/architecture/networking.md#public)",
+        "impd: egress: WARNING: a public imp exists and IMP_HOST_ADDRESSES is empty, so only IMP_EGRESS_DENY keeps it from the Docker host's own addresses and networks; the systemd unit and the NixOS module fill it at each start, compose does not (docs/architecture/networking.md#public)",
       );
     }
 

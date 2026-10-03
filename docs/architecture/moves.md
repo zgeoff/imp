@@ -29,7 +29,7 @@ pools.
 | 1    | `moves.prepare {name, stop?, force?}`               | source | Stops the imp when asked, marks it `sending`, counts its data bytes. A stop checks and ends leases as `imps.stop` does ([leases](#leases)).                                                |
 | 2    | `moves.receive {name, bytes}`                       | target | Checks the name and room for twice the bytes, then issues a ticket. The stream reserves twice the bytes for files, and the bytes plus the image for ZFS streams, which skip the temp file. |
 | 3    | `moves.send {name, to, ticket}`                     | source | Starts the send in the background; `moves.status` follows it.                                                                                                                              |
-| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest, and what it keeps (`keepsMaxMemory`, `keepsLeases`).                                                                                           |
+| 4    | `POST /move/offer`                                  | target | Says whether it needs the image, by digest, and what it keeps (`keepsMaxMemory`, `keepsLeases`, `keepsPublicEgress`).                                                                      |
 | 5    | `POST /move/receive`, one per part, then the finish | target | Reads the stream into a staged imp marked `receiving`; answers the receipt.                                                                                                                |
 | 6    | `POST /move/commit`                                 | target | Takes the mark off. The source then destroys its copy.                                                                                                                                     |
 
@@ -145,10 +145,13 @@ The source checks the MAC and every sum against what it sent before it marks the
 
 `lock.withImp` refuses every call by name on a marked imp with `MOVING`, so no start, wake, stop,
 fork, resize, checkpoint or restore runs. The egress policy and the grants refuse changes too: the
-header carries the ones the send read at its start. The exposure refuses changes, and a public imp
-never moves: `prepare` refuses one, and checks again after its mark, so an expose that lands before
-the mark undoes it. The move's own steps pass `isMove`. The storage GC drops only what no imp row
-names, and the marked imp keeps its row, so a GC during the send keeps every file the send reads.
+header carries the ones the send read at its start. The exposure refuses changes, and an imp exposed
+to the internet (`imp expose`) never moves: `prepare` refuses one, and checks again after its mark,
+so an expose that lands before the mark undoes it. An imp under the `public` egress policy moves,
+and keeps that policy: the offer reply's `keepsPublicEgress` says the target holds it. A target from
+before it leaves it out and would receive the imp as `none`, so the source refuses the send before
+the stream. The move's own steps pass `isMove`. The storage GC drops only what no imp row names, and
+the marked imp keeps its row, so a GC during the send keeps every file the send reads.
 
 The commit is idempotent: a target that committed answers a second commit, and an abort, with
 `isCommitted: true`. The source destroys its copy on that answer, whether it comes to the send, to

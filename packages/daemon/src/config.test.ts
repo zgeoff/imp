@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { loadConfig } from './config';
+import { createRangeChecker } from './net/range-checker';
 
 test('it fills every setting from its default when the env is empty', () => {
   const config = loadConfig({});
@@ -14,6 +15,7 @@ test('it fills every setting from its default when the env is empty', () => {
     brokerPort: 7081,
     egressDnsPort: 7053,
     egressDeny: [],
+    hostAddresses: [],
     brokerTestUpstreams: null,
     ramBudgetMib: 16_384,
     idleTimeoutS: 60,
@@ -238,18 +240,37 @@ test('IMP_EGRESS_DENY takes addresses and CIDRs of both families, with IMP_PUBLI
   expect(() => loadConfig({ IMP_EGRESS_DENY: '10.0.0.0/33' })).toThrow('IMP_EGRESS_DENY');
 });
 
-test("IMP_HOST_ADDRESSES adds the host's own addresses, never the networks they are on", () => {
+test("IMP_HOST_ADDRESSES adds the networks of the host's own addresses, prefixes kept", () => {
   const config = loadConfig({
     IMP_EGRESS_DENY: '198.51.100.7',
-    IMP_HOST_ADDRESSES: '203.0.113.9/24,172.17.0.1/16,2a01:4f8::7/64,198.51.100.7/32',
+    IMP_HOST_ADDRESSES: '203.0.113.9/24,172.17.0.1/16,2001:db8:1::5/64,198.51.100.7/32',
   });
 
   expect(config.egressDeny).toEqual([
     '198.51.100.7/32',
-    '203.0.113.9/32',
-    '172.17.0.1/32',
-    '2a01:4f8::7/128',
+    '203.0.113.0/24',
+    '172.17.0.0/16',
+    '2001:db8:1::/64',
   ]);
+
+  expect(config.hostAddresses).toEqual([
+    '203.0.113.0/24',
+    '172.17.0.0/16',
+    '2001:db8:1::/64',
+    '198.51.100.7/32',
+  ]);
+
+  // a device beside the host on its LAN, in each family, and one past it
+  const isDenied = createRangeChecker(
+    config.egressDeny.filter((cidr) => !cidr.includes(':')),
+    config.egressDeny.filter((cidr) => cidr.includes(':')),
+  );
+
+  expect(
+    ['2001:db8:1::9', '203.0.113.200', '2001:db8:2::9', '203.0.114.1'].map((address) =>
+      isDenied(address),
+    ),
+  ).toEqual([true, true, false, false]);
 
   expect(() => loadConfig({ IMP_HOST_ADDRESSES: 'inet6' })).toThrow('IMP_HOST_ADDRESSES');
 });
