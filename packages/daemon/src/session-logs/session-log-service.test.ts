@@ -701,6 +701,53 @@ test('a forged agent that lists many logged generations gets at most the cap of 
   expect(ctx.calls).toHaveLength(LIMITS.impMaxLive);
 });
 
+test('logs that roll past their first segment still keep the imp under its limit', async () => {
+  // 512-byte segments: a log at its own bound adds one as it drops one
+  const limits = { ...LIMITS, generationMaxBytes: 1024, impMaxBytes: 4096 };
+  const ctx = setupLogs({ limits });
+
+  const generations = Array.from({ length: LIMITS.impMaxLive }, (_, index) =>
+    index.toString(16).padStart(32, '0'),
+  );
+
+  const feeds = generations.map((generation) => createFakeTap(buildOutput(generation, 0)));
+
+  // one at a time, so each feed taps its own generation
+  for (const [index, feed] of feeds.entries()) {
+    ctx.answers.push(feed);
+
+    ctx.logs.observe(
+      ctx.imp,
+      generations.slice(0, index + 1).map((generation) => buildSession(generation)),
+    );
+
+    await waitFor('the tap', () => ctx.calls.length === index + 1);
+  }
+
+  const countDiskBytes = () =>
+    readdirSync(ctx.imp.sessionLogsDir, { recursive: true, encoding: 'utf8' })
+      .filter((path) => path.endsWith('.seg'))
+      .reduce((sum, path) => sum + Bun.file(join(ctx.imp.sessionLogsDir, path)).size, 0);
+
+  // each write settles under the limit: before the fix, a log at its own
+  // bound rolled with no check, and the imp grew to twice its limit
+  for (let round = 1; round <= 6; round += 1) {
+    for (const [index, feed] of feeds.entries()) {
+      feed.write('x'.repeat(512));
+
+      await waitFor('the bytes', () => {
+        const log = findLog(ctx, generations[index] ?? '');
+
+        return log === undefined || log.stopped !== undefined || log.logEnd === round * 512;
+      });
+
+      await waitFor('the limit', () => countDiskBytes() <= limits.impMaxBytes);
+    }
+  }
+
+  expect(countDiskBytes()).toBeLessThanOrEqual(limits.impMaxBytes);
+});
+
 test('past the imp limit with only live logs left, the newest stops with imp_limit', async () => {
   const ctx = setupLogs({ limits: { ...LIMITS, generationMaxBytes: 200, impMaxBytes: 150 } });
   const first = createFakeTap(buildOutput(GEN_A, 0));
@@ -750,6 +797,38 @@ test('a destroy while a log is being made leaves no directory behind', async () 
 
   expect(existsSync(ctx.imp.sessionLogsDir)).toBe(false);
   expect(ctx.calls).toEqual([]);
+});
+
+test('a destroyed imp moved home under its id logs again, and old work writes nothing', async () => {
+  const ctx = setupLogs();
+
+  // a tap on its way when the imp is destroyed, then moved home at once
+  ctx.answers.push(createFakeTap(buildOutput(GEN_A, 0)));
+  ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: GEN_A, boot_id: BOOT });
+  ctx.logs.forgetImp(ctx.imp.id);
+
+  rmSync(ctx.imp.sessionLogsDir, { recursive: true, force: true });
+
+  ctx.logs.observe(ctx.imp, [buildSession(GEN_B)]);
+  ctx.logs.admitImp(ctx.imp.id);
+
+  await Bun.sleep(50);
+
+  expect(ctx.calls).toEqual([]);
+  expect(existsSync(ctx.imp.sessionLogsDir)).toBe(false);
+
+  const tap = createFakeTap(buildOutput(GEN_B, 0));
+
+  ctx.answers.splice(0, ctx.answers.length, tap);
+  ctx.logs.tapNow(ctx.imp, { name: 'main', execution_generation: GEN_B, boot_id: BOOT });
+
+  await waitFor('the tap', () => ctx.calls.length === 1);
+
+  tap.write('home');
+
+  await waitFor('the bytes', () => findLog(ctx, GEN_B)?.logEnd === 4);
+
+  expect(ctx.logs.listLogs(ctx.imp).map((log) => log.executionGeneration)).toEqual([GEN_B]);
 });
 
 test('a deleted live log is not tapped again by a restarted impd', async () => {
