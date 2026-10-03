@@ -12,6 +12,7 @@ import { createCopyProgress } from '../cp/copy-progress';
 import type { CopyProgress } from '../cp/copy-progress';
 import type { ImpClient } from '../create-imp-client';
 import { UsageError } from '../usage-error';
+import { createBuildStatus } from './build-status';
 
 export interface ImageBuildOptions {
   readonly dir: string;
@@ -70,16 +71,15 @@ export async function runImageBuild(
     },
   );
 
-  const progress = createCopyProgress(
-    {
-      isTTY: process.stderr.isTTY,
-      write: (text) => {
-        process.stderr.write(text);
-      },
+  const output = {
+    isTTY: process.stderr.isTTY,
+    write: (text: string) => {
+      process.stderr.write(text);
     },
-    Date.now,
-    'imp image build',
-  );
+  };
+
+  const progress = createCopyProgress(output, Date.now, 'imp image build');
+  const status = createBuildStatus(output, 'imp image build');
 
   const size = await countTarBytes(entries);
 
@@ -92,9 +92,18 @@ export async function runImageBuild(
       {
         size,
         ...(options.dockerfile !== undefined && { dockerfile: options.dockerfile }),
+
+        // the upload's line ends where the build's starts
+        onProgress: (event) => {
+          if (event.phase === 'build') {
+            progress.finish();
+            status.show(event.elapsedMs);
+          }
+        },
       },
     );
   } finally {
     progress.finish();
+    status.finish();
   }
 }
