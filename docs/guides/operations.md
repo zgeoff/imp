@@ -54,10 +54,11 @@ bash upgrade.sh
 1. It pulls the image of its own release, unless `IMP_HOST_IMAGE` names another: from the
    environment, else a pin in `/etc/imp/imp-host.env`. It stops there when the host already runs
    that image. With the systemd unit, it refuses an image from the environment that the new units
-   would not run: pin it in the env file instead. It refuses an image from before the Docker socket
-   proxy once the unit or compose file gives imp-host the proxy's socket, and an image from before
-   the unprivileged host (no `imp.host-contract` label) once it runs without `--privileged`. To go
-   back past either, run `deploy/bootstrap.sh` of that image's release.
+   would not run: pin it in the env file instead. It refuses an env file whose last
+   `IMP_HOST_IMAGE=` is empty, which would give the units no image. It refuses an image from before
+   the Docker socket proxy once the unit or compose file gives imp-host the proxy's socket, and an
+   image from before the unprivileged host (no `imp.host-contract` label) once it runs without
+   `--privileged`. To go back past either, run `deploy/bootstrap.sh` of that image's release.
 2. It sleeps every awake imp through the API, one at a time. If the list or one sleep fails, it
    stops and the host keeps the old image. The stop would sleep them too, but only within its 120 s.
 3. It installs the new image's seccomp profile in `/etc/imp/imp-host.seccomp.json` and, for the

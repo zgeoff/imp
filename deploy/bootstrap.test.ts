@@ -496,3 +496,25 @@ test('a stale image, from before the proxy, is refused with how to get the new o
   expect(runContractCheck('').exitCode).toBe(1);
   expect(runContractCheck('socket-proxy').exitCode).toBe(0);
 });
+
+function runEnvImageCheck(env: string) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'imp-env-image-'));
+  const file = path.join(dir, 'imp-host.env');
+
+  writeFileSync(file, env);
+
+  try {
+    return Bun.spawnSync(['bash', '-c', 'source "$1"; check_env_image "$2"', 'x', script, file]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('an env file whose last IMP_HOST_IMAGE is empty is refused, naming the file', () => {
+  const empty = runEnvImageCheck('IMP_PORT=7070\nIMP_HOST_IMAGE=\n');
+
+  expect(empty.exitCode).toBe(1);
+  expect(empty.stderr.toString()).toMatch(/imp-host\.env sets IMP_HOST_IMAGE= empty/v);
+  expect(runEnvImageCheck('IMP_HOST_IMAGE=\nIMP_HOST_IMAGE=imp-host:1\n').exitCode).toBe(0);
+  expect(runEnvImageCheck(`# IMP_HOST_IMAGE=${releaseImage}\n`).exitCode).toBe(0);
+});

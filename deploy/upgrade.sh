@@ -82,6 +82,16 @@ pinned_image() {
   echo "${line#IMP_HOST_IMAGE=}"
 }
 
+# check_env_image FILE: fails, and says why, when FILE's last IMP_HOST_IMAGE
+# is empty: systemd passes it over the units' own image, and docker run gets
+# none. Keep it equal to check_env_image in deploy/bootstrap.sh.
+check_env_image() {
+  [ -f "$1" ] || return 0
+  [ "$(grep '^IMP_HOST_IMAGE=' "$1" | tail -n 1)" = IMP_HOST_IMAGE= ] || return 0
+  echo "upgrade: $1 sets IMP_HOST_IMAGE= empty, which systemd passes over the units' own image: delete the line, or set an image; nothing changed" >&2
+  return 1
+}
+
 # the image to move to: the environment, then the env file's pin, then this
 # script's release
 read_image() {
@@ -256,6 +266,9 @@ if ! docker inspect "$container" >/dev/null 2>&1; then
   echo "upgrade: no $container container; start the host first (docs/guides/install.md)" >&2
   exit 1
 fi
+
+# compose takes its image from the shell or its .env, never the env file
+[ -n "$compose_file" ] || check_env_image "$env_file" || exit 1
 
 image=$(read_image)
 

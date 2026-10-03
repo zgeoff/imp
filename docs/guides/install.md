@@ -106,14 +106,19 @@ restarts and day-to-day care.
 
 [`deploy/bootstrap.sh`](../../deploy/bootstrap.sh) takes a fresh Ubuntu 24.04 or 26.04, or Debian
 13, server, x86_64 with KVM, to a running impd. It is one file with no other repo files, so copy it
-to the server and run it as root:
+to the server and run it as root. Take it from a release tag: it runs the image of its own release
+([run the release image](#get-it)).
+
+<!-- x-release-please-start-version -->
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/main/deploy/bootstrap.sh
+curl -fsSLO https://raw.githubusercontent.com/zgeoff/imp/v0.26.0/deploy/bootstrap.sh
 install -m 0600 /dev/null /root/ts-key && vi /root/ts-key        # the auth key, one line
 bash bootstrap.sh --dry-run --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 bash bootstrap.sh --yes --data-device /dev/nvme1n1 --tailscale-authkey-file /root/ts-key
 ```
+
+<!-- x-release-please-end -->
 
 Log in as root to run it. The firewall phase reads `SSH_CONNECTION` to keep your session's port
 open, and plain `sudo` drops it, so the script refuses a run under `sudo` without it. If you must
@@ -129,7 +134,9 @@ with ZFS, the pool's own). Check the device name with `lsblk` before the run all
 
 The phases run in order:
 
-- **preflight:** Checks root, the OS, x86_64, `/dev/kvm` and `vmx`/`svm`, before any change.
+- **preflight:** Checks root, the OS, x86_64, `/dev/kvm` and `vmx`/`svm`, before any change. It
+  refuses an env file whose last `IMP_HOST_IMAGE=` is empty, which would give the units no image,
+  unless `--image` sets it.
 - **packages:** Installs `xfsprogs`, `nftables`, `jq` and Docker CE from Docker's apt repo. A Docker
   that is already installed stays. With ZFS, also `zfsutils-linux`; on Debian, `zfs-dkms` and the
   kernel headers from `contrib`, which the script adds.
@@ -415,10 +422,10 @@ The deploy files run the image of their own release: `deploy/bootstrap.sh`, both
 `deploy/compose.yaml` name `ghcr.io/zgeoff/imp-host:X.Y.Z`, the version in imp's `package.json`, and
 `deploy/upgrade.sh` moves the host to the release it comes from
 ([upgrade](./operations.md#upgrade)). On `main`, `package.json` holds the last release until the
-next one, so the files there, such as the `bootstrap.sh` that
-[bootstrap a server](#bootstrap-a-server) fetches, can name an image older than their own code.
-Files from a release tag name that release's image. A release tag's image appears on ghcr.io when
-`release.yml` pushes it, about 30 to 60 minutes after the tag.
+next one, so the files there can name an image older than their own code. Files from a release tag
+name that release's image, which is why [bootstrap a server](#bootstrap-a-server) fetches
+`bootstrap.sh` from one. A release tag's image appears on ghcr.io when `release.yml` pushes it,
+about 30 to 60 minutes after the tag.
 
 To run another image, set `IMP_HOST_IMAGE`: in `/etc/imp/imp-host.env` for the systemd units, in the
 shell or the `.env` next to the compose file for compose, or with `bootstrap.sh --image`. Each

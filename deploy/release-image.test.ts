@@ -7,7 +7,13 @@ import * as z from 'zod';
 // updater rewrites the first X.Y.Z of each marked line, so every default must sit under a
 // marker, in a file the config lists, and name package.json's version.
 const root = path.join(import.meta.dir, '..');
-const IMAGE_REF = /ghcr\.io\/zgeoff\/imp-host:(?<tag>[\w.\-]+)/gv;
+
+// the image, and a file of a release tag, such as docs/guides/install.md's bootstrap.sh URL
+const RELEASE_REF =
+  /ghcr\.io\/zgeoff\/imp-host:(?<tag>[\w.\-]+)|zgeoff\/imp\/v(?<source>[\w.\-]+)\//gv;
+
+// a deploy file from main names main's code, not a release's
+const MAIN_URL = 'raw.githubusercontent.com/zgeoff/imp/main/deploy/';
 
 // release-please's VERSION_REGEX, less its pre-release and build parts
 const VERSION = /\d+\.\d+\.\d+/v;
@@ -83,31 +89,43 @@ test('every file with a marker is a generic extra-file of the release-please con
 });
 
 for (const file of genericFiles) {
-  test(`${file} names imp-host:${version} at every marked default, and no other tag`, () => {
+  test(`${file} names release ${version} at every marked default, and no other`, () => {
     const lines = readLines(file, readRepoFile(file));
     const problems: string[] = [];
     let defaults = 0;
 
     for (const line of lines) {
       const where = `${file}:${line.number}`;
+      const refs = [...line.text.matchAll(RELEASE_REF)];
 
-      for (const match of line.text.matchAll(IMAGE_REF)) {
-        const tag = match.groups?.['tag'] ?? '';
+      for (const match of refs) {
+        const tag = match.groups?.['tag'] ?? match.groups?.['source'] ?? '';
 
         if (tag === version && line.marked) {
           defaults += 1;
         } else if (tag === version) {
-          problems.push(`${where}: imp-host:${tag} is under no marker`);
+          problems.push(`${where}: ${match[0]} is under no marker`);
         } else if (!line.prose && !(tag === 'latest' && LEGACY_DEFINITION.test(line.text))) {
-          problems.push(`${where}: imp-host:${tag} is not this release (${version})`);
+          problems.push(`${where}: ${match[0]} is not this release (${version})`);
         }
+      }
+
+      if (line.text.includes(MAIN_URL)) {
+        problems.push(`${where}: fetches from main, not this release`);
       }
 
       // release-please rewrites the first X.Y.Z of a marked line, wherever it is
       const first = line.marked ? VERSION.exec(line.text) : null;
 
-      if (first !== null && !line.text.includes(`imp-host:${first[0]}`)) {
-        problems.push(`${where}: the first X.Y.Z, ${first[0]}, is not the image's`);
+      const inRef = refs.some(
+        (match) =>
+          first !== null &&
+          first.index >= match.index &&
+          first.index < match.index + match[0].length,
+      );
+
+      if (first !== null && !inRef) {
+        problems.push(`${where}: the first X.Y.Z, ${first[0]}, is not a release reference`);
       }
     }
 
