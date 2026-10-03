@@ -60,8 +60,8 @@ RUN echo "deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/
  && apt-get install -y --no-install-recommends -t trixie-backports "zfsutils-linux=${ZFS_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
-# Docker CLI and Tailscale from their upstream apt repos. The CLI is pinned:
-# a newer one may drop the classic-builder fallback impd's `docker build` uses.
+# Docker CLI and Tailscale from their upstream apt repos. The CLI is pinned, so
+# a rebuild gets the same `docker pull`, `create` and `export` impd runs.
 ARG DOCKER_CLI_VERSION=5:29.8.2-1~debian.13~trixie
 RUN install -m 0755 -d /etc/apt/keyrings \
  && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
