@@ -1,11 +1,19 @@
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { join } from 'node:path';
 
 const LIB = new URL('lib.sh', import.meta.url).pathname;
 
-// what scripts/lib.sh sets IMP_HOST_IMAGE to, sourced with this env
-function readHostImage(env: Readonly<Record<string, string>> = {}): string {
+const dir = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-lib-'));
+
+afterAll(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// what scripts/lib.sh sets IMP_HOST_IMAGE to, sourced from lib with this env
+function readHostImage(env: Readonly<Record<string, string>> = {}, lib = LIB): string {
   const result = Bun.spawnSync(
-    ['bash', '-c', 'source "$1" && printf "%s" "$IMP_HOST_IMAGE"', 'bash', LIB],
+    ['bash', '-c', 'source "$1" && printf "%s" "$IMP_HOST_IMAGE"', 'bash', lib],
     { env: { PATH: process.env['PATH'] ?? '', ...env } },
   );
 
@@ -50,9 +58,17 @@ test('the tag keeps to the characters and length Docker allows', () => {
 });
 
 test('the default is the tag of the checkout lib.sh is in', () => {
-  const root = new URL('..', import.meta.url).pathname.replace(/\/$/u, '');
+  const root = realpathSync(new URL('..', import.meta.url).pathname);
 
   expect(readHostImage()).toBe(readDevImageTag(root));
+});
+
+test('a checkout reached through a symlink has the same tag', () => {
+  const link = join(dir, 'linked-checkout');
+
+  symlinkSync(realpathSync(new URL('..', import.meta.url).pathname), link);
+
+  expect(readHostImage({}, join(link, 'scripts', 'lib.sh'))).toBe(readHostImage());
 });
 
 test('IMP_HOST_IMAGE overrides the derived tag', () => {

@@ -299,27 +299,42 @@ down() {
   docker volume rm "$name-docker" "$name-docker-proxy" >/dev/null 2>&1 || true
 }
 
-# prune removes the dev host images (labelled imp.worktree by
-# build_host_image) whose checkout directory is gone and that no container
-# uses, by tag, so an image another tag still names stays. Then the untagged
-# ones rebuilds leave. Images of live checkouts stay as build caches; only
-# labelled images are touched, never another project's.
+# prune removes the dev host images that build_host_image labelled on this
+# machine, whose checkout directory is gone and that no container uses. It
+# removes only the checkout's own tag (dev_image_tag), so an override tag or
+# a second tag keeps the image. Then the untagged ones rebuilds leave. Images
+# of live checkouts stay as build caches; only labelled images are touched,
+# never another project's or another machine's.
 prune() {
-  local ref id dir
+  local machine ref id labels dir from
+  machine=$(read_machine_id)
   docker image ls --filter label=imp.worktree --format '{{.Repository}}:{{.Tag}} {{.ID}}' |
     while read -r ref id; do
       [[ $ref == *'<none>'* ]] && continue
-      dir=$(docker image inspect -f '{{index .Config.Labels "imp.worktree"}}' "$id")
+      if ! labels=$(docker image inspect \
+        -f '{{index .Config.Labels "imp.worktree"}}{{"\t"}}{{index .Config.Labels "imp.machine"}}' "$id"); then
+        echo "dev.sh: keeping $ref: docker image inspect failed"
+        continue
+      fi
+      dir=${labels%%$'\t'*}
+      from=${labels#*$'\t'}
       # an empty label names no checkout, so it cannot be gone
-      if [ -z "$dir" ] || [ -d "$dir" ]; then continue; fi
+      if [ -z "$dir" ] || [ -d "$dir" ] || [ "$from" != "$machine" ]; then continue; fi
+      if [ "$ref" != "$(dev_image_tag "$dir")" ]; then
+        echo "dev.sh: keeping $ref: not the tag of $dir"
+        continue
+      fi
       if [ -n "$(docker ps -aq --filter "ancestor=$id")" ]; then
         echo "dev.sh: keeping $ref: a container uses it"
         continue
       fi
-      docker image rm "$ref" >/dev/null
+      if ! docker image rm "$ref" >/dev/null; then
+        echo "dev.sh: keeping $ref: docker image rm failed"
+        continue
+      fi
       echo "dev.sh: removed $ref ($dir is gone)"
     done
-  docker image prune -f --filter label=imp.worktree
+  docker image prune -f --filter label=imp.worktree --filter "label=imp.machine=$machine"
 }
 
 case ${1:-} in
