@@ -127,11 +127,11 @@ not count
 ([what the governor measures](../architecture/sleep-and-wake.md#5-ram-what-the-governor-measures)).
 A guest grows past its boot reserve after admission, so use may pass the budget until a governor
 sleep ends. The suite follows every imp's sleep in the event stream (`ImpChanged slept`, which
-started `detail.durationMs` before its time). Use may fall back under the budget for any reason. It
-fails when impd's figure or the owned figure goes over by more than a guest can grow past its
-reserve, or stays over for one enforce period plus one sample with no enforce sleep
-(`detail.trigger` `RAM over budget`) started by then, or is still over after that sleep ends, or
-when the sleep takes more than 30 s.
+started `detail.durationMs` plus `detail.prepareMs` before its time). Use may fall back under the
+budget for any reason. It fails when impd's figure or the owned figure goes over by more than a
+guest can grow past its reserve, or stays over for one enforce period plus one sample with no
+enforce sleep (`detail.trigger` `RAM over budget`) started by then, or is still over after that
+sleep ends, or when the sleep takes more than 30 s.
 
 The connectors suite runs a fake github.com on this machine, which the dev container reaches on its
 default gateway. A dev instance reads `<IMP_DEV_DATA>/broker-test-upstreams.json` when it exists
