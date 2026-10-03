@@ -32,12 +32,20 @@ const JAIL_CGROUPS: CpuCgroups = {
   readCpuStat: () => null,
 };
 
-// `cloneFails` turns every disk clone away until a test sets it back;
-// `clone.delayMs` holds each clone back and `clone.onDone` sees it land;
-// with `isJailed`, every VM runs under the jailer
+// With `isJailed`, every VM runs under the jailer. The knobs below hold the
+// disk's steps back, fail them, or see them end, until a test sets them back.
 async function setupRestoreTest(isJailed = false) {
+  // turns every disk clone away
   const cloneFails = { isOn: false };
-  const clone: { delayMs: number; onDone?: () => void } = { delayMs: 0 };
+
+  // `isEmpty` lands no disk, so the grow after the clone fails
+  const clone: { delayMs: number; isEmpty: boolean; onDone?: () => void } = {
+    delayMs: 0,
+    isEmpty: false,
+  };
+
+  // the host's grow of the filesystem, which a template restore overlaps
+  const grow: { delayMs: number; onDone?: () => void } = { delayMs: 0 };
 
   const harness = await setupImpTest({
     ...(isJailed && { cgroups: JAIL_CGROUPS }),
@@ -54,8 +62,18 @@ async function setupRestoreTest(isJailed = false) {
         throw new Error('clone failed: no space');
       }
 
-      copyFileSync(source, target);
+      if (!clone.isEmpty) {
+        copyFileSync(source, target);
+      }
+
       clone.onDone?.();
+    },
+    growFilesystem: async () => {
+      await Bun.sleep(grow.delayMs);
+
+      grow.onDone?.();
+
+      return true;
     },
   });
 
@@ -71,7 +89,7 @@ async function setupRestoreTest(isJailed = false) {
   // the template a first boot started in the background
   const waitForTemplate = () => templates.buildTemplate(SHAPE);
 
-  return { ...harness, client: app.client, templates, waitForTemplate, cloneFails, clone };
+  return { ...harness, client: app.client, templates, waitForTemplate, cloneFails, clone, grow };
 }
 
 test('the second boot of a shape builds its template; the next restores it', async () => {
@@ -196,6 +214,44 @@ test('a clone that fails fails the create before any restore, and costs the temp
   expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['fifth']);
 });
 
+test('a grow that fails after the clone ends the restored VM, and costs the template nothing', async () => {
+  await using ctx = await setupRestoreTest();
+
+  await ctx.client.imps.create({ name: 'first' });
+  await ctx.waitForTemplate();
+
+  const aliveBefore = ctx.fake.alive.size;
+
+  ctx.clone.isEmpty = true;
+
+  // more than the restore failures that would turn the key off
+  for (const name of ['second', 'third', 'fourth']) {
+    const failed = await ctx.client.imps.create({ name }).catch((error: unknown) => error);
+
+    expect(failed).toBeInstanceOf(Error);
+  }
+
+  const key = buildTemplateKey(ctx.readIdentity(), SHAPE);
+
+  // each restore started, its VM ended, none booted the kernel, and the
+  // template stays
+  expect(ctx.fake.restorePlans.map((plan) => plan.claim.hostname)).toEqual([
+    'second',
+    'third',
+    'fourth',
+  ]);
+
+  expect(ctx.fake.alive.size).toBe(aliveBefore);
+  expect(ctx.fake.boots.map((boot) => boot.hostname)).toEqual(['first']);
+  expect(readdirSync(join(ctx.dataDir, 'templates'))).toContain(key);
+
+  ctx.clone.isEmpty = false;
+
+  await ctx.client.imps.create({ name: 'fifth' });
+
+  expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['fifth']);
+});
+
 test('a restore claims the identity reset an imp owes, and a done reset clears it', async () => {
   await using ctx = await setupRestoreTest();
 
@@ -260,22 +316,31 @@ test('a jailed restore runs as the imp, with the template and its drive bound in
 // On ZFS the disk is a dataset mounted on imps/<id>/disk. A jail sees only
 // the mounts made before its prepare, so a restore that starts first finds
 // an empty mountpoint (#147). A late clone stands in for that mount.
-test('a jailed restore starts only once the clone is in place', async () => {
+test('a jailed restore starts once the clone is in place, and overlaps the grow', async () => {
   await using ctx = await setupRestoreTest(true);
 
   await ctx.client.imps.create({ name: 'first' });
   await ctx.waitForTemplate();
 
   const restoresAtClone: number[] = [];
+  const restoresAtGrow: number[] = [];
 
   ctx.clone.delayMs = 50;
+  ctx.grow.delayMs = 50;
 
   ctx.clone.onDone = () => {
     restoresAtClone.push(ctx.fake.restorePlans.length);
   };
 
-  await ctx.client.imps.create({ name: 'second' });
+  ctx.grow.onDone = () => {
+    restoresAtGrow.push(ctx.fake.restorePlans.length);
+  };
 
+  // a disk past the image's filesystem, which the host grows
+  await ctx.client.imps.create({ name: 'second', diskMib: 2048 });
+
+  // none before the clone lands; one started while the grow was pending
   expect(restoresAtClone).toEqual([0]);
+  expect(restoresAtGrow).toEqual([1]);
   expect(ctx.fake.restores.map((restore) => restore.hostname)).toEqual(['second']);
 });
