@@ -11,12 +11,12 @@ import {
   encodeExecFrame,
 } from '@imp/api';
 import type { ExecServerMessage } from '@imp/api';
+import { countFileBytes, listLocalEntries, writeLocalEntries } from '@imp/local-tar';
 import type { ServerWebSocket } from 'bun';
 import tar from 'tar-stream';
 import type { CliConfig } from '../cli-config';
 import type { CopyProgress } from './copy-progress';
 import { openToolExec } from './open-tool-exec';
-import { countFileBytes, listLocalEntries, writeLocalEntries } from './pack-local-path';
 
 const TOKEN = 'cp-token';
 const cleanups: (() => void)[] = [];

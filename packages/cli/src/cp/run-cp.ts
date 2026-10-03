@@ -1,3 +1,4 @@
+import { countFileBytes, listLocalEntries, writeLocalEntries } from '@imp/local-tar';
 import { loadCliConfig } from '../cli-config';
 import type { CliConfig } from '../cli-config';
 import { printError } from '../run-action';
@@ -6,7 +7,6 @@ import { createCopyProgress } from './copy-progress';
 import type { CopyProgress } from './copy-progress';
 import { createLocalExtractor } from './extract-local';
 import { openToolExec } from './open-tool-exec';
-import { countFileBytes, listLocalEntries, writeLocalEntries } from './pack-local-path';
 import { parseCpArgs } from './parse-cp-args';
 import type { CpPlan } from './parse-cp-args';
 

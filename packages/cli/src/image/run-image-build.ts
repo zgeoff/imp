@@ -1,11 +1,17 @@
 import { resolve } from 'node:path';
 import type { Image } from '@imp/api';
+import {
+  MissingDockerfileError,
+  countFileBytes,
+  countTarBytes,
+  listContextEntries,
+  writeLocalEntries,
+} from '@imp/local-tar';
+import type { LocalEntry } from '@imp/local-tar';
 import { createCopyProgress } from '../cp/copy-progress';
 import type { CopyProgress } from '../cp/copy-progress';
-import { countFileBytes, countTarBytes, writeLocalEntries } from '../cp/pack-local-path';
-import type { LocalEntry } from '../cp/pack-local-path';
 import type { ImpClient } from '../create-imp-client';
-import { listContextEntries } from './pack-build-context';
+import { UsageError } from '../usage-error';
 
 export interface ImageBuildOptions {
   readonly dir: string;
@@ -58,7 +64,11 @@ export async function runImageBuild(
 ): Promise<Image> {
   const dockerfile = options.dockerfile ?? 'Dockerfile';
 
-  const entries = await listContextEntries(resolve(options.dir), dockerfile);
+  const entries = await listContextEntries(resolve(options.dir), dockerfile).catch(
+    (error: unknown) => {
+      throw error instanceof MissingDockerfileError ? new UsageError(error.message) : error;
+    },
+  );
 
   const progress = createCopyProgress(
     {
