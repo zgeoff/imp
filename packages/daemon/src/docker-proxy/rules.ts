@@ -235,11 +235,29 @@ function checkTag(value: string): string | null {
     : `is ${JSON.stringify(value)}`;
 }
 
+// A pull of `pullOnly`'s repository at its digest, the tag the CLI sends for
+// a digest; the engine pulls fromImage's repository at the tag alone
+function checkPullOnly(fromImage: string, tag: string, pullOnly: string): Check {
+  const image = readImageReference(fromImage);
+  const only = readImageReference(pullOnly);
+  const digest = pullOnly.split('@')[1] ?? '';
+
+  if (image.registry === only.registry && image.path === only.path && tag === digest) {
+    return OK;
+  }
+
+  return buildFailure(
+    `a pull of ${fromImage}:${tag} is refused: under IMP_BUILD_ISOLATION=imp the proxy pulls only IMP_BUILD_IMAGE, ${pullOnly}`,
+  );
+}
+
 // POST /images/create: a pull by fromImage and tag, nothing else (fromSrc
-// imports a tarball, repo and changes rewrite one)
+// imports a tarball, repo and changes rewrite one). With `pullOnly`, the
+// pull must be of that image, by its digest.
 export function checkPullQuery(
   query: ReadonlyMap<string, readonly string[]>,
   hostImage: string,
+  pullOnly: string | null,
 ): Check {
   const checked = checkQuery(query, {
     fromImage: { isRequired: true, check: () => null },
@@ -252,7 +270,14 @@ export function checkPullQuery(
     return checked;
   }
 
-  return checkImageReference(query.get('fromImage')?.[0] ?? '', hostImage);
+  const fromImage = query.get('fromImage')?.[0] ?? '';
+  const reference = checkImageReference(fromImage, hostImage);
+
+  if (!reference.isOk || pullOnly === null) {
+    return reference;
+  }
+
+  return checkPullOnly(fromImage, query.get('tag')?.[0] ?? '', pullOnly);
 }
 
 // DELETE /containers/{id}: `docker rm -f` sends force only

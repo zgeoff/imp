@@ -7,6 +7,7 @@ import { loadBackupConfig } from './backup/backup-config';
 import type { BackupConfig } from './backup/backup-config';
 import { HttpsEnvSchema, listHttpsWarnings, parseHttpsConfig } from './https/https-config';
 import type { HttpsConfig } from './https/https-config';
+import { BUILD_IMAGE_PATTERN, DEFAULT_BUILD_IMAGE } from './images/build-image';
 import { createPeerRanges, readPeerUrlAddress } from './moves/peer-address';
 import { countSlots, formatCidr4, isTailnetOverlap, parseSubnet } from './net/addressing';
 import type { Subnet } from './net/addressing';
@@ -73,10 +74,8 @@ const EnvSchema = z.object({
   IMP_BUILD_IMAGE_MAX_FILES: CountSchema.default(1_000_000),
   IMP_BUILD_IMAGE: z
     .string()
-    .regex(/^[\w.\/:\-]+@sha256:[a-f0-9]{64}$/v, 'must name an image by digest, <ref>@sha256:<hex>')
-    .default(
-      'ghcr.io/zgeoff/imp-base:0.29.0@sha256:1851f631ea77f3a99b6f1f9af8ca8868434f4cd066158bcf9def8678c29b0c21',
-    ),
+    .regex(BUILD_IMAGE_PATTERN, 'must name an image by digest, <ref>@sha256:<hex>')
+    .default(DEFAULT_BUILD_IMAGE),
 
   // the engine, as the docker CLI reads it; impd's own builds go there too
   DOCKER_HOST: z.string().optional(),
