@@ -29,7 +29,7 @@ const addCommand = defineCommand({
 // The context is packed here and uploaded, honoring its .dockerignore;
 // --on-host names a directory on the impd host instead, which never leaves it
 const buildCommand = defineCommand({
-  meta: { name: 'build', description: 'docker build a directory into an imp image' },
+  meta: { name: 'build', description: 'Build a directory with its Dockerfile into an imp image' },
   args: {
     dir: { type: 'positional', description: 'build context directory', required: true },
     name: { type: 'string', description: 'imp image name', required: true },
