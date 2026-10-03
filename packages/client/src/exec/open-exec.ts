@@ -1,5 +1,5 @@
 import { CONSOLE_SHELL } from '@imp/api';
-import type { ImpContract, ResumeFrom } from '@imp/api';
+import type { ExecRequirement, ImpContract, ResumeFrom } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
@@ -35,6 +35,11 @@ export interface ExecOptions {
   // generation, rather than a replay; `started.output.resume` says how it
   // was met (docs/architecture/daemon.md#output-offsets)
   readonly resumeFrom?: ResumeFrom;
+
+  // what impd must ensure before it starts the command, or the exec fails
+  // with PRECONDITION_FAILED and nothing runs: `broker`, the broker's
+  // variables and CA bundle (docs/guides/connectors.md#requiring-the-broker)
+  readonly require?: readonly ExecRequirement[];
 
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
@@ -107,6 +112,7 @@ export function openExec(
     ...(options.session !== undefined && { session: options.session }),
     ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
     ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
+    ...(options.require !== undefined && { require: options.require }),
   });
 }
 
@@ -148,6 +154,10 @@ async function openHandle(
   const callOptions = abort === undefined ? {} : { signal: abort };
 
   abort?.throwIfAborted();
+
+  if ('argv' in start && start.require !== undefined && start.require.length > 0) {
+    await checkRequireFeature(deps.rpc, callOptions);
+  }
 
   const issued = await deps.rpc.exec.ticket({ name }, callOptions);
 
@@ -515,4 +525,21 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
   }
 
   return all;
+}
+
+// An older impd drops `require` unread and runs the command anyway, so a
+// start that requires anything asks first, and fails as impd would.
+async function checkRequireFeature(
+  rpc: Readonly<ContractRouterClient<ImpContract>>,
+  callOptions: Readonly<{ signal?: Readonly<AbortSignal> }>,
+): Promise<void> {
+  const info = await rpc.system.info(undefined, callOptions);
+
+  if (info.features?.execRequire !== true) {
+    const detail = 'this impd is older than 0.30.0 and does not check exec requirements';
+
+    throw new ExecError('PRECONDITION_FAILED', `nothing was started: ${detail}`, {
+      data: { reason: 'broker_not_ready', detail },
+    });
+  }
 }

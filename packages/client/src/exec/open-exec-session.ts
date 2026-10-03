@@ -6,7 +6,13 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { DetachReason, ExecClientMessage, ResumeFrom, SessionOutput } from '@imp/api';
+import type {
+  DetachReason,
+  ExecClientMessage,
+  ExecRequirement,
+  ResumeFrom,
+  SessionOutput,
+} from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
 import { checkImpdAccess } from './check-impd-access';
 
@@ -25,6 +31,7 @@ export interface ExecStart {
 
   // with a session: the output after this byte rather than a replay
   readonly resumeFrom?: ResumeFrom;
+  readonly require?: readonly ExecRequirement[];
 }
 
 // attaches to a session that runs: its replay, then live output
@@ -382,7 +389,14 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
 function buildOpenMessage(start: Readonly<ExecStart | ExecAttach>): ExecClientMessage {
   if ('argv' in start) {
-    return { type: 'start', ...start, argv: [...start.argv] };
+    const { require: requirements, ...rest } = start;
+
+    return {
+      type: 'start',
+      ...rest,
+      argv: [...start.argv],
+      ...(requirements !== undefined && { require: [...requirements] }),
+    };
   }
 
   return { type: 'attach', ...start };

@@ -10,6 +10,7 @@ import type {
 } from '@imp/daemon/src/agent-client/exec-stream';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
 import { ORPCError } from '@orpc/client';
+import * as z from 'zod';
 import { createImpClient } from '../create-imp-client';
 import { ExecError } from './exec-error';
 import { InvalidResumeError } from './invalid-resume-error';
@@ -19,6 +20,9 @@ import { openExecSession } from './open-exec-session';
 import { toExecError } from './to-exec-error';
 
 const BIG_BYTES = 512 * 1024;
+
+// an RPC answer's body, as the oRPC link sends it
+const SystemInfoBodySchema = z.looseObject({ json: z.looseObject({}) });
 const GENERATION = 'd'.repeat(32);
 const COLD_BOOT = { bootId: 'boot-2', cause: 'recovery', at: '2026-10-03T00:00:00.000Z' } as const;
 
@@ -750,4 +754,55 @@ test('a started without output, from an older impd, reads as continuity none', a
   ]);
 
   expect(outcome).toEqual({ kind: 'exit', code: 0, signal: null });
+});
+
+test('a start that requires the broker passes it to impd', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['fail'], { require: ['broker'] });
+
+  await handle.exit;
+
+  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
+});
+
+test('an impd without execRequire gets no start that requires anything', async () => {
+  await using ctx = await setupExecTest();
+
+  const calls: string[] = [];
+
+  // impd as an older one answers: features without execRequire
+  const readAsOlder = async (request: Request): Promise<Response> => {
+    const path = new URL(request.url).pathname;
+
+    calls.push(path);
+
+    const response = await fetch(request);
+
+    if (path !== '/rpc/system/info') {
+      return response;
+    }
+
+    const raw: unknown = await response.json();
+
+    const body = SystemInfoBodySchema.parse(raw);
+
+    return Response.json({ ...body, json: { ...body.json, features: { leases: true } } });
+  };
+
+  const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: readAsOlder });
+
+  const refused = await client
+    .openExec('dev', ['tick'], { require: ['broker'] })
+    .catch((error: unknown) => error);
+
+  expect(refused).toBeInstanceOf(ExecError);
+
+  expect(refused).toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'broker_not_ready' },
+  });
+
+  expect(calls).toEqual(['/rpc/system/info']);
+  expect(ctx.requests).toEqual([]);
 });
