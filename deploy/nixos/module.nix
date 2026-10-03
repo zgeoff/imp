@@ -183,6 +183,7 @@ let
     IMP_HOST_FIREWALL = cfg.hostFirewall;
     IMP_HOST_IPV6 = if ipv6 then "on" else "off";
     IMP_HOST_SUBNET6 = lib.optionalString ipv6 cfg.ipv6.subnet;
+    IMP_EGRESS_DENY = lib.concatStringsSep "," cfg.egressDeny;
   };
   overridden = lib.attrNames (
     lib.intersectAttrs (
@@ -563,6 +564,21 @@ in
       '';
     };
 
+    egressDeny = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [
+        "203.0.113.7"
+        "2001:db8:1::7/128"
+      ];
+      description = ''
+        IMP_EGRESS_DENY: IPv4 and IPv6 addresses and CIDRs no public imp
+        reaches (docs/architecture/networking.md#public). List every address
+        this host owns, public ones above all: impd, inside the container,
+        cannot see them. IMP_PUBLIC_IP is always in it.
+      '';
+    };
+
     dnsApiTokenFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -601,7 +617,7 @@ in
       }
       {
         assertion = overridden == [ ];
-        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts) instead";
+        message = "services.imp.settings sets ${lib.concatStringsSep ", " overridden}; use the module's options (image, storage, zfs.root, hostFirewall, tailscaleAuthKeyFile, backupPasswordFile, dnsApiTokenFile, publicPorts, egressDeny) instead";
       }
       {
         assertion = !zfs || config.networking.hostId != null;
