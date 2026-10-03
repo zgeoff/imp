@@ -50,6 +50,7 @@ import type { ImpService } from './imps/imp-service';
 import type { MoveService } from './moves/move-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { NetworkService } from './networks/network-service';
+import type { OAuthService } from './oauth/oauth-service';
 import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
@@ -102,6 +103,9 @@ export interface RouterDeps {
   readonly log: (message: string) => void;
   readonly audit: ApiAudit;
   readonly tokens: TokenStore;
+
+  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
+  readonly oauth: OAuthService;
 }
 
 // what each call gets from build-app: who made it, and a signal that aborts
@@ -668,6 +672,45 @@ export function buildRouter(deps: RouterDeps) {
         }),
       ),
     },
+    oauth: {
+      clients: {
+        list: os.oauth.clients.list.handler(() => deps.oauth.listClients()),
+        add: os.oauth.clients.add.handler((context) =>
+          deps.oauth.addClient(context.input.name, context.input.redirectUris),
+        ),
+        update: os.oauth.clients.update.handler((context) =>
+          deps.oauth.updateClient(context.input.name, context.input.redirectUris),
+        ),
+        delete: os.oauth.clients.delete.handler(async (context) => {
+          await deps.oauth.removeClient(context.input.name);
+
+          return {};
+        }),
+      },
+      grants: {
+        list: os.oauth.grants.list.handler(() => deps.oauth.listGrants()),
+        delete: os.oauth.grants.delete.handler(async (context) => {
+          await deps.oauth.removeGrant(context.input.id);
+
+          return {};
+        }),
+      },
+      approvals: {
+        get: os.oauth.approvals.get.handler((context) =>
+          deps.oauth.readApproval(context.input.code, context.context.caller),
+        ),
+        approve: os.oauth.approvals.approve.handler((context) => {
+          deps.oauth.approve(
+            context.input.code,
+            context.context.caller,
+            context.input.scope,
+            context.input.imps,
+          );
+
+          return {};
+        }),
+      },
+    },
     tokens: {
       list: os.tokens.list.handler(() => deps.tokens.list()),
       create: os.tokens.create.handler((context) =>
@@ -704,6 +747,7 @@ const SYSTEM_FEATURES = {
   leases: true,
   grantableTokens: true,
   secretRebind: true,
+  oauthGrants: true,
 } as const;
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory

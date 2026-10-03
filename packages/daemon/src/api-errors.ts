@@ -13,7 +13,10 @@ type ResourceKind =
   | 'backup'
   | 'token'
   | 'ssh-key'
-  | 'network';
+  | 'network'
+  | 'oauth-client'
+  | 'oauth-grant'
+  | 'oauth-approval';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect
 // them; oRPC passes them to the client unchanged.

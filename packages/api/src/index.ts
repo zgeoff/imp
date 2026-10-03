@@ -194,4 +194,16 @@ export {
 } from './token-schema';
 
 export type { Identity, Scope, SshKey, Token } from './token-schema';
+
+export {
+  ApprovalCodeSchema,
+  GrantPatternSchema,
+  OAuthApprovalSchema,
+  OAuthClientSchema,
+  OAuthGrantSchema,
+  RedirectUriSchema,
+  RedirectUrisSchema,
+} from './oauth-schema';
+
+export type { OAuthApproval, OAuthClient, OAuthGrant } from './oauth-schema';
 export type { SystemInfo } from './system-info-schema';

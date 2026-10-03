@@ -22,6 +22,7 @@ import type { Caller } from './auth/caller';
 import { createLogouts } from './auth/logouts';
 import type { Revocations } from './auth/revocations';
 import { createSessionRoutes } from './auth/session-routes';
+import { readBearer } from './auth/token-store';
 import { buildRouter, toApiImage } from './build-router';
 import type { RouterDeps } from './build-router';
 import { DASHBOARD_PATH, createDashboardFiles } from './dashboard/dashboard-files';
@@ -30,11 +31,12 @@ import { buildGrantedBackend } from './exec/exec-grant';
 import type { ExecGrant } from './exec/exec-grant';
 import { createExecSession } from './exec/exec-session';
 import type { ExecSession } from './exec/exec-session';
-import { createExecTickets } from './exec/exec-tickets';
+import { createExecTickets, isCallerLive } from './exec/exec-tickets';
 import { createInProcessSocket } from './exec/in-process-socket';
 import type { BuildContextRoute } from './images/build-context-route';
 import { MCP_PATH, createMcpEndpoint } from './mcp/mcp-endpoint';
 import type { MoveService } from './moves/move-service';
+import { PROTECTED_RESOURCE_PATH } from './oauth/oauth-metadata';
 import { readPeerAddress } from './proxy/forwarded-peers';
 import type { ForwardedPeers } from './proxy/forwarded-peers';
 import { createReverseForwards } from './reverse/reverse-forwards';
@@ -86,7 +88,7 @@ interface PeerServer {
 export function buildApp(deps: AppDeps) {
   const execTickets = createExecTickets({
     now: deps.now,
-    isLive: (caller) => caller.tokenId === null || deps.tokens.findById(caller.tokenId) !== null,
+    isLive: (caller) => isCallerLive(deps.tokens, deps.revocations, caller),
   });
 
   const sources: CallerSources = {
@@ -148,22 +150,33 @@ export function buildApp(deps: AppDeps) {
     );
   };
 
-  // what ends when the caller's dashboard logs out or its token goes
-  const readEnds = (caller: Readonly<Caller>): AbortSignal | null => {
+  // what ends when the caller's token or grant goes
+  const readRevoked = (caller: Readonly<Caller> | undefined): AbortSignal | null => {
     const signals = [
-      caller.kind === 'dashboard' ? logouts.readSignal() : null,
-      deps.revocations.readSignal(caller.tokenId),
+      deps.revocations.readSignal(caller?.tokenId ?? null),
+      deps.revocations.readSignal(caller?.grantId ?? null),
     ].filter((signal) => signal !== null);
 
     return signals.length === 0 ? null : AbortSignal.any(signals);
   };
 
-  // closes a socket when its caller's token is removed; returns the undo
+  // what ends when the caller's dashboard logs out or its token or grant goes
+  const readEnds = (caller: Readonly<Caller>): AbortSignal | null => {
+    const signals = [
+      caller.kind === 'dashboard' ? logouts.readSignal() : null,
+      readRevoked(caller),
+    ].filter((signal) => signal !== null);
+
+    return signals.length === 0 ? null : AbortSignal.any(signals);
+  };
+
+  // closes a socket when its caller's token or grant is removed; returns the
+  // undo
   const handleRevocation = (
     caller: Readonly<Caller> | undefined,
     close: () => void,
   ): (() => void) => {
-    const signal = deps.revocations.readSignal(caller?.tokenId ?? null);
+    const signal = readRevoked(caller);
 
     // removed between the upgrade and the open
     if (signal?.aborted === true) {
@@ -232,6 +245,22 @@ export function buildApp(deps: AppDeps) {
     handleRpc,
     connectExec: openExecSocket,
     readEnds,
+  });
+
+  // The public route's /mcp: an access token from an OAuth grant and nothing
+  // else, no imp token, cookie or tailnet identity. A browser may call only
+  // from the route's own origin.
+  const publicMcp = createMcpEndpoint({
+    findCaller: (request) => {
+      const bearer = readBearer(request.headers.get('authorization'));
+
+      return bearer === null ? Promise.resolve(null) : deps.oauth.resolveAccess(bearer);
+    },
+    handleRpc,
+    connectExec: openExecSocket,
+    readEnds,
+    isCrossOrigin: (request) => isPublicCrossOrigin(request, deps.oauth.issuer),
+    challenge: `Bearer resource_metadata="${deps.oauth.issuer}${PROTECTED_RESOURCE_PATH}/mcp", scope="read"`,
   });
 
   const sessionRoutes = createSessionRoutes({
@@ -500,6 +529,7 @@ export function buildApp(deps: AppDeps) {
 
   return {
     app,
+    publicMcp,
 
     // the client can tell impd went away on purpose
     closeExecSessions: () => {
@@ -514,6 +544,19 @@ export function buildApp(deps: AppDeps) {
       }
     },
   };
+}
+
+// A browser names the page a request comes from in Sec-Fetch-Site or
+// Origin; on the public route only the route's own origin may call
+function isPublicCrossOrigin(request: Request, origin: string): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  const from = request.headers.get('origin');
+
+  if (site === null && from === null) {
+    return false;
+  }
+
+  return from !== origin || (site !== null && site !== 'same-origin');
 }
 
 // a reverse forward's socket path, for its audit row

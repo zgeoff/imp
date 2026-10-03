@@ -261,12 +261,15 @@ interface ImpdTestOptions {
 
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
+
+  // impd's environment, such as the public route's
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
 export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  const harness = await setupImpTest();
+  const harness = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
 
   const guest = buildFakeGuest(options.oldAgent ?? false);
 
@@ -296,6 +299,7 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
     guest,
     client,
     rootClient: built.client,
+    publicMcp: built.publicMcp,
     peers: built.peers,
     url,
     token: TEST_TOKEN,
