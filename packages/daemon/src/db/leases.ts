@@ -154,6 +154,40 @@ export async function removeLeases(
   return result;
 }
 
+// A moved imp's leases, as its target staged it: written with the imp's
+// hold, which emits nothing, as no imp of that name lives here yet. A pair
+// a header names twice keeps its last.
+export async function writeMovedLeases(
+  db: ImpDatabase,
+  impId: string,
+  leases: readonly Readonly<Omit<LeaseRecord, 'impId'>>[],
+): Promise<void> {
+  await db.transaction().execute(async (trx) => {
+    for (const lease of leases) {
+      const until = lease.until?.getTime() ?? null;
+
+      await trx
+        .insertInto('imp_leases')
+        .values({
+          imp_id: impId,
+          principal: lease.principal,
+          label: lease.label,
+          display: lease.display,
+          until,
+          created_at: lease.createdAt.getTime(),
+        })
+        .onConflict((oc) =>
+          oc
+            .columns(['imp_id', 'principal', 'label'])
+            .doUpdateSet({ display: lease.display, until }),
+        )
+        .execute();
+    }
+
+    await updateImpHold(trx, impId);
+  });
+}
+
 async function removeEndedLeases(db: ImpDatabase, impId: string, at: number): Promise<void> {
   await db
     .deleteFrom('imp_leases')

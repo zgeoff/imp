@@ -86,7 +86,8 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
   };
 
   // a whole move, as `imp move` runs it (packages/cli/src/commands/move.ts):
-  // ZFS streams to a ZFS target, and the memory too when the facts match
+  // ZFS streams to a ZFS target, and the memory too when the facts match;
+  // a stop forces, as --stop does
   const runMove = async (name: string, stop = false): Promise<MoveStatus> => {
     const info = await targetApp.client.system.info();
     const targetFacts = await targetApp.client.moves.facts();
@@ -94,6 +95,7 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
     const plan = await sourceApp.client.moves.prepare({
       name,
       stop,
+      ...(stop && { force: true }),
       targetStorage: info.storage.backend,
       target: targetFacts,
     });

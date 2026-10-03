@@ -240,6 +240,9 @@ export const impContract = {
         z.object({
           name: NameSchema,
           stop: z.boolean().optional(),
+
+          // as for imps.stop: a stop ends the imp's leases, never LEASED
+          force: z.boolean().optional(),
           targetStorage: z.enum(['xfs', 'zfs']).optional(),
           target: WarmHostSchema.optional(),
         }),

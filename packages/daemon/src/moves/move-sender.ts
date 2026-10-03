@@ -8,9 +8,11 @@ import { listColdBoots } from '../db/cold-boots';
 import { findImageById } from '../db/images';
 import { findImpById, findImpByName, listImps, updateImpMove } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
+import { listLeases } from '../db/leases';
 import { listNetworkMembers } from '../db/networks';
 import type { ImpDatabase } from '../db/open-database';
 import type { EgressService } from '../egress/egress-service';
+import type { LockedImp } from '../imps/imp-lock';
 import type { Imps } from '../imps/imp-service';
 import { deriveSlotAddress } from '../net/addressing';
 import { readTapMac } from '../net/tap-devices';
@@ -30,6 +32,8 @@ import {
 } from './move-frames';
 import type { MoveFile } from './move-frames';
 import {
+  MAX_LEASE_REMAINING_MS,
+  MAX_MOVED_LEASES,
   MOVE_FINISH_HEADER,
   MOVE_PART_HEADER,
   MOVE_PATHS,
@@ -57,6 +61,10 @@ export interface MoveSender {
 
 interface PrepareOptions {
   readonly stop: boolean;
+
+  // a stop of a leased imp ends its leases from leases.* rather than fail
+  // with LEASED, as `imps.stop` does
+  readonly force: boolean;
   readonly targetStorage: 'xfs' | 'zfs';
 
   // the target's facts, for a warm move; null from an older CLI or target
@@ -68,7 +76,16 @@ export interface MoveSenderDeps {
   readonly db: ImpDatabase;
   readonly dataDir: string;
   readonly storage: Pick<StorageBackend, 'kind' | 'openMoveSource' | 'resolveImpPaths'>;
-  readonly imps: Pick<Imps, 'lockImp' | 'haltImp' | 'destroyImp' | 'startImp'>;
+  readonly imps: Pick<
+    Imps,
+    | 'lockImp'
+    | 'haltImp'
+    | 'destroyImp'
+    | 'startImp'
+    | 'requireRunningImp'
+    | 'requireUnleased'
+    | 'endForcedLeases'
+  >;
   readonly grants: Pick<Broker, 'listGrants'>;
   readonly egress: Pick<EgressService, 'readPolicy' | 'readAnswers'>;
   readonly ranges: PeerRanges;
@@ -420,6 +437,24 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     };
   };
 
+  // The imp's live leases, each with the time it has left now: the target
+  // ends it that long after it reads the header. The mark keeps every lease
+  // call off the imp until the commit, so the rows here stay as sent.
+  const buildMovedLeases = async (imp: ImpRecord): Promise<MoveHeader['imp']['leases']> => {
+    const at = deps.now();
+
+    const leases = await listLeases(deps.db, at, [imp.id]);
+
+    return leases.map((lease) => ({
+      principal: lease.principal,
+      label: lease.label,
+      display: lease.display,
+      remainingMs:
+        lease.until === null ? null : Math.min(lease.until.getTime() - at, MAX_LEASE_REMAINING_MS),
+      createdAt: lease.createdAt,
+    }));
+  };
+
   const buildHeader = async (
     imp: ImpRecord,
     isImageIncluded: boolean,
@@ -438,6 +473,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
     const egress = await deps.egress.readPolicy(imp.name);
     const grants = await deps.grants.listGrants(imp.name);
+    const leases = await buildMovedLeases(imp);
 
     return {
       version: 1,
@@ -455,6 +491,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
         isIdentityResetPending: imp.isIdentityResetPending,
         isDiskGrowPending: imp.isDiskGrowPending,
         coldBoots: await listColdBoots(deps.db, imp.id),
+        leases,
       },
       image: {
         name: image.name,
@@ -553,9 +590,14 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
       throw new Error('the target is not on ZFS any more; prepare the move again');
     }
 
+    // a target from before elastic memory would land the imp at a fixed size
     if (imp.maxMemoryMib > imp.memoryMib && !reply.keepsMaxMemory) {
-      throw new MaxMemoryRefusalError();
+      throw new OfferRefusalError(
+        "the target's impd predates elastic memory and would drop the imp's max memory; upgrade it first",
+      );
     }
+
+    await requireLeasesKept(imp, reply.keepsLeases);
 
     const warm = meta === null ? null : { meta, isDriveIncluded: reply.needsSystemDrive };
 
@@ -690,6 +732,24 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return true;
   };
 
+  // Any live lease, a hold too, goes only to a target that keeps leases,
+  // and only as many as a header carries
+  const requireLeasesKept = async (imp: ImpRecord, keepsLeases: boolean): Promise<void> => {
+    const leases = await listLeases(deps.db, deps.now(), [imp.id]);
+
+    if (leases.length > 0 && !keepsLeases) {
+      throw new OfferRefusalError(
+        `the target's impd predates moving leases and would drop the imp's ${String(leases.length)} lease(s); upgrade it, or release them first`,
+      );
+    }
+
+    if (leases.length > MAX_MOVED_LEASES) {
+      throw new OfferRefusalError(
+        `the imp has ${String(leases.length)} leases, more than a move carries (${String(MAX_MOVED_LEASES)}); release some first`,
+      );
+    }
+  };
+
   const startHaltedAgain = async (imp: ImpRecord): Promise<void> => {
     try {
       await deps.imps.startImp(imp.name);
@@ -734,7 +794,7 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
         // the offer came after the prepare's halt: nothing went, so the imp
         // runs again as it did before the move
-        if (error instanceof MaxMemoryRefusalError && halted.has(imp.id)) {
+        if (error instanceof OfferRefusalError && halted.has(imp.id)) {
           await startHaltedAgain(imp);
         }
 
@@ -820,6 +880,83 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
     return move;
   };
 
+  // What prepare writes once the imp is stopped or asleep: the send's row
+  // and the mark, after which no call but the move's own reaches the imp
+  const writeSendMark = async (
+    imp: LockedImp,
+    options: PrepareOptions,
+    isWarm: boolean,
+  ): Promise<MovePlan> => {
+    const meta = isWarm ? requireMeta(imp) : null;
+    const warm = meta === null ? null : await checkWarmMove(imp, meta, options.target);
+    const isZfs = deps.storage.kind === 'zfs' && options.targetStorage === 'zfs';
+    const mode: MoveMode = isZfs ? 'zfs' : 'files';
+
+    const bytes = await countBytes(imp, mode, meta);
+
+    await deps.db
+      .insertInto('move_sends')
+      .values({
+        imp_id: imp.id,
+        peer_url: null,
+        ticket: null,
+        total_bytes: bytes,
+        mode,
+        warm: isWarm ? 1 : 0,
+        receipt: null,
+        error: null,
+        created_at: deps.now(),
+      })
+      .execute();
+
+    const marked = await updateImpMove(deps.db, imp.id, 'sending');
+
+    // an expose that landed before the mark; none lands after it
+    if (marked.publicAuth !== null) {
+      await removeMark(imp);
+
+      throw buildPublicError(imp.name);
+    }
+
+    finished.delete(imp.id);
+
+    const checkpoints = await listCheckpoints(deps.db, imp.id);
+
+    return { bytes, checkpoints: checkpoints.length, warm };
+  };
+
+  // A cold move's mark on the imp its prepare halted. A forced stop ends
+  // the leases only once the mark is on; a failure before that keeps them,
+  // and a running imp runs again.
+  const writeHaltedMark = async (
+    imp: LockedImp,
+    stopped: LockedImp,
+    options: PrepareOptions,
+  ): Promise<MovePlan> => {
+    try {
+      const plan = await writeSendMark(stopped, options, false);
+
+      if (options.force) {
+        await deps.imps.endForcedLeases(stopped);
+      }
+
+      return plan;
+    } catch (error) {
+      // the mark is this prepare's own: the lock refused a marked imp
+      await removeMark(imp);
+
+      if (halted.delete(imp.id)) {
+        await deps.imps.requireRunningImp(stopped).catch((startError: unknown) => {
+          deps.log(
+            `impd: move: ${imp.name}: could not start it again: ${readErrorMessage(startError)}`,
+          );
+        });
+      }
+
+      throw error;
+    }
+  };
+
   const requirePeer = (to: string): string => {
     const address = readPeerUrlAddress(to);
 
@@ -868,58 +1005,29 @@ export function createMoveSender(deps: MoveSenderDeps): MoveSender {
 
         const isWarm = imp.state === 'sleeping' && !options.stop;
 
-        if (isWarm) {
-          // the snapshot is read here, under the lock, and again at the send
-        } else if (imp.state === 'running' || imp.state === 'sleeping') {
-          if (!options.stop) {
-            throw buildInvalidStateError(imp.state, ['stopped', 'sleeping'], 'move');
-          }
+        // the snapshot is read here, under the lock, and again at the send
+        if (isWarm || imp.state === 'stopped') {
+          return writeSendMark(imp, options, isWarm);
+        }
 
-          await deps.imps.haltImp(imp);
-
-          if (imp.state === 'running') {
-            halted.add(imp.id);
-          }
-        } else if (imp.state !== 'stopped') {
+        if (imp.state !== 'running' && imp.state !== 'sleeping') {
           throw buildInvalidStateError(imp.state, ['stopped'], 'move');
         }
 
-        const meta = isWarm ? requireMeta(imp) : null;
-        const warm = meta === null ? null : await checkWarmMove(imp, meta, options.target);
-        const isZfs = deps.storage.kind === 'zfs' && options.targetStorage === 'zfs';
-        const mode: MoveMode = isZfs ? 'zfs' : 'files';
-
-        const bytes = await countBytes(imp, mode, meta);
-
-        await deps.db
-          .insertInto('move_sends')
-          .values({
-            imp_id: imp.id,
-            peer_url: null,
-            ticket: null,
-            total_bytes: bytes,
-            mode,
-            warm: isWarm ? 1 : 0,
-            receipt: null,
-            error: null,
-            created_at: deps.now(),
-          })
-          .execute();
-
-        const marked = await updateImpMove(deps.db, imp.id, 'sending');
-
-        // an expose that landed before the mark; none lands after it
-        if (marked.publicAuth !== null) {
-          await removeMark(imp);
-
-          throw buildPublicError(name);
+        if (!options.stop) {
+          throw buildInvalidStateError(imp.state, ['stopped', 'sleeping'], 'move');
         }
 
-        finished.delete(imp.id);
+        // LEASED first, as imps.stop checks, then the halt
+        await deps.imps.requireUnleased(imp, options.force);
 
-        const checkpoints = await listCheckpoints(deps.db, imp.id);
+        const stopped = await deps.imps.haltImp(imp);
 
-        return { bytes, checkpoints: checkpoints.length, warm };
+        if (imp.state === 'running') {
+          halted.add(imp.id);
+        }
+
+        return writeHaltedMark(imp, stopped, options);
       }),
 
     send: async (name, to, ticket) => {
@@ -1068,14 +1176,8 @@ async function withPeerError<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
-// a target from before elastic memory would land an elastic imp at a fixed
-// size; its offer reply has no keepsMaxMemory
-class MaxMemoryRefusalError extends Error {
-  override name = 'MaxMemoryRefusalError';
-
-  constructor() {
-    super(
-      "the target's impd predates elastic memory and would drop the imp's max memory; upgrade it first",
-    );
-  }
+// The offer's answer refused the send before any byte went: an imp the
+// prepare halted runs again
+class OfferRefusalError extends Error {
+  override name = 'OfferRefusalError';
 }
