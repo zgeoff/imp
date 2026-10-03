@@ -11,9 +11,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { countTarBytes, listContextEntries } from '@imp/local-tar';
 import type { CopyProgress } from '../cp/copy-progress';
-import { countTarBytes } from '../cp/pack-local-path';
-import { listContextEntries } from './pack-build-context';
 import { createContextStream } from './run-image-build';
 
 // `docker build -o` exports the image's files; FROM scratch pulls nothing

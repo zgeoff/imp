@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { listContextEntries } from './pack-build-context';
+import { MissingDockerfileError, listContextEntries } from './pack-build-context';
 
 // a directory with these files (relative path → content), removed on dispose
 function createContext(files: Readonly<Record<string, string>>) {
@@ -107,10 +107,11 @@ test('symlinks stay links and modes keep their exec bits', async () => {
   expect(link?.kind).toBe('symlink');
 });
 
-test('a missing Dockerfile is a usage error', async () => {
+test('a missing Dockerfile is a MissingDockerfileError', async () => {
   using ctx = createContext({ 'app.js': '' });
 
   const failure = await listContextEntries(ctx.root, 'Dockerfile').catch((error: unknown) => error);
 
+  expect(failure).toBeInstanceOf(MissingDockerfileError);
   expect(String(failure)).toContain('there is no Dockerfile');
 });

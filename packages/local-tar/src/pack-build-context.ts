@@ -2,8 +2,11 @@ import { existsSync } from 'node:fs';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import ignore from '@balena/dockerignore';
-import type { LocalEntry } from '../cp/pack-local-path';
-import { UsageError } from '../usage-error';
+import type { LocalEntry } from './pack-local-path';
+
+export class MissingDockerfileError extends Error {
+  override readonly name = 'MissingDockerfileError';
+}
 
 const ENTRY_KINDS = [
   ['directory', 'isDirectory'],
@@ -19,7 +22,7 @@ export async function listContextEntries(
   dockerfile: string,
 ): Promise<readonly LocalEntry[]> {
   if (!existsSync(join(root, dockerfile))) {
-    throw new UsageError(`there is no ${dockerfile} in ${root}`);
+    throw new MissingDockerfileError(`there is no ${dockerfile} in ${root}`);
   }
 
   const ignoreName = existsSync(join(root, `${dockerfile}.dockerignore`))

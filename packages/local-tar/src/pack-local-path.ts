@@ -3,7 +3,11 @@ import { lstat, readdir, readlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import tar from 'tar-stream';
 import type { Header, Pack } from 'tar-stream';
-import type { CopyProgress } from './copy-progress';
+
+// what a pack reports as file bytes go into the tar
+export interface PackProgress {
+  readonly add: (bytes: number) => void;
+}
 
 // One local entry under its archive name; `other` (a socket, a device, a
 // FIFO) is left out of the archive.
@@ -64,7 +68,7 @@ async function writeEntryContent(
   pack: Pack,
   header: EntryHeader,
   content: Readonly<AsyncIterable<Uint8Array>> | null,
-  progress: CopyProgress,
+  progress: PackProgress,
 ): Promise<void> {
   const written = Promise.withResolvers<void>();
 
@@ -121,7 +125,7 @@ async function readEntryHeader(entry: LocalEntry): Promise<EntryHeader | null> {
 async function writeEntry(
   pack: Pack,
   entry: LocalEntry,
-  progress: CopyProgress,
+  progress: PackProgress,
   warn: (text: string) => void,
 ): Promise<void> {
   const header = await readEntryHeader(entry);
@@ -174,7 +178,7 @@ export async function countTarBytes(entries: readonly LocalEntry[]): Promise<num
 export async function writeLocalEntries(
   entries: readonly LocalEntry[],
   send: (chunk: Uint8Array) => Promise<void>,
-  progress: CopyProgress,
+  progress: PackProgress,
   warn: (text: string) => void,
 ): Promise<void> {
   const pack = tar.pack();
