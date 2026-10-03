@@ -107,7 +107,7 @@ export interface TrustedImp {
 export type InstallBundle = (vsockPath: string, input: string) => Promise<void>;
 
 // whether the bundle is in this boot of the guest; the failure's text when not
-export type TrustOutcome =
+type TrustOutcome =
   | { readonly installed: true }
   | { readonly installed: false; readonly detail: string };
 
