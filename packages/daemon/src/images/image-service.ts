@@ -24,7 +24,7 @@ import {
 import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
-import { checkReferenceRegistry } from '../docker-proxy/rules';
+import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
@@ -190,6 +190,18 @@ async function loadImage(image: Readonly<ExternalImage>, signal: AbortSignal): P
   }
 
   return loaded;
+}
+
+// one image's every spelling: the engine's registry and path, and the tag
+// (latest when none) and digest
+function toImageKey(ref: string): string {
+  const named = readImageReference(ref);
+  const [withoutDigest = '', digest = ''] = ref.split('@');
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const tagColon = withoutDigest.indexOf(':', lastSlash + 1);
+  const tag = tagColon === -1 ? 'latest' : withoutDigest.slice(tagColon + 1);
+
+  return `${named.registry}/${named.path}:${tag}@${digest}`;
 }
 
 // The pin for one image: its digest ref, once impd has checked the
@@ -441,13 +453,12 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const stores = new Set<ImageStore>();
 
-    // each ref inspected and pinned once, whatever its uses: a tag that
-    // moves between two inspects would give the build two images
-    const distinct = images.filter(
-      (candidate, index) => images.findIndex((other) => other.ref === candidate.ref) === index,
-    );
+    // Each image inspected and pinned once, whatever its uses or spellings
+    // (`busybox` is `docker.io/library/busybox:latest`): a tag that moves
+    // between two inspects would give the build two images.
+    const keys = new Map<string, string>();
 
-    for (const image of distinct) {
+    for (const image of images) {
       if (!ImageRefSchema.safeParse(image.ref).success) {
         throw new ORPCError('BAD_REQUEST', {
           message: `${image.use} ${JSON.stringify(image.ref)} is not an image reference`,
@@ -463,14 +474,19 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         });
       }
 
-      signal.throwIfAborted();
+      const key = toImageKey(image.ref);
+      const known = keys.get(key);
 
-      const inspect = await loadImage(image, signal);
+      if (known === undefined) {
+        signal.throwIfAborted();
 
-      const pin = pickPin(image, inspect, platform);
+        const inspect = await loadImage(image, signal);
 
-      pins.set(image.ref, pin);
-      stores.add(readImageStore(inspect));
+        keys.set(key, pickPin(image, inspect, platform));
+        stores.add(readImageStore(inspect));
+      }
+
+      pins.set(image.ref, keys.get(key) ?? '');
     }
 
     for (const image of images) {

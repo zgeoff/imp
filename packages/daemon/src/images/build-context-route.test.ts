@@ -441,6 +441,8 @@ const IMAGE_DOCKER = [
   `    base.test/private:1) ${buildInspect([`localhost:5000/x@${DIGEST_A}`, `10.0.0.5:5000/y@${DIGEST_B}`])} ;;`,
   '    base.test/moving:1) n=$(cat "$pulled" 2>/dev/null || echo 0); echo $((n + 1)) >"$pulled"',
   `      if [ "$n" = 0 ]; then ${buildInspect([`base.test/moving@${DIGEST_A}`])}; else ${buildInspect([`base.test/moving@${DIGEST_B}`])}; fi ;;`,
+  '    moving:1|docker.io/library/moving:1|index.docker.io/library/moving) count="$(dirname "$0")/moving"; n=$(cat "$count" 2>/dev/null || echo 0); echo $((n + 1)) >"$count"',
+  `      if [ "$n" = 0 ]; then ${buildInspect([`moving@${DIGEST_A}`])}; else ${buildInspect([`moving@${DIGEST_B}`])}; fi ;;`,
   `    base.test/retag:1) ${buildInspect([`other.test/x@${DIGEST_B}`])} ;;`,
   `    base.test/a:1) ${buildInspect([`other.test/x@${DIGEST_B}`, `base.test/a@${DIGEST_A}`])} ;;`,
   `    *) [ -e "$pulled" ] || exit 1; ${buildInspect([`tools.test/b@${DIGEST_B}`])} ;;`,
@@ -617,6 +619,29 @@ test('a ref the build names twice is inspected and pinned once, so a moving tag 
       `FROM base.test/moving@${DIGEST_A}`,
       `COPY --from=base.test/moving@${DIGEST_A} /x /x`,
       `RUN --mount=from=base.test/moving@${DIGEST_A},target=/m true`,
+      '',
+    ].join('\n'),
+  ]);
+});
+
+test('the spellings of one image are inspected and pinned once', async () => {
+  const sent = await sendFakeDockerBuild(
+    'FROM moving:1\nCOPY --from=docker.io/library/moving:1 /x /x\nRUN --mount=from=index.docker.io/library/moving,target=/m true\n',
+  );
+
+  const inspects = sent.calls.filter((call) => call.startsWith('image inspect'));
+
+  // moving and moving:1 differ: no tag is latest
+  expect(inspects).toEqual([
+    'image inspect --format PIN moving:1',
+    'image inspect --format PIN index.docker.io/library/moving',
+  ]);
+
+  expect(sent.built).toEqual([
+    [
+      `FROM moving@${DIGEST_A}`,
+      `COPY --from=moving@${DIGEST_A} /x /x`,
+      `RUN --mount=from=moving@${DIGEST_B},target=/m true`,
       '',
     ].join('\n'),
   ]);
