@@ -368,6 +368,9 @@ export function createFakeImpd(): FakeImpd {
         dropped: [],
         kept: [],
       })),
+      copyDatabase: os.system.copyDatabase.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
     },
     tokens: {
       list: os.tokens.list.handler(() => fake.tokens),

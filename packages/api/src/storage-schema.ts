@@ -44,3 +44,14 @@ export const StorageGcSchema = z
   .readonly();
 
 export type StorageGc = z.infer<typeof StorageGcSchema>;
+
+// a copy of impd's database: where it is on the impd host, its size, and its
+// schema version, the last migration it holds
+export const DatabaseCopySchema = z.object({
+  path: z.string(),
+  sizeBytes: z.int().nonnegative(),
+  lastMigration: z.string(),
+  createdAt: z.date(),
+});
+
+export type DatabaseCopy = z.infer<typeof DatabaseCopySchema>;
