@@ -240,7 +240,7 @@ jobs:
   # build FROM by digest. A published tag never moves: when the tag exists,
   # as on a republish of a release that has its base or a second dry run of
   # one commit, the job leaves it alone and stays green. It skips a release
-  # from before imp-base, and attests an existing tag that has no
+  # from before imp-base, and fails on an existing tag that has no
   # attestation. The concurrency group keeps two runs for one tag apart
   # between the check and the push.
   # imp-base has no `latest`. Publish does not wait for this job: consumers
@@ -277,13 +277,12 @@ jobs:
       # - skip: the tree predates imp-base (every tag up to v0.27.0 has an
       #   unpinned images/base and no check script), or the tag exists with
       #   this repository's attestation;
-      # - attest: the tag exists but has no attestation, as after a run that
-      #   pushed and then failed to attest; the existing digest is attested,
-      #   and nothing is pushed again;
       # - push: the registry answers "not found" for the tag.
-      # Any other registry answer fails, so a 401, a 403 or a network error
-      # never reads as a missing tag. A failed verify only attests again,
-      # which is harmless: the tag never moves.
+      # An existing tag without that attestation fails the job: this
+      # workflow did not vouch for it, so it may not be ours, and attesting
+      # it now would vouch for what nobody checked (RELEASING.md). Any other
+      # registry answer fails too, so a 401, a 403 or a network error never
+      # reads as a missing tag.
       - name: Plan
         id: plan
         env:
@@ -296,21 +295,24 @@ jobs:
             echo "action=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if out=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2>&1); then
-            digest=$out
-            if gh attestation verify "oci://$BASE_IMAGE@$digest" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-              echo "::notice::$ref exists already at $digest, attested; a published imp-base never moves, so this run leaves it alone"
-              echo "action=skip" >> "$GITHUB_OUTPUT"
-            else
-              echo "::notice::$ref exists already at $digest with no attestation from $GITHUB_REPOSITORY; this run attests that digest and leaves the tag alone"
-              echo "action=attest" >> "$GITHUB_OUTPUT"
-              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          err=$(mktemp)
+          if digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2> "$err"); then
+            if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::$ref exists, but the registry gave no valid digest: $digest"
+              exit 1
             fi
+            if ! verified=$(gh attestation verify "oci://$BASE_IMAGE@$digest" --repo "$GITHUB_REPOSITORY" 2>&1); then
+              echo "$verified" >&2
+              echo "::error::$ref exists at $digest with no attestation from $GITHUB_REPOSITORY; treat it as a possible compromise (RELEASING.md)"
+              exit 1
+            fi
+            echo "::notice::$ref exists already at $digest, attested; a published imp-base never moves, so this run leaves it alone"
+            echo "action=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! grep -qF "$ref: not found" <<<"$out"; then
+          if ! grep -qF "$ref: not found" "$err"; then
             echo "cannot tell whether $ref exists:" >&2
-            echo "$out" >&2
+            cat "$err" >&2
             exit 1
           fi
           echo "action=push" >> "$GITHUB_OUTPUT"
@@ -349,14 +351,18 @@ jobs:
         run: |
           docker push "$BASE_IMAGE:$PUSH_TAG"
           digest=$(docker buildx imagetools inspect "$BASE_IMAGE:$PUSH_TAG" --format '{{.Manifest.Digest}}')
+          if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::the registry gave no valid digest for $BASE_IMAGE:$PUSH_TAG: $digest"
+            exit 1
+          fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Attest image
-        if: steps.plan.outputs.action == 'push' || steps.plan.outputs.action == 'attest'
+        if: steps.plan.outputs.action == 'push'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.BASE_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest || steps.plan.outputs.digest }}
+          subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
   publish:

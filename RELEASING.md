@@ -65,10 +65,10 @@ fails and prints the new sum to review.
      `imp-host:X.Y.Z` and attests the image and every asset.
    - **base:** after every smoke check passes, builds `images/base`, runs `host/check-base-image.sh`
      and pushes and attests `imp-base:X.Y.Z`. It never pushes over an existing tag: when
-     `imp-base:X.Y.Z` exists, it prints a notice with the tag's digest, and attests that digest only
-     when it has no attestation from this repository. A tag from before the pinned `images/base`
-     (v0.27.0 and older) is skipped with a notice. publish does not wait for it: consumers pin a
-     digest, so a base failure does not hold up a release.
+     `imp-base:X.Y.Z` exists with this repository's attestation, it prints a notice with the tag's
+     digest; without one, it fails ([an unattested imp-base](#an-unattested-imp-base)). A tag from
+     before the pinned `images/base` (v0.27.0 and older) is skipped with a notice. publish does not
+     wait for it: consumers pin a digest, so a base failure does not hold up a release.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
@@ -205,10 +205,20 @@ pinned `images/base` on: a republish of v0.27.0 or older builds no `imp-base`, a
 says so in a notice. For a newer release it publishes `imp-base:X.Y.Z` when the tag is missing and
 leaves an existing tag alone. A fix to the sources needs a new release, not a republish.
 
-When a run pushed `imp-base:X.Y.Z` and then failed to attest it, the tag has no attestation. A
-republish repairs that: the `base` job finds the tag, finds no attestation for its digest with
-`gh attestation verify`, and attests that digest without pushing again. Check it afterwards:
+### An unattested imp-base
+
+The `base` job fails with an error that names the tag and its digest when `imp-base:X.Y.Z` exists
+but `gh attestation verify` finds no attestation from this repository for it. This workflow did not
+vouch for that image. Someone with a leaked `write:packages` token could have pushed it ahead of the
+release, so treat it as a possible compromise and investigate:
 
 ```sh
+docker buildx imagetools inspect ghcr.io/zgeoff/imp-base:X.Y.Z
 gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp
 ```
+
+The workflow never deletes, re-pushes or attests such a tag, and the tag never moves. Consumers pin
+a digest, so an image they already use is not affected, and the next release publishes its own tag.
+Deleting the package version is a manual decision for the owner. The same holds when a run pushes
+the image and then fails at its own attest step: the tag stays unattested until the owner decides.
+When verify failed only for a transient reason, such as an API error, a republish passes.

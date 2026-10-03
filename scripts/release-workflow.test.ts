@@ -45,13 +45,14 @@ const planIndex = base.steps.findIndex((step) => step.id === 'plan');
 const planRun = base.steps[planIndex]?.run ?? '';
 
 // what the fake registry answers for the tag
-type Registry = 'found' | 'missing' | 'denied' | 'blob-missing';
+type Registry = 'found' | 'missing' | 'denied' | 'blob-missing' | 'bad-digest';
 
 const REGISTRY_ANSWERS: Record<Registry, string> = {
   found: `echo ${DIGEST}`,
   missing: 'echo "ERROR: $4: not found" >&2; exit 1',
   denied: 'echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1',
   'blob-missing': 'echo "ERROR: blob sha256:abc not found" >&2; exit 1',
+  'bad-digest': 'echo "WARN: something"; echo sha256:abc',
 };
 
 interface Run {
@@ -159,8 +160,7 @@ test('the plan comes before any build, and only push builds or pushes', () => {
     'Attest image',
   ]);
 
-  expect(after.slice(0, 3).map((step) => step.if)).toEqual([PUSH_ONLY, PUSH_ONLY, PUSH_ONLY]);
-  expect(after[3]?.if).toBe(`${PUSH_ONLY} || steps.plan.outputs.action == 'attest'`);
+  expect(after.map((step) => step.if)).toEqual([PUSH_ONLY, PUSH_ONLY, PUSH_ONLY, PUSH_ONLY]);
 });
 
 test('a missing tag is pushed', () => {
@@ -178,12 +178,22 @@ test('an attested existing tag is left alone, with a notice', () => {
   expect(result.stdout).toContain(`::notice::${IMAGE}:${TAG} exists already at ${DIGEST}`);
 });
 
-test('an existing tag without an attestation has its digest attested, not pushed', () => {
+test('an existing tag without an attestation fails the job, and is neither pushed nor attested', () => {
   const result = runPlan({ registry: 'found', attested: false });
 
-  expect(result.exitCode).toBe(0);
-  expect(result.outputs).toEqual({ action: 'attest', digest: DIGEST });
-  expect(result.stdout).toContain('::notice::');
+  expect(result.exitCode).not.toBe(0);
+  expect(result.outputs).toEqual({});
+
+  expect(result.stdout).toContain(
+    `::error::${IMAGE}:${TAG} exists at ${DIGEST} with no attestation`,
+  );
+});
+
+test('an existing tag whose digest is not a sha256 fails the job', () => {
+  const result = runPlan({ registry: 'bad-digest', attested: true });
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.outputs).toEqual({});
 });
 
 test('any registry error other than the tag not found fails closed', () => {
