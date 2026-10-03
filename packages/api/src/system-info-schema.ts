@@ -156,6 +156,9 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // an `/exec` start takes `require`, which an older impd drops unread
+      execRequire: z.boolean().optional(),
     })
     .optional(),
 });

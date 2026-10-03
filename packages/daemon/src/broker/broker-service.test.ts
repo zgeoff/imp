@@ -250,13 +250,15 @@ test('an exec gets the broker variables only once the CA is in that boot', async
   const imp = await requireImp(ctx.db, 'dev');
   const ungranted = await ctx.broker.readExecEnv(imp, '/vsock');
 
-  expect(ungranted).toEqual([]);
+  expect(ungranted).toEqual({ kind: 'ungranted' });
   expect(installs).toEqual([]);
 
   await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
   await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
 
-  const env = await ctx.broker.readExecEnv(imp, '/vsock');
+  const ready = await ctx.broker.readExecEnv(imp, '/vsock');
+
+  const env = ready.kind === 'ready' ? ready.env : [];
 
   expect(env).toContain('HTTPS_PROXY=http://10.66.0.1:7081');
   expect(env).toContain('https_proxy=http://10.66.0.1:7081');
@@ -278,7 +280,7 @@ test('an exec gets the broker variables only once the CA is in that boot', async
 
   const failed = await ctx.broker.readExecEnv(rebooted, '/vsock');
 
-  expect(failed).toEqual([]);
+  expect(failed).toEqual({ kind: 'untrusted', detail: 'no /bin/sh' });
   expect(installs).toHaveLength(2);
   expect(ctx.logs.join('\n')).toContain('broker CA not installed');
 });
