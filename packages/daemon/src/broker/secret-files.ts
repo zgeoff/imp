@@ -24,11 +24,25 @@ export interface SecretFiles {
   // moves every file not in `keep`, temp files a crash left included, into
   // ORPHANED_DIR/<at> (0700), and returns their names
   readonly keepOrphansExcept: (keep: ReadonlySet<string>, at: Date) => KeptOrphans;
+
+  // each directory under ORPHANED_DIR, for `imp gc`, and its removal by name
+  readonly listKept: () => KeptDirectory[];
+  readonly removeKept: (name: string) => void;
 }
 
 // where the start puts value files no row names, as after a restore from an
 // older database (docs/guides/connectors.md#value-files)
 const ORPHANED_DIR = '.orphaned';
+
+interface KeptDirectory {
+  readonly name: string;
+  readonly path: string;
+  readonly bytes: number;
+
+  // from its name, the start that made it
+  readonly createdAt: Date | null;
+  readonly files: readonly string[];
+}
 
 interface KeptOrphans {
   // null when there were none, and no directory was made
@@ -102,7 +116,54 @@ export function createSecretFiles(dataDir: string): SecretFiles {
 
       return { dir: target, files };
     },
+    listKept: () => {
+      const orphaned = join(dir, ORPHANED_DIR);
+
+      if (!checkDirectory(orphaned)) {
+        return [];
+      }
+
+      return readdirSync(orphaned)
+        .toSorted()
+        .filter((name) => checkDirectory(join(orphaned, name)))
+        .map((name) => {
+          const path = join(orphaned, name);
+          const files = readdirSync(path).toSorted();
+          const bytes = files.reduce((sum, file) => sum + lstatSync(join(path, file)).size, 0);
+
+          return { name, path, bytes, createdAt: readStamp(name), files };
+        });
+    },
+    removeKept: (name) => {
+      if (name === '' || name.includes('/') || name === '.' || name === '..') {
+        throw new Error(`not a kept directory: ${name}`);
+      }
+
+      rmSync(join(dir, ORPHANED_DIR, name), { recursive: true, force: true });
+    },
   };
+}
+
+// a directory itself, never a symlink to one
+function checkDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+// the start time a kept directory is named after, its colons dashes
+function readStamp(name: string): Date | null {
+  const iso = name.replace(/T(?<h>\d{2})-(?<m>\d{2})-(?<s>\d{2})/u, 'T$<h>:$<m>:$<s>');
+
+  const at = new Date(iso);
+
+  return Number.isNaN(at.getTime()) ? null : at;
 }
 
 // A file or a symlink where the orphans' directory goes would fail the start

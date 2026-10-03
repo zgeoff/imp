@@ -513,10 +513,16 @@ export const impContract = {
     info: base.output(SystemInfoSchema),
 
     // removes the crash leftovers no row names and lists the orphans it
-    // keeps, or retires them with `orphans`; PRECONDITION_FAILED while
-    // storage operations keep it busy (docs/architecture/storage.md#cleanup)
+    // keeps, or retires them with `orphans`, kept secret values too with
+    // `secretFiles`; PRECONDITION_FAILED while storage is busy
     gc: base
-      .input(z.object({ dryRun: z.boolean().optional(), orphans: z.boolean().optional() }))
+      .input(
+        z.object({
+          dryRun: z.boolean().optional(),
+          orphans: z.boolean().optional(),
+          secretFiles: z.boolean().optional(),
+        }),
+      )
       .output(StorageGcSchema),
   },
 

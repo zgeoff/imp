@@ -33,7 +33,13 @@ const MADE_TOKEN = {
 
 const NEW_INFO = {
   version: '0.27.0',
-  features: { sessionOffsets: true, leases: true, grantableTokens: true, secretRebind: true },
+  features: {
+    sessionOffsets: true,
+    leases: true,
+    grantableTokens: true,
+    secretRebind: true,
+    secretFilesGc: true,
+  },
 };
 
 const OLD_INFO = { version: '0.26.0', features: { sessionOffsets: true, leases: true } };

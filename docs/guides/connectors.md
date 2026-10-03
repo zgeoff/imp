@@ -91,8 +91,10 @@ temp files a crash left included, into `<data>/secrets/.orphaned/<start time>/` 
 `impd: broker: kept secret value file <file>, which no database row names, in <dir>`. Such a file is
 the value of a secret added after the database copy a restore put back, or of an add or a replace
 that impd stopped in before its commit: that value was never stored, but its file was written. impd
-does not read these files again: check each one, add back with `imp secret add` any value you still
-need, then delete the directory.
+does not read these files again. `imp gc` lists each directory as kind `secrets`, with how many
+files it holds. Check each file, add back with `imp secret add` any value you still need, then run
+`imp gc --orphans`, which deletes the directories with the other orphans
+([storage cleanup](./operations.md#storage-cleanup)).
 
 ### Restores
 

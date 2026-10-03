@@ -10,6 +10,7 @@ import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
+import { createSecretFiles } from '../broker/secret-files';
 import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import type { AppDeps } from '../build-app';
@@ -526,6 +527,7 @@ export function buildTestApp(
       storage: ctx.storage,
       storageGate: ctx.storageGate,
       log: () => {},
+      secretFiles: createSecretFiles(ctx.config.dataDir),
     }),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),

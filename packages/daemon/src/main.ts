@@ -9,6 +9,7 @@ import { createTailnetIdentities, runWhois } from './auth/tailnet-identity';
 import { loadTokenStore } from './auth/token-store';
 import { createBackupService } from './backup/backup-service';
 import { createBroker } from './broker/broker-service';
+import { createSecretFiles } from './broker/secret-files';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
@@ -189,7 +190,10 @@ async function main(): Promise<void> {
     log: printLog,
   });
 
-  const broker = await createBroker({ config, db, log: printLog, ipv6 });
+  // the broker's and the GC's: the GC lists and removes what the broker kept aside
+  const secretFiles = createSecretFiles(config.dataDir);
+
+  const broker = await createBroker({ config, db, log: printLog, ipv6, secretFiles });
 
   // the firewall and its resolver, before any VM is adopted, booted or woken
   const egress = createEgressService({
@@ -328,7 +332,7 @@ async function main(): Promise<void> {
           diskBudget,
         });
 
-  const gc = createStorageGc({ db, storage, storageGate, log: printLog });
+  const gc = createStorageGc({ db, storage, storageGate, log: printLog, secretFiles });
   const state = { ready: false };
   const audit = createApiAudit({ db, now: Date.now, log: printLog });
   const revocations = createRevocations();

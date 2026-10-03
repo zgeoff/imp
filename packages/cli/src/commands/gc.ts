@@ -12,7 +12,8 @@ export const gcCommand = defineCommand({
     'dry-run': { type: 'boolean', description: 'list what would go, and remove nothing' },
     orphans: {
       type: 'boolean',
-      description: 'also retire the disks and images no row names, with their snapshots',
+      description:
+        'also retire the disks and images no row names, with their snapshots, and delete the secret values impd kept aside',
     },
     json: jsonArg,
   },
@@ -21,6 +22,9 @@ export const gcCommand = defineCommand({
       const result = await client.system.gc({
         dryRun: context.args['dry-run'] === true,
         orphans: context.args.orphans === true,
+
+        // an impd older than secretFilesGc drops it and lists none
+        secretFiles: true,
       });
 
       console.log(formatOutput(result, context.args.json, formatGc));

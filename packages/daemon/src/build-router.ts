@@ -665,6 +665,7 @@ export function buildRouter(deps: RouterDeps) {
         deps.gc.runGc({
           isDryRun: context.input.dryRun ?? false,
           isOrphans: context.input.orphans ?? false,
+          isSecretFiles: context.input.secretFiles ?? false,
         }),
       ),
     },
@@ -704,6 +705,7 @@ const SYSTEM_FEATURES = {
   leases: true,
   grantableTokens: true,
   secretRebind: true,
+  secretFilesGc: true,
 } as const;
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
