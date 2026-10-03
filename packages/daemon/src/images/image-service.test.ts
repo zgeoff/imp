@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadConfig } from '../config';
 import { openDatabase } from '../db/open-database';
@@ -96,6 +96,32 @@ test('a build context on the impd host with no Dockerfile is the client’s mist
 
     expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
     expect(String(failure)).toContain('there is no Dockerfile');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused before it is sent', async () => {
+  const dataDir = mkdtempSync(`${tmpdir()}/impd-image-test-`);
+
+  try {
+    const db = await openDatabase(':memory:');
+
+    const images = createImageService({
+      config: loadConfig({ IMP_DATA_DIR: dataDir, IMP_BUILD_CONTEXT_MAX_MIB: '1' }),
+      db,
+      storage: createXfsBackend({ dataDir }),
+      storageGate: createStorageGate(),
+      diskBudget: { withRoom: (_bytes, task) => task() },
+    });
+
+    writeFileSync(`${dataDir}/Dockerfile`, 'FROM scratch\n');
+    writeFileSync(`${dataDir}/big`, new Uint8Array(2 * 1024 ** 2));
+
+    const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: 'BAD_REQUEST' });
+    expect(String(failure)).toContain('over the limit of 1 MiB (IMP_BUILD_CONTEXT_MAX_MIB)');
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

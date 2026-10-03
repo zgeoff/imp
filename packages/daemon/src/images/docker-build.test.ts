@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseQuery } from '../docker-proxy/router';
 import { checkBuildQuery } from '../docker-proxy/rules';
-import { DockerBuildError, readBuiltImageId, runDockerBuild } from './docker-build';
+import {
+  DockerBuildError,
+  readBuiltImageId,
+  readDockerSocket,
+  runDockerBuild,
+} from './docker-build';
 
 const IMAGE_ID = `sha256:${'c'.repeat(64)}`;
 const dir = mkdtempSync(join(tmpdir(), 'imp-docker-build-'));
@@ -52,7 +57,13 @@ function buildLines(...messages: readonly unknown[]): string {
 }
 
 function runBuild(signal = new AbortController().signal): Promise<string> {
-  return runDockerBuild({ socketPath, tarPath, tag: 'imp/x:latest', dockerfile: 'sub/Df', signal });
+  return runDockerBuild({
+    dockerHost: `unix://${socketPath}`,
+    tarPath,
+    tag: 'imp/x:latest',
+    dockerfile: 'sub/Df',
+    signal,
+  });
 }
 
 test('the image ID is the moby.image.id message, past the trace messages', async () => {
@@ -157,4 +168,27 @@ test('an abort ends the request while the build runs', async () => {
   expect(controller.signal.aborted).toBeTrue();
   expect(failure).toBeInstanceOf(Error);
   expect(failure).not.toBeInstanceOf(DockerBuildError);
+});
+
+test('a line that is not JSON, or too long, fails the build with a clear error', async () => {
+  engine.answer = () => new Response('{"stream":"ok"}\n<html>proxy error</html>\n');
+
+  const notJson = await runBuild().catch((error: unknown) => error);
+
+  expect(String(notJson)).toContain('a line that is not JSON: <html>proxy error</html>');
+
+  engine.answer = () => new Response('x'.repeat(9 * 1024 ** 2));
+
+  const tooLong = await runBuild().catch((error: unknown) => error);
+
+  expect(String(tooLong)).toContain('a line longer than');
+});
+
+test('builds go to the unix socket DOCKER_HOST names, and only to one', () => {
+  expect(readDockerSocket('unix:///run/imp-docker/docker.sock')).toBe(
+    '/run/imp-docker/docker.sock',
+  );
+
+  expect(readDockerSocket(null)).toBe('/var/run/docker.sock');
+  expect(() => readDockerSocket('tcp://10.0.0.1:2375')).toThrow('only through a unix socket');
 });

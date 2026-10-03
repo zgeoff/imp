@@ -28,7 +28,7 @@ test('it fills every setting from its default when the env is empty', () => {
     defaultDiskBytes: 32 * 1024 ** 3,
     diskReserveBytes: null,
     buildContextMaxBytes: 1024 ** 3,
-    dockerSocket: '/var/run/docker.sock',
+    dockerHost: null,
     dns: ['1.1.1.1', '8.8.8.8'],
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },
     ipv6: { kind: 'auto' },
@@ -377,13 +377,4 @@ test('IMP_KSM=0 is off, and then the headroom setting is not read', () => {
   const config = loadConfig({ IMP_KSM: '0', IMP_KSM_HEADROOM_PERCENT: 'lots' });
 
   expect(config.ksm).toBeNull();
-});
-
-test('image builds go to the unix socket DOCKER_HOST names, else the default one', () => {
-  expect(loadConfig({ DOCKER_HOST: 'unix:///run/imp-docker/docker.sock' }).dockerSocket).toBe(
-    '/run/imp-docker/docker.sock',
-  );
-
-  expect(loadConfig({}).dockerSocket).toBe('/var/run/docker.sock');
-  expect(() => loadConfig({ DOCKER_HOST: 'tcp://10.0.0.1:2375' })).toThrow('unix socket');
 });
