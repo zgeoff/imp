@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
-import type { EgressPolicy, Imp } from '@imp/api';
+import type { EgressPolicy, Imp, ImpKind } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
@@ -54,6 +54,9 @@ interface CreateImpInput {
   readonly moveState?: 'receiving';
   readonly slot?: number;
   readonly isDiskGrowPending?: boolean;
+
+  // an image builder's, which only impd makes (images/builder-imps.ts)
+  readonly kind?: ImpKind;
 }
 
 interface DestroyOptions {

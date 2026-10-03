@@ -8,6 +8,12 @@ export const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stoppe
 
 export type ImpState = z.infer<typeof ImpStateSchema>;
 
+// `builder`: an imp impd made for one image build and destroys after it
+// (docs/guides/images.md#isolated-builds); only rm reaches it
+export const ImpKindSchema = z.enum(['user', 'builder']);
+
+export type ImpKind = z.infer<typeof ImpKindSchema>;
+
 // a part of the host an imp's VM predates until its next cold boot; `impd`
 // is a VM an impd from before vm.json booted, whose next wake boots cold
 const OutdatedPartSchema = z.enum(['firecracker', 'kernel', 'agent', 'impd', 'ipv6']);
@@ -46,6 +52,9 @@ export const ImpSchema = z.object({
   name: NameSchema,
   image: NameSchema,
   state: ImpStateSchema,
+
+  // left out by an impd from before builders, whose imps are all `user`
+  kind: ImpKindSchema.optional(),
   vcpus: z.int().positive(),
   memoryMib: z.int().positive(),
 

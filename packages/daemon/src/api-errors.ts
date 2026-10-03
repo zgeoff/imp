@@ -68,6 +68,13 @@ export function buildMovingError(name: string) {
   });
 }
 
+// an image builder is impd's alone while it builds (docs/guides/images.md#isolated-builds)
+export function buildBuilderError(name: string) {
+  return new ORPCError('PRECONDITION_FAILED', {
+    message: `${name} is an image builder that impd made for one build; only rm reaches it`,
+  });
+}
+
 export function buildStoppingError() {
   return new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is stopping' });
 }

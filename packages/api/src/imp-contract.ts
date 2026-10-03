@@ -120,7 +120,11 @@ export const impContract = {
       )
       .output(ImpSchema),
 
-    list: base.output(z.array(ImpSchema)),
+    // image builders only with `builders`; an impd from before them
+    // ignores it
+    list: base
+      .input(z.object({ builders: z.boolean().optional() }).optional())
+      .output(z.array(ImpSchema)),
 
     get: base.input(NameInputSchema).output(ImpSchema),
 
