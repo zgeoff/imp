@@ -16,9 +16,13 @@ export interface DatabaseCopyFile {
   // the copy's schema version: the last migration it holds
   readonly lastMigration: string;
   readonly createdAt: Date;
+
+  // PRAGMA integrity_check on the copy: 'ok', or its first problem
+  readonly integrity: string;
 }
 
 const MigrationRowSchema = z.object({ name: z.string() });
+const IntegrityRowSchema = z.object({ integrity_check: z.string() });
 
 // `VACUUM INTO` copies the database in one read transaction, so the copy is
 // whole whatever writes run meanwhile; the target must be absent or empty
@@ -59,7 +63,7 @@ export async function writeDatabaseCopy(
     return {
       path,
       sizeBytes: statSync(path).size,
-      lastMigration: readLastMigration(path),
+      ...readCopyFacts(path),
       createdAt: new Date(now()),
     };
   } catch (error) {
@@ -68,13 +72,18 @@ export async function writeDatabaseCopy(
   }
 }
 
-function readLastMigration(path: string): string {
+// read from the copy itself, so they describe the file a restore puts back
+function readCopyFacts(path: string): Pick<DatabaseCopyFile, 'lastMigration' | 'integrity'> {
   const copy = new Database(path, { readonly: true });
 
   try {
     const row = copy.query('SELECT name FROM kysely_migration ORDER BY name DESC LIMIT 1').get();
+    const check = copy.query('PRAGMA integrity_check').get();
 
-    return MigrationRowSchema.parse(row).name;
+    return {
+      lastMigration: MigrationRowSchema.parse(row).name,
+      integrity: IntegrityRowSchema.parse(check).integrity_check,
+    };
   } finally {
     copy.close();
   }

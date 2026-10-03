@@ -26,11 +26,12 @@ const copyCommand = defineCommand({
       });
 
       console.log(
-        formatOutput(
-          copy,
-          context.args.json,
-          (made) =>
-            `${made.path}\n${String(made.sizeBytes)} bytes, schema at migration ${made.lastMigration}`,
+        formatOutput(copy, context.args.json, (made) =>
+          [
+            made.path,
+            `${String(made.sizeBytes)} bytes, schema at migration ${made.lastMigration}, from impd ${made.impVersion}`,
+            `integrity: ${made.integrity}`,
+          ].join('\n'),
         ),
       );
     }),

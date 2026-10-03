@@ -668,14 +668,24 @@ export function buildRouter(deps: RouterDeps) {
           isOrphans: context.input.orphans ?? false,
         }),
       ),
-      copyDatabase: os.system.copyDatabase.handler((context) =>
-        writeDatabaseCopy(
+      copyDatabase: os.system.copyDatabase.handler(async (context) => {
+        const copy = await writeDatabaseCopy(
           deps.db,
           deps.config.dataDir,
           context.input.name ?? buildCopyName(deps.now()),
           deps.now,
-        ),
-      ),
+        );
+
+        // in the contract's order, which a restore script's output follows
+        return {
+          path: copy.path,
+          sizeBytes: copy.sizeBytes,
+          lastMigration: copy.lastMigration,
+          impVersion: packageJson.version,
+          createdAt: copy.createdAt,
+          integrity: copy.integrity,
+        };
+      }),
     },
     tokens: {
       list: os.tokens.list.handler(() => deps.tokens.list()),

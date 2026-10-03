@@ -6,6 +6,7 @@ import type { ImpContract } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
+import packageJson from '../package.json' with { type: 'json' };
 import { listApiCalls } from './db/api-audit';
 import type { ImpDatabase } from './db/open-database';
 import { MIGRATIONS } from './db/run-migrations';
@@ -82,7 +83,23 @@ test('a host-wide copy is a 0600 file under the data directory with the schema v
 
   const path = join(ctx.dataDir, 'db-copies', 'before-upgrade.sqlite');
 
-  expect(copy).toMatchObject({ path, lastMigration: LAST_MIGRATION });
+  // a restore script matches these names, in this order
+  expect(Object.keys(copy)).toEqual([
+    'path',
+    'sizeBytes',
+    'lastMigration',
+    'impVersion',
+    'createdAt',
+    'integrity',
+  ]);
+
+  expect(copy).toMatchObject({
+    path,
+    lastMigration: LAST_MIGRATION,
+    impVersion: packageJson.version,
+    integrity: 'ok',
+  });
+
   expect(copy.sizeBytes).toBe(statSync(path).size);
   expect(statSync(path).mode & 0o777).toBe(0o600);
   expect(statSync(join(ctx.dataDir, 'db-copies')).mode & 0o777).toBe(0o700);

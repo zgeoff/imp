@@ -225,8 +225,10 @@ imp db copy before-upgrade
 - The name has the form of an imp name. The API never takes a host path.
 - The file is `0600` and the directory `0700`: the copy holds every token's hash, every grant and
   every imp. Move it off the host, as root, as you would the data directory.
-- It prints the path, the size and the schema version, the last migration the copy holds. `--json`
-  prints all four fields.
+- It prints what it read back from the copy. `--json`, and the API, return exactly these fields:
+  `path`, `sizeBytes`, `lastMigration` (the schema version, the last migration the copy holds),
+  `impVersion` (the impd that wrote it), `createdAt`, and `integrity`: `PRAGMA integrity_check` on
+  the copy, `ok` or its first problem. impd keeps a copy whose check fails; do not restore it.
 - It needs a `manage` token with no imp patterns, and leaves a row in the API audit log. The API is
   `system.copyDatabase` with `{ name? }`. A client checks `features.databaseCopy` in `system.info()`
   first; an impd older than 0.30.0 lacks the call.
