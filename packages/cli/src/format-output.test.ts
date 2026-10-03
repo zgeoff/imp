@@ -389,6 +389,14 @@ test('it names the caller and what it may do, and who made each api call', () =>
 
   expect(text).toContain('token ci');
   expect(text.split('\n')[2]).toContain(' dashboard ');
+
+  const pulled = `busybox@sha256:${'b'.repeat(64)}`;
+
+  const add = formatApiCalls([
+    { ...call, procedure: 'images.add', actor: 'token', detail: pulled },
+  ]);
+
+  expect(add.split('\n')[1]?.endsWith(pulled)).toBe(true);
 });
 
 test('imp info names a DNS token that fails as an error, with its file', () => {
