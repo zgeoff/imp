@@ -157,6 +157,37 @@ function listStageNames(instructions: readonly Instruction[]): Set<string> {
 // written, or the ref pinned
 type PickImage = (ref: string, use: ImageUse, line: number) => string;
 
+interface Stages {
+  // the lowercased names, which COPY --from and RUN --mount from match
+  readonly names: ReadonlySet<string>;
+  readonly count: number;
+}
+
+const INT64_MIN = -(2n ** 63n);
+const INT64_MAX = 2n ** 63n - 1n;
+
+// what Go's strconv.Atoi reads, which COPY --from takes as a stage index
+function isStageIndex(from: string): boolean {
+  if (!/^[+\-]?[0-9]+$/v.test(from)) {
+    return false;
+  }
+
+  const value = BigInt(from);
+
+  return value >= INT64_MIN && value <= INT64_MAX;
+}
+
+function checkStageIndex(from: string, count: number, line: number): void {
+  const index = BigInt(from);
+
+  if (index < 0n || index >= BigInt(count)) {
+    throw buildRefusal(
+      line,
+      `COPY --from=${from} names no stage: the Dockerfile has ${String(count)}`,
+    );
+  }
+}
+
 // an instruction as the pinned copy writes it
 interface PinnedInstruction {
   readonly instruction: Instruction;
@@ -169,7 +200,7 @@ interface PinnedInstruction {
 function pickInstruction(
   instruction: Readonly<Instruction>,
   earlierStages: ReadonlySet<string>,
-  allStages: ReadonlySet<string>,
+  stages: Readonly<Stages>,
   pickImage: PickImage,
   platform: string | null,
 ): PinnedInstruction {
@@ -197,11 +228,15 @@ function pickInstruction(
     const flags = instruction.flags.map((flag) => {
       const from = flag.startsWith('--from=') ? flag.slice('--from='.length) : null;
 
+      if (from !== null && isStageIndex(from)) {
+        checkStageIndex(from, stages.count, line);
+      }
+
       const isExternal =
         from !== null &&
-        !/^\d+$/v.test(from) &&
+        !isStageIndex(from) &&
         from !== 'scratch' &&
-        !allStages.has(from.toLowerCase());
+        !stages.names.has(from.toLowerCase());
 
       return isExternal ? `--from=${pickImage(from, 'COPY --from', line)}` : flag;
     });
@@ -225,7 +260,7 @@ function pickInstruction(
           key.toLowerCase() === 'from' &&
           from !== '' &&
           from !== 'scratch' &&
-          !allStages.has(from.toLowerCase());
+          !stages.names.has(from.toLowerCase());
 
         return isExternal ? `${key}=${pickImage(from, 'RUN --mount from', line)}` : field;
       });
@@ -246,7 +281,10 @@ function resolveInstructions(
   pickImage: PickImage,
   platform: string | null,
 ): PinnedInstruction[] {
-  const allStages = listStageNames(parsed.instructions);
+  const stages = {
+    names: listStageNames(parsed.instructions),
+    count: parsed.instructions.filter((instruction) => instruction.keyword === 'from').length,
+  };
 
   const earlierStages = new Set<string>();
 
@@ -267,7 +305,7 @@ function resolveInstructions(
       checkWords(instruction, parsed.escape);
     }
 
-    const pinned = pickInstruction(instruction, earlierStages, allStages, pickImage, platform);
+    const pinned = pickInstruction(instruction, earlierStages, stages, pickImage, platform);
     const [, as, stage] = instruction.words;
 
     if (instruction.keyword === 'from' && as?.toLowerCase() === 'as' && stage !== undefined) {

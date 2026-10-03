@@ -318,6 +318,25 @@ test('a pinned instruction is joined onto one line, and a heredoc body is kept a
   );
 });
 
+test('COPY --from takes what Go reads as an int as a stage index, and refuses one out of range', () => {
+  expect(checkDockerfile('FROM a:1\nFROM b:1\nCOPY --from=+1 /x /x\nCOPY --from=0 /y /y')).toEqual([
+    { ref: 'a:1', use: 'FROM' },
+    { ref: 'b:1', use: 'FROM' },
+  ]);
+
+  expect(readRefusal('FROM a:1\nCOPY --from=1 /x /x')).toContain(
+    'line 2: COPY --from=1 names no stage: the Dockerfile has 1',
+  );
+
+  expect(readRefusal('FROM a:1\nCOPY --from=-1 /x /x')).toContain('COPY --from=-1 names no stage');
+
+  // past int64, Atoi fails and the frontend reads an image
+  expect(checkDockerfile('FROM a:1\nCOPY --from=99999999999999999999 /x /x')).toEqual([
+    { ref: 'a:1', use: 'FROM' },
+    { ref: '99999999999999999999', use: 'COPY --from' },
+  ]);
+});
+
 test('the pinned copy needs a pin for every image the build names', () => {
   expect(() => renderPinnedDockerfile('FROM d:4', PINS, 'linux/amd64')).toThrow(
     'line 1: FROM d:4 has no pin',
