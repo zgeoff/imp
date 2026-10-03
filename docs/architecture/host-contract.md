@@ -180,6 +180,17 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   or multipart), and a tar with a parameter, too. The proxy sends `Content-Type: application/x-tar`
   itself. A create's body and type are the proxy's own; a pull takes no body.
 - **No start route:** a container the proxy creates never runs. No `Upgrade`, so no attach or exec.
+- **What the client sees:** impd answers a refusal, in a build or in a docker CLI call such as
+  `imp image add`'s pull or create, with `BAD_REQUEST` and the proxy's message alone, one line of at
+  most 1000 characters, such as `imp-docker-proxy: registry localhost:5320 is the host's own`. The
+  proxy refuses what the request asks for, as impd's own checks of the same rules do; `FORBIDDEN`
+  means the caller's token. impd logs each refusal too, since one can mean its own checks missed a
+  case. The proxy's `502` for a failed engine call stays impd's error, and so does a refusal of a
+  call that carries nothing from the client: `docker version`, the Dockerfile frontend's pull and
+  `docker export`. impd takes a refusal only when it is the whole answer: the proxy's exact JSON
+  body, or stderr whose one line is the CLI's engine error, after the CLI's
+  `Unable to find image '…' locally` line at most. A registry's error text around such a line is no
+  refusal.
 - **No BuildKit session:** `/session` and `/grpc` are refused, and so are the build params that need
   a session or move the build: `session`, `remote`, `outputs`, `cachefrom`, `pull`, `platform`,
   `buildid` and `networkmode`. Without the session the engine does not apply `.dockerignore`, so
