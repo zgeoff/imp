@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.22.0](https://github.com/zgeoff/imp/compare/v0.21.0...v0.22.0) (2026-10-03)
+
+### Features
+
+- **agent:** the inner container's limit follows an elastic guest
+  ([9557826](https://github.com/zgeoff/imp/commit/955782689084bdc4ee6e2ad040f721b5d22ae85a))
+- **daemon:** elastic guest memory with virtio-mem hot-plug
+  ([3cd36b6](https://github.com/zgeoff/imp/commit/3cd36b675a0270afa25f17da089253d4608bd904))
+- **daemon:** no grow for an imp whose agent predates elastic memory
+  ([2829924](https://github.com/zgeoff/imp/commit/2829924fbfc1b7d3542a857e3bb4c60632880271))
+- **daemon:** the memory.max of each vm follows its elastic guest
+  ([f250253](https://github.com/zgeoff/imp/commit/f25025367f2fb989491e8b8676cb563acd18633e))
+- **moves:** a moved imp keeps its max memory
+  ([ba7962e](https://github.com/zgeoff/imp/commit/ba7962e69b291bd9c8aa2a3227af6bb46a0dfc3d))
+
+### Bug Fixes
+
+- **moves:** start an imp again when the target refuses its max memory
+  ([2ae98e5](https://github.com/zgeoff/imp/commit/2ae98e5ef9b6783a0cfcd31521ac76a5bcb87bdf)), closes
+  [#35](https://github.com/zgeoff/imp/issues/35)
+
 ## [0.21.0](https://github.com/zgeoff/imp/compare/v0.20.0...v0.21.0) (2026-10-02)
 
 ### Features
