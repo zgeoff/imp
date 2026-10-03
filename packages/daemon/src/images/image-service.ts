@@ -282,7 +282,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       // the engine keeps its own copy of the context while it builds
       await deps.diskBudget.withRoom(tarBytes, () =>
-        runDockerBuild({ socketPath: deps.config.dockerSocket, tarPath, tag, dockerfile, signal }),
+        runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
       );
     } catch (error) {
       // nobody waits for the image: the build was stopped, or its tag is left
@@ -339,12 +339,21 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         },
       );
 
+      const tarBytes = await countTarBytes(entries);
+
+      const maxBytes = deps.config.buildContextMaxBytes;
+
+      // the limit an upload has, and the proxy's
+      if (tarBytes > maxBytes) {
+        throw new ORPCError('BAD_REQUEST', {
+          message: `the build context is ${String(tarBytes)} bytes, over the limit of ${String(Math.floor(maxBytes / 1024 ** 2))} MiB (IMP_BUILD_CONTEXT_MAX_MIB)`,
+        });
+      }
+
       const uploadsDir = buildUploadsDir(deps.config.dataDir);
       const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
 
       mkdirSync(uploadsDir, { recursive: true, mode: 0o700 });
-
-      const tarBytes = await countTarBytes(entries);
 
       return deps.diskBudget.withRoom(tarBytes, async () => {
         try {
