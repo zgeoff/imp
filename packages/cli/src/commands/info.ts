@@ -119,7 +119,7 @@ function formatLimits(cpu: SystemInfo['cpu']): string[][] {
       'limits',
       cpu.limitsEnforced
         ? 'cpu limits enforced'
-        : 'OFF: no delegated cgroup (setup-cgroups.sh in the container log); jailed VMs cannot start',
+        : 'OFF: no cpu or memory limits, no delegated cgroup (setup-cgroups.sh in the container log); jailed VMs cannot start',
     ],
   ];
 }

@@ -121,7 +121,12 @@ install_file() {
     rm -f "$1.new"
     return 1
   fi
-  mv "$1.new" "$1"
+  # its caller tests it, so set -e is off in here: a failed rename stops
+  # the upgrade before the restart
+  if ! mv "$1.new" "$1"; then
+    echo "upgrade: cannot install $1; nothing restarted, the host still runs $old" >&2
+    exit 1
+  fi
   echo "upgrade: installed $1 from $image"
 }
 
