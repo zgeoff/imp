@@ -65,38 +65,39 @@ imp restore box clean             # and back
 imp fork box box-2                # a second copy to try something else in
 ```
 
-| Command                                   | What it does                                                           |
-| ----------------------------------------- | ---------------------------------------------------------------------- |
-| `new [name]`                              | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`)     |
-| `ls`, `info`                              | list imps; show RAM use and the budget                                 |
-| `exec <name> -- cmd`                      | run a command (`-t` for a terminal)                                    |
-| `console <name>`                          | open a shell in a session that outlives the terminal                   |
-| `sessions <name>`, `attach <name>`        | list sessions; attach to one from any machine                          |
-| `service add`, `ls`, `restart`, `rm`      | manage the processes an imp keeps running                              |
-| `logs <name> [service]`                   | print a service's log (`-f` to follow)                                 |
-| `checkpoint`, `checkpoints`, `restore`    | save, list and roll back disk states                                   |
-| `fork <source> <name>`                    | copy an imp's disk, or a checkpoint (`--from`)                         |
-| `disk resize <name> <size>`               | grow an imp's disk; the guest grows into it                            |
-| `gc [--dry-run]`                          | remove storage no imp, checkpoint or image names                       |
-| `backup run`, `ls`, `restore`, `check`    | back imps up off the host and restore them                             |
-| `sleep`, `wake`, `hold <name> <time>`     | sleep by hand; keep an imp awake for a while                           |
-| `start`, `stop`, `rm`                     | boot cold, shut down, destroy                                          |
-| `set <name>`, `top`                       | change CPU limit, weight, vCPUs; watch resource use                    |
-| `url <name>`                              | print the imp's local and tailnet URLs, and its own tailnet name       |
-| `proxy <name> <port>...`                  | reach ports in the imp from this machine (`--reverse` the other way)   |
-| `cp <src> <dest>`                         | copy files and directories into or out of an imp                       |
-| `policy <name> [open\|box\|none]`         | show or set what the imp may reach (`--allow` for box)                 |
-| `net create`, `ls`, `rm`, `join`, `leave` | private networks between imps (`imp new --net`)                        |
-| `expose <name>`, `unexpose <name>`        | serve the imp to the internet on your domain (`--auth token\|basic`)   |
-| `image build`, `add`, `ls`, `rm`          | manage images                                                          |
-| `template create`, `ls`, `rm`             | make an image from an imp's disk, to create imps from                  |
-| `secret add`, `ls`, `rm`                  | store API tokens in impd, never in a guest                             |
-| `grant`, `revoke`, `grants`, `audit`      | let an imp use a token through the host-side broker                    |
-| `events [name]`                           | follow impd's events as JSON lines                                     |
-| `mcp --prefix <p>`                        | serve imps to a coding agent as MCP tools over stdio                   |
-| `token new`, `ls`, `rm`, `key`, `whoami`  | scoped API tokens and their SSH keys, limited to some imps if you like |
-| `login <url>`, `host ls`, `use`, `rm`     | save impd hosts and their tokens; pick one (`--host`)                  |
-| `completion bash\|zsh\|fish`              | print the shell completion script                                      |
+| Command                                   | What it does                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `new [name]`                              | create and boot an imp (`--image`, `--cpus`, `--memory`, `--disk`)        |
+| `ls`, `info`                              | list imps; show RAM use and the budget                                    |
+| `exec <name> -- cmd`                      | run a command (`-t` for a terminal)                                       |
+| `console <name>`                          | open a shell in a session that outlives the terminal                      |
+| `sessions <name>`, `attach <name>`        | list sessions; attach to one from any machine                             |
+| `service add`, `ls`, `restart`, `rm`      | manage the processes an imp keeps running                                 |
+| `logs <name> [service]`                   | print a service's log (`-f` to follow)                                    |
+| `checkpoint`, `checkpoints`, `restore`    | save, list and roll back disk states                                      |
+| `fork <source> <name>`                    | copy an imp's disk, or a checkpoint (`--from`)                            |
+| `move <name> <host>`                      | move an imp to another saved host (`--stop` for a cold move)              |
+| `disk resize <name> <size>`               | grow an imp's disk; the guest grows into it                               |
+| `gc [--dry-run]`                          | remove storage no imp, checkpoint or image names                          |
+| `backup run`, `ls`, `restore`, `check`    | back imps up off the host and restore them                                |
+| `sleep`, `wake`, `hold <name> <time>`     | sleep by hand; keep an imp awake for a while                              |
+| `start`, `stop`, `rm`                     | boot cold, shut down, destroy                                             |
+| `set <name>`, `top`                       | change CPU limit, weight, vCPUs; watch resource use                       |
+| `url <name>`                              | print the imp's local and tailnet URLs, and its own tailnet name          |
+| `proxy <name> <port>...`                  | reach ports in the imp from this machine (`--reverse` the other way)      |
+| `cp <src> <dest>`                         | copy files and directories into or out of an imp                          |
+| `policy <name> [open\|box\|none]`         | show or set what the imp may reach (`--allow` for box)                    |
+| `net create`, `ls`, `rm`, `join`, `leave` | private networks between imps (`imp new --net`)                           |
+| `expose <name>`, `unexpose <name>`        | serve the imp to the internet on your domain (`--auth token\|basic`)      |
+| `image build`, `add`, `ls`, `rm`          | manage images                                                             |
+| `template create`, `ls`, `rm`             | make an image from an imp's disk, to create imps from                     |
+| `secret add`, `ls`, `rm`                  | store API tokens in impd, never in a guest                                |
+| `grant`, `revoke`, `grants`, `audit`      | let an imp use a token through the host-side broker                       |
+| `events [name]`                           | follow impd's events as JSON lines                                        |
+| `mcp --prefix <p>`                        | serve imps to a coding agent as MCP tools over stdio                      |
+| `token new`, `ls`, `rm`, `key`, `whoami`  | scoped API tokens and their SSH keys, limited to some imps if you like    |
+| `login <url>`, `host ls`, `use`, `rm`     | save impd hosts and their tokens; pick one (`--host`); `hosts` lists them |
+| `completion bash\|zsh\|fish`              | print the shell completion script                                         |
 
 `--memory` and `--disk` take MiB or a unit (`512m`, `2g`, `1t`); a disk is 32 GiB by default.
 `imp new` and `imp set` take `--cpu-limit` and `--cpu-weight`
@@ -208,9 +209,10 @@ or a request in flight is never picked. When nothing can make room, the request 
 
 ## Images
 
-Any OCI image can be an imp: `imp image add ubuntu:24.04`, or build your own `FROM imp/base`. imp's
-agent boots from a separate read-only drive, so your image needs nothing from imp. Services that
-should start with the imp are small JSON files in `/etc/imp/services.d`.
+Any OCI image can be an imp: `imp image add ubuntu:24.04`, or build your own on the published base,
+`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…` (a build names its base by digest). imp's agent boots
+from a separate read-only drive, so your image needs nothing from imp. Services that should start
+with the imp are small JSON files in `/etc/imp/services.d`.
 
 `images/base` is Ubuntu with Docker. `images/dev` adds Node, Bun, Go, Python and Claude Code. The
 [images guide](./docs/guides/images.md) covers the rest.
