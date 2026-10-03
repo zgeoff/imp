@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { rootCertificates } from 'node:tls';
 import { openExecStream } from '../agent-client/exec-stream';
 import { readErrorMessage } from '../read-error-message';
@@ -106,15 +107,16 @@ export interface TrustedImp {
 // writes the bundle into the guest from buildInstallInput's text
 export type InstallBundle = (vsockPath: string, input: string) => Promise<void>;
 
-// whether the bundle is in this boot of the guest; the failure's text when not
+// whether the bundle is in this boot of the guest, and the boot's id; the
+// failure's text when not
 type TrustOutcome =
-  | { readonly installed: true }
+  | { readonly installed: true; readonly boot: string }
   | { readonly installed: false; readonly detail: string };
 
 // The broker's part of an exec's environment: the variables once the bundle
-// is in this boot, or why there are none.
+// is in this boot, with the boot's id, or why there are none.
 export type BrokerExecEnv =
-  | { readonly kind: 'ready'; readonly env: readonly string[] }
+  | { readonly kind: 'ready'; readonly env: readonly string[]; readonly boot: string }
   | { readonly kind: 'ungranted' }
   | { readonly kind: 'untrusted'; readonly detail: string };
 
@@ -123,31 +125,63 @@ export interface GuestTrust {
   // per boot however many execs wait on it
   readonly ensure: (imp: TrustedImp, vsockPath: string) => Promise<TrustOutcome>;
 
+  // each write of an imp: a boot ends once the imp is not running
+  readonly observe: (imp: Readonly<TrustedImp & { readonly state: string }>) => void;
+
   // drops what it knows of imps that no longer exist
   readonly forgetExcept: (impIds: ReadonlySet<string>) => void;
 }
 
+interface Boot {
+  readonly pid: number | null;
+  readonly id: string;
+}
+
+// A boot is an id impd mints, not the pid, which the kernel can hand out
+// again: a new pid is a new boot, and so is the same pid after observe saw
+// the imp stop, sleep or halt in between.
 export function createGuestTrust(
   input: string,
   install: InstallBundle,
   log: (message: string) => void,
 ): GuestTrust {
-  const installs = new Map<
-    string,
-    { readonly pid: number | null; readonly done: Promise<TrustOutcome> }
-  >();
+  const boots = new Map<string, Boot>();
+  const installs = new Map<string, { readonly boot: string; done: Promise<TrustOutcome> }>();
+
+  const readBoot = (imp: TrustedImp): Boot => {
+    const known = boots.get(imp.id);
+
+    if (known !== undefined && known.pid === imp.pid) {
+      return known;
+    }
+
+    const boot = { pid: imp.pid, id: randomUUID() };
+
+    boots.set(imp.id, boot);
+
+    return boot;
+  };
+
+  const removeImp = (impId: string): void => {
+    boots.delete(impId);
+    installs.delete(impId);
+  };
 
   return {
     ensure: (imp, vsockPath) => {
+      const boot = readBoot(imp);
       const known = installs.get(imp.id);
 
-      if (known !== undefined && known.pid === imp.pid) {
+      if (known?.boot === boot.id) {
         return known.done;
       }
 
-      const entry: { pid: number | null; done: Promise<TrustOutcome> } = {
-        pid: imp.pid,
-        done: Promise.resolve({ installed: false, detail: 'the install has not run' }),
+      const entry = {
+        boot: boot.id,
+        done: Promise.resolve<TrustOutcome>({
+          installed: false,
+          detail: 'the install has not run',
+        }),
       };
 
       // a failure is forgotten, so the next exec tries again
@@ -155,7 +189,7 @@ export function createGuestTrust(
         try {
           await install(vsockPath, input);
 
-          return { installed: true };
+          return { installed: true, boot: boot.id };
         } catch (error) {
           const detail = readErrorMessage(error);
 
@@ -177,10 +211,25 @@ export function createGuestTrust(
 
       return entry.done;
     },
+    observe: (imp) => {
+      if (imp.pid === null || imp.state !== 'running') {
+        removeImp(imp.id);
+
+        return;
+      }
+
+      readBoot(imp);
+    },
     forgetExcept: (impIds) => {
+      for (const id of boots.keys()) {
+        if (!impIds.has(id)) {
+          removeImp(id);
+        }
+      }
+
       for (const id of installs.keys()) {
         if (!impIds.has(id)) {
-          installs.delete(id);
+          removeImp(id);
         }
       }
     },

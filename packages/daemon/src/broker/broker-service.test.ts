@@ -285,6 +285,32 @@ test('an exec gets the broker variables only once the CA is in that boot', async
   expect(ctx.logs.join('\n')).toContain('broker CA not installed');
 });
 
+test('a stop ends the boot, so the same pid back again installs again', async () => {
+  const installs: string[] = [];
+
+  await using ctx = await setupTest({
+    installBundle: (vsockPath) => {
+      installs.push(vsockPath);
+
+      return Promise.resolve();
+    },
+  });
+
+  await ctx.client.imps.create({ name: 'dev' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: VALUE });
+  await ctx.client.grants.add({ name: 'dev', secret: 'gh' });
+
+  const imp = await requireImp(ctx.db, 'dev');
+
+  await ctx.broker.readExecEnv(imp, '/vsock');
+  await ctx.client.imps.stop({ name: 'dev' });
+
+  // the record as it was before the stop: the pid a new boot could get
+  await ctx.broker.readExecEnv(imp, '/vsock');
+
+  expect(installs).toHaveLength(2);
+});
+
 test('the audit log keeps the newest rows of each imp', async () => {
   await using ctx = await setupTest();
 
