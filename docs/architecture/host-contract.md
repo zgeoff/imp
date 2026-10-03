@@ -97,7 +97,9 @@ The rest of the list:
   are set by `--sysctl`. The scripts and impd only check them. Read-only stops a write by accident,
   not a deliberate one (see the caution below).
 - **cgroups:** `--cgroupns=private`. `setup-cgroups.sh` remounts the container's own
-  `/sys/fs/cgroup` read-write; the namespace keeps it to the container's subtree.
+  `/sys/fs/cgroup` read-write; the namespace keeps it to the container's subtree. If the remount
+  fails, the container still starts with limits off and jailed VMs cannot start; `imp info` then
+  says `limits OFF`.
 - **AppArmor:** `unconfined`. Docker's default AppArmor profile denies `mount`.
 - **seccomp:** [`deploy/imp-host.seccomp.json`](../../deploy/imp-host.seccomp.json), installed in
   `/etc/imp`. It is Docker's default profile with one rule added: `pivot_root` with `SYS_ADMIN`,
