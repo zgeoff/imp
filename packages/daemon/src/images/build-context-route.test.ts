@@ -10,7 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IMAGE_BUILD_PATH, ImageBuildResultSchema } from '@imp/api';
+import {
+  IMAGE_BUILD_PATH,
+  IMAGE_BUILD_STREAM_TYPE,
+  ImageBuildEventSchema,
+  ImageBuildResultSchema,
+} from '@imp/api';
 import type { Scope } from '@imp/api';
 import * as z from 'zod';
 import { createApiAudit } from '../audit/api-audit';
@@ -20,6 +25,7 @@ import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '../imps/test-imps';
 import { buildUploadsDir } from '../storage/data-layout';
 import { createBuildContextRoute } from './build-context-route';
+import { BUILD_KEEPALIVE_MS } from './build-event-stream';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import type { ImageService } from './image-service';
 
@@ -37,7 +43,15 @@ interface TestOptions {
 
   // replaces the fake build; 'image-service' builds as impd does
   readonly build?: ImageService['buildImageFromContext'] | 'image-service';
+
+  // the gap between a streamed build's progress lines
+  readonly keepaliveMs?: number;
 }
+
+// the headers of a client that reads the build as a stream of events
+const STREAM = { accept: IMAGE_BUILD_STREAM_TYPE };
+
+type BuildEvent = z.infer<typeof ImageBuildEventSchema>;
 
 // impd with a fake build that records what reached it
 async function setupTest(options: TestOptions = {}) {
@@ -81,7 +95,16 @@ async function setupTest(options: TestOptions = {}) {
       : (options.build ?? writeBuildCall);
 
   const images = { ...harness.images, buildImageFromContext: build };
-  const root = buildTestApp({ ...harness, images }, harness);
+
+  const root = buildTestApp(
+    { ...harness, images },
+    harness,
+    undefined,
+    {},
+    null,
+    {},
+    options.keepaliveMs,
+  );
 
   const sendBuild = (
     query: string,
@@ -150,6 +173,16 @@ async function setupTest(options: TestOptions = {}) {
   };
 }
 
+// every event of a streamed answer, to its end
+async function readEvents(response: Response): Promise<BuildEvent[]> {
+  const text = await response.text();
+
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => ImageBuildEventSchema.parse(JSON.parse(line)));
+}
+
 // a body with no Content-Length: the route can only count what arrives
 function createByteStream(total: number): ReadableStream<Uint8Array> {
   const state = { sent: 0 };
@@ -180,6 +213,39 @@ test('a streamed context builds, answers the image and leaves no file behind', a
   expect(response.status).toBe(200);
   expect(ImageBuildResultSchema.parse(body).name).toBe('web');
   expect(ctx.calls).toEqual([{ bytes: 'tar bytes', name: 'web', dockerfile: 'docker/Dockerfile' }]);
+  expect(ctx.listUploads()).toEqual([]);
+
+  const outcomes = await ctx.readOutcomes(1);
+
+  expect(outcomes).toEqual(['ok']);
+});
+
+test('a client that accepts the stream gets the headers at once, progress while it builds, then the image', async () => {
+  const gate = Promise.withResolvers<void>();
+
+  await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
+
+  // answered while the build still waits on the gate
+  const response = await ctx.sendBuild('name=web', 'tar bytes', TEST_TOKEN, STREAM);
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toBe(IMAGE_BUILD_STREAM_TYPE);
+
+  while (ctx.calls.length === 0) {
+    await Bun.sleep(1);
+  }
+
+  await Bun.sleep(50);
+
+  gate.resolve();
+
+  const events = await readEvents(response);
+
+  const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
+
+  expect(phases[0]).toBe('upload');
+  expect(phases.filter((phase) => phase === 'build').length).toBeGreaterThan(2);
+  expect(events.at(-1)).toMatchObject({ type: 'image', image: { name: 'web' } });
   expect(ctx.listUploads()).toEqual([]);
 
   const outcomes = await ctx.readOutcomes(1);
@@ -249,6 +315,28 @@ test('a context over the limit gets 413, by its Content-Length or by the bytes t
   expect(body).toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
   expect(ctx.listUploads()).toEqual([]);
 
+  // a stream refuses a Content-Length with its status; bytes past the limit
+  // come after its 200, so its last line says so
+  const declaredStream = await ctx.readStatus('name=web', 'x', TEST_TOKEN, {
+    ...STREAM,
+    'content-length': String(2 * 1024 ** 2),
+  });
+
+  expect(declaredStream).toBe(413);
+
+  const overStream = await ctx.sendBuild(
+    'name=web',
+    createByteStream(1024 ** 2 + 1),
+    TEST_TOKEN,
+    STREAM,
+  );
+
+  const events = await readEvents(overStream);
+
+  expect(overStream.status).toBe(200);
+  expect(events.at(-1)).toMatchObject({ type: 'error', code: 'PAYLOAD_TOO_LARGE' });
+  expect(ctx.listUploads()).toEqual([]);
+
   // exactly the limit is fine
   const atLimit = await ctx.readStatus('name=web', createByteStream(1024 ** 2));
 
@@ -268,8 +356,9 @@ test('a fifth build while four upload or run gets 429', async () => {
   }
 
   const fifth = await ctx.readStatus('name=web5', 'tar');
+  const fifthStream = await ctx.readStatus('name=web5', 'tar', TEST_TOKEN, STREAM);
 
-  expect(fifth).toBe(429);
+  expect([fifth, fifthStream]).toEqual([429, 429]);
 
   gate.resolve();
 
@@ -282,36 +371,46 @@ test('a fifth build while four upload or run gets 429', async () => {
   expect(sixth).toBe(200);
 });
 
-test('a client that goes mid-build stops the build, frees its slot and its file', async () => {
-  const gate = Promise.withResolvers<void>();
+test.each([
+  ['JSON', {}],
+  ['a stream', STREAM],
+])(
+  'a client that goes mid-build, answered as %s, stops the build, frees its slot and its file',
+  async (_, headers) => {
+    const gate = Promise.withResolvers<void>();
 
-  await using ctx = await setupTest({ gate: gate.promise });
+    await using ctx = await setupTest({ gate: gate.promise, keepaliveMs: 10 });
 
-  const clients = [1, 2, 3, 4].map(() => new AbortController());
+    const clients = [1, 2, 3, 4].map(() => new AbortController());
 
-  const builds = clients.map((client, n) =>
-    ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, {}, client.signal),
-  );
+    const builds = clients.map((client, n) =>
+      ctx.sendBuild(`name=gone${String(n)}`, 'tar', TEST_TOKEN, headers, client.signal),
+    );
 
-  while (ctx.calls.length < 4) {
-    await Bun.sleep(1);
-  }
+    while (ctx.calls.length < 4) {
+      await Bun.sleep(1);
+    }
 
-  for (const client of clients) {
-    client.abort();
-  }
+    for (const client of clients) {
+      client.abort();
+    }
 
-  await Promise.allSettled(builds);
+    await Promise.allSettled(builds);
 
-  expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
-  expect(ctx.listUploads()).toEqual([]);
+    // a stream answered before its build ended: the build's audit row comes
+    // after its file is gone
+    await ctx.readOutcomes(4);
 
-  gate.resolve();
+    expect(ctx.stopped.toSorted()).toEqual(['gone0', 'gone1', 'gone2', 'gone3']);
+    expect(ctx.listUploads()).toEqual([]);
 
-  const next = await ctx.readStatus('name=web', 'tar');
+    gate.resolve();
 
-  expect(next).toBe(200);
-});
+    const next = await ctx.readStatus('name=web', 'tar');
+
+    expect(next).toBe(200);
+  },
+);
 
 // a docker on PATH whose pulls hang, and which logs its argv; a pull execs
 // its sleep, so killing it leaves nothing holding its pipes
@@ -812,6 +911,21 @@ test('a failed build answers its error and removes the upload', async () => {
   expect(response.status).toBe(500);
   expect(body).toEqual({ code: 'INTERNAL_SERVER_ERROR', message: 'disk on fire' });
   expect(ctx.listUploads()).toEqual([]);
+
+  const streamed = await ctx.sendBuild('name=web', 'tar', TEST_TOKEN, STREAM);
+  const events = await readEvents(streamed);
+
+  expect(events.at(-1)).toEqual({
+    type: 'error',
+    code: 'INTERNAL_SERVER_ERROR',
+    message: 'disk on fire',
+  });
+
+  expect(ctx.listUploads()).toEqual([]);
+
+  const outcomes = await ctx.readOutcomes(2);
+
+  expect(outcomes).toEqual(['INTERNAL_SERVER_ERROR', 'INTERNAL_SERVER_ERROR']);
 });
 
 test('a new route clears what an earlier impd left in the uploads directory', async () => {
@@ -828,6 +942,7 @@ test('a new route clears what an earlier impd left in the uploads directory', as
     images: harness.images,
     diskBudget: harness.diskBudget,
     audit: createApiAudit({ db: harness.db, now: harness.now, log: () => {} }),
+    keepaliveMs: BUILD_KEEPALIVE_MS,
     now: harness.now,
   });
 

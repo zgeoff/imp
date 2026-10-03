@@ -156,6 +156,10 @@ export const SystemInfoSchema = z.object({
       // older impd drops both unread, so a client checks first
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
+
+      // POST /images/build streams build events to a client that accepts
+      // them (docs/guides/images.md#build-an-image)
+      imageBuildStream: z.boolean().optional(),
     })
     .optional(),
 });

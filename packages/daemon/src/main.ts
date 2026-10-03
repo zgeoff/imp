@@ -26,6 +26,7 @@ import { createDnsToken } from './https/dns/dns-token';
 import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
+import { BUILD_KEEPALIVE_MS } from './images/build-event-stream';
 import { createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { readSetfcapWarning } from './images/unpack-export';
@@ -424,7 +425,14 @@ async function main(): Promise<void> {
     now: Date.now,
     log: printLog,
     audit,
-    buildContexts: createBuildContextRoute({ config, images, diskBudget, audit, now: Date.now }),
+    buildContexts: createBuildContextRoute({
+      config,
+      images,
+      diskBudget,
+      audit,
+      now: Date.now,
+      keepaliveMs: BUILD_KEEPALIVE_MS,
+    }),
     moves,
   });
 
