@@ -39,7 +39,8 @@ such as `dev-*`. Such a token:
   tokens and `imp exec --agent`, which runs as root outside the imp's container
   ([outer exec](../architecture/agent.md#outer-exec)). A grant hands a host secret to an imp, so a
   `dev-*` token could otherwise grant itself any secret; a network reaches every imp on it. It
-  cannot pass `--net` to `imp new` either.
+  cannot pass `--net` to `imp new` either. A token made with a list of secrets may grant those
+  ([granting secrets](#granting-secrets)), and no others.
 
 A token with patterns still sees host-wide totals. `system.info` shows the RAM budget, use and
 reserve, the RAM that sleeping imps hold (`ramSleepingMib`), the count of imps, awake and in all,
@@ -56,7 +57,7 @@ Only a `manage` token with no patterns manages tokens.
 
 ```sh
 imp token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdout
-imp token ls                                   # names, scopes, imps, SSH keys; never secrets
+imp token ls                                   # names, scopes, imps, grantable secrets, SSH keys
 imp token whoami                               # who impd takes this CLI for
 imp token rm ci
 ```
@@ -71,6 +72,49 @@ new token once, with a copy button.
 Removing a token ends what it opened at once: its dashboard sessions, its event streams, its open
 `/exec` and `/tunnel` sockets (close code 1008), the SSH logins made with its keys, and exec tickets
 it asked for that are not used yet.
+
+## Granting secrets
+
+A `manage` token with imp patterns can also be given secrets it may grant to its imps and revoke
+from them. A client then manages the credentials of its own imps without host-wide `manage`:
+
+```sh
+imp token new agent --scope manage --imps 'agent-*' --grantable 'gh,npm'
+```
+
+The API takes the list as `grantable` on `tokens.create`: 1 to 32 secret names, no two the same.
+Each secret must exist; a missing one fails with `NOT_FOUND`. A list without `manage`, or on a token
+with no patterns, fails with `BAD_REQUEST`. `imp token ls` and `tokens.whoami` show the list.
+
+`grants.add` and `grants.delete` from such a token need both the imp within its patterns and the
+secret on its list. Each refusal is `FORBIDDEN` with `data.reason`:
+
+| Reason             | Why                                                                          |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `scope`            | The caller's scope is below `manage`.                                        |
+| `imp_out_of_scope` | The imp is outside the caller's patterns.                                    |
+| `not_grantable`    | The secret is not on the list, or it is no longer the secret the list named. |
+
+The check runs before the call looks anything up, so a secret that is not on the list is `FORBIDDEN`
+whether it exists or not. After the check, the usual errors apply: `NOT_FOUND` for the imp or the
+grant, `CONFLICT` when another grant already covers one of the secret's hosts
+([one credential per host](./connectors.md#secrets-and-grants)), and `MOVING`. `grants.list` needs
+only `read` on the imp, as before.
+
+The list names each secret as it was when the token was made. Every secret has a random generation,
+set when it is created and kept by `imp secret add --replace`. A secret deleted and made again under
+the name has another one, so the list no longer covers it: the host owner makes a new token to hand
+it out. impd reads the secret's generation at each call, never from the token's cache.
+
+The token may not grant a secret's value or change its hosts: secrets, and tokens, stay host-wide.
+
+In this version, such a token may not fork an imp or move one: `imps.fork`, `moves.prepare`,
+`moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A fork copies its
+source's grants, and a move carries them to the target, so either could hand an imp a secret the
+list does not name. `moves.abort` stays open to it. The list never changes after the token is made,
+so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep, wake,
+a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an imp
+made from a [template](./templates.md) gets none.
 
 ## Each way in
 
@@ -160,5 +204,9 @@ The dashboard needs no login for a tailnet member a rule matches.
   low, and every host-wide one a token with patterns. It also covers patterns, the event stream,
   sockets, tickets, revocation, the peer handle and cross-site sockets.
 - `packages/daemon/src/auth/authenticate.test.ts`: sessions, a rebound host and an imp's page.
+- `packages/daemon/src/build-app-grants.test.ts`: tokens that may grant secrets, through a bearer
+  token and a dashboard session: every pairing of imp and secret, refusals, stale list entries,
+  forks and moves, and what survives a restart. `broker/grant-races.test.ts` races grants, revokes,
+  fork copies and replaces against one another.
 - The `tokens` e2e suite drives it all through the CLI. The `tailscale` suite reboots impd with a
   rule and calls the API over the tailnet without a token.

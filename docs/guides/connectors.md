@@ -24,18 +24,30 @@ put secrets into the sandbox as environment variables.
 | Command                               | What it does                                                                                                                                                          |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `imp secret add <name> --kind <kind>` | Stores a secret. The value comes from stdin or a prompt that does not echo, never from a flag.                                                                        |
-| `imp secret add <name> ... --replace` | Replaces the value and the hosts of a secret that exists, for a rotation.                                                                                             |
+| `imp secret add <name> ... --replace` | Replaces the value and the hosts of a secret that exists, for a rotation. A request gets the old hosts with the old value, or the new with the new.                   |
 | `imp secret ls`                       | Lists each secret's kind, hosts and imps. It never shows a value.                                                                                                     |
 | `imp secret rm <name>`                | Deletes a secret and revokes it from every imp.                                                                                                                       |
 | `imp grant <imp> <secret>`            | Lets the imp use the secret.                                                                                                                                          |
-| `imp revoke <imp> <secret>`           | Takes it away. A request on a connection that is already open gets a 403 from then on.                                                                                |
+| `imp revoke <imp> <secret>`           | Takes it away. A request under way finishes; every later one fails, on any connection.                                                                                |
 | `imp grants <imp>`                    | Lists the secrets granted to the imp.                                                                                                                                 |
 | `imp audit [imp] [--limit n]`         | Lists the requests the broker sent with a credential, newest first. `--kind api` lists the calls that changed impd instead ([events](./events.md#the-api-audit-log)). |
 
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same
-host conflict. A fork gets the grants of its source, as it gets the disk. `imp rm` takes the imp's
-grants and audit rows with it.
+host conflict. impd checks for the clash and makes the grant in one transaction, so two grants at
+once cannot both pass; a replace checks its new hosts against every imp the secret is granted to in
+the transaction that switches them. A fork gets the grants of its source, as it gets the disk, less
+any that would clash with a grant the fork has by then; impd logs each one it skips. `imp rm` takes
+the imp's grants and audit rows with it.
+
+Grants are host-wide: only a `manage` token with no imp patterns makes them, unless the token was
+given a list of secrets to grant to its imps ([granting secrets](./tokens.md#granting-secrets)).
+
+After a revoke, the broker stops the terminator for that imp and host. A request already under way
+on it finishes, then its connections close, and the next request opens a new one: a plain tunnel,
+with no credential. A request that reaches a terminator between the revoke and its stop finds no
+grant, since the broker looks the credential up for each request, and gets a 403
+`no credential is granted for <host>`.
 
 ### Kinds
 
@@ -109,13 +121,13 @@ key id, so strict verifiers such as Python 3.13 accept it.
 
 ## Where secrets are
 
-| Place                    | What is there                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `<data>/secrets/<name>`  | The value, mode 0600 in a 0700 directory, written by a temp file and a rename. |
-| The database             | The name, kind, hosts and grants. Never a value.                               |
-| The API, the CLI, logs   | Never a value. A failed `imp secret add` logs the error but not the value.     |
-| The guest, its snapshots | The placeholder and the public CA bundle only.                                 |
-| `imp audit`              | Time, imp, secret, method, host, path without the query, status, bytes, time.  |
+| Place                            | What is there                                                                                                                                                                     |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<data>/secrets/<name>.<random>` | The value, mode 0600 in a 0700 directory, written by a temp file and a rename. A replace writes a new file and switches the secret's row to it; an older impd's file is `<name>`. |
+| The database                     | The name, kind, hosts and grants. Never a value.                                                                                                                                  |
+| The API, the CLI, logs           | Never a value. A failed `imp secret add` logs the error but not the value.                                                                                                        |
+| The guest, its snapshots         | The placeholder and the public CA bundle only.                                                                                                                                    |
+| `imp audit`                      | Time, imp, secret, method, host, path without the query, status, bytes, time.                                                                                                     |
 
 Values are not encrypted at rest: the key would sit on the same disk. The audit log keeps the newest
 1000 rows per imp.
