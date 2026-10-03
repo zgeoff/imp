@@ -18,7 +18,7 @@ function writeFakeBin(binDir: string, opBehaviour: 'key' | 'fail'): string {
       : `#!/bin/sh\necho call >> '${opCalls}'\nexit 1\n`;
 
   const docker =
-    '#!/bin/sh\ncase "$*" in *docker-proxy/main.ts) exit 0 ;; esac\n' +
+    '#!/bin/sh\ncase "$*" in *bin/imp-docker-proxy) exit 0 ;; esac\n' +
     'case "$1" in run|inspect) exit 1 ;; esac\nexit 0\n';
 
   for (const [name, script] of [

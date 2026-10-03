@@ -157,31 +157,72 @@ export function findPrivilegeDrift(host: HostConfig, expected: ExpectedPrivilege
   return findSeccompDrift(opts, expected.seccomp) ?? findDeviceDrift(host, expected);
 }
 
-// imp-host reaches Docker through imp-docker-proxy only: no docker.sock of
-// the host's, under any name
-export function findSocketDrift(mounts: readonly Mount[]): string | null {
-  const socket = mounts.find(
-    (mount) => mount.Source.endsWith('docker.sock') || mount.Destination.endsWith('docker.sock'),
+// the host's Docker socket: a bind of it, or of a directory above it,
+// hands imp-host the socket that only imp-docker-proxy may hold
+const HOST_SOCKETS = ['/var/run/docker.sock', '/run/docker.sock'];
+
+function isSocketMount(mount: Mount): boolean {
+  return [mount.Source, mount.Destination].some(
+    (path) =>
+      path.endsWith('docker.sock') ||
+      HOST_SOCKETS.some((socket) => path === '/' || socket.startsWith(`${path}/`)),
   );
+}
+
+export function findSocketDrift(mounts: readonly Mount[]): string | null {
+  const socket = mounts.find((mount) => isSocketMount(mount));
 
   return socket === undefined ? null : `it mounts ${socket.Source} at ${socket.Destination}`;
 }
 
+const ProxyArgsSchema = z.object({ proxy: z.object({ privileges: z.array(WordsSchema) }) });
+
+export interface ExpectedProxy {
+  readonly capDrop: readonly string[];
+  readonly securityOpts: readonly string[];
+  readonly isReadOnly: boolean;
+  readonly network: string;
+  readonly user: string;
+}
+
+// the proxy section of deploy/imp-host.args.json, as docker inspect shows it
+export function readExpectedProxy(argsJson: string): ExpectedProxy {
+  const words = ProxyArgsSchema.parse(JSON.parse(argsJson)).proxy.privileges.flat();
+
+  return {
+    capDrop: readFlagValues(words, '--cap-drop').toSorted(),
+    securityOpts: readFlagValues(words, '--security-opt').toSorted(),
+    isReadOnly: words.includes('--read-only'),
+    network: readFlagValues(words, '--network')[0] ?? 'default',
+    user: readFlagValues(words, '--user')[0] ?? '',
+  };
+}
+
 // why the proxy's container differs from the proxy section of
-// deploy/imp-host.args.json, or null
-export function findProxyDrift(proxy: ProxyConfig): string | null {
+// deploy/imp-host.args.json, or null; it adds no capability and no device
+export function findProxyDrift(proxy: ProxyConfig, expected: ExpectedProxy): string | null {
   const host = proxy.host;
+  const capDrop = (host.CapDrop ?? []).toSorted();
+  const opts = (host.SecurityOpt ?? []).toSorted();
 
-  if (host.Privileged || (host.CapAdd ?? []).length > 0 || !(host.CapDrop ?? []).includes('ALL')) {
-    return 'it keeps capabilities';
+  if (
+    host.Privileged ||
+    (host.CapAdd ?? []).length > 0 ||
+    capDrop.join(' ') !== expected.capDrop.join(' ')
+  ) {
+    return `it keeps capabilities (drops ${capDrop.join(' ') || 'none'})`;
   }
 
-  if (!(host.SecurityOpt ?? []).includes('no-new-privileges')) {
-    return 'it may gain privileges (no no-new-privileges)';
+  if (opts.join(' ') !== expected.securityOpts.join(' ')) {
+    return `its security options are ${opts.join(' ') || 'none'}, not ${expected.securityOpts.join(' ')}`;
   }
 
-  if (!host.ReadonlyRootfs || host.NetworkMode !== 'none' || proxy.user !== '65534:65534') {
-    return `its root is ${host.ReadonlyRootfs ? 'read-only' : 'writable'}, network ${host.NetworkMode}, user ${proxy.user || 'root'}`;
+  if (host.ReadonlyRootfs !== expected.isReadOnly || host.NetworkMode !== expected.network) {
+    return `its root is ${host.ReadonlyRootfs ? 'read-only' : 'writable'}, network ${host.NetworkMode}`;
+  }
+
+  if (proxy.user !== expected.user) {
+    return `it runs as ${proxy.user || 'root'}, not ${expected.user}`;
   }
 
   return (host.Devices ?? []).length > 0 ? 'it has devices' : null;
@@ -198,7 +239,12 @@ async function checkProxy(container: string): Promise<void> {
     throw new Error(`docker inspect ${proxy} returned nothing`);
   }
 
-  const drift = findProxyDrift({ user: info.Config.User, host: info.HostConfig });
+  const argsJson = readFileSync(join(REPO_ROOT, 'deploy', 'imp-host.args.json'), 'utf8');
+
+  const drift = findProxyDrift(
+    { user: info.Config.User, host: info.HostConfig },
+    readExpectedProxy(argsJson),
+  );
 
   if (drift !== null) {
     throw new Error(`${proxy} does not match the proxy in deploy/imp-host.args.json: ${drift}`);
