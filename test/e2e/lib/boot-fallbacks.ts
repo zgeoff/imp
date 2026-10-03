@@ -3,7 +3,9 @@
 // host restored no template while every suite passed (#147).
 const FALLBACK = /: boot template [0-9a-f]+ failed, booting the kernel/;
 
-// the lines of impd's log where a template restore fell back
+// The lines of impd's log where a template restore fell back. The caller
+// reads the current container's log: what a container logged before a suite
+// recreated it is gone, and goes unchecked.
 export function findBootFallbacks(log: string): string[] {
   return log.split('\n').filter((line) => FALLBACK.test(line));
 }

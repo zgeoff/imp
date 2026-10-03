@@ -302,18 +302,34 @@ async function runSuite(name: string, args: HarnessArgs): Promise<boolean> {
   return exitCode === 0 && isClean;
 }
 
+// chaos kills firecracker on purpose, so a restore there may fall back
+const FALLBACK_SUITES: ReadonlySet<string> = new Set(['chaos']);
+
 // A template restore that fell back still creates the imp, so the suite
-// passes; the fallback is a failure all the same
+// passes; the fallback is a failure all the same, unless the suite causes it
 async function checkNoBootFallbacks(name: string, since: Readonly<Date>): Promise<boolean> {
-  const log = await readImpdLogSince(since);
+  let log: string;
+
+  try {
+    log = await readImpdLogSince(since);
+  } catch (error) {
+    console.log(`== ${name}: no impd log to check for boot fallbacks: ${String(error)}`);
+
+    return false;
+  }
 
   const fallbacks = findBootFallbacks(log);
 
-  if (fallbacks.length > 0) {
-    console.log(`== ${name}: a boot template fell back to the kernel\n${fallbacks.join('\n')}`);
+  if (fallbacks.length === 0) {
+    return true;
   }
 
-  return fallbacks.length === 0;
+  const isAllowed = FALLBACK_SUITES.has(name);
+  const verdict = isAllowed ? 'fell back, as the suite may cause' : 'fell back to the kernel';
+
+  console.log(`== ${name}: a boot template ${verdict}\n${fallbacks.join('\n')}`);
+
+  return isAllowed;
 }
 
 async function removeSuiteImps(name: string): Promise<void> {
