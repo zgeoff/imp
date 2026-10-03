@@ -147,6 +147,9 @@ async function setupTest() {
 
     state.session = opened.headers.get('mcp-session-id') ?? '';
 
+    // read to its end, as a client does, so it holds no slot
+    await opened.text();
+
     const sendRequest = async (method: string, params: unknown = {}) => {
       const response = await sendPost({ jsonrpc: '2.0', id: state.nextId++, method, params });
       const text = await response.text();
@@ -156,7 +159,13 @@ async function setupTest() {
       return { status: response.status, body: parseJson(data?.slice(6) ?? text) };
     };
 
-    return { sendPost, sendRequest };
+    const sendDelete = () =>
+      send('/mcp', {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${bearer}`, 'mcp-session-id': state.session },
+      });
+
+    return { sendPost, sendRequest, sendDelete };
   };
 
   return { ...impd, handle, client, send, sendForm, runSignIn, openMcp };
@@ -618,3 +627,82 @@ test('a tool call keeps its room until the tool ends, though its client goes', a
 
   expect(next.status).toBe(200);
 });
+
+test('with every slot held, a cancel still gets through, stops its tool and frees a slot', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.rootClient.imps.create({ name: 'box', image: 'ubuntu' });
+
+  const tokens = await ctx.runSignIn('laptop', 'exec');
+  const mcp = await ctx.openMcp(tokens.access_token);
+
+  // 64 long calls whose clients go away at once
+  for (let index = 1; index <= 64; index += 1) {
+    const response = await mcp.sendPost({
+      jsonrpc: '2.0',
+      id: index,
+      method: 'tools/call',
+      params: { name: 'imp_exec', arguments: { name: 'box', command: 'sleepy' } },
+    });
+
+    expect(response.status).toBe(200);
+
+    await response.body?.cancel();
+  }
+
+  while (ctx.guest.requests.length < 64) {
+    await Bun.sleep(10);
+  }
+
+  const refused = await mcp.sendPost({ jsonrpc: '2.0', id: 100, method: 'ping' });
+
+  expect(refused.status).toBe(429);
+
+  // a notification and a DELETE start no work, so they still get through
+  const cancelled = await mcp.sendPost({
+    jsonrpc: '2.0',
+    method: 'notifications/cancelled',
+    params: { requestId: 1 },
+  });
+
+  expect(cancelled.status).toBe(202);
+
+  while (!ctx.guest.signals.includes('sleepy:15')) {
+    await Bun.sleep(10);
+  }
+
+  const statuses: number[] = [];
+
+  for (let attempt = 0; attempt < 100 && statuses.at(-1) !== 200; attempt += 1) {
+    const next = await mcp.sendPost({ jsonrpc: '2.0', id: 101, method: 'ping' });
+
+    statuses.push(next.status);
+
+    await next.text();
+    await Bun.sleep(10);
+  }
+
+  expect(statuses.at(-1)).toBe(200);
+
+  // full again: a body too large for a notification is refused, and the
+  // session's DELETE still gets through
+  const filler = await mcp.sendPost({
+    jsonrpc: '2.0',
+    id: 102,
+    method: 'tools/call',
+    params: { name: 'imp_exec', arguments: { name: 'box', command: 'sleepy' } },
+  });
+
+  await filler.body?.cancel();
+
+  const large = await mcp.sendPost({
+    jsonrpc: '2.0',
+    method: 'notifications/cancelled',
+    params: { requestId: 2, reason: 'x'.repeat(20 * 1024) },
+  });
+
+  const ended = await mcp.sendDelete();
+
+  expect(large.status).toBe(429);
+  expect(ended.status).toBe(204);
+}, 30_000);

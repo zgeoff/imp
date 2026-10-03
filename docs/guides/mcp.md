@@ -278,7 +278,9 @@ A restart ends the sign-ins in progress and their codes, not the grants.
 ### Limits
 
 - 64 open requests. A tool call counts until its tool ends, even when its client goes: a dropped
-  stream is no cancel. Send `notifications/cancelled` to stop a call.
+  stream is no cancel. Send `notifications/cancelled` to stop a call. With every slot taken, a
+  notification of at most 16 KiB and a session's `DELETE` still get through, 16 at a time, since
+  they start no work.
 - A new sign-in drops the oldest unapproved one of its own client's, never another client's. Past 16
   in all, a new one gets 429 until one ends.
 - 10 sign-ins per client in a burst, then one every 6 s.
