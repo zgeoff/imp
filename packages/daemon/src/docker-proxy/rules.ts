@@ -216,7 +216,9 @@ export function checkPullQuery(
 ): Check {
   const checked = checkQuery(query, {
     fromImage: { isRequired: true, check: () => null },
-    tag: { check: checkTag },
+
+    // required: a pull with no tag fetches every tag of the repository
+    tag: { isRequired: true, check: checkTag },
   });
 
   if (!checked.isOk) {
