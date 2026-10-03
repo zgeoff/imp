@@ -168,16 +168,18 @@ export function createPublicHandler(
   // its own allowance, so a cancel can still stop a call and free a slot.
   // It keeps the idle timeout: it is short, and made again here.
   const handleControl = async (request: Request): Promise<Response> => {
-    const control = state.control < MAX_CONTROL ? await readControlRequest(request) : null;
-
-    if (control === null || state.control >= MAX_CONTROL) {
+    if (state.control >= MAX_CONTROL) {
       return buildTooMany();
     }
 
+    // counted before its body is read, so no more than MAX_CONTROL bodies
+    // are read at once
     state.control += 1;
 
     try {
-      return await handleRequest(control, null);
+      const control = await readControlRequest(request);
+
+      return control === null ? buildTooMany() : await handleRequest(control, null);
     } finally {
       state.control -= 1;
     }
