@@ -22,6 +22,7 @@ import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
+import { writeExportedTree } from './unpack-export';
 
 const GIB = 1024 ** 3;
 
@@ -114,27 +115,22 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       return readDiskUsage(paths.rootfs);
     }
 
-    const work = join(deps.config.dataDir, 'images', `.build-${Bun.randomUUIDv7()}`);
+    const images = join(deps.config.dataDir, 'images');
+    const work = join(images, `.build-${Bun.randomUUIDv7()}`);
     const root = join(work, 'root');
 
-    mkdirSync(root, { recursive: true, mode: 0o755 });
+    // 0700: a host user must not reach the tree, whose setuid and capability
+    // files are live while it is unpacked
+    mkdirSync(images, { recursive: true });
+    mkdirSync(work, { mode: 0o700 });
+    mkdirSync(root, { mode: 0o755 });
 
     const created = await runChecked(['docker', 'create', ref, '/bin/true']);
 
     const containerId = created.trim();
 
     try {
-      // root here, so tar keeps numeric owners as they are in the image
-      await runChecked([
-        'bash',
-        '-o',
-        'pipefail',
-        '-c',
-        'docker export "$1" | tar --numeric-owner --xattrs -xpf - -C "$2"',
-        'export',
-        containerId,
-        root,
-      ]);
+      await writeExportedTree(containerId, root);
 
       mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
 

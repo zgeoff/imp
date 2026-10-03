@@ -69,6 +69,13 @@ call would.
 
 - **The filesystem.** Everything in the image, as it is, except `/run`, which is a fresh tmpfs.
   `/etc/resolv.conf`, `/etc/hostname` and an empty `/etc/hosts` are rewritten by the agent at boot.
+- **File capabilities and `user.*` attributes.** Of a file's extended attributes, the image keeps
+  `security.capability` (what `setcap` writes, such as `cap_net_bind_service+ep` on a server that
+  binds a port below 1024 without root) and `user.*`; every other one is dropped. impd needs
+  `CAP_SETFCAP` for the first ([host contract](../architecture/host-contract.md#privileges)):
+  without it, an image with a file capability fails to add or build. An image added by impd 0.25.1
+  or older lost its file capabilities, and impd keeps that rootfs for the same image ID:
+  `imp image rm <name>` and add or build it again.
 - **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`:
 
   ```json

@@ -84,7 +84,8 @@ mount_loop() {
     dev=${dev%% *}
     [ -b "$dev" ] || mknod "$dev" b 7 "${dev#/dev/loop}"
     if losetup "$dev" "$file" 2>/dev/null; then
-      if ! mount "$dev" "$dir"; then
+      # nosuid, as bootstrap mounts it on a host
+      if ! mount -o nosuid "$dev" "$dir"; then
         losetup -d "$dev" || true
         die "cannot mount $dev ($file) on $dir"
       fi

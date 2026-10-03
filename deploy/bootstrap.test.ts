@@ -98,12 +98,35 @@ test('it sizes a loop file to leave the larger of 30 GiB and 15 % of / free', ()
 
 test('it writes the fstab entry by kind', () => {
   expect(runFunction('fstab_line', ['UUID=1234', 'device'])).toBe(
-    'UUID=1234 /var/lib/imp xfs defaults,nofail 0 2\n',
+    'UUID=1234 /var/lib/imp xfs defaults,nosuid,nofail 0 2\n',
   );
 
   expect(runFunction('fstab_line', ['/srv/imp.xfs', 'loop'])).toBe(
-    '/srv/imp.xfs /var/lib/imp xfs loop,nofail 0 0\n',
+    '/srv/imp.xfs /var/lib/imp xfs loop,nosuid,nofail 0 0\n',
   );
+});
+
+test('it accepts the fstab entry an older bootstrap wrote without nosuid, and no other', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'bootstrap-fstab-'));
+  const fstab = path.join(dir, 'fstab');
+  const device = runFunction('fstab_line', ['UUID=1234', 'device']).trim();
+  const loop = runFunction('fstab_line', ['/srv/imp.xfs', 'loop']).trim();
+
+  const readState = (lines: string, line: string) => {
+    writeFileSync(fstab, `UUID=abcd / ext4 defaults 0 1\n${lines}`);
+
+    return runFunction('fstab_entry_state', [fstab, line]).trim();
+  };
+
+  try {
+    expect(readState('', device)).toBe('none');
+    expect(readState(`${device}\n`, device)).toBe('same');
+    expect(readState('UUID=1234 /var/lib/imp xfs defaults,nofail 0 2\n', device)).toBe('old');
+    expect(readState('/srv/imp.xfs /var/lib/imp xfs loop,nofail 0 0\n', loop)).toBe('old');
+    expect(readState('UUID=9999 /var/lib/imp xfs defaults,nofail 0 2\n', device)).toBe('other');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('it reads SSH ports from sshd -T, socket units and ss', () => {

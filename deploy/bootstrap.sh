@@ -270,12 +270,28 @@ loop_reserve_gib() {
 
 # fstab_line SOURCE KIND: the /etc/fstab entry for /var/lib/imp. nofail: a
 # missing disk must not stop the boot; the host container then refuses to
-# start, because nothing is mounted.
+# start, because nothing is mounted. nosuid: the host never honors a setuid
+# bit or a file capability from an image's files.
 fstab_line() {
   case $2 in
-    device) printf '%s %s xfs defaults,nofail 0 2\n' "$1" "$DATA_DIR" ;;
-    loop) printf '%s %s xfs loop,nofail 0 0\n' "$1" "$DATA_DIR" ;;
+    device) printf '%s %s xfs defaults,nosuid,nofail 0 2\n' "$1" "$DATA_DIR" ;;
+    loop) printf '%s %s xfs loop,nosuid,nofail 0 0\n' "$1" "$DATA_DIR" ;;
   esac
+}
+
+# fstab_entry_state FSTAB LINE: none when FSTAB has no entry for
+# /var/lib/imp, same when it has LINE, old when it has LINE as a bootstrap
+# before nosuid wrote it, other for anything else.
+fstab_entry_state() {
+  if ! grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" "$1"; then
+    echo none
+  elif grep -qxF "$2" "$1"; then
+    echo same
+  elif grep -qxF "${2/,nosuid/}" "$1"; then
+    echo old
+  else
+    echo other
+  fi
 }
 
 # ssh_ports_from_sshd_t: ports from `sshd -T` output on stdin.
@@ -552,7 +568,7 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add MKNOD \
   --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add KILL \
   --cap-add SYS_PTRACE --cap-add DAC_OVERRIDE --cap-add FOWNER \
-  --cap-add FSETID \
+  --cap-add FSETID --cap-add SETFCAP \
   --security-opt apparmor=unconfined \
   --security-opt seccomp=/etc/imp/imp-host.seccomp.json \
   --device /dev/kvm --device /dev/net/tun \
@@ -1044,6 +1060,8 @@ storage_xfs() {
     check_xfs_reflink
     grep -qE "[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab \
       || warn "$DATA_DIR is mounted but not in /etc/fstab; it will not come back after a reboot"
+    findmnt -n -o OPTIONS --mountpoint "$DATA_DIR" | tr ',' '\n' | grep -qx nosuid \
+      || warn "$DATA_DIR is mounted without nosuid; add nosuid to its /etc/fstab entry and run: mount -o remount,nosuid $DATA_DIR"
   else
     local source
     if [ -n "$data_device" ]; then
@@ -1203,12 +1221,12 @@ xfsprogs_version() {
 
 ensure_fstab() {
   local line=$1
-  if grep -qE "^[^#]*[[:space:]]${DATA_DIR}[[:space:]]" /etc/fstab; then
-    grep -qxF "$line" /etc/fstab \
-      || die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first"
-    return
-  fi
-  change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line"
+  case $(fstab_entry_state /etc/fstab "$line") in
+    none) change "add $DATA_DIR to /etc/fstab" append_line /etc/fstab "$line" ;;
+    same) ;;
+    old) warn "$DATA_DIR in /etc/fstab lacks nosuid; add it to the entry, then run: mount -o remount,nosuid $DATA_DIR" ;;
+    other) die "/etc/fstab has another entry for $DATA_DIR; fix or remove it first" ;;
+  esac
 }
 
 append_line() { printf '%s\n' "$2" >>"$1"; }
