@@ -76,14 +76,18 @@ context.
   FROM imp/base: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).
   ```
 
-  With Docker's classic image store, an image built on the host has no registry digest. With the
-  containerd image store, each tag has one under its own name. Docker 29.8 builds an image built on
-  the host by that digest; Docker 29.7 asks the registry for the name and fails the build, as both
-  do for a tag you put on a pulled multi-platform image (`docker tag busybox:1.37 imp/x`). A build
-  never uses such an image by its tag alone. `FROM --platform=$BUILDPLATFORM` and `$TARGETPLATFORM`
-  become the engine's platform, such as `--platform=linux/amd64`. A Dockerfile with
-  `# check=error=true` then fails the frontend's `FromPlatformFlagConstDisallowed` check; skip that
-  check, or leave `--platform` out.
+  With Docker's classic image store, an image built on the host has no registry digest, and impd
+  refuses it (#156). With the containerd image store, each tag has a digest under its own name, so
+  impd pins a base built on the host by its content digest. Docker 29.8 builds from that pin; Docker
+  29.7 asks the registry for the name and fails the build. A tag you put on a pulled multi-platform
+  image (`docker tag busybox:1.37 imp/x`) cannot be pinned on the containerd store: the engine asks
+  the registry for `imp/x@sha256:…` and fails. impd then adds a line to the error that names the
+  pin; build FROM the original repository, `busybox:1.37`, instead of the retag. A build never uses
+  such an image by its tag alone, and impd's log line for each build names the image store.
+
+  `FROM --platform=$BUILDPLATFORM` and `$TARGETPLATFORM` become the engine's platform, such as
+  `--platform=linux/amd64`. A Dockerfile with `# check=error=true` then fails the frontend's
+  `FromPlatformFlagConstDisallowed` check; skip that check, or leave `--platform` out.
 
 - **What impd refuses before the build.** impd reads the Dockerfile as the pinned frontend parses
   it, and refuses with `BAD_REQUEST`:
