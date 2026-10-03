@@ -52,3 +52,17 @@ test('a FROM line inside a heredoc is not an instruction', () => {
 
   expect(listBaseImages(dockerfile)).toEqual(['alpine:3.20', 'busybox:1.37']);
 });
+
+test('a << inside a quoted string does not start a heredoc', () => {
+  const dockerfile = [
+    'FROM alpine:3.20',
+    `RUN echo "<<EOF" && echo 'a <<-END b' && echo "say \\"<<NOTE\\""`,
+    'FROM busybox:1.37',
+    'RUN cat <<"EOF" >/a',
+    'FROM evil/inside:1',
+    'EOF',
+    'FROM debian:13',
+  ].join('\n');
+
+  expect(listBaseImages(dockerfile)).toEqual(['alpine:3.20', 'busybox:1.37', 'debian:13']);
+});

@@ -1,5 +1,6 @@
-// `<<EOF`, `<<-EOF`, `<<"EOF"`: a heredoc and its terminating word
-const HEREDOC = /<<(?<strip>-?)(?<quote>["']?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>/gv;
+// `<<EOF`, `<<-EOF`, `<<"EOF"`: a heredoc and its terminating word, matched
+// where the scan in findHeredocs stands
+const HEREDOC = /<<(?<strip>-?)(?<quote>["']?)(?<word>[A-Za-z_][A-Za-z0-9_]*)\k<quote>/vy;
 const ESCAPE_DIRECTIVE = /^#\s*escape\s*=\s*(?<escape>[\\`])\s*$/iv;
 
 interface Heredoc {
@@ -23,6 +24,55 @@ function readEscape(lines: readonly string[]): string {
   }
 
   return '\\';
+}
+
+// The heredocs an instruction opens, in order. A `<<` inside a quoted
+// string is the string's text, as BuildKit's shell lexer reads it.
+function findHeredocs(instruction: string, escape: string): Heredoc[] {
+  const heredocs: Heredoc[] = [];
+  let quote = '';
+  let index = 0;
+
+  while (index < instruction.length) {
+    const char = instruction.charAt(index);
+
+    if (quote !== '') {
+      // the escape character works only inside double quotes
+      if (char === escape && quote === '"') {
+        index += 2;
+        continue;
+      }
+
+      if (char === quote) {
+        quote = '';
+      }
+
+      index += 1;
+      continue;
+    }
+
+    HEREDOC.lastIndex = index;
+
+    const match = HEREDOC.exec(instruction);
+
+    if (match !== null) {
+      heredocs.push({
+        word: match.groups?.['word'] ?? '',
+        isStripped: match.groups?.['strip'] === '-',
+      });
+
+      index = HEREDOC.lastIndex;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+    }
+
+    index += 1;
+  }
+
+  return heredocs;
 }
 
 // The Dockerfile's instructions, one string each: continuations joined,
@@ -64,13 +114,7 @@ function readInstructions(dockerfile: string): string[] {
     current = '';
 
     instructions.push(instruction);
-
-    for (const match of instruction.matchAll(HEREDOC)) {
-      heredocs.push({
-        word: match.groups?.['word'] ?? '',
-        isStripped: match.groups?.['strip'] === '-',
-      });
-    }
+    heredocs.push(...findHeredocs(instruction, escape));
   }
 
   return instructions;
