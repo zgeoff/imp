@@ -131,6 +131,9 @@ test('a marked imp fails fast with MOVING and Retry-After, and an abort before t
   expect(raw.status).toBe(409);
   expect(raw.headers.get('retry-after')).toBe('30');
   expect(started.state).toBe('running');
+
+  // nothing reached the target, so it counted nothing
+  expect(ctx.commits).toEqual([]);
 });
 
 test('a public imp is refused a move, and a marked imp refuses an exposure change', async () => {
@@ -303,6 +306,9 @@ test('an abort after the target committed destroys the source copy instead', asy
 
   expect(gone).toBeUndefined();
   expect(target.move).toBeUndefined();
+
+  // the target's one commit counted the disk; the abort counts nothing more
+  expect(ctx.commits).toEqual(['dev']);
 });
 
 test('a ticket streams once, in a header from the tailnet, and only for its name', async () => {
