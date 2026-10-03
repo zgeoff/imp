@@ -14,6 +14,7 @@ import type {
   SessionOutput,
 } from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
+import { checkExecRequire } from './check-exec-require';
 import { checkImpdAccess } from './check-impd-access';
 
 export interface ExecStart {
@@ -278,11 +279,28 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     }
   };
 
+  // a start that requires anything waits for impd to say it checks them
+  const sendOpen = async (): Promise<void> => {
+    const start = options.start;
+
+    if ('argv' in start && start.require !== undefined && start.require.length > 0) {
+      const refusal = await checkExecRequire(options.baseUrl, options.token, options.fetch);
+
+      if (refusal !== null) {
+        resolveOutcome(refusal);
+
+        return;
+      }
+    }
+
+    sendControl(JSON.stringify(buildOpenMessage(start)));
+  };
+
   ws.addEventListener('open', () => {
     state.opened = true;
 
     clearTimeout(openTimer);
-    sendControl(JSON.stringify(buildOpenMessage(options.start)));
+    void sendOpen();
   });
 
   // a throw here would escape to the event loop and leave the session (and

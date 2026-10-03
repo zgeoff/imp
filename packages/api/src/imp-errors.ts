@@ -37,9 +37,10 @@ export type ForbiddenReason = z.infer<typeof ForbiddenReasonSchema>;
 const ForbiddenDataSchema = z.object({ reason: ForbiddenReasonSchema });
 
 // an exec with `require: ['broker']` the broker was not ready for; detail
-// names the cause (docs/guides/connectors.md#requiring-the-broker)
+// names the cause (docs/guides/connectors.md#requiring-the-broker). The
+// client, not impd, gives impd_outdated: an impd too old to check.
 const PreconditionDataSchema = z.object({
-  reason: z.enum(['broker_not_ready']),
+  reason: z.enum(['broker_not_ready', 'impd_outdated']),
   detail: z.string(),
 });
 

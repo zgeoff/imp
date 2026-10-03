@@ -155,10 +155,6 @@ async function openHandle(
 
   abort?.throwIfAborted();
 
-  if ('argv' in start && start.require !== undefined && start.require.length > 0) {
-    await checkRequireFeature(deps.rpc, callOptions);
-  }
-
   const issued = await deps.rpc.exec.ticket({ name }, callOptions);
 
   // the ticket call may have outlived an abort that it did not see
@@ -525,21 +521,4 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
   }
 
   return all;
-}
-
-// An older impd drops `require` unread and runs the command anyway, so a
-// start that requires anything asks first, and fails as impd would.
-async function checkRequireFeature(
-  rpc: Readonly<ContractRouterClient<ImpContract>>,
-  callOptions: Readonly<{ signal?: Readonly<AbortSignal> }>,
-): Promise<void> {
-  const info = await rpc.system.info(undefined, callOptions);
-
-  if (info.features?.execRequire !== true) {
-    const detail = 'this impd is older than 0.30.0 and does not check exec requirements';
-
-    throw new ExecError('PRECONDITION_FAILED', `nothing was started: ${detail}`, {
-      data: { reason: 'broker_not_ready', detail },
-    });
-  }
 }
