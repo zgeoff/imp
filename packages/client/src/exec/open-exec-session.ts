@@ -174,6 +174,10 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   // impd refuses a resize, a signal or stdin before the start
   const held: (string | Uint8Array<ArrayBuffer>)[] = [];
 
+  // held bytes count toward backpressure like the socket's own buffer
+  let heldBytes = 0;
+  const countQueuedBytes = (): number => ws.bufferedAmount + heldBytes;
+
   ws.binaryType = 'arraybuffer';
 
   const stopSocket = (): void => {
@@ -210,6 +214,8 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
       ws.send(data);
     } else {
       held.push(data);
+
+      heldBytes += typeof data === 'string' ? data.length : data.byteLength;
     }
   };
 
@@ -311,6 +317,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     ws.send(JSON.stringify(buildOpenMessage(start)));
 
     state.sentOpen = true;
+    heldBytes = 0;
 
     for (const data of held.splice(0)) {
       ws.send(data);
@@ -393,7 +400,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   });
 
   const waitForDrain = async (): Promise<void> => {
-    while (!state.finished && ws.bufferedAmount > HIGH_WATER_BYTES) {
+    while (!state.finished && countQueuedBytes() > HIGH_WATER_BYTES) {
       await new Promise((resolve) => {
         setTimeout(resolve, DRAIN_POLL_MS);
       });
@@ -406,7 +413,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     sendStdin: (data) => {
       sendControl(encodeExecFrame(EXEC_CHANNELS.stdin, data));
 
-      return ws.bufferedAmount <= HIGH_WATER_BYTES;
+      return countQueuedBytes() <= HIGH_WATER_BYTES;
     },
     waitForDrain,
     closeStdin: () => {
