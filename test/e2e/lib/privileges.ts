@@ -22,7 +22,33 @@ const HostConfigSchema = z.object({
   Devices: z.array(DeviceSchema).nullable(),
 });
 
-const InspectSchema = z.array(z.object({ HostConfig: HostConfigSchema }));
+const MountSchema = z.object({ Source: z.string(), Destination: z.string() });
+
+const InspectSchema = z.array(
+  z.object({ HostConfig: HostConfigSchema, Mounts: z.array(MountSchema).nullable() }),
+);
+
+const ProxyHostConfigSchema = HostConfigSchema.extend({
+  ReadonlyRootfs: z.boolean(),
+  NetworkMode: z.string(),
+});
+
+const ProxyInfoSchema = z.object({
+  Config: z.object({ User: z.string() }),
+  HostConfig: ProxyHostConfigSchema,
+});
+
+const ProxyInspectSchema = z.array(ProxyInfoSchema);
+
+export interface Mount {
+  readonly Source: string;
+  readonly Destination: string;
+}
+
+export interface ProxyConfig {
+  readonly user: string;
+  readonly host: HostConfig & { readonly ReadonlyRootfs: boolean; readonly NetworkMode: string };
+}
 
 export interface HostConfig {
   readonly Privileged: boolean;
@@ -131,6 +157,54 @@ export function findPrivilegeDrift(host: HostConfig, expected: ExpectedPrivilege
   return findSeccompDrift(opts, expected.seccomp) ?? findDeviceDrift(host, expected);
 }
 
+// imp-host reaches Docker through imp-docker-proxy only: no docker.sock of
+// the host's, under any name
+export function findSocketDrift(mounts: readonly Mount[]): string | null {
+  const socket = mounts.find(
+    (mount) => mount.Source.endsWith('docker.sock') || mount.Destination.endsWith('docker.sock'),
+  );
+
+  return socket === undefined ? null : `it mounts ${socket.Source} at ${socket.Destination}`;
+}
+
+// why the proxy's container differs from the proxy section of
+// deploy/imp-host.args.json, or null
+export function findProxyDrift(proxy: ProxyConfig): string | null {
+  const host = proxy.host;
+
+  if (host.Privileged || (host.CapAdd ?? []).length > 0 || !(host.CapDrop ?? []).includes('ALL')) {
+    return 'it keeps capabilities';
+  }
+
+  if (!(host.SecurityOpt ?? []).includes('no-new-privileges')) {
+    return 'it may gain privileges (no no-new-privileges)';
+  }
+
+  if (!host.ReadonlyRootfs || host.NetworkMode !== 'none' || proxy.user !== '65534:65534') {
+    return `its root is ${host.ReadonlyRootfs ? 'read-only' : 'writable'}, network ${host.NetworkMode}, user ${proxy.user || 'root'}`;
+  }
+
+  return (host.Devices ?? []).length > 0 ? 'it has devices' : null;
+}
+
+async function checkProxy(container: string): Promise<void> {
+  const proxy = `${container}-docker-proxy`;
+
+  const inspected = await runChecked(['docker', 'inspect', proxy]);
+
+  const [info] = ProxyInspectSchema.parse(JSON.parse(inspected));
+
+  if (info === undefined) {
+    throw new Error(`docker inspect ${proxy} returned nothing`);
+  }
+
+  const drift = findProxyDrift({ user: info.Config.User, host: info.HostConfig });
+
+  if (drift !== null) {
+    throw new Error(`${proxy} does not match the proxy in deploy/imp-host.args.json: ${drift}`);
+  }
+}
+
 // Every suite runs on the deploy's privileges, so a capability the code
 // newly needs fails here, not in production.
 export async function checkPrivileges(container: string): Promise<void> {
@@ -149,9 +223,11 @@ export async function checkPrivileges(container: string): Promise<void> {
     throw new Error(`docker inspect ${container} returned nothing`);
   }
 
-  const drift = findPrivilegeDrift(info.HostConfig, expected);
+  const drift = findPrivilegeDrift(info.HostConfig, expected) ?? findSocketDrift(info.Mounts ?? []);
 
   if (drift !== null) {
     throw new Error(`${container} does not match deploy/imp-host.args.json: ${drift}`);
   }
+
+  await checkProxy(container);
 }

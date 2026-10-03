@@ -47,6 +47,10 @@ export const SUITES: readonly Suite[] = [
   { name: 'boot-templates', prefix: 'e2e-bt-', images: ['e2e-ws'] },
   { name: 'inner', prefix: 'e2e-in-', images: ['e2e-tiny'] },
 
+  // root in the container reaches Docker only through imp-docker-proxy; it
+  // stops and starts the proxy
+  { name: 'socket', prefix: 'e2e-sock-', images: ['e2e-tiny'] },
+
   // a second instance beside the run's: over a Docker network, then over
   // the tailnet; each reboots the instance onto the network and back
   { name: 'moves', prefix: 'e2e-mv-', images: ['e2e-tiny', 'base'] },
@@ -91,6 +95,7 @@ export const SUITE_SETS: Readonly<Record<string, readonly string[]>> = {
     'templates',
     'boot-templates',
     'inner',
+    'socket',
     'jail',
     'memory',
     'ksm',
