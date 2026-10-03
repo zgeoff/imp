@@ -16,6 +16,14 @@ imp sessions log-rm dev build               # delete the logs of `build`
 
 None of these calls wakes or boots the imp: the logs live on the host.
 
+Only `log: true` on the start that creates a session turns its log on. A session that already runs
+stays unlogged, even when a later start with `log` attaches to it, and every session is unlogged by
+default.
+
+Each log belongs to one generation, and every read names it. A cold boot, a restore or a replacement
+starts a new generation, and so a new log: impd never joins two generations into one output. Bytes a
+log does not hold are always reported as a `gap`, never skipped.
+
 ## API
 
 | Where                  | What                                                                                                                                                                                                                                                                                   |

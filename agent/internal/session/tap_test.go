@@ -237,3 +237,21 @@ func startLoggedQuiet(t *testing.T, m *Manager, name, script string, n uint64) p
 	})
 	return out
 }
+
+// log turns logging on only for the session a start creates: a start that
+// attaches to a session that runs leaves it unlogged.
+func TestLogDoesNotReachARunningSession(t *testing.T) {
+	m := newTestManager(t)
+	h := start(t, m, "job", "exec sleep 60")
+	h.started(t)
+	h.detach(t)
+
+	again := startLogged(t, m, "job", "exec sleep 60")
+	st, out := again.output(t)
+	if st.Created || out.Log {
+		t.Fatalf("STARTED %+v output %+v, want an attach without log", st, out)
+	}
+	if code := tap(t, m, "job", nil).errorCode(t); code != proto.ErrBadRequest {
+		t.Fatalf("tap: %s, want BAD_REQUEST", code)
+	}
+}
