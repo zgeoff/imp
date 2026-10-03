@@ -10,6 +10,7 @@ Releases come from `main` through [release-please](https://github.com/googleapis
 | Where                                          | What                                                                                  |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------- |
 | `ghcr.io/zgeoff/imp-host:X.Y.Z` and `:latest`  | The host image (`host/build-release.sh`), linux/amd64, with a provenance attestation. |
+| `ghcr.io/zgeoff/imp-base:X.Y.Z`                | The base image (`images/base`), linux/amd64, with a provenance attestation.           |
 | GitHub release `vX.Y.Z`: `imp-<os>-<arch>`     | The CLI for `linux-x64`, `linux-arm64`, `darwin-x64` and `darwin-arm64`.              |
 | GitHub release `vX.Y.Z`: `vmlinux`             | The guest kernel, x86_64.                                                             |
 | GitHub release `vX.Y.Z`: `imp-system.squashfs` | The system drive with the guest agent, x86_64.                                        |
@@ -34,6 +35,17 @@ gh attestation verify imp-linux-x64 -R zgeoff/imp
 gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
 ```
 
+`imp-base` is the base that other images build `FROM`. Consumers pin it by digest
+(`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`), so a published tag never moves: the release does
+not overwrite one and has no `latest` for it. Its own base, `ubuntu:24.04`, is pinned by digest in
+`images/base/Dockerfile`; bumping that digest is a reviewed dependency change. The Docker packages
+(`docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`) are pinned to apt's exact
+versions there too, and `host/check-base-image.sh` checks the image against them. They ship no
+copyright file, so the build copies upstream's `LICENSE` and `NOTICE` from the source tag of each
+version into `/usr/share/doc/<package>/`, checked against sums in the Dockerfile. A Docker bump
+updates the versions and the sums in one reviewed change; when a file changed upstream, the build
+fails and prints the new sum to review.
+
 ## Flow
 
 1. A `feat:` or `fix:` commit lands on `main`. After the gates pass, the `release-please` job opens
@@ -51,6 +63,12 @@ gh attestation verify oci://ghcr.io/zgeoff/imp-host:X.Y.Z -R zgeoff/imp
      `host/check-release-image.sh`, which fails when `impd` or `imp` in the image reports another
      version, or when the image's kernel or drive differs from `SHA256SUMS`. Then it pushes
      `imp-host:X.Y.Z` and attests the image and every asset.
+   - **base:** after every smoke check passes, builds `images/base`, runs `host/check-base-image.sh`
+     and pushes and attests `imp-base:X.Y.Z`. It never pushes over an existing tag: when
+     `imp-base:X.Y.Z` exists with this repository's attestation, it prints a notice with the tag's
+     digest; without one, it fails ([an unattested imp-base](#an-unattested-imp-base)). A tag from
+     before the pinned `images/base` (v0.27.0 and older) is skipped with a notice. publish does not
+     wait for it: consumers pin a digest, so a base failure does not hold up a release.
    - **publish:** uploads the assets to the release, then moves `latest` to `X.Y.Z` when `vX.Y.Z` is
      the newest release.
    - **tap:** after publish, when `vX.Y.Z` is the newest release, renders the Homebrew formula from
@@ -83,8 +101,9 @@ the PR once its required checks pass; without it, at once. To set it up:
 The release itself starts with `GITHUB_TOKEN`: a workflow dispatch is the one `GITHUB_TOKEN` event
 that starts a workflow.
 
-The first push creates the `imp-host` package on GHCR as private. Make it public once in the package
-settings, so a server pulls it without a login.
+The first push creates the `imp-host` and `imp-base` packages on GHCR as private. Make each public
+once in the package settings, so a server pulls it without a login, and link `imp-base` to
+`zgeoff/imp`.
 
 ## Homebrew tap
 
@@ -151,9 +170,13 @@ gh workflow run release.yml
 ```
 
 It builds and checks everything for the current `main` as a release would, pushes
-`ghcr.io/zgeoff/imp-host:dryrun-<sha>` and attests it and the assets, and leaves the assets as the
-`release-assets` workflow artifact. It uploads nothing to a release and leaves `latest` alone. The
-version it checks is the one in `package.json`. Delete old `dryrun-` tags in the package settings.
+`ghcr.io/zgeoff/imp-host:dryrun-<sha>` and `imp-base:dryrun-<sha>` and attests them and the assets,
+and leaves the assets as the `release-assets` workflow artifact. It uploads nothing to a release and
+leaves `latest` alone. The version it checks is the one in `package.json`. A second dry run of the
+same commit leaves `imp-base:dryrun-<sha>` as the first one pushed it. The first dry run after the
+`base` job lands must show its tag check answering `not found` for the new `imp-base` package and
+the push going through; a 401 or 403 there fails the job, and the check then needs a fix. Delete old
+`dryrun-` tags in the package settings.
 
 Locally, with no push:
 
@@ -176,5 +199,26 @@ gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 It builds the tag's sources, not `main`'s. It replaces the release assets (`--clobber`) and the
-`X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes the client
-when npm does not have that version yet. A fix to the sources needs a new release, not a republish.
+`imp-host:X.Y.Z` image tag, moves `latest` only when `vX.Y.Z` is the newest release, and publishes
+the client when npm does not have that version yet. `imp-base` exists only for releases from the
+pinned `images/base` on: a republish of v0.27.0 or older builds no `imp-base`, and the `base` job
+says so in a notice. For a newer release it publishes `imp-base:X.Y.Z` when the tag is missing and
+leaves an existing tag alone. A fix to the sources needs a new release, not a republish.
+
+### An unattested imp-base
+
+The `base` job fails with an error that names the tag and its digest when `imp-base:X.Y.Z` exists
+but `gh attestation verify` finds no attestation from this repository for it. This workflow did not
+vouch for that image. Someone with a leaked `write:packages` token could have pushed it ahead of the
+release, so treat it as a possible compromise and investigate:
+
+```sh
+docker buildx imagetools inspect ghcr.io/zgeoff/imp-base:X.Y.Z
+gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp
+```
+
+The workflow never deletes, re-pushes or attests such a tag, and the tag never moves. Consumers pin
+a digest, so an image they already use is not affected, and the next release publishes its own tag.
+Deleting the package version is a manual decision for the owner. The same holds when a run pushes
+the image and then fails at its own attest step: the tag stays unattested until the owner decides.
+When verify failed only for a transient reason, such as an API error, a republish passes.

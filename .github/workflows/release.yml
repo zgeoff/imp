@@ -8,10 +8,11 @@ name: Release
 # - Started by ci.yml's release-please job with the tag it just created.
 # - Run by hand with a tag to republish an existing release. Every step is
 #   safe to repeat: assets upload with --clobber, and `latest` moves only
-#   when the tag is the newest release.
+#   when the tag is the newest release. The base job never pushes over an
+#   existing imp-base tag, and skips a release from before imp-base.
 # - Run by hand with no tag for a dry run of the current commit: it builds,
-#   checks, pushes imp-host:dryrun-<sha> and attests it, but uploads nothing
-#   to a release and leaves `latest` alone.
+#   checks, pushes imp-host:dryrun-<sha> and imp-base:dryrun-<sha> and
+#   attests them, but uploads nothing to a release and leaves `latest` alone.
 #
 # Nothing is pushed until every CLI binary has passed on its own platform.
 on:
@@ -33,6 +34,7 @@ concurrency:
 env:
   LEFTHOOK: 0
   IMAGE: ghcr.io/${{ github.repository_owner }}/imp-host
+  BASE_IMAGE: ghcr.io/${{ github.repository_owner }}/imp-base
 
 jobs:
   assets:
@@ -233,6 +235,135 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS
+
+  # Publishes images/base as imp-base:<push_tag>, the base other images
+  # build FROM by digest. A published tag never moves: when the tag exists,
+  # as on a republish of a release that has its base or a second dry run of
+  # one commit, the job leaves it alone and stays green. It skips a release
+  # from before imp-base, and fails on an existing tag that has no
+  # attestation. The concurrency group keeps two runs for one tag apart
+  # between the check and the push.
+  # imp-base has no `latest`. Publish does not wait for this job: consumers
+  # pin a digest, so a base failure must not hold up a release.
+  base:
+    needs: [assets, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # before the check, so a missing tag answers "not found" rather than an
+      # anonymous token error
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Decides what the job does, before any build:
+      # - skip: the tree predates imp-base (every tag up to v0.27.0 has an
+      #   unpinned images/base and no check script), or the tag exists with
+      #   this repository's attestation;
+      # - push: the registry answers "not found" for the tag.
+      # An existing tag without that attestation fails the job: this
+      # workflow did not vouch for it, so it may not be ours, and attesting
+      # it now would vouch for what nobody checked (RELEASING.md). Any other
+      # registry answer fails too, so a 401, a 403 or a network error never
+      # reads as a missing tag.
+      - name: Plan
+        id: plan
+        env:
+          PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref=$BASE_IMAGE:$PUSH_TAG
+          if [ ! -f host/check-base-image.sh ] || ! grep -q '^ARG DOCKER_CE_VERSION=' images/base/Dockerfile; then
+            echo "::notice::this tree predates the published imp-base, so $ref is not built"
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          err=$(mktemp)
+          if digest=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}' 2> "$err"); then
+            if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::$ref exists, but the registry gave no valid digest: $digest"
+              exit 1
+            fi
+            if ! verified=$(gh attestation verify "oci://$BASE_IMAGE@$digest" --repo "$GITHUB_REPOSITORY" 2>&1); then
+              echo "$verified" >&2
+              echo "::error::$ref exists at $digest with no attestation from $GITHUB_REPOSITORY; treat it as a possible compromise (RELEASING.md)"
+              exit 1
+            fi
+            echo "::notice::$ref exists already at $digest, attested; a published imp-base never moves, so this run leaves it alone"
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! grep -qF "$ref: not found" "$err"; then
+            echo "cannot tell whether $ref exists:" >&2
+            cat "$err" >&2
+            exit 1
+          fi
+          echo "action=push" >> "$GITHUB_OUTPUT"
+
+      # Loads into the runner's docker, so the image checked is the image
+      # pushed. The revision is the commit checked out: on a republish,
+      # github.sha is main's head, not the tag's.
+      - name: Build image
+        if: steps.plan.outputs.action == 'push'
+        env:
+          PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+          VERSION: ${{ needs.assets.outputs.version }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          revision=$(git rev-parse HEAD)
+          docker buildx build images/base --platform linux/amd64 --load \
+            --tag "$BASE_IMAGE:$PUSH_TAG" \
+            --label "org.opencontainers.image.source=$SOURCE" \
+            --label "org.opencontainers.image.revision=$revision" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.description=imp base image: Ubuntu 24.04 with the Docker engine"
+
+      - name: Check image
+        if: steps.plan.outputs.action == 'push'
+        env:
+          PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+        run: host/check-base-image.sh "$BASE_IMAGE:$PUSH_TAG"
+
+      # The digest comes from the registry, after the push, so the
+      # attestation names exactly what was pushed.
+      - name: Push image
+        id: push
+        if: steps.plan.outputs.action == 'push'
+        env:
+          PUSH_TAG: ${{ needs.assets.outputs.push_tag }}
+        run: |
+          docker push "$BASE_IMAGE:$PUSH_TAG"
+          digest=$(docker buildx imagetools inspect "$BASE_IMAGE:$PUSH_TAG" --format '{{.Manifest.Digest}}')
+          if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::the registry gave no valid digest for $BASE_IMAGE:$PUSH_TAG: $digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest image
+        if: steps.plan.outputs.action == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.BASE_IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   publish:
     needs: [assets, image]
