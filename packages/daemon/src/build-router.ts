@@ -737,6 +737,7 @@ const SYSTEM_FEATURES = {
   grantableTokens: true,
   secretRebind: true,
   databaseCopy: true,
+  imageBuildStream: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

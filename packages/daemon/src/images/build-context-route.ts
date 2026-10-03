@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ImageBuildQuerySchema } from '@imp/api';
-import type { ImageBuildQuery } from '@imp/api';
+import { IMAGE_BUILD_STREAM_TYPE, ImageBuildQuerySchema } from '@imp/api';
+import type { Image, ImageBuildPhase, ImageBuildQuery } from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import type { ApiAudit } from '../audit/api-audit';
 import { checkAccess, findAccess } from '../auth/access-policy';
@@ -12,6 +12,7 @@ import type { ImageRecord } from '../db/images';
 import { readErrorMessage } from '../read-error-message';
 import { buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
+import { createBuildEventStream } from './build-event-stream';
 import type { ImageService } from './image-service';
 
 // builds that may stream at once; each holds up to buildContextMaxBytes on disk
@@ -27,11 +28,11 @@ export interface BuildContextRoute {
   readonly handle: (
     request: Request,
     caller: Readonly<Caller>,
-    toApi: (image: ImageRecord) => unknown,
+    toApi: (image: ImageRecord) => Image,
   ) => Promise<Response>;
 }
 
-interface BuildContextDeps {
+export interface BuildContextDeps {
   readonly config: Pick<Config, 'dataDir' | 'buildContextMaxBytes'>;
   readonly images: Pick<ImageService, 'buildImageFromContext'>;
 
@@ -39,7 +40,22 @@ interface BuildContextDeps {
   readonly diskBudget: Pick<DiskBudget, 'withRoom'>;
   readonly audit: ApiAudit;
   readonly now: () => number;
+
+  // the gap between progress lines of a streamed build; BUILD_KEEPALIVE_MS
+  readonly keepaliveMs: number;
 }
+
+// an error as the route answers it, with the code an oRPC call would give
+interface BuildFailure {
+  readonly code: string;
+  readonly message: string;
+  readonly status: number;
+}
+
+// a build's end: the image as the API shows it, or its failure
+type BuildOutcome =
+  | { readonly ok: true; readonly image: Image }
+  | { readonly ok: false; readonly failure: BuildFailure };
 
 // `POST /images/build` (docs/guides/images.md#build-an-image): the context
 // streams to a temp file, never into memory, and the build reads it from
@@ -52,9 +68,9 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
 
   const running = { count: 0 };
 
-  const runBuild = async (request: Request, query: ImageBuildQuery): Promise<ImageRecord> => {
-    const limitBytes = readLimit(request, deps.config.buildContextMaxBytes);
-
+  // a build slot, held from before the upload until the build ends; the
+  // answer frees it
+  const claimSlot = (): (() => void) => {
     if (running.count >= MAX_BUILDS) {
       throw new ORPCError('TOO_MANY_REQUESTS', {
         message: `${String(MAX_BUILDS)} image builds are already uploading or running; try again`,
@@ -63,24 +79,31 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
 
     running.count += 1;
 
+    return () => {
+      running.count -= 1;
+    };
+  };
+
+  const runBuild = async (
+    request: Request,
+    query: ImageBuildQuery,
+    limitBytes: number,
+    signal: AbortSignal,
+    setPhase: (phase: ImageBuildPhase) => void,
+  ): Promise<ImageRecord> => {
     const tarPath = join(uploadsDir, `${Bun.randomUUIDv7()}.tar`);
 
     try {
       return await deps.diskBudget.withRoom(limitBytes, async () => {
         await writeBody(request, tarPath, limitBytes, deps.config.buildContextMaxBytes);
 
-        request.signal.throwIfAborted();
+        signal.throwIfAborted();
 
-        return deps.images.buildImageFromContext(
-          tarPath,
-          query.name,
-          query.dockerfile,
-          request.signal,
-        );
+        setPhase('build');
+
+        return deps.images.buildImageFromContext(tarPath, query.name, query.dockerfile, signal);
       });
     } finally {
-      running.count -= 1;
-
       rmSync(tarPath, { force: true });
     }
   };
@@ -94,8 +117,8 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
       // images.build is host-wide, so no secret is read
       const denial = await checkAccess(findAccess(PROCEDURE), caller, params, readNoSecret);
 
-      // audited with what was thrown; answered with its code, as oRPC would
-      const sendFailure = (error: unknown): Response => {
+      // writes the audit row with what was thrown
+      const writeFailure = (error: unknown): BuildFailure => {
         deps.audit.record({ procedure: PROCEDURE, actor: caller, impName: null, startedAt }, error);
 
         const known =
@@ -103,11 +126,10 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
             ? error
             : new ORPCError('INTERNAL_SERVER_ERROR', { message: readErrorMessage(error) });
 
-        return Response.json(
-          { code: String(known.code), message: known.message },
-          { status: known.status },
-        );
+        return { code: String(known.code), message: known.message, status: known.status };
       };
+
+      const sendFailure = (error: unknown): Response => sendError(writeFailure(error));
 
       if (denial !== null) {
         return sendFailure(new ORPCError('FORBIDDEN', { message: denial.message }));
@@ -119,22 +141,77 @@ export function createBuildContextRoute(deps: BuildContextDeps): BuildContextRou
         return sendFailure(new ORPCError('BAD_REQUEST', { message }));
       }
 
+      // refused with a real status, before a stream answers 200
+      let reserved: { readonly limitBytes: number; readonly release: () => void };
+
       try {
-        const image = await runBuild(request, parsed.data);
-
-        deps.audit.record({ procedure: PROCEDURE, actor: caller, impName: null, startedAt }, null);
-
-        return Response.json(toApi(image));
+        reserved = {
+          limitBytes: readLimit(request, deps.config.buildContextMaxBytes),
+          release: claimSlot(),
+        };
       } catch (error) {
-        // a client that went is in the audit, not the log
-        if (!(error instanceof ORPCError) && !request.signal.aborted) {
-          console.error('impd: image build from an upload failed:', error);
-        }
-
         return sendFailure(error);
       }
+
+      const runToOutcome = async (
+        signal: AbortSignal,
+        setPhase: (phase: ImageBuildPhase) => void,
+      ): Promise<BuildOutcome> => {
+        try {
+          const image = await runBuild(request, parsed.data, reserved.limitBytes, signal, setPhase);
+
+          deps.audit.record(
+            { procedure: PROCEDURE, actor: caller, impName: null, startedAt },
+            null,
+          );
+
+          return { ok: true, image: toApi(image) };
+        } catch (error) {
+          // a client that went is in the audit, not the log
+          if (!(error instanceof ORPCError) && !signal.aborted) {
+            console.error('impd: image build from an upload failed:', error);
+          }
+
+          return { ok: false, failure: writeFailure(error) };
+        } finally {
+          reserved.release();
+        }
+      };
+
+      if (isStreamAccepted(request)) {
+        return createBuildEventStream(
+          request.signal,
+          async (signal, setPhase) => {
+            const outcome = await runToOutcome(signal, setPhase);
+
+            return outcome.ok
+              ? { type: 'image', image: outcome.image }
+              : { type: 'error', code: outcome.failure.code, message: outcome.failure.message };
+          },
+          { keepaliveMs: deps.keepaliveMs, now: deps.now },
+        );
+      }
+
+      const outcome = await runToOutcome(request.signal, () => {
+        // the JSON answer shows no phase
+      });
+
+      return outcome.ok ? Response.json(outcome.image) : sendError(outcome.failure);
     },
   };
+}
+
+// a client from before the stream sends no Accept, and gets JSON at the end
+function isStreamAccepted(request: Request): boolean {
+  return request.headers.get('accept')?.includes(IMAGE_BUILD_STREAM_TYPE) === true;
+}
+
+// answered with its code, as oRPC would
+function sendError(failure: BuildFailure): Response {
+  return Response.json(
+    { code: failure.code, message: failure.message },
+    { status: failure.status },
+  );
 }
 
 // The bytes the body may hold. A Content-Length can only lower the limit:
