@@ -835,6 +835,28 @@ test('a rebind between the fork and the copy copies the grants left after it', a
   expect(grants).toEqual(['npm']);
 });
 
+test('a source destroyed and made again under its name before the copy lends the fork nothing', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  // the new dev-a holds npm: a copy by name would hand it to the fork
+  const gapped = ctx.buildAppWithGap(async () => {
+    await ctx.client.imps.destroy({ name: 'dev-a' });
+    await ctx.client.imps.create({ name: 'dev-a' });
+    await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+
+  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(fork.grantsNotCopied).toEqual([]);
+  expect(fork.grantsError).toBeUndefined();
+  expect(grants).toEqual([]);
+});
+
 test('a revoke on the source after a fork does not reach the fork', async () => {
   await using ctx = await setupTest();
 

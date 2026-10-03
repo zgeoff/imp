@@ -262,8 +262,13 @@ test('it forks from a checkpoint and from the live disk into a new slot', async 
   const fromLive = await ctx.checkpoints.forkImp({ source: 'dev', name: 'now' });
 
   expect(ctx.events.slice(0, 3)).toEqual(['freeze', `clone /imps/${source.id}/disk.ext4`, 'thaw']);
-  expect(fromCheckpoint).toMatchObject({ state: 'running', vcpus: 3, memoryMib: 1024, slot: 1 });
-  expect(fromLive).toMatchObject({ state: 'running', image: 'base', slot: 2 });
+
+  expect(fromCheckpoint).toMatchObject({
+    imp: { state: 'running', vcpus: 3, memoryMib: 1024, slot: 1 },
+    sourceId: source.id,
+  });
+
+  expect(fromLive).toMatchObject({ imp: { state: 'running', image: 'base', slot: 2 } });
 
   const oldDisk = await ctx.readDisk('old');
 

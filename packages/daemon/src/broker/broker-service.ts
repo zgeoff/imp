@@ -93,6 +93,13 @@ interface ForkGrantsReport {
   readonly error: string | null;
 }
 
+// an imp by id, not by name, which another imp may take meanwhile; the
+// name is for the log
+interface ForkEnd {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface Broker {
   readonly addSecret: (input: AddSecretInput) => Promise<SecretAdded>;
   readonly listSecrets: () => Promise<Secret[]>;
@@ -123,8 +130,8 @@ export interface Broker {
   // as db createForkGrants; a skip or a failure is logged and reported,
   // not thrown, as the fork exists by then
   readonly createForkGrants: (
-    fromImpName: string,
-    toImpName: string,
+    source: Readonly<ForkEnd>,
+    fork: Readonly<ForkEnd>,
     authority: Readonly<ForkAuthority> | null,
   ) => Promise<ForkGrantsReport>;
 
@@ -491,14 +498,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
-    createForkGrants: async (fromImpName, toImpName, authority) => {
+    createForkGrants: async (source, fork, authority) => {
       try {
-        const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
-        const outcome = await createForkGrants(db, from.id, to.id, authority);
+        const outcome = await createForkGrants(db, source.id, fork.id, authority);
 
         if (outcome.kind === 'no-token') {
           log(
-            `impd: ${toImpName}: forked without the grants of ${fromImpName}: the token was removed`,
+            `impd: ${fork.name}: forked without the grants of ${source.name}: the token was removed`,
           );
 
           return { notCopied: [], error: FORK_TOKEN_GONE };
@@ -506,14 +512,14 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
         for (const skipped of outcome.notCopied) {
           log(
-            `impd: ${toImpName}: forked without grant ${skipped.secret} of ${fromImpName}: ${FORK_SKIP_CAUSES[skipped.reason]}`,
+            `impd: ${fork.name}: forked without grant ${skipped.secret} of ${source.name}: ${FORK_SKIP_CAUSES[skipped.reason]}`,
           );
         }
 
         return { notCopied: outcome.notCopied, error: null };
       } catch (error) {
         log(
-          `impd: ${toImpName}: forked without the grants of ${fromImpName}: ${readErrorMessage(error)}`,
+          `impd: ${fork.name}: forked without the grants of ${source.name}: ${readErrorMessage(error)}`,
         );
 
         return { notCopied: [], error: FORK_COPY_FAILED };

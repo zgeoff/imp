@@ -48,7 +48,14 @@ export interface CheckpointService {
 
   // disk only: a memory fork would duplicate entropy and IDs
   // (docs/architecture/storage.md#checkpoints-restores-and-forks)
-  readonly forkImp: (input: ForkInput) => Promise<Imp>;
+  readonly forkImp: (input: ForkInput) => Promise<ForkedImp>;
+}
+
+// the fork, and the id of the source it was checked against: its name may
+// belong to another imp by the time the grants are copied
+interface ForkedImp {
+  readonly imp: Imp;
+  readonly sourceId: string;
 }
 
 export interface CheckpointServiceDeps {
@@ -283,7 +290,7 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         });
 
       // the source's policy is in the fork's insert: it never runs more open
-      return deps.imps.createImp({
+      const fork = await deps.imps.createImp({
         name: input.name,
         image: source.imp.image,
         vcpus: source.imp.vcpus,
@@ -297,6 +304,8 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         isIdentityResetPending: source.isIdentityResetPending,
         prepareDisk: createForkDisk,
       });
+
+      return { imp: fork, sourceId: source.imp.id };
     },
   };
 }

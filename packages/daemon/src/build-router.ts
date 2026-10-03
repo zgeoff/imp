@@ -331,16 +331,16 @@ export function buildRouter(deps: RouterDeps) {
       fork: os.imps.fork.handler(async (context) => {
         const caller = context.context.caller;
 
-        const imp = await deps.checkpoints.forkImp(context.input);
+        const forked = await deps.checkpoints.forkImp(context.input);
 
         const copied = await deps.broker.createForkGrants(
-          context.input.source,
-          imp.name,
+          { id: forked.sourceId, name: context.input.source },
+          forked.imp,
           findForkAuthority(caller),
         );
 
         return {
-          ...(await toCallerImp(caller, imp)),
+          ...(await toCallerImp(caller, forked.imp)),
           grantsNotCopied: copied.notCopied,
           ...(copied.error !== null && { grantsError: copied.error }),
         };
