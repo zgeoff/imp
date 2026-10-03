@@ -103,3 +103,35 @@ test('a file or a symlink where the orphans directory goes is kept aside, not fo
   expect(lstatSync(join(dir, '.orphaned')).isDirectory()).toBe(true);
   expect(statSync(elsewhere).mode & 0o777).toBe(0o755);
 });
+
+test('the kept directories are listed with their files, and removed by name only', () => {
+  using tmp = setupDir();
+
+  const files = createSecretFiles(tmp.dir);
+
+  expect(files.listKept()).toEqual([]);
+
+  files.write('late.b2', 'late');
+
+  const at = new Date('2026-10-04T05:30:00.000Z');
+
+  const orphans = files.keepOrphansExcept(new Set(), at);
+
+  expect(files.listKept()).toEqual([
+    {
+      name: '2026-10-04T05-30-00.000Z',
+      path: orphans.dir ?? '',
+      bytes: 4,
+      createdAt: at,
+      files: ['late.b2'],
+    },
+  ]);
+
+  expect(() => {
+    files.removeKept('..');
+  }).toThrow('not a kept directory');
+
+  files.removeKept('2026-10-04T05-30-00.000Z');
+
+  expect(files.listKept()).toEqual([]);
+});

@@ -198,6 +198,7 @@ An older impd drops an input field it does not know, and the call succeeds witho
 | `grantable` on `tokens.create`        | `grantableTokens` | 0.27.0 |
 | `rebind` on `secrets.add` (`replace`) | `secretRebind`    | 0.27.0 |
 | `require` on `openExec`               | `execRequire`     | 0.30.0 |
+| `secretFiles` on `system.gc`          | `secretFilesGc`   | 0.30.0 |
 
 ```ts
 const info = await imp.system.info();

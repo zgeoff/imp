@@ -12,6 +12,7 @@ import type {
   OAuthApproval,
   OAuthClient,
   OAuthGrant,
+  OrphanStorage,
   Secret,
   Service,
   Session,
@@ -540,13 +541,22 @@ export function formatGc(gc: Readonly<StorageGc>): string {
           orphan.location,
           formatBytesMib(orphan.bytes),
           orphan.createdAt?.toISOString() ?? '-',
-          orphan.snapshots.length === 0 ? '-' : orphan.snapshots.join(','),
+          formatOrphanContents(orphan),
         ]),
       ),
     );
   }
 
   return lines.join('\n');
+}
+
+// its snapshots, or for kept secret values how many files
+function formatOrphanContents(orphan: Readonly<OrphanStorage>): string {
+  if (orphan.files !== undefined) {
+    return `${String(orphan.files.length)} files`;
+  }
+
+  return orphan.snapshots.length === 0 ? '-' : orphan.snapshots.join(',');
 }
 
 export function formatJson(value: unknown): string {
