@@ -38,11 +38,13 @@ import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import {
   PIN_INSPECT_FORMAT,
   PinInspectSchema,
+  formatPinFailure,
   formatPlatform,
   normalizePlatform,
   pickRepoDigest,
+  readImageStore,
 } from './image-pin';
-import type { PinInspect } from './image-pin';
+import type { ImageStore, Pin, PinInspect } from './image-pin';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
 
@@ -421,10 +423,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // A sessionless build cannot ask impd for registry credentials: each image
   // the Dockerfile names and the host lacks is pulled first, as `imp image
   // add` does. Returns the Dockerfile with each image pinned to its digest.
-  const resolvePinnedDockerfile = async (
-    dockerfile: string,
-    signal: AbortSignal,
-  ): Promise<string> => {
+  const resolvePinnedDockerfile = async (dockerfile: string, signal: AbortSignal) => {
     const images = (() => {
       try {
         return checkDockerfile(dockerfile);
@@ -436,6 +435,10 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const platform = await readHostPlatform(signal);
 
     const pins = new Map<string, string>();
+
+    const used: Pin[] = [];
+
+    const stores = new Set<ImageStore>();
 
     for (const image of images) {
       if (!ImageRefSchema.safeParse(image.ref).success) {
@@ -457,11 +460,17 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       const inspect = await loadImage(image, signal);
 
-      pins.set(image.ref, pickPin(image, inspect, platform));
+      const pin = pickPin(image, inspect, platform);
+
+      pins.set(image.ref, pin);
+      used.push({ use: image.use, ref: image.ref, pin });
+      stores.add(readImageStore(inspect));
     }
 
+    const store = [...stores].find((candidate) => candidate !== 'unknown') ?? 'unknown';
+
     try {
-      return renderPinnedDockerfile(dockerfile, pins, platform);
+      return { dockerfile: renderPinnedDockerfile(dockerfile, pins, platform), pins: used, store };
     } catch (error) {
       throw toBadRequest(error);
     }
@@ -481,6 +490,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     const dockerfilePath = normalizeDockerfilePath(givenDockerfile);
     const rewrittenPath = `${tarPath}.rewritten`;
 
+    // the pins the build used, for a failure the engine reports
+    let pins: readonly Pin[] = [];
+
     try {
       // the rewrite is the context again, with pax headers for long names
       await deps.diskBudget.withRoom(tarBytes, async () => {
@@ -494,9 +506,21 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
         const pinned = await resolvePinnedDockerfile(context.dockerfile, signal);
 
+        pins = pinned.pins;
+
+        console.log(
+          `impd: image build ${name}: ${String(pinned.pins.length)} images pinned, image store ${pinned.store}`,
+        );
+
         signal.throwIfAborted();
 
-        await writeBuildContext(tarPath, rewrittenPath, context, pinned, DOCKERFILE_MAX_BYTES);
+        await writeBuildContext(
+          tarPath,
+          rewrittenPath,
+          context,
+          pinned.dockerfile,
+          DOCKERFILE_MAX_BYTES,
+        );
 
         signal.throwIfAborted();
 
@@ -516,7 +540,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       signal.throwIfAborted();
 
       if (error instanceof DockerBuildError) {
-        throw new ORPCError('BAD_REQUEST', { message: error.message });
+        throw new ORPCError('BAD_REQUEST', { message: formatPinFailure(error.message, pins) });
       }
 
       throw error;

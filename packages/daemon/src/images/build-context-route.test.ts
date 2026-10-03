@@ -414,7 +414,13 @@ function buildInspect(
   repoDigests: readonly string[],
   extra: Readonly<Record<string, unknown>> = {},
 ) {
-  const inspect = { RepoDigests: repoDigests, Os: 'linux', Architecture: 'amd64', OnBuild: null };
+  const inspect = {
+    Id: `sha256:${'c'.repeat(64)}`,
+    RepoDigests: repoDigests,
+    Os: 'linux',
+    Architecture: 'amd64',
+    OnBuild: null,
+  };
 
   return `echo '${JSON.stringify({ ...inspect, ...extra })}'`;
 }
@@ -451,7 +457,10 @@ function readCalls(log: string): string[] {
 
 // A build through the image service, with the fake docker on PATH and a
 // fake engine that records the context it gets and fails the build.
-async function sendFakeDockerBuild(dockerfile: string) {
+async function sendFakeDockerBuild(
+  dockerfile: string,
+  engineError = 'the fake engine builds nothing',
+) {
   const socketDir = mkdtempSync(join(tmpdir(), 'imp-engine-'));
   const socket = join(socketDir, 'docker.sock');
   const contexts: Uint8Array[] = [];
@@ -463,7 +472,7 @@ async function sendFakeDockerBuild(dockerfile: string) {
 
       contexts.push(new Uint8Array(context));
 
-      return new Response(`${JSON.stringify({ error: 'the fake engine builds nothing' })}\n`);
+      return new Response(`${JSON.stringify({ error: engineError })}\n`);
     },
   });
 
@@ -571,6 +580,18 @@ test('the engine builds the Dockerfile with each image pinned and the platform n
       '',
     ].join('\n'),
   ]);
+});
+
+test('a pinned build the registry denies says how impd pinned it, and what to build from', async () => {
+  const sent = await sendFakeDockerBuild(
+    'FROM base.test/retag:1\n',
+    'pull access denied, repository does not exist or may require authorization',
+  );
+
+  expect(sent.body).toMatchObject({
+    code: 'BAD_REQUEST',
+    message: `docker build failed: pull access denied, repository does not exist or may require authorization\nimpd pinned FROM base.test/retag:1 as other.test/x@${DIGEST_B}. On the containerd image store a retag of a multi-platform image cannot be pinned: build FROM its original repository, such as busybox:1.37, instead of the retag.`,
+  });
 });
 
 test('an image with no registry digest, or for another platform, is refused before the build', async () => {

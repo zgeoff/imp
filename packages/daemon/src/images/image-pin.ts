@@ -3,9 +3,10 @@ import * as z from 'zod';
 // What impd reads of an image the build names, through one inspect
 // format, so nothing else of the image reaches impd's logs.
 export const PIN_INSPECT_FORMAT =
-  '{"RepoDigests":{{json .RepoDigests}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"OnBuild":{{json .Config.OnBuild}}}';
+  '{"Id":{{json .Id}},"RepoDigests":{{json .RepoDigests}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"OnBuild":{{json .Config.OnBuild}}}';
 
 export const PinInspectSchema = z.object({
+  Id: z.string(),
   RepoDigests: z.array(z.string()).readonly().nullable(),
   Os: z.string(),
   Architecture: z.string(),
@@ -79,4 +80,39 @@ export function pickRepoDigest(ref: string, repoDigests: readonly string[]): str
   const own = repoDigests.find((entry) => entry.split('@')[0] === repository);
 
   return own ?? repoDigests[0] ?? null;
+}
+
+export type ImageStore = 'containerd' | 'classic' | 'unknown';
+
+// The engine's image store, read from an image: the containerd store's ID
+// is a manifest or index digest, which RepoDigests holds; the classic
+// store's is the config's, which it never does.
+export function readImageStore(inspect: Readonly<PinInspect>): ImageStore {
+  const digests = inspect.RepoDigests ?? [];
+
+  if (digests.length === 0) {
+    return 'unknown';
+  }
+
+  return digests.some((digest) => digest.endsWith(`@${inspect.Id}`)) ? 'containerd' : 'classic';
+}
+
+export interface Pin {
+  readonly use: string;
+  readonly ref: string;
+  readonly pin: string;
+}
+
+const PULL_DENIED = /pull access denied|repository does not exist/v;
+
+// A pinned build the engine could not resolve: on the containerd store, a
+// retag of a multi-platform image has a digest under a name no registry has.
+export function formatPinFailure(message: string, pins: readonly Pin[]): string {
+  if (pins.length === 0 || !PULL_DENIED.test(message)) {
+    return message;
+  }
+
+  const pinned = pins.map((entry) => `${entry.use} ${entry.ref} as ${entry.pin}`).join(', ');
+
+  return `${message}\nimpd pinned ${pinned}. On the containerd image store a retag of a multi-platform image cannot be pinned: build FROM its original repository, such as busybox:1.37, instead of the retag.`;
 }
