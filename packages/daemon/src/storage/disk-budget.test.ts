@@ -94,6 +94,48 @@ test('a growing write holds what it has grown to, refuses past the reserve, and 
   expect(after.pendingBytes).toBe(0);
 });
 
+test('two growing writes count against each other, and each frees its hold however it ends', async () => {
+  // 6 GiB above the reserve
+  const ctx = setupBudget(10 * GIB, 4 * GIB);
+  const firstGrown = Promise.withResolvers<void>();
+  const firstEnds = Promise.withResolvers<void>();
+
+  const first = ctx.budget.withGrowingRoom(async (grow) => {
+    await grow(4 * GIB);
+
+    firstGrown.resolve();
+
+    await firstEnds.promise;
+
+    throw new Error('the export hit its limit');
+  });
+
+  await firstGrown.promise;
+
+  const second = await ctx.budget
+    .withGrowingRoom(async (grow) => {
+      await grow(2 * GIB);
+      await grow(3 * GIB);
+    })
+    .catch((error: unknown) => error);
+
+  const during = await ctx.budget.readStatus();
+
+  firstEnds.resolve();
+
+  const firstEnd = await first.catch((error: unknown) => error);
+  const after = await ctx.budget.readStatus();
+
+  expect(second).toMatchObject({
+    code: 'DISK_FULL',
+    data: { availableBytes: 4 * GIB, requestedBytes: GIB },
+  });
+
+  expect(during.pendingBytes).toBe(4 * GIB);
+  expect(String(firstEnd)).toContain('the export hit its limit');
+  expect(after.pendingBytes).toBe(0);
+});
+
 test('a create past the reserve is refused even with an estimate of 0', async () => {
   const ctx = setupBudget(3 * GIB);
 

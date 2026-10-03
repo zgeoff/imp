@@ -10,11 +10,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ORPCError } from '@orpc/server';
 import { loadConfig } from '../config';
 import { findImageByName } from '../db/images';
 import { openDatabase } from '../db/open-database';
+import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
+import { createDiskBudget } from '../storage/disk-budget';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import type { Builders } from './builder-imps';
@@ -53,7 +54,11 @@ function buildTar(files: Readonly<Record<string, string>>): Uint8Array {
 
 // A builder's engine on amd64 that has base.test/a:1 and the frontend, and
 // builds whatever it gets; the Dockerfile each build got
-function createBuilderAnswer(onBuild: (dockerfile: string) => void, exported: Uint8Array) {
+function createBuilderAnswer(
+  onBuild: (dockerfile: string) => void,
+  exported: Uint8Array,
+  stall: boolean,
+) {
   return async (run: FakeRun): Promise<FakeAnswer> => {
     const argv = run.argv.slice(1).join(' ');
 
@@ -96,19 +101,26 @@ function createBuilderAnswer(onBuild: (dockerfile: string) => void, exported: Ui
     }
 
     if (argv === `export ${CONTAINER_ID}`) {
-      return { stdout: [exported] };
+      return { stdout: [exported], stall };
     }
 
     return { code: 1, stderr: `the fake builder has no ${argv}` };
   };
 }
 
-// exported: the builder's export, by default a tree with one file; roomBytes:
-// how far the disk lets the export's hold grow
-async function setupIsolatedBuild(
-  exported = buildTar({ hello: 'from the builder\n' }),
-  roomBytes = Number.POSITIVE_INFINITY,
-) {
+interface IsolatedBuildOptions {
+  // the builder's export, by default a tree with one file
+  readonly exported?: Uint8Array;
+
+  // the free disk above the reserve; IMP_* settings; an export that never ends
+  readonly roomBytes?: number;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly stallExport?: boolean;
+}
+
+async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) {
+  const exported = options.exported ?? buildTar({ hello: 'from the builder\n' });
+
   // one directory per setup, so a test may set up twice
   const home = join(dir, `setup-${Bun.randomUUIDv7()}`);
   const dataDir = join(home, 'data');
@@ -120,13 +132,24 @@ async function setupIsolatedBuild(
   const builtDockerfiles: string[] = [];
 
   const guest = createFakeGuest(
-    createBuilderAnswer((dockerfile) => {
-      builtDockerfiles.push(dockerfile);
-    }, exported),
+    createBuilderAnswer(
+      (dockerfile) => {
+        builtDockerfiles.push(dockerfile);
+      },
+      exported,
+      options.stallExport === true,
+    ),
   );
 
   const boots: string[] = [];
   const grows: number[] = [];
+  const usage = { usedBytes: 0, availableBytes: options.roomBytes ?? 1024 ** 5 };
+
+  const diskBudget = createDiskBudget({
+    storage: { readUsage: () => Promise.resolve(usage) },
+    reserveBytes: 0,
+    log: () => {},
+  });
 
   const builders: Builders = {
     withBuilder: (_signal, run) => {
@@ -148,28 +171,26 @@ async function setupIsolatedBuild(
   });
 
   const images = createImageService({
-    config: loadConfig({ IMP_DATA_DIR: dataDir }),
+    config: loadConfig({ ...options.env, IMP_DATA_DIR: dataDir }),
     db,
     storage: createXfsBackend({ dataDir }),
     storageGate: createStorageGate(),
     diskBudget: {
-      withRoom: (_bytes, task) => task(),
+      withRoom: diskBudget.withRoom,
       withGrowingRoom: (task) =>
-        task((totalBytes) => {
-          grows.push(totalBytes);
+        diskBudget.withGrowingRoom((grow) =>
+          task(async (totalBytes) => {
+            grows.push(totalBytes);
 
-          if (totalBytes > roomBytes) {
-            throw new ORPCError('DISK_FULL', { message: 'not enough free disk' });
-          }
-
-          return Promise.resolve();
-        }),
+            await grow(totalBytes);
+          }),
+        ),
     },
     readBuilders: () => builders,
     log: () => {},
   });
 
-  const runBuild = async (dockerfile: string) => {
+  const runBuild = async (dockerfile: string, signal = new AbortController().signal) => {
     const tarPath = join(dir, `context-${Bun.randomUUIDv7()}.tar`);
 
     writeFileSync(tarPath, buildTar({ Dockerfile: dockerfile }));
@@ -179,12 +200,7 @@ async function setupIsolatedBuild(
     process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
 
     try {
-      return await images.buildImageFromContext(
-        tarPath,
-        'web',
-        undefined,
-        new AbortController().signal,
-      );
+      return await images.buildImageFromContext(tarPath, 'web', undefined, signal);
     } finally {
       process.env['PATH'] = savedPath;
     }
@@ -192,7 +208,18 @@ async function setupIsolatedBuild(
 
   const readHostCalls = () => (existsSync(hostLog) ? readFileSync(hostLog, 'utf8') : '');
 
-  return { db, dataDir, guest, builtDockerfiles, exported, boots, grows, runBuild, readHostCalls };
+  return {
+    db,
+    dataDir,
+    guest,
+    builtDockerfiles,
+    exported,
+    boots,
+    grows,
+    diskBudget,
+    runBuild,
+    readHostCalls,
+  };
 }
 
 test('an isolated build pins, builds and exports in its builder, and the host engine sees none of it', async () => {
@@ -229,10 +256,10 @@ test('an isolated build holds disk as its export grows, not the image cap, and s
   // one 256 MiB step, where the cap would hold 16 GiB
   expect(small.grows).toEqual([256 * 1024 ** 2]);
 
-  const big = await setupIsolatedBuild(
-    buildTar({ big: 'x'.repeat(200 * 1024 ** 2) }),
-    256 * 1024 ** 2,
-  );
+  const big = await setupIsolatedBuild({
+    exported: buildTar({ big: 'x'.repeat(200 * 1024 ** 2) }),
+    roomBytes: 256 * 1024 ** 2,
+  });
 
   const failure = await big
     .runBuild('FROM base.test/a:1\nRUN true\n')
@@ -243,6 +270,56 @@ test('an isolated build holds disk as its export grows, not the image cap, and s
   // the fake builder sends its export as one chunk
   expect(big.grows).toEqual([512 * 1024 ** 2]);
   expect(big.guest.runs.at(-1)).toMatchObject({ closed: true });
+});
+
+test("an isolated build's disk hold goes however the build ends", async () => {
+  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+  const many = Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`f${String(n)}`, 'x']));
+
+  const built = await setupIsolatedBuild();
+
+  const limited = await setupIsolatedBuild({
+    exported: buildTar(many),
+    env: { IMP_BUILD_IMAGE_MAX_FILES: '5' },
+  });
+
+  const full = await setupIsolatedBuild({
+    exported: buildTar({ big: 'x'.repeat(200 * 1024 ** 2) }),
+    roomBytes: 256 * 1024 ** 2,
+  });
+
+  const cancelled = await setupIsolatedBuild({ stallExport: true });
+
+  const client = new AbortController();
+
+  await built.runBuild(dockerfile);
+
+  const ends = [
+    await limited.runBuild(dockerfile).catch((error: unknown) => error),
+    await full.runBuild(dockerfile).catch((error: unknown) => error),
+  ];
+
+  // the client goes while the builder holds its export open
+  const cancelling = readRejection(cancelled.runBuild(dockerfile, client.signal));
+
+  await Bun.sleep(100);
+
+  client.abort();
+
+  const cancelEnd = await cancelling;
+
+  expect(String(ends[0])).toContain('is over 5 files');
+  expect(ends[1]).toMatchObject({ code: 'DISK_FULL' });
+  expect(cancelEnd).toBeInstanceOf(Error);
+
+  for (const ctx of [built, limited, full, cancelled]) {
+    const status = await ctx.diskBudget.readStatus();
+
+    expect({ grows: ctx.grows.length > 0, pending: status.pendingBytes }).toEqual({
+      grows: true,
+      pending: 0,
+    });
+  }
 });
 
 test('a Dockerfile the input guard refuses boots no builder', async () => {
@@ -276,12 +353,15 @@ test("a built image's image.json link changes no host file", async () => {
   writeFileSync(hostFile, "the host's\n");
   mkdirSync(hostDir);
 
-  const linkedFile = await setupIsolatedBuild(buildLinkedExport('etc/imp/image.json', hostFile));
+  const linkedFile = await setupIsolatedBuild({
+    exported: buildLinkedExport('etc/imp/image.json', hostFile),
+  });
+
   const image = await linkedFile.runBuild('FROM base.test/a:1\nRUN true\n');
 
   expect(image.digest).toMatch(/^imp-build-[a-f0-9]{64}$/v);
 
-  const linkedDir = await setupIsolatedBuild(buildLinkedExport('etc/imp', hostDir));
+  const linkedDir = await setupIsolatedBuild({ exported: buildLinkedExport('etc/imp', hostDir) });
 
   const failure = await linkedDir
     .runBuild('FROM base.test/a:1\nRUN true\n')
