@@ -9,6 +9,9 @@ import type {
   Image,
   Imp,
   Network,
+  OAuthApproval,
+  OAuthClient,
+  OAuthGrant,
   Secret,
   Service,
   Session,
@@ -416,6 +419,44 @@ export function formatTokens(tokens: readonly WithOptionalGrantable<Token>[]): s
       token.createdAt.toISOString(),
     ]),
   );
+}
+
+export function formatOAuthClients(clients: readonly OAuthClient[]): string {
+  return formatTable(
+    ['NAME', 'CLIENT ID', 'REDIRECT URIS', 'CREATED'],
+    clients.map((client) => [
+      client.name,
+      client.clientId,
+      client.redirectUris.join(','),
+      client.createdAt.toISOString(),
+    ]),
+  );
+}
+
+export function formatOAuthGrants(grants: readonly OAuthGrant[]): string {
+  return formatTable(
+    ['ID', 'CLIENT', 'TOKEN', 'SCOPE', 'IMPS', 'CREATED', 'LAST USED'],
+    grants.map((grant) => [
+      grant.id,
+      grant.client,
+      grant.token,
+      grant.scope,
+      grant.imps === null ? '*' : grant.imps.join(','),
+      grant.createdAt.toISOString(),
+      grant.lastUsedAt?.toISOString() ?? '-',
+    ]),
+  );
+}
+
+// what a sign-in asks for, for its approver to check before approving
+export function formatOAuthApproval(approval: Readonly<OAuthApproval>): string {
+  return [
+    `client:       ${approval.client}`,
+    `returns to:   ${approval.redirectUri}`,
+    `asks for:     up to ${approval.requestedScope}`,
+    `started:      ${approval.requestedAt.toISOString()}`,
+    `ends:         ${approval.expiresAt.toISOString()}`,
+  ].join('\n');
 }
 
 // `SHA256:... comment`, as `ssh-keygen -l` prints a key
