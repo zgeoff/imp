@@ -486,6 +486,7 @@ async function main(): Promise<void> {
     startTicker('idle', 2000, idle.runCheck, printLog),
     startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
+    startTicker('session-logs', 60_000, imps.sweepSessionLogs, printLog),
 
     // elastic guests grow within a second of running low
     startTicker('memory', 500, governed.memory.runTick, printLog),

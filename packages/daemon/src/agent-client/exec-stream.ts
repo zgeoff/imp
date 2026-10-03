@@ -25,6 +25,10 @@ export interface AgentExecRequest {
   // with a session: the output after this byte, not a replay
   readonly resumeFrom?: ResumeFrom;
 
+  // a session impd keeps a log of; an agent from before session logs
+  // ignores it, and its STARTED says no log
+  readonly log?: boolean;
+
   // runs in the agent's own world, outside the inner container, as root:
   // the exec.outer op, which an older agent refuses
   readonly outer?: boolean;
@@ -115,6 +119,9 @@ const AgentOutputSchema = z.object({
   prelude: OffsetSchema,
   previous: AgentPreviousSchema.optional(),
   resume: AgentResumeSchema.optional(),
+
+  // set for a session started with log, by an agent with session logs
+  log: z.boolean().optional(),
 });
 
 const StartedSchema = z.object({
@@ -166,6 +173,26 @@ export async function openExecStream(
   }
 
   return stream;
+}
+
+// Taps a logged session's raw output beside its viewer, from resumeFrom or
+// the ring's start; it counts as no connection. Throws NO_SESSION, and
+// BAD_REQUEST for a session without a log.
+export function openTapStream(
+  vsockPath: string,
+  session: string,
+  resumeFrom?: ResumeFrom,
+  startTimeoutMs = EXEC_START_TIMEOUT_MS,
+): Promise<ExecStream> {
+  return openStream(
+    vsockPath,
+    {
+      op: 'session.tap',
+      session,
+      ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
+    },
+    startTimeoutMs,
+  ).catch(handleUnknownOp('session-log'));
 }
 
 // Attaches to a session and waits for STARTED; the replay follows as
@@ -300,6 +327,7 @@ function toSessionOutput(started: z.infer<typeof StartedSchema>): SessionOutput 
     coldBoots: [],
     ...(output.previous !== undefined && { previous: toPrevious(output.previous) }),
     ...(output.resume !== undefined && { resume: toResume(output.resume) }),
+    ...(output.log === true && { log: { enabled: true } }),
   };
 }
 

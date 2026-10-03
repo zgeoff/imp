@@ -518,6 +518,8 @@ async function removeImpFiles(
 ): Promise<void> {
   const paths = context.findPaths(impId);
 
+  context.sessionLogs.forgetImp(impId);
+
   await context.storage.removeImpDisk(impId, checkpointIds);
 
   rmSync(paths.dir, { recursive: true, force: true });
