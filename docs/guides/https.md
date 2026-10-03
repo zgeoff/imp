@@ -67,12 +67,17 @@ NixOS, set `services.imp.dnsApiTokenFile` instead ([NixOS](./nixos.md#the-dns-ap
 - A file that is missing, empty or refused does not stop impd. impd starts, logs the path and what
   is wrong (never the file's contents), and each DNS call reads the file again. Certificate attempts
   back off as for any DNS failure (below), the certificate on disk keeps serving, and the records
-  stay as they are. `imp info` shows the last read on its `https` line:
+  stay as they are. `imp info` (and `system.info` in the API) reads the file again each time you
+  ask, and shows an error on its `https` line:
 
   ```text
-  https       imp.example.com, DNS token failing at 2026-10-03T12:00:00.000Z: the DNS API token file /etc/imp/dns-api-token is empty
+  https       imp.example.com, ERROR: the DNS API token file /etc/imp/dns-api-token is empty
   ```
 
+- While impd has no certificate, nothing listens on the HTTPS port, the HTTP port or the public
+  ports: no imp is ever served as plain HTTP in its place. Once a certificate exists, the HTTP port
+  only redirects to HTTPS. impd's API on its own port stays up throughout, so you can see the state
+  and fix the file without a restart.
 - Without `IMP_DOMAIN`, the file is unused, and impd logs a warning at start.
 
 ## How it works
