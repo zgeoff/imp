@@ -1,0 +1,58 @@
+# imp-docker-proxy: the only Docker socket imp-host sees. It passes the
+# calls impd makes (pull, build, create, export, rm) and refuses every other
+# (docs/architecture/host-contract.md#the-docker-socket). It closes the
+# Docker socket path only: imp-host keeps SYS_ADMIN, which still lets root
+# out of the container.
+#
+#   install -m 0644 deploy/imp-docker-proxy.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now imp-docker-proxy
+#
+# imp-host.service wants this unit and starts after it; deploy/bootstrap.sh
+# and deploy/upgrade.sh install both.
+[Unit]
+Description=imp Docker socket proxy (the Docker API calls impd makes)
+Documentation=https://github.com/zgeoff/imp/blob/main/docs/architecture/host-contract.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=exec
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
+# IMP_HOST_IMAGE, whose repository a pull may not move, and
+# IMP_BUILD_CONTEXT_MAX_MIB. Only those two reach the container (-e NAME);
+# it never sees the rest of the file, such as TAILSCALE_AUTHKEY.
+EnvironmentFile=/etc/imp/imp-host.env
+ExecStartPre=-/usr/bin/docker rm -f imp-docker-proxy
+# The socket's directory and the proxy's token, owned by the proxy's user.
+# Not RuntimeDirectory=: a stop would remove the directory under imp-host's
+# bind mount.
+ExecStartPre=/usr/bin/install -d -m 0700 -o 65534 -g 65534 /run/imp-docker /var/lib/imp-docker-proxy
+# a socket left by a crash would pass the wait below before the proxy binds
+ExecStartPre=/bin/rm -f /run/imp-docker/docker.sock
+# The proxy runs as 65534 and joins the group of the host's socket, read
+# here as IMP_DOCKER_GID; systemd reads the file again for ExecStart.
+RuntimeDirectory=imp-docker-proxy
+EnvironmentFile=-/run/imp-docker-proxy/gid.env
+ExecStartPre=/bin/sh -c 'echo "IMP_DOCKER_GID=$$(stat -c %%g /var/run/docker.sock)" >/run/imp-docker-proxy/gid.env'
+# The arguments come from the proxy section of deploy/imp-host.args.json:
+# edit that, then run bun run render:deploy (the NixOS module reads the same
+# file).
+ExecStart=/usr/bin/docker run --rm --name imp-docker-proxy \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp \
+  --network none \
+  --user 65534:65534 \
+  --group-add $IMP_DOCKER_GID \
+  -e IMP_HOST_IMAGE -e IMP_BUILD_CONTEXT_MAX_MIB \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /run/imp-docker:/run/imp-docker \
+  -v /var/lib/imp-docker-proxy:/var/lib/imp-docker-proxy \
+  ${IMP_HOST_IMAGE} /usr/local/bin/imp-docker-proxy
+# Up once the socket is there, so impd's first docker call finds it.
+ExecStartPost=/bin/sh -c 'for i in $$(seq 300); do [ -S /run/imp-docker/docker.sock ] && exit 0; sleep 0.1; done; echo "imp-docker-proxy: no socket after 30 s" >&2; exit 1'
+ExecStop=/usr/bin/docker stop -t 10 imp-docker-proxy
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

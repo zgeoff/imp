@@ -4,20 +4,26 @@
 #   deploy/upgrade.sh                      the systemd unit (deploy/imp-host.service)
 #   deploy/upgrade.sh --compose <file>     docker compose (deploy/compose.yaml)
 #
+# A host on an older release gets this script from the new image, not from
+# its own release (docs/guides/operations.md#upgrade):
+#
+#   docker run --rm <new image> cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+#
 # 1. Pulls the image. Nothing happens when the host already runs it. Refuses
-#    an image older than the unprivileged host (no imp.host-contract label)
-#    once the unit or compose file runs without --privileged: that image
-#    needs the old privileges, and only deploy/bootstrap.sh of its release
-#    puts them back (docs/guides/operations.md#upgrade). Reads the image's
-#    seccomp profile and unit; one it cannot read, or reads empty, stops
-#    the upgrade here.
+#    an image older than the Docker socket proxy (imp.host-contract other
+#    than socket-proxy) once the unit or compose file gives imp-host the
+#    proxy's socket, and an image with no label once it runs without
+#    --privileged: only deploy/bootstrap.sh of that image's release puts its
+#    deploy back. Reads the image's seccomp profile and both units; one it
+#    cannot read, or reads empty, stops the upgrade here.
 # 2. Sleeps every awake imp through the API, one at a time, and stops on the
 #    first that fails: the host keeps running the old image, untouched.
 #    Stopping the container would sleep them too, but within its 120 s.
-# 3. Installs the image's seccomp profile and systemd unit by rename (with
-#    --compose, the compose file is the operator's and stays), restarts the
-#    host on the new image and waits for impd. Local changes to the unit
-#    belong in a drop-in (imp-host.service.d/), which stays.
+# 3. Installs the image's seccomp profile and systemd units by rename (with
+#    --compose, the compose file is the operator's and stays), restarts
+#    imp-docker-proxy, then the host, on the new image and waits for impd.
+#    Local changes to a unit belong in a drop-in (imp-host.service.d/),
+#    which stays.
 # 4. Prints how many imps will boot cold and how many run outdated parts, then
 #    lists the imps: a NOTE says which boot cold on their next wake, and why
 #    (docs/guides/operations.md#upgrade).
@@ -28,12 +34,15 @@
 #      ghcr.io/zgeoff/imp-host:latest) must be the image the unit or the
 #      compose file runs. IMP_HOST_ENV_FILE defaults to /etc/imp/imp-host.env.
 #      IMP_HOST_UNIT_FILE defaults to /etc/systemd/system/imp-host.service,
-#      IMP_HOST_SECCOMP_FILE to /etc/imp/imp-host.seccomp.json.
+#      IMP_DOCKER_PROXY_UNIT_FILE to /etc/systemd/system/imp-docker-proxy.service,
+#      IMP_HOST_SECCOMP_FILE to /etc/imp/imp-host.seccomp.json. With
+#      --compose, IMP_DOCKER_GID defaults to the group of /var/run/docker.sock.
 set -euo pipefail
 
 container=imp-host
 env_file=${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
 unit_file=${IMP_HOST_UNIT_FILE:-/etc/systemd/system/imp-host.service}
+proxy_unit_file=${IMP_DOCKER_PROXY_UNIT_FILE:-/etc/systemd/system/imp-docker-proxy.service}
 seccomp_file=${IMP_HOST_SECCOMP_FILE:-/etc/imp/imp-host.seccomp.json}
 image_deploy=/usr/local/share/imp/deploy
 health=http://127.0.0.1:7070/health
@@ -93,9 +102,16 @@ print_boot_status() {
     end' <<<"$info" || echo "upgrade: could not read imp info; see the NOTE column below" >&2
 }
 
-# succeeds when IMAGE runs without --privileged (its label, host/Dockerfile)
-unprivileged_image() {
-  [ "$(docker image inspect -f '{{index .Config.Labels "imp.host-contract"}}' "$1")" = unprivileged ]
+# IMAGE's imp.host-contract label (host/Dockerfile): socket-proxy runs
+# without --privileged and reaches Docker through imp-docker-proxy;
+# unprivileged, the release before, binds the host's docker.sock
+contract_of() {
+  docker image inspect -f '{{index .Config.Labels "imp.host-contract"}}' "$1"
+}
+
+# succeeds when FILE gives imp-host the proxy's socket, not the host's
+proxy_deploy() {
+  grep -q 'unix:///run/imp-docker/docker.sock' "$1"
 }
 
 # the deploy file in use: the unit, or the compose file
@@ -130,9 +146,18 @@ install_file() {
   echo "upgrade: installed $1 from $image"
 }
 
+# the proxy first: imp-host starts after it, and impd's first docker call
+# needs its socket
 restart_host() {
   if [ -n "$compose_file" ]; then
-    IMP_HOST_IMAGE=$image docker compose -f "$compose_file" up -d imp-host
+    local services=(imp-host)
+    ! grep -q '^  imp-docker-proxy:' "$compose_file" || services=(imp-docker-proxy imp-host)
+    IMP_DOCKER_GID=${IMP_DOCKER_GID:-$(stat -c %g /var/run/docker.sock 2>/dev/null || true)} \
+      IMP_HOST_IMAGE=$image docker compose -f "$compose_file" up -d "${services[@]}"
+  elif [ "$new_contract" = socket-proxy ]; then
+    systemctl enable -q imp-docker-proxy
+    systemctl restart imp-docker-proxy
+    systemctl restart imp-host
   else
     systemctl restart imp-host
   fi
@@ -173,24 +198,37 @@ fi
 
 echo "upgrade: $old -> $new"
 
-if ! unprivileged_image "$image"; then
-  if ! grep -qE -- '--privileged|privileged: true' "$(deploy_file)"; then
+new_contract=$(contract_of "$image")
+old_contract=$(contract_of "$old")
+
+if [ "$new_contract" != socket-proxy ]; then
+  if proxy_deploy "$(deploy_file)"; then
+    echo "upgrade: $image predates the Docker socket proxy, and $(deploy_file) gives imp-host no docker.sock." >&2
+    echo "upgrade: to roll back past it, run deploy/bootstrap.sh of that image's release (docs/guides/operations.md#upgrade)." >&2
+    exit 1
+  fi
+  if [ -z "$new_contract" ] && ! grep -qE -- '--privileged|privileged: true' "$(deploy_file)"; then
     echo "upgrade: $image predates the unprivileged host, and $(deploy_file) runs without --privileged." >&2
     echo "upgrade: to roll back past it, run deploy/bootstrap.sh of that image's release (docs/guides/operations.md#upgrade)." >&2
     exit 1
   fi
 fi
 
-# The image's seccomp profile and unit, read before any imp sleeps: an image
-# that cannot give them stops the upgrade with the host untouched.
+# The image's seccomp profile and units, read before any imp sleeps: an
+# image that cannot give them stops the upgrade with the host untouched.
 new_files=()
-if unprivileged_image "$image"; then
+if [ -n "$new_contract" ]; then
   new_files=("$seccomp_file")
   [ -n "$compose_file" ] || new_files+=("$unit_file")
+  [ -n "$compose_file" ] || [ "$new_contract" != socket-proxy ] || new_files+=("$proxy_unit_file")
 fi
 trap 'for f in "${new_files[@]}"; do rm -f "$f.new"; done' EXIT
 for f in "${new_files[@]}"; do
-  if [ "$f" = "$unit_file" ]; then deploy_name=imp-host.service; else deploy_name=imp-host.seccomp.json; fi
+  case $f in
+    "$unit_file") deploy_name=imp-host.service ;;
+    "$proxy_unit_file") deploy_name=imp-docker-proxy.service ;;
+    *) deploy_name=imp-host.seccomp.json ;;
+  esac
   fetch_file "$deploy_name" "$f" || exit 1
 done
 
@@ -207,7 +245,7 @@ done
 
 unit_changed=
 for f in "${new_files[@]}"; do
-  if install_file "$f" && [ "$f" = "$unit_file" ]; then
+  if install_file "$f" && [ "$f" != "$seccomp_file" ]; then
     unit_changed=1
   fi
 done
@@ -215,13 +253,20 @@ done
 restart_host
 wait_ready
 
-if unprivileged_image "$old"; then
-  echo "upgrade: done. To roll back: docker tag $old $image, then run the restart again."
+if [ "$old_contract" = "$new_contract" ]; then
+  if [ -n "$compose_file" ] || [ "$new_contract" != socket-proxy ]; then
+    echo "upgrade: done. To roll back: docker tag $old $image, then run the restart again."
+  else
+    echo "upgrade: done. To roll back: docker tag $old $image, then systemctl restart imp-docker-proxy imp-host."
+  fi
 else
-  echo "upgrade: done. $old predates the unprivileged host: to roll back to it, run deploy/bootstrap.sh of its release."
+  echo "upgrade: done. $old predates this host contract ($new_contract): to roll back to it, run deploy/bootstrap.sh of its release."
 fi
 if [ -n "$compose_file" ] && grep -q 'privileged: true' "$compose_file"; then
   echo "upgrade: NOTE: $compose_file still runs privileged; take the privileges of this release's deploy/compose.yaml" >&2
+fi
+if [ -n "$compose_file" ] && [ "$new_contract" = socket-proxy ] && ! proxy_deploy "$compose_file"; then
+  echo "upgrade: NOTE: $compose_file still gives imp-host the host's docker.sock; take the imp-docker-proxy service and imp-host's volumes from this release's deploy/compose.yaml" >&2
 fi
 print_boot_status
 imp ls

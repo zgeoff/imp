@@ -9,15 +9,17 @@ const dir = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-tskey-'));
 const opCalls = join(dir, 'op-calls');
 
 // a stand-in for one CLI: `op` succeeds or fails and counts its calls;
-// `docker` succeeds except for `inspect` and `run`, so dev.sh up stops right
-// at the container start
+// `docker` succeeds except for `inspect` and a `run` other than the proxy's,
+// so dev.sh up stops right at the container start
 function writeFakeBin(binDir: string, opBehaviour: 'key' | 'fail'): string {
   const op =
     opBehaviour === 'key'
       ? `#!/bin/sh\necho call >> '${opCalls}'\necho '${SECRET}'\n`
       : `#!/bin/sh\necho call >> '${opCalls}'\nexit 1\n`;
 
-  const docker = '#!/bin/sh\ncase "$1" in run|inspect) exit 1 ;; esac\nexit 0\n';
+  const docker =
+    '#!/bin/sh\ncase "$*" in *docker-proxy/main.ts) exit 0 ;; esac\n' +
+    'case "$1" in run|inspect) exit 1 ;; esac\nexit 0\n';
 
   for (const [name, script] of [
     ['op', op],

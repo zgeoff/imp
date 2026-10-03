@@ -1,9 +1,9 @@
 # imp host as a systemd service. One of the two supported ways to run the
 # release image; deploy/compose.yaml is the other. Run one, not both.
 #
-#   install -m 0644 deploy/imp-host.service /etc/systemd/system/
+#   install -m 0644 deploy/imp-host.service deploy/imp-docker-proxy.service /etc/systemd/system/
 #   install -D -m 0600 deploy/imp-host.env.example /etc/imp/imp-host.env  # then edit
-#   systemctl daemon-reload && systemctl enable --now imp-host
+#   systemctl daemon-reload && systemctl enable --now imp-docker-proxy imp-host
 #   deploy/upgrade.sh   to a new image
 #
 # /var/lib/imp must be XFS with reflink (docs/guides/install.md).
@@ -11,8 +11,10 @@
 Description=imp host (impd, Firecracker, tailscaled)
 Documentation=https://github.com/zgeoff/imp/blob/main/docs/guides/install.md
 Requires=docker.service
-After=docker.service network-online.target
-Wants=network-online.target
+After=docker.service network-online.target imp-docker-proxy.service
+# impd reaches Docker through the proxy's socket. Wants, not BindsTo: a
+# proxy that stops fails image work only, and the imps keep running.
+Wants=network-online.target imp-docker-proxy.service
 # With XFS, /var/lib/imp is a host mount; never start before it is there.
 RequiresMountsFor=/var/lib/imp
 
@@ -53,7 +55,8 @@ ExecStart=/usr/bin/docker run --rm --name imp-host --hostname imp-host \
   --env-file /etc/imp/imp-host.env \
   $IMP_HOST_NETWORK \
   -v /var/lib/imp:/var/lib/imp \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /run/imp-docker:/run/imp-docker:ro \
+  -e DOCKER_HOST=unix:///run/imp-docker/docker.sock \
   -v /etc/imp:/etc/imp:ro \
   -p 127.0.0.1:7070:7070 -p 127.0.0.1:7080:7080 \
   $IMP_PUBLIC_PORTS \

@@ -77,6 +77,7 @@ let
         (pkgs.lib.hiPrio pkgs.procps)
         (pkgs.lib.hiPrio pkgs.bash)
         pkgs.jq
+        pkgs.socat
         fakeTailscaled
         fakeTailscale
       ];
@@ -86,6 +87,11 @@ let
       mkdir -p lib/imp
       cp ${../../../host/scripts/tailscale-up.sh} lib/imp/tailscale-up.sh
       chmod 755 lib/imp/tailscale-up.sh
+      # stands in for imp-docker-proxy: a socket where the proxy's would be
+      mkdir -p usr/local/bin
+      printf '#!/bin/bash\nexec socat UNIX-LISTEN:/run/imp-docker/docker.sock,fork SYSTEM:true\n' \
+        >usr/local/bin/imp-docker-proxy
+      chmod 755 usr/local/bin/imp-docker-proxy
     '';
     config = {
       Cmd = [
@@ -196,7 +202,7 @@ pkgs.testers.runNixOSTest {
           return int(host.succeed("systemctl show -p NRestarts --value imp-host"))
 
       def loads():
-          return int(host.succeed("journalctl -u imp-host --no-pager | grep -c 'imp-host: loading' || true"))
+          return int(host.succeed("journalctl -u imp-host-image --no-pager | grep -c 'imp-host: loading' || true"))
 
       def ups():
           return host.succeed("cat ${stateDir}/fake-up.log 2>/dev/null || true").strip().splitlines()
@@ -316,6 +322,24 @@ pkgs.testers.runNixOSTest {
               host.succeed(f"grep -qx {line} /etc/imp/imp-host.env")
           # the formula refused this host (above); ramBudgetMiB is what runs
           host.succeed("grep -qx IMP_RAM_BUDGET_MIB=1024 /etc/imp/imp-host.env")
+
+      with subtest("imp-docker-proxy is the only Docker socket imp-host sees"):
+          host.succeed("systemctl is-active imp-docker-proxy")
+          host.succeed("test -S /run/imp-docker/docker.sock")
+          assert host.succeed("stat -c %u:%a /run/imp-docker").strip() == "65534:700"
+          mounts = host.succeed("docker container inspect -f '{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.RW}} {{end}}' imp-host")
+          assert "docker.sock" not in mounts, mounts
+          assert "/run/imp-docker:/run/imp-docker:false" in mounts, mounts
+          host.succeed("docker container inspect -f '{{.Config.Env}}' imp-host | grep -qF DOCKER_HOST=unix:///run/imp-docker/docker.sock")
+          info = host.succeed("docker container inspect -f '{{.Config.User}} {{.HostConfig.NetworkMode}} {{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}}' imp-docker-proxy").strip()
+          assert info == "65534:65534 none true [ALL]", info
+          host.fail("docker container inspect imp-docker-proxy | grep -qF ${fakeKey}")
+
+      with subtest("a proxy stop leaves imp-host running"):
+          host.succeed("systemctl stop imp-docker-proxy")
+          host.succeed("sleep 3; systemctl is-active imp-host")
+          host.succeed("systemctl start imp-docker-proxy")
+          host.succeed("test -S /run/imp-docker/docker.sock")
 
       with subtest("the kernel"):
           host.succeed("sysctl -n vm.overcommit_memory | grep -qx 1")

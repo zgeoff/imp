@@ -139,6 +139,7 @@ let
   ipv6Rules = ipv6Cfg.networking.firewall.extraForwardRules;
   xfsCfg = xfsHost.config;
   unit = zfsCfg.systemd.services.imp-host;
+  proxyUnit = zfsCfg.systemd.services.imp-docker-proxy;
   ownCfg = ownFirewall.config;
   hostArgs = lib.importJSON ../../imp-host.args.json;
   # the env words ($IMP_PUBLIC_PORTS) are options, empty here
@@ -201,6 +202,22 @@ let
     (expect "the pool is imported" (zfsCfg.boot.zfs.extraPools == [ "tank" ]))
     (expect "docker" zfsCfg.virtualisation.docker.enable)
     (expect "imp-host needs the dataset" (lib.elem "imp-zfs-dataset.service" unit.requires))
+    (expect "imp-host wants the proxy and starts after it" (
+      lib.elem "imp-docker-proxy.service" unit.wants && lib.elem "imp-docker-proxy.service" unit.after
+    ))
+    (expect "both containers start after their image is there" (
+      lib.elem "imp-host-image.service" unit.requires
+      && lib.elem "imp-host-image.service" proxyUnit.requires
+      && lib.elem "imp-host-image.service" proxyUnit.after
+    ))
+    (expect "the proxy gets the host image and restarts always" (
+      proxyUnit.environment.IMP_HOST_IMAGE == "ghcr.io/zgeoff/imp-host:latest"
+      && proxyUnit.serviceConfig.Restart == "always"
+    ))
+    (expect "imp-host binds no docker.sock" (
+      !(lib.hasInfix "/var/run/docker.sock" unit.serviceConfig.ExecStart)
+      && lib.hasInfix "DOCKER_HOST=unix:///run/imp-docker/docker.sock" unit.serviceConfig.ExecStart
+    ))
     (expect "the args come from deploy/imp-host.args.json" (
       lib.hasPrefix "/bin/docker run --init " (
         lib.removePrefix "${zfsCfg.virtualisation.docker.package}" unit.serviceConfig.ExecStart
@@ -349,6 +366,12 @@ pkgs.runCommand "imp-nixos-eval" { } ''
   grep -qx IMP_HOST_IPV6=off "$zfs"
   grep -qx IMP_HOST_SUBNET6= "$zfs"
   grep -q 'create_host_network' ${ipv6Network}
+  # the proxy: the args file's words, its socket's group read at start
+  grep -qF -- '--group-add "$gid"' ${proxyUnit.serviceConfig.ExecStart}
+  grep -qF -- "--cap-drop ALL --security-opt no-new-privileges --read-only" ${proxyUnit.serviceConfig.ExecStart}
+  grep -qF -- "-v /var/run/docker.sock:/var/run/docker.sock" ${proxyUnit.serviceConfig.ExecStart}
+  grep -qF -- "ghcr.io/zgeoff/imp-host:latest /usr/local/bin/imp-docker-proxy" ${proxyUnit.serviceConfig.ExecStart}
+  if grep -q -- --env-file ${proxyUnit.serviceConfig.ExecStart}; then exit 1; fi
   grep -q 'subnet6 ${ipv6Cfg.services.imp.ipv6.subnet}' ${ipv6Network}
   printf '%s\n' ${lib.escapeShellArgs checks} > $out
 ''
