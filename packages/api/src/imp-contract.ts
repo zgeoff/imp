@@ -183,9 +183,9 @@ export const impContract = {
     // back to the tailnet only, at once
     unexpose: base.input(NameInputSchema).output(ImpSchema),
 
-    // disk only, with the source's egress policy: a memory fork would
-    // duplicate entropy and IDs across clones. The fork gets the source's
-    // grants the caller could make, and names the rest.
+    // disk only, with the source's egress policy, and the source's grants
+    // the caller could make; CONFLICT when the source goes, or another imp
+    // takes its name, before the disk copy
     fork: base
       .input(
         z.object({

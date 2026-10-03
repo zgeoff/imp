@@ -438,3 +438,68 @@ test('it retries with a new id when storage holds the id already', async () => {
   expect(tried).toHaveLength(2);
   expect(checkpoint.id).toBe(tried[1] ?? '');
 });
+
+test('a source gone, or made again under its name, before the disk copy refuses the fork and leaves nothing', async () => {
+  await using harness = await setupImpTest();
+
+  await harness.createTestImage('base');
+  await harness.imps.createImp({ name: 'dev' });
+
+  // runs before the fork's second lock of its source: the disk copy's
+  const gap = { calls: 0, between: (): Promise<unknown> => Promise.resolve() };
+
+  const checkpoints = createCheckpointService({
+    config: harness.config,
+    db: harness.db,
+    diskBudget: harness.diskBudget,
+    log: () => {},
+    freezer: { freeze: () => Promise.resolve(), thaw: () => Promise.resolve() },
+    storage: harness.storage,
+    imps: {
+      ...harness.imps,
+      lockImp: async (name, action) => {
+        gap.calls += 1;
+
+        if (gap.calls % 2 === 0) {
+          await gap.between();
+        }
+
+        return harness.imps.lockImp(name, action);
+      },
+    },
+  });
+
+  const readFailure = async (name: string): Promise<unknown> => {
+    try {
+      return await checkpoints.forkImp({ source: 'dev', name });
+    } catch (error) {
+      return error;
+    }
+  };
+
+  gap.between = () => harness.imps.destroyImp('dev');
+
+  const gone = await readFailure('copy-a');
+
+  await harness.imps.createImp({ name: 'dev' });
+
+  gap.between = async () => {
+    await harness.imps.destroyImp('dev');
+    await harness.imps.createImp({ name: 'dev' });
+  };
+
+  const reused = await readFailure('copy-b');
+  const imps = await harness.imps.listImps();
+
+  const dirs = readdirSync(join(harness.dataDir, 'imps'));
+
+  for (const failure of [gone, reused]) {
+    expect(failure).toMatchObject({
+      code: 'CONFLICT',
+      message: 'imp dev changed during the fork; the fork was not made',
+    });
+  }
+
+  expect(imps.map((imp) => imp.name)).toEqual(['dev']);
+  expect(dirs).toEqual(imps.map((imp) => imp.id));
+});
