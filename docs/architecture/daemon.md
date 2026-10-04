@@ -47,24 +47,25 @@ and [operations](../guides/operations.md) covers both signals from the operator'
 
 The root of the source holds the HTTP app. It serves `/health` without auth, the oRPC router at
 `/rpc`, the exec WebSocket at `/exec`, the tunnel WebSocket at `/tunnel`, and `POST /images/build`,
-which takes a build context as a streamed tar ([images](../guides/images.md#build-an-image)). Each
-takes a bearer token in an `Authorization` header, or a tailnet identity. A browser cannot set that
-header on a WebSocket, so `/exec` also takes a `ticket` query parameter: `exec.ticket` gives a
-single-use ticket for one existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the
-CLI opens it. The token itself is never accepted in a URL, where logs and browser history would keep
-it. impd keeps at most 32 live tickets per caller, and 1024 in all. The router maps each procedure
-of the contract in `packages/api` to a service call. Errors come from the contract: `NOT_FOUND`,
-`CONFLICT`, `INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
+which takes a build context as a streamed tar and, to a client that accepts it, answers as a stream
+of build events ([images](../guides/images.md#build-an-image)). Each takes a bearer token in an
+`Authorization` header, or a tailnet identity. A browser cannot set that header on a WebSocket, so
+`/exec` also takes a `ticket` query parameter: `exec.ticket` gives a single-use ticket for one
+existing imp, valid for 30 s; `/tunnel` takes no ticket, since only the CLI opens it. The token
+itself is never accepted in a URL, where logs and browser history would keep it. impd keeps at most
+32 live tickets per caller, and 1024 in all. The router maps each procedure of the contract in
+`packages/api` to a service call. Errors come from the contract: `NOT_FOUND`, `CONFLICT`,
+`INVALID_STATE`, `RAM_BUDGET_EXCEEDED`, `DISK_FULL` when a write would cut into the
 [disk reserve](./storage.md#disk-budget), `SERVICE_UNAVAILABLE` while impd stops, `FORBIDDEN` for a
 call outside the caller's scope or imps (a grant or a revoke says why in `data.reason`,
 [granting secrets](../guides/tokens.md#granting-secrets)), `PRECONDITION_FAILED` when the host is
 not set up for the call (backups with no repository, say), `AGENT_OUTDATED` for a request the imp's
 agent is too old for, `LEASED` for a sleep or stop without `force` of a leased imp, `LEASE_NOT_HELD`
-for a renew of a lease the caller does not hold ([leases](../guides/leases.md)), and
-`INVALID_RESUME` for a session resume past the end of its output
-([output offsets](#output-offsets)). `LEASED` and `RAM_BUDGET_EXCEEDED` show only what the caller
-may see. `/rpc` takes POST only: a GET is what a link or an image on any page can make a browser
-send.
+for a renew of a lease the caller does not hold ([leases](../guides/leases.md)), `INVALID_RESUME`
+for a session resume past the end of its output ([output offsets](#output-offsets)), and `MOVING`
+for a call on an imp that is moving between hosts, with `data.retryAfterS` ([moves](./moves.md)).
+`LEASED` and `RAM_BUDGET_EXCEEDED` show only what the caller may see. `/rpc` takes POST only: a GET
+is what a link or an image on any page can make a browser send.
 
 `/mcp` serves the MCP tools over HTTP ([guide](../guides/mcp.md#http)). It takes a token or a
 tailnet identity, never the cookie, and resolves the caller on every POST. Each tool call goes
@@ -345,6 +346,12 @@ output while more than 1 MiB is unacked, so a slow disk on the client's side can
 client's memory. A tool runs as root in the guest, so it needs `manage` scope on the imp
 ([tokens](../guides/tokens.md#scopes)); `exec` scope runs only as the image's USER. A ticket socket
 cannot start a tool.
+
+A `start` with `require: ['broker']` starts the command only once impd set the credential broker's
+variables and CA bundle for this boot of the guest, and fails with `PRECONDITION_FAILED`
+(`data.reason: 'broker_not_ready'`) otherwise. impd checks it under the imp's lock, which it holds
+until the agent starts the command
+([requiring the broker](../guides/connectors.md#requiring-the-broker)).
 
 ### tunnel: `imp proxy`
 
@@ -659,32 +666,33 @@ creates and removes tap devices, and reads `tailscale status` for the node's nam
 
 The db module opens SQLite through Kysely on `bun:sqlite` and runs the migrations in code
 (`db/run-migrations.ts`). Its tables are `images`, `imps`, `checkpoints`, the broker's `secrets`,
-`grants` and `broker_audit`, `api_audit`, `tokens`, `token_ssh_keys` and `imp_cold_boots`. SQLite
-has one connection, so a promise-chain mutex gives it to one caller at a time. Timestamps are
-integer milliseconds since the epoch.
+`grants`, `broker_audit` and `broker_sessions`, `api_audit`, `tokens`, `token_ssh_keys` and
+`imp_cold_boots`. SQLite has one connection, so a promise-chain mutex gives it to one caller at a
+time. Timestamps are integer milliseconds since the epoch.
 
 The migrations, in order:
 
-| Migration                   | What it adds                                                                                                       |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                                 |
-| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                                     |
-| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                                  |
-| `004_add_api_audit`         | `api_audit`                                                                                                        |
-| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB                     |
-| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                               |
-| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                       |
-| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                                     |
-| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                           |
-| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies        |
-| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps                |
-| `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                     |
-| `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy` |
-| `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                     |
-| `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))       |
-| `016_add_imp_jail_uid`      | `imps.jail_uid`, the uid each imp's [jailed](#the-jailer) Firecracker runs as                                      |
-| `017_add_move_slots`        | `move_tickets.slot`, the slot a warm move keeps                                                                    |
-| `018_add_warm_moves`        | `move_sends.warm`, and `imps.trust_pending` until a warm-moved imp's first wake                                    |
+| Migration                   | What it adds                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `001_create_initial_schema` | `images`, `imps` and `checkpoints`                                                                                                  |
+| `002_add_imp_http_port`     | `imps.http_port`, default 8080                                                                                                      |
+| `003_add_broker`            | `imps.egress_policy` (default `open`), and `secrets`, `grants` and `broker_audit`                                                   |
+| `004_add_api_audit`         | `api_audit`                                                                                                                         |
+| `005_add_disk_sizes`        | `imps.disk_bytes` and `disk_grow_pending`, and `checkpoints.disk_bytes`; older rows get 32 GiB                                      |
+| `006_add_tokens`            | `tokens`, and `api_audit.actor_name`                                                                                                |
+| `007_add_egress_allow`      | `imps.egress_allow`, the policy's allow-list                                                                                        |
+| `008_add_token_ssh_keys`    | `token_ssh_keys`, the SSH keys bound to tokens                                                                                      |
+| `009_add_imp_cpu`           | `imps.cpu_limit`, `cpu_weight` (default 100), `wake_count`, `awake_ms` and `awake_since`                                            |
+| `010_add_image_source`      | `images.source` (default `oci`) and `source_imp`, and `imps.identity_reset_pending` for a template's copies                         |
+| `011_add_public_exposure`   | `imps.exposure` (default `tailnet`), `public_auth`, `public_user` and `public_hash` for public imps                                 |
+| `012_add_networks`          | `networks` and `network_members` for [private networks](../guides/networks.md)                                                      |
+| `013_add_imp_leases`        | `imp_leases`, each owner's hold on an imp ([leases](../guides/leases.md)); a live hold moves to the owner `legacy`                  |
+| `014_add_moves`             | `imps.move_state`, and `move_tickets` and `move_sends` for [moves](./moves.md)                                                      |
+| `015_add_cold_boots`        | `imp_cold_boots`, each imp's last cold boots, and `imps.next_boot_cause` ([output offsets](#output-offsets))                        |
+| `016_add_imp_jail_uid`      | `imps.jail_uid`, the uid each imp's [jailed](#the-jailer) Firecracker runs as                                                       |
+| `017_add_move_slots`        | `move_tickets.slot`, the slot a warm move keeps                                                                                     |
+| `018_add_warm_moves`        | `move_sends.warm`, and `imps.trust_pending` until a warm-moved imp's first wake                                                     |
+| `021_add_broker_sessions`   | `broker_sessions`, the session runs started with `require: ['broker']` ([connectors](../guides/connectors.md#requiring-the-broker)) |
 
 ### Other modules
 

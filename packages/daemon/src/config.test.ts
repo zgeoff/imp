@@ -51,6 +51,7 @@ test('it fills every setting from its default when the env is empty', () => {
     dashboardDir: null,
     backup: null,
     https: null,
+    publicMcp: null,
     tailnetNames: null,
     moves: { peerUrl: null, testCidr: null },
     warnings: [],
@@ -334,6 +335,38 @@ test('a token file without IMP_DOMAIN is a warning, not an error', () => {
   ]);
 
   expect(loadConfig({}).warnings).toEqual([]);
+});
+
+test('an IMP_PUBLIC_IP the internet cannot reach is a warning', () => {
+  const env = {
+    IMP_DOMAIN: 'imp.example.com',
+    IMP_DNS_PROVIDER: 'cloudflare',
+    IMP_DNS_API_TOKEN: 'cf-token',
+  };
+
+  for (const ip of [
+    '10.1.2.3',
+    '100.101.102.103',
+    '127.0.0.1',
+    '169.254.169.254',
+    '172.20.0.5',
+    '192.168.1.10',
+  ]) {
+    expect(loadConfig({ ...env, IMP_PUBLIC_IP: ip }).warnings).toEqual([
+      `IMP_PUBLIC_IP ${ip} is not an internet address; public imps' records point at it, so the internet cannot reach them`,
+    ]);
+  }
+
+  for (const ip of [
+    '203.0.113.7',
+    '100.63.255.1',
+    '100.128.0.1',
+    '172.15.0.1',
+    '172.32.0.1',
+    '8.8.8.8',
+  ]) {
+    expect(loadConfig({ ...env, IMP_PUBLIC_IP: ip }).warnings).toEqual([]);
+  }
 });
 
 const CLOUDFLARE = {

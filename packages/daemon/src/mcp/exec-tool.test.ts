@@ -52,6 +52,26 @@ test('imp_exec runs argv as it is, with stdin, and a non-zero exit is not a tool
   });
 });
 
+test('imp_exec passes a requirement to impd, and refuses an unknown one', async () => {
+  await using ctx = await setupMcpTest();
+
+  await ctx.client.imps.create({ name: 'dev', image: 'ubuntu' });
+
+  const unknown = await ctx.runTool('imp_exec', { name: 'dev', argv: ['ls'], require: ['net'] });
+
+  expect(unknown.isError).toBe(true);
+  expect(ctx.guest.requests).toEqual([]);
+
+  const result = await ctx.runTool('imp_exec', {
+    name: 'dev',
+    argv: ['fail'],
+    require: ['broker'],
+  });
+
+  expect(result.structuredContent).toMatchObject({ exitCode: 3 });
+  expect(ctx.guest.requests[0]).toMatchObject({ argv: ['fail'], require: ['broker'] });
+});
+
 test('imp_exec needs exactly one of command and argv', async () => {
   await using ctx = await setupMcpTest();
 

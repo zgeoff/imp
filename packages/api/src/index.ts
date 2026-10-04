@@ -24,12 +24,21 @@ export type { Lease, LeaseSummary } from './lease-schema';
 export {
   DockerfilePathSchema,
   IMAGE_BUILD_PATH,
+  IMAGE_BUILD_STREAM_TYPE,
   ImageBuildErrorSchema,
+  ImageBuildEventSchema,
   ImageBuildQuerySchema,
   ImageBuildResultSchema,
 } from './image-build-protocol';
 
-export type { ImageBuildQuery } from './image-build-protocol';
+export type {
+  ImageBuildEvent,
+  ImageBuildPhase,
+  ImageOpEvent,
+  ImageBuildProgress,
+  ImageBuildQuery,
+} from './image-build-protocol';
+
 export type { Checkpoint } from './checkpoint-schema';
 
 export {
@@ -40,6 +49,7 @@ export {
   EXEC_PATH,
   EXEC_STDIN_WINDOW_BYTES,
   EXEC_STDOUT_WINDOW_BYTES,
+  EXEC_REQUIREMENTS,
   EXEC_TICKET_PARAM,
   EXEC_TOOLS,
   ExecAttachMessageSchema,
@@ -55,6 +65,7 @@ export type {
   ExecChannel,
   ExecClientMessage,
   ExecFrame,
+  ExecRequirement,
   ExecServerMessage,
   ExecTool,
 } from './exec-protocol';
@@ -93,8 +104,15 @@ export {
 } from './tunnel-protocol';
 
 export type { TunnelClientMessage, TunnelServerMessage } from './tunnel-protocol';
-export { DroppedStorageSchema, OrphanStorageSchema, StorageGcSchema } from './storage-schema';
-export type { DroppedStorage, OrphanStorage, StorageGc } from './storage-schema';
+
+export {
+  DatabaseCopySchema,
+  DroppedStorageSchema,
+  OrphanStorageSchema,
+  StorageGcSchema,
+} from './storage-schema';
+
+export type { DatabaseCopy, DroppedStorage, OrphanStorage, StorageGc } from './storage-schema';
 export { ImageRefSchema } from './image-ref-schema';
 export { ImageSchema, ImageSourceSchema } from './image-schema';
 export type { Image, ImageSource } from './image-schema';
@@ -103,8 +121,24 @@ export type { ImpContract } from './imp-contract';
 export { IMP_ERRORS } from './imp-errors';
 export type { ForbiddenReason } from './imp-errors';
 export { isImpAllowed } from './imp-patterns';
-export { ImpSchema, ImpStateSchema } from './imp-schema';
-export type { Imp, ImpState, OutdatedPart } from './imp-schema';
+
+export {
+  ForkResultSchema,
+  GrantNotCopiedReasonSchema,
+  GrantNotCopiedSchema,
+  ImpSchema,
+  ImpStateSchema,
+} from './imp-schema';
+
+export type {
+  ForkResult,
+  GrantNotCopied,
+  GrantNotCopiedReason,
+  Imp,
+  ImpState,
+  OutdatedPart,
+} from './imp-schema';
+
 export { CONSOLE_SHELL } from './login-shell';
 
 export {
@@ -194,4 +228,16 @@ export {
 } from './token-schema';
 
 export type { Identity, Scope, SshKey, Token } from './token-schema';
+
+export {
+  ApprovalCodeSchema,
+  GrantPatternSchema,
+  OAuthApprovalSchema,
+  OAuthClientSchema,
+  OAuthGrantSchema,
+  RedirectUriSchema,
+  RedirectUrisSchema,
+} from './oauth-schema';
+
+export type { OAuthApproval, OAuthClient, OAuthGrant } from './oauth-schema';
 export type { SystemInfo } from './system-info-schema';

@@ -1,6 +1,6 @@
 import { SecretNameSchema, isImpAllowed } from '@imp/api';
 import type { ForbiddenReason, ImpContract, Scope } from '@imp/api';
-import type { GrantAuthority } from '../db/secrets';
+import type { ForkAuthority, GrantAuthority } from '../db/secrets';
 import { formatCaller } from './caller';
 import type { Caller } from './caller';
 import { hasScope } from './scopes';
@@ -9,7 +9,10 @@ import { hasScope } from './scopes';
 interface HostAccess {
   readonly scope: Scope;
   readonly on: 'host';
-  readonly audit?: false;
+
+  // 'refusals': the router audits only a refusal, and the handler the call
+  // itself, as its work ends
+  readonly audit?: false | 'refusals';
 }
 
 // the imps these input fields name, each within the caller's patterns; a
@@ -19,8 +22,8 @@ interface ImpAccess {
   readonly on: 'imp';
   readonly fields: readonly string[];
 
-  // refused to a token made able to grant secrets: the call could carry
-  // grants it may not make to an imp, and v1 does not follow them there
+  // refused to a token made able to grant secrets: a move carries grants it
+  // may not make, and v1 keeps forks refused with it (#168)
   readonly noGrantable?: true;
   readonly audit?: false;
 }
@@ -138,6 +141,10 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   'images.list': readAny,
   'images.add': manageHost,
   'images.build': manageHost,
+
+  // audited as the work ends, with its outcome (build-router.ts)
+  'images.addStream': { scope: 'manage', on: 'host', audit: 'refusals' },
+  'images.buildStream': { scope: 'manage', on: 'host', audit: 'refusals' },
   'images.delete': manageHost,
 
   // the exec it is for is audited as the socket opens
@@ -182,6 +189,20 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   // gc removes what a crash left and, with orphans, every disk no row names
   'system.gc': manageHost,
 
+  // the approver's own checks are the handler's: a named token, never
+  // wider than itself (docs/guides/mcp.md#public-route)
+  'oauth.clients.list': manageHost,
+  'oauth.clients.add': manageHost,
+  'oauth.clients.update': manageHost,
+  'oauth.clients.delete': manageHost,
+  'oauth.grants.list': manageHost,
+  'oauth.grants.delete': manageHost,
+  'oauth.approvals.get': readAny,
+  'oauth.approvals.approve': readAny,
+
+  // the copy holds every imp, token hash and grant
+  'system.copyDatabase': manageHost,
+
   'tokens.list': manageHost,
   'tokens.create': manageHost,
   'tokens.delete': manageHost,
@@ -201,7 +222,12 @@ export function findAccess(procedure: string): Access | null {
 export function isAuditedProcedure(procedure: string): boolean {
   const access = findAccess(procedure);
 
-  return access === null || (access.scope !== 'read' && access.audit !== false);
+  return access === null || (access.scope !== 'read' && access.audit === undefined);
+}
+
+// a call that audits itself as it ends, whose refusal the router audits
+export function isRefusalAudited(procedure: string): boolean {
+  return findAccess(procedure)?.audit === 'refusals';
 }
 
 // Why the caller may not make the call, or null when it may. The checks
@@ -222,6 +248,12 @@ export async function checkAccess(
       message: `${formatCaller(caller)} has scope ${caller.scope}; this needs ${access.scope}`,
       reason: 'scope',
     };
+  }
+
+  // an OAuth grant carries its token's list for the refusals above it, and
+  // grants or revokes no secret itself (docs/guides/mcp.md#public-route)
+  if (access.on === 'grant' && caller.kind === 'oauth') {
+    return { message: `${formatCaller(caller)} may not grant or revoke secrets`, reason: null };
   }
 
   if (access.on === 'imp' && access.noGrantable === true && caller.grantable.length > 0) {
@@ -276,6 +308,13 @@ export function findGrantAuthority(
   }
 
   return { tokenId: caller.tokenId, generation: entry.generation };
+}
+
+// What a fork's copy of its source's grants checks in its transaction: null
+// for a host-wide caller, whose fork gets every grant; else the token and
+// its grantable list, so the fork gets only grants the caller could make
+export function findForkAuthority(caller: Readonly<Caller>): ForkAuthority | null {
+  return caller.imps === null ? null : { tokenId: caller.tokenId, grantable: caller.grantable };
 }
 
 function findOutsideImp(

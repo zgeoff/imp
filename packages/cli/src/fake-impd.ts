@@ -32,8 +32,9 @@ const TOKEN = 'fake-token';
 // as long as the subprocess tests may take
 const WAIT_TIMEOUT_MS = 20_000;
 
-// An impd that serves only `/exec` (and a 401 or an empty answer on `/rpc`),
-// for tests that drive the real exec client. `onMessage` scripts the replies.
+// An impd that serves only `/exec` (and a 401, system.info's features or an
+// empty answer on `/rpc`), for tests that drive the real exec client.
+// `onMessage` scripts the replies.
 export function startFakeImpd(
   onMessage: (peer: FakeImpdPeer, message: FakeImpdReceived) => void,
   prefix = '',
@@ -53,6 +54,11 @@ export function startFakeImpd(
 
       if (new URL(request.url).pathname === `${prefix}/exec`) {
         return bunServer.upgrade(request) ? undefined : new Response('no upgrade', { status: 400 });
+      }
+
+      // system.info as a current impd answers it, for the requirement check
+      if (new URL(request.url).pathname === `${prefix}/rpc/system/info`) {
+        return Response.json({ json: { features: { execRequire: true } } });
       }
 
       return Response.json({});

@@ -16,3 +16,14 @@ test('a removal aborts the token’s signal, and every signal asked for after it
   expect(other?.aborted).toBeFalse();
   expect(revocations.readSignal(null)).toBeNull();
 });
+
+test('a removal is remembered for the per-request check', () => {
+  const revocations = createRevocations();
+
+  expect(revocations.isRevoked('grant')).toBeFalse();
+
+  revocations.revoke('grant');
+
+  expect(revocations.isRevoked('grant')).toBeTrue();
+  expect(revocations.isRevoked('other')).toBeFalse();
+});

@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { readRefusalError } from './run-docker';
 
 // the tail of a failed build's message the client gets
 const FAILURE_MAX_CHARS = 4000;
@@ -114,6 +115,12 @@ export async function readBuiltImageId(
 // (403), a context over its limit (413), or the engine's own error.
 async function readRefusal(response: Response): Promise<Error> {
   const text = await response.text();
+
+  const refused = response.status === 403 ? readRefusalError('docker build', text) : null;
+
+  if (refused !== null) {
+    return refused;
+  }
 
   let message = text.trim();
 

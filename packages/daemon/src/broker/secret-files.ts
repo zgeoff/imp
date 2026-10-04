@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -8,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 // Secret values, one file each in <dataDir>/secrets: the directory 0700, each
 // file 0600, unencrypted, as the key would live on the same disk. A file is
@@ -20,8 +21,33 @@ export interface SecretFiles {
   readonly read: (file: string) => string | null;
   readonly remove: (file: string) => void;
 
-  // every file not in `keep`, and every temp file a crash left
-  readonly removeExcept: (keep: ReadonlySet<string>) => void;
+  // moves every file not in `keep`, temp files a crash left included, into
+  // ORPHANED_DIR/<at> (0700), and returns their names
+  readonly keepOrphansExcept: (keep: ReadonlySet<string>, at: Date) => KeptOrphans;
+
+  // each directory under ORPHANED_DIR, for `imp gc`, and its removal by name
+  readonly listKept: () => KeptDirectory[];
+  readonly removeKept: (name: string) => void;
+}
+
+// where the start puts value files no row names, as after a restore from an
+// older database (docs/guides/connectors.md#value-files)
+const ORPHANED_DIR = '.orphaned';
+
+interface KeptDirectory {
+  readonly name: string;
+  readonly path: string;
+  readonly bytes: number;
+
+  // from its name, the start that made it
+  readonly createdAt: Date | null;
+  readonly files: readonly string[];
+}
+
+interface KeptOrphans {
+  // null when there were none, and no directory was made
+  readonly dir: string | null;
+  readonly files: readonly string[];
 }
 
 // A new file for each value: a replace writes the new value beside the old,
@@ -64,12 +90,97 @@ export function createSecretFiles(dataDir: string): SecretFiles {
     remove: (file) => {
       rmSync(join(dir, file), { force: true });
     },
-    removeExcept: (keep) => {
-      for (const file of readdirSync(dir)) {
-        if (!keep.has(file)) {
-          rmSync(join(dir, file), { force: true });
-        }
+    keepOrphansExcept: (keep, at) => {
+      const stamp = at.toISOString().replaceAll(':', '-');
+
+      checkOrphansDirectory(join(dir, ORPHANED_DIR), `${ORPHANED_DIR}.${stamp}`);
+
+      const files = readdirSync(dir)
+        .filter((file) => file !== ORPHANED_DIR && !keep.has(file))
+        .toSorted();
+
+      if (files.length === 0) {
+        return { dir: null, files };
       }
+
+      // a time a path can hold: no colons
+      const target = join(dir, ORPHANED_DIR, stamp);
+
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      chmodSync(join(dir, ORPHANED_DIR), 0o700);
+      chmodSync(target, 0o700);
+
+      for (const file of files) {
+        renameSync(join(dir, file), join(target, file));
+      }
+
+      return { dir: target, files };
+    },
+    listKept: () => {
+      const orphaned = join(dir, ORPHANED_DIR);
+
+      if (!checkDirectory(orphaned)) {
+        return [];
+      }
+
+      return readdirSync(orphaned)
+        .toSorted()
+        .filter((name) => checkDirectory(join(orphaned, name)))
+        .map((name) => {
+          const path = join(orphaned, name);
+          const files = readdirSync(path).toSorted();
+          const bytes = files.reduce((sum, file) => sum + lstatSync(join(path, file)).size, 0);
+
+          return { name, path, bytes, createdAt: readStamp(name), files };
+        });
+    },
+    removeKept: (name) => {
+      if (name === '' || name.includes('/') || name === '.' || name === '..') {
+        throw new Error(`not a kept directory: ${name}`);
+      }
+
+      rmSync(join(dir, ORPHANED_DIR, name), { recursive: true, force: true });
     },
   };
+}
+
+// a directory itself, never a symlink to one
+function checkDirectory(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory();
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+// the start time a kept directory is named after, its colons dashes
+function readStamp(name: string): Date | null {
+  const iso = name.replace(/T(?<h>\d{2})-(?<m>\d{2})-(?<s>\d{2})/u, 'T$<h>:$<m>:$<s>');
+
+  const at = new Date(iso);
+
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+// A file or a symlink where the orphans' directory goes would fail the start
+// or take the chmod elsewhere: it is renamed to `name` beside it, which no
+// row names, so it is kept aside with the other orphans.
+function checkOrphansDirectory(path: string, name: string): void {
+  try {
+    if (lstatSync(path).isDirectory()) {
+      return;
+    }
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  renameSync(path, join(dirname(path), name));
 }

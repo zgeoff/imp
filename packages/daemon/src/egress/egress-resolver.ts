@@ -226,9 +226,63 @@ function toCappedTtl(record: Answer, maxTtlS: number): Answer {
 const DEFAULT_TCP_LIMITS: ResolverServerLimits = { idleS: 10, maxPerSlot: 16 };
 
 // smaller limits for tests
-export interface ResolverServerLimits {
+interface ResolverServerLimits {
   readonly idleS: number;
   readonly maxPerSlot: number;
+}
+
+export interface ResolverServerOptions {
+  readonly log: (message: string) => void;
+  readonly now?: () => number;
+  readonly limits?: ResolverServerLimits;
+}
+
+// what a reply to a guest that went, or to a gateway with no route, gets
+// back as ICMP: Bun marks it `errqueue`, and the guest just asked again
+const ROUTINE_SOCKET_ERRORS = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
+
+// one line per minute at most, with a count of the ones it held back
+const SOCKET_ERROR_LOG_MS = 60_000;
+
+// Bun 1.4.2 passes the error alone, not after the socket its types name
+export function createSocketErrorReport(
+  log: (message: string) => void,
+  now: () => number,
+): (...args: readonly unknown[]) => void {
+  const state = { loggedAt: null as number | null, held: 0 };
+
+  return (...args) => {
+    const error = args.at(-1);
+
+    if (checkRoutineSocketError(error)) {
+      return;
+    }
+
+    const at = now();
+
+    if (state.loggedAt !== null && at - state.loggedAt < SOCKET_ERROR_LOG_MS) {
+      state.held += 1;
+
+      return;
+    }
+
+    const held = state.held === 0 ? '' : ` (${String(state.held)} more since the last)`;
+
+    log(`impd: egress: resolver socket: ${readErrorMessage(error)}${held}`);
+
+    state.loggedAt = at;
+    state.held = 0;
+  };
+}
+
+function checkRoutineSocketError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  const fields: { readonly errqueue?: unknown; readonly code?: unknown } = error;
+
+  return fields.errqueue === true || ROUTINE_SOCKET_ERRORS.has(String(fields.code));
 }
 
 export interface ResolverServer {
@@ -243,8 +297,10 @@ export async function startResolverServer(
   port: number,
   subnet: Subnet,
   handle: QueryHandler,
-  limits: ResolverServerLimits = DEFAULT_TCP_LIMITS,
+  options: Readonly<ResolverServerOptions>,
 ): Promise<ResolverServer> {
+  const limits = options.limits ?? DEFAULT_TCP_LIMITS;
+
   const open = new Map<number, number>();
 
   const udp = await Bun.udpSocket({
@@ -254,6 +310,10 @@ export async function startResolverServer(
       data: (socket, data, remotePort, address) => {
         void sendUdpReply(handle, { socket, data, remotePort, address });
       },
+
+      // an unhandled error would end impd; the ICMP error of a reply to a
+      // guest that went is routine, anything else is logged
+      error: createSocketErrorReport(options.log, options.now ?? Date.now),
     },
   });
 

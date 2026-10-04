@@ -55,7 +55,16 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
         })
       : source;
 
-  const targetApp = buildTestApp(target, target, undefined, {}, null, shared);
+  // the names the target's commits handed to onCommitted, in order
+  const commits: string[] = [];
+
+  const targetApp = buildTestApp(target, target, undefined, {}, null, {
+    ...shared,
+    onCommitted: (name) => {
+      commits.push(name);
+    },
+  });
+
   const sendToTarget = (request: Request) => targetApp.moves.handle(request, SOURCE_PEER);
   const hook = options.hook;
 
@@ -116,6 +125,7 @@ export async function setupMoveHosts(options: MoveHostsOptions = {}) {
     target,
     sourceApp,
     targetApp,
+    commits,
     runMove,
     waitForMove,
     async [Symbol.asyncDispose]() {

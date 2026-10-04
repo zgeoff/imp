@@ -113,6 +113,16 @@ tailnet-only and `imp expose` fails.
 | `IMP_PUBLIC_HTTPS_PORT` | `7443`  | The public TLS listener's port in the host container, on every address; publish as 443. |
 | `IMP_PUBLIC_HTTP_PORT`  | `7480`  | The public redirect listener's port in the host container; publish as 80.               |
 
+### Public MCP route
+
+With `IMP_MCP_PUBLIC_URL` set, impd serves `/mcp` and its OAuth sign-in to an operator's TLS front
+([public route](./mcp.md#public-route)). Without it, no listener starts.
+
+| Variable              | Default | Meaning                                                                                                                                                          |
+| --------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMP_MCP_PUBLIC_URL`  | none    | The bare origin the front serves, such as `https://imp.example.com`: the OAuth issuer, and `<origin>/mcp` the resource. http only on a loopback host, for tests. |
+| `IMP_MCP_PUBLIC_PORT` | `7071`  | The route's plain-HTTP port in the host container, on every address; publish it on the host's loopback only.                                                     |
+
 ### Telemetry
 
 impd exports [metrics and spans](./events.md#telemetry) only when `OTEL_EXPORTER_OTLP_ENDPOINT` is
@@ -151,24 +161,43 @@ not pass `IMP_DNS`, so the dev instance uses the defaults.
 `docker run --cgroupns=private` (`cgroup: private` in Compose). `setup-cgroups.sh` turns them off
 without it ([CPU limits](./cpu-limits.md)).
 
+## Deploy files
+
+The release's systemd units and `deploy/compose.yaml` read these, in the env file or the shell.
+
+| Variable                    | Default                        | Read by                                    | Meaning                                                                                                                                                                    |
+| --------------------------- | ------------------------------ | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMP_PUBLIC_PORTS`          | empty                          | `imp-host.service`                         | Extra `docker run` words for the public listeners, such as `-p 443:7443 -p 80:7480` ([public imps](./https.md#public-imps)). Compose and NixOS publish them their own way. |
+| `IMP_DOCKER_GID`            | the group of the Docker socket | `imp-docker-proxy.service`, `compose.yaml` | The group `imp-docker-proxy` joins to reach `/var/run/docker.sock`. That unit writes it at each start; compose needs it set ([install](./install.md)).                     |
+| `IMP_HOST_PROBED`           | written at each start          | `imp-host.service`                         | Not a setting: the unit writes the args this host supports, such as `--device /dev/zfs` and the IPv6 sysctls, to `/run/imp-host/probed.env`.                               |
+| `DOCKER_HOST`               | none                           | impd                                       | Where impd sends image builds. The units and compose set it to the proxy's socket, `unix:///run/imp-docker/docker.sock`.                                                   |
+| `IMP_DOCKER_PROXY_LISTEN`   | `/run/imp-docker/docker.sock`  | `imp-docker-proxy`                         | The socket the proxy serves to impd.                                                                                                                                       |
+| `IMP_DOCKER_PROXY_UPSTREAM` | `/var/run/docker.sock`         | `imp-docker-proxy`                         | The host's Docker socket.                                                                                                                                                  |
+| `IMP_DOCKER_PROXY_STATE`    | `/var/lib/imp-docker-proxy`    | `imp-docker-proxy`                         | The proxy's state directory.                                                                                                                                               |
+
+`imp-docker-proxy` also needs `IMP_HOST_IMAGE`, the image it runs from, so a pull cannot move that
+image's tag, and reads `IMP_BUILD_CONTEXT_MAX_MIB` as impd does
+([the Docker socket](../architecture/host-contract.md#the-docker-socket)).
+
 ## Dev instance
 
 `scripts/dev.sh` runs one host container for development. It reads these on your machine:
 
-| Variable              | Default                                        | Meaning                                                         |
-| --------------------- | ---------------------------------------------- | --------------------------------------------------------------- |
-| `IMP_DEV_NAME`        | `imp-dev`                                      | The container name.                                             |
-| `IMP_DEV_PORT_OFFSET` | `0`                                            | Added to every published port, for parallel instances.          |
-| `IMP_DEV_DATA`        | `<repo>/.data/dev`                             | The host directory that holds the XFS file.                     |
-| `IMP_KERNEL`          | `kernel/out/vmlinux`, else `.cache/vmlinux-ci` | The guest kernel; a path under the repo.                        |
-| `IMP_SYSTEM_DRIVE`    | `build/imp-system.squashfs`                    | The system drive; a path under the repo.                        |
-| `IMP_STORAGE_GIB`     | `200`                                          | Passed to the container.                                        |
-| `IMP_DEFAULT_IMAGE`   | none                                           | Passed to impd.                                                 |
-| `IMP_DEV_NETWORK`     | none                                           | A Docker network for the container.                             |
-| `IMP_DEV_IP`          | none                                           | The container's address on `IMP_DEV_NETWORK`.                   |
-| `IMP_DEV_PUBLISH`     | `1`                                            | `0` publishes no ports: impd answers on `IMP_DEV_IP:7070` only. |
-| `IMP_DEV_TAILNET`     | none                                           | `0` keeps the container off the tailnet, whatever key there is. |
-| `IMP_HOST_IMAGE`      | `imp-host:dev-<dir>-<hash>`                    | The host image tag, one per checkout.                           |
+| Variable               | Default                                        | Meaning                                                         |
+| ---------------------- | ---------------------------------------------- | --------------------------------------------------------------- |
+| `IMP_DEV_NAME`         | `imp-dev`                                      | The container name.                                             |
+| `IMP_DEV_PORT_OFFSET`  | `0`                                            | Added to every published port, for parallel instances.          |
+| `IMP_DEV_DATA`         | `<repo>/.data/dev`                             | The host directory that holds the XFS file.                     |
+| `IMP_KERNEL`           | `kernel/out/vmlinux`, else `.cache/vmlinux-ci` | The guest kernel; a path under the repo.                        |
+| `IMP_SYSTEM_DRIVE`     | `build/imp-system.squashfs`                    | The system drive; a path under the repo.                        |
+| `IMP_STORAGE_GIB`      | `200`                                          | Passed to the container.                                        |
+| `IMP_DEFAULT_IMAGE`    | none                                           | Passed to impd.                                                 |
+| `IMP_DEV_NETWORK`      | none                                           | A Docker network for the container.                             |
+| `IMP_DEV_IP`           | none                                           | The container's address on `IMP_DEV_NETWORK`.                   |
+| `IMP_DEV_PUBLISH`      | `1`                                            | `0` publishes no ports: impd answers on `IMP_DEV_IP:7070` only. |
+| `IMP_DEV_TAILNET`      | none                                           | `0` keeps the container off the tailnet, whatever key there is. |
+| `IMP_HOST_IMAGE`       | `imp-host:dev-<dir>-<hash>`                    | The host image tag, one per checkout.                           |
+| `IMP_HOST_IMAGE_READY` | none                                           | `1` uses `IMP_HOST_IMAGE` as it is, without a build.            |
 
 `dev.sh` passes `.env` in the repo root to Docker as an env file, so `IMP_DNS_API_TOKEN` and any
 other secret in it is never printed. It takes `TAILSCALE_AUTHKEY` from the first of:
@@ -195,17 +224,18 @@ impd tuning passes through an allowlist. When set on your machine, `dev.sh` pass
 `IMP_DEFAULT_MEMORY_MIB`, `IMP_DEFAULT_DISK_GIB`, `IMP_DISK_RESERVE_GIB`, `IMP_WATCHDOG_TIMEOUT_S`,
 `IMP_WATCHDOG_ACTION`, `IMP_TAILSCALE_HOSTNAME`, `IMP_TAILNET_IDENTITIES`, `IMP_TAILNET_NAMES`,
 `IMP_TAILNET_NAME_PREFIX`, `IMP_BUILD_CONTEXT_MAX_MIB`, `IMP_BROKER_PORT`, `IMP_KSM`,
-`IMP_KSM_HEADROOM_PERCENT`, `IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT` and
-`IMP_SUBNET6` to impd, the `IMP_BACKUP_*` variables, and the HTTPS settings except the token:
-`IMP_DOMAIN`, `IMP_DNS_PROVIDER`, `IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`,
-`IMP_HTTPS_PORT`, `IMP_HTTP_PORT`, `IMP_PUBLIC_IP`, `IMP_PUBLIC_HTTPS_PORT`, `IMP_PUBLIC_HTTP_PORT`,
-and `IMP_ACME_CA_FILE` as a path under the repo. `IMP_E2E=1` lets impd use the `challtestsrv` DNS
-provider. With `IMP_TAILNET_NAMES=1`, `dev.sh` writes the OAuth client from 1Password into the data
-directory and sets `IMP_TAILNET_OAUTH_FILE`. `IMP_DEV_NETWORK` puts the container on that Docker
-network. `IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so
-the keys in your own shell never reach the container. Other impd variables keep their defaults in
-the dev container. A ZFS dev instance needs the zfs module on the machine;
-`scripts/zfs-host-test.sh` runs one on a throwaway pool.
+`IMP_KSM_HEADROOM_PERCENT`, `IMP_SSH_AUTHORIZED_KEYS`, `IMP_STORAGE_BACKEND`, `IMP_ZFS_ROOT`,
+`IMP_SUBNET6`, `IMP_JAILER`, `IMP_JAILER_BIN`, `IMP_PEER_URL` and `IMP_MOVE_TEST_CIDR` to impd, the
+`IMP_BACKUP_*` variables, and the HTTPS settings except the token: `IMP_DOMAIN`, `IMP_DNS_PROVIDER`,
+`IMP_DNS_API_URL`, `IMP_ACME_DIRECTORY`, `IMP_ACME_EMAIL`, `IMP_HTTPS_PORT`, `IMP_HTTP_PORT`,
+`IMP_PUBLIC_IP`, `IMP_PUBLIC_HTTPS_PORT`, `IMP_PUBLIC_HTTP_PORT`, and `IMP_ACME_CA_FILE` as a path
+under the repo. `IMP_E2E=1` lets impd use the `challtestsrv` DNS provider. With
+`IMP_TAILNET_NAMES=1`, `dev.sh` writes the OAuth client from 1Password into the data directory and
+sets `IMP_TAILNET_OAUTH_FILE`. `IMP_DEV_NETWORK` puts the container on that Docker network.
+`IMP_DEV_BACKUP_ENV_FILE` names a Docker env file with the repository's `AWS_*` keys, so the keys in
+your own shell never reach the container. Other impd variables keep their defaults in the dev
+container. A ZFS dev instance needs the zfs module on the machine; `scripts/zfs-host-test.sh` runs
+one on a throwaway pool.
 
 ## CLI
 

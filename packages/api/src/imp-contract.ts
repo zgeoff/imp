@@ -11,11 +11,11 @@ import { CheckpointSchema } from './checkpoint-schema';
 import { EgressPolicySchema } from './egress-schema';
 import { ImpEventSchema } from './event-schema';
 import { ExposeInputSchema, ExposeResultSchema } from './exposure-schema';
-import { DockerfilePathSchema } from './image-build-protocol';
+import { DockerfilePathSchema, ImageOpEventSchema } from './image-build-protocol';
 import { ImageRefSchema } from './image-ref-schema';
 import { ImageSchema } from './image-schema';
 import { IMP_ERRORS } from './imp-errors';
-import { ImpSchema } from './imp-schema';
+import { ForkResultSchema, ImpSchema } from './imp-schema';
 import { LeaseLabelSchema, LeaseSchema, LeaseTtlSchema } from './lease-schema';
 import {
   MovePlanSchema,
@@ -27,6 +27,14 @@ import {
 } from './move-schema';
 import { NameSchema } from './name-schema';
 import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
+import {
+  ApprovalCodeSchema,
+  GrantPatternSchema,
+  OAuthApprovalSchema,
+  OAuthClientSchema,
+  OAuthGrantSchema,
+  RedirectUrisSchema,
+} from './oauth-schema';
 import {
   AuditEntrySchema,
   BrokerRuleSchema,
@@ -43,7 +51,7 @@ import {
   ServiceNameSchema,
 } from './service-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
-import { StorageGcSchema } from './storage-schema';
+import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 import {
   GrantableSchema,
@@ -86,6 +94,15 @@ const ImageAddInputSchema = z.union([
   z.object({ ref: ImageRefSchema, name: NameSchema.optional() }),
   z.object({ imp: NameSchema, name: NameSchema }),
 ]);
+
+// contextDir is a path on the imp host, handed to `docker build`; a context
+// on the client's machine streams to IMAGE_BUILD_PATH instead
+const ImageBuildInputSchema = z.object({
+  // absolute, so docker build cannot read it as a flag
+  contextDir: z.string().startsWith('/'),
+  name: NameSchema,
+  dockerfile: DockerfilePathSchema.optional(),
+});
 
 export const impContract = {
   imps: {
@@ -183,8 +200,9 @@ export const impContract = {
     // back to the tailnet only, at once
     unexpose: base.input(NameInputSchema).output(ImpSchema),
 
-    // disk only, with the source's egress policy: a memory fork would
-    // duplicate entropy and IDs across clones
+    // disk only, with the source's egress policy, and the source's grants
+    // the caller could make; CONFLICT when the source goes, or another imp
+    // takes its name, before the disk copy
     fork: base
       .input(
         z.object({
@@ -193,7 +211,7 @@ export const impContract = {
           checkpoint: CheckpointRefSchema.optional(),
         }),
       )
-      .output(ImpSchema),
+      .output(ForkResultSchema),
 
     // a running VM takes a new CPU limit or weight at once, a sleeping or
     // stopped one when it next starts; vcpus only while stopped. A null
@@ -346,18 +364,14 @@ export const impContract = {
     // name made again points at the new disk; imps made before keep theirs.
     add: base.input(ImageAddInputSchema).output(ImageSchema),
 
-    // contextDir is a path on the imp host, handed to `docker build`; a
-    // context on the client's machine streams to IMAGE_BUILD_PATH instead
-    build: base
-      .input(
-        z.object({
-          // absolute, so docker build cannot read it as a flag
-          contextDir: z.string().startsWith('/'),
-          name: NameSchema,
-          dockerfile: DockerfilePathSchema.optional(),
-        }),
-      )
-      .output(ImageSchema),
+    // from a directory on the imp host (ImageBuildInputSchema)
+    build: base.input(ImageBuildInputSchema).output(ImageSchema),
+
+    // add and build as progress, then the image, for a call longer than a
+    // client's fetch waits (docs/guides/images.md#long-calls); an impd with
+    // `features.imageOpStream` has them
+    addStream: base.input(ImageAddInputSchema).output(eventIterator(ImageOpEventSchema)),
+    buildStream: base.input(ImageBuildInputSchema).output(eventIterator(ImageOpEventSchema)),
 
     delete: base.input(NameInputSchema).output(EmptySchema),
   },
@@ -514,10 +528,69 @@ export const impContract = {
 
     // removes the crash leftovers no row names and lists the orphans it
     // keeps, or retires them with `orphans`; PRECONDITION_FAILED while
-    // storage operations keep it busy (docs/architecture/storage.md#cleanup)
+    // storage is busy (docs/guides/operations.md#storage-cleanup)
     gc: base
-      .input(z.object({ dryRun: z.boolean().optional(), orphans: z.boolean().optional() }))
+      .input(
+        z.object({
+          dryRun: z.boolean().optional(),
+          orphans: z.boolean().optional(),
+
+          // lists the secret values kept aside, as kind `secrets`; only
+          // `removeSecretFiles` with `orphans` deletes them
+          secretFiles: z.boolean().optional(),
+          removeSecretFiles: z.boolean().optional(),
+        }),
+      )
       .output(StorageGcSchema),
+
+    // a consistent copy of impd's database, safe while it runs, at
+    // <dataDir>/db-copies/<name>.sqlite (docs/guides/operations.md); CONFLICT
+    // when a copy by the name exists
+    copyDatabase: base.input(z.object({ name: NameSchema.optional() })).output(DatabaseCopySchema),
+  },
+
+  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
+  oauth: {
+    clients: {
+      list: base.output(z.array(OAuthClientSchema)),
+
+      // a public client: PKCE and no secret; CONFLICT for a name taken
+      add: base
+        .input(z.object({ name: NameSchema, redirectUris: RedirectUrisSchema }))
+        .output(OAuthClientSchema),
+
+      // its redirect URIs, replaced; the client ID stays
+      update: base
+        .input(z.object({ name: NameSchema, redirectUris: RedirectUrisSchema }))
+        .output(OAuthClientSchema),
+
+      // revokes every grant it holds
+      delete: base.input(NameInputSchema).output(EmptySchema),
+    },
+
+    grants: {
+      list: base.output(z.array(OAuthGrantSchema)),
+
+      // ends its MCP sessions, calls and execs; its tokens stop at once
+      delete: base.input(z.object({ id: z.string().min(1).max(64) })).output(EmptySchema),
+    },
+
+    // a sign-in waiting on the public route, by the code its page shows;
+    // only a named token approves, never wider than itself
+    approvals: {
+      get: base.input(z.object({ code: ApprovalCodeSchema })).output(OAuthApprovalSchema),
+      approve: base
+        .input(
+          z.object({
+            code: ApprovalCodeSchema,
+            scope: ScopeSchema,
+
+            // left out: the approver's own patterns
+            imps: z.array(GrantPatternSchema).min(1).max(32).optional(),
+          }),
+        )
+        .output(EmptySchema),
+    },
   },
 
   // named API tokens (docs/guides/tokens.md); the root token in

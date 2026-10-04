@@ -28,6 +28,7 @@ export const SUITES: readonly Suite[] = [
   { name: 'restart', prefix: 'e2e-rs-', images: ['e2e-tiny', 'e2e-bare'] },
   { name: 'tailscale', prefix: 'e2e-ts-', images: ['e2e-tiny'] },
   { name: 'mcp', prefix: 'e2e-mcp-', images: ['e2e-tiny'] },
+  { name: 'mcp-oauth', prefix: 'e2e-oa-', images: ['e2e-tiny'] },
   { name: 'sessions', prefix: 'e2e-ses-', images: ['e2e-bare'] },
   { name: 'offsets', prefix: 'e2e-off-', images: ['e2e-bare'] },
   { name: 'services', prefix: 'e2e-svc-', images: ['e2e-bare'] },

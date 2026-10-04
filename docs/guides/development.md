@@ -10,7 +10,7 @@ bun run typecheck && bun run lint && bun test
 bun run test:dashboard            # the dashboard's component tests, in their own run
 bun run test:pebble               # the ACME issuer against Pebble in Docker
 bun run format:check && bun run deadcode
-bun run lint:shell                # shellcheck over scripts/, host/, kernel/, deploy/ and test/
+bun run lint:shell                # shellcheck over install.sh, scripts/, host/, kernel/, deploy/, test/
 bun run lint:docs                 # every docs/ reference in code resolves
 (cd agent && gofmt -l . && go vet ./... && go test -race ./...)   # gofmt -l lists unformatted files
 scripts/test-e2e.sh --clean       # end to end, from a clean state
@@ -39,6 +39,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `restart`        | an impd restart re-adopts VMs; stopping the instance sleeps every imp                                                                                                                                                                     |
 | `tailscale`      | an imp answers tailnet members, a tailnet request wakes it, a rule gives a member the API without a token, per-imp names                                                                                                                  |
 | `mcp`            | `imp mcp` over stdio: the guard, odd file paths, modes, a timeout's group kill                                                                                                                                                            |
+| `mcp-oauth`      | the public MCP route: a sign-in approved with `imp oauth approve`, tools by scope, refresh replay, a removed token stopping a command, 429                                                                                                |
 | `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                                                                                                                        |
 | `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                                                                                                                  |
 | `services`       | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove                                                                                                    |
@@ -61,9 +62,12 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `templates`      | `imp template`: copies of a running imp's disk, a new machine-id and ssh host keys per copy, kept after a reboot, rm                                                                                                                      |
 | `boot-templates` | a cold boot restored from a boot template: its own name, MAC, disk size and TCP ISN secret; a sleep and wake after                                                                                                                        |
 | `inner`          | the inner container: PID 1 inside, signals, `kill -9 -1`, a memory hog, a reboot and the listeners after it, `rm -rf /`, a wiped root                                                                                                     |
+| `socket`         | Docker only through imp-docker-proxy: refused containers, calls, tags, pulls and build bodies; BuildKit pinned; imps keep running while the proxy is stopped                                                                              |
 | `moves`          | `imp move` to a second instance on a Docker network: cold with a checkpoint, an abort, warm moves of an open and a box imp that keep tmpfs and processes and reach DNS, HTTP and the broker at once                                       |
 | `moves-tailnet`  | `imp move` between two tailnet nodes: the real peer check, and a per-imp tailnet name that goes with its imp                                                                                                                              |
 | `chaos`          | kills of impd, Firecracker and the container mid-operation; the watchdog; a full disk                                                                                                                                                     |
+| `jail`           | the jailer: its own uid, no capabilities, seccomp, a memory cap; sleep, wake and re-adopt jailed; rollback and upgrade between jailed and unjailed                                                                                        |
+| `memory`         | elastic memory: a guest grows under a gradual allocation, shrinks to its use, and a sleep unplugs spare memory first                                                                                                                      |
 | `ksm`            | with KSM on the host (CI's runner only): two jailed guests merge the same pages, their Pss falls, the budget holds after they diverge; skips elsewhere                                                                                    |
 | `backups`        | backups of running and stopped imps and checkpoints, restores, forget and prune, a stale lock, a corrupted pack                                                                                                                           |
 
@@ -87,8 +91,9 @@ the timing limits fail the run. Any other set skips tailscale without a key and 
 missed limit. The harness starts Pebble for the https suite, which needs no domain and reboots the
 instance with HTTPS on, then off again ([HTTPS](./https.md#testing-with-pebble)). The `fast` set
 takes about 4.5 minutes, most of it idle timeouts in the sleep suite and the jail suite's two
-reboots. The full set adds docker, images, scale and tailscale; at its defaults the scale suite
-alone took about 75 seconds in the last acceptance run.
+reboots. The full set adds docker, images, scale, tailscale, sessions, ssh-wake, proxy-wake, cp,
+connectors, https, egress, ipv6, networks, moves, moves-tailnet, chaos and backups; at its defaults
+the scale suite alone took about 75 seconds in the last acceptance run.
 
 The moves suites start a second instance, `<IMP_DEV_NAME>-mv-b`, with its data in
 `<IMP_DEV_DATA>-mv-b`, and reboot the run's instance onto a network of their own and back. Each
@@ -302,10 +307,4 @@ system drive rebuild to the same bytes). It takes two cold kernel builds, so it 
 
 `.github/rulesets/main.json` protects `main`: the seven required CI jobs must pass, changes arrive
 through a squash-merged pull request, and the branch cannot be deleted or force-pushed. Only a
-repository admin can bypass it.
-
-The ruleset is not applied yet. Apply it once:
-
-```sh
-gh api -X POST repos/zgeoff/imp/rulesets --input .github/rulesets/main.json
-```
+repository admin can bypass it. The ruleset is applied on GitHub as `main protection`.

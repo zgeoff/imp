@@ -86,3 +86,52 @@ test('a directory is refused and stays as it was', async () => {
   expect(result).toEqual({ code: 1, stderr: `${path} is a directory\n` });
   expect(readdirSync(path)).toEqual(['keep']);
 });
+
+// Content past a pipe buffer, written as the agent writes it while the
+// script refuses: it must read it all, or the write fails with EPIPE and
+// the refusal is lost (#185)
+async function runWriteThroughPipe(path: string, bytes: number) {
+  const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const written = (async () => {
+    try {
+      await proc.stdin.write(new Uint8Array(bytes).fill(120));
+      await proc.stdin.end();
+
+      return 'ok';
+    } catch (error) {
+      return String(error);
+    }
+  })();
+
+  const [code, stderr, write] = await Promise.all([
+    proc.exited,
+    new Response(proc.stderr).text(),
+    written,
+  ]);
+
+  return { code, stderr, write };
+}
+
+test('a refused write still reads all its content, so the refusal is what comes back', async () => {
+  const directory = join(dir, 'sub');
+  const link = join(dir, 'dangling');
+
+  mkdirSync(directory);
+  symlinkSync(join(dir, 'loop'), join(dir, 'loop'));
+  symlinkSync(join(dir, 'loop'), link);
+
+  const outcomes = await Promise.all([
+    runWriteThroughPipe(directory, 4 << 20),
+    runWriteThroughPipe(link, 4 << 20),
+  ]);
+
+  expect(outcomes).toEqual([
+    { code: 1, stderr: `${directory} is a directory\n`, write: 'ok' },
+    { code: 1, stderr: `cannot resolve the symlink ${link}\n`, write: 'ok' },
+  ]);
+});

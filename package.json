@@ -1,6 +1,6 @@
 {
   "name": "@zgeoff/imp",
-  "version": "0.29.0",
+  "version": "0.31.0",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
   "license": "MIT",
@@ -51,7 +51,7 @@
       "knip": "6.24.0",
       "kysely": "0.29.5",
       "lefthook": "2.1.10",
-      "oxfmt": "0.57.0",
+      "oxfmt": "0.71.0",
       "oxlint": "1.73.0",
       "oxlint-tsgolint": "0.24.0",
       "reflect-metadata": "0.2.2",

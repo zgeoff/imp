@@ -73,3 +73,26 @@ test('the start warning shows only when CapEff lacks CAP_SETFCAP', () => {
   expect(readSetfcapWarning('Name:\timpd\nCapEff:\t00000000882810fb\n')).toBeNull();
   expect(readSetfcapWarning('Name:\timpd\nCapEff:\t00000000082810fb\n')).toContain('CAP_SETFCAP');
 });
+
+// the export is impd's own call on its own container: nothing in it came
+// from the client, so a refusal of it is impd's error, never BAD_REQUEST
+test('an export the proxy refused stays impd’s error', () => {
+  const refusal = 'imp-docker-proxy: GET /containers/x/export is not a call impd makes';
+  const stderr = `Error response from daemon: ${refusal}\n`;
+
+  const refused = (() => {
+    try {
+      assertUnpacked({ exitCode: 1, stdout: '', stderr });
+
+      return null;
+    } catch (error) {
+      return error;
+    }
+  })();
+
+  expect(refused).not.toHaveProperty('code');
+
+  expect(String(refused)).toContain(
+    `docker export | tar exited 1: Error response from daemon: ${refusal}`,
+  );
+});

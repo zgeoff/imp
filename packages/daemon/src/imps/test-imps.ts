@@ -10,6 +10,7 @@ import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import { createBroker } from '../broker/broker-service';
 import type { InstallBundle } from '../broker/guest-trust';
+import { createSecretFiles } from '../broker/secret-files';
 import { TunnelRefusedError } from '../broker/tunnel-target';
 import { buildApp } from '../build-app';
 import type { AppDeps } from '../build-app';
@@ -26,6 +27,7 @@ import { createGovernedImps } from '../governor/create-governed-imps';
 import { createDnsToken } from '../https/dns/dns-token';
 import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
+import { BUILD_KEEPALIVE_MS } from '../images/build-event-stream';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
 import { createMoveService } from '../moves/move-service';
@@ -33,6 +35,7 @@ import type { MoveServiceDeps } from '../moves/move-service';
 import type { Uplinks } from '../net/host-routes';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createNetworkService } from '../networks/network-service';
+import { createOAuthService } from '../oauth/oauth-service';
 import { createForwardedPeers } from '../proxy/forwarded-peers';
 import { hasSnapshot, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import type { SnapshotIdentity } from '../sleep/snapshot-meta';
@@ -354,6 +357,16 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     isFileKey: () => false,
   });
 
+  const oauth = createOAuthService({
+    db,
+    tokens,
+    revocations,
+    config: config.publicMcp,
+    now: readClock,
+    log: printTestLog,
+    key: Buffer.alloc(32, 7),
+  });
+
   // an image row whose rootfs is a small file in the data dir
   const createTestImage = async (name: string): Promise<ImageRecord> => {
     await Bun.write(`${dataDir}/images/${name}/rootfs.ext4`, 'rootfs');
@@ -389,6 +402,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     diskUsage,
     tokens,
     revocations,
+    oauth,
     now: readClock,
     advance: (ms: number) => {
       clock.offsetMs += ms;
@@ -428,6 +442,7 @@ type AppParts = Pick<
   | 'broker'
   | 'tokens'
   | 'revocations'
+  | 'oauth'
   | 'egress'
   | 'readIdentity'
   | 'readKsmHostStats'
@@ -454,6 +469,9 @@ export function buildTestApp(
       'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost' | 'readTapMac'
     >
   > = {},
+
+  // the gap between the progress events of a streamed image call
+  buildKeepaliveMs = BUILD_KEEPALIVE_MS,
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
 
@@ -487,6 +505,7 @@ export function buildTestApp(
     diskBudget: ctx.diskBudget,
     audit,
     now: ctx.now,
+    keepaliveMs: buildKeepaliveMs,
   });
 
   const moves = createMoveService({
@@ -519,6 +538,7 @@ export function buildTestApp(
     rootToken: TEST_TOKEN,
     tokens: ctx.tokens,
     revocations: ctx.revocations,
+    oauth: ctx.oauth,
     peers,
     tailnet,
     imps,
@@ -540,6 +560,7 @@ export function buildTestApp(
       storage: ctx.storage,
       storageGate: ctx.storageGate,
       log: () => {},
+      secretFiles: createSecretFiles(ctx.config.dataDir),
     }),
     readTailscale: () =>
       Promise.resolve({ state: null, hostname: null, dnsName: null, ip: null, ips: [] }),
@@ -551,6 +572,7 @@ export function buildTestApp(
     log: ctx.log,
     audit,
     buildContexts,
+    imageKeepaliveMs: buildKeepaliveMs,
     moves,
   });
 
@@ -562,7 +584,14 @@ export function buildTestApp(
 
   const client: ContractRouterClient<ImpContract> = createORPCClient(link);
 
-  return { app: built.app, closeExecSessions: built.closeExecSessions, client, peers, moves };
+  return {
+    app: built.app,
+    publicMcp: built.publicMcp,
+    closeExecSessions: built.closeExecSessions,
+    client,
+    peers,
+    moves,
+  };
 }
 
 // a memory snapshot as a sleep at `createdAt` by a VM with `identity`
