@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.1](https://github.com/zgeoff/imp/compare/v0.32.0...v0.32.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **images:** let a build stay silent past 360 s on the way to the engine ([#213](https://github.com/zgeoff/imp/issues/213)) ([935b064](https://github.com/zgeoff/imp/commit/935b064371011eb9b74175fc876d24e762f9085f))
+
 ## [0.32.0](https://github.com/zgeoff/imp/compare/v0.31.0...v0.32.0) (2026-10-04)
 
 ### Features
