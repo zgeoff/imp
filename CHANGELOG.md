@@ -2,10 +2,11 @@
 
 ## [0.32.2](https://github.com/zgeoff/imp/compare/v0.32.1...v0.32.2) (2026-10-04)
 
-
 ### Bug Fixes
 
-* **client:** send large stdin in small frames, and keep a fast command's exit ([#216](https://github.com/zgeoff/imp/issues/216)) ([ed5e36a](https://github.com/zgeoff/imp/commit/ed5e36a3dadccd11930fc7fa131e6e840c3ebb54))
+- **client:** send large stdin in small frames, and keep a fast command's exit
+  ([#216](https://github.com/zgeoff/imp/issues/216))
+  ([ed5e36a](https://github.com/zgeoff/imp/commit/ed5e36a3dadccd11930fc7fa131e6e840c3ebb54))
 
 ## [0.32.1](https://github.com/zgeoff/imp/compare/v0.32.0...v0.32.1) (2026-10-04)
 
