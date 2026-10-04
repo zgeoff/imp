@@ -335,8 +335,10 @@ export async function runCommand(
 
   const output = Promise.all([readAll(handle.stdout), readAll(handle.stderr)]);
 
+  // a command that exits before it reads its stdin still returns its exit
+  // and output: `exit` reports how it ended
   if (options.stdin !== undefined) {
-    await handle.write(options.stdin);
+    await handle.write(options.stdin).catch(checkWriteFailure);
   }
 
   await handle.closeStdin();
@@ -344,6 +346,13 @@ export async function runCommand(
   const [exit, [stdout, stderr]] = await Promise.all([handle.exit, output]);
 
   return { ...exit, stdout, stderr };
+}
+
+// a write to a command that already exited, which `exit` reports instead
+function checkWriteFailure(error: unknown): void {
+  if (!(error instanceof ExecError && error.code === 'CLOSED')) {
+    throw error;
+  }
 }
 
 interface HandleParts {
@@ -421,12 +430,14 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
     stderr: parts.streams[1],
     exit: exitPromise,
     write,
+
+    // stdin of a command that already exited is closed: nothing to send
     closeStdin: async () => {
       await startedPromise;
 
-      requireOpen();
-
-      session.closeStdin();
+      if (!parts.isEnded()) {
+        session.closeStdin();
+      }
     },
     resize: (cols, rows) => {
       session.resize(cols, rows);

@@ -518,6 +518,24 @@ test('started and exit are the same promise on every read, and a late write is C
   expect(rejection).toMatchObject({ code: 'CLOSED' });
 });
 
+// a command whose exit arrives with its start, as a fast one over a slow
+// link does: run must still return its exit and output (atc #273)
+test('closing the stdin of a command that already exited does nothing, and run still returns', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  await handle.exit;
+
+  await handle.closeStdin();
+
+  const late = await ctx.client.run('dev', ['fail'], { stdin: 'unread' });
+
+  expect(late.code).toBe(3);
+  expect(decoder.decode(late.stdout)).toBe('out');
+  expect(decoder.decode(late.stderr)).toBe('err');
+});
+
 test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', async () => {
   await using ctx = await setupExecTest();
 
