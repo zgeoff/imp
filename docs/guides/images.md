@@ -77,7 +77,7 @@ host first, with the exact reference, and impd uses that image without a pull.
 
 An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
 way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
-engine, as before 0.30.0, for one release only, with the credentials in impd's Docker config. impd
+engine, as before 0.32.0, for one release only, with the credentials in impd's Docker config. impd
 logs a warning at start and at every such add.
 
 ## Build an image
@@ -273,7 +273,7 @@ What a build costs on top of a host build: about 1.5 s for the builder and its d
 pulls, which start cold in every builder (about 7.5 s for `busybox` and the frontend on a home
 link). impd logs each build's phases as `pins=… build=… image=…`.
 
-`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.30.0, for one release only: impd
+`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.32.0, for one release only: impd
 logs a warning at start and at every build. Use it only when every caller with `manage` is trusted
 with the host (the caution above).
 
