@@ -135,6 +135,12 @@ interface SecretsTable {
   value_file: string;
 }
 
+// A value file a committed delete or replace displaced, until it is removed
+interface SecretFileRemovalsTable {
+  value_file: string;
+  created_at: number;
+}
+
 interface GrantsTable {
   imp_id: string;
   secret_name: string;
@@ -323,6 +329,7 @@ export interface DatabaseSchema {
   broker_sessions: BrokerSessionsTable;
   checkpoints: CheckpointsTable;
   secrets: SecretsTable;
+  secret_file_removals: SecretFileRemovalsTable;
   grants: GrantsTable;
   broker_audit: BrokerAuditTable;
   api_audit: ApiAuditTable;

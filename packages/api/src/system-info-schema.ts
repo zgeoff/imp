@@ -173,6 +173,10 @@ export const SystemInfoSchema = z.object({
       // the oauth procedures and the public MCP route exist; the route runs
       // only where the operator turned it on (publicMcp)
       oauthGrants: z.boolean().optional(),
+
+      // system.gc takes `secretFiles`; an older impd drops it unread and
+      // never lists the secret values it kept aside
+      secretFilesGc: z.boolean().optional(),
     })
     .optional(),
 });

@@ -758,6 +758,8 @@ export function buildRouter(deps: RouterDeps) {
         deps.gc.runGc({
           isDryRun: context.input.dryRun ?? false,
           isOrphans: context.input.orphans ?? false,
+          isSecretFiles: context.input.secretFiles ?? false,
+          isRemoveSecretFiles: context.input.removeSecretFiles ?? false,
         }),
       ),
       copyDatabase: os.system.copyDatabase.handler(async (context) => {
@@ -860,6 +862,7 @@ const SYSTEM_FEATURES = {
   imageOpStream: true,
   execRequire: true,
   oauthGrants: true,
+  secretFilesGc: true,
 } as const;
 
 // imp-20261004-061233: a name's form, in UTC, to the second

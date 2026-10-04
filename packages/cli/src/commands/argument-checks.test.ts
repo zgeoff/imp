@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
+import { gcCommand } from './gc';
 import { imageCommand } from './image';
 import { consoleCommand, newCommand, readConsoleSession } from './imps';
 import { oauthCommand } from './oauth';
@@ -258,4 +259,13 @@ test('oauth commands refuse a redirect URI, a code or a pattern impd would refus
     expect(stderr).toHaveBeenCalledWith(message);
     expect(process.exitCode).toBe(2);
   }
+});
+
+test('gc --secret-files without --orphans fails before it deletes anything', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(gcCommand, { rawArgs: ['--secret-files'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: --secret-files goes with --orphans');
+  expect(process.exitCode).toBe(2);
 });
