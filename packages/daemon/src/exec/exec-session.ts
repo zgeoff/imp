@@ -83,6 +83,9 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     // agent kills the group itself
     killGrace: boolean;
 
+    // the start asked for a log, so `started.output.log` answers it
+    log: boolean;
+
     // a session with offsets: where its data started, and the bytes sent
     // since, the prelude's included
     output: Extract<SessionOutput, { continuity: 'offsets' }> | null;
@@ -98,6 +101,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     acking: false,
     outUnacked: 0,
     killGrace: false,
+    log: false,
     output: null,
     sentBytes: 0,
   };
@@ -265,7 +269,10 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
     state.stream = stream;
 
     // a session from an agent without offsets replays as before
-    const output = stream.session === null ? null : (stream.output ?? { continuity: 'none' });
+    const sessionOutput =
+      stream.session === null ? null : (stream.output ?? { continuity: 'none' });
+
+    const output = withLogAnswer(sessionOutput, state.log && stream.created);
 
     state.output = output?.continuity === 'offsets' ? output : null;
 
@@ -387,6 +394,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
       }
 
       state.killGrace = control.killGraceMs !== undefined;
+      state.log = control.log === true;
 
       const request: AgentExecRequest = {
         argv: control.argv,
@@ -398,6 +406,7 @@ export function createExecSession(peer: ExecPeer, backend: ExecBackend): ExecSes
         ...(control.session !== undefined && { session: control.session }),
         ...(control.killGraceMs !== undefined && { killGraceMs: control.killGraceMs }),
         ...(control.resumeFrom !== undefined && { resumeFrom: control.resumeFrom }),
+        ...(control.log === true && { log: true }),
         ...(control.outer === true && { outer: true }),
         ...(control.require !== undefined && { require: control.require }),
         ...size,
@@ -514,4 +523,13 @@ function buildErrorMessage(error: unknown): ExecServerMessage {
   }
 
   return { type: 'error', message: readErrorMessage(error) };
+}
+
+// a session started with log whose agent predates session logs says so
+function withLogAnswer(output: SessionOutput | null, asked: boolean): SessionOutput | null {
+  if (!asked || output?.continuity !== 'offsets' || output.log !== undefined) {
+    return output;
+  }
+
+  return { ...output, log: { enabled: false } };
 }

@@ -242,7 +242,11 @@ test('a session from an agent with offsets lists its generation and its end as l
   const generation = 'b'.repeat(32);
 
   await using ctx = await setupSessionTest([
-    buildSession('main', { execution_generation: generation, boot_id: 'boot-x', end: 4096 }),
+    buildSession('main', {
+      execution_generation: generation,
+      boot_id: '22222222-2222-4222-8222-222222222222',
+      end: 4096,
+    }),
   ]);
 
   const before = Date.now();
@@ -252,7 +256,7 @@ test('a session from an agent with offsets lists its generation and its end as l
   expect(session).toMatchObject({
     continuity: 'offsets',
     executionGeneration: generation,
-    bootId: 'boot-x',
+    bootId: '22222222-2222-4222-8222-222222222222',
     end: 4096,
   });
 

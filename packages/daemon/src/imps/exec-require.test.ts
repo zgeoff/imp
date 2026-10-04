@@ -17,6 +17,9 @@ import { setupImpTest } from './test-imps';
 // An exec with `require: ['broker']` starts only once impd set the broker's
 // variables and the CA bundle for the boot it starts in.
 
+// the agent's boot, in the uuid form impd checks before it names a log path
+const AGENT_BOOT_ID = '6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f';
+
 // what `activity` lists: every session as running
 // one run of a fake session: the client attached to it, and whether its
 // process exited (a resume of its generation can still attach)
@@ -42,7 +45,7 @@ function buildActivity(sessions: ReadonlyMap<string, Readonly<FakeRun>>) {
       rows: 24,
       started_unix_ms: 0,
       execution_generation: run.generation,
-      boot_id: 'boot-1',
+      boot_id: AGENT_BOOT_ID,
       end: 0,
     })),
   };
@@ -137,7 +140,7 @@ async function setupRequireTest(installBundle?: InstallBundle) {
         session,
         created: known === undefined,
         output: {
-          boot_id: 'boot-1',
+          boot_id: AGENT_BOOT_ID,
           execution_generation: run.generation,
           buffer_start: 0,
           end: 0,

@@ -36,6 +36,10 @@ const FEATURES = {
     missing: 'no elastic memory, so its programs could not use a grow',
     strict: true,
   },
+
+  // session.tap, for impd's session logs; an older agent ignores `log` on a
+  // start and answers the tap UNKNOWN_OP
+  'session-log': { since: [0, 18], missing: 'no session logs' },
 } as const satisfies Record<string, Feature>;
 
 export type AgentFeature = keyof typeof FEATURES;

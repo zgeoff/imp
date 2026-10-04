@@ -177,6 +177,10 @@ export const SystemInfoSchema = z.object({
       // system.gc takes `secretFiles`; an older impd drops it unread and
       // never lists the secret values it kept aside
       secretFilesGc: z.boolean().optional(),
+
+      // a session start takes `log`, and `sessions.logs`, `readLog` and
+      // `deleteLog` exist (docs/guides/session-logs.md)
+      sessionLog: z.boolean().optional(),
     })
     .optional(),
 });
