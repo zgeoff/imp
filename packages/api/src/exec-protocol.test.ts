@@ -111,3 +111,19 @@ test('an outer exec takes no tool or session', () => {
     false,
   );
 });
+
+test('a start requires only known things, and not for a tool or an outer exec', () => {
+  const start = { type: 'start', name: 'dev', argv: ['sh'], tty: false } as const;
+
+  expect(ExecStartMessageSchema.safeParse({ ...start, require: ['broker'] }).success).toBe(true);
+  expect(ExecStartMessageSchema.safeParse({ ...start, require: [] }).success).toBe(true);
+  expect(ExecStartMessageSchema.safeParse({ ...start, require: ['network'] }).success).toBe(false);
+
+  expect(
+    ExecStartMessageSchema.safeParse({ ...start, tool: 'tar', require: ['broker'] }).success,
+  ).toBe(false);
+
+  expect(
+    ExecStartMessageSchema.safeParse({ ...start, outer: true, require: ['broker'] }).success,
+  ).toBe(false);
+});

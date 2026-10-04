@@ -317,9 +317,10 @@ func (s *session) input(r *proto.Reader) {
 		}
 		switch f.Type {
 		case proto.TypeStdin:
-			if !s.queueStdin(f.Payload) {
-				return
-			}
+			// Once the session ends the stdin goes nowhere, but the loop
+			// reads on: a host frame that meets a closed socket loses the
+			// host the EXIT frame to EPIPE (see Serve's exitLinger).
+			s.queueStdin(f.Payload)
 		case proto.TypeStdinEOF:
 			// A tty has no EOF to give; the client sends ^D itself.
 			if s.tty == nil {
@@ -343,21 +344,25 @@ func (s *session) input(r *proto.Reader) {
 }
 
 // queueStdin hands p to writeStdin in chunks. It blocks while the queue is
-// full and returns false if the session ended meanwhile.
-func (s *session) queueStdin(p []byte) bool {
+// full, and drops p once the session has ended.
+func (s *session) queueStdin(p []byte) {
 	if s.stdinEnded {
-		return true
+		return
 	}
 	for len(p) > 0 {
 		n := min(len(p), stdinChunk)
 		select {
+		case <-s.done:
+			return
+		default:
+		}
+		select {
 		case s.stdinQ <- p[:n]:
 		case <-s.done:
-			return false
+			return
 		}
 		p = p[n:]
 	}
-	return true
 }
 
 // endStdin closes the queue; writeStdin closes the pipe once it drains.

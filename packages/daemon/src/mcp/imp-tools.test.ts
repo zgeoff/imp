@@ -152,3 +152,23 @@ test('imp_fork copies a sleeping or stopped imp, now or from a checkpoint', asyn
   expect(fromCheckpoint.structuredContent).toMatchObject({ imp: { name: 'fork-a' } });
   expect(fromStopped.structuredContent).toMatchObject({ imp: { name: 'fork-b' } });
 });
+
+test('imp_fork names the grants the fork did not get beside the imp', async () => {
+  await using ctx = await setupMcpTest({ tokenImps: ['dev-*'] });
+
+  await ctx.client.imps.create({ name: 'dev-a', image: 'ubuntu' });
+  await ctx.client.secrets.add({ name: 'gh', kind: 'github', value: 'sk-synthetic-168' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const forked = await ctx.runTool('imp_fork', { source: 'dev-a', name: 'dev-b' });
+
+  expect(forked.isError).toBe(false);
+
+  expect(forked.structuredContent).toMatchObject({
+    imp: { name: 'dev-b' },
+    grantsNotCopied: [{ secret: 'gh', reason: 'not-grantable' }],
+  });
+
+  expect(forked.structuredContent).not.toHaveProperty('imp.grantsNotCopied');
+  expect(forked.structuredContent).not.toHaveProperty('grantsError');
+});

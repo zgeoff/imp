@@ -3,6 +3,7 @@
 // out of imp-host (docs/architecture/host-contract.md).
 
 import { z } from 'zod';
+import { formatEngineFailure, formatRefusal } from './refusal';
 import { findRequestRoute, formatQuery } from './router';
 import type { RoutedRequest } from './router';
 import {
@@ -177,7 +178,7 @@ export function createDockerProxy(
   const buildRefusal = (request: Request, path: string, reason: string): Response => {
     options.log(`refused ${request.method} ${path}: ${reason}`);
 
-    return buildJsonResponse(403, `imp-docker-proxy: ${reason}`);
+    return buildJsonResponse(403, formatRefusal(reason));
   };
 
   // the container's full ID, when the proxy created it; null otherwise
@@ -281,7 +282,7 @@ export function createDockerProxy(
       if (error instanceof BodyTooLargeError) {
         return buildJsonResponse(
           413,
-          `imp-docker-proxy: ${error.message} (IMP_BUILD_CONTEXT_MAX_MIB)`,
+          formatRefusal(`${error.message} (IMP_BUILD_CONTEXT_MAX_MIB)`),
         );
       }
 
@@ -446,7 +447,7 @@ export function createDockerProxy(
 
       options.log(`error on ${request.method} ${url.pathname}: ${message}`);
 
-      return buildJsonResponse(502, `imp-docker-proxy: the engine call failed: ${message}`);
+      return buildJsonResponse(502, formatEngineFailure(message));
     }
   };
 }

@@ -200,7 +200,7 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
 
     try {
-      return await images.buildImageFromContext(tarPath, 'web', undefined, signal);
+      return await images.buildImageFromContext(tarPath, 'web', undefined, { signal });
     } finally {
       process.env['PATH'] = savedPath;
     }

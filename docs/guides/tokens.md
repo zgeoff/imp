@@ -14,11 +14,11 @@ start impd again. A new root token ends every dashboard session.
 
 Scopes nest: `manage` includes `exec`, and `exec` includes `read`.
 
-| Scope    | What it may do                                                                                                                                                                                                                                                                                                            |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                                                       |
-| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`.                            |
-| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move` from this host. Host-wide: images, secrets and grants, networks, backups, `imp gc`, tokens, taking in an `imp move`, and `imp exec --agent`. |
+| Scope    | What it may do                                                                                                                                                                                                                                                                                                                           |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`   | List and read: imps, URLs, egress policies, checkpoints, sessions, services, images, secrets (names and grants only), networks, the audit logs, the event stream, `imp info`, and the backup list for a token with no imp patterns.                                                                                                      |
+| `exec`   | Run things in imps: `imp exec`, `imp console`, `attach`, `imp proxy` and its reverse forwards, and ticket requests for the dashboard console. Start, stop, sleep, wake and hold an imp, and take its [leases](./leases.md); kill a session; add, restart and remove a service, and `imp logs`.                                           |
+| `manage` | Create, destroy and fork imps; resize a disk; set an egress policy; `imp set` CPU limits and HTTP port; checkpoints; `imp cp`, to copy files in and out, as root; `imp move` from this host. Host-wide: images, secrets and grants, networks, backups, `imp gc`, `imp db copy`, tokens, taking in an `imp move`, and `imp exec --agent`. |
 
 `packages/daemon/src/auth/access-policy.ts` maps every procedure to its scope. The map covers every
 path of the API contract, so a new procedure without an entry fails the typecheck, and impd refuses
@@ -31,6 +31,9 @@ such as `dev-*`. Such a token:
 
 - touches only the imps its patterns match. A fork needs both the source and the new name to match,
   and so does a create from a [template](./templates.md): the template's source imp must match.
+- copies into a fork only the source's grants it could make itself, which today is none: the fork's
+  answer names the rest in `grantsNotCopied`. A host-wide caller copies every grant
+  ([forks and grants](./connectors.md#secrets-and-grants)).
 - must name the imp it creates. impd never picks a name for it.
 - sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, in
   `imp net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
@@ -112,12 +115,13 @@ fails with `UNAUTHORIZED`; a secret changed in between fails with `not_grantable
 The token may not grant a secret's value or change its hosts: secrets, and tokens, stay host-wide.
 
 In this version, such a token may not fork an imp or move one: `imps.fork`, `moves.prepare`,
-`moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A fork copies its
-source's grants, and a move carries them to the target, so either could hand an imp a secret the
-list does not name. `moves.abort` stays open to it. The list never changes after the token is made,
-so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep, wake,
-a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an imp
-made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
+`moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A move carries the
+imp's grants to the target, so it could hand an imp a secret the list does not name. A fork would
+copy only the grants on the list, checked again in the copy's transaction, but stays refused in this
+version all the same. `moves.abort` stays open to it. The list never changes after the token is
+made, so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep,
+wake, a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an
+imp made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
 dashboard sessions and the SSH keys bound to it too. `backups.restore` stays host-wide.
 
 An impd older than 0.27.0 drops `grantable` unread and makes a token with no list. Before a client
@@ -136,6 +140,7 @@ token.
 | SSH key                  | the key; see below                                                                     |
 | Tailnet peer             | the identity a rule gives it; see below                                                |
 | Move ticket              | nothing but its one move's `/move/*` steps ([moves](../architecture/moves.md#tickets)) |
+| OAuth access token       | its grant, within the token that approved it; on the public `/mcp` only (see below)    |
 
 A wrong bearer token is refused outright: it never falls through to the cookie or the tailnet. An
 `/exec` or `/tunnel` socket that a token without `exec` opens is accepted, and each start on it
@@ -160,6 +165,14 @@ IMP_TOKEN=$(imp token new agent --scope manage --imps 'agent-*') imp mcp --prefi
 The server's `--prefix` guard stays a convenience. impd's own MCP endpoint, `/mcp`, takes a token
 per client instead, and its tools follow that token's scope and patterns: see
 [MCP over HTTP](./mcp.md#http).
+
+### OAuth grants
+
+On the [public MCP route](./mcp.md#public-route), a client signs in and a named token approves it
+with `imp oauth approve`. The grant gets at most that token's scope and patterns, and no secrets.
+impd checks both on every request, and the audit log names the caller `<client>/<grant id>`.
+Removing the token ends every grant it approved. `imp oauth grant ls` lists the grants, and
+`imp oauth grant rm` ends one.
 
 ## Tailnet identity
 

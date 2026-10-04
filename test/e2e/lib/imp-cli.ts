@@ -34,7 +34,12 @@ const ImpRowSchema = z.object({
   error: z.string().optional(),
   sessions: z.number().optional(),
   diskUsage: z
-    .object({ exclusiveBytes: z.number(), sharedBytes: z.number(), isPartial: z.boolean() })
+    .object({
+      exclusiveBytes: z.number(),
+      sharedBytes: z.number(),
+      isPartial: z.boolean(),
+      measuredAt: z.coerce.date(),
+    })
     .optional(),
   cpu: z.object({ limit: z.number().nullable(), weight: z.number() }).optional(),
   resources: ResourcesSchema.optional(),

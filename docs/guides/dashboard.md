@@ -1,7 +1,8 @@
 # Dashboard
 
 impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui/` on the host, or
-`http://<tailnet-host>:7070/ui/` on your tailnet. `/` redirects there.
+`http://<tailnet-host>:7070/ui/` on your tailnet. `/` redirects there. With
+[HTTPS on your own domain](./https.md), `https://<IMP_DOMAIN>` opens it.
 
 ## What it shows
 
@@ -9,7 +10,9 @@ impd serves a web dashboard at `/ui/` on its API port: `http://localhost:7070/ui
   failed, why its next wake boots cold, which parts it runs outdated, a hold that keeps it awake,
   and an agent that stopped answering
   ([the watchdog](../architecture/sleep-and-wake.md#the-watchdog)). Each row has the buttons that
-  fit its state (sleep, wake, start, stop, restart), the console and destroy.
+  fit its state (sleep, wake, start, stop, restart), the console and destroy. **New imp** opens a
+  form for the name, image, memory, vCPUs and HTTP port; a blank field takes impd's default, as
+  `imp new` does.
 - **One imp**: its details with disk use, both URLs, CPU use with a form for the limit and the
   weight, the checkpoints (take, restore, fork, delete) and a fork of its disk as it is now.
 - **Console**: a login shell in the browser (xterm.js), as `imp console` opens. It wakes a sleeping
@@ -72,7 +75,5 @@ first.
 
 ## Not yet
 
-- HTTPS on `https://imp.<tailnet>.ts.net` through `tailscale serve`. The session and its origin
-  check already work behind such a front.
 - Detachable sessions in the console. `imp console` and `imp attach` have them; the console view
   takes a terminal source, so attaching to a session is a second source next to the login shell.

@@ -153,15 +153,44 @@ export function parseHttpsConfig(env: z.infer<typeof HttpsEnvSchema>): HttpsConf
   };
 }
 
-// what HTTPS settings say about themselves without IMP_DOMAIN, for main to log
+// the IPv4 ranges the internet cannot reach a host at: private, shared (the
+// tailnet's 100.64.0.0/10), loopback and link-local, as [first octet, second
+// octet from, second octet to]
+const UNREACHABLE_RANGES: readonly (readonly [number, number, number])[] = [
+  [10, 0, 255],
+  [100, 64, 127],
+  [127, 0, 255],
+  [169, 254, 254],
+  [172, 16, 31],
+  [192, 168, 168],
+];
+
+// what HTTPS settings say about themselves, for main to log
 export function listHttpsWarnings(env: z.infer<typeof HttpsEnvSchema>): string[] {
+  const warnings: string[] = [];
+
   if (env.IMP_DOMAIN === undefined && env.IMP_DNS_API_TOKEN_FILE !== undefined) {
-    return [
+    warnings.push(
       'IMP_DNS_API_TOKEN_FILE is set without IMP_DOMAIN; HTTPS is off and the file is unused',
-    ];
+    );
   }
 
-  return [];
+  // a warning, not an error: a test may point the records anywhere
+  if (env.IMP_PUBLIC_IP !== undefined && isUnreachable(env.IMP_PUBLIC_IP)) {
+    warnings.push(
+      `IMP_PUBLIC_IP ${env.IMP_PUBLIC_IP} is not an internet address; public imps' records point at it, so the internet cannot reach them`,
+    );
+  }
+
+  return warnings;
+}
+
+function isUnreachable(ip: string): boolean {
+  const [first = 0, second = 0] = ip.split('.').map(Number);
+
+  return UNREACHABLE_RANGES.some(
+    ([octet, from, to]) => first === octet && second >= from && second <= to,
+  );
 }
 
 function readTokenSource(env: z.infer<typeof HttpsEnvSchema>): DnsTokenSource | null {

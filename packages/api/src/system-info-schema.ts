@@ -157,6 +157,27 @@ export const SystemInfoSchema = z.object({
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
 
+      // system.copyDatabase; from 0.30.0
+      databaseCopy: z.boolean().optional(),
+
+      // POST /images/build streams build events to a client that accepts
+      // them (docs/guides/images.md#build-an-image)
+      imageBuildStream: z.boolean().optional(),
+
+      // images.addStream and images.buildStream
+      imageOpStream: z.boolean().optional(),
+
+      // an `/exec` start takes `require`, which an older impd drops unread
+      execRequire: z.boolean().optional(),
+
+      // the oauth procedures and the public MCP route exist; the route runs
+      // only where the operator turned it on (publicMcp)
+      oauthGrants: z.boolean().optional(),
+
+      // system.gc takes `secretFiles`; an older impd drops it unread and
+      // never lists the secret values it kept aside
+      secretFilesGc: z.boolean().optional(),
+
       // the `public` egress policy; an older impd refuses the mode
       publicEgress: z.boolean().optional(),
     })
