@@ -591,10 +591,13 @@ export function buildRouter(deps: RouterDeps) {
         ),
       ),
       build: os.images.build.handler(async (context) => {
+        // a client that goes stops the build on the engine, which may run
+        // past any fetch limit
         const image = await deps.images.buildImage(
           context.input.contextDir,
           context.input.name,
           context.input.dockerfile,
+          { ...(context.signal !== undefined && { signal: context.signal }) },
         );
 
         return toApiImage(image);
