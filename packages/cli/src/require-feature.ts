@@ -8,7 +8,7 @@ const FEATURES = {
   databaseCopy: 'is older than 0.30.0',
   execRequire: 'is older than 0.30.0',
   sessionLog: 'has no session logs',
-  publicEgress: 'is older than 0.32.0',
+  publicEgress: 'is older than 0.33.0',
 } as const;
 
 type Feature = keyof typeof FEATURES;
