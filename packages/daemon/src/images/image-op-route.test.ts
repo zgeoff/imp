@@ -10,7 +10,10 @@ import type { ImageService } from './image-service';
 type ImageOverrides = Partial<Pick<ImageService, 'addImage' | 'buildImage'>>;
 
 // impd in-process, with these in place of the image service's own
-async function setupTest(overrides: ImageOverrides = {}, env: Record<string, string> = {}) {
+async function setupTest(
+  overrides: ImageOverrides = {},
+  env: Readonly<Record<string, string>> = {},
+) {
   const harness = await setupImpTest({ env });
 
   const images = { ...harness.images, ...overrides };
