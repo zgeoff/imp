@@ -348,6 +348,10 @@ export async function runCommand(
   return { ...exit, stdout, stderr };
 }
 
+// stdin goes in frames of at most this: impd, as Bun serves it, closes a
+// socket that sends one frame over 16 MiB
+const STDIN_FRAME_BYTES = 1024 ** 2;
+
 // a write to a command that already exited, which `exit` reports instead
 function checkWriteFailure(error: unknown): void {
   if (!(error instanceof ExecError && error.code === 'CLOSED')) {
@@ -395,10 +399,23 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
   void waitIgnoringRejection(startedPromise);
   void waitIgnoringRejection(exitPromise);
 
-  const requireOpen = (): void => {
-    if (parts.isEnded()) {
-      throw new ExecError('CLOSED', 'the exec session has ended');
+  // what ended the session, when it failed: a write after it says why
+  const end: { error: Error | null } = { error: null };
+
+  void (async () => {
+    const result = await parts.ended;
+
+    if ('error' in result) {
+      end.error = result.error;
     }
+  })();
+
+  const requireOpen = (): void => {
+    if (!parts.isEnded()) {
+      return;
+    }
+
+    throw end.error ?? new ExecError('CLOSED', 'the exec session has ended');
   };
 
   const write = async (data: string | Uint8Array): Promise<void> => {
@@ -410,8 +427,12 @@ function buildHandle(session: ExecSession, parts: Readonly<HandleParts>): ExecHa
 
     const bytes = typeof data === 'string' ? encoder.encode(data) : data;
 
-    if (!session.sendStdin(bytes)) {
-      await session.waitForDrain();
+    for (let sent = 0; sent < bytes.byteLength; sent += STDIN_FRAME_BYTES) {
+      requireOpen();
+
+      if (!session.sendStdin(bytes.subarray(sent, sent + STDIN_FRAME_BYTES))) {
+        await session.waitForDrain();
+      }
     }
   };
 
