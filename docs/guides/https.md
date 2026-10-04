@@ -196,6 +196,9 @@ restore are tailnet-only until you expose them.
    IMP_PUBLIC_IP=203.0.113.7
    ```
 
+   impd logs a warning at start when it is a private, tailnet (`100.64.0.0/10`), loopback or
+   link-local address: the records would point where the internet cannot reach.
+
 2. Publish the public listeners as the host's ports 443 and 80. With the systemd unit, set
    `IMP_PUBLIC_PORTS=-p 443:7443 -p 80:7480` in the same env file. With compose, uncomment the two
    ports in `deploy/compose.yaml`.
