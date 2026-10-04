@@ -49,6 +49,7 @@ test('it serves system.info from config and the database', async () => {
       secretRebind: true,
       databaseCopy: true,
       imageBuildStream: true,
+      imageOpStream: true,
     },
     ksm: null,
   });
