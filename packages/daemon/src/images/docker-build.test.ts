@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -114,6 +114,23 @@ test('impd sends the context as the body, with a query the proxy lets through', 
   expect(request?.body).toBe('the context');
   expect(request?.contentType).toBe('application/x-tar');
   expect(checkBuildQuery(parseQuery(query))).toEqual({ isOk: true });
+});
+
+// a quiet RUN step leaves the answer silent past Bun's 360 s limit
+test('the build lifts the limit on a silent answer', async () => {
+  engine.answer = () => new Response(buildLines({ id: 'moby.image.id', aux: { ID: IMAGE_ID } }));
+
+  const sent = spyOn(globalThis, 'fetch');
+
+  try {
+    await runBuild();
+
+    expect(sent.mock.calls.map(([, init = {}]): unknown => Reflect.get(init, 'timeout'))).toEqual([
+      false,
+    ]);
+  } finally {
+    sent.mockRestore();
+  }
 });
 
 test('a message split across chunks is read whole', async () => {

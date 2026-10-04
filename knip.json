@@ -3,7 +3,12 @@
   "ignoreDependencies": ["@stylistic/eslint-plugin", "@zgeoff/oxlint-config"],
   "workspaces": {
     ".": {
-      "entry": ["test/e2e/main.ts", "test/e2e/suites/*.e2e.ts", "test/integration/*.pebble.ts"],
+      "entry": [
+        "test/e2e/main.ts",
+        "test/e2e/suites/*.e2e.ts",
+        "test/integration/*.pebble.ts",
+        "test/integration/*.slow.ts"
+      ],
       "project": ["test/**/*.ts", "scripts/**/*.ts"]
     },
     "packages/*": {
