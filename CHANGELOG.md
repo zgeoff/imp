@@ -2,10 +2,11 @@
 
 ## [0.31.0](https://github.com/zgeoff/imp/compare/v0.30.0...v0.31.0) (2026-10-04)
 
-
 ### Features
 
-* **mcp:** an OAuth sign-in for a default-off public /mcp route ([#190](https://github.com/zgeoff/imp/issues/190)) ([4b92ed3](https://github.com/zgeoff/imp/commit/4b92ed3cd8053b3f63b04b62162b3ab783e13120))
+- **mcp:** an OAuth sign-in for a default-off public /mcp route
+  ([#190](https://github.com/zgeoff/imp/issues/190))
+  ([4b92ed3](https://github.com/zgeoff/imp/commit/4b92ed3cd8053b3f63b04b62162b3ab783e13120))
 
 ## [0.30.0](https://github.com/zgeoff/imp/compare/v0.29.1...v0.30.0) (2026-10-04)
 
