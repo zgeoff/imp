@@ -65,6 +65,13 @@ async function collectEvents(
   return seen;
 }
 
+// a call to its end, failed or not: an aborted one fails
+async function waitForEnd(call: Promise<unknown>): Promise<void> {
+  try {
+    await call;
+  } catch {}
+}
+
 function readPhases(events: readonly ImageOpEvent[]): string[] {
   const phases = events.flatMap((event) => (event.type === 'progress' ? [event.phase] : []));
 
@@ -256,4 +263,45 @@ test('a client that goes stops the pull of an add on the host', async () => {
   } finally {
     process.env['PATH'] = savedPath;
   }
+});
+
+test('a client that goes from images.build or images.add stops its work, as a stream does', async () => {
+  const started = { build: Promise.withResolvers<void>(), add: Promise.withResolvers<void>() };
+  const stopped = { build: Promise.withResolvers<void>(), add: Promise.withResolvers<void>() };
+
+  // work that runs until its signal aborts
+  const runUntilAborted = async (kind: 'build' | 'add', signal: AbortSignal | undefined) => {
+    started[kind].resolve();
+
+    await new Promise((resolve) => {
+      signal?.addEventListener('abort', resolve);
+    });
+
+    stopped[kind].resolve();
+    throw new Error('stopped');
+  };
+
+  await using ctx = await setupTest({
+    buildImage: (_contextDir, _name, _dockerfile, options) =>
+      runUntilAborted('build', options?.signal),
+    addImage: (_ref, _name, options) => runUntilAborted('add', options?.signal),
+  });
+
+  const builder = new AbortController();
+  const adder = new AbortController();
+
+  const building = waitForEnd(
+    ctx.client.images.build({ contextDir: '/srv/ctx', name: 'web' }, { signal: builder.signal }),
+  );
+
+  const adding = waitForEnd(
+    ctx.client.images.add({ ref: 'busybox:1.37', name: 'box' }, { signal: adder.signal }),
+  );
+
+  await Promise.all([started.build.promise, started.add.promise]);
+
+  builder.abort();
+  adder.abort();
+
+  await Promise.all([stopped.build.promise, stopped.add.promise, building, adding]);
 });
