@@ -31,6 +31,9 @@ such as `dev-*`. Such a token:
 
 - touches only the imps its patterns match. A fork needs both the source and the new name to match,
   and so does a create from a [template](./templates.md): the template's source imp must match.
+- copies into a fork only the source's grants it could make itself, which today is none: the fork's
+  answer names the rest in `grantsNotCopied`. A host-wide caller copies every grant
+  ([forks and grants](./connectors.md#secrets-and-grants)).
 - must name the imp it creates. impd never picks a name for it.
 - sees only its imps in lists, in the event stream, in the grants of `imp secret ls`, in
   `imp net ls`, and in both audit logs. Rows of the API audit log that name no imp are hidden from
@@ -112,12 +115,13 @@ fails with `UNAUTHORIZED`; a secret changed in between fails with `not_grantable
 The token may not grant a secret's value or change its hosts: secrets, and tokens, stay host-wide.
 
 In this version, such a token may not fork an imp or move one: `imps.fork`, `moves.prepare`,
-`moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A fork copies its
-source's grants, and a move carries them to the target, so either could hand an imp a secret the
-list does not name. `moves.abort` stays open to it. The list never changes after the token is made,
-so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep, wake,
-a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an imp
-made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
+`moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A move carries the
+imp's grants to the target, so it could hand an imp a secret the list does not name. A fork would
+copy only the grants on the list, checked again in the copy's transaction, but stays refused in this
+version all the same. `moves.abort` stays open to it. The list never changes after the token is
+made, so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep,
+wake, a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an
+imp made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
 dashboard sessions and the SSH keys bound to it too. `backups.restore` stays host-wide.
 
 An impd older than 0.27.0 drops `grantable` unread and makes a token with no list. Before a client

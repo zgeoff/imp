@@ -3,6 +3,7 @@ import { PublicAuthSchema } from './exposure-schema';
 import { LeaseSummarySchema } from './lease-schema';
 import { MoveStateSchema } from './move-schema';
 import { NameSchema } from './name-schema';
+import { SecretNameSchema } from './secret-schema';
 
 export const ImpStateSchema = z.enum(['creating', 'running', 'sleeping', 'stopped', 'error']);
 
@@ -125,3 +126,30 @@ export const ImpSchema = z.object({
 });
 
 export type Imp = z.infer<typeof ImpSchema>;
+
+// why a fork did not get one of its source's grants: the caller could not
+// grant the secret, the fork held another credential for one of its hosts,
+// or the secret was gone (docs/guides/connectors.md#secrets-and-grants)
+export const GrantNotCopiedReasonSchema = z.enum(['not-grantable', 'clash', 'no-secret']);
+
+export type GrantNotCopiedReason = z.infer<typeof GrantNotCopiedReasonSchema>;
+
+export const GrantNotCopiedSchema = z.object({
+  secret: SecretNameSchema,
+  reason: GrantNotCopiedReasonSchema,
+});
+
+export type GrantNotCopied = z.infer<typeof GrantNotCopiedSchema>;
+
+// What imps.fork answers: the imp, and the source's grants it did not get.
+// An older client drops the extra fields; an impd from before them sends
+// neither.
+export const ForkResultSchema = ImpSchema.extend({
+  grantsNotCopied: z.array(GrantNotCopiedSchema).readonly().optional(),
+
+  // set when the copy failed as a whole: the fork exists, with none of
+  // the source's grants
+  grantsError: z.string().optional(),
+});
+
+export type ForkResult = z.infer<typeof ForkResultSchema>;

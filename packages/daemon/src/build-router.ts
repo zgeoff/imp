@@ -8,6 +8,7 @@ import type { ApiAudit } from './audit/api-audit';
 import {
   checkAccess,
   findAccess,
+  findForkAuthority,
   findGrantAuthority,
   isAuditedProcedure,
 } from './auth/access-policy';
@@ -325,13 +326,24 @@ export function buildRouter(deps: RouterDeps) {
         return toCallerImp(context.context.caller, deps.imps.getImp(context.input.name));
       }),
 
-      // a fork gets its source's grants, as it gets its disk
+      // a fork gets its source's grants the caller could make, as it gets
+      // its disk; the answer names the rest
       fork: os.imps.fork.handler(async (context) => {
-        const imp = await deps.checkpoints.forkImp(context.input);
+        const caller = context.context.caller;
 
-        await deps.broker.createForkGrants(context.input.source, imp.name);
+        const forked = await deps.checkpoints.forkImp(context.input);
 
-        return toCallerImp(context.context.caller, imp);
+        const copied = await deps.broker.createForkGrants(
+          { id: forked.sourceId, name: context.input.source },
+          forked.imp,
+          findForkAuthority(caller),
+        );
+
+        return {
+          ...(await toCallerImp(caller, forked.imp)),
+          grantsNotCopied: copied.notCopied,
+          ...(copied.error !== null && { grantsError: copied.error }),
+        };
       }),
     },
     leases: {

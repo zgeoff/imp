@@ -19,6 +19,7 @@ import type { ImpDatabase } from '../db/open-database';
 import { toLockedImp } from '../imps/imp-lock';
 import type { ImpCheckpointHooks } from '../imps/imp-service';
 import { printLog } from '../process/print-log';
+import { readErrorMessage } from '../read-error-message';
 import type { DiskBudget } from '../storage/disk-budget';
 import { CheckpointIdTakenError } from '../storage/storage-backend';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -48,7 +49,14 @@ export interface CheckpointService {
 
   // disk only: a memory fork would duplicate entropy and IDs
   // (docs/architecture/storage.md#checkpoints-restores-and-forks)
-  readonly forkImp: (input: ForkInput) => Promise<Imp>;
+  readonly forkImp: (input: ForkInput) => Promise<ForkedImp>;
+}
+
+// the fork, and the id of the source it was checked against: its name may
+// belong to another imp by the time the grants are copied
+interface ForkedImp {
+  readonly imp: Imp;
+  readonly sourceId: string;
 }
 
 export interface CheckpointServiceDeps {
@@ -78,6 +86,19 @@ export function isValidCheckpointLabel(label: string): boolean {
 
 export function createCheckpointService(deps: CheckpointServiceDeps): CheckpointService {
   const log = deps.log ?? printLog;
+
+  // a fork its source changed under goes, by id: an imp that took its name
+  // since stays
+  const removeRefusedFork = async (name: string, forkId: string | null): Promise<void> => {
+    if (forkId === null) {
+      return;
+    }
+
+    await deps.imps.destroyImpId(forkId).catch((error: unknown) => {
+      log(`impd: ${name}: a refused fork left the imp: ${readErrorMessage(error)}`);
+    });
+  };
+
   const storage = deps.storage;
 
   const withConsistentDisk = createConsistentDisk({
@@ -263,40 +284,95 @@ export function createCheckpointService(deps: CheckpointServiceDeps): Checkpoint
         return { imp: api, policy, isIdentityResetPending: imp.isIdentityResetPending };
       });
 
-      const createForkDisk = (impId: string) =>
-        deps.imps.lockImp(input.source, async (imp) => {
-          if (input.checkpoint === undefined) {
-            await withConsistentDisk(imp, 'fork', () =>
-              storage.createImpDisk(impId, { kind: 'imp', impId: imp.id }),
-            );
+      // the fork's id once it has one, and whether its source changed
+      const made = { forkId: null as string | null, isSourceChanged: false };
 
-            return;
+      // the name may belong to another imp by now, or to none: the fork must
+      // not copy what is there
+      const requireSameSource = (imp: Readonly<ImpRecord> | null): void => {
+        if (imp === null || imp.id !== source.imp.id) {
+          made.isSourceChanged = true;
+          throw buildSourceChangedError(input.source);
+        }
+      };
+
+      const createForkDisk = async (impId: string) => {
+        made.forkId = impId;
+
+        try {
+          await deps.imps.lockImp(input.source, async (imp) => {
+            requireSameSource(imp);
+
+            if (input.checkpoint === undefined) {
+              await withConsistentDisk(imp, 'fork', () =>
+                storage.createImpDisk(impId, { kind: 'imp', impId: imp.id }),
+              );
+
+              return;
+            }
+
+            const checkpoint = await findCheckpointOrThrow(imp, input.checkpoint);
+
+            await storage.createImpDisk(impId, {
+              kind: 'checkpoint',
+              impId: imp.id,
+              checkpointId: checkpoint.id,
+            });
+          });
+        } catch (error) {
+          if (isImpNotFound(error)) {
+            requireSameSource(null);
           }
 
-          const checkpoint = await findCheckpointOrThrow(imp, input.checkpoint);
+          throw error;
+        }
+      };
 
-          await storage.createImpDisk(impId, {
-            kind: 'checkpoint',
-            impId: imp.id,
-            checkpointId: checkpoint.id,
-          });
+      try {
+        // the source's policy is in the fork's insert: it never runs more open
+        const fork = await deps.imps.createImp({
+          name: input.name,
+          image: source.imp.image,
+          vcpus: source.imp.vcpus,
+          memoryMib: source.imp.memoryMib,
+          maxMemoryMib: source.imp.maxMemoryMib,
+          policy: source.policy,
+          ...(source.imp.cpu !== undefined && {
+            cpuLimit: source.imp.cpu.limit,
+            cpuWeight: source.imp.cpu.weight,
+          }),
+          isIdentityResetPending: source.isIdentityResetPending,
+          prepareDisk: createForkDisk,
         });
 
-      // the source's policy is in the fork's insert: it never runs more open
-      return deps.imps.createImp({
-        name: input.name,
-        image: source.imp.image,
-        vcpus: source.imp.vcpus,
-        memoryMib: source.imp.memoryMib,
-        maxMemoryMib: source.imp.maxMemoryMib,
-        policy: source.policy,
-        ...(source.imp.cpu !== undefined && {
-          cpuLimit: source.imp.cpu.limit,
-          cpuWeight: source.imp.cpu.weight,
-        }),
-        isIdentityResetPending: source.isIdentityResetPending,
-        prepareDisk: createForkDisk,
-      });
+        return { imp: fork, sourceId: source.imp.id };
+      } catch (error) {
+        if (made.isSourceChanged) {
+          await removeRefusedFork(input.name, made.forkId);
+        }
+
+        throw error;
+      }
     },
   };
+}
+
+// the fork's source was destroyed, or destroyed and made again under its
+// name, between its check and its disk copy
+function buildSourceChangedError(source: string) {
+  return buildConflictError(
+    'imp',
+    source,
+    `imp ${source} changed during the fork; the fork was not made`,
+  );
+}
+
+function isImpNotFound(error: unknown): boolean {
+  if (!(error instanceof ORPCError) || error.code !== 'NOT_FOUND') {
+    return false;
+  }
+
+  const data: unknown = error.data;
+
+  return typeof data === 'object' && data !== null && Reflect.get(data, 'kind') === 'imp';
 }

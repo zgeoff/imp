@@ -33,22 +33,22 @@ the server. The boundary is the token's scope, which impd enforces. Run `imp mcp
 
 ## Tools
 
-| Tool                    | What it does                                                        | Hints       |
-| ----------------------- | ------------------------------------------------------------------- | ----------- |
-| `imp_list`              | the imps inside the guard, with their state                         | read-only   |
-| `imp_create`            | create and boot an imp (name, image, vcpus, memoryMib, httpPort)    |             |
-| `imp_destroy`           | delete an imp, its disk and its checkpoints                         | destructive |
-| `imp_sleep`             | put an imp to sleep; the next use wakes it                          | idempotent  |
-| `imp_url`               | the imp's local and tailnet URLs                                    | read-only   |
-| `imp_fork`              | a new imp from another's disk, now or at a checkpoint               |             |
-| `imp_image_list`        | the images `imp_create` can boot                                    | read-only   |
-| `imp_exec`              | run a command to its exit, with capped output and a timeout         | destructive |
-| `imp_read_file`         | read a file, as UTF-8 or base64, up to `maxBytes`                   | read-only   |
-| `imp_write_file`        | replace a file whole, through a temp file and a rename              | destructive |
-| `imp_checkpoint`        | save the imp's disk, with an optional label                         |             |
-| `imp_checkpoint_list`   | the imp's checkpoints                                               | read-only   |
-| `imp_restore`           | put the disk back to a checkpoint; later writes and memory are lost | destructive |
-| `imp_checkpoint_delete` | delete one checkpoint                                               | destructive |
+| Tool                    | What it does                                                                       | Hints       |
+| ----------------------- | ---------------------------------------------------------------------------------- | ----------- |
+| `imp_list`              | the imps inside the guard, with their state                                        | read-only   |
+| `imp_create`            | create and boot an imp (name, image, vcpus, memoryMib, httpPort)                   |             |
+| `imp_destroy`           | delete an imp, its disk and its checkpoints                                        | destructive |
+| `imp_sleep`             | put an imp to sleep; the next use wakes it                                         | idempotent  |
+| `imp_url`               | the imp's local and tailnet URLs                                                   | read-only   |
+| `imp_fork`              | a new imp from another's disk, now or at a checkpoint; names grants it did not get |             |
+| `imp_image_list`        | the images `imp_create` can boot                                                   | read-only   |
+| `imp_exec`              | run a command to its exit, with capped output and a timeout                        | destructive |
+| `imp_read_file`         | read a file, as UTF-8 or base64, up to `maxBytes`                                  | read-only   |
+| `imp_write_file`        | replace a file whole, through a temp file and a rename                             | destructive |
+| `imp_checkpoint`        | save the imp's disk, with an optional label                                        |             |
+| `imp_checkpoint_list`   | the imp's checkpoints                                                              | read-only   |
+| `imp_restore`           | put the disk back to a checkpoint; later writes and memory are lost                | destructive |
+| `imp_checkpoint_delete` | delete one checkpoint                                                              | destructive |
 
 Each result carries the data twice: as `structuredContent`, and as the same JSON in a text block. A
 failed call (impd's `NOT_FOUND`, a guard refusal, bad arguments) is a result with `isError: true`,
