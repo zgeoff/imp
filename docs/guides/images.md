@@ -273,7 +273,7 @@ What a build costs on top of a host build: about 1.5 s for the builder and its d
 pulls, which start cold in every builder (about 7.5 s for `busybox` and the frontend on a home
 link). impd logs each build's phases as `pins=… build=… image=…`.
 
-`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.32.0, for one release only: impd
+`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.33.0, for one release only: impd
 logs a warning at start and at every build. Use it only when every caller with `manage` is trusted
 with the host (the caution above).
 
