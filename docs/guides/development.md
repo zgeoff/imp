@@ -42,6 +42,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 | `mcp-oauth`      | the public MCP route: a sign-in approved with `imp oauth approve`, tools by scope, refresh replay, a removed token stopping a command, 429                                                                                                |
 | `sessions`       | detach, attach after sleep, takeover, idle and busy sessions, kill                                                                                                                                                                        |
 | `offsets`        | output offsets: a gap past the ring, exact after a wake, cold-boot causes, `wake: false`                                                                                                                                                  |
+| `session-logs`   | session logs: 1 MiB kept past the ring, through a sleep and a wake to the exit, read with the imp stopped, kept through a restore, deleted                                                                                                |
 | `services`       | `imp service` and `imp logs`: a service the proxy reaches, logs and a follow across a sleep, restarts, a reboot, `--http-port`, remove                                                                                                    |
 | `ssh`            | `ssh`, `scp`, `sftp`, forwards, a VS Code-style SOCKS forward, the broker env, the firewall                                                                                                                                               |
 | `ssh-wake`       | a login wakes a sleeping imp, a refused one does not, a connection keeps it awake                                                                                                                                                         |
@@ -73,7 +74,7 @@ way a user would; the dashboard suite drives it through a browser. The suites ru
 
 ```sh
 scripts/test-e2e.sh                          # the acceptance set: every suite
-scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
+scripts/test-e2e.sh --only fast              # the CI subset: lifecycle, checkpoints, disks, sleep, restart, mcp, offsets, session-logs, services, ssh, ssh-agent, reverse, proxy, dashboard, tokens, leases, cpu, templates, boot-templates, inner, socket, registry, jail, memory, ksm
 scripts/test-e2e.sh --only checkpoints,sleep # named suites, run in the order above
 scripts/test-e2e.sh --clean                  # wipe the dev instance's data first
 ```

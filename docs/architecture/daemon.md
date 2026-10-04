@@ -534,6 +534,76 @@ A client that needs these keeps what it received.
 agent from before `0.15.0` gives `{ continuity: 'none' }`, today's replay, and ignores `resumeFrom`.
 An impd from before offsets sends no `output`, which the client reads as `none`.
 
+### Session logs
+
+A session started with `log` keeps its output on the host, so a client reads bytes the ring no
+longer holds and the output of a generation that ended ([guide](../guides/session-logs.md)). The
+code is `packages/daemon/src/session-logs/`.
+
+**Why the host.** A log on the imp's disk, written by the agent, would be readable and writable by
+the guest's root, would go with every checkpoint, fork, template, backup and move, would roll back
+on a restore, would lose its unflushed tail on every crash, and would need a boot to read a stopped
+imp's log. On the host, impd keeps everything its tap read, through a restore too, reads without a
+boot, and keeps the log away from the guest and out of every copy of the disk.
+
+**The tap.** A session has one viewer, and an attach takes it over, so impd cannot log from the
+viewer's stream. Since protocol `0.18.0` the agent marks a session started with `log`, and
+`session.tap` reads its raw ring by offset beside the viewer ([protocol](./protocol.md#sessiontap)).
+A tap takes no input, never takes the viewer over, gets the EXIT without delivering it, and counts
+as no connection, so a logged session never keeps an imp awake. A tap more than 2 MiB behind is
+dropped as a slow viewer is.
+
+impd taps a session as soon as a start creates it, and on every look at an imp's sessions: the idle
+loop's every 2 s and `sessions.list`. A look taps each logged session that has no tap, from the end
+of its log; the ring's answer places the bytes:
+
+- `exact`: the log goes on.
+- `gap`: the next byte starts a new segment at `to`, which leaves a hole. That happens only when
+  more than 256 KiB went by untapped: an impd restart, or a tap that fell behind.
+- `generation_changed`: the logged generation ended (its end and exit come from `previous` when it
+  names it), and the tap carries the new one from its first offset.
+- `NO_SESSION`, or `BAD_REQUEST` for a session no longer logged: the generation ended.
+
+The agent holds a logged session's output while its ring could drop bytes no tap wrote out, for up
+to 5 s ([protocol](./protocol.md#sessiontap)), so the first tap after a start or a wake still finds
+every byte. A sleep's vsock reset detaches the tap, and the first look after the wake taps again. A
+generation a look no longer lists, with no tap open, ended in a cold boot; a stop or an error ends
+every live log of the imp. The tap's EXIT ends a log with its final `end` and exit code.
+
+**Files.** Each generation is a directory, `imps/<id>/session-logs/<generation>/` (mode 0700), of
+segment files `<start>.seg`, each holding the bytes from offset `start`, and `meta.json`, which
+lists each segment with the length that reached the disk. Appends go to the page cache; within a
+second impd flushes the segment, then writes the meta beside it, flushes it and renames it over the
+old one. A read on this host takes the lengths the writer holds in memory; a reopen after an impd
+crash cuts each segment back to the meta's length and removes files the meta does not name, so a
+torn tail never reads back as bytes. A segment is half of `IMP_SESSION_LOG_MAX_MIB`, so a log holds
+at least that half of its newest output; each new segment asks the
+[disk budget](./storage.md#disk-sizes) for its size, and a refusal stops the log
+(`stopped: 'disk_full'`). Past `IMP_SESSION_LOG_IMP_MAX_MIB` per imp, ended logs go oldest first,
+then the largest live log's oldest segment; with every live log down to one segment, the newest live
+log stops (`stopped: 'imp_limit'`). An imp has at most `IMP_SESSION_LOG_IMP_MAX_LIVE` live logs, as
+a forged agent can list any number of logged generations. A deleted live log leaves a tombstone,
+`session-logs/.deleted/<generation>`, which keeps every impd from tapping it again and goes once the
+generation is gone. A destroy marks the imp forgotten first, so a tap still being set up writes
+nothing after the directory is removed; an imp made again under its id, as on a move home, logs
+again, while work begun before the destroy still writes nothing. The imp limit is checked each time
+a log starts a segment, so a log that rolls at its own bound is counted too, and again after every
+sixteenth of a segment an imp's logs take, so growth within a segment passes it by little.
+
+**Trust.** The guest is not trusted. Every generation, boot id and session name an agent reports
+goes through the form the real agent gives it (32 lowercase hex characters, a lowercase UUID or
+empty, the session name rule) before impd uses it; `activity` drops a session that fails, and a
+STARTED that fails fails its stream. The session logs check all three again before they open a tap
+or touch the disk. A log's directory is checked once more when impd builds it, and must resolve to a
+child of the imp's `session-logs/`. A sweep every minute removes ended logs past
+`IMP_SESSION_LOG_MAX_AGE_DAYS` and ends the live logs of imps whose VM is gone, as after an impd
+restart.
+
+**Reads.** `sessions.readLog` reads at most 1 MiB from one segment with the ring's rules: a gap
+before the data for bytes the log does not hold, and `INVALID_RESUME` past `logEnd`. The answer's
+`data` is a `Blob`, which oRPC sends as raw bytes. A destroy closes the taps and removes the
+directory with the imp's; a move leaves the log behind, and backups do not include it.
+
 ### services: guest services
 
 The services API (`services/service-api.ts`) adds, removes, restarts and lists the guest's services

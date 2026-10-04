@@ -604,6 +604,19 @@ export function buildRouter(deps: RouterDeps) {
 
         return {};
       }),
+      logs: os.sessions.logs.handler((context) =>
+        deps.imps.listSessionLogs(context.input.name, context.input.session),
+      ),
+      readLog: os.sessions.readLog.handler((context) => {
+        const { name, ...request } = context.input;
+
+        return deps.imps.readSessionLog(name, request);
+      }),
+      deleteLog: os.sessions.deleteLog.handler(async (context) => {
+        const { name, ...target } = context.input;
+
+        return { deleted: await deps.imps.deleteSessionLogs(name, target) };
+      }),
     },
     services: {
       list: os.services.list.handler((context) => deps.imps.listServices(context.input.name)),
@@ -878,6 +891,7 @@ const SYSTEM_FEATURES = {
   execRequire: true,
   oauthGrants: true,
   secretFilesGc: true,
+  sessionLog: true,
   publicEgress: true,
 } as const;
 

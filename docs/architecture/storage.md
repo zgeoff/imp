@@ -38,18 +38,21 @@ On XFS:
   imps/<id>/snapshot/{vmstate,mem,meta.json}
   imps/<id>/watchdog/{vmstate,mem,meta.json}
   imps/<id>/checkpoints/<cid>/disk.ext4
+  imps/<id>/session-logs/<generation>/{meta.json,<start>.seg}
   jail/firecracker/<id>/root/
   tailscale/
   tls/{account.json,certificate.pem,attempts.json}
 ```
 
-`jail/` holds each jailed VM's chroot, with binds of the imp's files while it runs
-([the jailer](./daemon.md#the-jailer)). `tls/` holds the ACME account and the certificate for
-`IMP_DOMAIN` ([HTTPS](../guides/https.md#files)). `snapshot/` holds the memory of a sleeping imp;
-during a wake its `meta.json` is `meta.json.loading` ([wake](./sleep-and-wake.md#wake)). `vm.json`
-holds what its VM booted with ([sleep and wake](./sleep-and-wake.md#snapshot-identity)), and
-`watchdog/` the memory the [watchdog](./sleep-and-wake.md#the-watchdog) saved before a restart.
-[ZFS](#datasets) keeps the disk and the memory snapshot in other places.
+`session-logs/` holds impd's logs of the imp's sessions, on the host only
+([session logs](./daemon.md#session-logs)). `jail/` holds each jailed VM's chroot, with binds of the
+imp's files while it runs ([the jailer](./daemon.md#the-jailer)). `tls/` holds the ACME account and
+the certificate for `IMP_DOMAIN` ([HTTPS](../guides/https.md#files)). `snapshot/` holds the memory
+of a sleeping imp; during a wake its `meta.json` is `meta.json.loading`
+([wake](./sleep-and-wake.md#wake)). `vm.json` holds what its VM booted with
+([sleep and wake](./sleep-and-wake.md#snapshot-identity)), and `watchdog/` the memory the
+[watchdog](./sleep-and-wake.md#the-watchdog) saved before a restart. [ZFS](#datasets) keeps the disk
+and the memory snapshot in other places.
 
 ## System files
 
