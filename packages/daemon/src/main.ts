@@ -385,7 +385,10 @@ async function main(): Promise<void> {
     releaseName: async () => {
       await tailnetNames?.runSync();
     },
+
+    // the received disk counts here now; the source's ImpRemoved counts there
     onCommitted: () => {
+      diskUsage.requestRefresh();
       void tailnetNames?.runSync();
     },
     now: Date.now,
