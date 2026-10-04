@@ -518,6 +518,60 @@ test('started and exit are the same promise on every read, and a late write is C
   expect(rejection).toMatchObject({ code: 'CLOSED' });
 });
 
+// a command whose exit arrives with its start, as a fast one over a slow
+// link does: run must still return its exit and output (atc #273)
+test('closing the stdin of a command that already exited does nothing, and run still returns', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['fail']);
+
+  await handle.exit;
+
+  await handle.closeStdin();
+
+  const late = await ctx.client.run('dev', ['fail'], { stdin: 'unread' });
+
+  expect(late.code).toBe(3);
+  expect(decoder.decode(late.stdout)).toBe('out');
+  expect(decoder.decode(late.stderr)).toBe('err');
+});
+
+// impd, as Bun serves it, closes a socket that sends one frame over 16 MiB
+// (atc #273: an 88 MB tar on stdin)
+test('run sends a stdin over 16 MiB in frames impd takes', async () => {
+  await using ctx = await setupExecTest();
+
+  const stdin = 'a'.repeat(17 * 1024 ** 2);
+
+  const result = await ctx.client.run('dev', ['cat'], { stdin });
+
+  const writes = ctx.input.filter((entry) => entry !== 'eof');
+
+  expect(result.code).toBe(0);
+  expect(result.stdout.byteLength).toBe(stdin.length);
+  expect(Math.max(...writes.map((entry) => entry.length))).toBeLessThanOrEqual(1024 ** 2);
+});
+
+test('a write after the session failed rejects with why it failed, not CLOSED', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['wait']);
+
+  await handle.started;
+
+  ctx.closeExecSessions();
+
+  await handle.exit.catch(() => null);
+
+  const rejections = await Promise.all([
+    handle.write('late').catch((error: unknown) => error),
+    handle.closeStdin().catch((error: unknown) => error),
+  ]);
+
+  expect(rejections[0]).toMatchObject({ code: 'RESTARTING' });
+  expect(rejections[1]).toBeUndefined();
+});
+
 test('a refused ticket with a good token is UNAUTHORIZED and names the ticket', async () => {
   await using ctx = await setupExecTest();
 
