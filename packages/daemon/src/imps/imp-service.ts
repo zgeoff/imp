@@ -69,6 +69,9 @@ type ResourceListener = (deltas: readonly ResourceDelta[]) => void;
 // imp's lifecycle lock with a fresh record; the other hooks take that record.
 export interface ImpCheckpointHooks {
   readonly createImp: ImpCommands['createImp'];
+
+  // a fork refused part way, whose source changed under it
+  readonly destroyImpId: ImpCommands['destroyImpId'];
   readonly lockImp: <T>(name: string, action: (imp: LockedImp) => Promise<T>) => Promise<T>;
 
   // by id, with no MOVING check: a move's commit and abort, which settle the

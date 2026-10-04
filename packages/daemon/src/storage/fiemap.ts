@@ -94,7 +94,7 @@ export async function readExtents(path: string, deadline: number): Promise<Exten
   const extents: Extent[] = [];
 
   try {
-    for (let start = 0; ; ) {
+    for (let start = 0; ;) {
       if (Date.now() > deadline) {
         return { extents, isComplete: false };
       }

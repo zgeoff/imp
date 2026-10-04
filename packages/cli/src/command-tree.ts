@@ -4,6 +4,7 @@ import { backupCommand } from './commands/backup';
 import { checkpointCommand, checkpointsCommand, restoreCommand } from './commands/checkpoints';
 import { cpCommand } from './commands/cp';
 import { setCommand, topCommand } from './commands/cpu';
+import { dbCommand } from './commands/db';
 import { diskCommand } from './commands/disk';
 import { eventsCommand } from './commands/events';
 import { exposeCommand, unexposeCommand } from './commands/expose';
@@ -29,6 +30,7 @@ import { infoCommand } from './commands/info';
 import { mcpCommand } from './commands/mcp';
 import { moveCommand } from './commands/move';
 import { netCommand } from './commands/networks';
+import { oauthCommand } from './commands/oauth';
 import { proxyCommand } from './commands/proxy';
 import {
   auditCommand,
@@ -83,6 +85,7 @@ export const mainCommand = defineCommand({
     move: moveCommand,
     disk: diskCommand,
     gc: gcCommand,
+    db: dbCommand,
     backup: backupCommand,
     image: imageCommand,
     template: templateCommand,
@@ -95,6 +98,7 @@ export const mainCommand = defineCommand({
     events: eventsCommand,
     info: infoCommand,
     mcp: mcpCommand,
+    oauth: oauthCommand,
     login: loginCommand,
     host: hostCommand,
     hosts: hostsCommand,

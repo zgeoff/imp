@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCommand } from 'citty';
 import { checkpointCommand } from './checkpoints';
+import { gcCommand } from './gc';
 import { imageCommand } from './image';
 import { consoleCommand, newCommand, readConsoleSession } from './imps';
+import { oauthCommand } from './oauth';
 import { auditCommand, secretCommand } from './secrets';
 import { sessionsCommand } from './sessions';
 import { tokenCommand } from './tokens';
@@ -224,4 +226,46 @@ test('token key add refuses a private key, an empty file and a missing one', asy
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('oauth commands refuse a redirect URI, a code or a pattern impd would refuse', async () => {
+  const stderr = setupStderr();
+
+  const cases: readonly (readonly [readonly string[], string])[] = [
+    [
+      ['client', 'add', 'conn', '--redirect-uri', 'http://client.example/cb'],
+      'imp: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not http://client.example/cb',
+    ],
+    [
+      ['client', 'set', 'conn', '--redirect-uri', 'https://client.example/cb#x'],
+      'imp: --redirect-uri takes https URLs, or http on a loopback host, with no fragment; not https://client.example/cb#x',
+    ],
+    [['approve', 'ABCD-EFG0'], 'imp: ABCD-EFG0 is not a sign-in code; it looks like ABCD-EFGH'],
+    [
+      ['approve', 'ABCD-EFGH', '--scope', 'admin'],
+      'imp: --scope must be one of read, exec, manage',
+    ],
+    [
+      ['approve', 'ABCD-EFGH', '--imps', 'd*v'],
+      'imp: --imps takes imp names, or a name prefix and a trailing *, such as dev-*; not d*v',
+    ],
+  ];
+
+  for (const [rawArgs, message] of cases) {
+    process.exitCode = 0;
+
+    await runCommand(oauthCommand, { rawArgs: [...rawArgs] });
+
+    expect(stderr).toHaveBeenCalledWith(message);
+    expect(process.exitCode).toBe(2);
+  }
+});
+
+test('gc --secret-files without --orphans fails before it deletes anything', async () => {
+  const stderr = setupStderr();
+
+  await runCommand(gcCommand, { rawArgs: ['--secret-files'] });
+
+  expect(stderr).toHaveBeenCalledWith('imp: --secret-files goes with --orphans');
+  expect(process.exitCode).toBe(2);
 });

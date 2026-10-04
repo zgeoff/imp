@@ -2,8 +2,8 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { ImageSourceSchema } from '@imp/api';
-import { sql } from 'kysely';
 import * as z from 'zod';
+import { writeConsistentCopy } from '../db/database-copy';
 import type { ImpDatabase } from '../db/open-database';
 
 const CopyImpSchema = z.object({
@@ -73,7 +73,7 @@ export async function readDatabaseCopy(db: ImpDatabase, path: string): Promise<D
   mkdirSync(dirname(path), { recursive: true });
   rmSync(path, { force: true });
 
-  await sql`VACUUM INTO ${path}`.execute(db);
+  await writeConsistentCopy(db, path);
 
   const copy = new Database(path, { readonly: true });
 

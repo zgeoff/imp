@@ -2,8 +2,11 @@ export type {
   ApiCall,
   Checkpoint,
   DetachReason,
+  ExecRequirement,
   Identity,
   Image,
+  ImageBuildPhase,
+  ImageBuildProgress,
   Imp,
   ImpEvent,
   ImpState,
@@ -57,7 +60,7 @@ export { InvalidResumeError } from './exec/invalid-resume-error';
 export { InvalidStateError } from './exec/invalid-state-error';
 export type { InvalidStateData } from './exec/invalid-state-error';
 export { NoSessionError } from './exec/no-session-error';
-export { CONSOLE_SHELL } from '@imp/api';
+export { CONSOLE_SHELL, EXEC_REQUIREMENTS } from '@imp/api';
 
 export type {
   AttachOptions,

@@ -44,8 +44,8 @@ release, so pick the release in the image you take it from:
 <!-- x-release-please-start-version -->
 
 ```sh
-docker pull ghcr.io/zgeoff/imp-host:0.29.0
-docker run --rm ghcr.io/zgeoff/imp-host:0.29.0 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+docker pull ghcr.io/zgeoff/imp-host:0.31.0
+docker run --rm ghcr.io/zgeoff/imp-host:0.31.0 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
 bash upgrade.sh
 ```
 
@@ -200,14 +200,89 @@ impd removes what a crash leaves at start and every hour
 - Orphans come from a create or a checkpoint that crashed before its row, or from a lost or replaced
   database. After a database restore, check the list before you remove anything: each orphan may be
   an imp.
+- `imp gc` also lists, as kind `secrets`, each directory of secret values that impd kept aside at
+  start, with how many files it holds ([value files](./connectors.md#value-files)). After a database
+  restore they may hold the only copy of a value.
 - `imp gc --orphans --dry-run` lists what `imp gc --orphans` would retire.
 
 **CAUTION:** `imp gc --orphans` deletes every disk, image, checkpoint and memory snapshot the
 database does not name. It cannot be undone. Run it with `--dry-run` first, and only when no orphan
 holds data you need.
 
-The API is `system.gc` with `{ dryRun?, orphans? }`. It returns `dryRun`, `dropped` (each `kind` and
-`id`) and `kept` (each orphan's `kind`, `id`, `location`, `bytes`, `createdAt` and `snapshots`).
+**CAUTION:** `imp gc --orphans --secret-files` also deletes every directory of secret values kept
+aside. It cannot be undone. Recover the values you need with `imp secret add` first; `--orphans`
+alone leaves these directories.
+
+The API is `system.gc` with `{ dryRun?, orphans?, secretFiles?, removeSecretFiles? }`. It returns
+`dryRun`, `dropped` (each `kind` and `id`) and `kept` (each orphan's `kind`, `id`, `location`,
+`bytes`, `createdAt` and `snapshots`). Kind `secrets` comes only with `secretFiles` or
+`removeSecretFiles`, which `system.info` reports as `features.secretFilesGc`: its entries carry
+`files`, and only a call with `removeSecretFiles` and `orphans` deletes them. An older impd drops
+both fields, and lists and deletes none.
+
+## Database copy and restore
+
+impd keeps its state in `<data>/db/imp.sqlite` (`<data>` is `IMP_DATA_DIR`), in WAL mode. A `cp` or
+`tar` of that file and its `-wal` and `-shm` files while impd runs can be torn. Take the copy
+through impd instead:
+
+```sh
+imp db copy before-upgrade
+```
+
+- It writes `<data>/db-copies/before-upgrade.sqlite` on the impd host with `VACUUM INTO`, in one
+  read transaction, so the copy is whole while impd runs and writes. Without a name it is
+  `imp-<UTC time>`, such as `imp-20261004-061233`. A name that is taken fails with `CONFLICT`.
+- The name has the form of an imp name. The API never takes a host path.
+- The file is `0600` and the directory `0700`: the copy holds every token's hash, every grant and
+  every imp. Move it off the host, as root, as you would the data directory.
+- It prints what it read back from the copy. `--json`, and the API, return exactly these fields:
+  `path`, `sizeBytes`, `lastMigration` (the schema version, the last migration the copy holds),
+  `impVersion` (the impd that wrote it), `createdAt`, and `integrity`: `PRAGMA integrity_check` on
+  the copy, `ok` or its first problem. impd keeps a copy whose check fails; do not restore it.
+- It needs a `manage` token with no imp patterns, and leaves a row in the API audit log. The API is
+  `system.copyDatabase` with `{ name? }`. A client checks `features.databaseCopy` in `system.info()`
+  first; an impd older than 0.30.0 lacks the call.
+
+### Restore
+
+**CAUTION:** At start, impd deletes each secret value file in `<data>/secrets` that no row of the
+database names. A copy older than a secret has no row for it, so the first start on that copy
+deletes the secret's value, and it cannot be recovered from the host. Copy `<data>/secrets` aside
+before you restore, and expect each secret added after the copy to be lost until you add it again
+with `imp secret add`.
+
+1. Copy `<data>/secrets` aside.
+2. Stop impd with a full stop that sleeps the imps (`systemctl stop imp-host`, or
+   `docker compose stop`), not a restart: a restart leaves the VMs running for the new impd to
+   adopt.
+3. Copy `<data>/db/imp.sqlite` with its `-wal` and `-shm` files to a directory outside `<data>/db`,
+   in case you need to go back. With impd stopped, the three files agree.
+4. Remove `<data>/db/imp.sqlite-wal` and `<data>/db/imp.sqlite-shm`. A WAL file left beside a
+   different database can be replayed into it, and corrupt it.
+5. Put the copy in place as `<data>/db/imp.sqlite`, owned and moded as the file it replaces.
+6. Start impd, and read its log.
+
+What the restored database means at start:
+
+- **Schema.** A copy from an older impd migrates forward on start. A copy from a newer impd is
+  refused, and impd does not start:
+  `the database is at migration <copy's>, newer than this impd's last, <impd's>`. Start the impd
+  that wrote the copy, or a newer one.
+- **Storage the copy does not name** (imps, images and checkpoints made after the copy) is kept as
+  orphans, never deleted. Start logs each one as `impd: storage: kept orphan …`, and `imp gc` lists
+  them ([storage cleanup](#storage-cleanup)). Each may be an imp you still need. Retire them with
+  `imp gc --orphans` only after you check the list.
+- **Imps whose storage is gone** (removed after the copy) keep their rows. impd checks each imp's VM
+  and memory snapshot at start, and marks one it cannot resume as stopped. Its next start fails, and
+  the imp shows `error` with the missing disk. `imp rm` removes the row.
+- **Tokens** are as they were at the copy. A token made later no longer works. A token deleted later
+  works again, so delete it once more. The SSH keys bound to tokens follow their tokens. The root
+  token in `<data>/token` and the keys in `authorized_keys` are files, which a restore does not
+  change.
+- **Secrets and grants** are as they were at the copy. The value of a secret added later is deleted
+  at start (see the caution above). A secret deleted later is back as a row with no value: re-add it
+  with `imp secret add <name> --replace`, or delete it.
 
 ## Logs
 

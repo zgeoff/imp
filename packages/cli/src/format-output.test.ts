@@ -266,6 +266,22 @@ test('a gc lists the orphans it kept, with their size, age and snapshots', () =>
   ]);
 });
 
+test('a gc shows how many files each directory of kept secret values holds', () => {
+  const kept = {
+    kind: 'secrets',
+    id: '2026-10-04T05-30-00.000Z',
+    location: '/var/lib/imp/secrets/.orphaned/2026-10-04T05-30-00.000Z',
+    bytes: 8,
+    createdAt: new Date('2026-10-04T05:30:00.000Z'),
+    snapshots: [],
+    files: ['late.b2', '.crashed.c3'],
+  } as const;
+
+  expect(formatGc({ dryRun: false, dropped: [], kept: [kept] })).toContain(
+    '0 MiB  2026-10-04T05:30:00.000Z  2 files',
+  );
+});
+
 test('the imp list shows what a destroy frees and what the imp shares', () => {
   const imp = {
     id: 'i1',

@@ -69,21 +69,21 @@ export function createPublicLimits(now: () => number = Date.now): PublicLimits {
   };
 }
 
-// A token bucket per imp: false when the imp has none left
-function createBuckets(
+// A token bucket per key: false when the key has none left. Keys must be
+// few, such as public imps or known clients: the map keeps one per key.
+export function createBuckets(
   spec: Readonly<{ size: number; refillMs: number }>,
   now: () => number,
-): (impId: string) => boolean {
-  // one bucket per public imp at most, so the map stays small
+): (key: string) => boolean {
   const buckets = new Map<string, Bucket>();
 
-  return (impId) => {
+  return (key) => {
     const at = now();
-    const bucket = buckets.get(impId) ?? { tokens: spec.size, at };
+    const bucket = buckets.get(key) ?? { tokens: spec.size, at };
     const refilled = Math.min(spec.size, bucket.tokens + (at - bucket.at) / spec.refillMs);
     const isTaken = refilled >= 1;
 
-    buckets.set(impId, { tokens: isTaken ? refilled - 1 : refilled, at });
+    buckets.set(key, { tokens: isTaken ? refilled - 1 : refilled, at });
 
     return isTaken;
   };

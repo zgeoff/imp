@@ -477,6 +477,95 @@ export const MIGRATIONS: Record<string, Migration> = {
     },
   },
 
+  // the sessions started with `require: ['broker']`, by execution generation
+  // (docs/guides/connectors.md#requiring-the-broker)
+  '021_add_broker_sessions': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('broker_sessions')
+        .addColumn('imp_id', 'text', (c) => c.notNull().references('imps.id').onDelete('cascade'))
+        .addColumn('generation', 'text', (c) => c.notNull())
+        .addColumn('at', 'integer', (c) => c.notNull())
+        .addPrimaryKeyConstraint('broker_sessions_pk', ['imp_id', 'generation'])
+        .execute();
+    },
+  },
+
+  // OAuth for the public MCP route (#127): the clients an operator adds,
+  // the grants people approve, and each grant's access and refresh tokens.
+  // 021 is #177's broker sessions.
+  '022_add_mcp_oauth': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('oauth_clients')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('name', 'text', (c) => c.notNull().unique())
+        .addColumn('redirect_uris', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+
+      await db.schema
+        .createTable('oauth_grants')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('client_id', 'text', (c) => c.notNull().references('oauth_clients.id'))
+        .addColumn('token_id', 'text', (c) => c.notNull().references('tokens.id'))
+        .addColumn('scope', 'text', (c) => c.notNull())
+        .addColumn('imps', 'text')
+        .addColumn('resource', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .addColumn('last_used_at', 'integer')
+        .execute();
+
+      await db.schema
+        .createTable('oauth_tokens')
+        .addColumn('id', 'text', (c) => c.primaryKey())
+        .addColumn('grant_id', 'text', (c) => c.notNull().references('oauth_grants.id'))
+        .addColumn('kind', 'text', (c) => c.notNull())
+        .addColumn('secret_hash', 'text', (c) => c.notNull())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .addColumn('expires_at', 'integer', (c) => c.notNull())
+        .addColumn('spent_at', 'integer')
+        .execute();
+
+      await db.schema
+        .createIndex('oauth_grants_token_id')
+        .on('oauth_grants')
+        .column('token_id')
+        .execute();
+
+      await db.schema
+        .createIndex('oauth_grants_client_id')
+        .on('oauth_grants')
+        .column('client_id')
+        .execute();
+
+      await db.schema
+        .createIndex('oauth_tokens_grant_id')
+        .on('oauth_tokens')
+        .column('grant_id')
+        .execute();
+
+      await db.schema
+        .createIndex('oauth_tokens_expires_at')
+        .on('oauth_tokens')
+        .column('expires_at')
+        .execute();
+    },
+  },
+
+  // each value file a delete or a replace displaced, written in its
+  // transaction and cleared once the file is gone, so a crash between the
+  // two leaves a record the next start finishes
+  '023_add_secret_file_removals': {
+    async up(db: Kysely<DatabaseSchema>) {
+      await db.schema
+        .createTable('secret_file_removals')
+        .addColumn('value_file', 'text', (c) => c.primaryKey())
+        .addColumn('created_at', 'integer', (c) => c.notNull())
+        .execute();
+    },
+  },
+
   // image builders (#156): an imp impd made for one build, which only rm
   // reaches and which goes at the build's end or impd's next start
   '024_add_imp_kind': {
@@ -502,6 +591,8 @@ const PROVIDER: MigrationProvider = {
 };
 
 export async function runMigrations(db: Kysely<DatabaseSchema>): Promise<void> {
+  await requireKnownMigrations(db);
+
   const migrator = new Migrator({ db, provider: PROVIDER });
 
   const result = await migrator.migrateToLatest();
@@ -516,6 +607,36 @@ export async function runMigrationsTo(db: Kysely<DatabaseSchema>, name: string):
   const result = await migrator.migrateTo(name);
 
   requireMigrated(result);
+}
+
+// A database a newer impd migrated holds migrations this one lacks: refused
+// before anything runs, naming both schema versions, where kysely's own
+// refusal names only the missing migration
+async function requireKnownMigrations(db: Kysely<DatabaseSchema>): Promise<void> {
+  const table = await sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kysely_migration'
+  `.execute(db);
+
+  if (table.rows.length === 0) {
+    return;
+  }
+
+  const executed = await sql<{ name: string }>`SELECT name FROM kysely_migration`.execute(db);
+
+  const unknown = executed.rows
+    .map((row) => row.name)
+    .filter((name) => !Object.hasOwn(MIGRATIONS, name));
+
+  if (unknown.length === 0) {
+    return;
+  }
+
+  const newest = unknown.toSorted().at(-1) ?? '';
+  const known = Object.keys(MIGRATIONS).toSorted().at(-1) ?? '';
+
+  throw new Error(
+    `the database is at migration ${newest}, newer than this impd's last, ${known}: start the impd that wrote it or a newer one, or restore an older database copy (docs/guides/operations.md#database-copy-and-restore)`,
+  );
 }
 
 function requireMigrated(result: MigrationResultSet): void {

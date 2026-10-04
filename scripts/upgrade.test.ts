@@ -83,6 +83,12 @@ interface Host {
   readonly dockerGid?: string;
 }
 
+// The pulls the upgrade ran, by their command: the log also holds paths, in
+// which the word may appear
+function listPulls(calls: string): string[] {
+  return calls.split('\n').filter((call) => call.startsWith('docker pull '));
+}
+
 // Fakes docker, systemctl and curl: each call lands in calls, the running
 // container is image sha256:old, the pulled one sha256:new, and the new
 // image's unit is host.newUnit.
@@ -634,7 +640,7 @@ test('an env file that sets IMP_HOST_IMAGE empty is refused before anything chan
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain('imp-host.env sets IMP_HOST_IMAGE= empty');
   expect(result.envFile).toBe(envFile);
-  expect(result.calls).not.toContain('pull');
+  expect(listPulls(result.calls)).toEqual([]);
   expect(result.calls).not.toContain('systemctl');
 });
 
@@ -711,7 +717,7 @@ test('without compose config, a .env image from other variables is refused befor
 
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain('sets IMP_HOST_IMAGE from other variables');
-  expect(result.calls).not.toContain('pull');
+  expect(listPulls(result.calls)).toEqual([]);
   expect(result.composeEnv).toBe(composeEnv);
 });
 

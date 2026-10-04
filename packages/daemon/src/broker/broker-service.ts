@@ -1,6 +1,14 @@
 import type { Socket } from 'node:net';
 import { join } from 'node:path';
-import type { AuditEntry, BrokerRule, EgressMode, Secret, SecretAdded, SecretKind } from '@imp/api';
+import type {
+  AuditEntry,
+  BrokerRule,
+  EgressMode,
+  GrantNotCopied,
+  Secret,
+  SecretAdded,
+  SecretKind,
+} from '@imp/api';
 import { ORPCError } from '@orpc/server';
 import {
   buildConflictError,
@@ -11,6 +19,7 @@ import {
 import type { Config } from '../config';
 import { listAuditEntries, writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';
+import { subscribeImpWrites } from '../db/imp-write-feed';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -20,15 +29,18 @@ import {
   createSecret,
   findBrokerPeer,
   listAllGrantedRules,
+  listFileRemovals,
   listGrantNames,
   listGrantedRules,
   listSecrets,
   listValueFiles,
   removeCheckedGrant,
+  removeFileRemoval,
   removeSecret,
   upsertSecret,
 } from '../db/secrets';
 import type {
+  ForkAuthority,
   GrantAuthority,
   GrantClash,
   GrantedRule,
@@ -61,7 +73,7 @@ import {
   createGuestTrust,
   runBundleInstall,
 } from './guest-trust';
-import type { InstallBundle, TrustedImp } from './guest-trust';
+import type { BrokerExecEnv, InstallBundle, TrustedImp } from './guest-trust';
 import { buildValueFile, createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
@@ -79,6 +91,20 @@ interface AddSecretInput {
   readonly rules?: readonly BrokerRule[] | undefined;
   readonly replace?: boolean | undefined;
   readonly rebind?: boolean | undefined;
+}
+
+// what a fork's copy of its source's grants did: the grants it skipped, and
+// a message when it copied none because the copy failed as a whole
+interface ForkGrantsReport {
+  readonly notCopied: readonly GrantNotCopied[];
+  readonly error: string | null;
+}
+
+// an imp by id, not by name, which another imp may take meanwhile; the
+// name is for the log
+interface ForkEnd {
+  readonly id: string;
+  readonly name: string;
 }
 
 export interface Broker {
@@ -108,14 +134,17 @@ export interface Broker {
     patterns: readonly string[] | null,
   ) => Promise<AuditEntry[]>;
 
-  // a fork gets its source's grants, but none that clashes with a grant it
-  // has by then; a skip or a failure is logged, not thrown, as the fork
-  // exists by then
-  readonly createForkGrants: (fromImpName: string, toImpName: string) => Promise<void>;
+  // as db createForkGrants; a skip or a failure is logged and reported,
+  // not thrown, as the fork exists by then
+  readonly createForkGrants: (
+    source: Readonly<ForkEnd>,
+    fork: Readonly<ForkEnd>,
+    authority: Readonly<ForkAuthority> | null,
+  ) => Promise<ForkGrantsReport>;
 
   // the variables for an exec in this imp: none without a grant, or when
-  // the CA could not be put in the guest
-  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  // the CA could not be put in this boot of the guest
+  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
 
   // drops terminators no grant covers and forgets destroyed imps; logs a
   // failure rather than throwing
@@ -235,11 +264,19 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
   const files = deps.secretFiles ?? createSecretFiles(config.dataDir);
 
-  // a value no row names: a write whose row never came, or a file a replace
-  // or a delete displaced and impd stopped before removing
   const valueFiles = await listValueFiles(db);
+  const pending = await removeRecordedFiles(db, files, valueFiles, log);
 
-  files.removeExcept(valueFiles);
+  // A value no row and no record names is kept aside, not deleted: it may be
+  // a secret added after the database copy a restore put back, or a write
+  // whose row never came. A record that failed again keeps its file here.
+  const orphans = files.keepOrphansExcept(new Set([...valueFiles, ...pending]), new Date());
+
+  for (const file of orphans.files) {
+    log(
+      `impd: broker: kept secret value file ${file}, which no database row names, in ${orphans.dir ?? ''}`,
+    );
+  }
 
   const resolveUpstream = createUpstreamResolver(config.brokerTestUpstreams, log);
 
@@ -248,6 +285,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     deps.installBundle ?? runBundleInstall,
     log,
   );
+
+  // a stop, sleep or halt ends the imp's boot, even if its pid comes back
+  const unwatch = subscribeImpWrites(db, (write) => {
+    if (write.kind === 'added' || write.kind === 'changed') {
+      trust.observe(write.imp);
+    }
+  });
 
   const findRule = async (impId: string, host: string): Promise<GrantedRule | undefined> => {
     const rules = await listGrantedRules(db, impId);
@@ -365,11 +409,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     }
   };
 
-  // the exact file the commit displaced; a failure leaves it to the sweep
-  // at the next start
-  const removeDisplacedFile = (file: string): void => {
+  // the exact file the commit displaced, then its record; a failure leaves
+  // both to the next start
+  const removeDisplacedFile = async (file: string): Promise<void> => {
     try {
       files.remove(file);
+
+      await removeFileRemoval(db, file);
     } catch (error) {
       log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
     }
@@ -415,8 +461,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       );
 
       if (saved.oldValueFile !== null) {
-        removeDisplacedFile(saved.oldValueFile);
-
+        await removeDisplacedFile(saved.oldValueFile);
         await applyGrants();
       }
 
@@ -444,8 +489,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         throw buildNotFoundError('secret', name);
       }
 
-      removeDisplacedFile(valueFile);
-
+      await removeDisplacedFile(valueFile);
       await applyGrants();
     },
 
@@ -515,20 +559,31 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       return listAuditEntries(db, imp?.id ?? null, Math.min(limit, 1000), patterns);
     },
 
-    createForkGrants: async (fromImpName, toImpName) => {
+    createForkGrants: async (source, fork, authority) => {
       try {
-        const [from, to] = await Promise.all([requireImp(fromImpName), requireImp(toImpName)]);
-        const skipped = await createForkGrants(db, from.id, to.id);
+        const outcome = await createForkGrants(db, source.id, fork.id, authority);
 
-        for (const name of skipped) {
+        if (outcome.kind === 'no-token') {
           log(
-            `impd: ${toImpName}: forked without grant ${name} of ${fromImpName}: it has another credential for that host`,
+            `impd: ${fork.name}: forked without the grants of ${source.name}: the token was removed`,
+          );
+
+          return { notCopied: [], error: FORK_TOKEN_GONE };
+        }
+
+        for (const skipped of outcome.notCopied) {
+          log(
+            `impd: ${fork.name}: forked without grant ${skipped.secret} of ${source.name}: ${FORK_SKIP_CAUSES[skipped.reason]}`,
           );
         }
+
+        return { notCopied: outcome.notCopied, error: null };
       } catch (error) {
         log(
-          `impd: ${toImpName}: forked without the grants of ${fromImpName}: ${readErrorMessage(error)}`,
+          `impd: ${fork.name}: forked without the grants of ${source.name}: ${readErrorMessage(error)}`,
         );
+
+        return { notCopied: [], error: FORK_COPY_FAILED };
       }
     },
 
@@ -536,13 +591,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       const granted = await listGrantedRules(db, imp.id);
 
       if (granted.length === 0) {
-        return [];
+        return { kind: 'ungranted' };
       }
 
       const trusted: TrustedImp = { id: imp.id, name: imp.name, pid: imp.pid };
 
-      if (!(await trust.ensure(trusted, vsockPath))) {
-        return [];
+      const outcome = await trust.ensure(trusted, vsockPath);
+
+      if (!outcome.installed) {
+        return { kind: 'untrusted', detail: outcome.detail };
       }
 
       const gateway = deriveSlotAddress(imp.slot, {
@@ -550,11 +607,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         portBase: config.portBase,
       }).hostIp;
 
-      return buildBrokerEnv({
+      const env = buildBrokerEnv({
         proxyUrl: `http://${gateway}:${String(state.port)}`,
         placeholders: listPlaceholderEnv(granted.map((entry) => entry.kind)),
         placeholder: PLACEHOLDER,
       });
+
+      return { kind: 'ready', env };
     },
 
     applyGrants,
@@ -585,10 +644,42 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     stop: async () => {
+      unwatch();
+
       await state.front?.stop();
       await terminators.stop();
     },
   };
+}
+
+// Removes each file a committed delete or replace displaced and impd stopped
+// before removing, then its record; returns the files whose removal failed
+// again, whose records stay for the next start. A file a row names stays.
+async function removeRecordedFiles(
+  db: ImpDatabase,
+  files: Pick<SecretFiles, 'remove'>,
+  valueFiles: ReadonlySet<string>,
+  log: (message: string) => void,
+): Promise<string[]> {
+  const recorded = await listFileRemovals(db);
+
+  const failed: string[] = [];
+
+  for (const file of recorded) {
+    try {
+      if (!valueFiles.has(file)) {
+        files.remove(file);
+      }
+
+      await removeFileRemoval(db, file);
+    } catch (error) {
+      failed.push(file);
+
+      log(`impd: broker: could not remove an old secret value file: ${readErrorMessage(error)}`);
+    }
+  }
+
+  return failed;
 }
 
 function buildClashError(impName: string, secretName: string, clash: Readonly<GrantClash>) {
@@ -606,6 +697,20 @@ function buildBindingChangedError(name: string) {
     data: { kind: 'secret', name, reason: 'binding_changed' },
   });
 }
+
+const FORK_SKIP_CAUSES: Readonly<Record<GrantNotCopied['reason'], string>> = {
+  'not-grantable': 'the caller may not grant it',
+  clash: 'it has another credential for that host',
+  'no-secret': 'the secret is gone',
+};
+
+// what a fork answers when its copy made no grant at all; the cause of a
+// failure stays in impd's log
+const FORK_TOKEN_GONE =
+  "the token behind this fork was removed, so it got none of the source's grants";
+
+const FORK_COPY_FAILED =
+  "the source's grants could not be copied, so the fork has none; impd's log has the cause";
 
 // the token behind the call was removed after its access check
 function buildTokenGoneError() {

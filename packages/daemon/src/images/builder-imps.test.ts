@@ -375,12 +375,9 @@ test('no client names an image imp-builder, which is impd’s', async () => {
 
   const signal = new AbortController().signal;
 
-  const building = ctx.images.buildImageFromContext(
-    '/nowhere.tar',
-    BUILDER_IMAGE,
-    undefined,
+  const building = ctx.images.buildImageFromContext('/nowhere.tar', BUILDER_IMAGE, undefined, {
     signal,
-  );
+  });
 
   const refusals = await Promise.all([
     readRejection(app.client.images.add({ ref: 'busybox:latest', name: BUILDER_IMAGE })),

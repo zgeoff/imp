@@ -10,11 +10,13 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
+| `coder/` → `imp/coder`          | the published base + Claude Code at a pinned version, no Node            |
 | `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
 ```sh
 imp image build images/dev --name dev       # FROM the published base, by digest
+imp image build images/coder --name coder   # or add the published imp-coder, below
 imp image build images/examples/hello --name hello
 imp image build images/base --name base     # optional: your own imp/base
 ```
@@ -24,6 +26,25 @@ a provenance attestation. A published tag never moves, but pin it by digest anyw
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
 `gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
 from ([releasing](../../RELEASING.md#what-a-release-ships)).
+
+## The coder image
+
+Each release also publishes `images/coder` as `ghcr.io/zgeoff/imp-coder:X.Y.Z`, linux/amd64 only,
+with a provenance attestation, so a host runs a coding agent without a build:
+
+```sh
+imp image add ghcr.io/zgeoff/imp-coder:X.Y.Z@sha256:… --name coder
+imp new work --image coder
+```
+
+It is the published base by digest plus the Claude Code binary at the exact version its Dockerfile
+pins, in `/usr/local/bin/claude`, checked against the sha256 from Anthropic's signed release
+manifest. It has no Node: the binary does not need it. The binary is owned by root in
+`/usr/local/bin`, which is what pins the version; `DISABLE_UPDATES=1` in the image keeps updates off
+by default. A release builds it FROM the base its Dockerfile pins, which is the base of an earlier
+release: the FROM line is a literal digest, since a build of the same release's base has no digest
+until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
+gives the steps to check a new Claude Code version.
 
 ## Add an image
 
@@ -70,18 +91,42 @@ digest as `images/dev` names it, works on both.
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
   `.dockerignore` is an ordinary file, and the ignore file can leave itself out. The Dockerfile
   always goes, because docker reads it from the context, so `COPY .` copies it even when the ignore
-  file matches it. Symlinks stay links, and files keep their modes. A progress line shows on a
-  terminal.
+  file matches it. Symlinks stay links, and files keep their modes. On a terminal, a progress line
+  shows the upload, then how long impd has built.
 - **The stream.** The tar goes out as it is made, to `POST /images/build`, with its exact length as
   the Content-Length. Neither the CLI nor impd holds it in memory. impd writes it to a temp file
   under `<IMP_DATA_DIR>/uploads`, builds from it, and deletes it. It clears that directory when it
   starts. When the client goes, impd ends the build request, which stops the build on the engine,
   and frees its slot and its disk room.
+- **The answer.** A client that sends `Accept: application/x-ndjson` gets the answer as a stream,
+  one JSON event per line. impd sends the headers and a first event as soon as it takes the build,
+  and a progress event every 15 s and at each new phase. The last event holds the image or the
+  error:
+
+  ```json
+  {"type":"progress","phase":"upload","elapsedMs":0}
+  {"type":"progress","phase":"build","elapsedMs":15000}
+  {"type":"image","image":{"name":"dev","ref":"imp/dev:latest","...":"..."}}
+  ```
+
+  An error ends the stream as `{"type":"error","code":"...","message":"..."}`, with the code an oRPC
+  call would give. A client skips an event type it does not know. The stream exists because a
+  client's fetch gives up on a response that stays silent: Bun's fetch (1.4.2) after 360 s without a
+  byte, before the headers or between two chunks, and `timeout: false` does not lift that. Node's
+  fetch (undici) waits 300 s for the headers (`headersTimeout`) and 300 s between two chunks of the
+  body (`bodyTimeout`). A build can take longer than that. A client that sends no such `Accept`, as
+  an older CLI, gets the image or the error as JSON when the build ends, and still fails on a build
+  longer than its fetch waits. `system.info` lists `imageBuildStream` among the features of an impd
+  that streams. The CLI asks for the stream and reads JSON from an impd that answers JSON.
+
 - **Limits.** A context may be up to `IMP_BUILD_CONTEXT_MAX_MIB` (default 1024); a larger one fails
-  with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once; a fifth gets
-  `TOO_MANY_REQUESTS`. The disk budget holds room for the tar, its rewrite, and, as the export
-  streams, twice what it has written so far for the unpacked image and its ext4 file, in 256 MiB
-  steps; a disk that fills stops the export with `DISK_FULL`
+  with `PAYLOAD_TOO_LARGE`. At most 4 builds upload or run at once, uploads and builds together; a
+  fifth gets `TOO_MANY_REQUESTS`. impd refuses the build with its real HTTP status when it can tell
+  before it answers: auth, the query, a Content-Length over the limit, and a fifth build. A stream
+  answers 200 first, so a context that grows past the limit as it uploads, or a failed build, ends
+  the stream with an error event. The disk budget holds room for the tar, its rewrite, and, as the
+  export streams, twice what it has written so far for the unpacked image and its ext4 file, in 256
+  MiB steps; a disk that fills stops the export with `DISK_FULL`
   ([storage](../architecture/storage.md#disk-budget)). Each build's builder imp takes a slot, its
   memory and its disk like any imp.
 - **Who may build.** A token with `manage` scope and no imp patterns, as for `images.build`. Every
@@ -228,10 +273,40 @@ link). impd logs each build's phases as `pins=… build=… image=…`.
 logs a warning at start and at every build. Use it only when every caller with `manage` is trusted
 with the host (the caution above).
 
-The SDK has the same upload: `client.buildImage(name, context, { dockerfile, size, signal })`, where
-`context` is a tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds
-only that much disk; without it, impd holds the whole limit. It throws an `ORPCError` as a contract
-call would.
+The SDK has the same upload:
+`client.buildImage(name, context, { dockerfile, size, signal, onProgress })`, where `context` is a
+tar as a `Blob`, bytes or a `ReadableStream`. Give a stream's `size` so impd holds only that much
+disk; without it, impd holds the whole limit. It reads the answer as a stream and calls `onProgress`
+with each progress event; an impd from before the stream answers JSON at the end, and sends no
+progress. It throws an `ORPCError` as a contract call would.
+
+## Long calls
+
+A pull, an unpack, an on-host build or a template copy can take longer than a client's fetch waits
+for a byte: Bun's fetch gives up after 360 s, Node's (undici) after 300 s. The upload build streams
+its answer ([the answer](#build-an-image)); the oRPC calls have streamed twins:
+
+| Procedure            | Same input as  | Phases, in order                        |
+| -------------------- | -------------- | --------------------------------------- |
+| `images.addStream`   | `images.add`   | `pull`, `unpack`; `copy` for a template |
+| `images.buildStream` | `images.build` | `pack`, `build`                         |
+
+Each yields a progress event (`{ type: "progress", phase, elapsedMs }`) as it starts, at each new
+phase and every 15 s, then `{ type: "image", image }`. A failure throws its `ORPCError` through the
+iterator. oRPC also sends a keepalive comment every 5 s. impd writes the audit row as the work ends,
+with its outcome; a refused call is audited at once, as any refused call. `system.info` lists
+`imageOpStream` among the features of an impd that has them. `imp image add`,
+`imp image build --on-host` and `imp template create` use them when impd does, and show the phase
+and its time on a terminal; with an older impd they call `images.add` or `images.build`, which
+answer only at the end. The dashboard calls `images.add`.
+
+When the client goes, impd stops what it can:
+
+- an on-host build stops, as an upload build does, and frees its disk room;
+- an add stops its pull, but an unpack that has started runs to its end, since another add of the
+  same image may wait on it, and the image is added;
+- a template copy runs to its end, as it does for `images.add`
+  ([templates](./templates.md#making-a-template)).
 
 ## What the guest takes from the image
 

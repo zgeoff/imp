@@ -253,3 +253,39 @@ func TestHangup(t *testing.T) {
 		})
 	}
 }
+
+// TestStdinAfterExit checks that host frames sent after the process exited,
+// past what the stdin queue holds, are still read, so none meets a closed
+// socket: a host whose write fails there loses the EXIT frame to EPIPE.
+func TestStdinAfterExit(t *testing.T) {
+	h := startExec(t, newManager(), proto.Request{Argv: []string{"sh", "-c", "echo refused >&2; exit 1"}})
+	h.started(t)
+	out, exit := h.wait(t, 5*time.Second)
+	if out != "refused\n" || exit.Code != 1 {
+		t.Fatalf("got %q %+v", out, exit)
+	}
+	// More than stdinQueueChunks of stdinChunk, all after the session ended.
+	written := make(chan error, 1)
+	go func() {
+		chunk := bytes.Repeat([]byte("x"), 64<<10)
+		for range (stdinQueueChunks*stdinChunk)/len(chunk) + 16 {
+			if err := h.w.Write(proto.TypeStdin, chunk); err != nil {
+				written <- err
+				return
+			}
+		}
+		written <- h.w.Write(proto.TypeStdinEOF, nil)
+	}()
+	select {
+	case err := <-written:
+		if err != nil {
+			t.Fatalf("host write after EXIT: %v", err)
+		}
+	case <-time.After(exitLinger):
+		t.Fatal("host writes after EXIT were not read within exitLinger")
+	}
+	h.conn.Close()
+	if err := <-h.served; err != nil {
+		t.Errorf("Serve: %v", err)
+	}
+}

@@ -193,10 +193,12 @@ A 401 means the token is wrong.
 An older impd drops an input field it does not know, and the call succeeds without it. Check
 `system.info().features` before you send a field that a later impd added:
 
-| Field                                 | Feature           | Since  |
-| ------------------------------------- | ----------------- | ------ |
-| `grantable` on `tokens.create`        | `grantableTokens` | 0.27.0 |
-| `rebind` on `secrets.add` (`replace`) | `secretRebind`    | 0.27.0 |
+| Field                                             | Feature           | Since  |
+| ------------------------------------------------- | ----------------- | ------ |
+| `grantable` on `tokens.create`                    | `grantableTokens` | 0.27.0 |
+| `rebind` on `secrets.add` (`replace`)             | `secretRebind`    | 0.27.0 |
+| `require` on `openExec`                           | `execRequire`     | 0.30.0 |
+| `secretFiles`, `removeSecretFiles` on `system.gc` | `secretFilesGc`   | 0.31.0 |
 
 ```ts
 const info = await imp.system.info();
@@ -208,6 +210,13 @@ if (info.features?.grantableTokens !== true) {
 
 Without the `secretRebind` feature, a `replace` that changes the hosts keeps every grant. With it,
 it fails with `CONFLICT` and `data.reason: 'binding_changed'` unless `rebind` is set.
+
+`openExec` and `openExecSession` check `execRequire` themselves when `require` is set. With
+`require: ['broker']`, the command starts only once impd set the credential broker's variables and
+CA bundle for this boot; otherwise the exec fails with `PRECONDITION_FAILED` and
+`data: { reason: 'broker_not_ready', detail }`, and nothing runs. Without the feature it fails the
+same way with `reason: 'impd_outdated'` before it sends the start. See
+[requiring the broker](https://github.com/zgeoff/imp/blob/main/docs/guides/connectors.md#requiring-the-broker).
 
 ## Versions
 

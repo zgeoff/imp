@@ -9,6 +9,10 @@ import type {
   Image,
   Imp,
   Network,
+  OAuthApproval,
+  OAuthClient,
+  OAuthGrant,
+  OrphanStorage,
   Secret,
   Service,
   Session,
@@ -423,6 +427,44 @@ export function formatTokens(tokens: readonly WithOptionalGrantable<Token>[]): s
   );
 }
 
+export function formatOAuthClients(clients: readonly OAuthClient[]): string {
+  return formatTable(
+    ['NAME', 'CLIENT ID', 'REDIRECT URIS', 'CREATED'],
+    clients.map((client) => [
+      client.name,
+      client.clientId,
+      client.redirectUris.join(','),
+      client.createdAt.toISOString(),
+    ]),
+  );
+}
+
+export function formatOAuthGrants(grants: readonly OAuthGrant[]): string {
+  return formatTable(
+    ['ID', 'CLIENT', 'TOKEN', 'SCOPE', 'IMPS', 'CREATED', 'LAST USED'],
+    grants.map((grant) => [
+      grant.id,
+      grant.client,
+      grant.token,
+      grant.scope,
+      grant.imps === null ? '*' : grant.imps.join(','),
+      grant.createdAt.toISOString(),
+      grant.lastUsedAt?.toISOString() ?? '-',
+    ]),
+  );
+}
+
+// what a sign-in asks for, for its approver to check before approving
+export function formatOAuthApproval(approval: Readonly<OAuthApproval>): string {
+  return [
+    `client:       ${approval.client}`,
+    `returns to:   ${approval.redirectUri}`,
+    `asks for:     up to ${approval.requestedScope}`,
+    `started:      ${approval.requestedAt.toISOString()}`,
+    `ends:         ${approval.expiresAt.toISOString()}`,
+  ].join('\n');
+}
+
 // `SHA256:... comment`, as `ssh-keygen -l` prints a key
 export function formatSshKey(key: SshKey): string {
   return key.comment === '' ? key.fingerprint : `${key.fingerprint} ${key.comment}`;
@@ -505,13 +547,22 @@ export function formatGc(gc: Readonly<StorageGc>): string {
           orphan.location,
           formatBytesMib(orphan.bytes),
           orphan.createdAt?.toISOString() ?? '-',
-          orphan.snapshots.length === 0 ? '-' : orphan.snapshots.join(','),
+          formatOrphanContents(orphan),
         ]),
       ),
     );
   }
 
   return lines.join('\n');
+}
+
+// its snapshots, or for kept secret values how many files
+function formatOrphanContents(orphan: Readonly<OrphanStorage>): string {
+  if (orphan.files !== undefined) {
+    return `${String(orphan.files.length)} files`;
+  }
+
+  return orphan.snapshots.length === 0 ? '-' : orphan.snapshots.join(',');
 }
 
 export function formatJson(value: unknown): string {

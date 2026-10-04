@@ -1,5 +1,5 @@
 import { CONSOLE_SHELL } from '@imp/api';
-import type { ImpContract, ResumeFrom } from '@imp/api';
+import type { ExecRequirement, ImpContract, ResumeFrom } from '@imp/api';
 import type { ContractRouterClient } from '@orpc/contract';
 import { ExecError } from './exec-error';
 import { openExecSession } from './open-exec-session';
@@ -35,6 +35,11 @@ export interface ExecOptions {
   // generation, rather than a replay; `started.output.resume` says how it
   // was met (docs/architecture/daemon.md#output-offsets)
   readonly resumeFrom?: ResumeFrom;
+
+  // what impd must ensure before it starts the command, or the exec fails
+  // with PRECONDITION_FAILED and nothing runs: `broker`, the broker's
+  // variables and CA bundle (docs/guides/connectors.md#requiring-the-broker)
+  readonly require?: readonly ExecRequirement[];
 
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
@@ -107,6 +112,7 @@ export function openExec(
     ...(options.session !== undefined && { session: options.session }),
     ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
     ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
+    ...(options.require !== undefined && { require: options.require }),
   });
 }
 

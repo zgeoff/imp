@@ -1,4 +1,4 @@
-import type { ExecHandle, ImpClient } from '@zgeoff/imp-client';
+import type { ExecHandle, ExecRequirement, ImpClient } from '@zgeoff/imp-client';
 import { ExecError } from '@zgeoff/imp-client';
 import { createOutputCollector } from './output-cap';
 import type { CappedOutput } from './output-cap';
@@ -8,6 +8,7 @@ export interface CappedRunOptions {
   readonly stdin?: Uint8Array;
   readonly cwd?: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly require?: readonly ExecRequirement[];
   readonly timeoutMs: number;
 
   // per stream; see output-cap.ts
@@ -47,6 +48,7 @@ export async function runCapped(
   const handle = await openExec(name, options.argv, {
     ...(options.cwd !== undefined && { cwd: options.cwd }),
     ...(options.env !== undefined && { env: options.env }),
+    ...(options.require !== undefined && { require: options.require }),
     killGraceMs: options.killGraceMs,
   });
 

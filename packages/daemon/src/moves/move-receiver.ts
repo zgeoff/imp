@@ -940,6 +940,9 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
 
     const committed = await updateImpCommitted(deps.db, imp.id, deps.now(), isWarm);
 
+    // the imp lives here from the write on; a throw below must not skip it
+    deps.onCommitted(row.name);
+
     // its leases are live here only now: `held`, as an acquire says it
     const leases = await listLeases(deps.db, deps.now(), [imp.id]);
 
@@ -948,7 +951,6 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
     }
 
     deps.log(`impd: move: ${row.name}: committed; it lives here now`);
-    deps.onCommitted(row.name);
   };
 
   // Idempotent, under the imp's lock, so a commit and an abort never cross:
