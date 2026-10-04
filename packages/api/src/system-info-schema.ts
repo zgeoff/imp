@@ -159,6 +159,10 @@ export const SystemInfoSchema = z.object({
 
       // system.copyDatabase; from 0.30.0
       databaseCopy: z.boolean().optional(),
+
+      // POST /images/build streams build events to a client that accepts
+      // them (docs/guides/images.md#build-an-image)
+      imageBuildStream: z.boolean().optional(),
     })
     .optional(),
 });

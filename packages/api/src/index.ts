@@ -24,12 +24,20 @@ export type { Lease, LeaseSummary } from './lease-schema';
 export {
   DockerfilePathSchema,
   IMAGE_BUILD_PATH,
+  IMAGE_BUILD_STREAM_TYPE,
   ImageBuildErrorSchema,
+  ImageBuildEventSchema,
   ImageBuildQuerySchema,
   ImageBuildResultSchema,
 } from './image-build-protocol';
 
-export type { ImageBuildQuery } from './image-build-protocol';
+export type {
+  ImageBuildEvent,
+  ImageBuildPhase,
+  ImageBuildProgress,
+  ImageBuildQuery,
+} from './image-build-protocol';
+
 export type { Checkpoint } from './checkpoint-schema';
 
 export {

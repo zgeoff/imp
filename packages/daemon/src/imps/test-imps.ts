@@ -26,6 +26,7 @@ import { createGovernedImps } from '../governor/create-governed-imps';
 import { createDnsToken } from '../https/dns/dns-token';
 import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
+import { BUILD_KEEPALIVE_MS } from '../images/build-event-stream';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
 import { createMoveService } from '../moves/move-service';
@@ -440,6 +441,9 @@ export function buildTestApp(
       'fetch' | 'releaseName' | 'onCommitted' | 'partBytes' | 'readWarmHost' | 'readTapMac'
     >
   > = {},
+
+  // the gap between a streamed build's progress lines
+  buildKeepaliveMs = BUILD_KEEPALIVE_MS,
 ) {
   const imps: ImpService = { ...impd.imps, ...agent };
 
@@ -473,6 +477,7 @@ export function buildTestApp(
     diskBudget: ctx.diskBudget,
     audit,
     now: ctx.now,
+    keepaliveMs: buildKeepaliveMs,
   });
 
   const moves = createMoveService({

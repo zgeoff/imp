@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { IMAGE_BUILD_STREAM_TYPE } from '@imp/api';
+import type { ImageBuildProgress } from '@imp/api';
 import { createImage } from '@imp/daemon/src/db/images';
 import type { ImageService } from '@imp/daemon/src/images/image-service';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from '@imp/daemon/src/imps/test-imps';
@@ -105,4 +107,184 @@ test('a stream with its size goes with that Content-Length', async () => {
 
   expect(ctx.lengths).toEqual(['11']);
   expect(ctx.received).toEqual(['as a stream']);
+});
+
+// impd on a real listener, whose build takes `buildMs`
+async function setupSlowBuild(buildMs: number, keepaliveMs: number) {
+  const harness = await setupImpTest();
+
+  const buildImageFromContext: ImageService['buildImageFromContext'] = async (_, name) => {
+    await Bun.sleep(buildMs);
+
+    return createImage(harness.db, {
+      name,
+      ref: `imp/${name}:latest`,
+      digest: 'sha256:x',
+      sizeBytes: 1,
+    });
+  };
+
+  const app = buildTestApp(
+    { ...harness, images: { ...harness.images, buildImageFromContext } },
+    harness,
+    undefined,
+    {},
+    null,
+    {},
+    keepaliveMs,
+  ).app;
+
+  app.listen({ port: 0, hostname: '127.0.0.1' });
+
+  return {
+    url: `http://127.0.0.1:${String(app.server?.port)}/`,
+    [Symbol.asyncDispose]: async () => {
+      await app.stop(true);
+      await harness[Symbol.asyncDispose]();
+    },
+  };
+}
+
+// The real fetch, but one that gives up after `idleMs` without a byte, before
+// the headers or between two chunks of the body: Bun's own fetch does so
+// after 360 s, undici's after 300 s.
+function createIdleFetch(idleMs: number) {
+  return async (request: Request): Promise<Response> => {
+    const watchdog = new AbortController();
+
+    const state = { timer: setTimeout(() => {}, 0) };
+
+    const resetWatchdog = (): void => {
+      clearTimeout(state.timer);
+
+      state.timer = setTimeout(() => {
+        watchdog.abort(new DOMException('no byte came in time', 'TimeoutError'));
+      }, idleMs);
+    };
+
+    resetWatchdog();
+
+    const response = await fetch(request, { signal: watchdog.signal });
+
+    resetWatchdog();
+
+    const body = response.body?.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform: (chunk, controller) => {
+          resetWatchdog();
+
+          controller.enqueue(chunk);
+        },
+        flush: () => {
+          clearTimeout(state.timer);
+        },
+      }),
+    );
+
+    return new Response(body ?? null, response);
+  };
+}
+
+// what an impd from before the stream sees: no Accept
+function removeAccept(next: (request: Request) => Promise<Response>) {
+  return (request: Request): Promise<Response> => {
+    const headers = new Headers(request.headers);
+
+    headers.delete('accept');
+
+    return next(new Request(request, { headers }));
+  };
+}
+
+test('a build longer than the fetch waits for a byte succeeds as a stream, and fails as JSON', async () => {
+  await using impd = await setupSlowBuild(500, 25);
+
+  const idleFetch = createIdleFetch(200);
+  const progress: ImageBuildProgress[] = [];
+  const streamed = createImpClient({ url: impd.url, token: TEST_TOKEN, fetch: idleFetch });
+
+  const image = await streamed.buildImage('slow', new Blob(['tar']), {
+    onProgress: (event) => {
+      progress.push(event);
+    },
+  });
+
+  expect(image.name).toBe('slow');
+  expect(progress[0]?.phase).toBe('upload');
+  expect(progress.filter((event) => event.phase === 'build').length).toBeGreaterThan(2);
+
+  // the answer at the end only, as before the stream
+  const whole = createImpClient({
+    url: impd.url,
+    token: TEST_TOKEN,
+    fetch: removeAccept(idleFetch),
+  });
+
+  const failure = await whole
+    .buildImage('slow2', new Blob(['tar']))
+    .catch((error: unknown) => error);
+
+  expect(failure).toMatchObject({ name: 'TimeoutError' });
+});
+
+test('an impd that answers JSON, from before the stream, still builds', async () => {
+  await using ctx = await setupBuildTest();
+
+  const headers: (string | null)[] = [];
+
+  const client = createImpClient({
+    url: 'http://impd.test/',
+    token: TEST_TOKEN,
+    fetch: removeAccept(async (request) => {
+      headers.push(request.headers.get('accept'));
+
+      const answer = await ctx.client.buildImage('old', new Blob(['tar']));
+
+      return Response.json(answer);
+    }),
+  });
+
+  const image = await client.buildImage('old', new Blob(['tar']));
+
+  expect(headers).toEqual([null]);
+  expect(image.name).toBe('old');
+  expect(image.createdAt).toBeInstanceOf(Date);
+});
+
+// a build whose answer is these lines, as a stream
+function buildFromLines(lines: readonly unknown[]): Promise<unknown> {
+  const client = createImpClient({
+    url: 'http://impd.test/',
+    token: TEST_TOKEN,
+    fetch: () =>
+      Promise.resolve(
+        new Response(lines.map((line) => `${JSON.stringify(line)}\n`).join(''), {
+          headers: { 'content-type': IMAGE_BUILD_STREAM_TYPE },
+        }),
+      ),
+  });
+
+  return client.buildImage('web', new Blob(['tar']));
+}
+
+test('a stream that ends in an error throws its ORPCError; one cut short throws too', async () => {
+  const progress = { type: 'progress', phase: 'build', elapsedMs: 15_000 };
+
+  const failed = await buildFromLines([
+    progress,
+    { type: 'from-a-newer-impd' },
+    { type: 'error', code: 'BAD_REQUEST', message: 'the Dockerfile: no FROM' },
+  ]).catch((error: unknown) => error);
+
+  expect(failed).toBeInstanceOf(ORPCError);
+
+  expect(failed).toMatchObject({
+    code: 'BAD_REQUEST',
+    status: 400,
+    message: 'the Dockerfile: no FROM',
+  });
+
+  const cut = await buildFromLines([progress]).catch((error: unknown) => error);
+
+  expect(cut).toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
 });

@@ -32,6 +32,11 @@ test('a terminal gets a redrawn line at most every 250 ms, and a newline at the 
   expect(written).toHaveLength(4);
   expect(written.at(-2)).toContain('30%');
   expect(written.at(-1)).toBe('\n');
+
+  // a second finish ends no second line
+  progress.finish();
+
+  expect(written).toHaveLength(4);
 });
 
 test('off a terminal it prints nothing', () => {
