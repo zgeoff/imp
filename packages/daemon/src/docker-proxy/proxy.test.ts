@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +30,9 @@ const engineSocket = join(dir, 'engine.sock');
 const proxySocket = join(dir, 'proxy.sock');
 const seen: Seen[] = [];
 const logged: string[] = [];
+
+// a create the engine never answers: the proxy gave up on it
+const stalledCreate = { gone: Promise.withResolvers<void>() };
 
 // a slow build on the engine: it started, and its client went
 const slowBuild = { started: Promise.withResolvers<void>(), gone: Promise.withResolvers<void>() };
@@ -67,6 +70,17 @@ const engine = Bun.serve({
 
     if (url.pathname.endsWith('/_ping')) {
       return new Response('OK', { headers: { 'api-version': '1.55' } });
+    }
+
+    // a create that never answers until its caller goes
+    if (body.includes('busybox:stall')) {
+      await new Promise((resolve) => {
+        request.signal.addEventListener('abort', resolve);
+      });
+
+      stalledCreate.gone.resolve();
+
+      return new Response(null, { status: 499 });
     }
 
     if (url.pathname.endsWith('/export')) {
@@ -245,6 +259,75 @@ test('a build streams its context and forwards no client header', async () => {
   expect(seen[0]?.headers['x-registry-config']).toBeUndefined();
   expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
   expect(seen[0]?.headers['cookie']).toBeUndefined();
+});
+
+// Bun's fetch gives up on an answer silent for 360 s, as a build's quiet RUN
+// step is; the live check is test/integration/docker-idle.slow.ts
+test('a build, a pull and an export wait past the limit, until the client goes; other calls have a deadline', async () => {
+  const sent = spyOn(globalThis, 'fetch');
+
+  try {
+    await sendToProxy('POST', BUILD_PATH, { body: 'ctx' });
+    await sendToProxy('POST', '/v1.55/images/create?fromImage=busybox&tag=latest');
+    await sendToProxy('GET', '/v1.55/containers/aaaa/export');
+
+    await sendToProxy('POST', '/v1.55/containers/create', {
+      body: JSON.stringify({ Image: 'busybox:1.37', Cmd: ['/bin/true'] }),
+    });
+
+    await sendToProxy('DELETE', '/v1.55/containers/aaaa?force=1');
+
+    const upstream = sent.mock.calls.flatMap(([, init = {}]) =>
+      Reflect.get(init, 'unix') === engineSocket
+        ? [{ timeout: Reflect.get(init, 'timeout') as unknown, signal: init.signal !== undefined }]
+        : [],
+    );
+
+    const bounded = { timeout: undefined, signal: true };
+    const long = { timeout: false, signal: true };
+
+    // the export and the removal inspect their container first
+    expect(upstream).toEqual([long, long, bounded, long, bounded, bounded, bounded]);
+  } finally {
+    sent.mockRestore();
+  }
+});
+
+test('a create the engine never answers ends at the control deadline, with the engine told', async () => {
+  const stalledSocket = join(dir, 'stalled.sock');
+
+  using stalled = Bun.serve({
+    unix: stalledSocket,
+    fetch: createDockerProxy({
+      upstreamSocket: engineSocket,
+      token: TOKEN,
+      hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+      builderImage: null,
+      buildContextMaxBytes: CONTEXT_MAX_BYTES,
+      controlCallMs: 100,
+      log: (message) => {
+        logged.push(message);
+      },
+    }),
+  });
+
+  const startedAt = Date.now();
+
+  const response = await fetch('http://docker/v1.55/containers/create', {
+    method: 'POST',
+    unix: stalledSocket,
+    body: JSON.stringify({ Image: 'busybox:stall', Cmd: ['/bin/true'] }),
+  });
+
+  await stalledCreate.gone.promise;
+
+  expect(stalled.url).toBeDefined();
+  expect(response.status).toBe(502);
+  expect(Date.now() - startedAt).toBeLessThan(5000);
+
+  expect(logged.some((line) => line.startsWith('error on POST /v1.55/containers/create'))).toBe(
+    true,
+  );
 });
 
 test('a build without a Content-Type reaches the engine as a tar', async () => {
