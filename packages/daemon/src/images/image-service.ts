@@ -775,8 +775,18 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
         guestWriters.delete(digest);
 
-        if (freshRootfs.delete(digest)) {
+        if (!freshRootfs.delete(digest)) {
+          return;
+        }
+
+        // logged, so the error that ended the write or the row is the one
+        // its caller gets
+        try {
           await removeUnusedRootfs(digest);
+        } catch (error) {
+          deps.log(
+            `impd: image ${guest.imageName}: could not remove the unused rootfs of ${digest}: ${readErrorMessage(error)}`,
+          );
         }
       });
     }
