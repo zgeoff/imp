@@ -2,15 +2,17 @@
 
 ## [0.32.0](https://github.com/zgeoff/imp/compare/v0.31.0...v0.32.0) (2026-10-04)
 
-
 ### Features
 
-* **sessions:** opt-in durable output logs, kept on the host ([#178](https://github.com/zgeoff/imp/issues/178)) ([724ffa2](https://github.com/zgeoff/imp/commit/724ffa230bf2d6d215a33342b93661980942bcee))
-
+- **sessions:** opt-in durable output logs, kept on the host
+  ([#178](https://github.com/zgeoff/imp/issues/178))
+  ([724ffa2](https://github.com/zgeoff/imp/commit/724ffa230bf2d6d215a33342b93661980942bcee))
 
 ### Bug Fixes
 
-* **daemon:** keep stale session log work off a re-created imp's logs ([#197](https://github.com/zgeoff/imp/issues/197)) ([36edfa8](https://github.com/zgeoff/imp/commit/36edfa8ee28bf976c71f8d8b0e18a2ff21dc54aa))
+- **daemon:** keep stale session log work off a re-created imp's logs
+  ([#197](https://github.com/zgeoff/imp/issues/197))
+  ([36edfa8](https://github.com/zgeoff/imp/commit/36edfa8ee28bf976c71f8d8b0e18a2ff21dc54aa))
 
 ## [0.31.0](https://github.com/zgeoff/imp/compare/v0.30.0...v0.31.0) (2026-10-04)
 
