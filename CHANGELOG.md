@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/zgeoff/imp/compare/v0.29.0...v0.29.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **images:** write image.json without following links in the image ([#196](https://github.com/zgeoff/imp/issues/196)) ([3d4541a](https://github.com/zgeoff/imp/commit/3d4541a1a25b5d1238050bfb5b9efc7c172ea884))
+
 ## [0.29.0](https://github.com/zgeoff/imp/compare/v0.28.1...v0.29.0) (2026-10-03)
 
 ### ⚠ BREAKING CHANGES
