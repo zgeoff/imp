@@ -21,9 +21,7 @@
     "packages/client": {
       // the package smoke (scripts/check-client-runtimes.sh)
       "entry": ["smoke/*.ts"],
-      "project": ["src/**/*.ts", "smoke/*.ts"],
-      // the bundled @imp/api declarations import it
-      "ignoreDependencies": ["zod"]
+      "project": ["src/**/*.ts", "smoke/*.ts"]
     }
   }
 }

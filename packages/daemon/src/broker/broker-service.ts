@@ -18,6 +18,7 @@ import {
 import type { Config } from '../config';
 import { listAuditEntries, writeAuditEntry } from '../db/broker-audit';
 import type { NewAuditEntry } from '../db/broker-audit';
+import { subscribeImpWrites } from '../db/imp-write-feed';
 import { findImpByName, listImps } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -66,7 +67,7 @@ import {
   createGuestTrust,
   runBundleInstall,
 } from './guest-trust';
-import type { InstallBundle, TrustedImp } from './guest-trust';
+import type { BrokerExecEnv, InstallBundle, TrustedImp } from './guest-trust';
 import { buildValueFile, createSecretFiles } from './secret-files';
 import type { SecretFiles } from './secret-files';
 import { createTerminators } from './terminators';
@@ -136,8 +137,8 @@ export interface Broker {
   ) => Promise<ForkGrantsReport>;
 
   // the variables for an exec in this imp: none without a grant, or when
-  // the CA could not be put in the guest
-  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  // the CA could not be put in this boot of the guest
+  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
 
   // drops terminators no grant covers and forgets destroyed imps; logs a
   // failure rather than throwing
@@ -231,6 +232,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     deps.installBundle ?? runBundleInstall,
     log,
   );
+
+  // a stop, sleep or halt ends the imp's boot, even if its pid comes back
+  const unwatch = subscribeImpWrites(db, (write) => {
+    if (write.kind === 'added' || write.kind === 'changed') {
+      trust.observe(write.imp);
+    }
+  });
 
   const findRule = async (impId: string, host: string): Promise<GrantedRule | undefined> => {
     const rules = await listGrantedRules(db, impId);
@@ -530,13 +538,15 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       const granted = await listGrantedRules(db, imp.id);
 
       if (granted.length === 0) {
-        return [];
+        return { kind: 'ungranted' };
       }
 
       const trusted: TrustedImp = { id: imp.id, name: imp.name, pid: imp.pid };
 
-      if (!(await trust.ensure(trusted, vsockPath))) {
-        return [];
+      const outcome = await trust.ensure(trusted, vsockPath);
+
+      if (!outcome.installed) {
+        return { kind: 'untrusted', detail: outcome.detail };
       }
 
       const gateway = deriveSlotAddress(imp.slot, {
@@ -544,11 +554,13 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
         portBase: config.portBase,
       }).hostIp;
 
-      return buildBrokerEnv({
+      const env = buildBrokerEnv({
         proxyUrl: `http://${gateway}:${String(state.port)}`,
         placeholders: listPlaceholderEnv(granted.map((entry) => entry.kind)),
         placeholder: PLACEHOLDER,
       });
+
+      return { kind: 'ready', env };
     },
 
     applyGrants,
@@ -579,6 +591,8 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
     },
 
     stop: async () => {
+      unwatch();
+
       await state.front?.stop();
       await terminators.stop();
     },

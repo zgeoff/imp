@@ -50,6 +50,7 @@ test('it serves system.info from config and the database', async () => {
       databaseCopy: true,
       imageBuildStream: true,
       imageOpStream: true,
+      execRequire: true,
     },
     ksm: null,
   });

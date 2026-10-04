@@ -166,6 +166,9 @@ export const SystemInfoSchema = z.object({
 
       // images.addStream and images.buildStream
       imageOpStream: z.boolean().optional(),
+
+      // an `/exec` start takes `require`, which an older impd drops unread
+      execRequire: z.boolean().optional(),
     })
     .optional(),
 });

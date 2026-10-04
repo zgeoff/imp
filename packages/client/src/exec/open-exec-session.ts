@@ -6,8 +6,15 @@ import {
   decodeExecFrame,
   encodeExecFrame,
 } from '@imp/api';
-import type { DetachReason, ExecClientMessage, ResumeFrom, SessionOutput } from '@imp/api';
+import type {
+  DetachReason,
+  ExecClientMessage,
+  ExecRequirement,
+  ResumeFrom,
+  SessionOutput,
+} from '@imp/api';
 import { resolveImpdUrl } from '../resolve-impd-url';
+import { checkExecRequire } from './check-exec-require';
 import { checkImpdAccess } from './check-impd-access';
 
 export interface ExecStart {
@@ -25,6 +32,7 @@ export interface ExecStart {
 
   // with a session: the output after this byte rather than a replay
   readonly resumeFrom?: ResumeFrom;
+  readonly require?: readonly ExecRequirement[];
 }
 
 // attaches to a session that runs: its replay, then live output
@@ -159,7 +167,16 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
   const ws = options.connect(url.href, headers);
   const outcome = Promise.withResolvers<ExecOutcome>();
-  const state = { opened: false, started: false, finished: false, refused: false };
+  const state = { opened: false, sentOpen: false, started: false, finished: false, refused: false };
+
+  // what the caller sent after the socket opened and before the open
+  // message went, as while a start that requires anything waits on impd:
+  // impd refuses a resize, a signal or stdin before the start
+  const held: (string | Uint8Array<ArrayBuffer>)[] = [];
+
+  // held bytes count toward backpressure like the socket's own buffer
+  let heldBytes = 0;
+  const countQueuedBytes = (): number => ws.bufferedAmount + heldBytes;
 
   ws.binaryType = 'arraybuffer';
 
@@ -188,9 +205,17 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     });
   }, OPEN_TIMEOUT_MS);
 
-  const sendControl = (text: string): void => {
-    if (!state.finished && ws.readyState === WebSocket.OPEN) {
-      ws.send(text);
+  const sendControl = (data: string | Uint8Array<ArrayBuffer>): void => {
+    if (state.finished || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    if (state.sentOpen) {
+      ws.send(data);
+    } else {
+      held.push(data);
+
+      heldBytes += typeof data === 'string' ? data.length : data.byteLength;
     }
   };
 
@@ -271,11 +296,39 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     }
   };
 
+  // a start that requires anything waits for impd to say it checks them
+  const sendOpen = async (): Promise<void> => {
+    const start = options.start;
+
+    if ('argv' in start && start.require !== undefined && start.require.length > 0) {
+      const refusal = await checkExecRequire(options.baseUrl, options.token, options.fetch);
+
+      if (refusal !== null) {
+        resolveOutcome(refusal);
+
+        return;
+      }
+    }
+
+    if (state.finished || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    ws.send(JSON.stringify(buildOpenMessage(start)));
+
+    state.sentOpen = true;
+    heldBytes = 0;
+
+    for (const data of held.splice(0)) {
+      ws.send(data);
+    }
+  };
+
   ws.addEventListener('open', () => {
     state.opened = true;
 
     clearTimeout(openTimer);
-    sendControl(JSON.stringify(buildOpenMessage(options.start)));
+    void sendOpen();
   });
 
   // a throw here would escape to the event loop and leave the session (and
@@ -347,7 +400,7 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
   });
 
   const waitForDrain = async (): Promise<void> => {
-    while (!state.finished && ws.bufferedAmount > HIGH_WATER_BYTES) {
+    while (!state.finished && countQueuedBytes() > HIGH_WATER_BYTES) {
       await new Promise((resolve) => {
         setTimeout(resolve, DRAIN_POLL_MS);
       });
@@ -358,11 +411,9 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
     outcome: outcome.promise,
     isStarted: () => state.started,
     sendStdin: (data) => {
-      if (!state.finished && ws.readyState === WebSocket.OPEN) {
-        ws.send(encodeExecFrame(EXEC_CHANNELS.stdin, data));
-      }
+      sendControl(encodeExecFrame(EXEC_CHANNELS.stdin, data));
 
-      return ws.bufferedAmount <= HIGH_WATER_BYTES;
+      return countQueuedBytes() <= HIGH_WATER_BYTES;
     },
     waitForDrain,
     closeStdin: () => {
@@ -382,7 +433,14 @@ export function openExecSession(options: Readonly<ExecSessionOptions>): ExecSess
 
 function buildOpenMessage(start: Readonly<ExecStart | ExecAttach>): ExecClientMessage {
   if ('argv' in start) {
-    return { type: 'start', ...start, argv: [...start.argv] };
+    const { require: requirements, ...rest } = start;
+
+    return {
+      type: 'start',
+      ...rest,
+      argv: [...start.argv],
+      ...(requirements !== undefined && { require: [...requirements] }),
+    };
   }
 
   return { type: 'attach', ...start };

@@ -1,4 +1,10 @@
-import type { PreviousGeneration, ResumeFrom, ResumeResult, SessionOutput } from '@imp/api';
+import type {
+  ExecRequirement,
+  PreviousGeneration,
+  ResumeFrom,
+  ResumeResult,
+  SessionOutput,
+} from '@imp/api';
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
@@ -28,6 +34,10 @@ export interface AgentExecRequest {
   // runs in the agent's own world, outside the inner container, as root:
   // the exec.outer op, which an older agent refuses
   readonly outer?: boolean;
+
+  // what impd checks before it starts the command (exec/exec-require.ts);
+  // never sent to the agent
+  readonly require?: readonly ExecRequirement[];
 }
 
 // attaches to a session that exists
@@ -142,7 +152,7 @@ export async function openExecStream(
   request: Readonly<AgentExecRequest>,
   startTimeoutMs = EXEC_START_TIMEOUT_MS,
 ): Promise<ExecStream> {
-  const { killGraceMs, resumeFrom, outer, ...rest } = request;
+  const { killGraceMs, resumeFrom, outer, require: _checked, ...rest } = request;
   const op = outer === true ? 'exec.outer' : 'exec';
 
   const opening = openStream(
