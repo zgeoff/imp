@@ -2,9 +2,11 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as z from 'zod';
 
-// `token new --grantable` and `secret add --replace` rely on fields an older
-// impd drops unread, so the CLI checks impd's features before it writes.
+// `token new --grantable`, `secret add --replace` and `exec --require` rely
+// on fields an older impd drops unread, and `db copy` on a call it lacks, so
+// the CLI checks impd's features before it writes or runs anything.
 
 const MAIN = join(import.meta.dir, '..', 'main.ts');
 const TOKEN = 'feature-gates-token';
@@ -33,7 +35,13 @@ const MADE_TOKEN = {
 
 const NEW_INFO = {
   version: '0.27.0',
-  features: { sessionOffsets: true, leases: true, grantableTokens: true, secretRebind: true },
+  features: {
+    sessionOffsets: true,
+    leases: true,
+    grantableTokens: true,
+    secretRebind: true,
+    secretFilesGc: true,
+  },
 };
 
 const OLD_INFO = { version: '0.26.0', features: { sessionOffsets: true, leases: true } };
@@ -47,6 +55,14 @@ function startImpd(info: unknown) {
     'system/info': info,
     'tokens/create': MADE_TOKEN,
     'secrets/add': SECRET,
+    'system/copyDatabase': {
+      path: '/var/lib/imp/db-copies/before-upgrade.sqlite',
+      sizeBytes: 4096,
+      lastMigration: '030_x',
+      impVersion: '0.30.0',
+      createdAt: '2026-10-04T00:00:00.000Z',
+      integrity: 'ok',
+    },
   };
 
   const server = Bun.serve({
@@ -192,4 +208,59 @@ test.each([
 
   expect([token.code, replace.code]).toEqual([1, 1]);
   expect(ctx.calls).toEqual(['system/info', 'system/info']);
+});
+
+test('exec --require on an older impd runs nothing, and a bad list makes no call', async () => {
+  await using ctx = setupTest({ ...NEW_INFO, version: '0.29.0' });
+
+  const older = await ctx.run(['exec', 'box', '--require', 'broker', '--', 'true']);
+
+  expect(older.code).toBe(1);
+  expect(older.stderr).toContain('this impd is older than 0.30.0');
+  expect(ctx.calls).toEqual(['system/info']);
+
+  const unknown = await ctx.run(['exec', 'box', '--require', 'network', '--', 'true']);
+  const agent = await ctx.run(['exec', 'box', '--agent', '--require', 'broker', '--', 'true']);
+
+  expect([unknown.code, agent.code]).toEqual([2, 2]);
+  expect(unknown.stderr).toContain('--require takes broker; not network');
+  expect(agent.stderr).toContain('--require does not go with --agent');
+  expect(ctx.calls).toEqual(['system/info']);
+});
+
+test('db copy asks for the feature first: an older impd gets no copy call', async () => {
+  const outcomes: { code: number; calls: string[] }[] = [];
+
+  for (const info of [
+    OLD_INFO,
+    { ...NEW_INFO, features: { ...NEW_INFO.features, databaseCopy: true } },
+  ]) {
+    await using ctx = setupTest(info);
+
+    const result = await ctx.run(['db', 'copy', 'before-upgrade', '--json']);
+
+    outcomes.push({ code: result.code, calls: [...ctx.calls] });
+
+    if (info === OLD_INFO) {
+      expect(result.stderr).toContain('this impd is older than 0.30.0');
+    } else {
+      // a restore script matches these names, in this order
+      const printed: unknown = JSON.parse(result.stdout);
+      const fields = Object.keys(z.record(z.string(), z.unknown()).parse(printed));
+
+      expect(fields).toEqual([
+        'path',
+        'sizeBytes',
+        'lastMigration',
+        'impVersion',
+        'createdAt',
+        'integrity',
+      ]);
+    }
+  }
+
+  expect(outcomes).toEqual([
+    { code: 1, calls: ['system/info'] },
+    { code: 0, calls: ['system/info', 'system/copyDatabase'] },
+  ]);
 });

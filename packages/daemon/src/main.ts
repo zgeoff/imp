@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import { createTailnetIdentities, runWhois } from './auth/tailnet-identity';
 import { loadTokenStore } from './auth/token-store';
 import { createBackupService } from './backup/backup-service';
 import { createBroker } from './broker/broker-service';
+import { createSecretFiles } from './broker/secret-files';
 import { buildApp } from './build-app';
 import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
@@ -26,6 +28,7 @@ import { createDnsToken } from './https/dns/dns-token';
 import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
+import { BUILD_KEEPALIVE_MS } from './images/build-event-stream';
 import { createBuilders } from './images/builder-imps';
 import type { Builders } from './images/builder-imps';
 import { HOST_BUILD_WARNING, createImageService } from './images/image-service';
@@ -44,6 +47,8 @@ import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { createTapDevices } from './net/tap-devices';
 import { createNetworkService } from './networks/network-service';
+import { createOAuthService } from './oauth/oauth-service';
+import { startPublicListener } from './oauth/public-listener';
 import { printLog } from './process/print-log';
 import { runCommand } from './process/run-command';
 import { startTicker } from './process/ticker';
@@ -58,7 +63,7 @@ import { setupSshDir } from './ssh/host-key';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
 import { createDiskBudget } from './storage/disk-budget';
-import { createDiskUsageCache } from './storage/disk-usage-cache';
+import { CHANGES_USAGE, createDiskUsageCache } from './storage/disk-usage-cache';
 import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
 import { createStorageGate } from './storage/storage-gate';
@@ -207,7 +212,10 @@ async function main(): Promise<void> {
     log: printLog,
   });
 
-  const broker = await createBroker({ config, db, log: printLog, ipv6 });
+  // the broker's and the GC's: the GC lists and removes what the broker kept aside
+  const secretFiles = createSecretFiles(config.dataDir);
+
+  const broker = await createBroker({ config, db, log: printLog, ipv6, secretFiles });
 
   // the firewall and its resolver, before any VM is adopted, booted or woken
   const egress = createEgressService({
@@ -295,8 +303,9 @@ async function main(): Promise<void> {
 
   // an imp that comes or goes opens or closes its proxy port and its grants
   subscribeImpWrites(db, (write) => {
-    // storage comes or goes with an imp or a checkpoint
-    if (write.kind !== 'changed') {
+    // storage comes or goes with an imp or a checkpoint, and changes when
+    // its disk grows or a stop or sleep writes it out
+    if (write.kind !== 'changed' || CHANGES_USAGE.has(write.reason)) {
       diskUsage.requestRefresh();
     }
 
@@ -357,7 +366,7 @@ async function main(): Promise<void> {
           diskBudget,
         });
 
-  const gc = createStorageGc({ db, storage, storageGate, log: printLog });
+  const gc = createStorageGc({ db, storage, storageGate, log: printLog, secretFiles });
   const state = { ready: false };
   const audit = createApiAudit({ db, now: Date.now, log: printLog });
   const revocations = createRevocations();
@@ -375,6 +384,16 @@ async function main(): Promise<void> {
     now: Date.now,
     onRemove: revocations.revoke,
     isFileKey: authorizedKeys.isListed,
+  });
+
+  const oauth = createOAuthService({
+    db,
+    tokens,
+    revocations,
+    config: config.publicMcp,
+    now: Date.now,
+    log: printLog,
+    key: randomBytes(32),
   });
 
   const peers = createForwardedPeers(Date.now);
@@ -413,7 +432,10 @@ async function main(): Promise<void> {
     releaseName: async () => {
       await tailnetNames?.runSync();
     },
+
+    // the received disk counts here now; the source's ImpRemoved counts there
     onCommitted: () => {
+      diskUsage.requestRefresh();
       void tailnetNames?.runSync();
     },
     now: Date.now,
@@ -428,6 +450,7 @@ async function main(): Promise<void> {
     rootToken: token,
     tokens,
     revocations,
+    oauth,
     peers,
     tailnet: buildTailnetAccess(config, readTailscale),
     imps,
@@ -453,7 +476,15 @@ async function main(): Promise<void> {
     now: Date.now,
     log: printLog,
     audit,
-    buildContexts: createBuildContextRoute({ config, images, diskBudget, audit, now: Date.now }),
+    buildContexts: createBuildContextRoute({
+      config,
+      images,
+      diskBudget,
+      audit,
+      now: Date.now,
+      keepaliveMs: BUILD_KEEPALIVE_MS,
+    }),
+    imageKeepaliveMs: BUILD_KEEPALIVE_MS,
     moves,
   });
 
@@ -465,6 +496,12 @@ async function main(): Promise<void> {
   });
 
   console.log(`impd: api on :${String(config.apiPort)}, data in ${config.dataDir}`);
+
+  // off unless the operator names the route's origin
+  const publicMcp =
+    config.publicMcp === null
+      ? null
+      : startPublicListener({ config: config.publicMcp, oauth, mcp: api.publicMcp }, printLog);
 
   const proxy = startWakeProxy({ config, db, imps, log: printLog, peers });
 
@@ -513,6 +550,7 @@ async function main(): Promise<void> {
 
   const tickers = [
     startTicker('idle', 2000, idle.runCheck, printLog),
+    startTicker('oauth-expiry', 3_600_000, oauth.removeExpired, printLog),
     startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
 
@@ -604,6 +642,10 @@ async function main(): Promise<void> {
     await runStopStep('ssh', readStepMs(), () => ssh?.stop() ?? Promise.resolve());
 
     api.closeExecSessions();
+
+    if (publicMcp !== null) {
+      await runStopStep('public-mcp', readStepMs(), () => publicMcp.stop());
+    }
 
     await runStopStep('api', readStepMs(), () => app.stop(true));
 

@@ -244,6 +244,78 @@ test('the API route hands a peer handle only to the paths that resolve a caller'
   }
 });
 
+// A streamed build (docs/guides/images.md#build-an-image) lives on its
+// progress lines: the proxy in front of the API must pass each one on as it
+// comes, not hold the body until it ends.
+test('the API route passes a streamed answer on line by line', async () => {
+  const second = Promise.withResolvers<void>();
+
+  const api = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: () => {
+      const body = new ReadableStream<Uint8Array>({
+        start: async (controller) => {
+          controller.enqueue(new TextEncoder().encode('first\n'));
+
+          await second.promise;
+
+          controller.enqueue(new TextEncoder().encode('second\n'));
+          controller.close();
+        },
+      });
+
+      return new Response(body, { headers: { 'content-type': 'application/x-ndjson' } });
+    },
+  });
+
+  await using ctx = await setupImpTest({
+    env: { ...pickPorts(), IMP_API_PORT: String(api.port) },
+  });
+
+  const proxy = startWakeProxy({
+    config: ctx.config,
+    db: ctx.db,
+    imps: ctx.imps,
+    log: () => {},
+    peers: createForwardedPeers(Date.now),
+  });
+
+  const apex = proxy.startListener({
+    port: 0,
+    hostname: '127.0.0.1',
+    route: () => ({ kind: 'api' }),
+  });
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${String(apex.port)}/images/build`, {
+      method: 'POST',
+      body: 'tar',
+    });
+
+    const lines = response.body?.pipeThrough(new TextDecoderStream()).getReader();
+
+    // the first line arrives while the API still holds the second
+    const first = await lines?.read();
+
+    expect(first?.value).toBe('first\n');
+
+    second.resolve();
+
+    const parts: string[] = [];
+
+    for (let chunk = await lines?.read(); chunk?.done === false; chunk = await lines?.read()) {
+      parts.push(chunk.value);
+    }
+
+    expect(parts.join('')).toBe('second\n');
+  } finally {
+    await apex.stop(true);
+    await proxy.stop();
+    await api.stop(true);
+  }
+});
+
 // What `tailscale serve` sends for a per-imp name (docs/guides/tailscale.md):
 // the service's Host, its own forwarding headers and the member's login. On
 // the imp's own port every one goes to the imp, never to impd's API.

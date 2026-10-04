@@ -135,19 +135,36 @@ test('a message split across chunks is read whole', async () => {
   expect(id).toBe(IMAGE_ID);
 });
 
-test('a refusal is impd’s failure; a context over the proxy’s limit is the client’s', async () => {
+// #173 turns #163's refusal-as-500 into the client's error, as impd's own
+// checks of the same rules answer; a 403 not from the proxy stays impd's
+test('a refusal and a context over the proxy’s limit are the client’s; other answers are impd’s', async () => {
   engine.answer = () => Response.json({ message: 'imp-docker-proxy: no' }, { status: 403 });
 
   const refused = await runBuild().catch((error: unknown) => error);
 
-  expect(refused).not.toBeInstanceOf(DockerBuildError);
-  expect(String(refused)).toContain('answered 403: imp-docker-proxy: no');
+  expect(refused).toMatchObject({ code: 'BAD_REQUEST', message: 'imp-docker-proxy: no' });
 
   engine.answer = () => Response.json({ message: 'too large' }, { status: 413 });
 
   const tooLarge = await runBuild().catch((error: unknown) => error);
 
   expect(tooLarge).toBeInstanceOf(DockerBuildError);
+
+  engine.answer = () => Response.json({ message: 'denied' }, { status: 403 });
+
+  const denied = await runBuild().catch((error: unknown) => error);
+
+  expect(denied).not.toBeInstanceOf(DockerBuildError);
+  expect(denied).not.toHaveProperty('code');
+  expect(String(denied)).toContain('answered 403: denied');
+
+  engine.answer = () =>
+    Response.json({ message: 'imp-docker-proxy: the engine call failed: x' }, { status: 502 });
+
+  const failed = await runBuild().catch((error: unknown) => error);
+
+  expect(failed).not.toHaveProperty('code');
+  expect(String(failed)).toContain('answered 502');
 });
 
 test('an abort ends the request while the build runs', async () => {

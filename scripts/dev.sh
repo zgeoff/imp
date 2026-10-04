@@ -44,6 +44,9 @@
 #      IMP_HTTPS_PORT, IMP_HTTP_PORT, the IMP_PUBLIC_* settings of public imps,
 #      and IMP_ACME_CA_FILE as a path under the repo. IMP_DNS_API_TOKEN, a
 #      secret, goes in .env. The public listeners are not published.
+#      IMP_MCP_PUBLIC_URL and IMP_MCP_PUBLIC_PORT turn on the public MCP route
+#      (docs/guides/mcp.md#public-route); its port is published on loopback
+#      at 7071 plus the offset, so the origin is http://127.0.0.1:<that port>.
 #      IMP_TAILNET_NAMES=1 turns on per-imp tailnet names, with
 #      IMP_TAILNET_NAME_PREFIX; the OAuth client comes from 1Password
 #      (write_tailnet_oauth_file in scripts/lib.sh) into <IMP_DEV_DATA>.
@@ -90,7 +93,8 @@ tuning_vars=(IMP_IDLE_TIMEOUT_S IMP_IDLE_CPU_PERCENT IMP_RAM_BUDGET_MIB IMP_BOOT
   IMP_HTTP_PORT IMP_PUBLIC_IP IMP_PUBLIC_HTTPS_PORT IMP_PUBLIC_HTTP_PORT IMP_E2E IMP_BROKER_PORT
   IMP_BACKUP_REPOSITORY IMP_BACKUP_PASSWORD_FILE
   IMP_BACKUP_INTERVAL_S IMP_BACKUP_KEEP IMP_BACKUP_FORGET IMP_BACKUP_CPUS IMP_BACKUP_MEMORY_MIB
-  IMP_BOOT_TEMPLATES IMP_JAILER IMP_JAILER_BIN IMP_MOVE_TEST_CIDR IMP_PEER_URL)
+  IMP_BOOT_TEMPLATES IMP_JAILER IMP_JAILER_BIN IMP_MOVE_TEST_CIDR IMP_PEER_URL
+  IMP_MCP_PUBLIC_URL IMP_MCP_PUBLIC_PORT)
 
 # in_container PATH maps a path under the repo to its /src path.
 in_container() {
@@ -255,6 +259,9 @@ up() {
       ports=(-p $((7070 + offset)):7070 -p $((7080 + offset)):7080
         -p $((20000 + offset))-$((20063 + offset)):20000-20063
         -p 127.0.0.1:$((2222 + offset)):22)
+      if [ -n "${IMP_MCP_PUBLIC_URL:-}" ]; then
+        ports+=(-p "127.0.0.1:$((7071 + offset)):${IMP_MCP_PUBLIC_PORT:-7071}")
+      fi
     fi
     # The repo is also mounted at its own path, so `imp image build <dir>`
     # paths the CLI resolves on this machine exist in the container.

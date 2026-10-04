@@ -64,7 +64,7 @@ export interface TokenStore {
   readonly create: (token: Readonly<NewToken>) => Promise<{ token: Token; secret: string }>;
 
   // NOT_FOUND for an unknown name; CONFLICT while authorized_keys lists one
-  // of its keys; calls onRemove with the token's id
+  // of its keys; calls onRemove with the token's id and its grants' ids
   readonly remove: (name: string) => Promise<void>;
 
   // CONFLICT for a key bound to any token or listed in authorized_keys
@@ -128,6 +128,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     imps: null,
     grantable: [],
     tokenId: ROOT_TOKEN_ID,
+    grantId: null,
     expiresAt: null,
 
     // the root token and a root dashboard session
@@ -251,7 +252,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 
       requireNotInFile(listKeys(record.id));
 
-      await removeTokenRecord(deps.db, record.id);
+      const grantIds = await removeTokenRecord(deps.db, record.id);
 
       byId.delete(record.id);
 
@@ -260,6 +261,11 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       }
 
       deps.onRemove(record.id);
+
+      // the OAuth grants it approved end with it, by their own ids too
+      for (const grantId of grantIds) {
+        deps.onRemove(grantId);
+      }
     },
     addKey: async (name, line) => {
       const record = requireByName(name);
@@ -433,6 +439,7 @@ function toCaller(record: Readonly<TokenRecord>): Caller {
     imps: record.imps,
     grantable: record.grantable,
     tokenId: record.id,
+    grantId: null,
     expiresAt: null,
 
     // by id, not name: a deleted token's id never comes back, so a new token

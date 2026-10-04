@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createSecretFiles } from '../broker/secret-files';
 import { openDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { buildImpPaths } from './data-layout';
@@ -296,4 +297,60 @@ test('a GC with orphans waits for a destroy that holds the gate', async () => {
 
   expect(swept).toEqual({ dryRun: false, dropped: [], kept: [] });
   expect(readdirSync(join(ctx.dataDir, 'imps'))).toEqual([]);
+});
+
+// Secret values the broker kept aside (docs/guides/connectors.md#value-files)
+// come only to a caller that asks with `secretFiles`: an older client does not
+// know kind `secrets`. Only `removeSecretFiles` with `orphans` deletes them.
+test('a GC lists the secret values kept aside when asked, and removes them only when told to', async () => {
+  await using ctx = await setupImpTest();
+
+  const app = buildTestApp(ctx, ctx);
+  const files = createSecretFiles(ctx.dataDir);
+
+  files.write('late.b2', 'npm_LATE');
+
+  const at = new Date('2026-10-04T05:30:00.000Z');
+
+  const kept = files.keepOrphansExcept(new Set(), at);
+  const id = '2026-10-04T05-30-00.000Z';
+
+  const unasked = await app.client.system.gc({ orphans: true });
+
+  expect(unasked.kept?.some((orphan) => orphan.kind === 'secrets')).toBe(false);
+  expect(unasked.dropped.some((dropped) => dropped.kind === 'secrets')).toBe(false);
+
+  const listed = await app.client.system.gc({ secretFiles: true });
+
+  expect(listed.kept?.filter((orphan) => orphan.kind === 'secrets')).toEqual([
+    {
+      kind: 'secrets',
+      id,
+      location: kept.dir ?? '',
+      bytes: 'npm_LATE'.length,
+      createdAt: at,
+      snapshots: [],
+      files: ['late.b2'],
+    },
+  ]);
+
+  // orphans alone retires disks and images, and only lists these
+  const orphans = await app.client.system.gc({ secretFiles: true, orphans: true });
+
+  expect(orphans.kept?.map((orphan) => orphan.id)).toContain(id);
+  expect(orphans.dropped).not.toContainEqual({ kind: 'secrets', id });
+  expect(existsSync(kept.dir ?? '')).toBe(true);
+
+  const told = { secretFiles: true, removeSecretFiles: true, orphans: true };
+
+  const dry = await app.client.system.gc({ ...told, dryRun: true });
+
+  expect(dry.dropped).toContainEqual({ kind: 'secrets', id });
+  expect(existsSync(kept.dir ?? '')).toBe(true);
+
+  const removed = await app.client.system.gc(told);
+
+  expect(removed.dropped).toContainEqual({ kind: 'secrets', id });
+  expect(existsSync(kept.dir ?? '')).toBe(false);
+  expect(files.listKept()).toEqual([]);
 });

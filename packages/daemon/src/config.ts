@@ -13,6 +13,8 @@ import type { Subnet } from './net/addressing';
 import { formatCidr6 } from './net/addressing6';
 import { parseIpv6Setting } from './net/ipv6-plan';
 import type { Ipv6Setting } from './net/ipv6-plan';
+import { PublicMcpEnvSchema, parsePublicMcpConfig } from './oauth/public-mcp-config';
+import type { PublicMcpConfig } from './oauth/public-mcp-config';
 import type { StorageBackendKind } from './storage/storage-backend';
 import {
   TailnetNamesEnvSchema,
@@ -110,6 +112,7 @@ const EnvSchema = z.object({
   IMP_MOVE_TEST_CIDR: z.cidrv4().optional(),
   ...HttpsEnvSchema.shape,
   ...TailnetNamesEnvSchema.shape,
+  ...PublicMcpEnvSchema.shape,
 });
 
 // image builds (docs/guides/images.md#isolated-builds)
@@ -263,6 +266,9 @@ export interface Config {
   // IMP_DOMAIN
   readonly https: HttpsConfig | null;
 
+  // the public MCP route behind OAuth; null when it is off
+  readonly publicMcp: PublicMcpConfig | null;
+
   // each imp's own name on the tailnet, as a Tailscale Service
   // (docs/guides/tailscale.md#per-imp-names); null unless IMP_TAILNET_NAMES=1
   readonly tailnetNames: TailnetNamesConfig | null;
@@ -398,6 +404,27 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     );
   }
 
+  const takenPorts: (readonly [string, number])[] = [
+    ['IMP_API_PORT', parsed.IMP_API_PORT],
+    ['IMP_PROXY_PORT', parsed.IMP_PROXY_PORT],
+    ['IMP_BROKER_PORT', parsed.IMP_BROKER_PORT],
+    ['IMP_EGRESS_DNS_PORT', parsed.IMP_EGRESS_DNS_PORT],
+    ['IMP_SSH_PORT', parsed.IMP_SSH_PORT],
+  ];
+
+  if (https !== null) {
+    takenPorts.push(['IMP_HTTPS_PORT', https.httpsPort], ['IMP_HTTP_PORT', https.httpPort]);
+
+    if (https.public !== null) {
+      takenPorts.push(
+        ['IMP_PUBLIC_HTTPS_PORT', https.public.httpsPort],
+        ['IMP_PUBLIC_HTTP_PORT', https.public.httpPort],
+      );
+    }
+  }
+
+  const publicMcp = parsePublicMcpConfig(parsed, takenPorts, [parsed.IMP_PORT_BASE, lastPort]);
+
   checkMoveSettings(parsed.IMP_MOVE_TEST_CIDR, parsed.IMP_PEER_URL, parsed.IMP_E2E === '1');
 
   return {
@@ -462,6 +489,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     dashboardDir: parsed.IMP_DASHBOARD_DIR ?? null,
     backup: loadBackupConfig(present),
     https,
+    publicMcp,
     tailnetNames: parseTailnetNamesConfig(parsed, parsed.IMP_DATA_DIR, isTailnetNode),
     moves: { peerUrl: parsed.IMP_PEER_URL ?? null, testCidr: parsed.IMP_MOVE_TEST_CIDR ?? null },
     warnings: listHttpsWarnings(parsed),

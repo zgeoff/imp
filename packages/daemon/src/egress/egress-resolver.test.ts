@@ -5,7 +5,11 @@ import type { Answer, DecodedPacket } from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
 import { findFreePorts } from '../net/test-free-ports';
 import { createDnsForward } from './dns-upstream';
-import { createQueryHandler, startResolverServer } from './egress-resolver';
+import {
+  createQueryHandler,
+  createSocketErrorReport,
+  startResolverServer,
+} from './egress-resolver';
 import type { QueryHandler, QueryVerdict, ResolverDeps } from './egress-resolver';
 import type { AddressAnswer } from './egress-sets';
 import { resolveNetworkName } from './network-names';
@@ -445,7 +449,9 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
     log: () => {},
   });
 
-  const server = await startResolverServer(ports.take(), parseSubnet('127.0.0.0/16'), handle);
+  const server = await startResolverServer(ports.take(), parseSubnet('127.0.0.0/16'), handle, {
+    log: () => {},
+  });
 
   try {
     // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
@@ -565,10 +571,7 @@ test('the TCP side closes an idle client and caps the clients of one slot', asyn
     findFreePorts(1).take(),
     parseSubnet('127.0.0.0/16'),
     handle,
-    {
-      idleS: 1,
-      maxPerSlot: 2,
-    },
+    { log: () => {}, limits: { idleS: 1, maxPerSlot: 2 } },
   );
 
   try {
@@ -626,6 +629,7 @@ test('with IPv6, an allowed AAAA goes in as an A does; without, it gets an empty
 test('a guest that goes before its reply leaves the resolver up: the ICMP error is not a crash', async () => {
   const ports = findFreePorts(1);
   const replied: string[] = [];
+  const logs: string[] = [];
 
   // slow enough that the first client has closed its port by the reply
   const writeSlowReply: QueryHandler = async (_source, message) => {
@@ -640,6 +644,11 @@ test('a guest that goes before its reply leaves the resolver up: the ICMP error 
     ports.take(),
     parseSubnet('127.0.0.0/16'),
     writeSlowReply,
+    {
+      log: (message) => {
+        logs.push(message);
+      },
+    },
   );
 
   try {
@@ -673,9 +682,59 @@ test('a guest that goes before its reply leaves the resolver up: the ICMP error 
     client.close();
 
     expect(answered.byteLength).toBeGreaterThan(0);
+
+    // routine: nothing logged
+    expect(logs).toEqual([]);
   } finally {
     server.stop();
   }
+});
+
+test('a resolver socket error that is not an ICMP refusal is logged, once a minute at most', () => {
+  const logs: string[] = [];
+  const clock = { now: 0 };
+
+  const report = createSocketErrorReport(
+    (message) => {
+      logs.push(message);
+    },
+    () => clock.now,
+  );
+
+  const queued = Object.assign(new Error('EHOSTDOWN: host is down, recv'), {
+    code: 'EHOSTDOWN',
+    errqueue: true,
+  });
+
+  const unreachable = Object.assign(new Error('ENETUNREACH: network is unreachable, send'), {
+    code: 'ENETUNREACH',
+  });
+
+  const other = Object.assign(new Error('ENOBUFS: no buffer space available, send'), {
+    code: 'ENOBUFS',
+  });
+
+  report(queued);
+  report(unreachable);
+
+  expect(logs).toEqual([]);
+
+  report(other);
+
+  clock.now = 30_000;
+
+  report(other);
+  report(other);
+
+  expect(logs).toEqual(['impd: egress: resolver socket: ENOBUFS: no buffer space available, send']);
+
+  clock.now = 60_000;
+
+  report(other);
+
+  expect(logs.at(-1)).toBe(
+    'impd: egress: resolver socket: ENOBUFS: no buffer space available, send (2 more since the last)',
+  );
 });
 
 test('an upstream that refuses with ICMP fails over at once, and ends nothing', async () => {

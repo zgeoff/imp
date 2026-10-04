@@ -261,12 +261,18 @@ interface ImpdTestOptions {
 
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
+
+  // the server's token is a manage token for these imps, not the root token
+  readonly tokenImps?: readonly string[];
+
+  // impd's environment, such as the public route's
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 // impd's app on a real port (exec needs a WebSocket) with the fake guest and
 // an image, and a client for it
 export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
-  const harness = await setupImpTest();
+  const harness = await setupImpTest({ ...(options.env !== undefined && { env: options.env }) });
 
   const guest = buildFakeGuest(options.oldAgent ?? false);
 
@@ -296,6 +302,7 @@ export async function setupImpdTest(options: Readonly<ImpdTestOptions> = {}) {
     guest,
     client,
     rootClient: built.client,
+    publicMcp: built.publicMcp,
     peers: built.peers,
     url,
     token: TEST_TOKEN,
@@ -312,6 +319,9 @@ interface McpTestOptions {
 
   // the imp's agent predates the group kill (protocol 0.8.0)
   readonly oldAgent?: boolean;
+
+  // the server's token is a manage token for these imps, not the root token
+  readonly tokenImps?: readonly string[];
 }
 
 // an impd as setupImpdTest makes it, and an MCP server in process over its
@@ -324,11 +334,21 @@ export async function setupMcpTest(options: Readonly<McpTestOptions> = {}) {
   const sent: unknown[] = [];
   const server = createMcpServer({ version: '1.2.3', progressIntervalMs: 50, killGraceMs: 50 });
 
+  const scoped =
+    options.tokenImps === undefined
+      ? null
+      : await impd.client.tokens.create({
+          name: 'mcp',
+          scope: 'manage',
+          imps: [...options.tokenImps],
+        });
+
   const context = {
     reply: (message: string) => {
       sent.push(JSON.parse(message));
     },
-    client: impd.client,
+    client:
+      scoped === null ? impd.client : createImpClient({ url: impd.url, token: scoped.secret }),
     guard: createImpGuard(options.guard ?? { all: true }),
     scope: options.scope ?? 'manage',
   };

@@ -35,9 +35,24 @@ put secrets into the sandbox as environment variables.
 A secret name has the same form as an imp name. The value must be printable ASCII without spaces,
 which every API token is. An imp may hold one credential per host, so two grants that cover the same
 host conflict. impd checks for the clash and makes the grant in one transaction, so two grants at
-once cannot both pass. A fork gets the grants of its source, as it gets the disk, less any that
-would clash with a grant the fork has by then; impd logs each one it skips. `imp rm` takes the imp's
-grants and audit rows with it.
+once cannot both pass. `imp rm` takes the imp's grants and audit rows with it.
+
+A fork copies the grants of its source, as it copies the disk, from the live disk or from a
+checkpoint alike. What it copies depends on who forks:
+
+- A host-wide caller (the root token, or a token with no imp patterns) copies every grant of the
+  source.
+- A token with imp patterns copies only the grants it could make itself: the secrets on its
+  grantable list, at the generation the list holds, while the token still exists
+  ([granting secrets](./tokens.md#granting-secrets)). A token with a grantable list may not fork
+  today, so every scoped token that forks has an empty list, and its fork copies no grant.
+
+impd checks each grant, and the clash with what the fork holds by then, in the one transaction that
+copies them. The fork's answer names each grant it did not get in `grantsNotCopied`, with the reason
+`not-grantable`, `clash` or `no-secret`. When the copy fails as a whole, the fork still exists with
+none of the grants, and `grantsError` says so; impd logs the cause. `imp fork` prints each one as a
+warning and exits 0, as the fork exists. A copied grant is the fork's own: a revoke on the source
+does not reach its forks, so revoke the secret from each fork too (`imp grants <fork>` lists them).
 
 Grants are host-wide: only a `manage` token with no imp patterns makes them, unless the token was
 given a list of secrets to grant to its imps ([granting secrets](./tokens.md#granting-secrets)).
@@ -82,8 +97,22 @@ the old value, or the new with the new. If the file is gone by then, the request
 (a 403); the broker never falls back to another file.
 
 impd removes the file a replace or a delete displaced once the transaction commits, and only that
-file. A file no row names, from a crash before the commit or before that removal, goes when impd
-next starts. A failed commit removes its new file and leaves the old one in place.
+file, so a deleted secret's value does not stay on disk. The transaction also records that file, and
+the record goes once the file does: if impd stops in between, or the removal fails, the next start
+removes the file. A failed commit removes its new file and leaves the old one in place.
+
+At start, impd never deletes a value file that no row and no such record names. It moves each one,
+temp files a crash left included, into `<data>/secrets/.orphaned/<start time>/` (mode 0700) and logs
+`impd: broker: kept secret value file <file>, which no database row names, in <dir>`. Such a file is
+the value of a secret added after the database copy a restore put back, or of an add or a replace
+that impd stopped in before its commit: that value was never stored, but its file was written. impd
+does not read these files again. `imp gc` lists each directory as kind `secrets`, with how many
+files it holds, and `imp gc --orphans` leaves them.
+
+**CAUTION:** after a database restore, these files may hold the only copy of a secret's value.
+Recover the values first: check each file, and add back with `imp secret add` any value you still
+need. Only then run `imp gc --orphans --secret-files`, which deletes the directories and cannot be
+undone ([storage cleanup](./operations.md#storage-cleanup)).
 
 ### Restores
 
@@ -92,7 +121,9 @@ next starts. A failed commit removes its new file and leaves the old one in plac
 - A backup restore still re-creates the grants a backup lists, as fresh host-authorized grants
   against the current secrets: each one takes the secret's generation now and passes the clash
   check. A grant revoked after the backup is created again, so revoke it again if needed.
-- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism.
+- Restoring the whole host database rolls back revocations. imp has no anti-rollback mechanism. The
+  values of secrets added after the copy are kept aside at the next start
+  ([value files](#value-files)), not deleted.
 
 ### Kinds
 
@@ -155,7 +186,8 @@ sends in the header and sets the real value.
    or the distro's path, CAs the guest added included) plus the broker CA. A guest with no root
    bundle gets the host's roots instead. The exec leaves the file alone when it already holds that
    bundle. If it fails (an image with no `/bin/sh`), that exec runs without the broker's variables
-   instead of with a CA nothing trusts, impd logs why, and the next exec tries again.
+   instead of with a CA nothing trusts, impd logs why, and the next exec tries again. An exec that
+   [requires the broker](#requiring-the-broker) is refused instead.
 
 ### One CA for the host
 
@@ -166,6 +198,59 @@ has its own server, and it serves only the credential granted to that imp. The C
 `<data>/broker/ca/ca.pem`, with its key in `ca.key` (0600, in a 0700 directory). Leaves last one
 year and are issued again 30 days before they end. Each leaf has a SAN, `serverAuth` and the CA's
 key id, so strict verifiers such as Python 3.13 accept it.
+
+### Requiring the broker
+
+An exec without the broker's variables still keeps the credential out of the guest, but its command
+then runs with no credential at all. A caller that must never start a command without the broker
+sets `require: ['broker']` on the `/exec` `start`: `imp exec --require broker`, the SDK's
+`openExec(name, argv, { require: ['broker'] })`, or `require` on the MCP `imp_exec` tool. The SSH
+gateway takes no requirement.
+
+impd checks it at each exec, after the CA bundle step and before the command starts, in the same
+step that adds the variables. It refuses the exec with `PRECONDITION_FAILED`,
+`data.reason: 'broker_not_ready'` and a `data.detail` that names the cause when:
+
+- the imp has no grant, so impd sets no broker variables;
+- the CA bundle step failed for this boot (the detail carries its error). A step that has not run
+  for this boot yet runs first;
+- the exec's own `env` sets a variable the broker sets, such as `HTTPS_PROXY` or `SSL_CERT_FILE`, or
+  a placeholder variable of a granted kind, such as `GH_TOKEN` with a value of the caller's own;
+- the variables lack `HTTPS_PROXY` for any other reason;
+- it is an exec in the agent (`outer`), which never gets the broker's variables. The protocol
+  refuses `require` with `outer` or a `tool` before that.
+
+The command never starts then. impd mints a boot id when the imp runs under a new Firecracker
+process, and drops it when the imp stops, sleeps or halts, so a pid the kernel hands out again is
+still a new boot. After a wake, a snapshot restore or a checkpoint restore, the next exec runs the
+bundle step again. impd holds the imp's lock from the bundle step until the agent starts the
+command, so no restore, reboot or sleep can replace the guest in between. Such an exec can wait
+behind a locked operation, such as a restore under way.
+
+A `start` that names a session that already runs attaches to it, and one whose `resumeFrom` names an
+exited run that the agent still holds attaches to that run. With `require: ['broker']`, the attach
+passes only when that run of the session was itself started with `require: ['broker']`. impd records
+each such run by its execution generation (one run of a session's process) in its database, so the
+record holds across sleeps, wakes and impd restarts, and a cold boot or a session started again
+without the requirement is a new run it does not cover. impd reads the agent's session list before
+it opens anything, so a refused attach almost never reaches the agent and the client attached to the
+session keeps it. One race remains: a plain exec takes no imp lock, so it can start that session
+between impd's list and its open, and the refused attach then takes the new session from its viewer;
+a start in the agent that only creates a session, and fails if one runs, would close it. The refusal
+is `broker_not_ready` with the detail `session <name> was started without the broker requirement`. A
+session on an agent from before output offsets, which names no generation, and one an imp brought
+from another host, never pass.
+
+The boundary is exactly this: impd set the broker's variables and the CA bundle for this boot before
+it started the command. It does not prove that the process uses them: a command can unset
+`HTTPS_PROXY`, or ignore it, and then it reaches the network without the broker, and without the
+credential.
+
+`system.info().features.execRequire` is `true` on an impd that checks requirements (0.30.0). An
+older impd drops `require` unread and runs the command, so the CLI and every SDK exec call check the
+feature first. Without it they fail with `PRECONDITION_FAILED` and `data.reason: 'impd_outdated'`
+(upgrade impd) without starting anything, where `broker_not_ready` means the broker is not ready on
+an impd that checks. A client that sends the `start` itself must check the same.
 
 ## Where secrets are
 

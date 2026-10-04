@@ -1,5 +1,6 @@
 import { availableParallelism } from 'node:os';
 import type { EgressPolicy } from '@imp/api';
+import type { BrokerExecEnv } from '../broker/guest-trust';
 import type { Config } from '../config';
 import { TEMPLATE_BUILD_UID } from '../db/imps';
 import type { ImpRecord } from '../db/imps';
@@ -106,8 +107,9 @@ export interface ImpServiceDeps {
   readonly now?: () => number;
 
   // `KEY=VALUE` entries every exec in the imp starts with, under the
-  // caller's own: the credential broker's proxy and CA variables
-  readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  // caller's own: the credential broker's proxy and CA variables, or why
+  // there are none
+  readonly readExecEnv?: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
 
   // every imp operation joins it under the imp's lock (storage-gate.ts)
   readonly storageGate?: StorageGate;
@@ -166,7 +168,7 @@ export interface ImpContext {
   readonly readTailnetHostname: (() => Promise<string | null>) | undefined;
   readonly readServiceUrl: (name: string) => string | null;
   readonly now: () => number;
-  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<readonly string[]>;
+  readonly readExecEnv: (imp: ImpRecord, vsockPath: string) => Promise<BrokerExecEnv>;
   readonly growFilesystem: (disk: string) => Promise<boolean>;
   readonly storageGate: StorageGate;
   readonly diskBudget: DiskBudget;
@@ -236,7 +238,7 @@ export function createImpContext(deps: ImpServiceDeps): ImpContext {
     readTailnetHostname: deps.readTailnetHostname,
     readServiceUrl: deps.readServiceUrl ?? (() => null),
     now: deps.now ?? Date.now,
-    readExecEnv: deps.readExecEnv ?? (() => Promise.resolve([])),
+    readExecEnv: deps.readExecEnv ?? (() => Promise.resolve({ kind: 'ungranted' })),
     growFilesystem: deps.growFilesystem ?? growFilesystem,
     readDiskUsage: deps.readDiskUsage ?? (() => {}),
     storageGate: deps.storageGate ?? createStorageGate(),

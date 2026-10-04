@@ -25,6 +25,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   fence that keeps one host's copy live, and recovery.
 - [Sleep and wake](./architecture/sleep-and-wake.md): memory snapshots, idle detection, the RAM
   governor, and the prototype findings behind them.
+- [Boot templates](./architecture/boot-templates.md): how a cold boot restores a parked guest per
+  shape instead of booting its kernel, the limits, and the RAM it costs.
 - [Elastic memory](./architecture/memory.md): `--max-memory`, how a guest grows and shrinks with
   virtio-mem, the governor's part, and what it costs a sleep.
 
@@ -48,8 +50,6 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
   login, and how to build, run and test it.
 - [MCP server](./guides/mcp.md): `imp mcp` and impd's `/mcp` endpoint, the tools a coding agent
   gets, the guard, and how exec output, timeouts and cancels work.
-- [More than one host](./guides/hosts.md): `imp new --place` on the saved host with the most free
-  RAM, and `imp ls --all` over every saved host.
 - [Private networks](./guides/networks.md): `imp net`, which imps reach which, and the
   `<imp>.<network>.internal` names.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
@@ -58,7 +58,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [Copying files](./guides/cp.md): `imp cp` into and out of an imp, what a copy keeps, how it works,
   and its safety rules.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.
-- [More than one host](./guides/hosts.md): `imp move`, what a move keeps, the URLs, tickets,
+- [More than one host](./guides/hosts.md): `imp new --place` on the saved host with the most free
+  RAM, `imp ls --all` over every saved host, and `imp move`: what a move keeps, the URLs, tickets,
   failures and limits.
 - [Tokens and identities](./guides/tokens.md): scopes, imp patterns, `imp token`, and tailnet
   identity.

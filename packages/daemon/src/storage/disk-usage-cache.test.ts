@@ -7,7 +7,9 @@ import type { DiskUsageReport, StorageBackend } from './storage-backend';
 
 type MeasureUsage = StorageBackend['measureUsage'];
 
-async function setupCache(measureUsage: MeasureUsage) {
+type CacheOptions = Pick<Parameters<typeof createDiskUsageCache>[0], 'now' | 'refreshDelayMs'>;
+
+async function setupCache(measureUsage: MeasureUsage, options: CacheOptions = {}) {
   const ctx = await setupTestDatabase();
 
   const logs: string[] = [];
@@ -30,6 +32,7 @@ async function setupCache(measureUsage: MeasureUsage) {
       logs.push(message);
     },
     now: () => new Date(5000),
+    ...options,
   });
 
   return Object.assign(ctx, { imp, cache, logs });
@@ -114,4 +117,79 @@ test('an imp a cut-short pass did not reach keeps its last count', async () => {
   await ctx.cache.runPass();
 
   expect(ctx.cache.read(ctx.imp.id)).toMatchObject({ exclusiveBytes: 10, isPartial: false });
+});
+
+test('a count carries the time its pass started, not the time it ended', async () => {
+  const clock = { ms: 1000 };
+
+  await using ctx = await setupCache(
+    (imps) => {
+      // the measure is slow: a write lands while it runs
+      clock.ms = 9000;
+
+      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
+    },
+    { now: () => new Date(clock.ms) },
+  );
+
+  await ctx.cache.runPass();
+
+  expect(ctx.cache.read(ctx.imp.id)?.measuredAt).toEqual(new Date(1000));
+});
+
+test('a refresh asked for during a pass runs a pass of its own after it', async () => {
+  const gate = Promise.withResolvers<DiskUsageReport>();
+  const second = Promise.withResolvers<undefined>();
+  const state = { calls: 0 };
+
+  await using ctx = await setupCache(
+    (imps) => {
+      state.calls += 1;
+
+      if (state.calls === 1) {
+        return gate.promise;
+      }
+
+      second.resolve(undefined);
+
+      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
+    },
+    { refreshDelayMs: 0 },
+  );
+
+  const first = ctx.cache.runPass();
+
+  ctx.cache.requestRefresh();
+
+  // the refresh's timer fires while the first pass still measures
+  await Bun.sleep(5);
+
+  expect(state.calls).toBe(1);
+
+  gate.resolve(buildReport(ctx.imp.id, true));
+
+  await first;
+  await second.promise;
+
+  expect(state.calls).toBe(2);
+});
+
+test('after stop, a refresh runs no pass', async () => {
+  const state = { calls: 0 };
+
+  await using ctx = await setupCache(
+    (imps) => {
+      state.calls += 1;
+
+      return Promise.resolve(buildReport(imps[0]?.impId ?? '', false));
+    },
+    { refreshDelayMs: 0 },
+  );
+
+  ctx.cache.stop();
+  ctx.cache.requestRefresh();
+
+  await Bun.sleep(5);
+
+  expect(state.calls).toBe(0);
 });

@@ -1,5 +1,5 @@
 import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
-import type { Image, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
+import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
 import { buildBuilderError, buildForbiddenError } from './api-errors';
@@ -8,8 +8,10 @@ import type { ApiAudit } from './audit/api-audit';
 import {
   checkAccess,
   findAccess,
+  findForkAuthority,
   findGrantAuthority,
   isAuditedProcedure,
+  isRefusalAudited,
 } from './auth/access-policy';
 import { readChangedImps } from './auth/builder-calls';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
@@ -29,6 +31,7 @@ import type { Broker } from './broker/broker-service';
 import type { CheckpointService } from './checkpoints/checkpoint-service';
 import type { Config } from './config';
 import { listApiCalls } from './db/api-audit';
+import { writeDatabaseCopy } from './db/database-copy';
 import type { ImageRecord } from './db/images';
 import { findImpByName, listImps } from './db/imps';
 import type { ImpRecord } from './db/imps';
@@ -43,6 +46,8 @@ import type { DnsTokenStatus } from './https/dns/dns-token';
 import { createExposureService } from './https/exposure-service';
 import type { RecordsStatus } from './https/https-service';
 import type { PublicRecordsLink } from './https/public-records-link';
+import { runImageOp } from './images/image-op-stream';
+import type { ImageOpStreamOptions } from './images/image-op-stream';
 import type { ImageService } from './images/image-service';
 import type { TemplateService } from './images/template-service';
 import { countBootStatuses } from './imps/boot-status';
@@ -51,6 +56,7 @@ import type { ImpService } from './imps/imp-service';
 import type { MoveService } from './moves/move-service';
 import type { TailscaleStatus } from './net/tailscale-status';
 import type { NetworkService } from './networks/network-service';
+import type { OAuthService } from './oauth/oauth-service';
 import type { DiskBudget } from './storage/disk-budget';
 import type { StorageBackend } from './storage/storage-backend';
 import type { StorageGcService } from './storage/storage-gc';
@@ -97,12 +103,25 @@ export interface RouterDeps {
   readonly checkDnsToken: (() => Promise<DnsTokenStatus>) | null;
   readonly execTickets: ExecTickets;
   readonly storage: Pick<StorageBackend, 'kind'>;
-  readonly diskBudget: Pick<DiskBudget, 'readStatus'>;
+  readonly diskBudget: Pick<DiskBudget, 'readStatus' | 'withRoom'>;
   readonly gc: Pick<StorageGcService, 'runGc'>;
   readonly now: () => number;
   readonly log: (message: string) => void;
   readonly audit: ApiAudit;
   readonly tokens: TokenStore;
+
+  // the gap between progress events of a streamed image add or build
+  readonly imageKeepaliveMs: number;
+
+  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
+  readonly oauth: OAuthService;
+}
+
+// what a streamed image call's options are made from
+interface ImageOpCall {
+  readonly context: RpcContext;
+  readonly input: unknown;
+  readonly signal?: AbortSignal | undefined;
 }
 
 // what each call gets from build-app: who made it, and a signal that aborts
@@ -155,16 +174,6 @@ export function buildRouter(deps: RouterDeps) {
         }
       };
 
-      if (!isAuditedProcedure(procedure)) {
-        try {
-          await requireAccess();
-
-          return await options.next();
-        } catch (error) {
-          throw toCallerError(error, caller);
-        }
-      }
-
       const startedAt = deps.now();
 
       const buildCall = (output: unknown) => ({
@@ -173,6 +182,24 @@ export function buildRouter(deps: RouterDeps) {
         impName: readImpName(procedure, input, output),
         startedAt,
       });
+
+      if (!isAuditedProcedure(procedure)) {
+        try {
+          await requireAccess();
+        } catch (error) {
+          if (isRefusalAudited(procedure)) {
+            deps.audit.record(buildCall(null), error);
+          }
+
+          throw toCallerError(error, caller);
+        }
+
+        try {
+          return await options.next();
+        } catch (error) {
+          throw toCallerError(error, caller);
+        }
+      }
 
       try {
         await requireAccess();
@@ -197,6 +224,28 @@ export function buildRouter(deps: RouterDeps) {
     const at = new Date(deps.now());
 
     return imps.map((imp) => ({ v: EVENT_VERSION, at, ev: 'ImpAdded', reason: 'snapshot', imp }));
+  };
+
+  // A streamed image call audits itself as its work ends, so the row holds
+  // the outcome rather than the stream's opening (access-policy.ts)
+  const buildImageOpOptions = (
+    call: Readonly<ImageOpCall>,
+    procedure: string,
+    firstPhase: ImageBuildPhase,
+  ): ImageOpStreamOptions => {
+    const startedAt = deps.now();
+
+    return {
+      firstPhase,
+      signal: call.signal ?? new AbortController().signal,
+      keepaliveMs: deps.imageKeepaliveMs,
+      now: deps.now,
+      record: (failure) => {
+        const impName = readImpName(procedure, call.input, null);
+
+        deps.audit.record({ procedure, actor: call.context.caller, impName, startedAt }, failure);
+      },
+    };
   };
 
   // one for every stream: each event is checked once, whoever reads it
@@ -340,13 +389,24 @@ export function buildRouter(deps: RouterDeps) {
         return toCallerImp(context.context.caller, deps.imps.getImp(context.input.name));
       }),
 
-      // a fork gets its source's grants, as it gets its disk
+      // a fork gets its source's grants the caller could make, as it gets
+      // its disk; the answer names the rest
       fork: os.imps.fork.handler(async (context) => {
-        const imp = await deps.checkpoints.forkImp(context.input);
+        const caller = context.context.caller;
 
-        await deps.broker.createForkGrants(context.input.source, imp.name);
+        const forked = await deps.checkpoints.forkImp(context.input);
 
-        return toCallerImp(context.context.caller, imp);
+        const copied = await deps.broker.createForkGrants(
+          { id: forked.sourceId, name: context.input.source },
+          forked.imp,
+          findForkAuthority(caller),
+        );
+
+        return {
+          ...(await toCallerImp(caller, forked.imp)),
+          grantsNotCopied: copied.notCopied,
+          ...(copied.error !== null && { grantsError: copied.error }),
+        };
       }),
     },
     leases: {
@@ -481,6 +541,39 @@ export function buildRouter(deps: RouterDeps) {
 
         return toApiImage(image);
       }),
+      addStream: os.images.addStream.handler((context) => {
+        const input = context.input;
+        const firstPhase = 'imp' in input ? 'copy' : 'pull';
+
+        return runImageOp(
+          async (signal, setPhase) => {
+            // a template copies an imp's disk under its lock: no client
+            // stops it, as with images.add
+            const image =
+              'imp' in input
+                ? await deps.templates.createTemplate(input.imp, input.name)
+                : await deps.images.addImage(input.ref, input.name, { signal, setPhase });
+
+            return toApiImage(image);
+          },
+          buildImageOpOptions(context, 'images.addStream', firstPhase),
+        );
+      }),
+      buildStream: os.images.buildStream.handler((context) =>
+        runImageOp(
+          async (signal, setPhase) => {
+            const image = await deps.images.buildImage(
+              context.input.contextDir,
+              context.input.name,
+              context.input.dockerfile,
+              { signal, setPhase },
+            );
+
+            return toApiImage(image);
+          },
+          buildImageOpOptions(context, 'images.buildStream', 'pack'),
+        ),
+      ),
       build: os.images.build.handler(async (context) => {
         const image = await deps.images.buildImage(
           context.input.contextDir,
@@ -680,8 +773,68 @@ export function buildRouter(deps: RouterDeps) {
         deps.gc.runGc({
           isDryRun: context.input.dryRun ?? false,
           isOrphans: context.input.orphans ?? false,
+          isSecretFiles: context.input.secretFiles ?? false,
+          isRemoveSecretFiles: context.input.removeSecretFiles ?? false,
         }),
       ),
+      copyDatabase: os.system.copyDatabase.handler(async (context) => {
+        const copy = await writeDatabaseCopy(
+          deps.db,
+          deps.diskBudget,
+          deps.config.dataDir,
+          context.input.name ?? buildCopyName(deps.now()),
+          deps.now,
+        );
+
+        // in the contract's order, which a restore script's output follows
+        return {
+          path: copy.path,
+          sizeBytes: copy.sizeBytes,
+          lastMigration: copy.lastMigration,
+          impVersion: packageJson.version,
+          createdAt: copy.createdAt,
+          integrity: copy.integrity,
+        };
+      }),
+    },
+    oauth: {
+      clients: {
+        list: os.oauth.clients.list.handler(() => deps.oauth.listClients()),
+        add: os.oauth.clients.add.handler((context) =>
+          deps.oauth.addClient(context.input.name, context.input.redirectUris),
+        ),
+        update: os.oauth.clients.update.handler((context) =>
+          deps.oauth.updateClient(context.input.name, context.input.redirectUris),
+        ),
+        delete: os.oauth.clients.delete.handler(async (context) => {
+          await deps.oauth.removeClient(context.input.name);
+
+          return {};
+        }),
+      },
+      grants: {
+        list: os.oauth.grants.list.handler(() => deps.oauth.listGrants()),
+        delete: os.oauth.grants.delete.handler(async (context) => {
+          await deps.oauth.removeGrant(context.input.id);
+
+          return {};
+        }),
+      },
+      approvals: {
+        get: os.oauth.approvals.get.handler((context) =>
+          deps.oauth.readApproval(context.input.code, context.context.caller),
+        ),
+        approve: os.oauth.approvals.approve.handler((context) => {
+          deps.oauth.approve(
+            context.input.code,
+            context.context.caller,
+            context.input.scope,
+            context.input.imps,
+          );
+
+          return {};
+        }),
+      },
     },
     tokens: {
       list: os.tokens.list.handler(() => deps.tokens.list()),
@@ -719,8 +872,21 @@ const SYSTEM_FEATURES = {
   leases: true,
   grantableTokens: true,
   secretRebind: true,
+  databaseCopy: true,
+  imageBuildStream: true,
+  imageOpStream: true,
+  execRequire: true,
+  oauthGrants: true,
+  secretFilesGc: true,
   publicEgress: true,
 } as const;
+
+// imp-20261004-061233: a name's form, in UTC, to the second
+function buildCopyName(now: number): string {
+  const stamp = new Date(now).toISOString().slice(0, 19).replaceAll(/[-:]/g, '').replace('T', '-');
+
+  return `imp-${stamp}`;
+}
 
 // RAM used is measured (what awake Firecrackers own); committed is the memory
 // the awake imps were given
