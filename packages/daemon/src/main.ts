@@ -524,6 +524,7 @@ async function main(): Promise<void> {
     startTicker('oauth-expiry', 3_600_000, oauth.removeExpired, printLog),
     startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
     startTicker('resources', 5000, imps.sampleResources, printLog),
+    startTicker('session-logs', 60_000, imps.sweepSessionLogs, printLog),
 
     // elastic guests grow within a second of running low
     startTicker('memory', 500, governed.memory.runTick, printLog),

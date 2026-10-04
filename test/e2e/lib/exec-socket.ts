@@ -32,6 +32,7 @@ const OutputSchema = z
       })
       .readonly()
       .optional(),
+    log: z.object({ enabled: z.boolean() }).readonly().optional(),
   })
   .readonly();
 
@@ -67,6 +68,7 @@ export type SessionOpen =
       readonly argv: readonly string[];
       readonly tty: true;
       readonly resumeFrom?: ResumeFrom;
+      readonly log?: true;
     }
   | {
       readonly type: 'attach';

@@ -181,6 +181,10 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
 
       return lock.withNewImp(id, writeRecord, async (imp) => {
         const paths = context.findPaths(imp.id);
+
+        // a destroyed imp's id comes back on a move home
+        context.sessionLogs.admitImp(imp.id);
+
         const started = performance.now();
         const recordMs = Math.round(started - received);
 
@@ -528,6 +532,8 @@ async function removeImpFiles(
   checkpointIds: readonly string[],
 ): Promise<void> {
   const paths = context.findPaths(impId);
+
+  context.sessionLogs.forgetImp(impId);
 
   await context.storage.removeImpDisk(impId, checkpointIds);
 
