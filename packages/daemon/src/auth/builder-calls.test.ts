@@ -12,6 +12,7 @@ const NOT_AN_IMP_CALLS = new Set([
   'backups.restore',
   'leases.list',
   'images.build',
+  'images.buildStream',
   'images.delete',
   'secrets.add',
   'secrets.delete',
@@ -21,6 +22,10 @@ const NOT_AN_IMP_CALLS = new Set([
   'tokens.delete',
   'tokens.addKey',
   'tokens.removeKey',
+  'oauth.clients.add',
+  'oauth.clients.update',
+  'oauth.clients.delete',
+  'system.copyDatabase',
 ]);
 
 const IMP_FIELDS = new Set(['name', 'imp', 'source']);

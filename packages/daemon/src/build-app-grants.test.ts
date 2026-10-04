@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from 'bun:test';
+import { ImpSchema } from '@imp/api';
 import type { ImpContract, Scope } from '@imp/api';
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
@@ -10,6 +11,9 @@ import { loadTokenStore } from './auth/token-store';
 import type { Broker } from './broker/broker-service';
 import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
+import { createForkGrants } from './db/secrets';
+import type { ForkAuthority } from './db/secrets';
+import { listTokenRecords } from './db/tokens';
 import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 import { createEd25519Key } from './ssh/host-key';
 
@@ -25,7 +29,9 @@ interface RequestHandler {
 
 interface TokenOptions {
   readonly scope?: Scope;
-  readonly imps?: readonly string[];
+
+  // null: host-wide
+  readonly imps?: readonly string[] | null;
   readonly grantable?: readonly string[];
 }
 
@@ -57,7 +63,7 @@ async function setupTest() {
     const made = await root.client.tokens.create({
       name,
       scope: options.scope ?? 'manage',
-      imps: [...(options.imps ?? ['dev-*'])],
+      ...(options.imps !== null && { imps: [...(options.imps ?? ['dev-*'])] }),
       ...(options.grantable !== undefined && { grantable: [...options.grantable] }),
     });
 
@@ -98,7 +104,8 @@ async function setupTest() {
   };
 
   // an app whose grants and revokes run `between` after the access check
-  // and before their transaction
+  // and before their transaction, and whose forks run it after the fork is
+  // made and before its grants are copied
   const buildAppWithGap = (between: () => Promise<void>) => {
     const broker: Broker = {
       ...harness.broker,
@@ -111,6 +118,11 @@ async function setupTest() {
         await between();
 
         return harness.broker.removeGrant(...args);
+      },
+      createForkGrants: async (...args) => {
+        await between();
+
+        return harness.broker.createForkGrants(...args);
       },
     };
 
@@ -344,12 +356,13 @@ test('a token that may grant forks and moves nothing, and leaves nothing behind'
   expect(imps.map((imp) => imp.name)).toEqual(['dev-a', 'prod']);
   expect(tickets).toEqual([]);
 
-  // the same patterns without a list fork as before, grants and all
-  await plain.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
-
+  // the same patterns without a list fork, but copy no grant they could
+  // not make
+  const fork = await plain.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
   const forked = await ctx.client.grants.list({ name: 'dev-b' });
 
-  expect(forked).toEqual(['npm']);
+  expect(forked).toEqual([]);
+  expect(fork.grantsNotCopied).toEqual([{ secret: 'npm', reason: 'not-grantable' }]);
 });
 
 test('a listed secret deleted, or deleted and made again, grants nothing, even after a restart', async () => {
@@ -712,4 +725,274 @@ test('its ssh keys and dashboard sessions may not fork or move, even with every 
   ]);
 
   expect(browserRefusals).toEqual(['FORBIDDEN', 'FORBIDDEN']);
+});
+
+// A fork copies its source's grants only as far as the caller could make
+// them (docs/guides/connectors.md#secrets-and-grants): every one for a
+// host-wide caller, none it could not grant for a caller with patterns.
+
+test('root and host-wide manage forks copy every grant; a scoped fork copies none, live or from a checkpoint', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  const checkpoint = await ctx.client.checkpoints.create({ name: 'dev-a' });
+  const host = await ctx.createToken('host', { imps: null });
+  const scoped = await ctx.createToken('scoped');
+
+  const callers = [
+    ['root', ctx.client],
+    ['host', host.client],
+    ['scoped', scoped.client],
+  ] as const;
+
+  const outcomes: unknown[] = [];
+
+  for (const [who, client] of callers) {
+    for (const from of [undefined, checkpoint.id]) {
+      const name = `dev-${who}-${from === undefined ? 'live' : 'cp'}`;
+
+      const fork = await client.imps.fork({
+        source: 'dev-a',
+        name,
+        ...(from !== undefined && { checkpoint: from }),
+      });
+
+      const grants = await ctx.client.grants.list({ name });
+
+      outcomes.push({ name, grants, notCopied: fork.grantsNotCopied, error: fork.grantsError });
+    }
+  }
+
+  const skipped = [
+    { secret: 'gh', reason: 'not-grantable' },
+    { secret: 'npm', reason: 'not-grantable' },
+  ];
+
+  expect(outcomes).toEqual([
+    { name: 'dev-root-live', grants: ['gh', 'npm'], notCopied: [], error: undefined },
+    { name: 'dev-root-cp', grants: ['gh', 'npm'], notCopied: [], error: undefined },
+    { name: 'dev-host-live', grants: ['gh', 'npm'], notCopied: [], error: undefined },
+    { name: 'dev-host-cp', grants: ['gh', 'npm'], notCopied: [], error: undefined },
+    { name: 'dev-scoped-live', grants: [], notCopied: skipped, error: undefined },
+    { name: 'dev-scoped-cp', grants: [], notCopied: skipped, error: undefined },
+  ]);
+});
+
+test('a grant made on the fork before the copy is named as a clash', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.secrets.add({
+    name: 'gh-api',
+    kind: 'custom',
+    value: VALUE,
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+  });
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  // the fork exists by then, so a host-wide grant on it lands first
+  const gapped = ctx.buildAppWithGap(async () => {
+    await ctx.client.grants.add({ name: 'dev-b', secret: 'gh-api' });
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+
+  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(fork.grantsNotCopied).toEqual([{ secret: 'gh', reason: 'clash' }]);
+  expect(grants).toEqual(['gh-api', 'npm']);
+  expect(ctx.logs.join('\n')).toContain('forked without grant gh of dev-a');
+});
+
+test('a rebind between the fork and the copy copies the grants left after it', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  // the rebind drops every grant of gh, the source's too
+  const gapped = ctx.buildAppWithGap(async () => {
+    await ctx.client.secrets.add({
+      name: 'gh',
+      kind: 'custom',
+      value: VALUE,
+      rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+      replace: true,
+      rebind: true,
+    });
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+
+  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(fork.grantsNotCopied).toEqual([]);
+  expect(grants).toEqual(['npm']);
+});
+
+test('a source destroyed and made again under its name before the copy lends the fork nothing', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  // the new dev-a holds npm: a copy by name would hand it to the fork
+  const gapped = ctx.buildAppWithGap(async () => {
+    await ctx.client.imps.destroy({ name: 'dev-a' });
+    await ctx.client.imps.create({ name: 'dev-a' });
+    await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  });
+
+  const client = buildClient(gapped.app, { authorization: `Bearer ${TEST_TOKEN}` });
+
+  const fork = await client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(fork.grantsNotCopied).toEqual([]);
+  expect(fork.grantsError).toBeUndefined();
+  expect(grants).toEqual([]);
+});
+
+test('a revoke on the source after a fork does not reach the fork', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  await ctx.client.grants.delete({ name: 'dev-a', secret: 'gh' });
+
+  const grants = await Promise.all([
+    ctx.client.grants.list({ name: 'dev-a' }),
+    ctx.client.grants.list({ name: 'dev-b' }),
+  ]);
+
+  expect(grants).toEqual([[], ['gh']]);
+});
+
+test('a fork whose copy fails as a whole is still returned, with the error and no grant', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+
+  // the copy writes gh, then fails to read npm: the transaction takes gh back
+  await ctx.db
+    .updateTable('secrets')
+    .set({ rules: 'not json' })
+    .where('name', '=', 'npm')
+    .execute();
+
+  const fork = await ctx.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(fork.name).toBe('dev-b');
+  expect(fork.grantsNotCopied).toEqual([]);
+  expect(fork.grantsError).toContain('could not be copied');
+  expect(fork.grantsError).not.toContain('JSON');
+  expect(grants).toEqual([]);
+  expect(ctx.logs.join('\n')).toContain('forked without the grants of dev-a');
+});
+
+test('an older client reads a fork answer with the new fields', async () => {
+  await using ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const scoped = await ctx.createToken('scoped');
+  const fork = await scoped.client.imps.fork({ source: 'dev-a', name: 'dev-b' });
+
+  // the output schema before the report: a plain object drops the fields
+  const parsed = ImpSchema.parse(fork);
+
+  expect(parsed.name).toBe('dev-b');
+  expect(parsed).not.toHaveProperty('grantsNotCopied');
+});
+
+// The copy's own checks, for a caller whose list is not empty: no such
+// caller reaches imps.fork today (it is refused first), so these call the
+// copy as the handler would, with the authority read at the access check.
+
+async function setupListedFork() {
+  const ctx = await setupTest();
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'npm' });
+  await ctx.client.imps.create({ name: 'dev-b' });
+  await ctx.createToken('agent', { grantable: ['gh'] });
+
+  const records = await listTokenRecords(ctx.db);
+
+  const token = records.find((record) => record.name === 'agent');
+
+  const authority: ForkAuthority = {
+    tokenId: token?.id ?? null,
+    grantable: token?.grantable ?? [],
+  };
+
+  const [from, to] = await Promise.all([
+    findImpByName(ctx.db, 'dev-a'),
+    findImpByName(ctx.db, 'dev-b'),
+  ]);
+
+  const runCopy = () => createForkGrants(ctx.db, from?.id ?? '', to?.id ?? '', authority);
+
+  return Object.assign(ctx, { runCopy });
+}
+
+test('a listed caller’s fork copies the secrets on its list, and names the rest', async () => {
+  await using ctx = await setupListedFork();
+
+  const outcome = await ctx.runCopy();
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(outcome).toEqual({
+    kind: 'copied',
+    notCopied: [{ secret: 'npm', reason: 'not-grantable' }],
+  });
+
+  expect(grants).toEqual(['gh']);
+});
+
+test('a list entry from before a rebind copies nothing of that secret', async () => {
+  await using ctx = await setupListedFork();
+
+  // rebound after the access check, and granted again at its new generation
+  await ctx.client.secrets.add({
+    name: 'gh',
+    kind: 'custom',
+    value: VALUE,
+    rules: [{ host: 'api.github.com', header: 'authorization', scheme: 'bearer' }],
+    replace: true,
+    rebind: true,
+  });
+
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const outcome = await ctx.runCopy();
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(outcome).toEqual({
+    kind: 'copied',
+    notCopied: [
+      { secret: 'gh', reason: 'not-grantable' },
+      { secret: 'npm', reason: 'not-grantable' },
+    ],
+  });
+
+  expect(grants).toEqual([]);
+});
+
+test('a token removed after the access check copies no grant', async () => {
+  await using ctx = await setupListedFork();
+
+  await ctx.client.tokens.delete({ name: 'agent' });
+
+  const outcome = await ctx.runCopy();
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(outcome).toEqual({ kind: 'no-token' });
+  expect(grants).toEqual([]);
 });

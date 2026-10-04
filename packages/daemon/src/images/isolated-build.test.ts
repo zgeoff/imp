@@ -271,7 +271,7 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     paths.users += 1;
 
     try {
-      return await images.buildImageFromContext(tarPath, name, undefined, signal);
+      return await images.buildImageFromContext(tarPath, name, undefined, { signal });
     } finally {
       paths.users -= 1;
 

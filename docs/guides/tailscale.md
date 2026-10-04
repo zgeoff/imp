@@ -23,7 +23,7 @@ does nothing. Otherwise it:
    returns, and waits in the background, for up to 30 minutes, for `Running`, or for a login it then
    makes with the key.
 4. Runs
-   `tailscale up --auth-key=file:... --hostname=${IMP_TAILSCALE_HOSTNAME:-imp} --advertise-tags=tag:imp --accept-dns=false --reset`.
+   `tailscale up --auth-key=file:... --hostname=${IMP_TAILSCALE_HOSTNAME:-imp} --advertise-tags=tag:imp --accept-dns=false --reset --timeout=60s`.
    The key goes through a 0600 temp file, or the key file itself, so it never shows in argv. A node
    that runs from saved state under another hostname logs in again only when there is a key.
 5. Waits for `Running` and prints the tailnet IP and MagicDNS name.
@@ -32,15 +32,16 @@ does nothing. Otherwise it:
 ephemeral node at once. A plain container stop does **not** log out.
 
 ACL: `autogroup:member -> tag:imp:*`. Members reach the host on any port. The host (and so any imp
-traffic that leaves through it) cannot open connections to members or to other `tag:imp` nodes.
-Replies to member connections pass.
+traffic that leaves through it) cannot open connections to members. Replies to member connections
+pass. With more than one host, add `tag:imp -> tag:imp:7070`, so hosts can reach each other's impd
+API for [moves](./hosts.md#the-acl). Guests never use it: their egress refuses `100.64.0.0/10`.
 
 ## State and ephemeral keys
 
 State lives in `/var/lib/imp/tailscale` (`IMP_TAILSCALE_STATE_DIR`; `mem` keeps it in memory).
 
-The current key is ephemeral. We still persist the state, because the name matters more than the
-node lifetime:
+imp keeps the node state even with an ephemeral key, because the name matters more than the node
+lifetime:
 
 - With persisted state, a restart reuses the same node: same IP, same name. Checked: kill
   `tailscaled`, run `tailscale-up.sh` again, the IP does not change.

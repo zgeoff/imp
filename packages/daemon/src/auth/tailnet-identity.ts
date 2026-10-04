@@ -136,6 +136,7 @@ export function findTailnetCaller(
     imps: rule.imps ?? null,
     grantable: [],
     tokenId: null,
+    grantId: null,
     expiresAt: null,
     principal: readTailnetPrincipal(peer),
     display: peer.node,

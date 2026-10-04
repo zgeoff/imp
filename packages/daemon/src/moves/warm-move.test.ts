@@ -374,6 +374,7 @@ test('a warm move whose commit was lost commits warm on resume, with a reissued 
   expect(moved).toMatchObject({ slot: ctx.slot, state: 'sleeping', moveState: null });
   expect(woken.state).toBe('running');
   expect(ctx.target.fake.wakes).toHaveLength(1);
+  expect(ctx.commits).toEqual(['dev']);
 });
 
 test('a source restart with the warm move verified commits it warm', async () => {

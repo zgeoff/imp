@@ -271,7 +271,7 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
 
     writeFileSync(tarPath, buildTar(ctx.dataDir, { Dockerfile: 'FROM busybox:1.37\nRUN true\n' }));
 
-    return images.buildImageFromContext(tarPath, name, undefined, signal);
+    return images.buildImageFromContext(tarPath, name, undefined, { signal });
   };
 
   return Object.assign(ctx, {

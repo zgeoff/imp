@@ -33,8 +33,9 @@ async function setupTest() {
     const secret = await findSecret(ctx.db, name);
 
     const named = secret === undefined ? null : readFileSync(join(dir, secret.valueFile), 'utf8');
+    const files = readdirSync(dir).filter((file) => file !== '.orphaned');
 
-    return { files: readdirSync(dir).toSorted(), named, secret };
+    return { files: files.toSorted(), named, secret };
   };
 
   // a broker started again on the same database and data dir
@@ -264,6 +265,7 @@ test('a cleanup that fails after the commit is logged, and the next start remove
   const real = createSecretFiles(ctx.dataDir);
   const logs: string[] = [];
   const state = { failRemove: false };
+  const displaced = { file: '' };
 
   // the old file's removal fails once the replace has committed
   const broker = await createBroker({
@@ -290,6 +292,7 @@ test('a cleanup that fails after the commit is logged, and the next start remove
 
     const before = await ctx.readFiles('api');
 
+    displaced.file = before.secret?.valueFile ?? '';
     state.failRemove = true;
 
     const rotated = await broker.addSecret({
@@ -315,6 +318,9 @@ test('a cleanup that fails after the commit is logged, and the next start remove
 
   const swept = await ctx.readFiles('api');
 
+  // the replace recorded the file it displaced, so it is not kept aside
   expect(swept.files).toEqual([swept.secret?.valueFile ?? '']);
+  expect(swept.files).not.toContain(displaced.file);
   expect(swept.named).toBe('v2');
+  expect(readdirSync(ctx.dir)).not.toContain('.orphaned');
 });

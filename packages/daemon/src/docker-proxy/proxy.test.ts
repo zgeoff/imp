@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from './dockerfile-frontend';
 import { PROXY_LABEL, createDockerProxy } from './proxy';
+import { readProxyRefusal } from './refusal';
 
 const TOKEN = 'test-token';
 const OWN_ID = 'a'.repeat(64);
@@ -458,6 +459,30 @@ test('under IMP_BUILD_ISOLATION=imp only IMP_BUILD_IMAGE by digest pulls or crea
   expect(seen.map((request) => request.target)).toEqual([
     `/v1.55/images/create?fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${encodeURIComponent(digest)}`,
   ]);
+});
+
+// #173: impd reads the proxy's message alone back out of its body and out
+// of the CLI's stderr, and answers it as the client's BAD_REQUEST
+test('a loopback registry is refused, and the refusal reads back alone', async () => {
+  const pulled = await sendToProxy(
+    'POST',
+    '/v1.55/images/create?fromImage=localhost%3A5320%2Fx&tag=1',
+  );
+
+  const created = await sendToProxy('POST', '/v1.55/containers/create', {
+    body: JSON.stringify({ Image: 'localhost:5320/x:1', Cmd: ['/bin/true'] }),
+  });
+
+  expect([pulled.status, created.status]).toEqual([403, 403]);
+  expect(seen).toEqual([]);
+
+  const message = "imp-docker-proxy: registry localhost:5320 is the host's own";
+
+  for (const body of [await pulled.text(), await created.text()]) {
+    for (const output of [body, `Error response from daemon: ${body}`]) {
+      expect(readProxyRefusal(output)).toBe(message);
+    }
+  }
 });
 
 test('an Upgrade, a refused route and a refused param never reach the engine', async () => {

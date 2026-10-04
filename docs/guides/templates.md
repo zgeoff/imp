@@ -40,6 +40,10 @@ is removed once no image names it. A template and a docker image never share a n
 
 `imp template rm` refuses a template that an imp still uses, as `imp image rm` does for any image.
 
+`imp template create` reads `images.addStream` from an impd that has it, and shows how long the copy
+takes ([long calls](./images.md#long-calls)). A copy runs to its end when the client goes, and the
+template is made.
+
 ## Disk size
 
 An imp from a template gets at least the template's disk, which is the size of the source imp's disk
@@ -78,7 +82,8 @@ machine-id on each cold boot while the old host keys stay; impd logs each attemp
 
 A template holds its source imp's disk. A token limited to some imps may create an imp from a
 template only when its patterns reach the template's source imp, as a fork needs the source. The
-images row keeps the source imp's name for this check, and the `images.add` audit row names it.
+images row keeps the source imp's name for this check, and the `images.add` or `images.addStream`
+audit row names it.
 
 Other per-machine state in the disk is copied as it is: application secrets, tokens in home
 directories, a `/var/lib/systemd/random-seed`, and any IDs your own software stores. Remove them

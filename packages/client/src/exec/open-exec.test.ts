@@ -751,3 +751,158 @@ test('a started without output, from an older impd, reads as continuity none', a
 
   expect(outcome).toEqual({ kind: 'exit', code: 0, signal: null });
 });
+
+test('a start that requires the broker passes it to impd', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openExec('dev', ['fail'], { require: ['broker'] });
+
+  await handle.exit;
+
+  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
+});
+
+// impd answers system.info as an older one would: execRequire is not true;
+// `calls` holds the path of each request
+function buildOlderFetch() {
+  const calls: string[] = [];
+
+  const readAsOlder = async (request: Request): Promise<Response> => {
+    const path = new URL(request.url).pathname;
+
+    calls.push(path);
+
+    const response = await fetch(request);
+
+    if (path !== '/rpc/system/info') {
+      return response;
+    }
+
+    const text = await response.text();
+
+    return new Response(text.replace('"execRequire":true', '"execRequire":false'), response);
+  };
+
+  return { calls, fetch: readAsOlder };
+}
+
+test('an impd without execRequire gets no start that requires anything', async () => {
+  await using ctx = await setupExecTest();
+
+  const older = buildOlderFetch();
+  const client = createImpClient({ url: ctx.url, token: TEST_TOKEN, fetch: older.fetch });
+
+  const handle = await client.openExec('dev', ['tick'], { require: ['broker'] });
+  const refused = await handle.exit.catch((error: unknown) => error);
+
+  expect(refused).toBeInstanceOf(ExecError);
+
+  expect(refused).toMatchObject({
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'impd_outdated' },
+  });
+
+  expect(older.calls).toContain('/rpc/system/info');
+  expect(ctx.requests).toEqual([]);
+});
+
+test('a session opened directly asks impd before it sends a start that requires anything', async () => {
+  await using ctx = await setupExecTest();
+
+  const older = buildOlderFetch();
+
+  const session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['tick'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: older.fetch,
+  });
+
+  const outcome = await session.outcome;
+
+  expect(outcome).toMatchObject({
+    kind: 'failed',
+    code: 'PRECONDITION_FAILED',
+    data: { reason: 'impd_outdated' },
+  });
+
+  expect(older.calls).toEqual(['/rpc/system/info']);
+  expect(ctx.requests).toEqual([]);
+});
+
+test('a resize while a start that requires anything waits on impd goes after the start', async () => {
+  await using ctx = await setupExecTest();
+
+  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
+
+  // the resize lands after the socket opened, while the feature check runs
+  const readResizing = (request: Request): Promise<Response> => {
+    held.session?.resize(100, 40);
+
+    return fetch(request);
+  };
+
+  held.session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: readResizing,
+  });
+
+  const outcome = await held.session.outcome;
+
+  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
+  expect(ctx.requests.map((request) => request.require)).toEqual([['broker']]);
+});
+
+test('stdin held while a start that requires anything waits on impd counts toward backpressure', async () => {
+  await using ctx = await setupExecTest();
+
+  const held: { session: ReturnType<typeof openExecSession> | null } = { session: null };
+
+  const seen: { accepted: boolean | null; drainedEarly: boolean | null } = {
+    accepted: null,
+    drainedEarly: null,
+  };
+
+  // more than the high-water mark lands while the feature check runs
+  const readFlooding = async (request: Request): Promise<Response> => {
+    const session = held.session;
+
+    if (session !== null) {
+      seen.accepted = session.sendStdin(new Uint8Array(1_048_577));
+
+      seen.drainedEarly = await Promise.race([
+        session.waitForDrain().then(() => true),
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            resolve(false);
+          }, 50);
+        }),
+      ]);
+    }
+
+    return fetch(request);
+  };
+
+  held.session = openExecSession({
+    baseUrl: ctx.url,
+    token: TEST_TOKEN,
+    start: { name: 'dev', argv: ['fail'], tty: false, require: ['broker'] },
+    onStarted: () => {},
+    onOutput: () => {},
+    connect: (url, headers) => new WebSocket(url, { headers }),
+    fetch: readFlooding,
+  });
+
+  const outcome = await held.session.outcome;
+
+  expect(seen).toEqual({ accepted: false, drainedEarly: false });
+  expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
+});

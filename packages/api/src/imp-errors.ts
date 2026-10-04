@@ -17,6 +17,10 @@ const ResourceKindSchema = z.enum([
   'token',
   'ssh-key',
   'network',
+  'oauth-client',
+  'oauth-grant',
+  'oauth-approval',
+  'database-copy',
 ]);
 
 const ResourceDataSchema = z.object({
@@ -34,6 +38,14 @@ const ForbiddenReasonSchema = z.enum(['imp_out_of_scope', 'not_grantable', 'scop
 export type ForbiddenReason = z.infer<typeof ForbiddenReasonSchema>;
 
 const ForbiddenDataSchema = z.object({ reason: ForbiddenReasonSchema });
+
+// an exec with `require: ['broker']` the broker was not ready for; detail
+// names the cause (docs/guides/connectors.md#requiring-the-broker). The
+// client, not impd, gives impd_outdated: an impd too old to check.
+const PreconditionDataSchema = z.object({
+  reason: z.enum(['broker_not_ready', 'impd_outdated']),
+  detail: z.string(),
+});
 
 // an awake imp the governor could not sleep: leased (a lease of any kind)
 // or busy (in use, under an operation, or its sleep failed)
@@ -54,8 +66,12 @@ export const IMP_ERRORS = defineErrors({
   // a grant or a revoke says which (docs/guides/tokens.md#granting-secrets)
   FORBIDDEN: { message: 'Not allowed', data: ForbiddenDataSchema.optional() },
 
-  // the host is not set up for this, such as backups with no repository
-  PRECONDITION_FAILED: { message: 'Not possible on this host' },
+  // the host is not set up for this, such as backups with no repository;
+  // data only for an exec requirement impd could not meet
+  PRECONDITION_FAILED: {
+    message: 'Not possible on this host',
+    data: PreconditionDataSchema.optional(),
+  },
   RAM_BUDGET_EXCEEDED: {
     message: 'Not enough RAM budget, even after sleeping idle imps',
     status: 503,

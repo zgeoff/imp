@@ -14,7 +14,7 @@ import { MIB, buildDiskTooSmallError, growDiskFile, readFileBytes } from './imp-
 import type { ImpLeases } from './imp-leases';
 import { checkLiveness } from './imp-liveness';
 import { toLockedImp } from './imp-lock';
-import type { ImpLock } from './imp-lock';
+import type { ImpLock, LockedImp } from './imp-lock';
 import type { ImpPresenter, ImpUrls } from './imp-presenter';
 import { requireTransition } from './imp-transitions';
 import type { ImpVmOps } from './imp-vm-ops';
@@ -75,6 +75,10 @@ export interface ImpCommands {
   // otherwise (docs/guides/leases.md#sleep-and-stop)
   readonly stopImp: (name: string, force?: boolean) => Promise<Imp>;
   readonly destroyImp: (name: string, options?: DestroyOptions) => Promise<void>;
+
+  // the imp with this id, checked under its lock: never another that took
+  // its name since; nothing when it is gone
+  readonly destroyImpId: (id: string) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
   // snapshot memory to disk and stop Firecracker
@@ -116,6 +120,36 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
   const ops = parts.ops;
   const presenter = parts.presenter;
   const leases = parts.leases;
+
+  // stops the VM and removes everything the imp holds, its row last
+  const removeLockedImp = async (imp: LockedImp): Promise<void> => {
+    const paths = context.findPaths(imp.id);
+
+    if (imp.pid !== null) {
+      await context.vms.stopVm(imp.pid, paths, false);
+    }
+
+    // the VM is gone: an empty cgroup and its jail can go; a jail mount
+    // would keep a ZFS disk busy
+    await context.cgroups.remove(imp.id);
+    await context.vms.removeJail(paths);
+    await context.taps.removeTap(context.findAddress(imp.slot).tap);
+
+    // out of the firewall before another imp can take the slot
+    await context.egress.releaseSlot(imp.slot);
+
+    const checkpoints = await listCheckpoints(context.db, imp.id);
+
+    await removeImpFiles(
+      context,
+      imp.id,
+      checkpoints.map((checkpoint) => checkpoint.id),
+    );
+
+    context.admission?.release(imp.id);
+
+    await removeImp(context.db, imp.id);
+  };
 
   return {
     createImp: async (input) => {
@@ -324,38 +358,15 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       }),
 
     destroyImp: async (name, options = {}) => {
-      await lock.withImp(
-        name,
-        async (imp) => {
-          const paths = context.findPaths(imp.id);
+      await lock.withImp(name, removeLockedImp, options);
+    },
 
-          if (imp.pid !== null) {
-            await context.vms.stopVm(imp.pid, paths, false);
-          }
-
-          // the VM is gone: an empty cgroup and its jail can go; a jail mount
-          // would keep a ZFS disk busy
-          await context.cgroups.remove(imp.id);
-          await context.vms.removeJail(paths);
-          await context.taps.removeTap(context.findAddress(imp.slot).tap);
-
-          // out of the firewall before another imp can take the slot
-          await context.egress.releaseSlot(imp.slot);
-
-          const checkpoints = await listCheckpoints(context.db, imp.id);
-
-          await removeImpFiles(
-            context,
-            imp.id,
-            checkpoints.map((checkpoint) => checkpoint.id),
-          );
-
-          context.admission?.release(imp.id);
-
-          await removeImp(context.db, imp.id);
-        },
-        options,
-      );
+    destroyImpId: async (id) => {
+      await lock.withImpId(id, async (imp) => {
+        if (imp !== undefined) {
+          await removeLockedImp(imp);
+        }
+      });
     },
 
     readUrls: async (name) => {

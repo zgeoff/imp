@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
+import { createRevocations } from '../auth/revocations';
 import { buildTestCaller } from '../auth/test-callers';
-import { createExecTickets } from './exec-tickets';
+import { createExecTickets, isCallerLive } from './exec-tickets';
 
 const TOKEN = buildTestCaller();
 const DASHBOARD = buildTestCaller({ kind: 'dashboard', name: 'laptop', tokenId: 'other-id' });
@@ -82,4 +83,33 @@ test('a ticket whose token was removed opens nothing', () => {
   ctx.removed.add(TOKEN.tokenId ?? '');
 
   expect(ctx.tickets.redeem(issued.ticket)).toBeNull();
+});
+
+test('an OAuth grant’s ticket opens nothing once the grant or its token goes', () => {
+  const revocations = createRevocations();
+
+  const tokens = new Set(['test-token-id']);
+
+  const findById = (id: string) => (tokens.has(id) ? TOKEN : null);
+  const grant = buildTestCaller({ kind: 'oauth', grantId: 'grant-a' });
+  const sibling = buildTestCaller({ kind: 'oauth', grantId: 'grant-b' });
+
+  const tickets = createExecTickets({
+    now: () => 1_000_000,
+    isLive: (caller) => isCallerLive({ findById }, revocations, caller),
+  });
+
+  const first = tickets.issue('dev', grant);
+  const second = tickets.issue('dev', sibling);
+
+  revocations.revoke('grant-a');
+
+  expect(tickets.redeem(first.ticket)).toBeNull();
+  expect(tickets.redeem(second.ticket)).toEqual({ name: 'dev', caller: sibling });
+
+  const third = tickets.issue('dev', sibling);
+
+  tokens.delete('test-token-id');
+
+  expect(tickets.redeem(third.ticket)).toBeNull();
 });

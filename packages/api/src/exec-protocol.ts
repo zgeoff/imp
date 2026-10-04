@@ -41,6 +41,13 @@ export const EXEC_TOOLS = ['tar'] as const;
 
 export type ExecTool = (typeof EXEC_TOOLS)[number];
 
+// What must hold before impd starts the command, or it refuses with
+// PRECONDITION_FAILED: `broker`, the broker's variables and CA bundle
+// (docs/guides/connectors.md#requiring-the-broker).
+export const EXEC_REQUIREMENTS = ['broker'] as const;
+
+export type ExecRequirement = (typeof EXEC_REQUIREMENTS)[number];
+
 // impd acks a tool's stdin (`stdin_ack`); its client keeps at most this
 // many bytes unacked, in frames of at most the next, so a large upload
 // cannot grow impd's memory
@@ -81,6 +88,10 @@ export const ExecStartMessageSchema = z
     // with a session: the output after the last byte the client saw,
     // rather than a replay; `started.output.resume` says how it was met
     resumeFrom: ResumeFromSchema.optional(),
+
+    // an older impd drops this unread: a client checks
+    // SystemInfo.features.execRequire first
+    require: z.array(z.enum(EXEC_REQUIREMENTS)).optional(),
   })
   .refine((start) => start.session === undefined || start.tty, {
     message: 'a session needs a tty',
@@ -109,6 +120,13 @@ export const ExecStartMessageSchema = z
       message: 'an outer exec takes no tool or session',
       path: ['outer'],
     },
+  )
+  .refine(
+    (start) =>
+      start.require === undefined ||
+      start.require.length === 0 ||
+      (start.tool === undefined && start.outer !== true),
+    { message: 'a tool or an outer exec takes no require', path: ['require'] },
   );
 
 export const ExecAttachMessageSchema = z.object({

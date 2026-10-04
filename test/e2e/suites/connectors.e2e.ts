@@ -86,6 +86,21 @@ test('a secret goes in on stdin and never comes back out of the API', async () =
   expect(shown).not.toContain(token);
 });
 
+test('an exec that requires the broker starts with its variables', async () => {
+  const proxy = await runImp(
+    'exec',
+    name,
+    '--require',
+    'broker',
+    '--',
+    'sh',
+    '-c',
+    'echo "$HTTPS_PROXY"',
+  );
+
+  expect(proxy.trim()).toMatch(/^http:\/\/10\.66\.\d+\.\d+:7081$/u);
+});
+
 test('an API call gets the real token while the guest holds a placeholder', async () => {
   const placeholder = await runShellInImp(name, 'echo "$GH_TOKEN"');
   const env = await runShellInImp(name, 'env');
@@ -195,6 +210,46 @@ test('a slept and woken guest holds no secret in memory and still gets the broke
   expect(JSON.parse(body)).toEqual({ authorized: true });
 });
 
+// whether the command an exec was refused for ran after all
+function checkRan(marker: string): Promise<string> {
+  return runShellInImp(name, `test -e ${marker} && echo ran || echo none`);
+}
+
+test('a failed CA bundle step after a wake refuses an exec that requires the broker', async () => {
+  const marker = '/root/e2e-required-ran';
+
+  // /etc/imp as a file: the bundle step's mkdir fails at the next boot
+  await runShellInImp(name, `rm -f ${marker}; mv /etc/imp /etc/imp.e2e && touch /etc/imp`);
+  await runImp('sleep', name);
+
+  const refused = await tryImp(['exec', name, '--require', 'broker', '--', 'touch', marker]);
+
+  await runShellInImp(name, 'rm /etc/imp && mv /etc/imp.e2e /etc/imp');
+  await holdImp(name);
+
+  expect(refused.exitCode).toBe(255);
+  expect(refused.stderr).toContain('PRECONDITION_FAILED');
+  expect(refused.stderr).toContain('the broker CA bundle is not in this boot');
+
+  const ran = await checkRan(marker);
+
+  expect(ran).toBe('none');
+
+  // the next exec tries the step again
+  const proxy = await runImp(
+    'exec',
+    name,
+    '--require',
+    'broker',
+    '--',
+    'sh',
+    '-c',
+    'echo "$HTTPS_PROXY"',
+  );
+
+  expect(proxy).toContain(':7081');
+});
+
 test('a revoke stops the credential: the fake upstream sees nothing more', async () => {
   await runImp('revoke', name, secret);
 
@@ -204,4 +259,17 @@ test('a revoke stops the credential: the fake upstream sees nothing more', async
   await runShellInImp(name, 'curl -s -o /dev/null https://api.github.com/user || true');
 
   expect(upstream.seen).toHaveLength(before);
+});
+
+test('without a grant, an exec that requires the broker runs nothing', async () => {
+  const marker = '/root/e2e-ungranted-ran';
+
+  const refused = await tryImp(['exec', name, '--require', 'broker', '--', 'touch', marker]);
+
+  expect(refused.exitCode).toBe(255);
+  expect(refused.stderr).toContain('the imp has no grant');
+
+  const ran = await checkRan(marker);
+
+  expect(ran).toBe('none');
 });

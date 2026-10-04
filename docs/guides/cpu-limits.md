@@ -18,11 +18,12 @@ imp set box --http-port 3000       # the port box's URL reaches, from the next r
 | -------------- | ------------------- | --------------------------- | ------------------------------------------------------------------ |
 | `--cpu-limit`  | `none`              | 0.1 to the host's CPU count | The most CPU time the VM gets, in cores: `1.5` is one and a half.  |
 | `--cpu-weight` | `100`               | 1 to 10000                  | The VM's share of the CPU when imps compete; idle time is free.    |
-| `--cpus`       | `IMP_DEFAULT_VCPUS` | 1 or more                   | The vCPUs the guest sees. A limit under the vCPU count slows each. |
+| `--cpus`       | `IMP_DEFAULT_VCPUS` | 1 to 32                     | The vCPUs the guest sees. A limit under the vCPU count slows each. |
 
 A fork copies the source's limit and weight. A change to a sleeping imp applies at its next wake. A
 sleep or a wake lifts the limit while Firecracker writes or loads the memory snapshot, so a low
-limit never slows those steps.
+limit never slows those steps. Memory has its own flags: `--memory` and `--max-memory`
+([elastic memory](../architecture/memory.md)).
 
 ## The memory limit
 

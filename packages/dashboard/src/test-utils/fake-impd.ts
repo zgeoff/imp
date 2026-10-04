@@ -248,6 +248,14 @@ export function createFakeImpd(): FakeImpd {
       build: os.images.build.handler(() => {
         throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
       }),
+
+      // the dashboard adds through images.add
+      addStream: os.images.addStream.handler(() => {
+        throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
+      }),
+      buildStream: os.images.buildStream.handler(() => {
+        throw new ORPCError('INVALID_STATE', { message: 'not in the fake' });
+      }),
       delete: os.images.delete.handler((context) => {
         registerCall('images.delete', context.input);
 
@@ -368,6 +376,43 @@ export function createFakeImpd(): FakeImpd {
         dropped: [],
         kept: [],
       })),
+      copyDatabase: os.system.copyDatabase.handler(() => {
+        throw new ORPCError('PRECONDITION_FAILED', { message: 'not in the fake' });
+      }),
+    },
+
+    // the dashboard shows no OAuth page yet
+    oauth: {
+      clients: {
+        list: os.oauth.clients.list.handler(() => []),
+        add: os.oauth.clients.add.handler((context) => ({
+          name: context.input.name,
+          clientId: 'impc_fake',
+          redirectUris: context.input.redirectUris,
+          createdAt: NOW,
+        })),
+        update: os.oauth.clients.update.handler((context) => ({
+          name: context.input.name,
+          clientId: 'impc_fake',
+          redirectUris: context.input.redirectUris,
+          createdAt: NOW,
+        })),
+        delete: os.oauth.clients.delete.handler(() => ({})),
+      },
+      grants: {
+        list: os.oauth.grants.list.handler(() => []),
+        delete: os.oauth.grants.delete.handler(() => ({})),
+      },
+      approvals: {
+        get: os.oauth.approvals.get.handler(() => ({
+          client: 'fake',
+          redirectUri: 'https://client.test/callback',
+          requestedScope: 'read' as const,
+          requestedAt: NOW,
+          expiresAt: NOW,
+        })),
+        approve: os.oauth.approvals.approve.handler(() => ({})),
+      },
     },
     tokens: {
       list: os.tokens.list.handler(() => fake.tokens),
