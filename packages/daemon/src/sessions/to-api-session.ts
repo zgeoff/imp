@@ -22,6 +22,7 @@ export function toApiSession(session: Readonly<SeenSession>): Session {
       session.observed_unix_ms !== undefined && {
         endObservedAt: new Date(session.observed_unix_ms),
       }),
+    ...(session.log === true && { log: true }),
   };
 
   if (session.exit !== undefined) {

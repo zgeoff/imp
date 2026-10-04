@@ -118,7 +118,7 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 
-	if req.Op == proto.OpSessionAttach || (req.Op == proto.OpExec && req.Session != "") {
+	if req.Op == proto.OpSessionAttach || req.Op == proto.OpSessionTap || (req.Op == proto.OpExec && req.Session != "") {
 		if err := s.Sessions.Serve(req, c, r, w); err != nil {
 			log.Printf("session %s: %v", req.Session, err)
 		}

@@ -7,10 +7,11 @@ binary frames for stdin, output, resizes, signals and the exit, and dial connect
 both ways. An `agent.listen` or `listen` connection stays open for as long as its socket should
 live.
 
-Version `0.17.0` moves the inner container's memory limit with an elastic guest's memory, and impd
-grows no guest whose agent is older (`0.16.0` adds `exec.outer`, an exec in the agent's own world,
-`0.15.0` adds session output offsets: a generation per session process, `resume_from`, `output` in
-STARTED, `boot_id` in `ping` and `activity`, and error `data`; `0.14.0` runs user code in the inner
+Version `0.18.0` adds `log` on a session start and `session.tap`, which impd's session logs read
+(`0.17.0` moves the inner container's memory limit with an elastic guest's memory, and impd grows no
+guest whose agent is older, `0.16.0` adds `exec.outer`, an exec in the agent's own world, `0.15.0`
+adds session output offsets: a generation per session process, `resume_from`, `output` in STARTED,
+`boot_id` in `ping` and `activity`, and error `data`; `0.14.0` runs user code in the inner
 container, reports it in `ping` and adds `INNER_DOWN`, `0.13.0` adds `claim` and the `stage` of a
 parked boot template's `ping`, `0.12.0` reports a template copy's identity reset in `ping`, `0.11.0`
 kills a stopped exec's whole cgroup, `0.10.0` adds the services ops, `0.9.0` adds `listen` for
@@ -482,6 +483,35 @@ When the process exits, the agent forwards the remaining output (for at most 500
 and sends EXIT to the viewer, then waits up to 2 s for the host to close. The session is gone once
 the EXIT is written. With no viewer attached, or when the write of the EXIT fails, the session stays
 as `exited`; the next attach gets the replay and EXIT, and the session is gone after that.
+
+### `session.tap`
+
+Since `0.18.0` a session start may carry `"log":true`. The agent marks the session, lists it with
+`"log":true` in `activity`, and puts `"log":true` in the STARTED `output` of every connection to it.
+impd keeps its output ([daemon](./daemon.md#session-logs)) by tapping it:
+
+```json
+→ REQUEST {"op":"session.tap","session":"build",
+           "resume_from":{"execution_generation":"9f1c…","offset":1048576}}
+← STARTED {"pid":301,"session":"build","output":{…,"resume":{"kind":"exact"},"log":true}}
+← STDOUT …
+← EXIT {"code":0,"signal":0}
+```
+
+A tap reads the raw ring from `resume_from`, with the resume rules above, or from `buffer_start`
+without it; it never replays the screen and sends no prelude. Then it gets live output and the EXIT.
+It is not a viewer: it takes no input (the agent reads and drops what the host sends), never takes a
+viewer over, is not counted in `activity`'s `exec_sessions` or a session's `attached`, and gets the
+EXIT without delivering it, so the next viewer still gets the EXIT too. A tap more than 2 MiB behind
+gets `DETACHED {"reason":"slow"}`, as a viewer does.
+
+A logged session does not let its ring drop bytes that no tap wrote out: before each read of the
+pty, the agent waits while the read could overwrite them, so the program waits on the pty as on a
+slow terminal. That covers the moments before impd's first tap and between a sleep's wake and the
+tap after it. After 5 s with no tap catching up, the session reads on untapped, and the ring drops
+bytes as for any session, until a tap attaches again. `NO_SESSION` if there is no session of that
+name, and `BAD_REQUEST` for a session started without `log`. An older agent answers `UNKNOWN_OP`,
+and ignores `log` on a start.
 
 ### `session.kill`
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/zgeoff/imp/agent/internal/proto"
@@ -49,6 +50,11 @@ type viewer struct {
 
 	// done closes when the writer has stopped.
 	done chan struct{}
+
+	// written counts the STDOUT bytes written out: how far a tap has read
+	written atomic.Uint64
+	// progress, set before run for a tap, is signalled after each STDOUT write
+	progress chan struct{}
 }
 
 func newViewer(conn net.Conn, w *proto.Writer) *viewer {
@@ -100,6 +106,16 @@ func (v *viewer) stop(last *frame, drop bool) bool {
 	return true
 }
 
+func (v *viewer) signalProgress() {
+	if v.progress == nil {
+		return
+	}
+	select {
+	case v.progress <- struct{}{}:
+	default:
+	}
+}
+
 func (v *viewer) signal() {
 	select {
 	case v.wake <- struct{}{}:
@@ -121,6 +137,10 @@ func (v *viewer) run() {
 			if v.w.Write(f.typ, f.payload) != nil {
 				v.fail()
 				return
+			}
+			if f.typ == proto.TypeStdout {
+				v.written.Add(uint64(len(f.payload)))
+				v.signalProgress()
 			}
 			v.mu.Lock()
 			v.queued -= len(f.payload)

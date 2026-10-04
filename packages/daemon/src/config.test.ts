@@ -40,6 +40,12 @@ test('it fills every setting from its default when the env is empty', () => {
       image:
         'ghcr.io/zgeoff/imp-base:0.29.0@sha256:1851f631ea77f3a99b6f1f9af8ca8868434f4cd066158bcf9def8678c29b0c21',
     },
+    sessionLog: {
+      generationMaxBytes: 16 * 1024 ** 2,
+      impMaxBytes: 64 * 1024 ** 2,
+      impMaxLive: 8,
+      maxAgeMs: 7 * 86_400_000,
+    },
     dockerHost: null,
     dns: ['1.1.1.1', '8.8.8.8'],
     subnet: { network: 0x0a_42_00_00, prefixLength: 16 },

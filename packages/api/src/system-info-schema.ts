@@ -178,6 +178,10 @@ export const SystemInfoSchema = z.object({
       // never lists the secret values it kept aside
       secretFilesGc: z.boolean().optional(),
 
+      // a session start takes `log`, and `sessions.logs`, `readLog` and
+      // `deleteLog` exist (docs/guides/session-logs.md)
+      sessionLog: z.boolean().optional(),
+
       // the `public` egress policy; an older impd refuses the mode
       publicEgress: z.boolean().optional(),
     })
