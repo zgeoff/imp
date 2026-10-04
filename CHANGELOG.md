@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.30.0](https://github.com/zgeoff/imp/compare/v0.29.1...v0.30.0) (2026-10-04)
+
+
+### Features
+
+* **images:** publish imp-coder, a small image for running a coding agent ([#176](https://github.com/zgeoff/imp/issues/176)) ([f7bfd1b](https://github.com/zgeoff/imp/commit/f7bfd1b47defa7f5fa5b3ddcde951049ee27b89b))
+* **ops:** copy the database safely while impd runs, and document a restore ([#184](https://github.com/zgeoff/imp/issues/184)) ([e29ea05](https://github.com/zgeoff/imp/commit/e29ea05de8250a02b958140b1183082910ee026c))
+
+
+### Bug Fixes
+
+* **agent:** keep reading host frames after an exec's session ends ([#187](https://github.com/zgeoff/imp/issues/187)) ([282a085](https://github.com/zgeoff/imp/commit/282a085f861bf8840150e49572ad9a7effa36810))
+* **egress:** keep impd up when a resolver socket gets a refusal ([#193](https://github.com/zgeoff/imp/issues/193)) ([f516cc0](https://github.com/zgeoff/imp/commit/f516cc00252f6944641d578ebf183078b54b5636))
+* **https:** warn when the public ip is not an internet address ([#192](https://github.com/zgeoff/imp/issues/192)) ([f344390](https://github.com/zgeoff/imp/commit/f3443907363b59e21753532ba0db1499310ea8f2))
+* **images:** a docker proxy refusal reaches the client as BAD_REQUEST ([#179](https://github.com/zgeoff/imp/issues/179)) ([0f080a2](https://github.com/zgeoff/imp/commit/0f080a2db45e6579e854cacc588cf878eef554da))
+* **images:** stream build events so a long build outlives the fetch ([#174](https://github.com/zgeoff/imp/issues/174)) ([73de198](https://github.com/zgeoff/imp/commit/73de19871a4e6bfe198859a91ed15c80424daff0)), closes [#162](https://github.com/zgeoff/imp/issues/162)
+* **images:** stream images.add and on-host builds past fetch timeouts ([#181](https://github.com/zgeoff/imp/issues/181)) ([f1b42a8](https://github.com/zgeoff/imp/commit/f1b42a8f1b5d6ddf83ccd5a38ae1f93ad140f527))
+* **security:** a scoped token's fork copies only the grants it could make ([#172](https://github.com/zgeoff/imp/issues/172)) ([eef2ec8](https://github.com/zgeoff/imp/commit/eef2ec8dd50580820650e7aecce6927758c7c069))
+* **storage:** count disk usage after stops, sleeps and resizes ([#166](https://github.com/zgeoff/imp/issues/166)) ([dce9a74](https://github.com/zgeoff/imp/commit/dce9a742c27836c22e90075b2e0577f41f838be8))
+* **storage:** count disk usage when a move lands ([#183](https://github.com/zgeoff/imp/issues/183)) ([3223f05](https://github.com/zgeoff/imp/commit/3223f0528949c479712a85ed5c3147b5e165d29d))
+
 ## [0.29.1](https://github.com/zgeoff/imp/compare/v0.29.0...v0.29.1) (2026-10-04)
 
 ### Bug Fixes
