@@ -44,3 +44,17 @@ export const StorageGcSchema = z
   .readonly();
 
 export type StorageGc = z.infer<typeof StorageGcSchema>;
+
+// a copy of impd's database, its schema version (last migration), the impd
+// that wrote it, and integrity_check on it ('ok' or the first problem); a
+// restore script reads these names
+export const DatabaseCopySchema = z.object({
+  path: z.string(),
+  sizeBytes: z.int().nonnegative(),
+  lastMigration: z.string(),
+  impVersion: z.string(),
+  createdAt: z.date(),
+  integrity: z.string(),
+});
+
+export type DatabaseCopy = z.infer<typeof DatabaseCopySchema>;

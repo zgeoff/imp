@@ -182,6 +182,9 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   // gc removes what a crash left and, with orphans, every disk no row names
   'system.gc': manageHost,
 
+  // the copy holds every imp, token hash and grant
+  'system.copyDatabase': manageHost,
+
   'tokens.list': manageHost,
   'tokens.create': manageHost,
   'tokens.delete': manageHost,

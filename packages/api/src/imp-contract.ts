@@ -43,7 +43,7 @@ import {
   ServiceNameSchema,
 } from './service-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
-import { StorageGcSchema } from './storage-schema';
+import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 import {
   GrantableSchema,
@@ -519,6 +519,11 @@ export const impContract = {
     gc: base
       .input(z.object({ dryRun: z.boolean().optional(), orphans: z.boolean().optional() }))
       .output(StorageGcSchema),
+
+    // a consistent copy of impd's database, safe while it runs, at
+    // <dataDir>/db-copies/<name>.sqlite (docs/guides/operations.md); CONFLICT
+    // when a copy by the name exists
+    copyDatabase: base.input(z.object({ name: NameSchema.optional() })).output(DatabaseCopySchema),
   },
 
   // named API tokens (docs/guides/tokens.md); the root token in

@@ -483,6 +483,8 @@ const PROVIDER: MigrationProvider = {
 };
 
 export async function runMigrations(db: Kysely<DatabaseSchema>): Promise<void> {
+  await requireKnownMigrations(db);
+
   const migrator = new Migrator({ db, provider: PROVIDER });
 
   const result = await migrator.migrateToLatest();
@@ -497,6 +499,36 @@ export async function runMigrationsTo(db: Kysely<DatabaseSchema>, name: string):
   const result = await migrator.migrateTo(name);
 
   requireMigrated(result);
+}
+
+// A database a newer impd migrated holds migrations this one lacks: refused
+// before anything runs, naming both schema versions, where kysely's own
+// refusal names only the missing migration
+async function requireKnownMigrations(db: Kysely<DatabaseSchema>): Promise<void> {
+  const table = await sql<{ name: string }>`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kysely_migration'
+  `.execute(db);
+
+  if (table.rows.length === 0) {
+    return;
+  }
+
+  const executed = await sql<{ name: string }>`SELECT name FROM kysely_migration`.execute(db);
+
+  const unknown = executed.rows
+    .map((row) => row.name)
+    .filter((name) => !Object.hasOwn(MIGRATIONS, name));
+
+  if (unknown.length === 0) {
+    return;
+  }
+
+  const newest = unknown.toSorted().at(-1) ?? '';
+  const known = Object.keys(MIGRATIONS).toSorted().at(-1) ?? '';
+
+  throw new Error(
+    `the database is at migration ${newest}, newer than this impd's last, ${known}: start the impd that wrote it or a newer one, or restore an older database copy (docs/guides/operations.md#database-copy-and-restore)`,
+  );
 }
 
 function requireMigrated(result: MigrationResultSet): void {

@@ -2,9 +2,11 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as z from 'zod';
 
 // `token new --grantable` and `secret add --replace` rely on fields an older
-// impd drops unread, so the CLI checks impd's features before it writes.
+// impd drops unread, and `db copy` on a call it lacks, so the CLI checks
+// impd's features before it writes.
 
 const MAIN = join(import.meta.dir, '..', 'main.ts');
 const TOKEN = 'feature-gates-token';
@@ -47,6 +49,14 @@ function startImpd(info: unknown) {
     'system/info': info,
     'tokens/create': MADE_TOKEN,
     'secrets/add': SECRET,
+    'system/copyDatabase': {
+      path: '/var/lib/imp/db-copies/before-upgrade.sqlite',
+      sizeBytes: 4096,
+      lastMigration: '030_x',
+      impVersion: '0.30.0',
+      createdAt: '2026-10-04T00:00:00.000Z',
+      integrity: 'ok',
+    },
   };
 
   const server = Bun.serve({
@@ -192,4 +202,41 @@ test.each([
 
   expect([token.code, replace.code]).toEqual([1, 1]);
   expect(ctx.calls).toEqual(['system/info', 'system/info']);
+});
+
+test('db copy asks for the feature first: an older impd gets no copy call', async () => {
+  const outcomes: { code: number; calls: string[] }[] = [];
+
+  for (const info of [
+    OLD_INFO,
+    { ...NEW_INFO, features: { ...NEW_INFO.features, databaseCopy: true } },
+  ]) {
+    await using ctx = setupTest(info);
+
+    const result = await ctx.run(['db', 'copy', 'before-upgrade', '--json']);
+
+    outcomes.push({ code: result.code, calls: [...ctx.calls] });
+
+    if (info === OLD_INFO) {
+      expect(result.stderr).toContain('this impd is older than 0.30.0');
+    } else {
+      // a restore script matches these names, in this order
+      const printed: unknown = JSON.parse(result.stdout);
+      const fields = Object.keys(z.record(z.string(), z.unknown()).parse(printed));
+
+      expect(fields).toEqual([
+        'path',
+        'sizeBytes',
+        'lastMigration',
+        'impVersion',
+        'createdAt',
+        'integrity',
+      ]);
+    }
+  }
+
+  expect(outcomes).toEqual([
+    { code: 1, calls: ['system/info'] },
+    { code: 0, calls: ['system/info', 'system/copyDatabase'] },
+  ]);
 });
