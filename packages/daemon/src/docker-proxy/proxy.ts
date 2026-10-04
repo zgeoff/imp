@@ -152,9 +152,12 @@ export function createDockerProxy(
   const sendUpstream = (versionPrefix: string, call: UpstreamCall): Promise<Response> => {
     const search = call.query === undefined ? '' : formatQuery(call.query);
 
-    // the host part is ignored: the request goes to the unix socket
+    // the host part is ignored: the request goes to the unix socket.
+    // timeout: false lifts Bun's 360 s limit on a silent response, which a
+    // RUN step with no output outlasts; the client's signal still ends it
     return fetch(`http://docker${versionPrefix}${call.path}${search}`, {
       method: call.method,
+      timeout: false,
       headers: call.headers ?? {},
       body: call.body ?? null,
       unix: options.upstreamSocket,

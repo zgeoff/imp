@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -244,6 +244,31 @@ test('a build streams its context and forwards no client header', async () => {
   expect(seen[0]?.headers['x-registry-config']).toBeUndefined();
   expect(seen[0]?.headers['x-registry-auth']).toBeUndefined();
   expect(seen[0]?.headers['cookie']).toBeUndefined();
+});
+
+// Bun's fetch gives up on an answer silent for 360 s, as a build's quiet RUN
+// step is; the live check is test/slow/docker-idle.slow.ts
+test('every call to the engine lifts the limit on a silent answer', async () => {
+  const sent = spyOn(globalThis, 'fetch');
+
+  try {
+    await sendToProxy('POST', BUILD_PATH, { body: 'ctx' });
+    await sendToProxy('POST', '/v1.55/images/create?fromImage=busybox&tag=latest');
+    await sendToProxy('GET', '/v1.55/containers/aaaa/export');
+
+    await sendToProxy('POST', '/v1.55/containers/create', {
+      body: JSON.stringify({ Image: 'busybox:1.37', Cmd: ['/bin/true'] }),
+    });
+
+    const upstream = sent.mock.calls.flatMap(([, init = {}]): unknown[] =>
+      Reflect.get(init, 'unix') === engineSocket ? [Reflect.get(init, 'timeout')] : [],
+    );
+
+    // the export inspects its container first
+    expect(upstream).toEqual([false, false, false, false, false]);
+  } finally {
+    sent.mockRestore();
+  }
 });
 
 test('a build without a Content-Type reaches the engine as a tar', async () => {
