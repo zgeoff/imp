@@ -171,9 +171,12 @@ export async function runDockerBuild(options: Readonly<DockerBuildOptions>): Pro
     query.set('dockerfile', options.dockerfile);
   }
 
-  // the host part is ignored: the request goes to the unix socket
+  // the host part is ignored: the request goes to the unix socket.
+  // timeout: false lifts Bun's 360 s limit on a silent response, which a
+  // RUN step with no output outlasts; `signal` still ends the build
   const response = await fetch(`http://docker/build?${query.toString()}`, {
     method: 'POST',
+    timeout: false,
     headers: { 'content-type': 'application/x-tar' },
     body: Bun.file(options.tarPath),
     unix: readDockerSocket(options.dockerHost),
