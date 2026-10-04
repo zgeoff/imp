@@ -41,6 +41,11 @@ export interface ExecOptions {
   // variables and CA bundle (docs/guides/connectors.md#requiring-the-broker)
   readonly require?: readonly ExecRequirement[];
 
+  // with a session this start creates: impd keeps its output on the host,
+  // for `sessions.readLog`; `started.output.log` says whether it does. Check
+  // `system.info.features.sessionLog` first (docs/guides/session-logs.md).
+  readonly log?: boolean;
+
   // closes the session, as `close()` does; before the start, `started` and
   // `exit` reject with the abort's reason (an AbortError), as `openExec` does
   readonly signal?: Readonly<AbortSignal>;
@@ -113,6 +118,7 @@ export function openExec(
     ...(options.killGraceMs !== undefined && { killGraceMs: options.killGraceMs }),
     ...(options.resumeFrom !== undefined && { resumeFrom: options.resumeFrom }),
     ...(options.require !== undefined && { require: options.require }),
+    ...(options.log === true && { log: true }),
   });
 }
 

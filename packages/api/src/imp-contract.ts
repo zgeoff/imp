@@ -50,6 +50,13 @@ import {
   ServiceLogSchema,
   ServiceNameSchema,
 } from './service-schema';
+import {
+  SessionLogDeleteInputSchema,
+  SessionLogListInputSchema,
+  SessionLogReadInputSchema,
+  SessionLogReadSchema,
+  SessionLogSchema,
+} from './session-log-schema';
 import { SessionNameSchema, SessionSchema } from './session-schema';
 import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
@@ -396,6 +403,20 @@ export const impContract = {
     kill: base
       .input(z.object({ name: NameSchema, session: SessionNameSchema }))
       .output(EmptySchema),
+
+    // the logs impd keeps of sessions started with `log`, newest first
+    // (docs/guides/session-logs.md); none of the three wakes or boots the
+    // imp, as the logs live on the host
+    logs: base.input(SessionLogListInputSchema).output(z.array(SessionLogSchema)),
+
+    // a byte range of one generation's log; INVALID_RESUME past its end,
+    // NOT_FOUND for a generation with no log
+    readLog: base.input(SessionLogReadInputSchema).output(SessionLogReadSchema),
+
+    // deletes logs, a live generation's included: impd stops logging it
+    deleteLog: base
+      .input(SessionLogDeleteInputSchema)
+      .output(z.object({ deleted: z.int().nonnegative() })),
   },
 
   // the services the imp's agent supervises (docs/guides/services.md); each

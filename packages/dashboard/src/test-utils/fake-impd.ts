@@ -274,6 +274,15 @@ export function createFakeImpd(): FakeImpd {
 
         return {};
       }),
+
+      // the dashboard has no session logs
+      logs: os.sessions.logs.handler(() => []),
+      readLog: os.sessions.readLog.handler(() => {
+        throw new Error('not in the fake');
+      }),
+      deleteLog: os.sessions.deleteLog.handler(() => {
+        throw new Error('not in the fake');
+      }),
     },
 
     // the dashboard has no moves

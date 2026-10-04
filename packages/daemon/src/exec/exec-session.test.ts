@@ -924,3 +924,50 @@ test('a start passes its requirements to the backend, and a refusal keeps its da
     { type: 'error', code: 'PRECONDITION_FAILED', message: 'not ready', data },
   ]);
 });
+
+test('a log goes to the agent, and an agent that keeps none says so in started', async () => {
+  const fake = buildFakeStream();
+  const peer = buildFakePeer();
+  const requests: AgentExecRequest[] = [];
+
+  const stream: ExecStream = {
+    ...fake.stream,
+    session: 'main',
+    created: true,
+    output: OFFSETS_OUTPUT,
+  };
+
+  const session = createExecSession(
+    peer.peer,
+    buildBackend({
+      openExec: (_name, request) => {
+        requests.push(request);
+
+        return Promise.resolve(stream);
+      },
+    }),
+  );
+
+  session.handleMessage({
+    type: 'start',
+    name: 'dev',
+    argv: ['sh'],
+    tty: true,
+    session: 'main',
+    log: true,
+  });
+
+  await Bun.sleep(5);
+
+  expect(requests).toEqual([{ argv: ['sh'], tty: true, session: 'main', log: true }]);
+  expect(peer.sent[0]).toMatchObject({ output: { ...OFFSETS_OUTPUT, log: { enabled: false } } });
+});
+
+test('a log without a session is a bad message', () => {
+  const peer = buildFakePeer();
+  const session = createExecSession(peer.peer, buildBackend({}));
+
+  session.handleMessage({ type: 'start', name: 'dev', argv: ['sh'], tty: true, log: true });
+
+  expect(peer.sent).toEqual([expect.objectContaining({ type: 'error' })]);
+});

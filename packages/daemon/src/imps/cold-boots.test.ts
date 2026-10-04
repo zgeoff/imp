@@ -74,7 +74,7 @@ function sendNoSession(socket: Socket): void {
         code: 'NO_SESSION',
         message: 'no session "main"',
         data: {
-          boot_id: 'boot-x',
+          boot_id: '22222222-2222-4222-8222-222222222222',
           previous: { execution_generation: GENERATION, end: 12, exit: { code: 137, signal: 9 } },
         },
       },
@@ -194,7 +194,7 @@ test('an attach that boots a crashed imp answers NO_SESSION with its cold boots'
   const data = NoSessionDataSchema.parse(error.data);
 
   expect(error.code).toBe('NO_SESSION');
-  expect(data.bootId).toBe('boot-x');
+  expect(data.bootId).toBe('22222222-2222-4222-8222-222222222222');
   expect(data.coldBoots.map((boot) => boot.cause)).toEqual(['recovery', 'start']);
   expect(data.previous).toEqual({ executionGeneration: GENERATION, end: 12, exitCode: null });
 });
@@ -237,7 +237,7 @@ test('a session’s started output names the cold boots; a resume error keeps it
           pid: 9,
           session: 'main',
           output: {
-            boot_id: 'boot-x',
+            boot_id: '22222222-2222-4222-8222-222222222222',
             execution_generation: GENERATION,
             buffer_start: 0,
             end: 5,
@@ -279,7 +279,7 @@ test('a session’s started output names the cold boots; a resume error keeps it
 
   expect(stream.output).toEqual({
     continuity: 'offsets',
-    bootId: 'boot-x',
+    bootId: '22222222-2222-4222-8222-222222222222',
     executionGeneration: GENERATION,
     bufferStart: 0,
     end: 5,
