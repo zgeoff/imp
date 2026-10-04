@@ -489,16 +489,14 @@ export function createZfsBackend(deps: ZfsBackendDeps): ZfsBackend {
       };
     });
 
-    const checkpoints = plan.orphanCheckpoints.map(
-      (snapshot): OrphanStorage => ({
-        kind: 'checkpoint',
-        id: readSnapshotId(snapshot.name),
-        location: snapshot.name,
-        bytes: space.get(snapshot.name)?.used ?? 0,
-        createdAt: space.get(snapshot.name)?.createdAt ?? null,
-        snapshots: [],
-      }),
-    );
+    const checkpoints = plan.orphanCheckpoints.map((snapshot): OrphanStorage => ({
+      kind: 'checkpoint',
+      id: readSnapshotId(snapshot.name),
+      location: snapshot.name,
+      bytes: space.get(snapshot.name)?.used ?? 0,
+      createdAt: space.get(snapshot.name)?.createdAt ?? null,
+      snapshots: [],
+    }));
 
     return [...datasetOrphans, ...checkpoints, ...dirs];
   };
