@@ -55,6 +55,8 @@ Architecture and guides for imp, persistent Linux microVMs that sleep when idle.
 - [SSH](./guides/ssh.md): `ssh box@imp`, keys, what the gateway supports, and how it wakes imps.
 - [Reverse forwards](./guides/reverse-forwards.md): `imp proxy --reverse`, a socket or a port in an
   imp that reaches one on your machine, and how it lives through sleeps.
+- [Session logs](./guides/session-logs.md): `imp console --log`, a session's output kept on the host
+  past the agent's ring, how it is read, bounded and deleted, and what survives which event.
 - [Copying files](./guides/cp.md): `imp cp` into and out of an imp, what a copy keeps, how it works,
   and its safety rules.
 - [Tailscale](./guides/tailscale.md): the tailnet node, the ACL, keys and state, HTTPS and DNS.

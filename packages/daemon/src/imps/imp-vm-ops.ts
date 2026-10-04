@@ -14,6 +14,7 @@ import { shrinkGuest } from '../memory/shrink-guest';
 import type { SlotAddress } from '../net/addressing';
 import { GATEWAY_IP6 } from '../net/addressing6';
 import { readErrorMessage } from '../read-error-message';
+import { findSessionLogImp } from '../session-logs/find-session-log-imp';
 import { toSeenSessions } from '../sessions/session-cache';
 import type { SeenSession } from '../sessions/session-cache';
 import { waitForGuestAge } from '../sleep/guest-age';
@@ -135,6 +136,11 @@ export function createImpVmOps(context: ImpContext, gate: ShutdownGate): ImpVmOp
 
     if (change.state !== 'running') {
       context.sessions.forget(imp.id);
+    }
+
+    // the VM is gone, and the generations its sessions ran with it
+    if (change.state === 'stopped' || change.state === 'error') {
+      void context.sessionLogs.endImp(findSessionLogImp(context.findPaths, updated));
     }
 
     return toLockedImp(imp, updated);

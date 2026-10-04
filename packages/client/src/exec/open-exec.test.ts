@@ -906,3 +906,17 @@ test('stdin held while a start that requires anything waits on impd counts towar
   expect(seen).toEqual({ accepted: false, drainedEarly: false });
   expect(outcome).toMatchObject({ kind: 'exit', code: 3 });
 });
+
+test('a log reaches impd with the session that starts', async () => {
+  await using ctx = await setupExecTest();
+
+  const handle = await ctx.client.openConsole('dev', { session: 'main', log: true });
+
+  await handle.started;
+
+  handle.close();
+
+  await handle.exit.catch(() => null);
+
+  expect(ctx.requests[0]).toMatchObject({ session: 'main', log: true });
+});

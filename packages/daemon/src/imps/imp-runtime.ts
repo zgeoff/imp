@@ -22,6 +22,7 @@ import { checkBrokerAttach, checkOpenedSession } from '../exec/broker-sessions';
 import { buildBrokerNotReadyError, checkBrokerReady, isBrokerRequired } from '../exec/exec-require';
 import { mergeEnv } from '../exec/merge-env';
 import { readErrorMessage } from '../read-error-message';
+import { findSessionLogImp } from '../session-logs/find-session-log-imp';
 import { toSeenSessions } from '../sessions/session-cache';
 import { readVmIdentity } from '../sleep/vm-identity';
 import type { ImpPaths } from '../storage/data-layout';
@@ -127,6 +128,10 @@ export interface ImpRuntime {
   // on SIGTERM: every running imp to sleep, a few at a time. A wake or boot
   // already under way finishes first and is put to sleep; later ones fail.
   readonly sleepAllImps: () => Promise<void>;
+
+  // ends the session logs of VMs that are gone and removes those past their
+  // age (docs/architecture/daemon.md#session-logs)
+  readonly sweepSessionLogs: () => Promise<void>;
 
   // on SIGHUP: impd restarts in place and leaves VMs running, but a wake or
   // boot under way must finish, or its Firecracker has no record
@@ -439,7 +444,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
             return stream;
           };
 
-          return withColdBoots(context, target, openNoted());
+          // a session this start created gets its log tap once it opens
+          return withColdBoots(context, target, openNoted()).then((stream) => {
+            startNewLogTap(context, target, stream);
+
+            return stream;
+          });
         };
 
         if (!requiresBroker) {
@@ -489,6 +499,7 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
         const activity = await sendActivity(context.findPaths(imp.id).vsockSocket);
 
         context.sessions.record(imp.id, toSeenSessions(activity.sessions, new Date()));
+        context.sessionLogs.observe(findSessionLogImp(context.findPaths, imp), activity.sessions);
 
         return activity;
       } catch {
@@ -572,6 +583,12 @@ export function createImpRuntime(parts: ImpRuntimeParts): ImpRuntime {
           lock.withImpId(imp.id, (fresh) => sleepIfRunning(fresh, 'impd is stopping')),
         ),
       );
+    },
+
+    sweepSessionLogs: async () => {
+      const imps = await listImps(context.db);
+
+      await context.sessionLogs.sweep(imps.map((imp) => findSessionLogImp(context.findPaths, imp)));
     },
 
     // the lock's liveness check marks an imp whose VM died with impd stopped
@@ -775,5 +792,28 @@ function requireFeature(paths: ImpPaths, feature: AgentFeature): void {
     throw agentVersion === undefined
       ? buildAgentUnknownError(feature)
       : buildAgentOutdatedError(feature);
+  }
+}
+
+// a session that just started with log is tapped at once, while the agent's
+// ring still holds its first output
+function startNewLogTap(
+  context: ImpContext,
+  imp: Readonly<ImpRecord>,
+  stream: Readonly<ExecStream>,
+) {
+  const output = stream.output;
+
+  if (
+    stream.created &&
+    stream.session !== null &&
+    output?.continuity === 'offsets' &&
+    output.log?.enabled === true
+  ) {
+    context.sessionLogs.tapNow(findSessionLogImp(context.findPaths, imp), {
+      name: stream.session,
+      execution_generation: output.executionGeneration,
+      boot_id: output.bootId,
+    });
   }
 }

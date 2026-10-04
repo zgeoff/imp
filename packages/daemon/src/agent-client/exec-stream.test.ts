@@ -5,11 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
 import { sendActivity, sendPing, sendSessionKill } from './agent-requests';
-import { openAttachStream, openExecStream } from './exec-stream';
+import { openAttachStream, openExecStream, openTapStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
 import { startFakeAgent } from './fake-agent';
 import type { FakeAgentHandler } from './fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
+import { HOSTILE_BOOT_IDS, HOSTILE_GENERATIONS, HOSTILE_SESSION_NAMES } from './test-agent-ids';
 
 // a fake agent in a fresh directory
 async function setupFakeVsock(agent: FakeAgentHandler) {
@@ -186,7 +187,7 @@ test('a resume goes to the agent in its shape, without wake, and STARTED places 
         pid: 42,
         session: 'main',
         output: {
-          boot_id: 'boot-1',
+          boot_id: '11111111-1111-4111-8111-111111111111',
           execution_generation: generation,
           buffer_start: 10,
           end: 20,
@@ -214,7 +215,7 @@ test('a resume goes to the agent in its shape, without wake, and STARTED places 
 
   expect(stream.output).toEqual({
     continuity: 'offsets',
-    bootId: 'boot-1',
+    bootId: '11111111-1111-4111-8111-111111111111',
     executionGeneration: generation,
     bufferStart: 10,
     end: 20,
@@ -374,4 +375,136 @@ test('an outer exec is the exec.outer op, which an older agent refuses as AGENT_
     argv: ['ls', '/user'],
     tty: false,
   });
+});
+
+test('a tap is the session.tap op, and a logged STARTED says the log is on', async () => {
+  const generation = 'e'.repeat(32);
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.started, {
+        pid: 42,
+        session: 'main',
+        output: {
+          boot_id: '11111111-1111-4111-8111-111111111111',
+          execution_generation: generation,
+          buffer_start: 0,
+          end: 9,
+          offset: 9,
+          prelude: 0,
+          resume: { kind: 'exact' },
+          log: true,
+        },
+      }),
+    );
+  });
+
+  const stream = await openTapStream(vsock.path, 'main', {
+    executionGeneration: generation,
+    offset: 9,
+  });
+
+  stream.close();
+
+  expect(decodeJsonPayload(vsock.received[0] ?? { type: 0, payload: new Uint8Array() })).toEqual({
+    op: 'session.tap',
+    session: 'main',
+    resume_from: { execution_generation: generation, offset: 9 },
+  });
+
+  expect(stream.output).toMatchObject({ offset: 9, log: { enabled: true } });
+});
+
+test('a tap on an agent from before session logs fails as AGENT_OUTDATED', async () => {
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        error: { code: 'UNKNOWN_OP', message: 'unknown op' },
+      }),
+    );
+  });
+
+  const tap = await readRejection(openTapStream(vsock.path, 'main'));
+
+  expect(tap).toMatchObject({ code: 'AGENT_OUTDATED' });
+});
+
+test('activity drops a session whose generation, boot or name is not of its form', async () => {
+  const good = {
+    name: 'main',
+    pid: 1,
+    argv: ['sh'],
+    state: 'running',
+    attached: false,
+    cols: 80,
+    rows: 24,
+    started_unix_ms: 1,
+    execution_generation: 'a'.repeat(32),
+    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    log: true,
+  };
+
+  using vsock = await setupFakeVsock((socket) => {
+    socket.end(
+      encodeJsonFrame(FRAME_TYPES.response, {
+        tcp_established: 0,
+        exec_sessions: 0,
+        load1: 0,
+        sessions: [
+          good,
+          ...HOSTILE_GENERATIONS.map((value) => ({ ...good, execution_generation: value })),
+          ...HOSTILE_BOOT_IDS.map((value) => ({ ...good, boot_id: value })),
+          ...HOSTILE_SESSION_NAMES.map((value) => ({ ...good, name: value })),
+        ],
+      }),
+    );
+  });
+
+  const activity = await sendActivity(vsock.path);
+
+  expect(activity.sessions.map((session) => session.execution_generation)).toEqual([
+    'a'.repeat(32),
+  ]);
+});
+
+test('a tap whose STARTED names a forged generation, boot id or session fails', async () => {
+  const output = {
+    boot_id: '4f3c0f86-8f8b-4c45-a3b4-8e1c1e9b0d11',
+    execution_generation: 'a'.repeat(32),
+    buffer_start: 0,
+    end: 0,
+    offset: 0,
+    prelude: 0,
+    log: true,
+  };
+
+  const forged = [
+    ...HOSTILE_GENERATIONS.map((value) => ({
+      session: 'main',
+      output: { ...output, execution_generation: value },
+    })),
+    ...HOSTILE_BOOT_IDS.map((value) => ({
+      session: 'main',
+      output: { ...output, boot_id: value },
+    })),
+    ...HOSTILE_SESSION_NAMES.map((value) => ({ session: value, output })),
+  ];
+
+  const opened: unknown[] = [];
+
+  // the real STARTED opens, so each refusal below is its forged value's
+  for (const started of [{ session: 'main', output }, ...forged]) {
+    using vsock = await setupFakeVsock((socket) => {
+      socket.end(encodeJsonFrame(FRAME_TYPES.started, { pid: 42, ...started }));
+    });
+
+    const stream = await openTapStream(vsock.path, 'main').catch(() => null);
+
+    if (stream !== null) {
+      opened.push(started);
+      stream.close();
+    }
+  }
+
+  expect(opened).toEqual([{ session: 'main', output }]);
 });

@@ -175,7 +175,9 @@ and into the attached viewer's queue, and never waits for the viewer. The histor
 drops, so the history knows the terminal modes in effect where its kept output starts, and cuts it
 between escape sequences. Apart from it, a raw ring keeps exactly the last 256 KiB, which a resume
 reads by offset ([output offsets](./protocol.md#output-offsets)). Each start of the process is a new
-generation, and the agent keeps the last one that ended under each name as `previous`.
+generation, and the agent keeps the last one that ended under each name as `previous`. A session
+started with `log` also takes taps, impd's readers of its raw ring for the
+[session logs](./daemon.md#session-logs); a tap is not a viewer and is not counted as one.
 
 Each session holds up to 512 KiB of history, the 256 KiB ring and a 2 MiB queue for its viewer.
 Input waits in a queue of 4 STDIN frames before the pty, at most 4 MiB when the host sends frames of

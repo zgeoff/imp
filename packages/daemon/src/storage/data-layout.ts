@@ -18,6 +18,10 @@ export interface ImpPaths extends FirecrackerPaths {
   // what the VM booted with; outside snapshotDir, which a cold boot clears
   readonly vmIdentity: string;
   readonly checkpointsDir: string;
+
+  // impd's logs of the imp's sessions, one directory per generation
+  // (docs/architecture/daemon.md#session-logs)
+  readonly sessionLogsDir: string;
 }
 
 export interface ImagePaths {
@@ -42,6 +46,7 @@ export function buildImpPaths(dataDir: string, impId: string): ImpPaths {
     ...buildSnapshotPaths(join(dir, 'snapshot')),
     vmIdentity: join(dir, 'vm.json'),
     checkpointsDir: join(dir, 'checkpoints'),
+    sessionLogsDir: join(dir, 'session-logs'),
   };
 }
 

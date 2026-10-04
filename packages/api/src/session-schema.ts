@@ -44,6 +44,9 @@ export const SessionSchema = z.object({
   bootId: z.string().optional(),
   end: z.int().nonnegative().optional(),
   endObservedAt: z.date().optional(),
+
+  // impd keeps a log of this session's output (docs/guides/session-logs.md)
+  log: z.boolean().optional(),
 });
 
 export type Session = z.infer<typeof SessionSchema>;

@@ -16,6 +16,7 @@ import type {
   Secret,
   Service,
   Session,
+  SessionLog,
   SshKey,
   StorageGc,
   SystemInfo,
@@ -339,6 +340,37 @@ export function formatSessions(sessions: readonly Readonly<Session>[]): string {
       session.argv.join(' '),
     ]),
   );
+}
+
+export function formatSessionLogs(logs: readonly SessionLog[]): string {
+  return formatTable(
+    ['SESSION', 'GENERATION', 'STATE', 'BYTES', 'OFFSETS', 'EXIT', 'STARTED'],
+    logs.map((log) => [
+      log.session,
+      log.executionGeneration,
+      formatLogState(log),
+      String(log.bytes),
+      `${String(log.logStart)}-${String(log.logEnd)}`,
+      formatLogExit(log),
+      log.startedAt.toISOString(),
+    ]),
+  );
+}
+
+function formatLogState(log: SessionLog): string {
+  if (log.stopped !== undefined) {
+    return `${log.state} (stopped: ${log.stopped})`;
+  }
+
+  return log.complete ? `${log.state} (complete)` : log.state;
+}
+
+function formatLogExit(log: SessionLog): string {
+  if (log.exitCode === undefined) {
+    return '-';
+  }
+
+  return log.exitCode === null ? 'signal' : String(log.exitCode);
 }
 
 function formatSessionState(session: Readonly<Session>): string {

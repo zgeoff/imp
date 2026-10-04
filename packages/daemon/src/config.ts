@@ -16,6 +16,7 @@ import { parseIpv6Setting } from './net/ipv6-plan';
 import type { Ipv6Setting } from './net/ipv6-plan';
 import { PublicMcpEnvSchema, parsePublicMcpConfig } from './oauth/public-mcp-config';
 import type { PublicMcpConfig } from './oauth/public-mcp-config';
+import type { SessionLogLimits } from './session-logs/session-log-service';
 import type { StorageBackendKind } from './storage/storage-backend';
 import {
   TailnetNamesEnvSchema,
@@ -78,6 +79,13 @@ const EnvSchema = z.object({
     .string()
     .regex(BUILD_IMAGE_PATTERN, 'must name an image by digest, <ref>@sha256:<hex>')
     .default(DEFAULT_BUILD_IMAGE),
+
+  // session logs (docs/guides/session-logs.md): per generation, per imp,
+  // and how long an ended generation's log stays
+  IMP_SESSION_LOG_MAX_MIB: CountSchema.default(16),
+  IMP_SESSION_LOG_IMP_MAX_MIB: CountSchema.default(64),
+  IMP_SESSION_LOG_IMP_MAX_LIVE: CountSchema.default(8),
+  IMP_SESSION_LOG_MAX_AGE_DAYS: CountSchema.default(7),
 
   // the engine, as the docker CLI reads it; impd's own builds go there too
   DOCKER_HOST: z.string().optional(),
@@ -200,6 +208,9 @@ export interface Config {
   // the largest build context a client may upload to IMAGE_BUILD_PATH
   readonly buildContextMaxBytes: number;
   readonly build: BuildConfig;
+
+  // the bounds of session logs (docs/guides/session-logs.md)
+  readonly sessionLog: SessionLogLimits;
 
   // DOCKER_HOST, where impd sends its image builds: imp-docker-proxy's
   // socket on imp-host (docs/architecture/host-contract.md#the-docker-socket)
@@ -466,6 +477,12 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
       imageMaxBytes: parsed.IMP_BUILD_IMAGE_MAX_MIB * 1024 ** 2,
       imageMaxFiles: parsed.IMP_BUILD_IMAGE_MAX_FILES,
       image: parsed.IMP_BUILD_IMAGE,
+    },
+    sessionLog: {
+      generationMaxBytes: parsed.IMP_SESSION_LOG_MAX_MIB * 1024 ** 2,
+      impMaxBytes: parsed.IMP_SESSION_LOG_IMP_MAX_MIB * 1024 ** 2,
+      impMaxLive: parsed.IMP_SESSION_LOG_IMP_MAX_LIVE,
+      maxAgeMs: parsed.IMP_SESSION_LOG_MAX_AGE_DAYS * 86_400_000,
     },
     dockerHost: parsed.DOCKER_HOST ?? null,
     dns: parsed.IMP_DNS,

@@ -77,6 +77,9 @@ export const ResumeResultSchema = z
 
 export type ResumeResult = z.infer<typeof ResumeResultSchema>;
 
+// docs/guides/session-logs.md
+const SessionLogStateSchema = z.object({ enabled: z.boolean() }).readonly();
+
 // where a session socket's data stands; `none` for an agent without offsets,
 // which replays as before and ignores resumeFrom
 export const SessionOutputSchema = z
@@ -101,6 +104,10 @@ export const SessionOutputSchema = z
 
       // set only when the request had resumeFrom
       resume: ResumeResultSchema.optional(),
+
+      // a session started with `log`: whether impd keeps its output; false
+      // when the imp's agent predates session logs
+      log: SessionLogStateSchema.optional(),
     }),
   ])
   .readonly();

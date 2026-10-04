@@ -8,6 +8,7 @@ import type {
 import * as z from 'zod';
 import { AgentError, openAgentConnection } from './agent-connection';
 import type { AgentConnection } from './agent-connection';
+import { AgentBootIdSchema, AgentGenerationSchema, AgentSessionNameSchema } from './agent-ids';
 import { buildAgentOutdatedError, handleUnknownOp } from './agent-outdated';
 import { AgentExitSchema, readFrameWithin, requireNoAgentError } from './agent-requests';
 import { FRAME_TYPES, decodeJsonPayload } from './frame-codec';
@@ -30,6 +31,10 @@ export interface AgentExecRequest {
 
   // with a session: the output after this byte, not a replay
   readonly resumeFrom?: ResumeFrom;
+
+  // a session impd keeps a log of; an agent from before session logs
+  // ignores it, and its STARTED says no log
+  readonly log?: boolean;
 
   // runs in the agent's own world, outside the inner container, as root:
   // the exec.outer op, which an older agent refuses
@@ -101,7 +106,7 @@ const EXEC_START_TIMEOUT_MS = 10_000;
 const OffsetSchema = z.int().nonnegative();
 
 const AgentPreviousSchema = z.object({
-  execution_generation: z.string(),
+  execution_generation: AgentGenerationSchema,
   end: OffsetSchema,
   exit: AgentExitSchema,
 });
@@ -111,25 +116,28 @@ const AgentResumeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('gap'), from: OffsetSchema, to: OffsetSchema }),
   z.object({
     kind: z.literal('generation_changed'),
-    execution_generation: z.string(),
+    execution_generation: AgentGenerationSchema,
     first_offset: OffsetSchema,
   }),
 ]);
 
 const AgentOutputSchema = z.object({
-  boot_id: z.string(),
-  execution_generation: z.string(),
+  boot_id: AgentBootIdSchema,
+  execution_generation: AgentGenerationSchema,
   buffer_start: OffsetSchema,
   end: OffsetSchema,
   offset: OffsetSchema,
   prelude: OffsetSchema,
   previous: AgentPreviousSchema.optional(),
   resume: AgentResumeSchema.optional(),
+
+  // set for a session started with log, by an agent with session logs
+  log: z.boolean().optional(),
 });
 
 const StartedSchema = z.object({
   pid: z.int(),
-  session: z.string().optional(),
+  session: AgentSessionNameSchema.optional(),
   created: z.boolean().optional(),
   kill_grace_ms: z.int().optional(),
 
@@ -138,7 +146,7 @@ const StartedSchema = z.object({
 });
 
 const NoSessionDataSchema = z.object({
-  boot_id: z.string(),
+  boot_id: AgentBootIdSchema,
   previous: AgentPreviousSchema.optional(),
 });
 
@@ -176,6 +184,26 @@ export async function openExecStream(
   }
 
   return stream;
+}
+
+// Taps a logged session's raw output beside its viewer, from resumeFrom or
+// the ring's start; it counts as no connection. Throws NO_SESSION, and
+// BAD_REQUEST for a session without a log.
+export function openTapStream(
+  vsockPath: string,
+  session: string,
+  resumeFrom?: ResumeFrom,
+  startTimeoutMs = EXEC_START_TIMEOUT_MS,
+): Promise<ExecStream> {
+  return openStream(
+    vsockPath,
+    {
+      op: 'session.tap',
+      session,
+      ...(resumeFrom !== undefined && { resume_from: toAgentResumeFrom(resumeFrom) }),
+    },
+    startTimeoutMs,
+  ).catch(handleUnknownOp('session-log'));
 }
 
 // Attaches to a session and waits for STARTED; the replay follows as
@@ -310,6 +338,7 @@ function toSessionOutput(started: z.infer<typeof StartedSchema>): SessionOutput 
     coldBoots: [],
     ...(output.previous !== undefined && { previous: toPrevious(output.previous) }),
     ...(output.resume !== undefined && { resume: toResume(output.resume) }),
+    ...(output.log === true && { log: { enabled: true } }),
   };
 }
 
