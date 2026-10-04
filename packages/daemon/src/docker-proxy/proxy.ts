@@ -20,6 +20,10 @@ import type { Check } from './rules';
 // the label on every container the proxy creates; export and rm need it
 export const PROXY_LABEL = 'imp.docker-proxy';
 
+// how long any call but a build, a pull or an export may wait for the
+// engine: an inspect, a create or a removal answers in seconds
+const CONTROL_CALL_MS = 120_000;
+
 // a create body from the CLI is about 2 KiB
 const CREATE_BODY_MAX_BYTES = 1024 ** 2;
 
@@ -49,6 +53,9 @@ export interface DockerProxyOptions {
   readonly hostImage: string;
   readonly buildContextMaxBytes: number;
   readonly log: (message: string) => void;
+
+  // CONTROL_CALL_MS, but for tests
+  readonly controlCallMs?: number;
 }
 
 class BodyTooLargeError extends Error {
@@ -141,9 +148,10 @@ interface UpstreamCall {
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: string | ReadableStream<Uint8Array> | null;
 
-  // the client's: a client that goes ends a build, a pull or an export on
-  // the engine too
-  readonly signal?: AbortSignal;
+  // a build, a pull or an export: past Bun's 360 s limit on a silent answer,
+  // which a quiet RUN step outlasts, until the client goes. Any other call
+  // ends at CONTROL_CALL_MS.
+  readonly longRunning?: { readonly signal: AbortSignal };
 }
 
 export function createDockerProxy(
@@ -161,7 +169,9 @@ export function createDockerProxy(
       duplex: 'half',
       redirect: 'manual',
       decompress: false,
-      ...(call.signal !== undefined && { signal: call.signal }),
+      ...(call.longRunning === undefined
+        ? { signal: AbortSignal.timeout(options.controlCallMs ?? CONTROL_CALL_MS) }
+        : { timeout: false, signal: call.longRunning.signal }),
     });
   };
 
@@ -272,7 +282,7 @@ export function createDockerProxy(
         // client header: a build without a session reads no registry auth
         headers: { 'content-type': BUILD_CONTENT_TYPE },
         body,
-        signal: request.signal,
+        longRunning: { signal: request.signal },
       });
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
@@ -310,7 +320,7 @@ export function createDockerProxy(
       path: '/images/create',
       query,
       headers: pickHeaders(request, ['x-registry-auth']),
-      signal: request.signal,
+      longRunning: { signal: request.signal },
     });
   };
 
@@ -342,7 +352,7 @@ export function createDockerProxy(
     return sendAndRelay(versionPrefix, {
       method: 'GET',
       path: `/containers/${fullId}/export`,
-      signal: request.signal,
+      longRunning: { signal: request.signal },
     });
   };
 

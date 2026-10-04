@@ -534,10 +534,13 @@ export function buildRouter(deps: RouterDeps) {
       add: os.images.add.handler(async (context) => {
         const input = context.input;
 
+        // a client that goes stops the pull, as a streamed add's does
         const image =
           'imp' in input
             ? await deps.templates.createTemplate(input.imp, input.name)
-            : await deps.images.addImage(input.ref, input.name);
+            : await deps.images.addImage(input.ref, input.name, {
+                ...(context.signal !== undefined && { signal: context.signal }),
+              });
 
         return toApiImage(image);
       }),
@@ -575,10 +578,13 @@ export function buildRouter(deps: RouterDeps) {
         ),
       ),
       build: os.images.build.handler(async (context) => {
+        // a client that goes stops the build on the engine, which may run
+        // past any fetch limit
         const image = await deps.images.buildImage(
           context.input.contextDir,
           context.input.name,
           context.input.dockerfile,
+          { ...(context.signal !== undefined && { signal: context.signal }) },
         );
 
         return toApiImage(image);
