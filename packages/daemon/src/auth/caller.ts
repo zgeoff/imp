@@ -4,7 +4,7 @@ import type { GrantableSecret } from '../db/tokens';
 import { hasScope } from './scopes';
 
 // Who a request runs as (docs/guides/tokens.md): a token, the dashboard
-// session made with one, an ssh key or a tailnet identity
+// session made with one, an ssh key, a tailnet identity, or an OAuth grant
 export interface Caller {
   readonly kind: ApiActor;
 
@@ -23,6 +23,10 @@ export interface Caller {
   // the token behind it, so deleting the token ends what it opened; null
   // for an ssh key or a tailnet identity
   readonly tokenId: string | null;
+
+  // the OAuth grant it acts for on the public MCP route, so revoking the
+  // grant ends what it opened; null for every other caller
+  readonly grantId: string | null;
 
   // when what it authenticated with expires: a dashboard session's expiry,
   // else null

@@ -169,6 +169,10 @@ export const SystemInfoSchema = z.object({
 
       // an `/exec` start takes `require`, which an older impd drops unread
       execRequire: z.boolean().optional(),
+
+      // the oauth procedures and the public MCP route exist; the route runs
+      // only where the operator turned it on (publicMcp)
+      oauthGrants: z.boolean().optional(),
     })
     .optional(),
 });

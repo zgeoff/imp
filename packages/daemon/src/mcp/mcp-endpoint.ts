@@ -12,15 +12,20 @@ export const MCP_PATH = '/mcp';
 const IN_PROCESS_URL = 'http://impd.internal';
 
 export interface McpEndpointDeps {
-  // a token or a tailnet identity; null for none
+  // a token or a tailnet identity, or a grant on the public route; null for
+  // none
   readonly findCaller: (request: Request) => Promise<Caller | null>;
 
   // one API call as the caller, through its access rules and audit
   readonly handleRpc: (request: Request, caller: Readonly<Caller>) => Promise<Response>;
   readonly connectExec: (url: string) => ExecSocket;
 
-  // what ends when the caller's token is removed
+  // what ends when the caller's token or grant is removed
   readonly readEnds: (caller: Readonly<Caller>) => AbortSignal | null;
+
+  // the public route's: who may call from a browser, and the 401's challenge
+  readonly isCrossOrigin?: (request: Request) => boolean;
+  readonly challenge?: string;
 }
 
 // impd's own MCP endpoint (docs/guides/mcp.md#http): the tools of `imp mcp`,
@@ -29,7 +34,8 @@ export interface McpEndpointDeps {
 export function createMcpEndpoint(deps: Readonly<McpEndpointDeps>): HttpTransport {
   return createHttpTransport({
     version: packageJson.version,
-    isCrossOrigin,
+    isCrossOrigin: deps.isCrossOrigin ?? isCrossOrigin,
+    ...(deps.challenge !== undefined && { challenge: deps.challenge }),
     authenticate: async (request) => {
       const caller = await deps.findCaller(request);
 
@@ -44,7 +50,8 @@ export function createMcpEndpoint(deps: Readonly<McpEndpointDeps>): HttpTranspor
       });
 
       return {
-        key: `${caller.kind}:${caller.tokenId ?? caller.name}`,
+        // a grant is a caller of its own, apart from its token's other grants
+        key: `${caller.kind}:${caller.grantId ?? caller.tokenId ?? caller.name}`,
         scope: caller.scope,
         client,
         guard: createPatternGuard(caller.imps),

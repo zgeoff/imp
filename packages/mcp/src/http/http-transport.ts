@@ -27,6 +27,9 @@ export interface HttpTransportOptions extends McpServerOptions {
   // before the request is authenticated
   readonly isCrossOrigin: (request: Request) => boolean;
 
+  // the WWW-Authenticate a 401 carries; `Bearer` when left out
+  readonly challenge?: string;
+
   // between SSE comments, so no idle timeout ends a long call's stream
   readonly keepaliveMs?: number;
   readonly limits?: { readonly perCaller: number; readonly total: number; readonly idleMs: number };
@@ -38,6 +41,10 @@ export interface HttpTransport {
 
   // ends every session and stops what their calls run
   readonly close: () => Promise<void>;
+
+  // when the tool call behind a streamed response ends, which a dropped
+  // stream does not hasten; null for any other response
+  readonly readCallEnd: (response: Response) => Promise<void> | null;
 }
 
 const SESSION_HEADER = 'mcp-session-id';
@@ -51,6 +58,10 @@ const DEFAULT_LIMITS = { perCaller: 16, total: 256, idleMs: 3_600_000 };
 export function createHttpTransport(options: Readonly<HttpTransportOptions>): HttpTransport {
   const now = options.now ?? Date.now;
   const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
+  const challenge = options.challenge ?? 'Bearer';
+
+  // each streamed call's end, by its response
+  const callEnds = new WeakMap<Response, Promise<void>>();
 
   const sessions = createSessionStore({
     limits: options.limits ?? DEFAULT_LIMITS,
@@ -62,7 +73,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     const principal = await options.authenticate(request);
 
     if (principal === null) {
-      return buildText(401, 'unauthorized', { 'www-authenticate': 'Bearer' });
+      return buildText(401, 'unauthorized', { 'www-authenticate': challenge });
     }
 
     if (!(request.headers.get('content-type') ?? '').includes('application/json')) {
@@ -162,6 +173,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
     const encoder = new TextEncoder();
 
     const state = { open: true };
+    const ended = Promise.withResolvers<void>();
 
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -185,6 +197,8 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
           } finally {
             clearInterval(keepalive);
 
+            ended.resolve();
+
             if (state.open) {
               state.open = false;
 
@@ -200,16 +214,20 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       },
     });
 
-    return new Response(stream, {
+    const response = new Response(stream, {
       headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' },
     });
+
+    callEnds.set(response, ended.promise);
+
+    return response;
   };
 
   const handleDelete = async (request: Request): Promise<Response> => {
     const principal = await options.authenticate(request);
 
     if (principal === null) {
-      return buildText(401, 'unauthorized', { 'www-authenticate': 'Bearer' });
+      return buildText(401, 'unauthorized', { 'www-authenticate': challenge });
     }
 
     const found = findSession(request, principal);
@@ -244,6 +262,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
       );
     },
     close: () => sessions.endAll(),
+    readCallEnd: (response) => callEnds.get(response) ?? null,
   };
 }
 

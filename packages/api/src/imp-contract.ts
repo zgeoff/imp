@@ -28,6 +28,14 @@ import {
 import { NameSchema } from './name-schema';
 import { MAX_CREATE_NETWORKS, NetworkJoinSchema, NetworkSchema } from './network-schema';
 import {
+  ApprovalCodeSchema,
+  GrantPatternSchema,
+  OAuthApprovalSchema,
+  OAuthClientSchema,
+  OAuthGrantSchema,
+  RedirectUrisSchema,
+} from './oauth-schema';
+import {
   AuditEntrySchema,
   BrokerRuleSchema,
   SecretAddedSchema,
@@ -529,6 +537,50 @@ export const impContract = {
     // <dataDir>/db-copies/<name>.sqlite (docs/guides/operations.md); CONFLICT
     // when a copy by the name exists
     copyDatabase: base.input(z.object({ name: NameSchema.optional() })).output(DatabaseCopySchema),
+  },
+
+  // OAuth for the public MCP route (docs/guides/mcp.md#public-route)
+  oauth: {
+    clients: {
+      list: base.output(z.array(OAuthClientSchema)),
+
+      // a public client: PKCE and no secret; CONFLICT for a name taken
+      add: base
+        .input(z.object({ name: NameSchema, redirectUris: RedirectUrisSchema }))
+        .output(OAuthClientSchema),
+
+      // its redirect URIs, replaced; the client ID stays
+      update: base
+        .input(z.object({ name: NameSchema, redirectUris: RedirectUrisSchema }))
+        .output(OAuthClientSchema),
+
+      // revokes every grant it holds
+      delete: base.input(NameInputSchema).output(EmptySchema),
+    },
+
+    grants: {
+      list: base.output(z.array(OAuthGrantSchema)),
+
+      // ends its MCP sessions, calls and execs; its tokens stop at once
+      delete: base.input(z.object({ id: z.string().min(1).max(64) })).output(EmptySchema),
+    },
+
+    // a sign-in waiting on the public route, by the code its page shows;
+    // only a named token approves, never wider than itself
+    approvals: {
+      get: base.input(z.object({ code: ApprovalCodeSchema })).output(OAuthApprovalSchema),
+      approve: base
+        .input(
+          z.object({
+            code: ApprovalCodeSchema,
+            scope: ScopeSchema,
+
+            // left out: the approver's own patterns
+            imps: z.array(GrantPatternSchema).min(1).max(32).optional(),
+          }),
+        )
+        .output(EmptySchema),
+    },
   },
 
   // named API tokens (docs/guides/tokens.md); the root token in

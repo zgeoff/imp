@@ -274,6 +274,48 @@ interface MoveSendsTable {
   created_at: number;
 }
 
+// a public client of the MCP route (docs/guides/mcp.md#public-route)
+export interface OAuthClientsTable {
+  // the client_id a connector holds
+  id: string;
+  name: string;
+
+  // a JSON array, each matched exactly
+  redirect_uris: string;
+  created_at: number;
+}
+
+// what one approval gave one client: never wider than token_id, whose
+// removal removes it
+export interface OAuthGrantsTable {
+  id: string;
+  client_id: string;
+  token_id: string;
+  scope: Scope;
+
+  // a JSON array of grant patterns; null for every imp and the host
+  imps: string | null;
+
+  // the resource its tokens are bound to, `<origin>/mcp`
+  resource: string;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+// an access or refresh token; a spent refresh token stays until it expires,
+// so a second use of it is known for a replay
+interface OAuthTokensTable {
+  id: string;
+  grant_id: string;
+  kind: 'access' | 'refresh';
+
+  // SHA-256 of the secret, in hex
+  secret_hash: string;
+  created_at: number;
+  expires_at: number;
+  spent_at: number | null;
+}
+
 export interface DatabaseSchema {
   images: ImagesTable;
   imps: ImpsTable;
@@ -291,4 +333,7 @@ export interface DatabaseSchema {
   imp_leases: ImpLeasesTable;
   move_tickets: MoveTicketsTable;
   move_sends: MoveSendsTable;
+  oauth_clients: OAuthClientsTable;
+  oauth_grants: OAuthGrantsTable;
+  oauth_tokens: OAuthTokensTable;
 }

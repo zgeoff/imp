@@ -14,6 +14,9 @@ type ResourceKind =
   | 'token'
   | 'ssh-key'
   | 'network'
+  | 'oauth-client'
+  | 'oauth-grant'
+  | 'oauth-approval'
   | 'database-copy';
 
 // Errors from the contract's IMP_ERRORS, built where the services detect

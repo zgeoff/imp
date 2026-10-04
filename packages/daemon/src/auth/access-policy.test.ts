@@ -224,3 +224,61 @@ test('a token made able to grant may not fork or move, even with every entry sta
 
   expect(allowed).toEqual([null, null, null]);
 });
+
+// whether a call is refused, and why, leaving out the caller's name
+async function readDecision(path: string, caller: Readonly<Caller>, input: unknown) {
+  const refusal = await readRefusal(path, caller, input);
+
+  return refusal === null ? 'allowed' : `refused: ${String(refusal.reason)}`;
+}
+
+test('an OAuth grant gets its token’s answer on every procedure, and grants no secret', async () => {
+  const paths = Object.keys(PROCEDURE_ACCESS);
+  const inputs: readonly unknown[] = [{ name: 'dev-a', secret: 'gh' }, { name: 'web' }, {}];
+  const differences: string[] = [];
+
+  const cases = [
+    ...(['read', 'exec', 'manage'] as const).flatMap((scope) =>
+      [null, ['dev-*']].map((imps) => ({ scope, imps, grantable: [] })),
+    ),
+
+    // a token that may grant gh to its imps, which therefore may not fork
+    { scope: 'manage' as const, imps: ['dev-*'], grantable: GRANTER.grantable },
+  ];
+
+  for (const limits of cases) {
+    const token = buildTestCaller(limits);
+
+    const grant = buildTestCaller({
+      ...limits,
+      kind: 'oauth',
+      name: 'conn/grant-a',
+      grantId: 'grant-a',
+      principal: 'grant:grant-a',
+    });
+
+    for (const path of paths) {
+      const isSecretGrant = findAccess(path)?.on === 'grant';
+
+      for (const input of inputs) {
+        const forToken = await readDecision(path, token, input);
+        const forGrant = await readDecision(path, grant, input);
+
+        const isRight = isSecretGrant ? forGrant.startsWith('refused') : forGrant === forToken;
+
+        if (!isRight) {
+          differences.push(`${path} ${limits.scope}: ${forToken} / ${forGrant}`);
+        }
+      }
+    }
+  }
+
+  expect(differences).toEqual([]);
+
+  // the fork a grantable token may not make, its grant may not make either
+  const forkGrant = buildTestCaller({ ...GRANTER, kind: 'oauth', grantId: 'grant-b' });
+
+  const fork = await check('imps.fork', forkGrant, { source: 'dev-a', name: 'dev-b' });
+
+  expect(fork).toContain('may not fork');
+});

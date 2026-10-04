@@ -189,6 +189,17 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
   // gc removes what a crash left and, with orphans, every disk no row names
   'system.gc': manageHost,
 
+  // the approver's own checks are the handler's: a named token, never
+  // wider than itself (docs/guides/mcp.md#public-route)
+  'oauth.clients.list': manageHost,
+  'oauth.clients.add': manageHost,
+  'oauth.clients.update': manageHost,
+  'oauth.clients.delete': manageHost,
+  'oauth.grants.list': manageHost,
+  'oauth.grants.delete': manageHost,
+  'oauth.approvals.get': readAny,
+  'oauth.approvals.approve': readAny,
+
   // the copy holds every imp, token hash and grant
   'system.copyDatabase': manageHost,
 
@@ -237,6 +248,12 @@ export async function checkAccess(
       message: `${formatCaller(caller)} has scope ${caller.scope}; this needs ${access.scope}`,
       reason: 'scope',
     };
+  }
+
+  // an OAuth grant carries its token's list for the refusals above it, and
+  // grants or revokes no secret itself (docs/guides/mcp.md#public-route)
+  if (access.on === 'grant' && caller.kind === 'oauth') {
+    return { message: `${formatCaller(caller)} may not grant or revoke secrets`, reason: null };
   }
 
   if (access.on === 'imp' && access.noGrantable === true && caller.grantable.length > 0) {

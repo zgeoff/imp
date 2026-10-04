@@ -183,3 +183,120 @@ claude mcp add --transport http imp https://imp.example.com/mcp \
 
 Exec over HTTP runs inside impd: the tool takes an exec ticket as the CLI does, and the `/exec`
 session is joined in process, not over a socket.
+
+## Public route
+
+An MCP client that signs in with OAuth, such as a hosted connector, cannot hold an imp token or
+reach the tailnet. impd can serve it a second `/mcp` on a public origin, behind a TLS front the
+operator runs. The route is off until `IMP_MCP_PUBLIC_URL` is set.
+
+| Path                                                | What it serves                                           |
+| --------------------------------------------------- | -------------------------------------------------------- |
+| `/mcp`                                              | the same tools and rules as [HTTP](#http)                |
+| `/.well-known/oauth-protected-resource/mcp`         | protected resource metadata (RFC 9728), also at the root |
+| `/.well-known/oauth-authorization-server`           | authorization server metadata (RFC 8414)                 |
+| `/oauth/authorize`, `/oauth/token`, `/oauth/revoke` | the sign-in, the token endpoint, revocation (RFC 7009)   |
+
+Every other path gets the same 404, as does a request whose `Host` is not the origin's. The route
+follows the MCP authorization spec of 2026-07-28: PKCE with S256, a resource indicator (RFC 8707)
+bound to `<origin>/mcp`, and `iss` on every redirect back (RFC 9207). It has no dynamic registration
+and no client ID metadata documents: the operator adds each client.
+
+### Turn it on
+
+1. Set `IMP_MCP_PUBLIC_URL` to the bare origin, such as `https://imp.example.com`. impd serves the
+   route as plain HTTP on `IMP_MCP_PUBLIC_PORT` (default 7071)
+   ([configuration](./configuration.md#public-mcp-route)).
+2. Publish that port on the host's loopback only, beside 7070: `-p 127.0.0.1:7071:7071`. The deploy
+   files do not publish it.
+3. Point the TLS front at `http://127.0.0.1:7071` for the paths above, and send every other path a
+   404, never to 7070. Keep the client's `Host`, and cache nothing.
+4. Add the client with its redirect URI. The client ID prints on stdout; the client has no secret.
+
+   ```sh
+   imp oauth client add conn --redirect-uri https://client.example/oauth/callback
+   ```
+
+5. In the client, give `https://imp.example.com/mcp` and the client ID.
+
+impd takes nothing on the route as an identity but an access token from a grant. It refuses an imp
+token, the dashboard's cookie and a tailnet identity, and never reads `X-Forwarded-*`, `Forwarded`,
+`CF-Connecting-IP` or `x-imp-peer`. Every request comes through the front, so the limits count per
+route, client and grant, never per address. impd logs no code, token or query.
+
+### Sign in
+
+1. The client opens the sign-in page. It names the client, where it returns, the scope it asks for,
+   and a code such as `ABCD-EFGH`.
+2. Approve the code with a named token, over your usual access to impd. The CLI shows the client,
+   its redirect URI, when the sign-in started and what the grant gets, and asks before it approves.
+   `--yes` skips the question; without a terminal on stdin, it is required:
+
+   ```sh
+   imp oauth approve ABCD-EFGH --scope exec --imps 'agent-*'
+   ```
+
+3. Press Continue. The page shows the final scope, imps and redirect URI; press Allow.
+
+Approve only a sign-in you started: anyone can open the page for a client impd knows, and ask you to
+approve its code. The code is 8 symbols of 32 (40 bits), lasts 10 minutes, and only a named token
+can try one: after 20 codes from one token that match nothing, impd takes one every 3 s.
+
+A grant is never wider than the token that approved it:
+
+- its scope is at most the token's and at most what the client asked for; `--scope` defaults to
+  `read`;
+- each of its patterns is an imp name or a prefix and a trailing `*`, and equals one of the token's,
+  or one of the token's is `p*` and the pattern starts with `p`. `--imps` defaults to the token's;
+- it grants and revokes no secrets, and meets every refusal its token meets: a token that may grant
+  secrets may not fork or move an imp, and neither may its grants.
+
+impd checks the grant and its token on every request. The root token and a tailnet identity cannot
+approve: neither can be removed on its own, so neither could end its grants.
+
+### Tokens and revocation
+
+| Credential    | Lifetime                                                                         |
+| ------------- | -------------------------------------------------------------------------------- |
+| access token  | 15 minutes                                                                       |
+| refresh token | rotates on each use; a 30-day inactivity timeout, not an absolute grant lifetime |
+| code          | 10 minutes, once                                                                 |
+| sign-in       | 10 minutes; 3 wait for each client, and 16 in all                                |
+
+Tokens are opaque (`impat_…`, `imprt_…`); impd keeps only their SHA-256. A refresh answers with the
+scope the grant holds, for the same resource.
+
+A grant ends with `imp oauth grant rm <id>`, `imp token rm` of the token that approved it,
+`imp oauth client rm`, the client's own revocation, or a replay. Its sessions end, its running
+commands stop as a cancel stops them, its unused exec tickets open nothing, and its next request
+gets 401. A replay is a code exchanged again, or a spent refresh token, presented in full by its own
+client: a wrong secret, an unknown token or another client's request gets `invalid_grant` and
+revokes nothing.
+
+A refresh token is strictly single use, with no grace window. Two refreshes of one token at once
+count as a replay: one gets new tokens, and the other ends the grant. A client must send one refresh
+at a time. After a lost response or a reuse failure, it signs in again.
+
+A restart ends the sign-ins in progress and their codes, not the grants.
+
+### Limits
+
+- 64 open requests. A tool call counts until its tool ends, even when its client goes: a dropped
+  stream is no cancel. Send `notifications/cancelled` to stop a call. With every slot taken, a
+  notification of at most 16 KiB and a session's `DELETE` still get through, 16 at a time, since
+  they start no work.
+- A new sign-in drops the oldest unapproved one of its own client's, never another client's. Past 16
+  in all, a new one gets 429 until one ends.
+- 10 sign-ins per client in a burst, then one every 6 s.
+- 30 failed token requests per client, then one every 2 s; past them a failure answers `slow_down`.
+  A valid code exchange or refresh never counts. Requests that name no known client share one such
+  burst.
+- 20 approval codes that match nothing per token, then one every 3 s.
+- 16 sessions per grant.
+
+Past a limit, impd answers 429 with `Retry-After`. A form is at most 16 KiB, and an idle request
+ends after 30 s, except on `/mcp`.
+
+impd sees only the front's connection, never the client's address, so it cannot limit one source.
+Client IDs are public: a flood that names a client can hold back that client's sign-ins and token
+requests, though never a valid exchange or refresh. Rate limits by address belong at the front.
