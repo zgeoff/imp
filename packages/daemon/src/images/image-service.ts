@@ -48,6 +48,7 @@ import {
 import type { ImageStore, Pin, PinInspect } from './image-pin';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
+import { writeImageConfig } from './write-image-config';
 
 const GIB = 1024 ** 3;
 
@@ -326,12 +327,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     try {
       await writeExportedTree(containerId, root);
 
-      mkdirSync(join(root, 'etc', 'imp'), { recursive: true });
-
-      writeFileSync(
-        join(root, 'etc', 'imp', 'image.json'),
-        JSON.stringify(buildImageRuntimeConfig(ociConfig)),
-      );
+      writeImageConfig(root, JSON.stringify(buildImageRuntimeConfig(ociConfig)));
 
       const usage = await readTreeUsage(root);
 

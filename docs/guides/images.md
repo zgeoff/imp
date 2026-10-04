@@ -151,7 +151,9 @@ call would.
   without it, an image with a file capability fails to add or build. An image added by impd 0.25.1
   or older lost its file capabilities, and impd keeps that rootfs for the same image ID:
   `imp image rm <name>` and add or build it again.
-- **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`:
+- **`Env`, `WorkingDir`, `User`** from the OCI config. impd writes them to `/etc/imp/image.json`, in
+  place of any file the image has there. `/etc` and `/etc/imp` must be directories: an image with a
+  symlink or a file at either fails to add or build.
 
   ```json
   { "env": ["PATH=/root/.local/bin:..."], "workdir": "", "user": "" }
