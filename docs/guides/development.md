@@ -244,6 +244,11 @@ node-forge, but impd uses only `acme.crypto`, which runs on Node's own crypto an
 node-forge to verify a signature. Drop the ignore when a fixed node-forge or an acme-client without
 it ships.
 
+`bunfig.toml` exempts `source-map-js` from the 7-day release-age gate, and `package.json` pins it to
+1.2.2 through `overrides`. Version 1.2.2 fixes GHSA-68fv-2mgg-jv7q, which reaches the dashboard
+through vite and postcss. Bun's exemption takes a package name only, so the exact pin holds it to
+that one version. Remove the exemption after 2026-10-07 14:08 UTC, when 1.2.2 passes the gate.
+
 On `main`, the `release-please` job makes releases ([RELEASING.md](../../RELEASING.md)).
 
 ### The e2e job
