@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config';
@@ -98,6 +98,12 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
 
       expect(failure).toMatchObject({ code: 'BAD_REQUEST', message: refusal });
     }
+
+    // a create that fails leaves no work directory behind
+    const imagesDir = join(dataDir, 'images');
+    const left = existsSync(imagesDir) ? readdirSync(imagesDir) : [];
+
+    expect(left.filter((entry) => entry.startsWith('.build-'))).toEqual([]);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
