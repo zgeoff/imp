@@ -309,7 +309,7 @@ A `public` imp is refused the documentation ranges `2001:db8::/32` and `3fff::/2
 `box` imps are not, as test networks use them. It is refused the rest of `2001::/23` too, which the
 registry marks not globally reachable: only AMT `2001:3::/32`, AS112 `2001:4:112::/48`, ORCHIDv2
 `2001:20::/28` and DETs `2001:30::/28` stay open. The anycast PCP, TURN and SRP addresses in
-`2001:1::/32` go with it, as their servers answer on the host's own network.
+`2001:1::/32` go with it, as the nearest of their servers can sit on the host's own network.
 
 The broker reads the connected prefixes every 30 s. It dials an IPv4-mapped answer as its IPv4
 address, under the IPv4 checks.
