@@ -20,7 +20,7 @@ Type=exec
 # The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
 # read after it, pins another. release-please bumps the version.
 # x-release-please-start-version
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.38.0
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.38.1
 # x-release-please-end
 # IMP_HOST_IMAGE, whose repository a pull may not move,
 # IMP_BUILD_CONTEXT_MAX_MIB, and IMP_BUILD_ISOLATION and IMP_BUILD_IMAGE, the
