@@ -41,6 +41,7 @@ const NEW_INFO = {
     grantableTokens: true,
     secretRebind: true,
     secretFilesGc: true,
+    tokenUpdate: true,
   },
 };
 
@@ -54,6 +55,7 @@ function startImpd(info: unknown) {
   const answers: Readonly<Record<string, unknown>> = {
     'system/info': info,
     'tokens/create': MADE_TOKEN,
+    'tokens/update': MADE_TOKEN.token,
     'secrets/add': SECRET,
     'system/copyDatabase': {
       path: '/var/lib/imp/db-copies/before-upgrade.sqlite',
@@ -283,4 +285,26 @@ test('console --log without a session is a usage error', async () => {
   expect(result.code).toBe(2);
   expect(result.stderr).toContain('--log needs a session');
   expect(ctx.calls).toEqual([]);
+});
+
+test('token set checks for tokens.update first, and refuses a bad name before any call', async () => {
+  await using older = setupTest(OLD_INFO);
+  await using newer = setupTest(NEW_INFO);
+
+  const refused = await older.run(['token', 'set', 'agent', '--grantable', 'gh']);
+  const badName = await newer.run(['token', 'set', 'agent', '--grantable', 'Not A Name']);
+  const set = await newer.run(['token', 'set', 'agent', '--grantable', 'gh', '--json']);
+
+  // '' clears the list; --json, as this fake impd sends dates as strings
+  const cleared = await newer.run(['token', 'set', 'agent', '--grantable', '', '--json']);
+
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain('this impd is older than 0.34.0');
+  expect(refused.stderr).toContain('nothing was changed');
+  expect(older.calls).toEqual(['system/info']);
+  expect(badName.code).toBe(2);
+  expect(badName.stderr).toContain('--grantable takes secret names');
+  expect([set.code, cleared.code]).toEqual([0, 0]);
+  expect(z.object({ name: z.string() }).parse(JSON.parse(set.stdout))).toEqual({ name: 'agent' });
+  expect(newer.calls).toEqual(['system/info', 'tokens/update', 'system/info', 'tokens/update']);
 });

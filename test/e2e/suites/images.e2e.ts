@@ -656,7 +656,10 @@ test('an added image comes from a builder: the host engine gains no image, and t
 
       const audit: unknown = JSON.parse(auditJson);
       const calls = z.array(z.object({ procedure: z.string(), detail: z.string().optional() }));
-      const add = calls.parse(audit).find((call) => call.procedure === 'images.add');
+
+      const add = calls
+        .parse(audit)
+        .find((call) => call.procedure === 'images.add' || call.procedure === 'images.addStream');
 
       expect(add?.detail).toMatch(/^busybox@sha256:[a-f0-9]{64}$/v);
     });

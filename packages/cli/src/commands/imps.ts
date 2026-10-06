@@ -324,7 +324,7 @@ export const lsCommand = defineCommand({
         throw new UsageError('--all lists every saved host; drop --host');
       }
 
-      await listAllImps(context.args.json === true);
+      await listAllImps(context.args.json === true, context.args.builders === true);
     } catch (error) {
       printError(error);
     }
@@ -334,9 +334,11 @@ export const lsCommand = defineCommand({
 // One list per saved host, at once. What came back is printed, JSON or
 // table, then one line per host that failed; docs/guides/hosts.md#one-view
 // gives the exit codes.
-async function listAllImps(json: boolean): Promise<void> {
+async function listAllImps(json: boolean, builders: boolean): Promise<void> {
+  const input = builders ? { builders: true } : undefined;
+
   const answers = await runOnHosts(listSavedTargets(process.env), (client, signal) =>
-    client.imps.list(undefined, { signal }),
+    client.imps.list(input, { signal }),
   );
 
   const imps = answers.flatMap((answer) =>

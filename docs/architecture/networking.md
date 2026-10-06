@@ -178,9 +178,9 @@ Its slot chain checks, in order:
    networks (each on-link route, and each address as its prefix and as a /32), the IPv4 entries of
    `IMP_EGRESS_DENY`, and each IPv4 network of `IMP_HOST_ADDRESSES`, prefix kept.
 4. `public6`: the [blocked IPv6 ranges](#blocked-ranges), the imps' prefix, the container's IPv6
-   prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, the IPv6 entries of
-   `IMP_EGRESS_DENY`, and each IPv6 network of `IMP_HOST_ADDRESSES`, prefix kept. An imp with no
-   IPv6 address drops all IPv6.
+   prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, the rest of `2001::/23`, the
+   IPv6 entries of `IMP_EGRESS_DENY`, and each IPv6 network of `IMP_HOST_ADDRESSES`, prefix kept. An
+   imp with no IPv6 address drops all IPv6.
 
 imp-host runs in a network namespace of its own, so the Docker host's LAN is in none of the
 container's prefixes: a global IPv6 /64, or a VPS's public IPv4 subnet, would be open to a public
@@ -306,7 +306,10 @@ The `open` and `box` chains refuse these, and the credential broker never dials 
 | the container's connected prefixes | The host's own networks, such as its Docker network: every on-link route, whatever made it, and the prefix of every global address. impd reads them at each table build. |
 
 A `public` imp is refused the documentation ranges `2001:db8::/32` and `3fff::/20` too; `open` and
-`box` imps are not, as test networks use them.
+`box` imps are not, as test networks use them. It is refused the rest of `2001::/23` too, which the
+registry marks not globally reachable: only AMT `2001:3::/32`, AS112 `2001:4:112::/48`, ORCHIDv2
+`2001:20::/28` and DETs `2001:30::/28` stay open. The anycast PCP, TURN and SRP addresses in
+`2001:1::/32` go with it, as the nearest of their servers can sit on the host's own network.
 
 The broker reads the connected prefixes every 30 s. It dials an IPv4-mapped answer as its IPv4
 address, under the IPv4 checks.

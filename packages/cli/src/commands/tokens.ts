@@ -62,6 +62,11 @@ function parseGrantable(text: string | undefined): string[] | undefined {
   return names;
 }
 
+// `token set --grantable`: the whole new list, as parseGrantable; '' clears it
+function parseGrantableUpdate(text: string): string[] {
+  return text.trim() === '' ? [] : (parseGrantable(text) ?? []);
+}
+
 // a list makes sense only on a manage token for some imps; an impd refuses
 // it otherwise, but an older one would not see the list at all
 function requireGrantScope(scope: Scope, imps: readonly string[] | undefined): void {
@@ -161,6 +166,34 @@ const newCommand = defineCommand({
 
       console.error(`imp: token ${made.token.name} made; impd shows its secret only this once`);
       console.log(made.secret);
+    }),
+});
+
+const setCommand = defineCommand({
+  meta: {
+    name: 'set',
+    description:
+      "Change a token's grantable secrets; its secret stays, and a secret taken off loses its grants on the token's imps",
+  },
+  args: {
+    name: tokenArg,
+    grantable: {
+      type: 'string',
+      description:
+        "the whole new list, such as 'gh,npm' (comma-separated; '' for none; non-empty needs a manage token with imps)",
+      required: true,
+    },
+    json: jsonArg,
+  },
+  run: (context) =>
+    runAction(context.host, async (client) => {
+      const grantable = parseGrantableUpdate(context.args.grantable);
+
+      await requireFeature(client, 'tokenUpdate', 'not know tokens.update');
+
+      const token = await client.tokens.update({ name: context.args.name, grantable });
+
+      console.log(formatOutput(token, context.args.json, (shown) => formatTokens([shown])));
     }),
 });
 
@@ -283,6 +316,7 @@ export const tokenCommand = defineCommand({
   meta: { name: 'token', description: 'Manage API tokens and their scopes (needs manage)' },
   subCommands: {
     new: newCommand,
+    set: setCommand,
     ls: lsCommand,
     rm: rmCommand,
     key: keyCommand,

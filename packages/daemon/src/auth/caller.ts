@@ -15,9 +15,9 @@ export interface Caller {
   // the imps it may touch; null for every imp and the host itself
   readonly imps: readonly string[] | null;
 
-  // the secrets it may grant to those imps, as they were when its token was
-  // made (docs/guides/tokens.md#granting-secrets); none for a caller that is
-  // not a token. Never shrinks: non-empty marks a token made able to grant.
+  // its token's list when this caller was built, read again by each grant
+  // (docs/guides/tokens.md#change-the-list); none for a caller that is not
+  // a token. Non-empty marks a token able to grant.
   readonly grantable: readonly GrantableSecret[];
 
   // the token behind it, so deleting the token ends what it opened; null

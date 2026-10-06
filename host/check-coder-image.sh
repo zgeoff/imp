@@ -2,9 +2,9 @@
 # Check a built imp coder image (images/coder) before it is pushed: it
 # proves the image matches images/coder/Dockerfile. It is linux/amd64, it
 # runs the Claude Code that the Dockerfile pins, byte for byte, with updates
-# off by default, and it keeps the base's tools. The pins come from the
-# Dockerfile, so a bump to the version or the sum is a reviewed change
-# there, never an edit here.
+# off by default, it carries the pinned GitHub CLI, and it keeps the base's
+# tools. The pins come from the Dockerfile, so a bump to the version or the
+# sum is a reviewed change there, never an edit here.
 #
 #   host/check-coder-image.sh IMAGE
 #
@@ -46,6 +46,13 @@ got=$(in_image 'sha256sum /usr/local/bin/claude' 2> /dev/null | cut -d' ' -f1 ||
 if [ -z "$sum" ] || [ "$got" != "$sum" ]; then
   fail "/usr/local/bin/claude has sha256 ${got:-unknown}, want ${sum:-the ARG CLAUDE_CODE_SHA256 in $dockerfile}"
 fi
+
+gh_version=$(sed -n 's/^ARG GH_VERSION=//p' "$dockerfile")
+got=$(in_image 'gh --version' 2> /dev/null | head -n 1 || true)
+case "$got" in
+  "gh version $gh_version "*) ;;
+  *) fail "gh --version prints '${got:-nothing}', want gh version ${gh_version:-the ARG GH_VERSION in $dockerfile}" ;;
+esac
 
 # shellcheck disable=SC2016 # the image's shell expands it
 if [ "$(in_image 'echo "$DISABLE_UPDATES"')" != 1 ]; then

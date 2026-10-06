@@ -30,6 +30,13 @@ export const GrantableSchema = z
   .max(MAX_GRANTABLE)
   .refine((names) => new Set(names).size === names.length, 'must not name a secret twice');
 
+// The whole list a tokens.update sets, as GrantableSchema; empty clears it
+// (docs/guides/tokens.md#change-the-list)
+export const GrantableUpdateSchema = z
+  .array(SecretNameSchema)
+  .max(MAX_GRANTABLE)
+  .refine((names) => new Set(names).size === names.length, 'must not name a secret twice');
+
 // An SSH public key line, as in a `.pub` file: `<type> <base64> [comment]`
 export const SshPublicKeySchema = z.string().trim().min(1).max(16_384);
 

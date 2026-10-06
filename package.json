@@ -1,6 +1,6 @@
 {
   "name": "@zgeoff/imp",
-  "version": "0.32.0",
+  "version": "0.34.0",
   "private": true,
   "description": "Persistent Linux microVMs that sleep when idle and wake on request",
   "license": "MIT",
@@ -108,7 +108,8 @@
     "zod": "catalog:"
   },
   "overrides": {
-    "@types/node": "26.6.2"
+    "@types/node": "26.6.2",
+    "source-map-js": "1.2.2"
   },
   "packageManager": "bun@1.4.2",
   "patchedDependencies": {
