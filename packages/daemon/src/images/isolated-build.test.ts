@@ -763,18 +763,6 @@ async function runDiskTrial(
     }
   };
 
-  waitForSettledDisk();
-
-  if (roomBytes !== undefined) {
-    const fill = readDisk().free - RESERVE_BYTES - roomBytes;
-
-    Bun.spawnSync(['fallocate', '-l', String(fill), filler]);
-
-    waitForSettledDisk();
-  }
-
-  const baseUsed = readDisk().used;
-
   // the blocks of the unpacked tree and of the rootfs, once both are written
   const readSplit = () => {
     const images = join(where.dataDir, 'images');
@@ -816,36 +804,51 @@ async function runDiskTrial(
 
   where.dataDir = ctx.dataDir;
 
-  const timer = setInterval(updateSeen, 1);
-
+  // the filler and the data dir go however the trial ends
   try {
-    const outcome = await ctx.runBuild('FROM base.test/a:1\nRUN true\n').then(
-      () => 'built',
-      (error: unknown) =>
-        typeof error === 'object' && error !== null && 'code' in error
-          ? String(error.code)
-          : String(error),
-    );
+    waitForSettledDisk();
 
-    updateSeen();
+    if (roomBytes !== undefined) {
+      const fill = readDisk().free - RESERVE_BYTES - roomBytes;
 
-    const trial = {
-      hold: ctx.grows.at(-1) ?? 0,
-      settledBytes: seen.settledUsed === 0 ? 0 : seen.settledUsed - baseUsed,
-      peakBytes: seen.highestUsed - baseUsed,
-      lowestFree: seen.lowestFree,
-      outcome,
-    };
+      Bun.spawnSync(['fallocate', '-l', String(fill), filler]);
 
-    const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
+      waitForSettledDisk();
+    }
 
-    console.log(
-      `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, settled use ${formatMib(trial.settledBytes)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome} (${seen.split})`,
-    );
+    const baseUsed = readDisk().used;
+    const timer = setInterval(updateSeen, 1);
 
-    return trial;
+    try {
+      const outcome = await ctx.runBuild('FROM base.test/a:1\nRUN true\n').then(
+        () => 'built',
+        (error: unknown) =>
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String(error.code)
+            : String(error),
+      );
+
+      updateSeen();
+
+      const trial = {
+        hold: ctx.grows.at(-1) ?? 0,
+        settledBytes: seen.settledUsed === 0 ? 0 : seen.settledUsed - baseUsed,
+        peakBytes: seen.highestUsed - baseUsed,
+        lowestFree: seen.lowestFree,
+        outcome,
+      };
+
+      const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
+
+      console.log(
+        `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, settled use ${formatMib(trial.settledBytes)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome} (${seen.split})`,
+      );
+
+      return trial;
+    } finally {
+      clearInterval(timer);
+    }
   } finally {
-    clearInterval(timer);
     rmSync(ctx.dataDir, { recursive: true, force: true });
     rmSync(filler, { force: true });
     waitForSettledDisk();

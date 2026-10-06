@@ -102,10 +102,11 @@ jobs:
         run: |
           command -v mkfs.xfs || { sudo apt-get update && sudo apt-get install -y --no-install-recommends xfsprogs; }
           fs="$RUNNER_TEMP/small-fs"
-          truncate -s 2G "$fs.img"
+          truncate -s 4G "$fs.img"
           mkfs.xfs -q "$fs.img"
           mkdir "$fs"
           sudo mount -o loop "$fs.img" "$fs"
+          trap 'sudo umount "$fs" && rm -f "$fs.img" && rmdir "$fs"' EXIT
           sudo chown "$(id -u):$(id -g)" "$fs"
           IMP_TEST_SMALL_FS="$fs" bun test packages/daemon/src/images/isolated-build.test.ts -t 'small filesystem'
 
