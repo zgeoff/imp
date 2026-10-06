@@ -114,7 +114,6 @@ packages/dashboard web dashboard, served at /ui/
 packages/mcp      MCP server, behind imp mcp and /mcp
 packages/local-tar local files as a tar, with .dockerignore: imp cp, image build contexts
 images/base       thin base image
-images/dev        example dev image
 images/examples   small example images
 host/             host container Dockerfile (dev and release), entrypoint, storage, network
                   and tailnet setup

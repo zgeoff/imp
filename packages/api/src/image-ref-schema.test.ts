@@ -8,7 +8,7 @@ test('it accepts OCI image references', () => {
     'ubuntu',
     'ubuntu:24.04',
     'library/ubuntu:latest',
-    'imp/dev:latest',
+    'imp/hello:latest',
     'ghcr.io/org/app:v1.2.3',
     'localhost:5000/team/app_x__y-z',
     `alpine@${DIGEST}`,

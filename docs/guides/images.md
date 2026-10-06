@@ -10,15 +10,11 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
-| `coder/` → `imp/coder`          | the published base + Claude Code and gh at pinned versions, no Node      |
-| `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
 ```sh
-imp image build images/dev --name dev       # FROM the published base, by digest
-imp image build images/coder --name coder   # or add the published imp-coder, below
-imp image build images/examples/hello --name hello
-imp image build images/base --name base     # optional: your own imp/base
+imp image build images/examples/hello --name hello   # FROM the published base, by digest
+imp image build images/base --name base             # optional: your own imp/base
 ```
 
 Each release also publishes `images/base` as `ghcr.io/zgeoff/imp-base:X.Y.Z`, linux/amd64 only, with
@@ -26,31 +22,6 @@ a provenance attestation. A published tag never moves, but pin it by digest anyw
 (`FROM ghcr.io/zgeoff/imp-base:X.Y.Z@sha256:…`): the digest names the exact bytes, and
 `gh attestation verify oci://ghcr.io/zgeoff/imp-base:X.Y.Z -R zgeoff/imp` checks where they came
 from ([releasing](../../RELEASING.md#what-a-release-ships)).
-
-## The coder image
-
-Each release also publishes `images/coder` as `ghcr.io/zgeoff/imp-coder:X.Y.Z`, linux/amd64 only,
-with a provenance attestation, so a host runs a coding agent without a build:
-
-```sh
-imp image add ghcr.io/zgeoff/imp-coder:X.Y.Z@sha256:… --name coder
-imp new work --image coder
-```
-
-It is the published base by digest plus the Claude Code binary at the exact version its Dockerfile
-pins, in `/usr/local/bin/claude`, checked against the sha256 from Anthropic's signed release
-manifest. It has no Node: the binary does not need it. The binary is owned by root in
-`/usr/local/bin`, which is what pins the version; `DISABLE_UPDATES=1` in the image keeps updates off
-by default. A release builds it FROM the base its Dockerfile pins, which is the base of an earlier
-release: the FROM line is a literal digest, since a build of the same release's base has no digest
-until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
-gives the steps to check a new Claude Code version.
-
-The image also holds the GitHub CLI, `gh`, in `/usr/local/bin/gh`, at the exact version its
-Dockerfile pins and checked against the sum from the release's checksums file. An agent uses it to
-open pull requests. Grant the imp a `github` secret and `gh` works with no sign-in: impd sets
-`GH_TOKEN` to a placeholder, and the broker adds the token
-([credential connectors](./connectors.md)).
 
 ## Add an image
 
@@ -95,7 +66,7 @@ names a Dockerfile inside the context. A later image can start FROM an image you
 Docker's containerd image store, where impd pins it by its content digest (Docker 29.8 builds from
 that pin, 29.7 does not; see the digest the build uses, below). The classic store refuses it
 ([#156](https://github.com/zgeoff/imp/issues/156)). The published base, `ghcr.io/zgeoff/imp-base` by
-digest as `images/dev` names it, works on both.
+digest as `images/examples/hello` names it, works on both.
 
 - **What goes up.** The CLI sends what `docker buildx build <dir>` would. It reads
   `<Dockerfile>.dockerignore` when there is one, else `.dockerignore`, with Docker's rules. Then
@@ -116,7 +87,7 @@ digest as `images/dev` names it, works on both.
   ```json
   {"type":"progress","phase":"upload","elapsedMs":0}
   {"type":"progress","phase":"build","elapsedMs":15000}
-  {"type":"image","image":{"name":"dev","ref":"imp/dev:latest","...":"..."}}
+  {"type":"image","image":{"name":"hello","ref":"imp/hello:latest","...":"..."}}
   ```
 
   An error ends the stream as `{"type":"error","code":"...","message":"..."}`, with the code an oRPC
@@ -227,9 +198,9 @@ absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its
 impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`,
 and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An image you built with
 plain `docker build` goes in with `imp image add <ref>` only under `IMP_BUILD_ISOLATION=host`
-([add an image](#add-an-image)). `images/dev` and `images/examples/hello` start FROM the published
-base by digest; to stack them on another base, edit that FROM line. An imp's own disk can be an
-image too: a [template](./templates.md) copies a set-up imp into new ones.
+([add an image](#add-an-image)). `images/examples/hello` starts FROM the published base by digest;
+to stack it on another base, edit that FROM line. An imp's own disk can be an image too: a
+[template](./templates.md) copies a set-up imp into new ones.
 
 ## Isolated builds
 
@@ -407,9 +378,9 @@ them on a running imp, and `imp logs` prints their logs ([services](./services.m
 ## Make your own
 
 Any image boots. Start FROM the published base to get Docker and the usual tools. Copy its FROM line
-from `images/dev/Dockerfile`, which names it by digest. `FROM imp/base`, a base you built yourself,
-is pinned by its content digest on the containerd image store and refused on the classic store
-(#156):
+from `images/examples/hello/Dockerfile`, which names it by digest. `FROM imp/base`, a base you built
+yourself, is pinned by its content digest on the containerd image store and refused on the classic
+store (#156):
 
 ```dockerfile
 FROM ghcr.io/zgeoff/imp-base:<tag>@sha256:<digest>

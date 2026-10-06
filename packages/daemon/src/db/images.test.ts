@@ -8,7 +8,7 @@ test('it creates, finds and lists images by name', async () => {
 
   const dev = await createImage(ctx.db, {
     name: 'dev',
-    ref: 'imp/dev:latest',
+    ref: 'imp/hello:latest',
     digest: 'sha256:1111',
     sizeBytes: 2048,
   });

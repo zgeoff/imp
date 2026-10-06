@@ -6,12 +6,7 @@ import { join } from 'node:path';
 // always starts from the bytes that a release attested
 const REPO_ROOT = join(import.meta.dir, '..');
 const PINNED_BASE = /^FROM ghcr\.io\/zgeoff\/imp-base:[\w.\-]+@sha256:[0-9a-f]{64}$/v;
-
-const PINNED = [
-  'images/coder/Dockerfile',
-  'images/dev/Dockerfile',
-  'images/examples/hello/Dockerfile',
-];
+const PINNED = ['images/examples/hello/Dockerfile'];
 
 for (const path of PINNED) {
   test(`${path} starts FROM the published base, pinned by digest`, () => {
