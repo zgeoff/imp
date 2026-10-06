@@ -200,8 +200,8 @@ export interface TokensTable {
   imps: string | null;
 
   // a JSON array of { name, generation }: the secrets it may grant to its
-  // imps. Set at create and never changed, so a non-empty list also marks
-  // a token made able to grant.
+  // imps. Set at create, and changed only by tokens.update; a non-empty
+  // list also marks a token able to grant.
   grantable: Generated<string>;
   created_at: number;
 }

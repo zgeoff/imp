@@ -157,6 +157,9 @@ export const SystemInfoSchema = z.object({
       grantableTokens: z.boolean().optional(),
       secretRebind: z.boolean().optional(),
 
+      // tokens.update, which changes a token's grantable list
+      tokenUpdate: z.boolean().optional(),
+
       // system.copyDatabase; from 0.30.0
       databaseCopy: z.boolean().optional(),
 

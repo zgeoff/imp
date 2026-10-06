@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.34.0](https://github.com/zgeoff/imp/compare/v0.33.0...v0.34.0) (2026-10-06)
+
+### Features
+
+- **tokens:** change a token's grantable list without a new secret
+  ([#221](https://github.com/zgeoff/imp/issues/221))
+  ([da3b8a0](https://github.com/zgeoff/imp/commit/da3b8a001bb91f824365ba190cf197956165b72e))
+
+## [0.33.0](https://github.com/zgeoff/imp/compare/v0.32.2...v0.33.0) (2026-10-06)
+
+### Features
+
+- **images:** add gh to the coder image ([#218](https://github.com/zgeoff/imp/issues/218))
+  ([3f3a053](https://github.com/zgeoff/imp/commit/3f3a053f9603b13e3b4afc433fd257b6bdfcecd0))
+
+### Bug Fixes
+
+- **deps:** pin source-map-js 1.2.2 past its advisory
+  ([#219](https://github.com/zgeoff/imp/issues/219))
+  ([1c6e7ad](https://github.com/zgeoff/imp/commit/1c6e7ad9014776b534893d0e906d4e763ae847de))
+
+## [0.32.2](https://github.com/zgeoff/imp/compare/v0.32.1...v0.32.2) (2026-10-04)
+
+### Bug Fixes
+
+- **client:** send large stdin in small frames, and keep a fast command's exit
+  ([#216](https://github.com/zgeoff/imp/issues/216))
+  ([ed5e36a](https://github.com/zgeoff/imp/commit/ed5e36a3dadccd11930fc7fa131e6e840c3ebb54))
+
+## [0.32.1](https://github.com/zgeoff/imp/compare/v0.32.0...v0.32.1) (2026-10-04)
+
+### Bug Fixes
+
+- **images:** let a build stay silent past 360 s on the way to the engine
+  ([#213](https://github.com/zgeoff/imp/issues/213))
+  ([935b064](https://github.com/zgeoff/imp/commit/935b064371011eb9b74175fc876d24e762f9085f))
+
 ## [0.32.0](https://github.com/zgeoff/imp/compare/v0.31.0...v0.32.0) (2026-10-04)
 
 ### Features

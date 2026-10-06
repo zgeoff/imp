@@ -211,6 +211,7 @@ export const PROCEDURE_ACCESS: Readonly<Record<ImpProcedurePath, Access>> = {
 
   'tokens.list': manageHost,
   'tokens.create': manageHost,
+  'tokens.update': manageHost,
   'tokens.delete': manageHost,
   'tokens.addKey': manageHost,
   'tokens.removeKey': manageHost,
