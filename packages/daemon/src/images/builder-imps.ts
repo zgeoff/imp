@@ -79,11 +79,11 @@ export function createBuilders(deps: BuildersDeps): Builders {
   const retrying = new Set<string>();
 
   // true once the builder is gone; a builder that survives holds its memory
-  // and disk, and refuses sleep, so it is an error. By id: an imp that took
-  // its name stays.
+  // and disk, and refuses sleep, so it is an error. By id, and only a
+  // builder: an imp that took its name or its id stays.
   const removeOnce = async (id: string, name: string): Promise<boolean> => {
     try {
-      await deps.imps.destroyImpId(id);
+      await deps.imps.destroyImpId(id, 'builder');
 
       return true;
     } catch (error) {

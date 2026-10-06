@@ -55,7 +55,7 @@ async function setupBuilderTest(
 
         return guest.open(request);
       },
-      destroyImpId: async (id) => {
+      destroyImpId: async (id, kind) => {
         if (destroys.failed < failedDestroys) {
           destroys.failed += 1;
           throw new Error('the jailer did not stop');
@@ -63,7 +63,7 @@ async function setupBuilderTest(
 
         await released.promise;
 
-        await ctx.imps.destroyImpId(id);
+        await ctx.imps.destroyImpId(id, kind);
       },
     },
     ensureImage: async () => {
@@ -207,6 +207,33 @@ test('a leftover builder that survives its removal at start goes on a retry', as
 
   expect(left).toEqual([]);
   expect(ctx.logs.filter((line) => line.includes('ERROR: builder imp-build-left'))).toHaveLength(2);
+});
+
+test('a retry leaves a user imp that took a removed builder’s id', async () => {
+  await using ctx = await setupBuilderTest(1);
+
+  const builder = await ctx.imps.createImp({
+    name: 'imp-build-left',
+    image: 'base',
+    kind: 'builder',
+  });
+
+  const record = await findImpByName(ctx.db, builder.name);
+
+  const id = record?.id ?? '';
+
+  await ctx.builders.removeLeftovers();
+  await ctx.imps.destroyImpId(id);
+  await ctx.imps.createImp({ id, name: 'mine', image: 'base' });
+
+  ctx.releaseDestroys();
+
+  await Bun.sleep(100);
+
+  const imps = await listImps(ctx.db);
+
+  expect(imps.map((imp) => [imp.id, imp.name, imp.kind])).toEqual([[id, 'mine', 'user']]);
+  expect(ctx.logs).toContain('impd: image build: removed builder imp-build-left');
 });
 
 test('an export that stalls past a limit ends, and its builder goes, with no client cancel', async () => {
