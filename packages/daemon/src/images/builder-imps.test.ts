@@ -11,7 +11,7 @@ import { createFakeGuest } from './fake-guest';
 import type { FakeAnswer, FakeRun } from './fake-guest';
 import { writeGuestTree } from './guest-build';
 
-// failedDestroys: how many destroyImp calls fail; the ones after wait for
+// failedDestroys: how many destroyImpId calls fail; the ones after wait for
 // releaseDestroys. answer: the builder's engine, once it is up; openDelayMs:
 // how long opening an exec of each argv takes
 async function setupBuilderTest(
@@ -55,7 +55,7 @@ async function setupBuilderTest(
 
         return guest.open(request);
       },
-      destroyImp: async (name) => {
+      destroyImpId: async (id) => {
         if (destroys.failed < failedDestroys) {
           destroys.failed += 1;
           throw new Error('the jailer did not stop');
@@ -63,7 +63,7 @@ async function setupBuilderTest(
 
         await released.promise;
 
-        await ctx.imps.destroyImp(name);
+        await ctx.imps.destroyImpId(id);
       },
     },
     ensureImage: async () => {
@@ -388,4 +388,36 @@ test('no client names an image imp-builder, which is impd’s', async () => {
   for (const refusal of refusals) {
     expect(String(refusal)).toContain(`the image name ${BUILDER_IMAGE} is impd's`);
   }
+});
+
+test('a builder whose create fails on a taken name leaves the imp that holds it', async () => {
+  await using ctx = await setupBuilderTest();
+
+  const builders = createBuilders({
+    config: ctx.config,
+    db: ctx.db,
+    imps: {
+      ...ctx.imps,
+      createImp: async (input) => {
+        await ctx.imps.createImp({ name: input.name, image: 'base' });
+
+        return ctx.imps.createImp(input);
+      },
+    },
+    ensureImage: async () => {
+      await ctx.createTestImage(BUILDER_IMAGE);
+    },
+    log: () => {},
+  });
+
+  const rejection = await readRejection(
+    builders.withBuilder(new AbortController().signal, () => Promise.resolve('built')),
+  );
+
+  expect(rejection).toBeInstanceOf(Error);
+
+  const imps = await listImps(ctx.db);
+
+  expect(imps.map((imp) => imp.kind)).toEqual(['user']);
+  expect(imps[0]?.name).toMatch(/^imp-build-[a-z2-9]{8}$/v);
 });

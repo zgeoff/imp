@@ -1,4 +1,3 @@
-import { ORPCError } from '@orpc/server';
 import type { Config } from '../config';
 import { listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
@@ -34,7 +33,7 @@ export interface Builders {
 export interface BuildersDeps {
   readonly config: Pick<Config, 'build'>;
   readonly db: ImpDatabase;
-  readonly imps: Pick<ImpService, 'createImp' | 'destroyImp' | 'openBuilderExec'>;
+  readonly imps: Pick<ImpService, 'createImp' | 'destroyImpId' | 'openBuilderExec'>;
 
   // adds IMP_BUILD_IMAGE as BUILDER_IMAGE, when it is not that already
   readonly ensureImage: () => Promise<void>;
@@ -48,10 +47,6 @@ function pickBuilderName(): string {
   const picks = Array.from({ length: 8 }, () => Math.random() * NAME_ALPHABET.length);
 
   return `imp-build-${picks.map((pick) => NAME_ALPHABET[Math.floor(pick)]).join('')}`;
-}
-
-function isNotFound(error: unknown): boolean {
-  return error instanceof ORPCError && error.code === 'NOT_FOUND';
 }
 
 // a builder's dockerd starts with the guest, a little after its agent
@@ -84,17 +79,14 @@ export function createBuilders(deps: BuildersDeps): Builders {
   const retrying = new Set<string>();
 
   // true once the builder is gone; a builder that survives holds its memory
-  // and disk, and refuses sleep, so it is an error
-  const removeOnce = async (name: string): Promise<boolean> => {
+  // and disk, and refuses sleep, so it is an error. By id: an imp that took
+  // its name stays.
+  const removeOnce = async (id: string, name: string): Promise<boolean> => {
     try {
-      await deps.imps.destroyImp(name);
+      await deps.imps.destroyImpId(id);
 
       return true;
     } catch (error) {
-      if (isNotFound(error)) {
-        return true;
-      }
-
       deps.log(
         `impd: image build: ERROR: builder ${name} survives its removal, tried again every ${String(retryMs / 1000)} s: ${readErrorMessage(error)}`,
       );
@@ -103,18 +95,18 @@ export function createBuilders(deps: BuildersDeps): Builders {
     }
   };
 
-  const removeLater = (name: string): void => {
-    if (retrying.has(name)) {
+  const removeLater = (id: string, name: string): void => {
+    if (retrying.has(id)) {
       return;
     }
 
-    retrying.add(name);
+    retrying.add(id);
 
     const tryAgain = async () => {
-      const gone = await removeOnce(name);
+      const gone = await removeOnce(id, name);
 
       if (gone) {
-        retrying.delete(name);
+        retrying.delete(id);
         deps.log(`impd: image build: removed builder ${name}`);
 
         return;
@@ -127,11 +119,11 @@ export function createBuilders(deps: BuildersDeps): Builders {
   };
 
   // a builder that survives impd keeps trying to remove
-  const removeBuilder = async (name: string): Promise<void> => {
-    const gone = await removeOnce(name);
+  const removeBuilder = async (id: string, name: string): Promise<void> => {
+    const gone = await removeOnce(id, name);
 
     if (!gone) {
-      removeLater(name);
+      removeLater(id, name);
     }
   };
 
@@ -141,6 +133,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
       signal.throwIfAborted();
 
+      const id = Bun.randomUUIDv7();
       const name = pickBuilderName();
       const started = performance.now();
 
@@ -148,6 +141,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
         // the create fails where the firewall cannot hold the public policy,
         // and where the governor or the disk budget has no room
         await deps.imps.createImp({
+          id,
           name,
           image: BUILDER_IMAGE,
           memoryMib: deps.config.build.memoryMib,
@@ -168,7 +162,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
       } finally {
         // a builder that survives is logged and retried; a build it served
         // still stands, its image written
-        await removeBuilder(name);
+        await removeBuilder(id, name);
       }
     },
     removeLeftovers: async () => {
@@ -177,7 +171,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
       for (const imp of imps.filter((each) => each.kind === 'builder')) {
         deps.log(`impd: removing builder ${imp.name}, which a stopped impd left`);
 
-        await removeBuilder(imp.name);
+        await removeBuilder(imp.id, imp.name);
       }
     },
   };
