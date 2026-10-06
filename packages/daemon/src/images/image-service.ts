@@ -411,21 +411,24 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       return readDiskUsage(paths.rootfs);
     }
 
-    const workDir = makeWorkDir();
-    const root = workDir.root;
-
     const created = await runDockerChecked(['create', ref, '/bin/true'], docker);
 
     const containerId = created.trim();
 
+    // the work directory only once the create has passed, so a refused
+    // create leaves none behind
     try {
-      await writeExportedTree(containerId, root);
+      const workDir = makeWorkDir();
 
-      return await writeRootfs(root, digest, ociConfig);
+      try {
+        await writeExportedTree(containerId, workDir.root);
+
+        return await writeRootfs(workDir.root, digest, ociConfig);
+      } finally {
+        rmSync(workDir.work, { recursive: true, force: true });
+      }
     } finally {
       await runCommand(['docker', 'rm', '-f', containerId]);
-
-      rmSync(workDir.work, { recursive: true, force: true });
     }
   };
 
