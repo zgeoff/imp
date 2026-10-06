@@ -2,14 +2,15 @@
 
 ## [0.38.0](https://github.com/zgeoff/imp/compare/v0.37.0...v0.38.0) (2026-10-06)
 
-
 ### ⚠ BREAKING CHANGES
 
-* **images:** releases no longer publish ghcr.io/zgeoff/imp-coder, and the repo no longer has images/dev. Published imp-coder tags stay on GHCR.
+- **images:** releases no longer publish ghcr.io/zgeoff/imp-coder, and the repo no longer has
+  images/dev. Published imp-coder tags stay on GHCR.
 
 ### Features
 
-* **images:** publish imp-base as the only image ([#226](https://github.com/zgeoff/imp/issues/226)) ([461ff88](https://github.com/zgeoff/imp/commit/461ff882840e88b9e6d9fbbc6032118f5d8840e1))
+- **images:** publish imp-base as the only image ([#226](https://github.com/zgeoff/imp/issues/226))
+  ([461ff88](https://github.com/zgeoff/imp/commit/461ff882840e88b9e6d9fbbc6032118f5d8840e1))
 
 ## [0.37.0](https://github.com/zgeoff/imp/compare/v0.36.0...v0.37.0) (2026-10-06)
 
