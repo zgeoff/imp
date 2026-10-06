@@ -119,7 +119,7 @@ export interface RouterDeps {
 
 // what a streamed image call's options are made from
 interface ImageOpCall {
-  readonly context: RpcContext & { readonly auditDetail: AuditDetail };
+  readonly context: RpcContext & { readonly auditDetail: Readonly<AuditDetail> };
   readonly input: unknown;
   readonly signal?: AbortSignal | undefined;
 }
