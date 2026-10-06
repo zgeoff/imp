@@ -878,6 +878,26 @@ smallFsTest('on a small filesystem, random data takes no more than its hold', as
   assertWithinHold(trial);
 });
 
+// twice the archive just under a 256 MiB step, so the step's round-up
+// leaves no slack: 58 000 blocks of random data, a header each
+smallFsTest('on a small filesystem, an export just under a hold step fits it', async () => {
+  const exported = buildTreeTar((tree) => {
+    for (let d = 0; d < 58; d += 1) {
+      const sub = join(tree, `d${String(d)}`);
+
+      mkdirSync(sub);
+      writeRandomFiles(sub, 1000, 4096);
+    }
+  });
+
+  expect(2 * exported.byteLength).toBeGreaterThan(500 * MIB);
+  expect(2 * exported.byteLength).toBeLessThan(512 * MIB);
+
+  const trial = await runDiskTrial(SMALL_FS ?? '', exported);
+
+  assertWithinHold(trial);
+});
+
 smallFsTest(
   'on a nearly full small filesystem, a build bigger than the room is refused before the reserve',
   async () => {
