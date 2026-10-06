@@ -7,6 +7,9 @@
 - **egress:** a public egress policy that reaches the internet only
   ([#180](https://github.com/zgeoff/imp/issues/180))
   ([9a5b63b](https://github.com/zgeoff/imp/commit/9a5b63b65a8ad2abe2be6fc21f06aba270141c10))
+- **images:** build images in a disposable builder imp
+  ([#194](https://github.com/zgeoff/imp/issues/194))
+  ([b29b883](https://github.com/zgeoff/imp/commit/b29b8832c4b6274f3749d4af47de24ecfe435b92))
 
 ## [0.34.0](https://github.com/zgeoff/imp/compare/v0.33.0...v0.34.0) (2026-10-06)
 

@@ -79,7 +79,7 @@ an add too.
 
 An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
 way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
-engine, as before 0.35.0, for one release only, with the credentials in impd's Docker config. impd
+engine, as before 0.36.0, for one release only, with the credentials in impd's Docker config. impd
 logs a warning at start and at every such add.
 
 ## Build an image
