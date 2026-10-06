@@ -727,7 +727,8 @@ async function runDiskTrial(
   roomBytes?: number,
 ): Promise<DiskTrial> {
   const filler = join(mount, `filler-${Bun.randomUUIDv7()}`);
-  const seen = { lowestFree: Number.POSITIVE_INFINITY, highestUsed: 0 };
+  const seen = { lowestFree: Number.POSITIVE_INFINITY, highestUsed: 0, split: '' };
+  const where = { dataDir: '' };
 
   const readDisk = () => {
     const stats = statfsSync(mount);
@@ -750,12 +751,41 @@ async function runDiskTrial(
 
   const baseUsed = readDisk().used;
 
+  // the blocks of the unpacked tree and of the rootfs, once both are written
+  const readSplit = () => {
+    const images = join(where.dataDir, 'images');
+
+    const du = Bun.spawnSync([
+      'du',
+      '-s',
+      '-B1',
+      ...readdirSync(images).map((entry) => join(images, entry)),
+    ]);
+
+    seen.split = new TextDecoder()
+      .decode(du.stdout)
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const [bytes, path] = line.split('\t');
+        const kind = (path ?? '').includes('/.build-') ? 'tree' : 'rootfs';
+
+        return `${kind} ${(Number(bytes) / MIB).toFixed(1)} MiB`;
+      })
+      .join(', ');
+  };
+
   const ctx = await setupIsolatedBuild({
     exported,
     chunkBytes: MIB,
     disk: { mount, reserveBytes: RESERVE_BYTES },
-    onRootfsWritten: updateSeen,
+    onRootfsWritten: () => {
+      updateSeen();
+      readSplit();
+    },
   });
+
+  where.dataDir = ctx.dataDir;
 
   const timer = setInterval(updateSeen, 1);
 
@@ -780,7 +810,7 @@ async function runDiskTrial(
     const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
 
     console.log(
-      `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome}`,
+      `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome} (${seen.split})`,
     );
 
     return trial;
@@ -791,7 +821,10 @@ async function runDiskTrial(
   }
 }
 
-const smallFsTest = test.skipIf(SMALL_FS === undefined);
+// a trial of tens of thousands of files runs past bun's 5 s default
+function registerSmallFsTest(name: string, run: () => Promise<void>) {
+  test.skipIf(SMALL_FS === undefined)(name, run, 120_000);
+}
 
 // what it took fits in what it held, and free space never went under the reserve
 function assertWithinHold(trial: DiskTrial) {
@@ -800,35 +833,41 @@ function assertWithinHold(trial: DiskTrial) {
   expect(trial.lowestFree).toBeGreaterThanOrEqual(RESERVE_BYTES);
 }
 
-smallFsTest('on a small filesystem, a one-file image takes no more than its hold', async () => {
-  const trial = await runDiskTrial(
-    SMALL_FS ?? '',
-    buildTreeTar((tree) => {
-      writeFileSync(join(tree, 'hello'), 'from the builder\n');
-    }),
-  );
+registerSmallFsTest(
+  'on a small filesystem, a one-file image takes no more than its hold',
+  async () => {
+    const trial = await runDiskTrial(
+      SMALL_FS ?? '',
+      buildTreeTar((tree) => {
+        writeFileSync(join(tree, 'hello'), 'from the builder\n');
+      }),
+    );
 
-  assertWithinHold(trial);
-});
+    assertWithinHold(trial);
+  },
+);
 
-smallFsTest('on a small filesystem, many empty files take no more than their hold', async () => {
-  const trial = await runDiskTrial(
-    SMALL_FS ?? '',
-    buildTreeTar((tree) => {
-      for (let d = 0; d < 30; d += 1) {
-        mkdirSync(join(tree, `d${String(d)}`));
+registerSmallFsTest(
+  'on a small filesystem, many empty files take no more than their hold',
+  async () => {
+    const trial = await runDiskTrial(
+      SMALL_FS ?? '',
+      buildTreeTar((tree) => {
+        for (let d = 0; d < 30; d += 1) {
+          mkdirSync(join(tree, `d${String(d)}`));
 
-        for (let n = 0; n < 1000; n += 1) {
-          writeFileSync(join(tree, `d${String(d)}`, `f${String(n)}`), '');
+          for (let n = 0; n < 1000; n += 1) {
+            writeFileSync(join(tree, `d${String(d)}`, `f${String(n)}`), '');
+          }
         }
-      }
-    }),
-  );
+      }),
+    );
 
-  assertWithinHold(trial);
-});
+    assertWithinHold(trial);
+  },
+);
 
-smallFsTest('on a small filesystem, a deep tree takes no more than its hold', async () => {
+registerSmallFsTest('on a small filesystem, a deep tree takes no more than its hold', async () => {
   const trial = await runDiskTrial(
     SMALL_FS ?? '',
     buildTreeTar((tree) => {
@@ -843,22 +882,25 @@ smallFsTest('on a small filesystem, a deep tree takes no more than its hold', as
   assertWithinHold(trial);
 });
 
-smallFsTest('on a small filesystem, a sparse file takes no more than its hold', async () => {
-  const writeSparse = (tree: string) => {
-    const file = join(tree, 'sparse');
+registerSmallFsTest(
+  'on a small filesystem, a sparse file takes no more than its hold',
+  async () => {
+    const writeSparse = (tree: string) => {
+      const file = join(tree, 'sparse');
 
-    writeFileSync(file, 'x'.repeat(MIB));
+      writeFileSync(file, 'x'.repeat(MIB));
 
-    Bun.spawnSync(['truncate', '-s', String(400 * MIB), file]);
-  };
+      Bun.spawnSync(['truncate', '-s', String(400 * MIB), file]);
+    };
 
-  // stored in full, as docker export sends it, and as a GNU sparse member
-  const full = await runDiskTrial(SMALL_FS ?? '', buildTreeTar(writeSparse));
-  const holes = await runDiskTrial(SMALL_FS ?? '', buildTreeTar(writeSparse, ['--sparse']));
+    // stored in full, as docker export sends it, and as a GNU sparse member
+    const full = await runDiskTrial(SMALL_FS ?? '', buildTreeTar(writeSparse));
+    const holes = await runDiskTrial(SMALL_FS ?? '', buildTreeTar(writeSparse, ['--sparse']));
 
-  assertWithinHold(full);
-  assertWithinHold(holes);
-});
+    assertWithinHold(full);
+    assertWithinHold(holes);
+  },
+);
 
 // count files of random data, which no tool can store as holes
 function writeRandomFiles(tree: string, count: number, bytes: number) {
@@ -867,7 +909,7 @@ function writeRandomFiles(tree: string, count: number, bytes: number) {
   }
 }
 
-smallFsTest('on a small filesystem, random data takes no more than its hold', async () => {
+registerSmallFsTest('on a small filesystem, random data takes no more than its hold', async () => {
   const trial = await runDiskTrial(
     SMALL_FS ?? '',
     buildTreeTar((tree) => {
@@ -880,7 +922,7 @@ smallFsTest('on a small filesystem, random data takes no more than its hold', as
 
 // twice the archive just under a 256 MiB step, so the step's round-up
 // leaves no slack: 58 000 blocks of random data, a header each
-smallFsTest('on a small filesystem, an export just under a hold step fits it', async () => {
+registerSmallFsTest('on a small filesystem, an export just under a hold step fits it', async () => {
   const exported = buildTreeTar((tree) => {
     for (let d = 0; d < 58; d += 1) {
       const sub = join(tree, `d${String(d)}`);
@@ -898,7 +940,7 @@ smallFsTest('on a small filesystem, an export just under a hold step fits it', a
   assertWithinHold(trial);
 });
 
-smallFsTest(
+registerSmallFsTest(
   'on a nearly full small filesystem, a build bigger than the room is refused before the reserve',
   async () => {
     const room = 300 * MIB;
