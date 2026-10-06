@@ -10,7 +10,7 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
-| `coder/` → `imp/coder`          | the published base + Claude Code at a pinned version, no Node            |
+| `coder/` → `imp/coder`          | the published base + Claude Code and gh at pinned versions, no Node      |
 | `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
@@ -45,6 +45,12 @@ by default. A release builds it FROM the base its Dockerfile pins, which is the 
 release: the FROM line is a literal digest, since a build of the same release's base has no digest
 until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
 gives the steps to check a new Claude Code version.
+
+The image also holds the GitHub CLI, `gh`, in `/usr/local/bin/gh`, at the exact version its
+Dockerfile pins and checked against the sum from the release's checksums file. An agent uses it to
+open pull requests. Grant the imp a `github` secret and `gh` works with no sign-in: impd sets
+`GH_TOKEN` to a placeholder, and the broker adds the token
+([credential connectors](./connectors.md)).
 
 ## Build an image
 
