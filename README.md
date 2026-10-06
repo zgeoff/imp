@@ -214,7 +214,7 @@ Any OCI image can be an imp: `imp image add ubuntu:24.04`, or build your own on 
 from a separate read-only drive, so your image needs nothing from imp. Services that should start
 with the imp are small JSON files in `/etc/imp/services.d`.
 
-`images/base` is Ubuntu with Docker. `images/dev` adds Node, Bun, Go, Python and Claude Code. The
+`images/base` is Ubuntu with Docker, and the only image a release publishes. The
 [images guide](./docs/guides/images.md) covers the rest.
 
 ## How it works

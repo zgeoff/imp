@@ -358,7 +358,7 @@ describe('a pull under IMP_BUILD_ISOLATION=imp', () => {
 
     expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=0.29.0')).toContain('refused');
     expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${other}`)).toContain('refused');
-    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-dev&tag=${DIGEST}`)).toContain('refused');
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-other&tag=${DIGEST}`)).toContain('refused');
     expect(checkPull(`fromImage=docker.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}`)).toContain('refused');
 
     // the engine pulls fromImage's repository at the tag, whatever else it names
@@ -468,7 +468,7 @@ describe('a create body', () => {
 
     expect(checkLocked('ghcr.io/zgeoff/imp-base:0.29.0')).toContain('is refused');
     expect(checkLocked(`ghcr.io/zgeoff/imp-base@sha256:${'e'.repeat(64)}`)).toContain('is refused');
-    expect(checkLocked(`ghcr.io/zgeoff/imp-dev@${digest}`)).toContain('is refused');
+    expect(checkLocked(`ghcr.io/zgeoff/imp-other@${digest}`)).toContain('is refused');
     expect(checkLocked(digest)).toContain('is refused');
   });
 });
