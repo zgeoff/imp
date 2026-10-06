@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -11,11 +12,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config';
-import { findImageByName } from '../db/images';
+import { createImage, findImageByName, listImages } from '../db/images';
 import { openDatabase } from '../db/open-database';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
 import { createDiskBudget } from '../storage/disk-budget';
+import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
 import type { Builders } from './builder-imps';
@@ -24,6 +26,7 @@ import type { FakeAnswer, FakeRun } from './fake-guest';
 import { createGuestExec } from './guest-exec';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import { createImageService } from './image-service';
+import { createQueryGate } from './query-gate';
 
 let dir = '';
 
@@ -58,6 +61,7 @@ function createBuilderAnswer(
   onBuild: (dockerfile: string) => void,
   exported: Uint8Array,
   stall: boolean,
+  onExport: () => Promise<void>,
 ) {
   return async (run: FakeRun): Promise<FakeAnswer> => {
     const argv = run.argv.slice(1).join(' ');
@@ -101,6 +105,8 @@ function createBuilderAnswer(
     }
 
     if (argv === `export ${CONTAINER_ID}`) {
+      await onExport();
+
       return { stdout: [exported], stall };
     }
 
@@ -116,6 +122,15 @@ interface IsolatedBuildOptions {
   readonly roomBytes?: number;
   readonly env?: Readonly<Record<string, string>>;
   readonly stallExport?: boolean;
+
+  // runs as the export starts; mkfs.ext4 waits for startMkfs
+  readonly onExport?: () => Promise<void>;
+  readonly pauseMkfs?: boolean;
+
+  // a select of this name the gate can hold; a rootfs write that fails once
+  // published
+  readonly gatedName?: string;
+  readonly failAfterPublish?: boolean;
 }
 
 async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) {
@@ -138,11 +153,13 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
       },
       exported,
       options.stallExport === true,
+      options.onExport ?? (() => Promise.resolve()),
     ),
   );
 
   const boots: string[] = [];
   const grows: number[] = [];
+  const live = { builders: 0 };
   const usage = { usedBytes: 0, availableBytes: options.roomBytes ?? 1024 ** 5 };
 
   const diskBudget = createDiskBudget({
@@ -152,10 +169,16 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
   });
 
   const builders: Builders = {
-    withBuilder: (_signal, run) => {
+    withBuilder: async (_signal, run) => {
       boots.push('builder');
 
-      return run(createGuestExec(guest.open));
+      live.builders += 1;
+
+      try {
+        return await run(createGuestExec(guest.open));
+      } finally {
+        live.builders -= 1;
+      }
     },
     removeLeftovers: () => Promise.resolve(),
   };
@@ -170,10 +193,48 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     mode: 0o755,
   });
 
+  const mkfsStarted = join(home, 'mkfs-started');
+  const mkfsReleased = join(home, 'mkfs-released');
+
+  if (options.pauseMkfs === true) {
+    const mkfs = Bun.which('mkfs.ext4', { PATH: `${process.env['PATH'] ?? ''}:/usr/sbin:/sbin` });
+
+    writeFileSync(
+      join(bin, 'mkfs.ext4'),
+      `#!/bin/sh\ntouch '${mkfsStarted}'\nwhile [ ! -e '${mkfsReleased}' ]; do sleep 0.05; done\nexec '${mkfs ?? 'mkfs.ext4'}' "$@"\n`,
+      { mode: 0o755 },
+    );
+  }
+
+  const waitForMkfs = async () => {
+    while (!existsSync(mkfsStarted)) {
+      await Bun.sleep(20);
+    }
+  };
+
+  const startMkfs = () => {
+    writeFileSync(mkfsReleased, '');
+  };
+
+  const gate = createQueryGate(options.gatedName ?? '');
+  const xfs = createXfsBackend({ dataDir });
+
+  const storage: StorageBackend =
+    options.failAfterPublish === true
+      ? {
+          ...xfs,
+          createImage: async (digest, write) => {
+            await xfs.createImage(digest, write);
+
+            throw new Error('the mount failed');
+          },
+        }
+      : xfs;
+
   const images = createImageService({
     config: loadConfig({ ...options.env, IMP_DATA_DIR: dataDir }),
-    db,
-    storage: createXfsBackend({ dataDir }),
+    db: db.withPlugin(gate.plugin),
+    storage,
     storageGate: createStorageGate(),
     diskBudget: {
       withRoom: diskBudget.withRoom,
@@ -190,19 +251,33 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     log: () => {},
   });
 
-  const runBuild = async (dockerfile: string, signal = new AbortController().signal) => {
+  // bin leads PATH while any build of this setup runs
+  const paths = { users: 0, saved: process.env['PATH'] };
+
+  const runBuild = async (
+    dockerfile: string,
+    signal = new AbortController().signal,
+    name = 'web',
+  ) => {
     const tarPath = join(dir, `context-${Bun.randomUUIDv7()}.tar`);
 
     writeFileSync(tarPath, buildTar({ Dockerfile: dockerfile }));
 
-    const savedPath = process.env['PATH'];
+    if (paths.users === 0) {
+      paths.saved = process.env['PATH'];
+      process.env['PATH'] = `${bin}:${paths.saved ?? ''}`;
+    }
 
-    process.env['PATH'] = `${bin}:${savedPath ?? ''}`;
+    paths.users += 1;
 
     try {
-      return await images.buildImageFromContext(tarPath, 'web', undefined, { signal });
+      return await images.buildImageFromContext(tarPath, name, undefined, { signal });
     } finally {
-      process.env['PATH'] = savedPath;
+      paths.users -= 1;
+
+      if (paths.users === 0) {
+        process.env['PATH'] = paths.saved;
+      }
     }
   };
 
@@ -216,7 +291,12 @@ async function setupIsolatedBuild(options: Readonly<IsolatedBuildOptions> = {}) 
     exported,
     boots,
     grows,
+    live,
+    images,
+    gate,
     diskBudget,
+    waitForMkfs,
+    startMkfs,
     runBuild,
     readHostCalls,
   };
@@ -320,6 +400,210 @@ test("an isolated build's disk hold goes however the build ends", async () => {
       pending: 0,
     });
   }
+});
+
+// the rootfs directories of builds in the data dir
+function listBuiltRootfs(dataDir: string): string[] {
+  const images = join(dataDir, 'images');
+
+  return existsSync(images)
+    ? readdirSync(images).filter((entry) => entry.startsWith('imp-build-'))
+    : [];
+}
+
+test('a template that takes the name during the build leaves no new row and no rootfs', async () => {
+  const holder: { db?: Awaited<ReturnType<typeof openDatabase>> } = {};
+
+  const ctx = await setupIsolatedBuild({
+    onExport: async () => {
+      if (holder.db !== undefined) {
+        await createImage(holder.db, {
+          name: 'web',
+          ref: 'imp:dev',
+          digest: `sha256:${'b'.repeat(64)}`,
+          sizeBytes: 1,
+          source: 'imp',
+          sourceImp: 'dev',
+        });
+      }
+    },
+  });
+
+  holder.db = ctx.db;
+
+  const failure = await readRejection(ctx.runBuild('FROM base.test/a:1\nRUN true\n'));
+  const rows = await listImages(ctx.db);
+  const status = await ctx.diskBudget.readStatus();
+
+  expect(String(failure)).toContain('image web is a template');
+  expect(rows.map((row) => [row.name, row.source])).toEqual([['web', 'imp']]);
+  expect(listBuiltRootfs(ctx.dataDir)).toEqual([]);
+  expect(status.pendingBytes).toBe(0);
+});
+
+test('a build whose row fails keeps the rootfs another build of the digest is writing', async () => {
+  const ctx = await setupIsolatedBuild({ pauseMkfs: true });
+
+  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+  const failing = readRejection(ctx.runBuild(dockerfile));
+  const kept = ctx.runBuild(dockerfile, new AbortController().signal, 'web2');
+
+  // both exports are in, so both builds wait on the one mkfs.ext4
+  await ctx.waitForMkfs();
+
+  while (ctx.guest.runs.filter((run) => run.argv[1] === 'export' && run.closed).length < 2) {
+    await Bun.sleep(20);
+  }
+
+  await Bun.sleep(200);
+
+  await createImage(ctx.db, {
+    name: 'web',
+    ref: 'imp:dev',
+    digest: `sha256:${'b'.repeat(64)}`,
+    sizeBytes: 1,
+    source: 'imp',
+    sourceImp: 'dev',
+  });
+
+  ctx.startMkfs();
+
+  const failure = await failing;
+  const image = await kept;
+
+  expect(String(failure)).toContain('image web is a template');
+  expect(image).toMatchObject({ name: 'web2' });
+  expect(existsSync(buildImagePaths(ctx.dataDir, image.digest).rootfs)).toBe(true);
+});
+
+// A build of web's digest held between finding its rootfs and writing its
+// row while `imp image rm web` runs; `failRow` makes that row fail too
+async function runRemoveDuringRow(failRow: boolean) {
+  const exports = { count: 0 };
+  const holder: { arm?: () => void } = {};
+
+  // the second build's export arms the gate, after its name check
+  const ctx = await setupIsolatedBuild({
+    gatedName: 'web2',
+    onExport: () => {
+      exports.count += 1;
+
+      if (exports.count === 2) {
+        holder.arm?.();
+      }
+
+      return Promise.resolve();
+    },
+  });
+
+  holder.arm = ctx.gate.arm;
+
+  const dockerfile = 'FROM base.test/a:1\nRUN true\n';
+
+  const first = await ctx.runBuild(dockerfile);
+
+  const second = readRejection(ctx.runBuild(dockerfile, new AbortController().signal, 'web2'));
+
+  await ctx.gate.reached;
+
+  await ctx.images.removeImage('web');
+
+  if (failRow) {
+    await createImage(ctx.db, {
+      name: 'web2',
+      ref: 'imp:dev',
+      digest: `sha256:${'b'.repeat(64)}`,
+      sizeBytes: 1,
+      source: 'imp',
+      sourceImp: 'dev',
+    });
+  }
+
+  ctx.gate.release();
+
+  const end = await second;
+  const rows = await listImages(ctx.db);
+
+  const rootfs = buildImagePaths(ctx.dataDir, first.digest).rootfs;
+
+  return {
+    end,
+    rows: rows.map((row) => [row.name, row.digest]),
+    hasRootfs: existsSync(rootfs),
+    first,
+  };
+}
+
+test('an image rm while a build of its digest is between its rootfs and its row keeps that rootfs', async () => {
+  const kept = await runRemoveDuringRow(false);
+
+  expect(kept.end).toBeNull();
+  expect(kept.rows).toEqual([['web2', kept.first.digest]]);
+  expect(kept.hasRootfs).toBe(true);
+});
+
+test("that rootfs goes after all when the build's row then fails", async () => {
+  const failed = await runRemoveDuringRow(true);
+
+  expect(failed.end).toBeInstanceOf(Error);
+  expect(failed.rows).toEqual([['web2', `sha256:${'b'.repeat(64)}`]]);
+  expect(failed.hasRootfs).toBe(false);
+});
+
+test('a rootfs whose write fails after it is published goes with the build', async () => {
+  const ctx = await setupIsolatedBuild({ failAfterPublish: true });
+  const failure = await readRejection(ctx.runBuild('FROM base.test/a:1\nRUN true\n'));
+  const rows = await listImages(ctx.db);
+
+  expect(String(failure)).toContain('the mount failed');
+  expect(rows).toEqual([]);
+  expect(listBuiltRootfs(ctx.dataDir)).toEqual([]);
+});
+
+test('a client that goes while mkfs.ext4 runs leaves no row and no rootfs', async () => {
+  const ctx = await setupIsolatedBuild({ pauseMkfs: true });
+
+  const client = new AbortController();
+
+  const building = readRejection(ctx.runBuild('FROM base.test/a:1\nRUN true\n', client.signal));
+
+  await ctx.waitForMkfs();
+
+  client.abort();
+  ctx.startMkfs();
+
+  const failure = await building;
+  const rows = await listImages(ctx.db);
+  const status = await ctx.diskBudget.readStatus();
+
+  expect(failure).toBeInstanceOf(Error);
+  expect(rows).toEqual([]);
+  expect(listBuiltRootfs(ctx.dataDir)).toEqual([]);
+  expect(status.pendingBytes).toBe(0);
+});
+
+test('an export that stalls past a limit ends at once, with its builder and its disk hold', async () => {
+  const many = Object.fromEntries(Array.from({ length: 20 }, (_, n) => [`f${String(n)}`, 'x']));
+
+  const ctx = await setupIsolatedBuild({
+    exported: buildTar(many),
+    env: { IMP_BUILD_IMAGE_MAX_FILES: '5' },
+    stallExport: true,
+  });
+
+  const started = performance.now();
+
+  const failure = await readRejection(ctx.runBuild('FROM base.test/a:1\nRUN true\n'));
+
+  const elapsedMs = performance.now() - started;
+
+  const status = await ctx.diskBudget.readStatus();
+
+  expect(String(failure)).toContain('is over 5 files');
+  expect(elapsedMs).toBeLessThan(5000);
+  expect(ctx.live.builders).toBe(0);
+  expect(ctx.guest.runs.at(-1)).toMatchObject({ closed: true });
+  expect(status.pendingBytes).toBe(0);
 });
 
 test('a Dockerfile the input guard refuses boots no builder', async () => {

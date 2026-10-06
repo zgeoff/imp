@@ -268,7 +268,10 @@ A build goes:
    small archive off as a small image. An export with more entries than `IMP_BUILD_IMAGE_MAX_FILES`
    (1,000,000) also fails. The directories `tar` makes for a member's missing parents count as
    entries and blocks too. impd ends the export at once when a limit trips or `tar` fails, and after
-   120 s in which the builder sends nothing, so a builder that holds its export open still goes.
+   120 s in which the builder sends nothing, so a builder that holds its export open still goes. A
+   client that goes before the image row is written, or a row that cannot be written, such as a
+   template that took the name meanwhile, leaves no row and no rootfs the build made; a rootfs
+   another build of the same digest still writes stays.
 6. impd destroys the builder, on success, failure or a client that goes. impd destroys a builder it
    finds at start, which a stop cut short. A builder that survives its removal does not fail its
    build, whose image impd wrote: impd logs an `ERROR`, tries again every 30 s until it is gone, and

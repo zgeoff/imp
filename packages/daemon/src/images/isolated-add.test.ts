@@ -9,15 +9,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { findImageByName } from '../db/images';
+import { createImage, findImageByName, listImages } from '../db/images';
 import { listImps } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { buildImagePaths } from '../storage/data-layout';
+import type { StorageBackend } from '../storage/storage-backend';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
 import { createFakeGuest } from './fake-guest';
 import type { FakeAnswer, FakeRun } from './fake-guest';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
+import { createQueryGate } from './query-gate';
 
 const CONTAINER_ID = 'e'.repeat(64);
 const CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';
@@ -41,6 +43,14 @@ interface AddTestOptions {
 
   // how long the builder image's pull may take
   readonly builderImagePullMs?: number;
+
+  // runs as an export starts; mkfs.ext4 waits for startMkfs
+  readonly onExport?: () => Promise<void>;
+  readonly pauseMkfs?: boolean;
+
+  // a select of this name the gate can hold; a storage whose removals fail
+  readonly gatedName?: string;
+  readonly isRemoveFailing?: boolean;
 }
 
 // the error `adding` rejects with, or null
@@ -125,7 +135,20 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     }
 
     if (argv === `export ${CONTAINER_ID}`) {
+      await options.onExport?.();
+
       return { stdout: exported };
+    }
+
+    // a build, for an add and a build of one digest
+    if (argv.startsWith('image inspect --format {{.Id}} docker/dockerfile')) {
+      return { stdout: `sha256:${'f'.repeat(64)}\n` };
+    }
+
+    if (argv.startsWith('build ')) {
+      await run.readStdin();
+
+      return {};
     }
 
     return { code: 1, stderr: `the fake builder has no ${argv}` };
@@ -147,6 +170,36 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
       mode: 0o755,
     },
   );
+
+  const mkfsStarted = join(ctx.dataDir, 'mkfs-started');
+  const mkfsReleased = join(ctx.dataDir, 'mkfs-released');
+
+  if (options.pauseMkfs === true) {
+    const mkfs = Bun.which('mkfs.ext4', { PATH: `${process.env['PATH'] ?? ''}:/usr/sbin:/sbin` });
+
+    writeFileSync(
+      join(bin, 'mkfs.ext4'),
+      `#!/bin/sh\ntouch '${mkfsStarted}'\nwhile [ ! -e '${mkfsReleased}' ]; do sleep 0.05; done\nexec '${mkfs ?? 'mkfs.ext4'}' "$@"\n`,
+      { mode: 0o755 },
+    );
+  }
+
+  const waitForMkfs = async () => {
+    while (!existsSync(mkfsStarted)) {
+      await Bun.sleep(20);
+    }
+  };
+
+  const startMkfs = () => {
+    writeFileSync(mkfsReleased, '');
+  };
+
+  const gate = createQueryGate(options.gatedName ?? '');
+
+  const storage: StorageBackend =
+    options.isRemoveFailing === true
+      ? { ...ctx.storage, removeImage: () => Promise.reject(new Error('the disk is read-only')) }
+      : ctx.storage;
 
   const holder: { images: ReturnType<typeof createImageService> | null } = { images: null };
 
@@ -174,8 +227,8 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
 
   const images = createImageService({
     config: ctx.config,
-    db: ctx.db,
-    storage: ctx.storage,
+    db: ctx.db.withPlugin(gate.plugin),
+    storage,
     storageGate: ctx.storageGate,
     diskBudget: ctx.diskBudget,
     readBuilders: () => builders,
@@ -208,6 +261,19 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
   const listWorkDirs = () =>
     readdirSync(join(ctx.dataDir, 'images')).filter((entry) => entry.startsWith('.build-'));
 
+  // the rootfs directories of builder images under images/
+  const listBuiltRootfs = () =>
+    readdirSync(join(ctx.dataDir, 'images')).filter((entry) => entry.startsWith('imp-build-'));
+
+  // a build of a context that makes the add's own export, so its digest
+  const runBuild = (name: string, signal = new AbortController().signal) => {
+    const tarPath = join(ctx.dataDir, `context-${Bun.randomUUIDv7()}.tar`);
+
+    writeFileSync(tarPath, buildTar(ctx.dataDir, { Dockerfile: 'FROM busybox:1.37\nRUN true\n' }));
+
+    return images.buildImageFromContext(tarPath, name, undefined, { signal });
+  };
+
   return Object.assign(ctx, {
     guest,
     logs,
@@ -215,6 +281,11 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     withHostDocker,
     readHostCalls,
     listWorkDirs,
+    listBuiltRootfs,
+    runBuild,
+    waitForMkfs,
+    startMkfs,
+    gate,
   });
 }
 
@@ -669,4 +740,203 @@ test('a step after the pull that fails past the limit names its own error, not t
   expect(failure).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
   expect(String(failure)).toContain('no space left on device');
   expect(String(failure)).not.toContain('the pull did not finish');
+});
+
+// a template row named `name`, as an imp's image would be
+function createTemplateRow(db: Parameters<typeof createImage>[0], name: string) {
+  return createImage(db, {
+    name,
+    ref: 'imp:dev',
+    digest: `sha256:${'d'.repeat(64)}`,
+    sizeBytes: 1,
+    source: 'imp',
+    sourceImp: 'dev',
+  });
+}
+
+test('a client that leaves an add while mkfs.ext4 runs leaves no row, no rootfs and no hold', async () => {
+  await using ctx = await setupAdd({ pauseMkfs: true });
+
+  const controller = new AbortController();
+
+  const failure = await ctx.withHostDocker(async () => {
+    const adding = readFailure(
+      ctx.addImages.addImage('busybox:1.37', 'box', { signal: controller.signal }),
+    );
+
+    await ctx.waitForMkfs();
+
+    controller.abort(new Error('the client went'));
+    ctx.startMkfs();
+
+    return adding;
+  });
+
+  const box = await findImageByName(ctx.db, 'box');
+  const status = await ctx.diskBudget.readStatus();
+  const imps = await listImps(ctx.db);
+
+  expect(String(failure)).toContain('the client went');
+  expect(box).toBeUndefined();
+  expect(ctx.listBuiltRootfs()).toEqual([]);
+  expect(status.pendingBytes).toBe(0);
+  expect(imps).toEqual([]);
+});
+
+test('a template that takes the name during an add leaves no new row and no rootfs', async () => {
+  const holder: { db?: Parameters<typeof createImage>[0] } = {};
+
+  await using ctx = await setupAdd({
+    onExport: async () => {
+      if (holder.db !== undefined) {
+        await createTemplateRow(holder.db, 'box');
+      }
+    },
+  });
+
+  holder.db = ctx.db;
+
+  const failure = await readFailure(
+    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
+  );
+
+  const box = await findImageByName(ctx.db, 'box');
+  const status = await ctx.diskBudget.readStatus();
+
+  expect(String(failure)).toContain('image box is a template');
+  expect(box).toMatchObject({ source: 'imp' });
+  expect(ctx.listBuiltRootfs()).toEqual([]);
+  expect(status.pendingBytes).toBe(0);
+});
+
+test("an add and a build of one digest at once: one row fails, the other's row and rootfs stay", async () => {
+  await using ctx = await setupAdd({ pauseMkfs: true });
+
+  // one PATH for both callers: each call's own would restore it as it ends
+  const [failure, built] = await ctx.withHostDocker(async () => {
+    const adding = readFailure(ctx.addImages.addImage('busybox:1.37', 'box'));
+    const building = ctx.runBuild('web');
+
+    // both exports are in, so both wait on the one mkfs.ext4
+    await ctx.waitForMkfs();
+
+    while (ctx.guest.runs.filter((run) => run.argv[1] === 'export' && run.closed).length < 2) {
+      await Bun.sleep(20);
+    }
+
+    await Bun.sleep(200);
+
+    await createTemplateRow(ctx.db, 'box');
+
+    ctx.startMkfs();
+
+    return Promise.all([adding, building]);
+  });
+
+  const status = await ctx.diskBudget.readStatus();
+
+  expect(String(failure)).toContain('image box is a template');
+  expect(built).toMatchObject({ name: 'web' });
+  expect(ctx.listBuiltRootfs()).toEqual([built.digest]);
+  expect(existsSync(buildImagePaths(ctx.dataDir, built.digest).rootfs)).toBe(true);
+  expect(status.pendingBytes).toBe(0);
+});
+
+// An add of `one`'s digest held between finding its rootfs and writing its
+// row while `imp image rm one` runs; `isRowFailing` makes that row fail too
+async function runRemoveDuringAdd(isRowFailing: boolean) {
+  const exports = { count: 0 };
+  const holder: { arm?: () => void } = {};
+
+  // the second add's export arms the gate, after its name check
+  const ctx = await setupAdd({
+    gatedName: 'box',
+    onExport: () => {
+      exports.count += 1;
+
+      if (exports.count === 2) {
+        holder.arm?.();
+      }
+
+      return Promise.resolve();
+    },
+  });
+
+  holder.arm = ctx.gate.arm;
+
+  const first = await ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'one'));
+
+  const end = await ctx.withHostDocker(async () => {
+    const adding = readFailure(ctx.addImages.addImage('busybox:1.37', 'box'));
+
+    await ctx.gate.reached;
+
+    await ctx.addImages.removeImage('one');
+
+    if (isRowFailing) {
+      await createTemplateRow(ctx.db, 'box');
+    }
+
+    ctx.gate.release();
+
+    return adding;
+  });
+
+  const rows = await listImages(ctx.db);
+
+  const hasRootfs = existsSync(buildImagePaths(ctx.dataDir, first.digest).rootfs);
+
+  await ctx[Symbol.asyncDispose]();
+
+  return {
+    end,
+    rows: rows
+      .filter((row) => ['one', 'box'].includes(row.name))
+      .map((row) => [row.name, row.digest]),
+    hasRootfs,
+    first,
+  };
+}
+
+test('an image rm while an add of its digest sits between its rootfs and its row keeps that rootfs', async () => {
+  const kept = await runRemoveDuringAdd(false);
+
+  expect(kept.end).toBeNull();
+  expect(kept.rows).toEqual([['box', kept.first.digest]]);
+  expect(kept.hasRootfs).toBe(true);
+});
+
+test("that rootfs goes after all when the add's row then fails", async () => {
+  const failed = await runRemoveDuringAdd(true);
+
+  expect(String(failed.end)).toContain('UNIQUE');
+  expect(failed.rows).toEqual([['box', `sha256:${'d'.repeat(64)}`]]);
+  expect(failed.hasRootfs).toBe(false);
+});
+
+test('a cleanup removal that fails is logged, and the add returns its own error', async () => {
+  const holder: { db?: Parameters<typeof createImage>[0] } = {};
+
+  await using ctx = await setupAdd({
+    isRemoveFailing: true,
+    onExport: async () => {
+      if (holder.db !== undefined) {
+        await createTemplateRow(holder.db, 'box');
+      }
+    },
+  });
+
+  holder.db = ctx.db;
+
+  const failure = await readFailure(
+    ctx.withHostDocker(() => ctx.addImages.addImage('busybox:1.37', 'box')),
+  );
+
+  expect(String(failure)).toContain('image box is a template');
+
+  expect(ctx.logs.join('\n')).toContain(
+    'impd: image box: could not remove the unused rootfs of imp-build-',
+  );
+
+  expect(ctx.logs.join('\n')).toContain('the disk is read-only');
 });

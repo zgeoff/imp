@@ -26,6 +26,7 @@ import type { ImageRecord } from '../db/images';
 import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
+import { createKeyedMutex } from '../imps/keyed-mutex';
 import { runChecked, runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
@@ -324,6 +325,13 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   // one build per docker image ID at a time
   const building = new Map<string, Promise<number>>();
 
+  // per guest digest, the writers whose row is not written yet, and whether
+  // one made its rootfs or a removal waits on them: the last to end removes
+  // it if no row took it, under a lock, so no new writer finds it as it goes
+  const guestWriters = new Map<string, number>();
+  const freshRootfs = new Set<string>();
+
+  const guestRootfsLock = createKeyedMutex();
   const docker = { env: deps.dockerEnv };
   const buildSlots = createBuildSlots();
 
@@ -462,7 +470,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
     const updated = await updateImage(deps.db, existing.id, { ref, digest, sizeBytes });
 
-    await removeUnusedRootfs(existing.digest);
+    await removeIdleRootfs(existing.digest);
 
     return updated;
   };
@@ -475,6 +483,20 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       await deps.storage.removeImage(digest);
     }
   };
+
+  // removeUnusedRootfs, but while a guest build of the digest counts, which
+  // may have found the rootfs and not yet written its row, the last such
+  // build decides
+  const removeIdleRootfs = (digest: string): Promise<void> =>
+    guestRootfsLock.runExclusive(digest, async () => {
+      if (guestWriters.has(digest)) {
+        freshRootfs.add(digest);
+
+        return;
+      }
+
+      await removeUnusedRootfs(digest);
+    });
 
   // An image of the host's engine, pulled there when it lacks it: the
   // builders' own image, and every add and build under
@@ -743,6 +765,64 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       runDockerBuild({ dockerHost: deps.config.dockerHost, tarPath, tag, dockerfile, signal }),
     );
 
+  const writeGuestRootfsAndRow = async (guest: Readonly<GuestRootfs>): Promise<ImageRecord> => {
+    const digest = guest.digest;
+    const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
+
+    await guestRootfsLock.runExclusive(digest, () => {
+      guestWriters.set(digest, (guestWriters.get(digest) ?? 0) + 1);
+
+      return Promise.resolve();
+    });
+
+    try {
+      guest.signal.throwIfAborted();
+
+      const sizeBytes = await createRootfsOnce(digest, () => {
+        if (existsSync(rootfs)) {
+          return Promise.resolve(readDiskUsage(rootfs));
+        }
+
+        // marked first: a write that fails after it published the rootfs, as
+        // a ZFS mount can, still leaves it to the cleanup below
+        freshRootfs.add(digest);
+
+        return writeRootfs(guest.root, digest, guest.config);
+      });
+
+      // a cancel during mkfs.ext4 commits nothing
+      guest.signal.throwIfAborted();
+
+      return await writeImageRow(guest.imageName, guest.ref, digest, sizeBytes);
+    } finally {
+      await guestRootfsLock.runExclusive(digest, async () => {
+        const left = (guestWriters.get(digest) ?? 1) - 1;
+
+        if (left > 0) {
+          guestWriters.set(digest, left);
+
+          return;
+        }
+
+        guestWriters.delete(digest);
+
+        if (!freshRootfs.delete(digest)) {
+          return;
+        }
+
+        // logged, so the error that ended the write or the row is the one
+        // its caller gets
+        try {
+          await removeUnusedRootfs(digest);
+        } catch (error) {
+          deps.log(
+            `impd: image ${guest.imageName}: could not remove the unused rootfs of ${digest}: ${readErrorMessage(error)}`,
+          );
+        }
+      });
+    }
+  };
+
   // the built image, streamed out of its builder into a rootfs and a row
   const writeGuestImage = (
     exec: GuestExec,
@@ -768,16 +848,14 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
             grow,
           );
 
-          const digest = exported.digest;
-          const rootfs = buildImagePaths(deps.config.dataDir, digest).rootfs;
-
-          const sizeBytes = await createRootfsOnce(digest, () =>
-            existsSync(rootfs)
-              ? Promise.resolve(readDiskUsage(rootfs))
-              : writeRootfs(root, digest, exported.config),
-          );
-
-          return await writeImageRow(imageName, ref, digest, sizeBytes);
+          return await writeGuestRootfsAndRow({
+            root,
+            digest: exported.digest,
+            config: exported.config,
+            imageName,
+            ref,
+            signal,
+          });
         } finally {
           rmSync(workDir.work, { recursive: true, force: true });
         }
@@ -1035,7 +1113,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
 
       await storageGate.join(async () => {
         await removeImage(deps.db, image.id);
-        await removeUnusedRootfs(image.digest);
+        await removeIdleRootfs(image.digest);
       });
     },
     resolveImage,
@@ -1097,6 +1175,16 @@ function assertImageRef(ref: string): void {
       message: `invalid image reference ${JSON.stringify(ref)}`,
     });
   }
+}
+
+// a builder's export, unpacked at root, on its way to a rootfs and a row
+interface GuestRootfs {
+  readonly root: string;
+  readonly digest: string;
+  readonly config: unknown;
+  readonly imageName: string;
+  readonly ref: string;
+  readonly signal: AbortSignal;
 }
 
 interface RootfsPlan {
