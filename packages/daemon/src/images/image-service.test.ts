@@ -8,7 +8,8 @@ import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
 import { checkBuildQuery } from '../docker-proxy/rules';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
-import { createImageService, normalizeDockerfilePath, planRootfs } from './image-service';
+import { createImageService, normalizeDockerfilePath } from './image-service';
+import { planRootfs, planRootfsOverhead } from './rootfs-plan';
 
 // These all fail before any docker command runs, so no docker is needed.
 test('it refuses refs and build contexts that docker could read as flags', async () => {
@@ -151,6 +152,17 @@ test('a rootfs is its tree plus room to spare, in whole GiB, at least 4 GiB', ()
 
   // node_modules: many small files need more inodes than 16 KiB each gives
   expect(planRootfs({ bytes: GIB, inodes: 400_000 })).toEqual({ bytes: 4 * GIB, inodes: 800_000 });
+});
+
+// mkfs.ext4's journal is 64 MiB below 16 GiB, then 1/128 of the filesystem
+test("a build holds the rootfs's own blocks: at least 128 MiB, else 1/64 of the rootfs", () => {
+  const GIB = 1024 ** 3;
+
+  expect(planRootfsOverhead(0)).toBe(128 * 1024 ** 2);
+
+  // the default image cap, 8 GiB, plans a 12 GiB rootfs
+  expect(planRootfsOverhead(8 * GIB)).toBe(192 * 1024 ** 2);
+  expect(planRootfsOverhead(100 * GIB)).toBe((122 * GIB) / 64);
 });
 
 test('a build context on the impd host with no Dockerfile is the client’s mistake', async () => {

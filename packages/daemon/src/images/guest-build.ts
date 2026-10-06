@@ -5,6 +5,7 @@ import { DockerBuildError } from './docker-build';
 import type { GuestExec } from './guest-exec';
 import { ImageLimitError } from './image-limit-error';
 import { PIN_INSPECT_FORMAT, PinInspectSchema, formatPlatform, pickRepoDigest } from './image-pin';
+import { planRootfsOverhead } from './rootfs-plan';
 import { UNPACK_TAR_ARGS, assertUnpacked } from './unpack-export';
 
 // the tag of the one image a builder makes
@@ -271,9 +272,11 @@ export async function writeGuestTree(
   const held = { bytes: 0 };
 
   // twice the larger of the archive and the disk its entries take: the tree,
-  // then its ext4 file; in steps, ahead of what tar has listed
+  // then its ext4 file, with the ext4 file's journal; in steps, ahead of what
+  // tar has listed
   const growHold = async () => {
-    const needed = 2 * Math.max(sent.bytes, listed.bytes);
+    const tree = Math.max(sent.bytes, listed.bytes);
+    const needed = 2 * tree + planRootfsOverhead(tree);
 
     if (needed > held.bytes) {
       held.bytes = (Math.floor(needed / GROW_STEP_BYTES) + 1) * GROW_STEP_BYTES;
