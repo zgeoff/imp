@@ -1,5 +1,5 @@
-# imp coder image: images/base plus Claude Code, for running a coding agent
-# in an imp. Each release publishes it as ghcr.io/zgeoff/imp-coder:X.Y.Z, so a
+# imp coder image: images/base plus Claude Code and the GitHub CLI, for running
+# a coding agent in an imp. Each release publishes it as ghcr.io/zgeoff/imp-coder:X.Y.Z, so a
 # host adds it with `imp image add` and builds nothing.
 #   docker build -t imp/coder images/coder
 # The published images/base, pinned by digest. A bump to a newer base is a
@@ -30,3 +30,22 @@ RUN curl -fsSL -o /usr/local/bin/claude \
 # no background update and no `claude update`, which would install another
 # version under ~/.local.
 ENV DISABLE_UPDATES=1
+
+# The GitHub CLI's linux amd64 release, at an exact version, so an agent can
+# open a pull request. A granted github secret gives it GH_TOKEN, a
+# placeholder the broker swaps for the token (docs/guides/connectors.md).
+# The sum comes from the release's gh_<version>_checksums.txt; check the
+# tarball's build provenance before a bump, which is a reviewed change:
+#   gh release download v$VERSION -R cli/cli -p "gh_${VERSION}_linux_amd64.tar.gz"
+#   gh attestation verify "gh_${VERSION}_linux_amd64.tar.gz" --repo cli/cli
+#   sha256sum "gh_${VERSION}_linux_amd64.tar.gz"
+# host/check-coder-image.sh checks the image against the version.
+ARG GH_VERSION=2.101.0
+ARG GH_SHA256=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
+
+RUN curl -fsSL -o /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+ && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp \
+ && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
