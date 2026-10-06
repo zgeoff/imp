@@ -46,6 +46,7 @@ test('it serves system.info from config and the database', async () => {
       sessionOffsets: true,
       leases: true,
       grantableTokens: true,
+      tokenUpdate: true,
       secretRebind: true,
       databaseCopy: true,
       imageBuildStream: true,

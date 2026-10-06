@@ -8,6 +8,7 @@ const FEATURES = {
   databaseCopy: 'is older than 0.30.0',
   execRequire: 'is older than 0.30.0',
   sessionLog: 'has no session logs',
+  tokenUpdate: 'is older than 0.34.0',
 } as const;
 
 type Feature = keyof typeof FEATURES;
