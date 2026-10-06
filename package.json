@@ -108,7 +108,8 @@
     "zod": "catalog:"
   },
   "overrides": {
-    "@types/node": "26.6.2"
+    "@types/node": "26.6.2",
+    "source-map-js": "1.2.2"
   },
   "packageManager": "bun@1.4.2",
   "patchedDependencies": {
