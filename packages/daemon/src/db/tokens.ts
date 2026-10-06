@@ -75,14 +75,14 @@ export async function writeTokenRecord(
   });
 }
 
-// A new grantable list, and the end of the grants of each secret left off
-// on the token's imps, whoever made them, as a rebind drops them. Returns
-// how many it dropped; null for no such token.
+// The list `read` builds in the write, so its generations are one snapshot,
+// and the end of each left-off secret's grants on the token's imps, whoever
+// made them, as a rebind drops them. Null for no such token.
 export function updateTokenGrantable(
   db: ImpDatabase,
   id: string,
-  grantable: readonly GrantableSecret[],
-): Promise<number | null> {
+  read: (trx: ImpDatabase) => Promise<GrantableSecret[]>,
+): Promise<{ grantable: GrantableSecret[]; dropped: number } | null> {
   return db.transaction().execute(async (trx) => {
     const row = await trx
       .selectFrom('tokens')
@@ -93,6 +93,8 @@ export function updateTokenGrantable(
     if (row === undefined) {
       return null;
     }
+
+    const grantable = await read(trx);
 
     await trx
       .updateTable('tokens')
@@ -111,7 +113,7 @@ export function updateTokenGrantable(
 
     // a host-wide token holds no list, so it has nothing to drop
     if (removed.length === 0 || patterns === null) {
-      return 0;
+      return { grantable, dropped: 0 };
     }
 
     const rows = await trx.selectFrom('imps').select(['id', 'name']).execute();
@@ -119,7 +121,7 @@ export function updateTokenGrantable(
     const impIds = rows.filter((imp) => isImpAllowed(patterns, imp.name)).map((imp) => imp.id);
 
     if (impIds.length === 0) {
-      return 0;
+      return { grantable, dropped: 0 };
     }
 
     const dropped = await trx
@@ -128,7 +130,7 @@ export function updateTokenGrantable(
       .where('imp_id', 'in', impIds)
       .executeTakeFirst();
 
-    return Number(dropped.numDeletedRows);
+    return { grantable, dropped: Number(dropped.numDeletedRows) };
   });
 }
 

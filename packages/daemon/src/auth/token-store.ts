@@ -259,21 +259,22 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
     updateGrantable: async (name, names) => {
       const record = requireByName(name);
 
-      const grantable = await readGrantable(deps.db, names, record);
-      const dropped = await updateTokenGrantable(deps.db, record.id, grantable);
+      const written = await updateTokenGrantable(deps.db, record.id, (trx) =>
+        readGrantable(trx, names, record),
+      );
 
-      // removed since the read above
-      if (dropped === null) {
+      // removed since requireByName
+      if (written === null) {
         throw buildNotFoundError('token', name);
       }
 
       // a new record, not an edit: a caller built from the old one keeps
       // its view, and every request builds its caller again from this one
-      const updated: TokenRecord = { ...record, grantable };
+      const updated: TokenRecord = { ...record, grantable: written.grantable };
 
       byId.set(record.id, updated);
 
-      return { token: toFullToken(updated), droppedGrants: dropped };
+      return { token: toFullToken(updated), droppedGrants: written.dropped };
     },
     remove: async (name) => {
       const record = requireByName(name);
