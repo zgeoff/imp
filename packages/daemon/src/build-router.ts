@@ -879,6 +879,21 @@ export function buildRouter(deps: RouterDeps) {
           grantable: context.input.grantable ?? [],
         }),
       ),
+
+      // a secret taken off the list ends its grants on the token's imps, so
+      // the broker drops what no grant covers any more
+      update: os.tokens.update.handler(async (context) => {
+        const updated = await deps.tokens.updateGrantable(
+          context.input.name,
+          context.input.grantable,
+        );
+
+        if (updated.droppedGrants > 0) {
+          await deps.broker.applyGrants();
+        }
+
+        return updated.token;
+      }),
       delete: os.tokens.delete.handler(async (context) => {
         await deps.tokens.remove(context.input.name);
 
@@ -903,6 +918,7 @@ const SYSTEM_FEATURES = {
   sessionOffsets: true,
   leases: true,
   grantableTokens: true,
+  tokenUpdate: true,
   secretRebind: true,
   databaseCopy: true,
   imageBuildStream: true,

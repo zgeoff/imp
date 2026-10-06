@@ -28,7 +28,7 @@
     },
     "packages/api": {
       "name": "@imp/api",
-      "version": "0.32.0",
+      "version": "0.34.0",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -37,7 +37,7 @@
     },
     "packages/cli": {
       "name": "@imp/cli",
-      "version": "0.32.0",
+      "version": "0.34.0",
       "bin": {
         "imp": "src/main.ts",
       },
@@ -54,7 +54,7 @@
     },
     "packages/client": {
       "name": "@zgeoff/imp-client",
-      "version": "0.32.0",
+      "version": "0.34.0",
       "dependencies": {
         "@orpc/client": "catalog:",
         "@orpc/contract": "catalog:",
@@ -75,7 +75,7 @@
     },
     "packages/daemon": {
       "name": "@imp/daemon",
-      "version": "0.32.0",
+      "version": "0.34.0",
       "dependencies": {
         "@imp/api": "workspace:*",
         "@imp/local-tar": "workspace:*",
@@ -158,6 +158,7 @@
   },
   "overrides": {
     "@types/node": "26.6.2",
+    "source-map-js": "1.2.2",
   },
   "catalog": {
     "@ark-ui/react": "5.37.2",
@@ -1411,7 +1412,7 @@
 
     "smol-toml": ["smol-toml@1.9.0", "", {}, "sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ=="],
 
-    "source-map-js": ["source-map-js@1.2.1", "", {}, "sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA=="],
+    "source-map-js": ["source-map-js@1.2.2", "", {}, "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw=="],
 
     "ssh2": ["ssh2@1.17.0", "", { "dependencies": { "asn1": "^0.2.6", "bcrypt-pbkdf": "^1.0.2" }, "optionalDependencies": { "cpu-features": "~0.0.10", "nan": "^2.23.0" } }, "sha512-wPldCk3asibAjQ/kziWQQt1Wh3PgDFpC0XpwclzKcdT1vql6KeYxf5LIt4nlFkUeR8WuphYMKqUA56X4rjbfgQ=="],
 

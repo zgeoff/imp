@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { REFUSED_RANGES } from '../broker/tunnel-target';
 import { createRangeChecker } from './range-checker';
-import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6 } from './ranges6';
+import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, RESERVED_RANGES6 } from './ranges6';
 
 // The IANA special-purpose registries (iana-ipv4-special-registry and
 // iana-ipv6-special-registry, 2025-10-09): every block not globally
@@ -63,4 +63,46 @@ test("2001::/23's globally reachable anycast services stay reachable", () => {
 
   expect(isRefused('2606:4700:4700::1111')).toBeFalse();
   expect(isRefused('93.184.215.14')).toBeFalse();
+});
+
+test('a public imp is refused the rest of 2001::/23, and keeps its global blocks', () => {
+  const isPublicRefused = createRangeChecker(
+    [],
+    [...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6, ...RESERVED_RANGES6],
+  );
+
+  const refused = [
+    '2001::',
+    '2001:1::1',
+    '2001:1:ffff::1',
+    '2001:2:1::1',
+    '2001:4::1',
+    '2001:4:111::1',
+  ];
+
+  const reserved = [
+    '2001:4:113::',
+    '2001:5::1',
+    '2001:6::1',
+    '2001:8::1',
+    '2001:40::1',
+    '2001:1ff::1',
+  ];
+
+  for (const address of [...refused, ...reserved, '2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff']) {
+    expect({ address, refused: isPublicRefused(address) }).toEqual({ address, refused: true });
+  }
+
+  const global = [
+    '2001:3::1',
+    '2001:4:112::1',
+    '2001:20::1',
+    '2001:2f:ffff::1',
+    '2001:30::1',
+    '2001:3f::1',
+  ];
+
+  for (const address of [...global, '2001:200::1', '2606:4700:4700::1111']) {
+    expect({ address, refused: isPublicRefused(address) }).toEqual({ address, refused: false });
+  }
 });

@@ -441,6 +441,22 @@ export function createFakeImpd(): FakeImpd {
 
         return { token, secret: `imp_fake.${context.input.name}-secret` };
       }),
+      update: os.tokens.update.handler((context) => {
+        registerCall('tokens.update', context.input);
+
+        const index = fake.tokens.findIndex((token) => token.name === context.input.name);
+        const found = fake.tokens[index];
+
+        if (found === undefined) {
+          throw new ORPCError('NOT_FOUND', { message: `no token ${context.input.name}` });
+        }
+
+        const token: Token = { ...found, grantable: context.input.grantable };
+
+        fake.tokens[index] = token;
+
+        return token;
+      }),
       delete: os.tokens.delete.handler((context) => {
         registerCall('tokens.delete', context.input);
 

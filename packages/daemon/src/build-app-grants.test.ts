@@ -996,3 +996,24 @@ test('a token removed after the access check copies no grant', async () => {
   expect(outcome).toEqual({ kind: 'no-token' });
   expect(grants).toEqual([]);
 });
+
+test('a secret taken off the list after the access check copies nothing of it', async () => {
+  await using ctx = await setupListedFork();
+
+  // the update drops gh from dev-a; the root token grants it again
+  await ctx.client.tokens.update({ name: 'agent', grantable: ['npm'] });
+  await ctx.client.grants.add({ name: 'dev-a', secret: 'gh' });
+
+  const outcome = await ctx.runCopy();
+  const grants = await ctx.client.grants.list({ name: 'dev-b' });
+
+  expect(outcome).toEqual({
+    kind: 'copied',
+    notCopied: [
+      { secret: 'gh', reason: 'not-grantable' },
+      { secret: 'npm', reason: 'not-grantable' },
+    ],
+  });
+
+  expect(grants).toEqual([]);
+});

@@ -10,7 +10,7 @@ imp bits and no init system: the guest kernel boots `imp-agent` from the read-on
 | Image                           | What it is                                                               |
 | ------------------------------- | ------------------------------------------------------------------------ |
 | `base/` → `imp/base`            | Ubuntu 24.04, Docker engine (dockerd supervised by the agent), git, curl |
-| `coder/` → `imp/coder`          | the published base + Claude Code at a pinned version, no Node            |
+| `coder/` → `imp/coder`          | the published base + Claude Code and gh at pinned versions, no Node      |
 | `dev/` → `imp/dev`              | the published base + Node LTS, Bun, Go, Python 3 + pip + uv, Claude Code |
 | `examples/hello/` → `imp/hello` | the published base + a tiny HTTP service on :8080 (bring-your-own)       |
 
@@ -46,6 +46,12 @@ release: the FROM line is a literal digest, since a build of the same release's 
 until it is pushed. Bumping the base or Claude Code is a reviewed change; the Dockerfile comment
 gives the steps to check a new Claude Code version.
 
+The image also holds the GitHub CLI, `gh`, in `/usr/local/bin/gh`, at the exact version its
+Dockerfile pins and checked against the sum from the release's checksums file. An agent uses it to
+open pull requests. Grant the imp a `github` secret and `gh` works with no sign-in: impd sets
+`GH_TOKEN` to a placeholder, and the broker adds the token
+([credential connectors](./connectors.md)).
+
 ## Add an image
 
 `imp image add <ref> [--name <name>]` makes an image from a public registry reference. By default
@@ -73,7 +79,7 @@ an add too.
 
 An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
 way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
-engine, as before 0.33.0, for one release only, with the credentials in impd's Docker config. impd
+engine, as before 0.35.0, for one release only, with the credentials in impd's Docker config. impd
 logs a warning at start and at every such add.
 
 ## Build an image
@@ -273,7 +279,7 @@ What a build costs on top of a host build: about 1.5 s for the builder and its d
 pulls, which start cold in every builder (about 7.5 s for `busybox` and the frontend on a home
 link). impd logs each build's phases as `pins=… build=… image=…`.
 
-`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.33.0, for one release only: impd
+`IMP_BUILD_ISOLATION=host` builds on the host's engine, as before 0.35.0, for one release only: impd
 logs a warning at start and at every build. Use it only when every caller with `manage` is trusted
 with the host (the caution above).
 

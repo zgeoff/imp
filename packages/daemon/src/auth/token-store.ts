@@ -10,6 +10,7 @@ import {
   listTokenSshKeyRecords,
   removeTokenRecord,
   removeTokenSshKeyRecord,
+  updateTokenGrantable,
   writeTokenRecord,
   writeTokenSshKeyRecord,
 } from '../db/tokens';
@@ -62,6 +63,14 @@ export interface TokenStore {
   // a grantable list without manage and imps; NOT_FOUND for a name no
   // secret has.
   readonly create: (token: Readonly<NewToken>) => Promise<{ token: Token; secret: string }>;
+
+  // a new grantable list at each secret's generation now; the secret hash
+  // stays. Ends the grants of a secret left off on the token's imps.
+  // NOT_FOUND for the token or a secret; BAD_REQUEST as create.
+  readonly updateGrantable: (
+    name: string,
+    grantable: readonly string[],
+  ) => Promise<{ token: Token; droppedGrants: number }>;
 
   // NOT_FOUND for an unknown name; CONFLICT while authorized_keys lists one
   // of its keys; calls onRemove with the token's id and its grants' ids
@@ -221,7 +230,7 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       const secret = randomBytes(32).toString('base64url');
       const entries = buildKeyEntries(token.sshKeys ?? [], (line) => buildKeyEntry(id, line));
 
-      const grantable = await readGrantable(deps.db, token);
+      const grantable = await readGrantable(deps.db, token.grantable ?? [], token);
 
       const record: TokenRecord = {
         id,
@@ -246,6 +255,26 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
       }
 
       return { token: toFullToken(record), secret: `${SECRET_PREFIX}${id}.${secret}` };
+    },
+    updateGrantable: async (name, names) => {
+      const record = requireByName(name);
+
+      const written = await updateTokenGrantable(deps.db, record.id, (trx) =>
+        readGrantable(trx, names, record),
+      );
+
+      // removed since requireByName
+      if (written === null) {
+        throw buildNotFoundError('token', name);
+      }
+
+      // a new record, not an edit: a caller built from the old one keeps
+      // its view, and every request builds its caller again from this one
+      const updated: TokenRecord = { ...record, grantable: written.grantable };
+
+      byId.set(record.id, updated);
+
+      return { token: toFullToken(updated), droppedGrants: written.dropped };
     },
     remove: async (name) => {
       const record = requireByName(name);
@@ -342,10 +371,9 @@ export async function loadTokenStore(deps: Readonly<TokenStoreDeps>): Promise<To
 // some imps takes a list: a host-wide one grants anything already.
 async function readGrantable(
   db: ImpDatabase,
-  token: Readonly<NewToken>,
+  names: readonly string[],
+  token: Readonly<Pick<NewToken, 'scope' | 'imps'>>,
 ): Promise<GrantableSecret[]> {
-  const names = token.grantable ?? [];
-
   if (names.length === 0) {
     return [];
   }

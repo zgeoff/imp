@@ -63,7 +63,8 @@ console.log(result.code, new TextDecoder().decode(result.stdout));
 
 `imp.openExec` streams instead. `stdout` and `stderr` are `ReadableStream`s that end with the
 session. `write` takes a string or bytes and waits while the socket's buffer is full, so a writer in
-a loop keeps to the network's pace.
+a loop keeps to the network's pace. It sends a large write in frames of at most 1 MiB: impd closes a
+socket that sends one frame over 16 MiB.
 
 Read or cancel both streams. Output nobody reads waits in memory, and past 8 MiB on one stream
 (`maxUnreadBytes`) the session ends with `OUTPUT_OVERFLOW`. Cancelling both streams ends the session
@@ -144,7 +145,8 @@ boot ended, or the output of an exec without `session`. Keep what you received i
 
 With a tty, `sendSignal('SIGINT')` and `sendSignal('SIGQUIT')` send ^C and ^\ as keys, so they reach
 the foreground job; other signals, and every signal without a tty, go to the process. A write after
-the session ended rejects with `CLOSED`.
+the session ended rejects with the error that ended it, such as `CONNECTION_CLOSED` or `RESTARTING`,
+or with `CLOSED` after an exit or a `close`. `closeStdin` after the session ended does nothing.
 
 The socket authenticates with a single-use exec ticket from `exec.ticket`, so the token never goes
 in a URL; a browser behind a proxy that adds the token works the same way.

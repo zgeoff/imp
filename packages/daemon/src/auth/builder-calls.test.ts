@@ -19,6 +19,7 @@ const NOT_AN_IMP_CALLS = new Set([
   'networks.create',
   'networks.delete',
   'tokens.create',
+  'tokens.update',
   'tokens.delete',
   'tokens.addKey',
   'tokens.removeKey',
