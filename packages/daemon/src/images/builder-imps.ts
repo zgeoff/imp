@@ -36,7 +36,7 @@ export interface BuildersDeps {
   readonly imps: Pick<ImpService, 'createImp' | 'destroyImpId' | 'openBuilderExec'>;
 
   // adds IMP_BUILD_IMAGE as BUILDER_IMAGE, when it is not that already
-  readonly ensureImage: () => Promise<void>;
+  readonly ensureImage: (signal: AbortSignal) => Promise<void>;
   readonly log: (message: string) => void;
 
   // REMOVE_RETRY_MS, but for tests
@@ -129,7 +129,7 @@ export function createBuilders(deps: BuildersDeps): Builders {
 
   return {
     withBuilder: async (signal, run) => {
-      await deps.ensureImage();
+      await deps.ensureImage(signal);
 
       signal.throwIfAborted();
 
