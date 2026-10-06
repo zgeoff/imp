@@ -154,7 +154,7 @@ start_proxy() {
   for var in IMP_BUILD_CONTEXT_MAX_MIB IMP_BUILD_ISOLATION IMP_BUILD_IMAGE; do
     value=${!var:-}
     if [ -z "$value" ] && [ -f "$IMP_ROOT/.env" ]; then
-      value=$(sed -n "s/^$var=//p" "$IMP_ROOT/.env" | tail -n 1)
+      value=$(sed -n "s/^$var=//p" "$IMP_ROOT/.env" | tail -n 1 | tr -d '\r')
     fi
     [ -n "$value" ] && context+=(-e "$var=$value")
   done
