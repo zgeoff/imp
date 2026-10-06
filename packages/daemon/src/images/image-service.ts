@@ -952,10 +952,13 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     resolveImage,
     findDefaultImage,
     ensureBuilderImage: loadBuilderImage,
+
+    // impd's builder image does not count: a seed that failed after the
+    // builder image landed tries again at the next start
     seedDefaultImage: async () => {
       const images = await listImages(deps.db);
 
-      if (images.length === 0) {
+      if (images.every((image) => image.name === BUILDER_IMAGE)) {
         await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE, true, {
           signal: new AbortController().signal,
         });

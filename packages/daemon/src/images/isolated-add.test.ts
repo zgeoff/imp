@@ -499,6 +499,18 @@ test('the first-start seed goes through a builder too', async () => {
   expect(commands).toContain('pull --quiet --platform linux/amd64 ubuntu:24.04');
 });
 
+test('a seed that failed after the builder image landed seeds at the next start', async () => {
+  await using ctx = await setupAdd();
+
+  await ctx.db.deleteFrom('images').where('name', '=', 'base').execute();
+  await ctx.createTestImage(BUILDER_IMAGE);
+  await ctx.withHostDocker(() => ctx.addImages.seedDefaultImage());
+
+  const seeded = await findImageByName(ctx.db, 'ubuntu');
+
+  expect(seeded).toMatchObject({ ref: 'ubuntu:24.04' });
+});
+
 test('IMP_BUILD_ISOLATION=host adds on the host engine, as before, with a warning and no builder', async () => {
   await using ctx = await setupAdd({ env: { IMP_BUILD_ISOLATION: 'host' } });
 
