@@ -52,6 +52,36 @@ open pull requests. Grant the imp a `github` secret and `gh` works with no sign-
 `GH_TOKEN` to a placeholder, and the broker adds the token
 ([credential connectors](./connectors.md)).
 
+## Add an image
+
+`imp image add <ref> [--name <name>]` makes an image from a public registry reference. By default
+(`IMP_BUILD_ISOLATION=imp`) impd does it in a builder imp, as it does a build, and the host's Docker
+engine never has the image:
+
+1. impd creates a builder imp, as step 2 of an [isolated build](#isolated-builds) does. The governor
+   and the disk budget admit it as any imp; a refusal fails the add and never falls back to the
+   host.
+2. The builder's dockerd pulls the reference for the builder's platform (`linux/amd64` on an x86
+   host), under the `public` egress policy. A reference with no tag and no digest means `:latest`,
+   and impd writes it out. The builder holds no registry credentials, so a private image does not
+   pull. Before any builder boots, impd refuses a registry named `localhost` or by an IP address,
+   which needs no resolver to reach the host. A registry name that resolves to a private address
+   fails in the builder's resolver; one that resolves to the host's public address meets the
+   `public` policy's deny list, which `IMP_HOST_ADDRESSES` fills
+   ([public](../architecture/networking.md#public)).
+3. impd streams `docker export` out of the builder into the host's `tar` unpack, with every limit of
+   an isolated build's step 5, and computes the image's `imp-build-` digest as a build does.
+4. impd destroys the builder, on success, failure or a client that goes.
+
+An add costs a builder boot and a cold pull, about 6 to 10 s for a small image. impd logs each add
+as `pull=… image=…`, with the platform and the registry's digest. The first-start `ubuntu` seed is
+an add too.
+
+An image that only the host's Docker has, such as one from a plain `docker build`, does not add this
+way: build it with `imp image build` instead. `IMP_BUILD_ISOLATION=host` adds from the host's Docker
+engine, as before 0.36.0, for one release only, with the credentials in impd's Docker config. impd
+logs a warning at start and at every such add.
+
 ## Build an image
 
 `imp image build <dir> --name <name>` packs the directory on the machine that runs the CLI and
@@ -125,11 +155,11 @@ digest as `images/dev` names it, works on both.
 - **Images the build names.** Before the build, impd pulls each image that a `FROM`, a `COPY --from`
   or a `RUN --mount=from=` names and the engine that builds does not have yet. In a builder that is
   a cold pull with no credentials. A host build has no session, so BuildKit cannot ask for
-  credentials there; impd pulls as `imp image add` does, with the credentials in impd's Docker
-  config. It skips `scratch` and the Dockerfile's own stages. impd inspects each image once, for the
-  engine's platform, and refuses an image the host has for another platform, and any image the build
-  names whose config holds `ONBUILD` triggers: the frontend runs the triggers of a `COPY --from` or
-  a `RUN --mount=from=` image too, in this build.
+  credentials there; impd pulls as a host `imp image add` does, with the credentials in impd's
+  Docker config. It skips `scratch` and the Dockerfile's own stages. impd inspects each image once,
+  for the engine's platform, and refuses an image the host has for another platform, and any image
+  the build names whose config holds `ONBUILD` triggers: the frontend runs the triggers of a
+  `COPY --from` or a `RUN --mount=from=` image too, in this build.
 - **The digest the build uses.** The Dockerfile the engine gets names each of those images by the
   registry digest of the image impd inspected: `FROM busybox:1.37` becomes `FROM busybox@sha256:…`,
   so a tag that moves in the registry after the pull does not change the build. impd picks the
@@ -192,9 +222,10 @@ Isolated builds, the default, close this ([isolated builds](#isolated-builds)).
 absolute and must exist where impd runs; `scripts/dev.sh` mounts the repo at its own path for this.
 impd packs the directory as the CLI would, `.dockerignore` included, into `<IMP_DATA_DIR>/uploads`,
 and refuses a context over `IMP_BUILD_CONTEXT_MAX_MIB` before it sends it. An image you built with
-plain `docker build` goes in with `imp image add <ref>`. `images/dev` and `images/examples/hello`
-start FROM the published base by digest; to stack them on another base, edit that FROM line. An
-imp's own disk can be an image too: a [template](./templates.md) copies a set-up imp into new ones.
+plain `docker build` goes in with `imp image add <ref>` only under `IMP_BUILD_ISOLATION=host`
+([add an image](#add-an-image)). `images/dev` and `images/examples/hello` start FROM the published
+base by digest; to stack them on another base, edit that FROM line. An imp's own disk can be an
+image too: a [template](./templates.md) copies a set-up imp into new ones.
 
 ## Isolated builds
 
@@ -213,10 +244,10 @@ A build goes:
 
 1. impd checks the context and the Dockerfile on the host (the guard).
 2. It creates a builder imp, `imp-build-<8 letters>`, from the image `imp-builder`
-   (`IMP_BUILD_IMAGE`, the published `imp-base` by digest, which impd adds on the first build), with
-   `IMP_BUILD_MEMORY_MIB` (2048) of memory and `IMP_BUILD_DISK_GIB` (20) of disk. The governor and
-   the disk budget admit it as any imp; a refusal fails the build and never falls back to the host.
-   Where nft cannot hold the `public` policy, a build fails with `PRECONDITION_FAILED`.
+   (`IMP_BUILD_IMAGE`, the published `imp-base` by digest, which impd adds on the first add or
+   build), with `IMP_BUILD_MEMORY_MIB` (2048) of memory and `IMP_BUILD_DISK_GIB` (20) of disk. The
+   governor and the disk budget admit it as any imp; a refusal fails the build and never falls back
+   to the host. Where nft cannot hold the `public` policy, a build fails with `PRECONDITION_FAILED`.
 3. It waits for the builder's dockerd (60 s at most), then pulls and pins each image the Dockerfile
    names on the builder's engine, as the host does for a host build. The builder holds no registry
    credentials, so a private image does not pull, and a registry name that resolves to a private

@@ -10,8 +10,11 @@ import type { ImageService } from './image-service';
 type ImageOverrides = Partial<Pick<ImageService, 'addImage' | 'buildImage'>>;
 
 // impd in-process, with these in place of the image service's own
-async function setupTest(overrides: ImageOverrides = {}) {
-  const harness = await setupImpTest();
+async function setupTest(
+  overrides: ImageOverrides = {},
+  env: Readonly<Record<string, string>> = {},
+) {
+  const harness = await setupImpTest({ env });
 
   const images = { ...harness.images, ...overrides };
 
@@ -98,6 +101,30 @@ test('images.addStream yields its phases, then the image, and audits the outcome
   const outcomes = await ctx.readOutcomes('images.addStream', 1);
 
   expect(outcomes).toEqual([{ outcome: 'ok', imp: null }]);
+});
+
+test("a streamed add's audit row keeps the reference its pull resolved", async () => {
+  const pulled = `busybox@sha256:${'b'.repeat(64)}`;
+
+  await using ctx = await setupTest({
+    addImage: (ref, name, options) => {
+      options?.onResolved?.(pulled);
+
+      return ctx.makeImage(name ?? ref);
+    },
+  });
+
+  const stream = await ctx.client.images.addStream({ ref: 'busybox', name: 'box' });
+
+  await collectEvents(stream);
+
+  await ctx.readOutcomes('images.addStream', 1);
+
+  const rows = await listApiCalls(ctx.harness.db, null, 10, null);
+
+  const adds = rows.filter((row) => row.procedure === 'images.addStream');
+
+  expect(adds.map((row) => row.detail)).toEqual([pulled]);
 });
 
 test('a template streams its copy and is audited with its imp', async () => {
@@ -215,8 +242,8 @@ test('images.buildStream packs, then builds; a client that goes stops the build'
   expect(outcomes[0]?.outcome).not.toBe('ok');
 });
 
-test('a client that goes stops the pull of an add', async () => {
-  await using ctx = await setupTest();
+test('a client that goes stops the pull of an add on the host', async () => {
+  await using ctx = await setupTest({}, { IMP_BUILD_ISOLATION: 'host' });
 
   // a docker whose inspect finds nothing and whose pull hangs until killed
   const bin = join(ctx.harness.config.dataDir, 'fake-bin');

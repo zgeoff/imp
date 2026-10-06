@@ -223,9 +223,19 @@ through the calls impd and its CLI make, and refuses every other with a 403 and 
   the proxy as direct, and the proxy stays near 43 MB of memory.
 - **The container:** the same image, as uid and gid 65534 plus the group of the host's socket, with
   `--cap-drop ALL`, `no-new-privileges`, a read-only root and `--network none`. It gets
-  `IMP_HOST_IMAGE` and `IMP_BUILD_CONTEXT_MAX_MIB` by name, never the env file and its Tailscale
-  key. `/run/imp-docker` (0700) belongs to 65534; imp-host's root reaches the 0600 socket through
-  `DAC_OVERRIDE`. If the socket's group does not let the proxy in, its unit fails to start.
+  `IMP_HOST_IMAGE`, `IMP_BUILD_CONTEXT_MAX_MIB`, `IMP_BUILD_ISOLATION` and `IMP_BUILD_IMAGE` by
+  name, never the env file and its Tailscale key. Compose passes the last three from the shell or
+  `.env`, not the env file, so set a changed value there too: a proxy locked to another image
+  refuses impd's pull of its builder image with a 403. `/run/imp-docker` (0700) belongs to 65534;
+  imp-host's root reaches the 0600 socket through `DAC_OVERRIDE`. If the socket's group does not let
+  the proxy in, its unit fails to start.
+- **The isolation lock:** under the default `IMP_BUILD_ISOLATION=imp`, impd adds images and builds
+  in builder imps ([add an image](../guides/images.md#add-an-image)), and its one pull on the host's
+  engine is its builder image, by digest, when the engine lacks it on the first add or build on a
+  new host or after an `IMP_BUILD_IMAGE` change. The proxy refuses every other pull and every
+  `POST /build`, so the engine gets no image impd did not name. A container create from any image
+  but `IMP_BUILD_IMAGE` by its digest is refused too, so no create reaches a pull. Under
+  `IMP_BUILD_ISOLATION=host` a pull and a build meet only the rules in the table.
 - **Units:** `imp-host.service` has `Wants=` and `After=` on the proxy, not `BindsTo=`. A proxy that
   stops fails image work only; running imps keep running. The proxy unit waits up to 30 s for its
   socket and restarts always. Compose has a healthcheck and `depends_on`; the NixOS module loads the
@@ -255,10 +265,11 @@ What stays open through the proxy, by design or until later work:
   image a digest under its own name; Docker 29.7 then asks the registry for it and fails the build.
 - The engine applies no ignore file to an uploaded context, so `.dockerignore` does not hide a file
   from `COPY .` in an upload.
-- The pull rule reads the registry's name, not its address, so a pull from a name that resolves into
-  `127.0.0.0/8` or another private range reaches a registry on the host's loopback or network. The
-  engine speaks HTTPS to such a name: Docker 29.7.2 with the containerd image store refuses a
-  plain-HTTP answer, so the registry needs a certificate the engine trusts.
+- Under `IMP_BUILD_ISOLATION=host` only, the pull rule reads the registry's name, not its address,
+  so a pull from a name that resolves into `127.0.0.0/8` or another private range reaches a registry
+  on the host's loopback or network. The engine speaks HTTPS to such a name: Docker 29.7.2 with the
+  containerd image store refuses a plain-HTTP answer, so the registry needs a certificate the engine
+  trusts.
 - A build has no memory limit and may use all host RAM; a pull can fill the disk. BuildKit keeps a
   build cache in the host's Docker, which the engine's builder GC bounds and impd's disk budget does
   not count.

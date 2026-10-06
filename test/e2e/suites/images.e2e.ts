@@ -616,3 +616,79 @@ test('a FROM whose registry name resolves to a private address fails in the buil
   expect(result.stderr).toContain('FROM 10-0-0-1.nip.io:5000/e2e/x:1: the pull failed');
   expect(result.stderr).toContain('no such host');
 });
+
+// the host engine's busybox images, each with its digests and ID, sorted:
+// other work on this engine may change other repositories meanwhile
+async function listEngineBusybox(): Promise<readonly string[]> {
+  const listed = await runChecked([
+    'docker',
+    'image',
+    'ls',
+    '--all',
+    '--digests',
+    '--no-trunc',
+    '--format',
+    '{{.Repository}}:{{.Tag}}@{{.Digest}} {{.ID}}',
+    'busybox',
+  ]);
+
+  return listed.split('\n').toSorted();
+}
+
+// #169: an add pulls in a builder imp, so the host engine never has the image
+test('an added image comes from a builder: the host engine gains no image, and the image boots', async () => {
+  const name = `${prefix}added`;
+
+  const before = await listEngineBusybox();
+
+  await runImp('image', 'add', 'busybox:1.36.1', '--name', name);
+
+  try {
+    const after = await listEngineBusybox();
+    const inspected = await runCommand(['docker', 'image', 'inspect', 'busybox:1.36.1']);
+
+    expect(after).toEqual(before);
+    expect(inspected.exitCode).not.toBe(0);
+
+    // the audit row, written after the answer, names the bytes the pull took
+    await waitFor('the add in the audit log', async () => {
+      const auditJson = await runImp('audit', '--kind', 'api', '--json', '--limit', '20');
+
+      const audit: unknown = JSON.parse(auditJson);
+      const calls = z.array(z.object({ procedure: z.string(), detail: z.string().optional() }));
+
+      const add = calls
+        .parse(audit)
+        .find((call) => call.procedure === 'images.add' || call.procedure === 'images.addStream');
+
+      expect(add?.detail).toMatch(/^busybox@sha256:[a-f0-9]{64}$/v);
+    });
+
+    await createImp(name, '--image', name);
+
+    const banner = await runInImp(name, 'busybox');
+
+    expect(banner).toContain('BusyBox v1.36.1');
+  } finally {
+    await removeImps(name);
+    await tryImp(['image', 'rm', name]);
+  }
+
+  const listedJson = await runImp('ls', '--builders', '--json');
+
+  const listed: unknown = JSON.parse(listedJson);
+  const kinds = z.array(z.object({ kind: z.string().optional() })).parse(listed);
+
+  expect(kinds.filter((imp) => imp.kind === 'builder')).toEqual([]);
+});
+
+test('an add whose registry name resolves to a private address fails in the builder', async () => {
+  const result = await tryImp(['image', 'add', '10-0-0-1.nip.io:5000/e2e/x:1', '--name', rejected]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('the pull of 10-0-0-1.nip.io:5000/e2e/x:1 in the builder failed');
+
+  const names = await listImageNames();
+
+  expect(names).not.toContain(rejected);
+});

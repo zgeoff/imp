@@ -147,7 +147,17 @@ start_proxy() {
     bun build --compile packages/daemon/src/docker-proxy/main.ts \
     --outfile /out/imp-docker-proxy.new >/dev/null
   mapfile -t privileges < <(read_proxy_privileges)
-  [ -n "${IMP_BUILD_CONTEXT_MAX_MIB:-}" ] && context=(-e "IMP_BUILD_CONTEXT_MAX_MIB=$IMP_BUILD_CONTEXT_MAX_MIB")
+  # the settings the proxy reads too: under imp isolation it pulls only
+  # IMP_BUILD_IMAGE. impd takes each from this env, else .env, so the proxy
+  # does too; only these keys are read from .env, never its secrets.
+  local var value
+  for var in IMP_BUILD_CONTEXT_MAX_MIB IMP_BUILD_ISOLATION IMP_BUILD_IMAGE; do
+    value=${!var:-}
+    if [ -z "$value" ] && [ -f "$IMP_ROOT/.env" ]; then
+      value=$(sed -n "s/^$var=//p" "$IMP_ROOT/.env" | tail -n 1 | tr -d '\r')
+    fi
+    [ -n "$value" ] && context+=(-e "$var=$value")
+  done
   stamp=$({
     sha256sum <"$data/imp-docker-proxy.new"
     printf '%s\n' "${privileges[@]}" "${context[@]}" "$IMP_HOST_IMAGE"

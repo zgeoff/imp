@@ -80,7 +80,7 @@ function checkCreate(
     HostConfig: { ...CREATE_BODY.HostConfig, ...hostConfig },
   };
 
-  const checked = checkCreateBody(body, HOST_IMAGE);
+  const checked = checkCreateBody(body, HOST_IMAGE, null);
 
   return checked.isOk ? 'ok' : checked.reason;
 }
@@ -300,7 +300,7 @@ describe('an image reference', () => {
 
 describe('a pull query', () => {
   const checkPull = (raw: string): string => {
-    const checked = checkPullQuery(parseQuery(raw), HOST_IMAGE);
+    const checked = checkPullQuery(parseQuery(raw), HOST_IMAGE, null);
 
     return checked.isOk ? 'ok' : checked.reason;
   };
@@ -334,6 +334,48 @@ describe('a pull query', () => {
   });
 });
 
+describe('a pull under IMP_BUILD_ISOLATION=imp', () => {
+  const DIGEST = `sha256:${'d'.repeat(64)}`;
+  const ONLY = `ghcr.io/zgeoff/imp-base:0.29.0@${DIGEST}`;
+
+  const checkPull = (raw: string): string => {
+    const checked = checkPullQuery(parseQuery(raw), HOST_IMAGE, ONLY);
+
+    return checked.isOk ? 'ok' : checked.reason;
+  };
+
+  // `docker pull <repo>:<tag>@<digest>` sends the repository and the digest
+  test('passes for IMP_BUILD_IMAGE by its digest, as `docker pull` sends it', () => {
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}`)).toBe('ok');
+  });
+
+  test('fails for any other image, tag or digest', () => {
+    const other = `sha256:${'e'.repeat(64)}`;
+
+    expect(checkPull('fromImage=docker.io%2Flibrary%2Fbusybox&tag=1.37')).toContain(
+      `the proxy pulls only IMP_BUILD_IMAGE, ${ONLY}`,
+    );
+
+    expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=0.29.0')).toContain('refused');
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${other}`)).toContain('refused');
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-dev&tag=${DIGEST}`)).toContain('refused');
+    expect(checkPull(`fromImage=docker.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}`)).toContain('refused');
+
+    // the engine pulls fromImage's repository at the tag, whatever else it names
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base%40${other}&tag=${other}`)).toContain(
+      'refused',
+    );
+  });
+
+  test('keeps the rules every pull meets', () => {
+    expect(checkPull('fromImage=ghcr.io%2Fzgeoff%2Fimp-base')).toBe('param tag is missing');
+
+    expect(checkPull(`fromImage=ghcr.io%2Fzgeoff%2Fimp-base&tag=${DIGEST}&repo=x`)).toBe(
+      'param repo is not allowed',
+    );
+  });
+});
+
 describe('a remove query', () => {
   test('takes force only', () => {
     expect(checkRemoveQuery(parseQuery('force=1')).isOk).toBe(true);
@@ -346,7 +388,11 @@ describe('a remove query', () => {
 describe('a create body', () => {
   test('passes as `docker create <image> /bin/true` sends it', () => {
     expect(checkCreate({})).toBe('ok');
-    expect(checkCreateBody(CREATE_BODY, HOST_IMAGE)).toEqual({ isOk: true, image: 'busybox' });
+
+    expect(checkCreateBody(CREATE_BODY, HOST_IMAGE, null)).toEqual({
+      isOk: true,
+      image: 'busybox',
+    });
   });
 
   test('fails with another command, an entrypoint, labels, volumes or env', () => {
@@ -399,7 +445,30 @@ describe('a create body', () => {
   });
 
   test('fails when it is not an object, or has no Image', () => {
-    expect(checkCreateBody([], HOST_IMAGE).isOk).toBe(false);
+    expect(checkCreateBody([], HOST_IMAGE, null).isOk).toBe(false);
     expect(checkCreate({ Image: 1 })).toBe('Image is missing');
+  });
+
+  test('under IMP_BUILD_ISOLATION=imp, passes only for IMP_BUILD_IMAGE by its digest', () => {
+    const digest = `sha256:${'d'.repeat(64)}`;
+    const only = `ghcr.io/zgeoff/imp-base:0.29.0@${digest}`;
+
+    const checkLocked = (image: string): string => {
+      const checked = checkCreateBody({ ...CREATE_BODY, Image: image }, HOST_IMAGE, only);
+
+      return checked.isOk ? 'ok' : checked.reason;
+    };
+
+    expect(checkLocked(only)).toBe('ok');
+    expect(checkLocked(`ghcr.io/zgeoff/imp-base@${digest}`)).toBe('ok');
+
+    expect(checkLocked('busybox')).toBe(
+      `a create from busybox is refused: under IMP_BUILD_ISOLATION=imp the proxy creates only from IMP_BUILD_IMAGE, ${only}`,
+    );
+
+    expect(checkLocked('ghcr.io/zgeoff/imp-base:0.29.0')).toContain('is refused');
+    expect(checkLocked(`ghcr.io/zgeoff/imp-base@sha256:${'e'.repeat(64)}`)).toContain('is refused');
+    expect(checkLocked(`ghcr.io/zgeoff/imp-dev@${digest}`)).toContain('is refused');
+    expect(checkLocked(digest)).toContain('is refused');
   });
 });

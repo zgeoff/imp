@@ -186,6 +186,10 @@ export interface ApiAuditTable {
   imp_name: string | null;
   outcome: string;
   duration_ms: number;
+
+  // what the call resolved that its name does not show: an image add's
+  // pulled reference, by digest; null for most calls and older rows
+  detail: string | null;
 }
 
 export interface TokensTable {

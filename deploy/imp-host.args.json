@@ -53,6 +53,7 @@
       ["--rm", "--name", "imp-docker-proxy"],
       ["--group-add", "$IMP_DOCKER_GID"],
       ["-e", "IMP_HOST_IMAGE", "-e", "IMP_BUILD_CONTEXT_MAX_MIB"],
+      ["-e", "IMP_BUILD_ISOLATION", "-e", "IMP_BUILD_IMAGE"],
       ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
       ["-v", "/run/imp-docker:/run/imp-docker"],
       ["-v", "/var/lib/imp-docker-proxy:/var/lib/imp-docker-proxy"]

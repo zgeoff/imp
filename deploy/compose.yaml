@@ -42,10 +42,14 @@ services:
       - ${IMP_DOCKER_GID:?set IMP_DOCKER_GID to the group of /var/run/docker.sock (stat -c %g
         /var/run/docker.sock)}
     # not the env file, which holds the Tailscale key: set a different
-    # IMP_BUILD_CONTEXT_MAX_MIB here too, in the shell or .env
+    # IMP_BUILD_CONTEXT_MAX_MIB, IMP_BUILD_ISOLATION or IMP_BUILD_IMAGE here
+    # too, in the shell or .env; under imp isolation the proxy pulls only
+    # IMP_BUILD_IMAGE (empty is impd's default)
     environment:
       IMP_HOST_IMAGE: ${IMP_HOST_IMAGE:-ghcr.io/zgeoff/imp-host:0.35.0} # x-release-please-version
       IMP_BUILD_CONTEXT_MAX_MIB: ${IMP_BUILD_CONTEXT_MAX_MIB:-1024}
+      IMP_BUILD_ISOLATION: ${IMP_BUILD_ISOLATION:-imp}
+      IMP_BUILD_IMAGE: ${IMP_BUILD_IMAGE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # new volumes take the image's directories, owned by the proxy's user

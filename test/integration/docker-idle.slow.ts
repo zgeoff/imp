@@ -51,6 +51,9 @@ const proxy = Bun.serve({
     upstreamSocket: engineSocket,
     token: 'test-token',
     hostImage: 'ghcr.io/zgeoff/imp-host:latest',
+
+    // host isolation: the proxy lets builds through
+    builderImage: null,
     buildContextMaxBytes: 1024 ** 2,
     log: () => {},
   }),

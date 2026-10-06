@@ -60,15 +60,15 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
   mkdirSync(bin);
   writeFileSync(join(dataDir, 'stderr'), stderr);
 
-  // localhost:5320/pulled is not on the host, so impd pulls it; the host
-  // has localhost:5320/local, so impd goes on to create a container
+  // names the proxy refuses (impd refuses a literal localhost itself): impd
+  // pulls registry.example/pulled, and creates from registry.example/local
   writeFileSync(
     join(bin, 'docker'),
     [
       '#!/bin/sh',
       'for last; do :; done',
       'case "$1 $last" in',
-      `  "image localhost:5320/local:1") echo '${inspect}' ;;`,
+      `  "image registry.example/local:1") echo '${inspect}' ;;`,
       `  "pull "*|"create "*) cat '${join(dataDir, 'stderr')}' >&2; exit 1 ;;`,
       '  *) exit 1 ;;',
       'esac',
@@ -78,7 +78,7 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
 
   try {
     const images = createImageService({
-      config: loadConfig({ IMP_DATA_DIR: dataDir }),
+      config: loadConfig({ IMP_DATA_DIR: dataDir, IMP_BUILD_ISOLATION: 'host' }),
       db: await openDatabase(':memory:'),
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
@@ -93,7 +93,7 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
       dockerEnv: { PATH: `${bin}:${process.env['PATH'] ?? ''}` },
     });
 
-    for (const ref of ['localhost:5320/pulled:1', 'localhost:5320/local:1']) {
+    for (const ref of ['registry.example/pulled:1', 'registry.example/local:1']) {
       const failure = await images.addImage(ref, 'x').catch((error: unknown) => error);
 
       expect(failure).toMatchObject({ code: 'BAD_REQUEST', message: refusal });

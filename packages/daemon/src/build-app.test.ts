@@ -634,6 +634,44 @@ test('an exec ticket opens one socket for its imp, once', async () => {
   }
 });
 
+test("an image add's audit row keeps the reference its pull resolved", async () => {
+  const harness = await setupImpTest();
+
+  const pulled = `busybox@sha256:${'b'.repeat(64)}`;
+
+  // an add as the builder makes it, without the builder
+  const images = {
+    ...harness.images,
+    addImage: (
+      _ref: string,
+      name?: string,
+      options?: Readonly<{ onResolved?: (reference: string) => void }>,
+    ) => {
+      options?.onResolved?.(pulled);
+
+      return harness.createTestImage(name ?? 'box');
+    },
+  };
+
+  await using ctx = { ...harness, ...buildTestApp({ ...harness, images }, harness) };
+
+  await ctx.client.images.add({ ref: 'busybox', name: 'box' });
+
+  // the row lands after the answer
+  const deadline = Date.now() + 5000;
+  let adds: { readonly detail?: string | undefined }[] = [];
+
+  while (adds.length === 0 && Date.now() < deadline) {
+    const calls = await listApiCalls(ctx.db, null, 10, null);
+
+    adds = calls.filter((call) => call.procedure === 'images.add');
+
+    await Bun.sleep(1);
+  }
+
+  expect(adds.map((call) => call.detail)).toEqual([pulled]);
+});
+
 test('an exec on a ticket the token asked for is audited as the token', async () => {
   await using ctx = await setupTest(TEST_TOKEN);
 

@@ -3,6 +3,7 @@
 // root out of imp-host (docs/architecture/host-contract.md).
 
 import { chmodSync, rmSync } from 'node:fs';
+import { BUILD_IMAGE_PATTERN, DEFAULT_BUILD_IMAGE } from '../images/build-image';
 import { printLog } from '../process/print-log';
 import { loadOrCreateToken } from '../token';
 import { createDockerProxy } from './proxy';
@@ -29,11 +30,35 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// IMP_BUILD_IMAGE under IMP_BUILD_ISOLATION=imp, which impd sets the same:
+// the only image a pull may fetch then, with no build; null under host
+// isolation
+function readBuilderImage(): string | null {
+  const isolation = readEnv('IMP_BUILD_ISOLATION', 'imp');
+
+  if (isolation === 'host') {
+    return null;
+  }
+
+  if (isolation !== 'imp') {
+    throw new Error(`IMP_BUILD_ISOLATION is ${isolation}, not imp or host`);
+  }
+
+  const image = readEnv('IMP_BUILD_IMAGE', DEFAULT_BUILD_IMAGE);
+
+  if (!BUILD_IMAGE_PATTERN.test(image)) {
+    throw new Error(`IMP_BUILD_IMAGE is ${image}, not an image by digest, <ref>@sha256:<hex>`);
+  }
+
+  return image;
+}
+
 function main(): void {
   const listen = readEnv('IMP_DOCKER_PROXY_LISTEN', '/run/imp-docker/docker.sock');
   const upstreamSocket = readEnv('IMP_DOCKER_PROXY_UPSTREAM', '/var/run/docker.sock');
   const stateDir = readEnv('IMP_DOCKER_PROXY_STATE', '/var/lib/imp-docker-proxy');
   const hostImage = requireEnv('IMP_HOST_IMAGE');
+  const builderImage = readBuilderImage();
   const contextMib = Number(readEnv('IMP_BUILD_CONTEXT_MAX_MIB', '1024'));
 
   if (!Number.isInteger(contextMib) || contextMib <= 0) {
@@ -48,6 +73,7 @@ function main(): void {
     upstreamSocket,
     token: loadOrCreateToken(stateDir),
     hostImage,
+    builderImage,
     buildContextMaxBytes,
     log: printLog,
   });
@@ -68,7 +94,10 @@ function main(): void {
   const server = Bun.serve(serveOptions);
 
   chmodSync(listen, 0o600);
-  printLog(`imp-docker-proxy on ${listen}, engine ${upstreamSocket}, host image ${hostImage}`);
+
+  printLog(
+    `imp-docker-proxy on ${listen}, engine ${upstreamSocket}, host image ${hostImage}, ${builderImage === null ? 'pulls and builds as host isolation allows' : `pulls only ${builderImage}, no builds`}`,
+  );
 
   const stop = async (): Promise<void> => {
     await server.stop(true);

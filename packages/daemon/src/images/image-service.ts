@@ -27,6 +27,7 @@ import { countImpsUsingImage } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { checkReferenceRegistry, readImageReference } from '../docker-proxy/rules';
 import { runChecked, runCommand } from '../process/run-command';
+import { readErrorMessage } from '../read-error-message';
 import { buildImagePaths, buildUploadsDir } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
@@ -40,7 +41,7 @@ import { DockerBuildError, runDockerBuild } from './docker-build';
 import { checkDockerfile, renderPinnedDockerfile } from './dockerfile-check';
 import type { ExternalImage } from './dockerfile-check';
 import { DockerfileError } from './dockerfile-error';
-import { runGuestBuild, writeGuestTree } from './guest-build';
+import { loadGuestImage, runGuestBuild, writeGuestTree } from './guest-build';
 import type { GuestExec } from './guest-exec';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from './image-pin';
@@ -68,12 +69,18 @@ const SEED_REF = 'ubuntu:24.04';
 export const HOST_BUILD_WARNING =
   'impd: WARNING: IMP_BUILD_ISOLATION=host: image builds run on the host engine, whose RUN steps can reach the host and its private networks; for a trusted operator only, and gone in the next release (docs/guides/images.md#isolated-builds)';
 
+export const HOST_ADD_WARNING =
+  'impd: WARNING: IMP_BUILD_ISOLATION=host: image adds pull onto the host engine, which keeps each image impd pulled; gone in the next release (docs/guides/images.md#add-an-image)';
+
+const RepoDigestsSchema = z.array(z.string()).nullish();
+
 const InspectSchema = z
   .array(
     z.object({
       Id: z.string(),
       Config: z.unknown(),
       Size: z.number().optional(),
+      RepoDigests: RepoDigestsSchema,
     }),
   )
   .length(1);
@@ -85,12 +92,27 @@ interface ImageOpOptions {
   readonly setPhase?: (phase: ImageBuildPhase) => void;
 }
 
+interface AddImageOptions {
+  readonly setPhase?: (phase: ImageBuildPhase) => void;
+
+  // a client that goes ends the pull, and the builder with it
+  readonly signal?: AbortSignal | undefined;
+
+  // the reference the pull resolved, by digest, once it is known
+  readonly onResolved?: (reference: string) => void;
+}
+
+// an add's options once its signal is settled
+interface AddFromRefOptions extends AddImageOptions {
+  readonly signal: AbortSignal;
+}
+
 export interface ImageService {
-  // the client going stops a pull; the unpack after it runs to its end
+  // `signal` aborts when the client goes, and ends the add and its builder
   readonly addImage: (
     ref: string,
     name?: string,
-    options?: Readonly<ImageOpOptions>,
+    options?: Readonly<AddImageOptions>,
   ) => Promise<ImageRecord>;
   readonly buildImage: (
     contextDir: string,
@@ -176,6 +198,17 @@ function toBadRequest(error: unknown): unknown {
   return error instanceof DockerfileError
     ? new ORPCError('BAD_REQUEST', { message: `the Dockerfile: ${error.message}` })
     : error;
+}
+
+// The reference with the tag the engine would assume written out, so the
+// pull, the log and the error name what is fetched: `ubuntu` is
+// `ubuntu:latest`
+function formatExplicitRef(ref: string): string {
+  const [withoutDigest = ''] = ref.split('@');
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const hasTag = withoutDigest.includes(':', lastSlash + 1);
+
+  return ref.includes('@') || hasTag ? ref : `${ref}:latest`;
 }
 
 // one image's every spelling: the engine's registry and path, and the tag
@@ -395,26 +428,24 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     }
   };
 
-  // `isImpds`: impd's own add of the builders' image, which no client may name
-  const createImageFromRef = async (
+  // An image of the host's engine, pulled there when it lacks it: the
+  // builders' own image, and every add and build under
+  // IMP_BUILD_ISOLATION=host
+  const createImageOnHost = async (
     ref: string,
-    name?: string,
-    isImpds = true,
-    options: Readonly<ImageOpOptions> = {},
+    imageName: string,
+    options: Readonly<AddImageOptions> = {},
   ): Promise<ImageRecord> => {
-    assertImageRef(ref);
-
-    const givenName = name ?? deriveImageName(ref);
-    const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
-
-    const taken = await findImageByName(deps.db, imageName);
-
-    requireDockerImage(taken);
-
     const inspect = await readInspect(ref, options.signal);
 
     if (inspect === undefined) {
       throw new Error(`docker image inspect ${ref}: no result`);
+    }
+
+    const resolved = pickRepoDigest(ref, inspect.RepoDigests ?? []);
+
+    if (resolved !== null) {
+      options.onResolved?.(resolved);
     }
 
     // the unpack is shared with any add of the same image: no client stops it
@@ -433,6 +464,108 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
         return writeImageRow(imageName, ref, inspect.Id, sizeBytes);
       }),
     );
+  };
+
+  // An image pulled in a builder imp and streamed out of it, as a build's
+  // result is (docs/guides/images.md#add-an-image); the host engine never
+  // has it. A refused builder fails the add: it never falls back.
+  const createImageInBuilder = (
+    ref: string,
+    imageName: string,
+    options: Readonly<AddFromRefOptions>,
+  ): Promise<ImageRecord> => {
+    const signal = options.signal;
+    const builders = deps.readBuilders();
+
+    if (builders === null) {
+      throw new ORPCError('SERVICE_UNAVAILABLE', { message: 'impd is starting; try again' });
+    }
+
+    const explicitRef = formatExplicitRef(ref);
+
+    return builders.withBuilder(signal, async (exec) => {
+      const started = performance.now();
+
+      const platform = await createBuildEngine(toEngineRun(exec)).readPlatform(signal);
+      const pulled = await loadGuestImage(exec, { ref: explicitRef, platform, signal });
+
+      if (pulled !== null) {
+        options.onResolved?.(pulled);
+      }
+
+      const pullMs = Math.round(performance.now() - started);
+
+      // the export out of the builder, and its unpack
+      options.setPhase?.('unpack');
+
+      const image = await writeGuestImage(exec, imageName, ref, signal);
+
+      const imageMs = Math.round(performance.now() - started) - pullMs;
+
+      deps.log(
+        `impd: image add ${imageName}: ${explicitRef} for ${platform}${pulled === null ? '' : ` (${pulled})`}, digest ${image.digest}; pull=${String(pullMs)}ms image=${String(imageMs)}ms`,
+      );
+
+      return image;
+    });
+  };
+
+  // `isImpds`: impd's own add, of a name no client may take
+  const createImageFromRef = async (
+    ref: string,
+    name: string | undefined,
+    isImpds: boolean,
+    options: Readonly<AddFromRefOptions>,
+  ): Promise<ImageRecord> => {
+    assertImageRef(ref);
+
+    // the proxy holds this rule for a host pull; a builder's pull would
+    // reach a literal address under imp isolation, so impd holds it for both
+    const registryProblem = checkReferenceRegistry(ref);
+
+    if (registryProblem !== null) {
+      throw new ORPCError('BAD_REQUEST', { message: `image ${ref}: ${registryProblem}` });
+    }
+
+    const givenName = name ?? deriveImageName(ref);
+    const imageName = isImpds ? NameSchema.parse(givenName) : requireClientImageName(givenName);
+
+    const taken = await findImageByName(deps.db, imageName);
+
+    requireDockerImage(taken);
+
+    if (deps.config.build.isolation === 'host') {
+      deps.log(HOST_ADD_WARNING);
+
+      return createImageOnHost(ref, imageName, options);
+    }
+
+    return createImageInBuilder(ref, imageName, options);
+  };
+
+  // the builders' image, at most one add of it at a time
+  const builderImage = { adding: null as Promise<ImageRecord> | null };
+
+  const loadBuilderImage = async (): Promise<void> => {
+    const ref = deps.config.build.image;
+
+    const image = await findImageByName(deps.db, BUILDER_IMAGE);
+
+    if (image?.ref === ref) {
+      return;
+    }
+
+    builderImage.adding ??= createImageOnHost(ref, BUILDER_IMAGE);
+
+    try {
+      await builderImage.adding;
+    } catch (error) {
+      throw new ORPCError('SERVICE_UNAVAILABLE', {
+        message: `impd cannot add its builder image ${ref} (IMP_BUILD_IMAGE) from the host engine, so no image add or build can run: ${readErrorMessage(error)}`,
+      });
+    } finally {
+      builderImage.adding = null;
+    }
   };
 
   const findDefaultImage = async (): Promise<ImageRecord | undefined> => {
@@ -686,7 +819,7 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
       }
 
       // the tag is the engine's now: no pull, only the unpack
-      return await createImageFromRef(tag, name, true, {
+      return await createImageOnHost(tag, NameSchema.parse(name), {
         ...(options.setPhase !== undefined && { setPhase: options.setPhase }),
       });
     } catch (error) {
@@ -781,7 +914,11 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
   };
 
   return {
-    addImage: (ref, name, options) => createImageFromRef(ref, name, false, options),
+    addImage: (ref, name, options) =>
+      createImageFromRef(ref, name, false, {
+        ...options,
+        signal: options?.signal ?? new AbortController().signal,
+      }),
     buildImage: async (contextDir, name, dockerfile, options = {}) => {
       const release = buildSlots.claim();
 
@@ -814,18 +951,17 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     },
     resolveImage,
     findDefaultImage,
-    ensureBuilderImage: async () => {
-      const image = await findImageByName(deps.db, BUILDER_IMAGE);
+    ensureBuilderImage: loadBuilderImage,
 
-      if (image?.ref !== deps.config.build.image) {
-        await createImageFromRef(deps.config.build.image, BUILDER_IMAGE);
-      }
-    },
+    // impd's builder image does not count: a seed that failed after the
+    // builder image landed tries again at the next start
     seedDefaultImage: async () => {
       const images = await listImages(deps.db);
 
-      if (images.length === 0) {
-        await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE);
+      if (images.every((image) => image.name === BUILDER_IMAGE)) {
+        await createImageFromRef(SEED_REF, FALLBACK_DEFAULT_IMAGE, true, {
+          signal: new AbortController().signal,
+        });
       }
     },
   };
