@@ -1,3 +1,4 @@
+import { isImpAllowed } from '@imp/api';
 import type { Scope } from '@imp/api';
 import type { Selectable } from 'kysely';
 import * as z from 'zod';
@@ -74,7 +75,80 @@ export async function writeTokenRecord(
   });
 }
 
-// the token, its keys, and the OAuth grants it approved with their tokens
+// The list `read` builds in the write, so its generations are one snapshot,
+// and the end of each left-off secret's grants on the token's imps, whoever
+// made them, as a rebind drops them. Null for no such token.
+export function updateTokenGrantable(
+  db: ImpDatabase,
+  id: string,
+  read: (trx: ImpDatabase) => Promise<GrantableSecret[]>,
+): Promise<{ grantable: GrantableSecret[]; dropped: number } | null> {
+  return db.transaction().execute(async (trx) => {
+    const row = await trx
+      .selectFrom('tokens')
+      .select(['imps', 'grantable'])
+      .where('id', '=', id)
+      .executeTakeFirst();
+
+    if (row === undefined) {
+      return null;
+    }
+
+    const grantable = await read(trx);
+
+    await trx
+      .updateTable('tokens')
+      .set({ grantable: JSON.stringify(grantable) })
+      .where('id', '=', id)
+      .execute();
+
+    const kept = new Set(grantable.map((secret) => secret.name));
+
+    const removed = GrantableSchema.parse(JSON.parse(row.grantable))
+      .map((secret) => secret.name)
+      .filter((name) => !kept.has(name));
+
+    const imps: unknown = row.imps === null ? null : JSON.parse(row.imps);
+    const patterns = ImpsSchema.parse(imps);
+
+    // a host-wide token holds no list, so it has nothing to drop
+    if (removed.length === 0 || patterns === null) {
+      return { grantable, dropped: 0 };
+    }
+
+    const rows = await trx.selectFrom('imps').select(['id', 'name']).execute();
+
+    const impIds = rows.filter((imp) => isImpAllowed(patterns, imp.name)).map((imp) => imp.id);
+
+    if (impIds.length === 0) {
+      return { grantable, dropped: 0 };
+    }
+
+    const dropped = await trx
+      .deleteFrom('grants')
+      .where('secret_name', 'in', removed)
+      .where('imp_id', 'in', impIds)
+      .executeTakeFirst();
+
+    return { grantable, dropped: Number(dropped.numDeletedRows) };
+  });
+}
+
+// the token's grantable list as the database holds it now, read in the
+// caller's transaction; null for no such token
+export async function readTokenGrantable(
+  db: ImpDatabase,
+  id: string,
+): Promise<GrantableSecret[] | null> {
+  const row = await db
+    .selectFrom('tokens')
+    .select('grantable')
+    .where('id', '=', id)
+    .executeTakeFirst();
+
+  return row === undefined ? null : GrantableSchema.parse(JSON.parse(row.grantable));
+}
+
 // the token, its keys, and the OAuth grants it approved with their tokens;
 // returns the grants' ids, for their revocation
 export function removeTokenRecord(db: ImpDatabase, id: string): Promise<string[]> {

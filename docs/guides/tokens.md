@@ -62,6 +62,7 @@ Only a `manage` token with no patterns manages tokens.
 imp token new ci --scope exec --imps 'dev-*'   # prints the secret once, on stdout
 imp token ls                                   # names, scopes, imps, grantable secrets, SSH keys
 imp token whoami                               # who impd takes this CLI for
+imp token set agent --grantable 'gh,npm'       # change the secrets it may grant
 imp token rm ci
 ```
 
@@ -107,10 +108,11 @@ only `read` on the imp, as before.
 The list names each secret as it was when the token was made. Every secret has a random generation,
 set when it is created and kept by a rotation. A rebind, or a secret deleted and made again under
 the name, gives it another ([rotate or rebind](./connectors.md#rotate-or-rebind)), so the list no
-longer covers it: the host owner makes a new token to hand it out. impd reads the secret's
-generation at each call, never from the token's cache, and reads it again, with the token, in the
-transaction that makes or removes the grant. A token removed between the check and the transaction
-fails with `UNAUTHORIZED`; a secret changed in between fails with `not_grantable`.
+longer covers it: the host owner names it again with `imp token set`
+([change the list](#change-the-list)). impd reads the secret's generation at each call, never from
+the token's cache, and reads it again, with the token, in the transaction that makes or removes the
+grant. A token removed between the check and the transaction fails with `UNAUTHORIZED`; a secret
+changed in between fails with `not_grantable`.
 
 The token may not grant a secret's value or change its hosts: secrets, and tokens, stay host-wide.
 
@@ -118,16 +120,48 @@ In this version, such a token may not fork an imp or move one: `imps.fork`, `mov
 `moves.send` and `moves.resume` fail with `FORBIDDEN` before they make anything. A move carries the
 imp's grants to the target, so it could hand an imp a secret the list does not name. A fork would
 copy only the grants on the list, checked again in the copy's transaction, but stays refused in this
-version all the same. `moves.abort` stays open to it. The list never changes after the token is
-made, so the refusal holds when every secret on it is gone. Grants stay with the imp through sleep,
-wake, a checkpoint restore and a restart of impd. A destroyed imp takes its grants with it, and an
-imp made from a [template](./templates.md) gets none. The fork and move refusal covers the token's
-dashboard sessions and the SSH keys bound to it too. `backups.restore` stays host-wide.
+version all the same. `moves.abort` stays open to it. The refusal holds while the list names any
+secret, even one that is gone; a list cleared with `imp token set` lifts it. Grants stay with the
+imp through sleep, wake, a checkpoint restore and a restart of impd. A destroyed imp takes its
+grants with it, and an imp made from a [template](./templates.md) gets none. The fork and move
+refusal covers the token's dashboard sessions and the SSH keys bound to it too. `backups.restore`
+stays host-wide.
 
 An impd older than 0.27.0 drops `grantable` unread and makes a token with no list. Before a client
 sends `grantable`, it checks that `system.info()` has `features.grantableTokens`.
 `imp token new --grantable` does that check, and against an older impd it fails before it makes the
 token.
+
+### Change the list
+
+A `manage` token with no patterns changes another token's list in place. The token keeps its secret,
+its SSH keys, its scope and its patterns, so its clients keep working:
+
+```sh
+imp token set agent --grantable 'gh,npm,pypi'   # the whole new list
+imp token set agent --grantable ''              # no list
+```
+
+The API call is `tokens.update` with `name` and `grantable`: the whole new list, 0 to 32 secret
+names, no two the same. It answers with the token, never its secret. It refuses what `tokens.create`
+refuses: `BAD_REQUEST` for a non-empty list on a token without `manage` or with no patterns, and
+`NOT_FOUND` for a missing token or secret. It needs the same caller as a host-wide grant, so a token
+with patterns gets `FORBIDDEN`, whatever its own list.
+
+Each secret on the new list takes its generation now, as on a new token. A secret the list already
+named but that a rebind changed since is covered again.
+
+A secret taken off the list loses its grants on every imp within the token's patterns, in the same
+transaction, whoever made them. This is the rule a rebind follows: the token can no longer manage
+those grants, so they end. A grant of the secret that a host-wide caller made on one of those imps
+ends too; `grants.add` makes it again. Grants on imps outside the patterns stay.
+
+A grant, a revoke or a fork copy reads the token's list again in its own transaction, so a call
+checked before the change and run after it cannot use a secret taken off. The audit log
+(`imp audit --kind api`) records each `tokens.update` with its caller and outcome.
+
+An impd older than 0.34.0 has no `tokens.update`. `imp token set` checks that `system.info()` has
+`features.tokenUpdate` first.
 
 ## Each way in
 
@@ -228,7 +262,8 @@ The dashboard needs no login for a tailnet member a rule matches.
 - `packages/daemon/src/auth/authenticate.test.ts`: sessions, a rebound host and an imp's page.
 - `packages/daemon/src/build-app-grants.test.ts`: tokens that may grant secrets, through a bearer
   token and a dashboard session: every pairing of imp and secret, refusals, stale list entries,
-  forks and moves, and what survives a restart. `broker/grant-races.test.ts` races grants, revokes,
-  fork copies and replaces against one another.
+  forks and moves, and what survives a restart. `build-app-token-update.test.ts` changes a list in
+  place. `broker/grant-races.test.ts` races grants, revokes, fork copies and replaces against one
+  another.
 - The `tokens` e2e suite drives it all through the CLI. The `tailscale` suite reboots impd with a
   rule and calls the API over the tailnet without a token.

@@ -62,6 +62,7 @@ import { DatabaseCopySchema, StorageGcSchema } from './storage-schema';
 import { SystemInfoSchema } from './system-info-schema';
 import {
   GrantableSchema,
+  GrantableUpdateSchema,
   IdentitySchema,
   ImpPatternSchema,
   MAX_SSH_KEYS,
@@ -633,6 +634,13 @@ export const impContract = {
         }),
       )
       .output(z.object({ token: TokenSchema, secret: z.string() })),
+
+    // sets its grantable list; the token's secret and the rest stay
+    // (docs/guides/tokens.md#change-the-list). BAD_REQUEST for a list without
+    // manage and imps; NOT_FOUND for the token or a secret.
+    update: base
+      .input(z.object({ name: NameSchema, grantable: GrantableUpdateSchema }))
+      .output(TokenSchema),
 
     // ends its dashboard sessions, event streams, sockets and ssh logins too;
     // CONFLICT while authorized_keys lists one of its keys
