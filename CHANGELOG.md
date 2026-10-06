@@ -2,20 +2,28 @@
 
 ## [0.36.0](https://github.com/zgeoff/imp/compare/v0.35.0...v0.36.0) (2026-10-06)
 
-
 ### ⚠ BREAKING CHANGES
 
-* **images:** under the default IMP_BUILD_ISOLATION=imp, imp image add pulls in a builder imp from a public registry, so an image that only the host's Docker engine has (such as one from a plain docker build) no longer adds; build it with imp image build, or set IMP_BUILD_ISOLATION=host for this release. Private registries do not pull in a builder.
-* **images:** under the default IMP_BUILD_ISOLATION=imp, imp image add pulls in a builder imp from a public registry, so an image that only the host's Docker engine has (such as one from a plain docker build) no longer adds; build it with imp image build, or set IMP_BUILD_ISOLATION=host for this release. Private registries do not pull in a builder.
+- **images:** under the default IMP_BUILD_ISOLATION=imp, imp image add pulls in a builder imp from a
+  public registry, so an image that only the host's Docker engine has (such as one from a plain
+  docker build) no longer adds; build it with imp image build, or set IMP_BUILD_ISOLATION=host for
+  this release. Private registries do not pull in a builder.
+- **images:** under the default IMP_BUILD_ISOLATION=imp, imp image add pulls in a builder imp from a
+  public registry, so an image that only the host's Docker engine has (such as one from a plain
+  docker build) no longer adds; build it with imp image build, or set IMP_BUILD_ISOLATION=host for
+  this release. Private registries do not pull in a builder.
 
 ### Features
 
-* **images:** pull added images in a disposable builder imp ([#198](https://github.com/zgeoff/imp/issues/198)) ([ca6dc4d](https://github.com/zgeoff/imp/commit/ca6dc4d55fb2028433e8bc668a4ebc5cbf9e3662))
-
+- **images:** pull added images in a disposable builder imp
+  ([#198](https://github.com/zgeoff/imp/issues/198))
+  ([ca6dc4d](https://github.com/zgeoff/imp/commit/ca6dc4d55fb2028433e8bc668a4ebc5cbf9e3662))
 
 ### Bug Fixes
 
-* **images:** time out the builder image pull, and let callers leave it ([#201](https://github.com/zgeoff/imp/issues/201)) ([c8f7504](https://github.com/zgeoff/imp/commit/c8f7504c80f346b84a220eb3d14389434ca20f7f))
+- **images:** time out the builder image pull, and let callers leave it
+  ([#201](https://github.com/zgeoff/imp/issues/201))
+  ([c8f7504](https://github.com/zgeoff/imp/commit/c8f7504c80f346b84a220eb3d14389434ca20f7f))
 
 ## [0.35.0](https://github.com/zgeoff/imp/compare/v0.34.0...v0.35.0) (2026-10-06)
 
