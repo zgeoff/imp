@@ -19,8 +19,8 @@ broker listens on every imp's gateway.
   snapshot.
 - With IPv6, each imp also gets a /128 in the host's /64, and its gateway is `fe80::1`
   ([IPv6](#ipv6)).
-- Guest DNS: `IMP_DNS` (default `1.1.1.1,8.8.8.8`), passed on the kernel command line. A `box` or
-  `none` imp's queries go to impd's resolver whatever the guest asks ([Egress](#egress)).
+- Guest DNS: `IMP_DNS` (default `1.1.1.1,8.8.8.8`), passed on the kernel command line. A `public`,
+  `box` or `none` imp's queries go to impd's resolver whatever the guest asks ([Egress](#egress)).
 
 ## iptables
 
@@ -51,7 +51,10 @@ container's own network namespace and never touch the host's.
 - `ip6tables INPUT -i imp+` drops everything but router solicitations and neighbour solicitations
   and advertisements with a hop limit of 255. The taps have IPv6 addresses, and impd's API and proxy
   listen on IPv6 too; without this rule a guest reaches them over its tap. A guest's router
-  advertisement or redirect is dropped here, and the taps ignore both anyway ([IPv6](#ipv6)).
+  advertisement or redirect is dropped here, and the taps ignore both anyway ([IPv6](#ipv6)). impd's
+  nft table holds the same rule in an `input` chain, under every policy, so it holds where ip6tables
+  is missing or `ip6tables -S INPUT` fails and setup-net.sh adds none. If impd cannot write its
+  table, no `public`, `box` or `none` imp starts.
 - `ip6tables FORWARD`: no imp-to-imp traffic; a tap may send out of the container's IPv6 default
   route; to a tap, only replies and related ICMPv6, such as packet-too-big. Anything else to or from
   a tap is dropped. The `raw` rpfilter rule is set for IPv6 as well.
@@ -66,19 +69,21 @@ container's own network namespace and never touch the host's.
 
 Each imp has an egress policy: what it may reach directly, past the host container.
 
-| Policy | The imp reaches                                                                                                            |
-| ------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `open` | anything but `169.254.0.0/16` (metadata services), `100.64.0.0/10` (the tailnet), and the IPv6 ranges [IPv6](#ipv6) blocks |
-| `box`  | the addresses its allow-list's names resolve to, and the address ranges the list names                                     |
-| `none` | nothing                                                                                                                    |
+| Policy   | The imp reaches                                                                                                            |
+| -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `open`   | anything but `169.254.0.0/16` (metadata services), `100.64.0.0/10` (the tailnet), and the IPv6 ranges [IPv6](#ipv6) blocks |
+| `public` | the global internet only ([Public](#public))                                                                               |
+| `box`    | the addresses its allow-list's names resolve to, and the address ranges the list names                                     |
+| `none`   | nothing                                                                                                                    |
 
 Hosts a [grant](../guides/connectors.md) covers stay reachable under every policy, through the
 credential broker: it dials them from the host container, which this firewall does not filter.
 `open` is the default. `imp new --policy box --allow github.com,*.npmjs.org` sets one at create, and
-`imp policy <name> box --allow …`, `open` or `none` changes it; `imp policy <name>` shows it. An
-allow entry is a hostname, `*.` and a hostname for every name under it (not the name itself), or an
-IPv4 or IPv6 address or CIDR (IPv6 from /16 to /128), the only way a box reaches a private address.
-A fork and a backup restore carry the policy.
+`imp policy <name> box --allow …`, `open`, `public` or `none` changes it; `imp policy <name>` shows
+it. An impd that knows `public` says so in `system.info` as `features.publicEgress`. An allow entry
+is a hostname, `*.` and a hostname for every name under it (not the name itself), or an IPv4 or IPv6
+address or CIDR (IPv6 from /16 to /128), the only way a box reaches a private address. A fork and a
+backup restore carry the policy.
 
 ### The firewall
 
@@ -96,16 +101,20 @@ still accept what it lets through.
   ranges, refuses every range the broker refuses (`REFUSED_RANGES`) and `IMP_SUBNET`, and accepts
   the addresses in its set. Anything else is refused. IPv6 follows the same order: the list's
   ranges, then the blocked IPv6 ranges, then the addresses in its IPv6 set.
+- A `public` chain drops `ct state invalid`, refuses a packet that would leave by any interface but
+  a default route's of its family, then the addresses in its `public4` and `public6` sets, and
+  accepts the rest ([Public](#public)).
 - A refusal is a TCP reset, or ICMP admin-prohibited for anything else. A reset ends a live
   connection at once; ICMP alone leaves it retrying.
 - impd writes a new imp's chain in the same step as its insert, before its tap comes up, and takes a
   destroyed imp's out before its slot is free. A box or none imp does not boot or wake where nft
-  cannot run; impd logs `impd: egress: NO FIREWALL` at start and refuses those policies.
+  cannot run, nor does a public one; impd logs `impd: egress: NO FIREWALL` at start and refuses
+  those policies.
 
 ### The resolver
 
-A `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to any
-address outside `IMP_SUBNET`, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the
+A `public`, `box` or `none` imp's DNS goes to impd: a nat redirect sends its UDP and TCP port 53, to
+any address outside `IMP_SUBNET`, to `IMP_EGRESS_DNS_PORT` on its gateway. impd knows the imp by the
 source address. Only IPv4 is redirected (the `dns` chain matches `meta nfproto ipv4`): the guest's
 resolv.conf names IPv4 servers, and port 53 over IPv6 meets the policy as any other port does. A
 none imp sends no DNS over IPv6, and a box imp sends it only to an address its list allows. The
@@ -117,6 +126,9 @@ its peers' names, and every name it asks is forwarded; it gets a higher rate lim
   leaves the host. A query with more than one question is refused. Each imp has a rate limit; a
   query past it gets plain REFUSED, with no EDE, so the two can be told apart.
 - Over TCP, each imp may hold 16 connections, and one idle for 10 s is closed.
+- A `public` imp's names are all forwarded. impd removes every A and AAAA record in its `public4`
+  and `public6` ranges from the reply, in every section, so a name that resolves only inside gets an
+  empty answer. Nothing goes into a set, and the imp gets an open imp's rate limit.
 - For an allowed name, impd asks `IMP_DNS`, under a fresh random query id, puts the A records on the
   CNAME chain from the name into the imp's set, and only then replies. The chain's names count as
   allowed for their TTL, for a stub resolver that follows the CNAME itself. AAAA does the same into
@@ -135,9 +147,9 @@ A change of policy applies at once, whatever the imp's state: the table is keyed
 nft does not take is undone, and the imp keeps its old policy. A box keeps the addresses some name
 on its new list covers. When the new policy is not `open`, impd deletes the guest's conntrack
 entries, so a flow the policy now denies ends on its next packet, and the broker closes the imp's
-plain tunnels to hosts the new policy denies: they are relays in impd, which conntrack never sees. A
-broker connection is tracked from the moment it is accepted, so one whose CONNECT arrives after the
-change is held to the new policy.
+plain tunnels to hosts the new policy denies, and all of them on a change to `public`: they are
+relays in impd, which conntrack never sees. A broker connection is tracked from the moment it is
+accepted, so one whose CONNECT arrives after the change is held to the new policy.
 
 Known limits:
 
@@ -147,6 +159,86 @@ Known limits:
   construction: their addresses are in no set unless the list names them.
 - A guest that cached a wildcard name's address before an impd restart reaches it again only after
   it asks again: at most 5 minutes.
+
+### Public
+
+A `public` imp reaches the global internet only. The boundary: a `public` imp cannot open
+connections to the host, impd, other imps (unless a network you create puts both on it), the
+tailnet, link-local or private networks; the firewall does not and cannot restrict the guest's own
+loopback.
+
+Its slot chain checks, in order:
+
+1. `ct state invalid` is dropped.
+2. The interface: a packet that would leave by anything but a default route's interface of its own
+   family (`ip route show default`, and `ip -6 route show default`) is refused. `tailscale0`, a
+   Tailscale subnet route and a second Docker network are refused whatever address they carry. With
+   no default route, everything is.
+3. `public4`: every range the broker refuses (`REFUSED_RANGES`), `IMP_SUBNET`, the container's IPv4
+   networks (each on-link route, and each address as its prefix and as a /32), the IPv4 entries of
+   `IMP_EGRESS_DENY`, and each IPv4 network of `IMP_HOST_ADDRESSES`, prefix kept.
+4. `public6`: the [blocked IPv6 ranges](#blocked-ranges), the imps' prefix, the container's IPv6
+   prefixes, the documentation ranges `2001:db8::/32` and `3fff::/20`, the rest of `2001::/23`, the
+   IPv6 entries of `IMP_EGRESS_DENY`, and each IPv6 network of `IMP_HOST_ADDRESSES`, prefix kept. An
+   imp with no IPv6 address drops all IPv6.
+
+imp-host runs in a network namespace of its own, so the Docker host's LAN is in none of the
+container's prefixes: a global IPv6 /64, or a VPS's public IPv4 subnet, would be open to a public
+imp. `IMP_HOST_ADDRESSES` keeps each address's prefix for that reason, and denies the whole network,
+the host's neighbours on it included.
+
+impd writes these sets only while some imp is public, and reads the container's routes for them at
+each table build. A read that fails fails closed: impd logs
+`impd: egress: reading the host container's routes: …`, writes no uplink, so a public chain refuses
+everything, and refuses to start a public imp or set the policy until a later build reads them.
+`REFUSED_RANGES` and the blocked IPv6 ranges hold every block that the IANA special-purpose
+registries (2025-10-09) mark not globally reachable, and multicast; a unit test checks each block.
+The anycast services in `2001::/23` that are globally reachable stay reachable.
+
+The host container itself is never reached from a tap: `INPUT -i imp+` drops everything but the
+broker's and the resolver's ports, and IPv6 gets neighbour discovery only, from setup-net.sh's
+ip6tables and from impd's nft `input` chain, under every policy ([iptables](#iptables)). The public
+chain covers what the container forwards: the Docker host behind the bridge gateway, the networks
+past it, and the tailnet.
+
+| Path                                                                | How it closes                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NAT64 and DNS64                                                     | `64:ff9b::/96` and `64:ff9b:1::/48` are refused, and the resolver removes a DNS64 answer in them.                                                                                                                                                                                      |
+| 6to4 and Teredo                                                     | `2002::/16`, `2001::/32` and the old relay anycast `192.88.99.0/24` are refused.                                                                                                                                                                                                       |
+| IPv4-mapped, IPv4-compatible and IPv4-translated IPv6               | `::ffff:0:0/96`, `::/96` and `::ffff:0:0:0/96` are refused. The broker dials a mapped answer as the IPv4 address it holds, under the IPv4 checks.                                                                                                                                      |
+| A global address routed to a private service: a subnet route, a VPN | It leaves by another interface than the default route's.                                                                                                                                                                                                                               |
+| A global address on the container's own network                     | `public4` and `public6` hold the container's networks.                                                                                                                                                                                                                                 |
+| The Docker host's own addresses and the networks they are on        | `IMP_HOST_ADDRESSES` and `IMP_EGRESS_DENY`, which always holds `IMP_PUBLIC_IP` (see the limits below). A packet to them leaves by the uplink and reaches the host from the container's address, which a host firewall may trust.                                                       |
+| DNS rebinding                                                       | Nothing opens: the firewall refuses by address, whatever a name resolved to. The resolver removes inside answers, so a guest tries the next address at once.                                                                                                                           |
+| The credential broker                                               | It dials from the host container, which this firewall does not filter, as for every policy. A plain tunnel is refused every range above, every address of the host container, and an address that `ip route get` sends out by an interface other than a default route's of its family. |
+
+Known limits:
+
+- impd cannot see the Docker host's addresses from inside the container. `deploy/imp-host.service`
+  (which `bootstrap.sh` installs) and the NixOS module read them at each start into
+  `IMP_HOST_ADDRESSES`: every global-scope address with its prefix, IPv4 and IPv6
+  (`ip -o addr show scope global`). `deploy/compose.yaml` does not; there, list the host's addresses
+  and networks in `IMP_EGRESS_DENY`. While a public imp exists and `IMP_HOST_ADDRESSES` is empty,
+  impd logs `impd: egress: WARNING: a public imp exists and IMP_HOST_ADDRESSES is empty`, whatever
+  `IMP_EGRESS_DENY` holds.
+- The public sets are only as complete as the host data they get. A host address given without its
+  prefix (counted as a /32 or /128), or a network the host joins after the start, stays reachable
+  until `IMP_HOST_ADDRESSES` or `IMP_EGRESS_DENY` covers it. This holds for the broker too: a public
+  imp's plain tunnel is refused the same lists, and reaches what they miss.
+- The addresses are read only when imp-host starts. An IPv6 privacy address that rotates inside the
+  same /64 stays covered by the prefix, but an address on a new network (a new DHCP lease elsewhere,
+  a new SLAAC prefix from the router) is reachable until `systemctl restart imp-host`. A timer would
+  not help: the container's environment is fixed at its start.
+- Routing on the Docker host is the operator's boundary. If the host itself routes, NATs or DNATs a
+  global address to a private service (a VPN, a port forward, a load balancer's backend), the public
+  chain and the broker see only the global address and allow it. Only `IMP_EGRESS_DENY` closes it.
+- A host a [grant](../guides/connectors.md) covers is reached through the broker, whatever its
+  address, as under every policy.
+- The resolver forwards every name, so a name in a private zone of `IMP_DNS` gets an answer, with
+  its inside addresses removed.
+- When the default route moves to another interface, the table follows at its next build: a create,
+  a destroy or a policy change. Until then, a public imp's traffic out of the new interface is
+  refused.
 
 ## IPv6
 
@@ -206,8 +298,18 @@ The `open` and `box` chains refuse these, and the credential broker never dials 
 | `64:ff9b::/96`, `64:ff9b:1::/48`   | NAT64: a translator on the path would reach private IPv4 addresses.                                                                                                      |
 | `2002::/16`                        | 6to4: the address holds an IPv4 address, which a relay reaches.                                                                                                          |
 | `2001::/32`                        | Teredo: the same.                                                                                                                                                        |
+| `100:0:0:1::/64`                   | The dummy prefix: never routed.                                                                                                                                          |
+| `2001:2::/48`                      | Benchmarking.                                                                                                                                                            |
+| `2001:10::/28`                     | The old ORCHID: retired.                                                                                                                                                 |
+| `5f00::/16`                        | Segment routing IDs: never a host.                                                                                                                                       |
 | the imps' prefix                   | Other imps.                                                                                                                                                              |
 | the container's connected prefixes | The host's own networks, such as its Docker network: every on-link route, whatever made it, and the prefix of every global address. impd reads them at each table build. |
+
+A `public` imp is refused the documentation ranges `2001:db8::/32` and `3fff::/20` too; `open` and
+`box` imps are not, as test networks use them. It is refused the rest of `2001::/23` too, which the
+registry marks not globally reachable: only AMT `2001:3::/32`, AS112 `2001:4:112::/48`, ORCHIDv2
+`2001:20::/28` and DETs `2001:30::/28` stay open. The anycast PCP, TURN and SRP addresses in
+`2001:1::/32` go with it, as the nearest of their servers can sit on the host's own network.
 
 The broker reads the connected prefixes every 30 s. It dials an IPv4-mapped answer as its IPv4
 address, under the IPv4 checks.

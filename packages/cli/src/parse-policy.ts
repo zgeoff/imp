@@ -15,7 +15,7 @@ export function parsePolicy(
   const parsed = EgressModeSchema.safeParse(mode ?? 'box');
 
   if (!parsed.success) {
-    throw new UsageError(`the egress policy is open, box or none, not ${mode ?? ''}`);
+    throw new UsageError(`the egress policy is open, public, box or none, not ${mode ?? ''}`);
   }
 
   const entries = (allow ?? '')

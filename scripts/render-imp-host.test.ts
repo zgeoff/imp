@@ -86,7 +86,8 @@ test('the name, the privileges, the rest, the probed args, then the image', () =
 test('the probe escapes its dollars for systemd', () => {
   expect(renderProbe([{ path: '/dev/zfs', args: ['--device', '/dev/zfs'] }])).toBe(
     'ExecStartPre=/bin/sh -c \'a=; [ -e /dev/zfs ] && a="$$a --device /dev/zfs"; ' +
-      'echo "IMP_HOST_PROBED=$$a" >/run/imp-host/probed.env\'',
+      '{ echo "IMP_HOST_PROBED=$$a"; echo "IMP_HOST_ADDRESSES=$$(ip -o addr show scope global | ' +
+      'tr -s " " | cut -d " " -f 4 | paste -sd ,)"; } >/run/imp-host/probed.env\'',
   );
 });
 

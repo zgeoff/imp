@@ -101,6 +101,9 @@ services:
     env_file:
       - path: ${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
         required: true
+    # Unlike the systemd unit, compose does not read this host's addresses
+    # into IMP_HOST_ADDRESSES: list them in IMP_EGRESS_DENY in the env file,
+    # or public imps can reach them (docs/architecture/networking.md#public).
     # impd pulls and builds imp images through the proxy's socket
     environment:
       DOCKER_HOST: unix:///run/imp-docker/docker.sock

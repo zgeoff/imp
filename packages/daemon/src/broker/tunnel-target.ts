@@ -3,14 +3,15 @@ import { networkInterfaces } from 'node:os';
 import { parseIpv4 } from '../net/addressing';
 import { formatIpv6, parseIpv6 } from '../net/addressing6';
 import { readMappedIpv4 } from '../net/ranges6';
+import { readErrorMessage } from '../read-error-message';
 
 // Where a plain tunnel may go. It starts in the host container, past the
 // `INPUT -i imp+ DROP` rule: unchecked, a guest could reach impd's API, the
 // wake proxy and other imps' ports.
 
-// [network, prefix length]: loopback, private, shared (the tailnet's 100.x),
-// link-local, documentation, benchmark, multicast and the reserved top; the
-// egress firewall refuses them to a box imp too
+// [network, prefix length]: every block not globally reachable in the IANA
+// IPv4 Special-Purpose Address Registry (special-ranges.test.ts), and
+// multicast; the egress firewall refuses them to a box or public imp too
 export const REFUSED_RANGES: readonly (readonly [string, number])[] = [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
@@ -20,6 +21,7 @@ export const REFUSED_RANGES: readonly (readonly [string, number])[] = [
   ['172.16.0.0', 12],
   ['192.0.0.0', 24],
   ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
   ['192.168.0.0', 16],
   ['198.18.0.0', 15],
   ['198.51.100.0', 24],
@@ -96,6 +98,9 @@ export interface TunnelTargetDeps {
   // with IPv6, which IPv6 addresses no tunnel reaches; without it, every
   // IPv6 address is refused and names resolve to IPv4 only
   readonly isBlocked6?: ((address: string) => boolean) | null;
+
+  // more addresses this tunnel may not reach: a public imp's
+  readonly isRefusedMore?: (address: string) => boolean;
 }
 
 // The address to dial for `host`, resolved once and dialled as checked, so a
@@ -122,13 +127,43 @@ export async function resolveTunnelTarget(
     throw new TunnelRefusedError(`${host} has no address a tunnel may dial`);
   }
 
-  const refused = addresses.find((address) => isRefusedAddress(address, hostAddresses, isBlocked6));
+  const isRefusedMore = deps.isRefusedMore ?? (() => false);
+
+  const refused = addresses.find(
+    (address) => isRefusedAddress(address, hostAddresses, isBlocked6) || isRefusedMore(address),
+  );
 
   if (refused !== undefined) {
     throw new TunnelRefusedError(`${host} resolves to ${refused}, which a tunnel may not reach`);
   }
 
   return first;
+}
+
+// A public imp's tunnel leaves by a default route's interface only, as its
+// firewall's traffic does; a route that cannot be read refuses it too.
+export async function requireUplinkRoute(
+  host: string,
+  address: string,
+  uplinks: Readonly<{ ipv4: readonly string[]; ipv6: readonly string[] }>,
+  readRouteDevice: (address: string) => Promise<string>,
+): Promise<void> {
+  const allowed = parseIpv4(address) === null ? uplinks.ipv6 : uplinks.ipv4;
+  let dev: string;
+
+  try {
+    dev = await readRouteDevice(address);
+  } catch (error) {
+    throw new TunnelRefusedError(`${host}: no route to ${address}: ${readErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+
+  if (!allowed.includes(dev)) {
+    throw new TunnelRefusedError(
+      `${host} resolves to ${address}, which the host reaches by ${dev}, not by a default route`,
+    );
+  }
 }
 
 async function resolveAddresses(host: string, ipv6: boolean): Promise<readonly string[]> {

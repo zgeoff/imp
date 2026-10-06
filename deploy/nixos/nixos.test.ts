@@ -42,6 +42,9 @@ interface WriterInput {
   readonly liveArcMib?: number;
   readonly secrets?: string;
   readonly backupPassword?: string;
+
+  // the fake ip's output, or null for an ip that fails
+  readonly ipOutput?: string | null;
 }
 
 interface WriterResult {
@@ -59,10 +62,20 @@ function runWriter(input: WriterInput = {}): WriterResult {
   rmSync(out, { force: true });
 
   const arcParam = writeTempFile('zfs_arc_max', `${String((input.liveArcMib ?? 0) * MIB)}\n`);
+  const bin = path.join(dir, 'bin');
+
+  mkdirSync(bin, { recursive: true });
+
+  const ipOutput = input.ipOutput === undefined ? '' : input.ipOutput;
+
+  const fakeIp =
+    ipOutput === null ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\ncat <<'EOF'\n${ipOutput}EOF\n`;
+
+  writeFileSync(path.join(bin, 'ip'), fakeIp, { mode: 0o755 });
 
   const result = Bun.spawnSync(['bash', writer, bootstrap], {
     env: {
-      PATH: process.env['PATH'] ?? '',
+      PATH: `${bin}:${process.env['PATH'] ?? ''}`,
       IMP_SETTINGS: writeTempFile('settings', 'IMP_HOST_FIREWALL=none\nIMP_STORAGE_BACKEND=zfs\n'),
       IMP_STORAGE: input.storage ?? 'zfs',
       IMP_RAM_BUDGET: input.ramBudget ?? '',
@@ -183,6 +196,24 @@ test('a backup password names its file; without one, backups stay off', () => {
   expect(getEnvValues(without.env, 'IMP_BACKUP_REPOSITORY')).toEqual(['']);
   expect(getEnvValues(without.env, 'IMP_BACKUP_PASSWORD_FILE')).toEqual([]);
   expect(without.output).toContain('backups stay off');
+});
+
+test("the host's own global addresses go in last, and an ip that fails leaves them empty", () => {
+  const result = runWriter({
+    secrets: 'IMP_HOST_ADDRESSES=10.9.9.9\n',
+    ipOutput:
+      '2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global eth0\\       valid_lft forever\n' +
+      '2: eth0    inet6 2001:db8::7/64 scope global \\       valid_lft forever\n',
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(getEnvValues(result.env, 'IMP_HOST_ADDRESSES')).toEqual(['203.0.113.7/24,2001:db8::7/64']);
+
+  const failed = runWriter({ ipOutput: null });
+
+  expect(failed.exitCode).toBe(0);
+  expect(getEnvValues(failed.env, 'IMP_HOST_ADDRESSES')).toEqual(['']);
+  expect(failed.output).toContain("cannot read the host's addresses");
 });
 
 // The DNS token's staging, as the module runs it before each start, on a

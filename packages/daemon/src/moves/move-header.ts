@@ -179,6 +179,10 @@ export const MoveOfferReplySchema = z.object({
   // the target keeps the imp's leases; a target from before leases moved
   // leaves it out, and would drop them
   keepsLeases: z.boolean().default(false),
+
+  // the target knows the public egress policy; a target from before it
+  // leaves it out, and would receive a public imp as none
+  keepsPublicEgress: z.boolean().default(false),
 });
 
 // `/move/commit` and `/move/abort`: whether the target's copy is live

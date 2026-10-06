@@ -6,7 +6,7 @@ import {
   buildRuleset,
 } from '../../packages/daemon/src/egress/egress-ruleset';
 import type { FirewallSlot } from '../../packages/daemon/src/egress/egress-ruleset';
-import { BLOCKED_RANGES6 } from '../../packages/daemon/src/net/ranges6';
+import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6 } from '../../packages/daemon/src/net/ranges6';
 import { buildUnshare } from './unshare';
 
 // impd's table, applied by the real nft in a fresh user and network
@@ -62,6 +62,10 @@ const BASE = {
   dnsServers: ['1.1.1.1', '8.8.8.8'],
   privateRanges: PRIVATE,
   blocked6: BLOCKED6,
+  public4: PRIVATE,
+  public6: [...BLOCKED6, ...DOCUMENTATION_RANGES6],
+  uplinks4: ['eth0'],
+  uplinks6: ['eth0'],
   dnsPort: 7053,
   setSize: 4096,
 };
@@ -275,6 +279,226 @@ counted
       'g2>10.66.0.2 no',
       'packets 1',
       'packets 1',
+    ]);
+  },
+);
+
+// A public guest (g3) and an open one (g0); the uplink up0 on a public /24
+// whose neighbour wan answers on public, private and special addresses, and
+// tailscale0 with a public-looking subnet route to ts.
+const PUBLIC_NET = `
+mount -t tmpfs tmpfs /run
+mkdir -p /run/netns
+sysctl -qw net.ipv4.ip_forward=1
+sysctl -qw net.ipv6.conf.all.forwarding=1
+for n in 0 3; do
+  ip netns add g$n
+  ip link add imp$n type veth peer name eth0 netns g$n
+  ip addr add 10.66.0.$((n * 4 + 1))/30 dev imp$n
+  ip -6 addr add fd12:3456:789a::$n:1/112 dev imp$n nodad
+  ip link set imp$n up
+  ip -n g$n addr add 10.66.0.$((n * 4 + 2))/30 dev eth0
+  ip -n g$n -6 addr add fd12:3456:789a::$n:2/112 dev eth0 nodad
+  ip -n g$n link set eth0 up
+  ip -n g$n link set lo up
+  ip -n g$n route add default via 10.66.0.$((n * 4 + 1))
+  ip -n g$n -6 route add default via fd12:3456:789a::$n:1
+done
+ip netns add wan
+ip link add up0 type veth peer name eth0 netns wan
+ip addr add 44.0.0.1/24 dev up0
+ip -6 addr add 2a00:44::1/64 dev up0 nodad
+ip link set up0 up
+ip -n wan addr add 44.0.0.2/24 dev eth0
+ip -n wan -6 addr add 2a00:44::2/64 dev eth0 nodad
+ip -n wan link set eth0 up
+ip -n wan link set lo up
+for address in 93.184.215.14 10.250.77.1 169.254.169.254 192.88.99.1 8.8.4.4; do
+  ip -n wan addr add $address/32 dev lo
+done
+for address in 2606:4700::1111 64:ff9b::a00:1 2002:a00:1::1 2001:db8:77::1 2a01:4f8::7; do
+  ip -n wan -6 addr add $address/128 dev lo nodad
+done
+ip -n wan route add 10.66.0.0/16 via 44.0.0.1
+ip -n wan -6 route add fd12:3456:789a::/64 via 2a00:44::1
+ip route add default via 44.0.0.2
+ip -6 route add default via 2a00:44::2
+ip netns add ts
+ip link add tailscale0 type veth peer name eth0 netns ts
+ip addr add 100.90.0.1/24 dev tailscale0
+ip link set tailscale0 up
+ip -n ts addr add 100.90.0.2/24 dev eth0
+ip -n ts addr add 1.2.3.4/32 dev lo
+ip -n ts link set eth0 up
+ip -n ts link set lo up
+ip -n ts route add 10.66.0.0/16 via 100.90.0.1
+ip route add 1.2.3.0/24 via 100.90.0.2 dev tailscale0
+printf '%s' "$TABLE" | nft -f -
+# IPv6 neighbour discovery takes a second a hop on a first packet; a refusal
+# comes back at once as ICMP admin-prohibited
+reach() { ip netns exec "$1" ping -c 1 -W 4 "$2" >/dev/null 2>&1 && echo "$1>$2 yes" || echo "$1>$2 no"; }
+`;
+
+test.skipIf(!canUnshare)('packets: a public imp reaches the internet only, in each family', () => {
+  const slots: readonly FirewallSlot[] = [0, 3].map((slot) => ({
+    slot,
+    tap: `imp${String(slot)}`,
+    guestIp: `10.66.0.${String(slot * 4 + 2)}`,
+    guestIp6: `fd12:3456:789a::${String(slot)}:2`,
+    mode: slot === 0 ? 'open' : 'public',
+    cidrs: [],
+    addresses: [],
+  }));
+
+  // the host's own networks as impd reads them, and IMP_EGRESS_DENY
+  const table = buildRuleset({
+    ...BASE,
+    slots,
+    blocked6: [...BLOCKED6, '2a00:44::/64'],
+    public4: [...PRIVATE, '44.0.0.0/24', '44.0.0.1/32', '100.90.0.0/24', '8.8.4.4/32'],
+    public6: [...BLOCKED6, '2a00:44::/64', ...DOCUMENTATION_RANGES6, '2a01:4f8::7/128'],
+    uplinks4: ['up0'],
+    uplinks6: ['up0'],
+  });
+
+  const targets = [
+    '93.184.215.14',
+    '2606:4700::1111',
+    '10.250.77.1',
+    '169.254.169.254',
+    '192.88.99.1',
+    '44.0.0.2',
+    '8.8.4.4',
+    '1.2.3.4',
+    '64:ff9b::a00:1',
+    '2002:a00:1::1',
+    '2001:db8:77::1',
+    '2a00:44::2',
+    '2a01:4f8::7',
+  ];
+
+  const result = Bun.spawnSync(
+    [
+      ...buildUnshare(true),
+      'bash',
+      '-euo',
+      'pipefail',
+      '-c',
+      `${PUBLIC_NET}
+for target in ${targets.join(' ')}; do reach g3 $target; done
+for target in 10.250.77.1 44.0.0.2 8.8.4.4 1.2.3.4 2001:db8:77::1; do reach g0 $target; done
+`,
+    ],
+    { env: { ...process.env, TABLE: table } },
+  );
+
+  expect(result.stderr.toString()).toBe('');
+
+  // the public addresses, and nothing else; the open imp, as a control,
+  // reaches what the public one is refused by address and by route
+  expect(result.stdout.toString().trim().split('\n')).toEqual([
+    'g3>93.184.215.14 yes',
+    'g3>2606:4700::1111 yes',
+    ...targets.slice(2).map((target) => `g3>${target} no`),
+    'g0>10.250.77.1 yes',
+    'g0>44.0.0.2 yes',
+    'g0>8.8.4.4 yes',
+    'g0>1.2.3.4 yes',
+    'g0>2001:db8:77::1 yes',
+  ]);
+});
+
+test.skipIf(!canUnshare)('packets: with no default route, a public imp reaches nothing', () => {
+  const table = buildRuleset({
+    ...BASE,
+    slots: [
+      {
+        slot: 3,
+        tap: 'imp3',
+        guestIp: '10.66.0.14',
+        guestIp6: 'fd12:3456:789a::3:2',
+        mode: 'public',
+        cidrs: [],
+        addresses: [],
+      },
+    ],
+    uplinks4: [],
+    uplinks6: [],
+  });
+
+  const result = Bun.spawnSync(
+    [
+      ...buildUnshare(true),
+      'bash',
+      '-euo',
+      'pipefail',
+      '-c',
+      `${PUBLIC_NET}
+reach g3 93.184.215.14
+reach g3 2606:4700::1111
+`,
+    ],
+    { env: { ...process.env, TABLE: table } },
+  );
+
+  expect(result.stderr.toString()).toBe('');
+
+  expect(result.stdout.toString().trim().split('\n')).toEqual([
+    'g3>93.184.215.14 no',
+    'g3>2606:4700::1111 no',
+  ]);
+});
+
+test.skipIf(!canUnshare)(
+  'packets: with no ip6tables rules, a guest reaches the host container over IPv6 only for neighbour discovery',
+  () => {
+    const slots: readonly FirewallSlot[] = [0, 3].map((slot) => ({
+      slot,
+      tap: `imp${String(slot)}`,
+      guestIp: `10.66.0.${String(slot * 4 + 2)}`,
+      guestIp6: `fd12:3456:789a::${String(slot)}:2`,
+      mode: slot === 0 ? 'open' : 'public',
+      cidrs: [],
+      addresses: [],
+    }));
+
+    const table = buildRuleset({ ...BASE, slots, uplinks4: ['up0'], uplinks6: ['up0'] });
+
+    // the namespace has no ip6tables rules, as a container without ip6tables;
+    // the gateway's link-local address and its own on the tap, then IPv4 and
+    // the internet as controls (neighbour discovery must still pass)
+    const result = Bun.spawnSync(
+      [
+        ...buildUnshare(true),
+        'bash',
+        '-euo',
+        'pipefail',
+        '-c',
+        `${PUBLIC_NET}
+quick() { ip netns exec "$1" ping -c 1 -W 1 "$2" >/dev/null 2>&1 && echo "$1>$3 yes" || echo "$1>$3 no"; }
+for n in 0 3; do
+  local6=$(ip -6 addr show dev imp$n scope link | awk '/inet6/ { sub("/.*", "", $2); print $2 }')
+  quick g$n "$local6%eth0" link-local
+  quick g$n fd12:3456:789a::$n:1 tap6
+  quick g$n 10.66.0.$((n * 4 + 1)) tap4
+  reach g$n 2606:4700::1111
+done
+`,
+      ],
+      { env: { ...process.env, TABLE: table } },
+    );
+
+    expect(result.stderr.toString()).toBe('');
+
+    expect(result.stdout.toString().trim().split('\n')).toEqual([
+      'g0>link-local no',
+      'g0>tap6 no',
+      'g0>tap4 yes',
+      'g0>2606:4700::1111 yes',
+      'g3>link-local no',
+      'g3>tap6 no',
+      'g3>tap4 yes',
+      'g3>2606:4700::1111 yes',
     ]);
   },
 );

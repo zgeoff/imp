@@ -173,6 +173,27 @@ test('a host that cannot enforce a box or none policy is dropped for one', () =>
   ]);
 });
 
+test('a host that predates the public policy, or cannot enforce it, is dropped for one', () => {
+  const current = buildInfo({
+    features: { sessionOffsets: true, leases: true, publicEgress: true },
+  });
+
+  const hosts = [
+    buildAnswer('older'),
+    buildAnswer('unenforced', { info: { ...current, egress: { isEnforced: false } } }),
+    buildAnswer('current', { info: current }),
+  ];
+
+  const ranking = buildTestRanking(hosts, { policyMode: 'public' });
+
+  expect(ranking.dropped).toEqual([
+    { host: 'older', reason: 'impd 0.12.0 predates the public egress policy' },
+    { host: 'unenforced', reason: 'it cannot enforce a public egress policy' },
+  ]);
+
+  expect(ranking.ranked.map((host) => host.host)).toEqual(['current']);
+});
+
 test('a host with low storage, too few cores or a missing network is dropped', () => {
   const low = buildAnswer('low', {
     info: buildInfo({ storage: { ...buildInfo().storage, isLow: true } }),

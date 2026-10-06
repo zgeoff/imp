@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import * as dnsPacket from 'dns-packet';
 import { resolveImageName } from '../lib/fixtures';
-import { requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
+import { readInfo, requireImp, runImp, runShellInImp, tryImp } from '../lib/imp-cli';
 import { createImp, holdImp } from '../lib/imps';
 import { instance, runInContainer } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
@@ -16,13 +16,14 @@ const prefix = setupSuite('egress');
 const TINY = resolveImageName('e2e-tiny');
 const open = `${prefix}open`;
 const box = `${prefix}box`;
+const pub = `${prefix}pub`;
 
 // an address no allow-list here names, and no answer adds
 const OUTSIDE = '9.9.9.9';
 
 // a server on this machine, which guests reach on the dev container's
 // default gateway: a private address, held open for the flush test
-const held = { received: 0 };
+const held = { received: 0, accepted: 0 };
 const host = { gateway: '', port: 0, stop: () => {} };
 
 async function readContainerGateway(): Promise<string> {
@@ -45,6 +46,8 @@ beforeAll(async () => {
     port: 0,
     socket: {
       open: (socket) => {
+        held.accepted += 1;
+
         socket.write('hello\n');
       },
       data: (_socket, chunk) => {
@@ -265,4 +268,222 @@ test('none reaches nothing, and open gives it all back', async () => {
 
   expect(shut).toEqual([false, false]);
   expect(reopened).toBeTrue();
+});
+
+// A netns in the dev container that the suite owns, behind a veth: a 10/8
+// and a link-local address, whose listener logs each connection. Guests
+// reach it through FORWARD, as a private network beside the host.
+const LAN = {
+  netns: 'e2e-egress-lan',
+  private: '10.250.77.1',
+  linkLocal: '169.254.77.1',
+  port: 8077,
+  log: '/tmp/e2e-egress-lan.log',
+};
+
+const LAN_LISTENER = `
+const { appendFileSync } = require('node:fs');
+Bun.listen({
+  hostname: '0.0.0.0',
+  port: ${String(LAN.port)},
+  socket: {
+    open: (socket) => {
+      appendFileSync('${LAN.log}', socket.localAddress + ' ' + socket.remoteAddress + '\\n');
+      socket.write('hello\\n');
+    },
+    data: () => {},
+  },
+});
+`;
+
+const LAN_SETUP = `
+set -e
+ip netns del ${LAN.netns} 2>/dev/null || true
+ip netns add ${LAN.netns}
+ip link add e2elan0 type veth peer name eth0 netns ${LAN.netns}
+ip addr add 10.250.77.254/24 dev e2elan0
+ip link set e2elan0 up
+ip -n ${LAN.netns} addr add ${LAN.private}/24 dev eth0
+ip -n ${LAN.netns} addr add ${LAN.linkLocal}/32 dev eth0
+ip -n ${LAN.netns} link set eth0 up
+ip -n ${LAN.netns} link set lo up
+ip -n ${LAN.netns} route add default via 10.250.77.254
+ip route add ${LAN.linkLocal}/32 dev e2elan0
+: > ${LAN.log}
+setsid ip netns exec ${LAN.netns} bun -e "$LISTENER" </dev/null >/dev/null 2>&1 &
+`;
+
+async function runLanScript(script: string): Promise<void> {
+  const result = await runInContainer(['env', `LISTENER=${LAN_LISTENER}`, 'sh', '-c', script]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`the lan netns: ${result.stderr}`);
+  }
+}
+
+// the connections each lan listener took, by the address dialled
+async function countLanConnections(): Promise<Readonly<Record<string, number>>> {
+  const result = await runInContainer(['cat', LAN.log]);
+
+  const counts: Record<string, number> = { [LAN.private]: 0, [LAN.linkLocal]: 0 };
+
+  for (const line of result.stdout.split('\n')) {
+    const [local = ''] = line.split(' ');
+
+    if (local in counts) {
+      counts[local] = (counts[local] ?? 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+beforeAll(async () => {
+  await runLanScript(LAN_SETUP);
+
+  // the container reaches both listeners itself: they are up
+  await waitFor('the lan listeners', async () => {
+    for (const address of [LAN.private, LAN.linkLocal]) {
+      const probe = await runInContainer([
+        'bash',
+        '-c',
+        `exec 3<>/dev/tcp/${address}/${String(LAN.port)}`,
+      ]);
+
+      expect(probe.exitCode).toBe(0);
+    }
+  });
+
+  await createImp(pub, '--image', TINY, '--memory', '256', '--policy', 'public');
+  await holdImp(pub);
+}, 600_000);
+
+afterAll(async () => {
+  await runInContainer([
+    'sh',
+    '-c',
+    `ip netns pids ${LAN.netns} | xargs -r kill; ip netns del ${LAN.netns}`,
+  ]);
+});
+
+interface Dial {
+  readonly isConnected: boolean;
+  readonly ms: number;
+  readonly error: string;
+}
+
+// A TCP connection from the guest by nc, timed by /proc/uptime's hundredths;
+// a failure is tried again with wget, which names it (nc fails in silence).
+// A refusal is a reset, at once, where a drop would take all 5 s of -w.
+async function runTimedDial(name: string, target: string, port: number): Promise<Dial> {
+  const script = [
+    'rm -f /tmp/dial-err',
+    "s=$(cut -d ' ' -f 1 /proc/uptime | tr -d .)",
+    `echo | nc -w 5 ${target} ${String(port)} >/dev/null 2>&1`,
+    'rc=$?',
+    "e=$(cut -d ' ' -f 1 /proc/uptime | tr -d .)",
+    `[ $rc = 0 ] || wget -q -T 5 -O /dev/null http://${target}:${String(port)}/ 2>/tmp/dial-err`,
+    String.raw`echo "$rc $(( (e - s) * 10 )) $(head -c 200 /tmp/dial-err | tr -s "\n" " ")"`,
+  ].join('; ');
+
+  const out = await runShellInImp(name, script);
+
+  const [rc = '', ms = '', ...words] = out.trim().split(' ');
+
+  return { isConnected: rc === '0', ms: Number(ms), error: words.join(' ') };
+}
+
+test('the open imp reaches each private listener, as a control', async () => {
+  const before = await countLanConnections();
+
+  const gateway = held.accepted;
+
+  const dials = [
+    await runTimedDial(open, LAN.private, LAN.port),
+    await runTimedDial(open, host.gateway, host.port),
+  ];
+
+  const after = await countLanConnections();
+
+  expect(dials.map((dial) => dial.isConnected)).toEqual([true, true]);
+  expect(after[LAN.private]).toBe((before[LAN.private] ?? 0) + 1);
+  expect(held.accepted).toBe(gateway + 1);
+});
+
+test('a public imp is refused the bridge gateway, 10/8 and link-local at once, with a reset', async () => {
+  const before = await countLanConnections();
+
+  const gateway = held.accepted;
+
+  const targets = [
+    [host.gateway, host.port],
+    [LAN.private, LAN.port],
+    [LAN.linkLocal, LAN.port],
+    ['169.254.169.254', 80],
+  ] as const;
+
+  const dials = [];
+
+  for (const [target, port] of targets) {
+    dials.push({ target, ...(await runTimedDial(pub, target, port)) });
+  }
+
+  const after = await countLanConnections();
+
+  for (const dial of dials) {
+    expect({ target: dial.target, isConnected: dial.isConnected }).toEqual({
+      target: dial.target,
+      isConnected: false,
+    });
+
+    expect(dial.error).toContain('Connection refused');
+    expect(dial.ms).toBeLessThan(1000);
+  }
+
+  writeMetric('egressPublicRefusalMs', Math.max(...dials.map((dial) => dial.ms)));
+
+  // no listener saw a connection: the firewall refused it, no dead listener
+  expect(after).toEqual(before);
+  expect(held.accepted).toBe(gateway);
+});
+
+test('a public imp is refused the tailnet address, when the host has one', async () => {
+  const info = await readInfo();
+
+  const ip = info.tailscale.ip;
+
+  if (ip === null) {
+    console.log('    no tailnet address here; skipped');
+
+    return;
+  }
+
+  const dial = await runTimedDial(pub, ip, 7070);
+
+  expect(dial.isConnected).toBeFalse();
+});
+
+test('a public imp fetches from the internet, and its DNS hides inside answers', async () => {
+  const fetched = await tryGetFromImp(pub, 'http://example.com/');
+
+  // a public name that resolves into 10/8 (sslip.io answers with the
+  // address the name spells): the open imp asks a public resolver itself and
+  // gets it; the public imp's query goes to impd, which removes it
+  const name = '10-250-77-1.sslip.io';
+
+  const openAnswer = await runShellInImp(open, `nslookup ${name} 8.8.8.8 || true`);
+  const publicAnswer = await runShellInImp(pub, `nslookup ${name} 8.8.8.8 || true`);
+
+  expect(fetched).toBeTrue();
+  expect(openAnswer).toContain(LAN.private);
+  expect(publicAnswer).not.toContain(LAN.private);
+});
+
+test('the controls still reach the listeners after the public refusals', async () => {
+  const dials = [
+    await runTimedDial(open, LAN.private, LAN.port),
+    await runTimedDial(open, host.gateway, host.port),
+  ];
+
+  expect(dials.map((dial) => dial.isConnected)).toEqual([true, true]);
 });

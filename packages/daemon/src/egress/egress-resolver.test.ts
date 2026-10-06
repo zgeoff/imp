@@ -108,6 +108,7 @@ function setupHandler(overrides: Partial<ResolverDeps> = {}) {
 
       return Promise.resolve(buildAnswer(query, NPM_ANSWERS));
     },
+    isScreened: () => false,
     maxTtlS: 86_400,
     readRate: () => ({ burst: 100, perSecond: 10 }),
     now: () => 0,
@@ -145,6 +146,35 @@ test('an allowed name: the CNAME chain and its A records go in, and the TTLs dro
   ]);
 
   expect(ttls).toEqual([300, 86_400, 60, 60]);
+});
+
+test('a screened name drops the addresses a public imp may not reach, and adds nothing', async () => {
+  const answers: readonly Answer[] = [
+    { type: 'CNAME', name: 'rebind.test', ttl: 300, data: 'inside.test' },
+    { type: 'A', name: 'inside.test', ttl: 60, data: '10.250.77.1' },
+    { type: 'A', name: 'inside.test', ttl: 60, data: '93.184.215.14' },
+    { type: 'AAAA', name: 'inside.test', ttl: 60, data: '::ffff:a00:1' },
+    { type: 'AAAA', name: 'inside.test', ttl: 60, data: '2606:2800:21f:cb07::1' },
+  ];
+
+  const screened = new Set(['10.250.77.1', '::ffff:a00:1']);
+
+  const ctx = setupHandler({
+    checkName: () => Promise.resolve('screen'),
+    forward: (query) => Promise.resolve(buildAnswer(query, answers)),
+    isScreened: (address) => screened.has(address),
+  });
+
+  const reply = await ctx.sendQuery('rebind.test');
+
+  // the chain stays, TTLs as they came: no set holds a public imp's answers
+  expect(reply.answers).toEqual([
+    expect.objectContaining({ type: 'CNAME', data: 'inside.test', ttl: 300 }),
+    expect.objectContaining({ type: 'A', data: '93.184.215.14', ttl: 60 }),
+    expect.objectContaining({ type: 'AAAA', data: '2606:2800:21f:cb07::1' }),
+  ]);
+
+  expect(ctx.admitted).toEqual([]);
 });
 
 test('the reply waits for the addresses to be in nft', async () => {
@@ -412,6 +442,7 @@ test('over UDP and TCP on loopback, with a truncated upstream reply retried over
     checkName: () => Promise.resolve('admit'),
     writeAnswers: () => Promise.resolve(),
     forward: createDnsForward(['127.0.0.1'], upstream.port),
+    isScreened: () => false,
     maxTtlS: 86_400,
     readRate: () => ({ burst: 100, perSecond: 100 }),
     now: Date.now,
@@ -528,6 +559,7 @@ test('the TCP side closes an idle client and caps the clients of one slot', asyn
     checkName: () => Promise.resolve('refuse'),
     writeAnswers: () => Promise.resolve(),
     forward: () => Promise.reject(new Error('no upstream')),
+    isScreened: () => false,
     maxTtlS: 300,
     readRate: () => ({ burst: 100, perSecond: 100 }),
     now: Date.now,

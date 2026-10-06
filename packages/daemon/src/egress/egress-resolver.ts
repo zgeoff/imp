@@ -9,10 +9,10 @@ import { normalizeName } from './egress-rules';
 import type { AddressAnswer } from './egress-sets';
 import type { LocalAnswer } from './network-names';
 
-// What the resolver does with a name: `admit` forwards it and lets the
-// answer's addresses into the imp's set, `answer` forwards it and adds
-// nothing (a host the broker serves), `refuse` never asks upstream.
-export type QueryVerdict = 'admit' | 'answer' | 'refuse';
+// What the resolver does with a name, which it forwards unless refused:
+// `admit` puts the addresses into the imp's set, `answer` adds nothing, and
+// `screen` drops the addresses a public imp may not reach.
+export type QueryVerdict = 'admit' | 'answer' | 'screen' | 'refuse';
 
 export interface RateLimit {
   readonly burst: number;
@@ -42,6 +42,9 @@ export interface ResolverDeps {
     answers: readonly AddressAnswer[],
   ) => Promise<void>;
   readonly forward: DnsForward;
+
+  // an address a public imp may not reach, which a screened reply leaves out
+  readonly isScreened: (address: string) => boolean;
 
   // the longest TTL a reply carries: a guest asks again within it, so an
   // impd restart, which empties the sets, costs a guest at most that long
@@ -120,6 +123,10 @@ export function createQueryHandler(deps: ResolverDeps): QueryHandler {
     try {
       const reply = await deps.forward(message);
 
+      if (verdict === 'screen') {
+        return removeScreened(reply, deps.isScreened);
+      }
+
       if (verdict === 'answer' || (query.type !== 'A' && query.type !== 'AAAA')) {
         return reply;
       }
@@ -163,6 +170,25 @@ async function writeAnswers(
   return dnsPacket.encode({
     ...packet,
     answers: records.map((record) => toCappedTtl(record, deps.maxTtlS)),
+  });
+}
+
+// The reply without an A or AAAA record a public imp may not reach, in any
+// section: the firewall drops the address anyway, and a guest that never
+// sees it tries the next at once. The rest stays as it came.
+function removeScreened(reply: Uint8Array, isScreened: (address: string) => boolean): Uint8Array {
+  const packet = dnsPacket.decode(Buffer.from(reply));
+
+  const removeAddresses = (records: readonly Answer[] | undefined): Answer[] | undefined =>
+    records?.filter(
+      (record) => !((record.type === 'A' || record.type === 'AAAA') && isScreened(record.data)),
+    );
+
+  return dnsPacket.encode({
+    ...packet,
+    answers: removeAddresses(packet.answers),
+    authorities: removeAddresses(packet.authorities),
+    additionals: removeAddresses(packet.additionals),
   });
 }
 

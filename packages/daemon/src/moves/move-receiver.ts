@@ -806,6 +806,7 @@ export function createMoveReceiver(deps: MoveReceiverDeps): MoveReceiver {
       storage: deps.storage.kind,
       keepsMaxMemory: true,
       keepsLeases: true,
+      keepsPublicEgress: true,
     });
   };
 

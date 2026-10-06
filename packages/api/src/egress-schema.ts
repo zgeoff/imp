@@ -3,10 +3,10 @@ import * as z from 'zod';
 const HOST_PATTERN = /^(?:[a-z0-9_][a-z0-9_-]{0,62}\.)+[a-z][a-z0-9-]{0,62}$/;
 const CIDR_PATTERN = /^(?<address>(?:\d{1,3}\.){3}\d{1,3})(?:\/(?<prefix>\d{1,2}))?$/;
 
-// What an imp may reach directly. `open` is anything but the metadata and
-// tailnet ranges; `box` is the allow-list; `none` is nothing. Hosts a grant
-// covers stay reachable through the credential broker under every mode.
-export const EgressModeSchema = z.enum(['open', 'box', 'none']);
+// What an imp may reach directly (docs/architecture/networking.md#egress):
+// open, public (the internet only), box (its allow-list) or none. Hosts a
+// grant covers stay reachable through the credential broker under each.
+export const EgressModeSchema = z.enum(['open', 'public', 'box', 'none']);
 
 export type EgressMode = z.infer<typeof EgressModeSchema>;
 

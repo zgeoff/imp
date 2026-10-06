@@ -136,12 +136,16 @@ export function renderProxyUnit(unit: string, proxy: ProxyArgs): string {
   return unit.replace(PROXY_EXEC_START, () => renderProxyExecStart(proxy));
 }
 
-// IMP_HOST_PROBED: the probed args whose path this host has. Unbraced in ExecStart, it splits
-// into words, and none when empty.
+// IMP_HOST_PROBED: the probed args whose path this host has, split into words in ExecStart.
+// IMP_HOST_ADDRESSES: the host's own global addresses, which no public imp reaches
+// (docs/architecture/networking.md#public), read at each start for a new DHCP lease.
+const HOST_ADDRESSES =
+  'echo "IMP_HOST_ADDRESSES=$$(ip -o addr show scope global | tr -s " " | cut -d " " -f 4 | paste -sd ,)"';
+
 export function renderProbe(probed: readonly Probed[]): string {
   const tests = probed.map((entry) => `[ -e ${entry.path} ] && a="$$a ${entry.args.join(' ')}"; `);
 
-  return `ExecStartPre=/bin/sh -c 'a=; ${tests.join('')}echo "IMP_HOST_PROBED=$$a" >${PROBED_FILE}'`;
+  return `ExecStartPre=/bin/sh -c 'a=; ${tests.join('')}{ echo "IMP_HOST_PROBED=$$a"; ${HOST_ADDRESSES}; } >${PROBED_FILE}'`;
 }
 
 export function renderUnit(unit: string, args: HostArgs): string {

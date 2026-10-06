@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { buildNat66Removal, buildNat66Ruleset } from '../egress/egress-ruleset';
-import { runCommand } from '../process/run-command';
+import { runChecked, runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { buildUlaPrefix, formatCidr6, parsePrefix64 } from './addressing6';
 import type { Prefix64 } from './addressing6';
@@ -179,17 +179,14 @@ export async function readIpv6DefaultRoute(): Promise<string | null> {
   return /\bdev (?<dev>\S+)/.exec(result.stdout)?.groups?.['dev'] ?? null;
 }
 
-// The prefixes on the container's own links, which no imp may reach: a
-// docker network's /64, say, or one learned from router adverts. Read at
-// each table build, as interfaces and addresses come and go.
+// The prefixes on the container's own links, which no imp may reach, read
+// at each table build. A failed read throws: a blocklist without them would
+// let an imp or a tunnel reach them.
 export async function readConnectedPrefixes6(): Promise<readonly string[]> {
-  const routes = await runCommand(['ip', '-6', 'route', 'show']);
-  const addresses = await runCommand(['ip', '-6', '-o', 'addr', 'show']);
+  const routes = await runChecked(['ip', '-6', 'route', 'show']);
+  const addresses = await runChecked(['ip', '-6', '-o', 'addr', 'show']);
 
-  const routeText = routes.exitCode === 0 ? routes.stdout : '';
-  const addressText = addresses.exitCode === 0 ? addresses.stdout : '';
-
-  return parseConnectedPrefixes(routeText, addressText);
+  return parseConnectedPrefixes(routes, addresses);
 }
 
 // On-link routes of any origin (kernel, ra, static), and the prefix of every

@@ -15,6 +15,10 @@ const PEER_MARK = '0x01000000';
 // shared range that holds the tailnet
 const OPEN_BLOCKED_RANGES: readonly string[] = ['169.254.0.0/16', '100.64.0.0/10'];
 
+// the policies whose IPv4 DNS goes to impd's resolver, whatever server the
+// guest asks
+const REDIRECTED_MODES: ReadonlySet<EgressMode> = new Set(['public', 'box', 'none']);
+
 // One slot's part of the table. `addresses` are what the resolver let in for
 // a box; `cidrs` are its allow-list's address entries. Both hold IPv4 and
 // IPv6 alike; the table splits them by family.
@@ -56,6 +60,14 @@ export interface RulesetInput {
   // what no open or box imp reaches over IPv6, unless a box's list names
   // it: BLOCKED_RANGES6, the imps' /64 and the container's own prefixes
   readonly blocked6: readonly string[];
+
+  // what no public imp reaches: the private ranges, the host container's
+  // networks and IMP_EGRESS_DENY in each family, and the interfaces its
+  // traffic may leave by, each family's default routes'
+  readonly public4: readonly string[];
+  readonly public6: readonly string[];
+  readonly uplinks4: readonly string[];
+  readonly uplinks6: readonly string[];
   readonly dnsPort: number;
   readonly setSize: number;
 }
@@ -65,7 +77,8 @@ export interface RulesetInput {
 // kernel, and nothing is ever half applied.
 export function buildRuleset(input: RulesetInput): string {
   const box = input.slots.filter((slot) => slot.mode === 'box');
-  const redirected = input.slots.filter((slot) => slot.mode !== 'open');
+  const redirected = input.slots.filter((slot) => REDIRECTED_MODES.has(slot.mode));
+  const hasPublic = input.slots.some((slot) => slot.mode === 'public');
 
   const peerTaps = new Set(input.networks.flatMap((peers) => peers.map((peer) => peer.tap)));
 
@@ -77,6 +90,7 @@ export function buildRuleset(input: RulesetInput): string {
     `table ${EGRESS_TABLE} {`,
     ...buildSet('private', 'ipv4_addr', input.privateRanges, ['flags interval', 'auto-merge']),
     ...buildSet('blocked6', 'ipv6_addr', input.blocked6, ['flags interval', 'auto-merge']),
+    ...(hasPublic ? buildPublicSets(input) : []),
     ...buildSet(
       'dns_taps',
       'ifname',
@@ -129,6 +143,17 @@ export function buildRuleset(input: RulesetInput): string {
     // a tap with no slot
     '    goto deny',
     '  }',
+
+    // A guest's IPv6 to the host container itself: neighbour discovery
+    // only, as setup-net.sh's ip6tables INPUT, which may be missing, says.
+    // IPv4 is left to iptables.
+    '  chain input {',
+    '    type filter hook input priority filter - 1; policy accept;',
+    '    iifname != "imp*" accept',
+    '    meta nfproto ipv4 accept',
+    '    icmpv6 type { nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert } ip6 hoplimit 255 accept',
+    '    drop',
+    '  }',
     '  chain dns {',
     '    type nat hook prerouting priority dstnat - 1; policy accept;',
 
@@ -160,6 +185,28 @@ export function buildElementChange(
     ipv4.length === 0 ? '' : `${verb} element ${EGRESS_TABLE} allow${id} { ${ipv4.join(', ')} }\n`,
     ipv6.length === 0 ? '' : `${verb} element ${EGRESS_TABLE} allow6${id} { ${ipv6.join(', ')} }\n`,
   ].join('');
+}
+
+// the public chains' sets, written only while some imp is public
+function buildPublicSets(input: RulesetInput): readonly string[] {
+  const interval = ['flags interval', 'auto-merge'];
+
+  return [
+    ...buildSet('public4', 'ipv4_addr', input.public4, interval),
+    ...buildSet('public6', 'ipv6_addr', input.public6, interval),
+    ...buildSet(
+      'uplinks4',
+      'ifname',
+      input.uplinks4.map((uplink) => formatTap(uplink)),
+      [],
+    ),
+    ...buildSet(
+      'uplinks6',
+      'ifname',
+      input.uplinks6.map((uplink) => formatTap(uplink)),
+      [],
+    ),
+  ];
 }
 
 // a box's sets, by family: what the resolver let in, and its list's CIDRs
@@ -195,6 +242,18 @@ function buildSlotChain(slot: FirewallSlot): readonly string[] {
     open: [
       `ip daddr { ${OPEN_BLOCKED_RANGES.join(', ')} } goto deny`,
       'ip6 daddr @blocked6 goto deny',
+      'accept',
+    ],
+
+    // Only out of a default route's interface: a route to the tailnet, a
+    // Tailscale subnet route or another Docker network leaves by another,
+    // whatever address it carries. Then by address, in each family.
+    public: [
+      'ct state invalid drop',
+      'meta nfproto ipv4 oifname != @uplinks4 goto deny',
+      'meta nfproto ipv6 oifname != @uplinks6 goto deny',
+      'ip daddr @public4 goto deny',
+      'ip6 daddr @public6 goto deny',
       'accept',
     ],
     box: [

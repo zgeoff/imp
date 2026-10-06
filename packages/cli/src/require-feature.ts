@@ -9,13 +9,14 @@ const FEATURES = {
   execRequire: 'is older than 0.30.0',
   sessionLog: 'has no session logs',
   tokenUpdate: 'is older than 0.34.0',
+  publicEgress: 'is older than 0.35.0',
 } as const;
 
 type Feature = keyof typeof FEATURES;
 
-// An impd drops input fields it does not know, so a call that relies on a
-// newer one asks first, before it writes anything. `outcome` says what the
-// older impd would do instead.
+// An impd drops input fields it does not know and fails on values it does
+// not know, so a call that relies on a newer one asks first, before it
+// writes anything. `outcome` says what the older impd would do instead.
 export async function requireFeature(
   client: Pick<ImpClient, 'system'>,
   feature: Feature,
