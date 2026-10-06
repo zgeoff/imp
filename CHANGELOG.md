@@ -2,15 +2,16 @@
 
 ## [0.33.0](https://github.com/zgeoff/imp/compare/v0.32.2...v0.33.0) (2026-10-06)
 
-
 ### Features
 
-* **images:** add gh to the coder image ([#218](https://github.com/zgeoff/imp/issues/218)) ([3f3a053](https://github.com/zgeoff/imp/commit/3f3a053f9603b13e3b4afc433fd257b6bdfcecd0))
-
+- **images:** add gh to the coder image ([#218](https://github.com/zgeoff/imp/issues/218))
+  ([3f3a053](https://github.com/zgeoff/imp/commit/3f3a053f9603b13e3b4afc433fd257b6bdfcecd0))
 
 ### Bug Fixes
 
-* **deps:** pin source-map-js 1.2.2 past its advisory ([#219](https://github.com/zgeoff/imp/issues/219)) ([1c6e7ad](https://github.com/zgeoff/imp/commit/1c6e7ad9014776b534893d0e906d4e763ae847de))
+- **deps:** pin source-map-js 1.2.2 past its advisory
+  ([#219](https://github.com/zgeoff/imp/issues/219))
+  ([1c6e7ad](https://github.com/zgeoff/imp/commit/1c6e7ad9014776b534893d0e906d4e763ae847de))
 
 ## [0.32.2](https://github.com/zgeoff/imp/compare/v0.32.1...v0.32.2) (2026-10-04)
 
