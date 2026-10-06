@@ -1,8 +1,8 @@
 import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as z from 'zod';
 import { IMAGE_BUILD_PATH } from '../../../packages/api/src/image-build-protocol';
-import { DOCKERFILE_FRONTEND } from '../../../packages/daemon/src/docker-proxy/dockerfile-frontend';
 import { config } from '../lib/config';
 import { runConsole } from '../lib/console';
 import { getThroughProxy } from '../lib/http';
@@ -19,10 +19,12 @@ import { createImp, removeImps } from '../lib/imps';
 import {
   REPO_ROOT,
   instance,
+  readContainerGateway,
   readImpdLogSince,
   readToken,
   runChecked,
   runCommand,
+  runInContainer,
 } from '../lib/instance';
 import { setupSuite } from '../lib/setup-suite';
 import { waitFor } from '../lib/wait-for';
@@ -76,8 +78,8 @@ test('an image built from images/examples/hello serves its page through the prox
   expect(digest).toStartWith('@sha256:');
   expect(log).toContain(`pinned FROM ${ref} as ghcr.io/zgeoff/imp-base${digest}`);
 
-  // impd pulls the frontend first, so an engine before 29.6.0 can run it
-  await runChecked(['docker', 'image', 'inspect', '--format', '{{.Id}}', DOCKERFILE_FRONTEND]);
+  // in a builder, which pulls the frontend and the base cold
+  expect(log).toContain(`impd: image build ${hello} (imp): pins=`);
 
   console.log(`    imp image build images/examples/hello: ${String(Date.now() - started)} ms`);
 
@@ -177,6 +179,20 @@ test('a file capability survives the build: nobody binds port 80 with it, and no
   }
 });
 
+// what argv prints in an imp of the image: an isolated build tags nothing
+// on the host's Docker
+async function runInImage(image: string, ...argv: readonly string[]): Promise<string> {
+  const name = `${prefix}look`;
+
+  await createImp(name, '--image', image, '--memory', '512');
+
+  try {
+    return await runInImp(name, ...argv);
+  } finally {
+    await removeImps(name);
+  }
+}
+
 // a context directory under buildDir with this Dockerfile
 function writeContext(name: string, dockerfile: string): string {
   const dir = join(buildDir, name);
@@ -197,7 +213,7 @@ test('a build from a host path leaves out what .dockerignore drops, as an upload
   // ./ and the default name: impd sends the proxy one spelling
   await runImp('image', 'build', dir, '--name', onHost, '--on-host', '--file', './Dockerfile');
 
-  const listed = await runChecked(['docker', 'run', '--rm', `imp/${onHost}:latest`, 'ls', '/ctx']);
+  const listed = await runInImage(onHost, 'ls', '/ctx');
 
   expect(listed.trim().split('\n')).toEqual(['Dockerfile', 'kept.txt']);
 
@@ -233,34 +249,20 @@ test('a RUN step cannot ask for the host network or insecure mode', async () => 
   expect(images).not.toContain(rejected);
 });
 
-// The classic store gives an image built here no RepoDigest. The containerd
-// store gives it one under its own name: Docker 29.8 builds by it, and 29.7
-// asks the registry and fails. No build uses the tag unbound.
-test('a FROM image built on the host is refused, or built by its own digest', async () => {
+// A builder has only what it pulls: an image built on the host's Docker is
+// not there, and its name pulls from the registry, which has none
+test('a FROM image built on the host is not in the builder, so its pull fails', async () => {
   const local = 'e2e-img-localbase:1';
   const baseDir = writeContext('local-base-image', 'FROM busybox:1.37\nRUN echo local > /m\n');
   const dir = writeContext('local-base', `FROM ${local}\nRUN grep local /m\n`);
 
   await runChecked(['docker', 'build', '--quiet', '--tag', local, baseDir]);
 
-  const drivers = await runChecked(['docker', 'info', '--format', '{{json .DriverStatus}}']);
-
-  const isContainerdStore = drivers.includes('io.containerd.snapshotter');
-
   try {
     const result = await tryImp(['image', 'build', dir, '--name', onHost]);
 
-    if (!isContainerdStore) {
-      expect(result.exitCode).not.toBe(0);
-
-      expect(result.stderr).toContain(
-        `FROM ${local}: this image exists only on this host and has no registry digest, so impd cannot bind the build to it; build FROM a registry image by tag or digest. Local base images are not supported yet (#156).`,
-      );
-    } else if (result.exitCode === 0) {
-      await runImp('image', 'rm', onHost);
-    } else {
-      expect(result.stderr).toContain('pull access denied');
-    }
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(`FROM ${local}: the pull failed`);
   } finally {
     await runCommand(['docker', 'rmi', local]);
   }
@@ -364,15 +366,12 @@ test('a local ADD of a tar still extracts, COPY --from a stage and an image by d
   try {
     await runImp('image', 'build', dir, '--name', onHost);
 
-    const seen = await runChecked([
-      'docker',
-      'run',
-      '--rm',
-      `imp/${onHost}:latest`,
+    const seen = await runInImage(
+      onHost,
       'sh',
       '-c',
       'cat /extracted/inner.txt /staged; test -x /copied-busybox && echo copied',
-    ]);
+    );
 
     expect(seen.trim().split('\n')).toEqual(['inside the tar', 'staged', 'copied']);
   } finally {
@@ -413,14 +412,7 @@ test('a context with only a lowercase dockerfile builds it, as the frontend fall
 
     expect(response.status).toBe(200);
 
-    const which = await runChecked([
-      'docker',
-      'run',
-      '--rm',
-      `imp/${onHost}:latest`,
-      'cat',
-      '/which',
-    ]);
+    const which = await runInImage(onHost, 'cat', '/which');
 
     expect(which.trim()).toBe('lower');
   } finally {
@@ -451,15 +443,7 @@ test('the engine applies no ignore file to an uploaded context, Dockerfile.docke
 
     expect(response.status).toBe(200);
 
-    const listed = await runChecked([
-      'docker',
-      'run',
-      '--rm',
-      `imp/${onHost}:latest`,
-      'ls',
-      '-A',
-      '/ctx',
-    ]);
+    const listed = await runInImage(onHost, 'ls', '-A', '/ctx');
 
     expect(listed.trim().split('\n')).toEqual([
       '.dockerignore',
@@ -471,4 +455,164 @@ test('the engine applies no ignore file to an uploaded context, Dockerfile.docke
   } finally {
     await tryImp(['image', 'rm', onHost]);
   }
+});
+
+// #156: a RUN step in the builder reaches the internet only. The listener is
+// the test's, on every address of this machine, so the Docker host behind
+// the bridge gateway; impd's API and the metadata address are the others.
+test('an isolated build reaches the internet but not the host, impd or a private address', async () => {
+  const requests: string[] = [];
+
+  using listener = Bun.serve({
+    hostname: '0.0.0.0',
+    port: 0,
+    fetch: (request) => {
+      requests.push(request.url);
+
+      return new Response('probe');
+    },
+  });
+
+  const gateway = await readContainerGateway();
+
+  const port = String(listener.port);
+  const targets = [`${gateway}:${port}`, '10.66.0.1:7070', '169.254.169.254:80'];
+
+  const dir = writeContext(
+    'isolation',
+    [
+      'FROM busybox:1.37',
+      `RUN for t in ${targets.join(' ')}; do \\`,
+      '      if wget -T 3 -q -O /dev/null "http://$t/"; then echo "$t open"; else echo "$t closed"; fi; \\',
+      '    done > /probe.txt; \\',
+      '    if wget -T 15 -q -O /dev/null http://example.com/; then echo "public open"; else echo "public closed"; fi >> /probe.txt',
+      '',
+    ].join('\n'),
+  );
+
+  const name = `${prefix}iso`;
+
+  await runImp('image', 'build', dir, '--name', name);
+
+  try {
+    await createImp(name, '--image', name);
+
+    const probe = await runInImp(name, 'cat', '/probe.txt');
+
+    expect(probe.split('\n')).toEqual([
+      ...targets.map((target) => `${target} closed`),
+      'public open',
+    ]);
+
+    expect(requests).toEqual([]);
+  } finally {
+    await removeImps(name);
+    await tryImp(['image', 'rm', name]);
+  }
+
+  // every build's builder is gone with it
+  const listedJson = await runImp('ls', '--builders', '--json');
+
+  const listed: unknown = JSON.parse(listedJson);
+  const kinds = z.array(z.object({ kind: z.string().optional() })).parse(listed);
+
+  expect(kinds.filter((imp) => imp.kind === 'builder')).toEqual([]);
+});
+
+// The host container's own IPv6 addresses, every scope but loopback
+async function readContainerAddresses6(): Promise<string[]> {
+  const shown = await runInContainer(['ip', '-6', '-o', 'addr', 'show']);
+
+  return [
+    ...shown.stdout.matchAll(/ inet6 (?<address>[\da-f:]+)\/\d+ scope (?:global|link)/gv),
+  ].map((match) => match.groups?.['address'] ?? '');
+}
+
+// #156 and #180: a RUN step has no IPv6 of its own; what IPv6 it reaches
+// goes through the broker on the builder's gateway, its second hop after the
+// engine's bridge, and the public policy holds the broker to the internet.
+test("an isolated build's broker tunnel reaches the internet, but not the host, its taps or impd", async () => {
+  const requests: string[] = [];
+
+  using listener = Bun.serve({
+    hostname: '0.0.0.0',
+    port: 0,
+    fetch: (request) => {
+      requests.push(request.url);
+
+      return new Response('probe');
+    },
+  });
+
+  const gateway = await readContainerGateway();
+  const own6 = await readContainerAddresses6();
+  const route6 = await runInContainer(['ip', '-6', 'route', 'show', 'default']);
+
+  const hasIpv6 = route6.stdout.trim() !== '';
+
+  const refused = [
+    `${gateway}:${String(listener.port)}`,
+    '10.66.0.1:7070',
+    'GW:7070',
+    '127.0.0.1:7070',
+    '[::1]:7070',
+    '[fe80::1]:7070',
+    '169.254.169.254:80',
+    ...own6.map((address) => `[${address}]:7070`),
+  ];
+
+  const allowed = ['example.com:80', ...(hasIpv6 ? ['[2606:4700:4700::1111]:80'] : [])];
+
+  const dir = writeContext(
+    'broker',
+    [
+      'FROM busybox:1.37',
+      "RUN gw=$(traceroute -n -m 2 -w 2 1.1.1.1 2>/dev/null | awk '$1 == 2 { print $2 }'); \\",
+      '    awk \'$6 != "lo" { print "ipv6 " $6 }\' /proc/net/if_inet6 > /probe.txt; \\',
+      '    if wget -T 3 -q -O /dev/null "http://$gw:7070/"; then echo "direct open"; else echo "direct closed"; fi >> /probe.txt; \\',
+      `    for t in ${[...refused, ...allowed].join(' ')}; do \\`,
+      '      d=$(echo "$t" | sed "s/^GW:/$gw:/"); \\',
+      '      reply=$( (printf \'CONNECT %s HTTP/1.1\\r\\nHost: %s\\r\\n\\r\\n\' "$d" "$d"; sleep 3) | nc -w 5 "$gw" 7081 | head -1 | cut -d \' \' -f 2); \\',
+      '      echo "$t $reply"; \\',
+      '    done >> /probe.txt',
+      '',
+    ].join('\n'),
+  );
+
+  const name = `${prefix}broker`;
+
+  await runImp('image', 'build', dir, '--name', name);
+
+  try {
+    await createImp(name, '--image', name);
+
+    const probe = await runInImp(name, 'cat', '/probe.txt');
+
+    if (!hasIpv6) {
+      console.log(
+        '    the host container has no IPv6 default route; the public IPv6 fetch is skipped',
+      );
+    }
+
+    expect(probe.split('\n')).toEqual([
+      'direct closed',
+      ...refused.map((target) => `${target} 403`),
+      ...allowed.map((target) => `${target} 200`),
+    ]);
+
+    expect(requests).toEqual([]);
+  } finally {
+    await removeImps(name);
+    await tryImp(['image', 'rm', name]);
+  }
+});
+
+test('a FROM whose registry name resolves to a private address fails in the builder', async () => {
+  const dir = writeContext('private-registry', 'FROM 10-0-0-1.nip.io:5000/e2e/x:1\n');
+
+  const result = await tryImp(['image', 'build', dir, '--name', rejected]);
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.stderr).toContain('FROM 10-0-0-1.nip.io:5000/e2e/x:1: the pull failed');
+  expect(result.stderr).toContain('no such host');
 });

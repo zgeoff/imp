@@ -29,7 +29,9 @@ import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
 import { createBuildContextRoute } from './images/build-context-route';
 import { BUILD_KEEPALIVE_MS } from './images/build-event-stream';
-import { createImageService } from './images/image-service';
+import { createBuilders } from './images/builder-imps';
+import type { Builders } from './images/builder-imps';
+import { HOST_BUILD_WARNING, createImageService } from './images/image-service';
 import { createTemplateService } from './images/template-service';
 import { readSetfcapWarning } from './images/unpack-export';
 import { removeUnusedDrives } from './imps/remove-unused-drives';
@@ -183,7 +185,23 @@ async function main(): Promise<void> {
     log: printLog,
   });
 
-  const images = createImageService({ config, db, storage, storageGate, diskBudget });
+  // the image builders need the imps, which need the images
+  const buildersHolder: { builders: Builders | null } = { builders: null };
+
+  const images = createImageService({
+    config,
+    db,
+    storage,
+    storageGate,
+    diskBudget,
+    readBuilders: () => buildersHolder.builders,
+    log: printLog,
+  });
+
+  if (config.build.isolation === 'host') {
+    printLog(HOST_BUILD_WARNING);
+  }
+
   const diskUsage = createDiskUsageCache({ db, storage, log: printLog });
 
   const ipv6 = await resolveIpv6Plan(config.ipv6, {
@@ -299,6 +317,17 @@ async function main(): Promise<void> {
   });
 
   await imps.reconcileImps();
+
+  buildersHolder.builders = createBuilders({
+    config,
+    db,
+    imps,
+    ensureImage: images.ensureBuilderImage,
+    log: printLog,
+  });
+
+  // a build that a stop cut short left its builder
+  await buildersHolder.builders.removeLeftovers();
 
   // templates this host no longer boots go first, so their drives can too
   for (const key of imps.bootTemplates?.removeStale() ?? []) {

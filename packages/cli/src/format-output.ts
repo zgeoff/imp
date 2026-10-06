@@ -155,6 +155,11 @@ function formatNote(imp: Imp): string {
     notes.push(imp.move);
   }
 
+  // impd's, for one image build (docs/guides/images.md#isolated-builds)
+  if (imp.kind === 'builder') {
+    notes.push('image builder');
+  }
+
   if (imp.agentSilentSince !== undefined) {
     notes.push(`agent silent since ${imp.agentSilentSince.toISOString()}`);
   }

@@ -4,6 +4,7 @@ import type {
   EgressPolicy,
   ImpChangeReason,
   ImpEventDetail,
+  ImpKind,
   ImpState,
   MoveState,
   PublicAuth,
@@ -21,6 +22,7 @@ export interface ImpRecord {
   readonly name: string;
   readonly imageId: string;
   readonly state: ImpState;
+  readonly kind: ImpKind;
   readonly vcpus: number;
   readonly memoryMib: number;
 
@@ -99,6 +101,9 @@ export interface NewImp {
 
   // a move stages the imp marked
   readonly moveState?: MoveState;
+
+  // user when left out
+  readonly kind?: ImpKind;
 }
 
 export interface ImpStateChange {
@@ -249,6 +254,7 @@ async function writeImpRow(db: ImpDatabase, imp: NewImp): Promise<ImpRecord> {
       }),
       ...(imp.cpu !== undefined && { cpu_limit: imp.cpu.limit, cpu_weight: imp.cpu.weight }),
       ...(imp.moveState !== undefined && { move_state: imp.moveState }),
+      ...(imp.kind !== undefined && { kind: imp.kind }),
       created_at: now,
       last_active_at: now,
       jail_uid: jailUid,
@@ -677,6 +683,7 @@ function toImpRecord(row: Readonly<ImpRow>): ImpRecord {
     name: row.name,
     imageId: row.image_id,
     state: row.state,
+    kind: row.kind,
     vcpus: row.vcpus,
     memoryMib: row.memory_mib,
     maxMemoryMib: row.max_memory_mib ?? row.memory_mib,

@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
-import type { EgressPolicy, Imp } from '@imp/api';
+import type { EgressPolicy, Imp, ImpKind } from '@imp/api';
 import { buildInvalidStateError, isRamBudgetError } from '../api-errors';
 import { listCheckpoints } from '../db/checkpoints';
 import type { ImageRecord } from '../db/images';
@@ -54,6 +54,9 @@ interface CreateImpInput {
   readonly moveState?: 'receiving';
   readonly slot?: number;
   readonly isDiskGrowPending?: boolean;
+
+  // an image builder's, which only impd makes (images/builder-imps.ts)
+  readonly kind?: ImpKind;
 }
 
 interface DestroyOptions {
@@ -74,8 +77,8 @@ export interface ImpCommands {
   readonly destroyImp: (name: string, options?: DestroyOptions) => Promise<void>;
 
   // the imp with this id, checked under its lock: never another that took
-  // its name since; nothing when it is gone
-  readonly destroyImpId: (id: string) => Promise<void>;
+  // its name since; nothing when it is gone, or not of `kind` when given
+  readonly destroyImpId: (id: string, kind?: ImpKind) => Promise<void>;
   readonly readUrls: (name: string) => Promise<ImpUrls>;
 
   // snapshot memory to disk and stop Firecracker
@@ -362,9 +365,9 @@ export function createImpCommands(parts: ImpCommandParts): ImpCommands {
       await lock.withImp(name, removeLockedImp, options);
     },
 
-    destroyImpId: async (id) => {
+    destroyImpId: async (id, kind) => {
       await lock.withImpId(id, async (imp) => {
-        if (imp !== undefined) {
+        if (imp !== undefined && (kind === undefined || imp.kind === kind)) {
           await removeLockedImp(imp);
         }
       });

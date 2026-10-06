@@ -38,7 +38,13 @@ export type ImpService = ImpCommands &
   ServiceApi &
   Pick<
     ImpRuntime,
-    'openExec' | 'openAttach' | 'openDial' | 'openListener' | 'openAccept' | 'recordActivity'
+    | 'openExec'
+    | 'openBuilderExec'
+    | 'openAttach'
+    | 'openDial'
+    | 'openListener'
+    | 'openAccept'
+    | 'recordActivity'
   > & {
     // sessions impd last saw in the imp; undefined when it has not seen any
     readonly countSessions: (imp: ImpRecord) => number | undefined;

@@ -19,6 +19,7 @@ import { buildImagePaths } from '../storage/data-layout';
 import type { DiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import type { StorageGate } from '../storage/storage-gate';
+import { BUILDER_IMAGE } from './builder-imps';
 
 // A template's digest: no docker image ID ever starts with it
 // (docs/guides/templates.md#how-a-template-is-stored)
@@ -98,6 +99,14 @@ export function createTemplateService(deps: TemplateServiceDeps): TemplateServic
 
   return {
     createTemplate: async (impName, name) => {
+      if (name === BUILDER_IMAGE) {
+        throw buildConflictError(
+          'image',
+          name,
+          `the image name ${name} is impd's, for its image builders; pick another`,
+        );
+      }
+
       await deps.diskBudget.requireRoom(0);
 
       // joined before the lock, as a backup run does

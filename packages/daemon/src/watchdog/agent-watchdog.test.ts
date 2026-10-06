@@ -11,6 +11,7 @@ function buildImp(): ImpRecord {
     ...IMP,
     imageId: 'img',
     state: 'running',
+    kind: 'user',
     vcpus: 1,
     memoryMib: 512,
     maxMemoryMib: 512,

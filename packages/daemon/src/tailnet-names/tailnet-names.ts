@@ -136,10 +136,11 @@ export function createTailnetNames(deps: TailnetNamesDeps): TailnetNames {
     view.suffix = await deps.readSuffix();
 
     // a moving imp's name is the source's until the target commits, and no
-    // pass refreshes it meanwhile (docs/guides/hosts.md#moves)
+    // pass refreshes it meanwhile (docs/guides/hosts.md#moves); an image
+    // builder serves nothing
     const listed = await listImps(deps.db);
 
-    const imps = listed.filter((imp) => imp.moveState === null);
+    const imps = listed.filter((imp) => imp.moveState === null && imp.kind === 'user');
 
     const wanted = new Map(imps.map((imp) => [toService(imp.name), imp]));
 

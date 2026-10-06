@@ -22,7 +22,12 @@ test('it refuses refs and build contexts that docker could read as flags', async
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     for (const ref of ['--help', '-v/:/host', 'ubuntu --privileged', '']) {
@@ -77,7 +82,12 @@ test('images.add answers a proxy refusal as BAD_REQUEST, on the pull and on the 
       db: await openDatabase(':memory:'),
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
+      readBuilders: () => null,
+      log: () => {},
 
       // the fake docker first, for these calls only
       dockerEnv: { PATH: `${bin}:${process.env['PATH'] ?? ''}` },
@@ -104,7 +114,12 @@ test('it refuses a build context that is not on the impd host', async () => {
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     const failure = await images
@@ -143,7 +158,12 @@ test('a build context on the impd host with no Dockerfile is the client’s mist
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     const failure = await images.buildImage(dataDir, 'x').catch((error: unknown) => error);
@@ -166,7 +186,12 @@ test('a build context on the impd host over IMP_BUILD_CONTEXT_MAX_MIB is refused
       db,
       storage: createXfsBackend({ dataDir }),
       storageGate: createStorageGate(),
-      diskBudget: { withRoom: (_bytes, task) => task() },
+      diskBudget: {
+        withRoom: (_bytes, task) => task(),
+        withGrowingRoom: (task) => task(() => Promise.resolve()),
+      },
+      readBuilders: () => null,
+      log: () => {},
     });
 
     writeFileSync(`${dataDir}/Dockerfile`, 'FROM scratch\n');

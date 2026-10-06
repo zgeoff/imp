@@ -126,6 +126,7 @@ export {
   ForkResultSchema,
   GrantNotCopiedReasonSchema,
   GrantNotCopiedSchema,
+  ImpKindSchema,
   ImpSchema,
   ImpStateSchema,
 } from './imp-schema';
@@ -135,6 +136,7 @@ export type {
   GrantNotCopied,
   GrantNotCopiedReason,
   Imp,
+  ImpKind,
   ImpState,
   OutdatedPart,
 } from './imp-schema';

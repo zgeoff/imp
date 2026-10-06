@@ -376,7 +376,7 @@ async function checkGrantable(
   };
 }
 
-function readField(input: unknown, field: string): string | null {
+export function readField(input: unknown, field: string): string | null {
   if (typeof input !== 'object' || input === null) {
     return null;
   }

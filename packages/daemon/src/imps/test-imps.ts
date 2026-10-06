@@ -28,6 +28,8 @@ import { createDnsToken } from '../https/dns/dns-token';
 import { createPublicRecordsLink } from '../https/public-records-link';
 import { createBuildContextRoute } from '../images/build-context-route';
 import { BUILD_KEEPALIVE_MS } from '../images/build-event-stream';
+import { createBuilders } from '../images/builder-imps';
+import type { Builders } from '../images/builder-imps';
 import { createImageService } from '../images/image-service';
 import { createTemplateService } from '../images/template-service';
 import { createMoveService } from '../moves/move-service';
@@ -200,12 +202,22 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     log: () => {},
   });
 
-  const images = createImageService({ config, db, storage, storageGate, diskBudget });
-
   const printTestLog = (message: string): void => {
     logs.push(message);
     options.onLog?.(message);
   };
+
+  const buildersHolder: { builders: Builders | null } = { builders: null };
+
+  const images = createImageService({
+    config,
+    db,
+    storage,
+    storageGate,
+    diskBudget,
+    readBuilders: () => buildersHolder.builders,
+    log: printTestLog,
+  });
 
   // the vsock paths the broker installed its CA through
   const bundleInstalls: string[] = [];
@@ -349,6 +361,16 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
   const governed = startImpd();
   const revocations = createRevocations();
 
+  const builders = createBuilders({
+    config,
+    db,
+    imps: governed.imps,
+    ensureImage: images.ensureBuilderImage,
+    log: printTestLog,
+  });
+
+  buildersHolder.builders = builders;
+
   const tokens = await loadTokenStore({
     db,
     rootToken: TEST_TOKEN,
@@ -379,6 +401,7 @@ export async function setupImpTest(options: ImpTestOptions = {}) {
     db,
     dataDir,
     images,
+    builders,
     fake,
     taps,
     removedTaps,

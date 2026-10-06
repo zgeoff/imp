@@ -458,6 +458,21 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
   ]);
 });
 
+test('neither the idle loop nor the governor sleeps an image builder', async () => {
+  await using ctx = await setupRunningImp();
+
+  const builder = await ctx.imps.createImp({ name: 'imp-build-x', kind: 'builder' });
+
+  const byIdle = await ctx.imps.trySleepImp(builder.id, 'idle', {
+    by: 'idle',
+    seenActiveAt: Date.now() + 60_000,
+  });
+
+  const byGovernor = await ctx.imps.trySleepImp(builder.id, 'budget', { by: 'governor' });
+
+  expect([byIdle, byGovernor]).toEqual(['skipped', 'skipped']);
+});
+
 test('an imp destroyed and made again under its id, as on a move home, logs again', async () => {
   await using ctx = await setupImpTest();
 

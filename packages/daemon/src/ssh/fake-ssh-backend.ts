@@ -12,6 +12,7 @@ export const FAKE_IMP: ImpRecord = {
   name: 'box',
   imageId: 'image',
   state: 'running',
+  kind: 'user',
   vcpus: 2,
   memoryMib: 512,
   maxMemoryMib: 512,

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import * as z from 'zod';
 import { runImp, tryImp } from '../lib/imp-cli';
-import { REPO_ROOT, runChecked, runCommand } from '../lib/instance';
+import { REPO_ROOT, runChecked, runCommand, runDevScript } from '../lib/instance';
 import { writeRegistryIndex } from '../lib/registry-index';
 import { setupSuite } from '../lib/setup-suite';
 
@@ -64,6 +64,13 @@ beforeAll(async () => {
   if (!REGISTRY_READY) {
     return;
   }
+
+  // the host engine's builds: a builder imp may not reach the host's
+  // loopback, by design, so not this registry either; the suite goes with
+  // IMP_BUILD_ISOLATION=host
+  process.env['IMP_BUILD_ISOLATION'] = 'host';
+
+  await runDevScript('reboot');
 
   // --bail skips afterAll: a failed run's registry goes here
   const stale = await runChecked([
@@ -133,7 +140,7 @@ beforeAll(async () => {
     join(certs, 'cert.pem'),
     join(buildCertsDir(), 'ca.crt'),
   ]);
-});
+}, 600_000);
 
 afterAll(async () => {
   rmSync(buildDir, { recursive: true, force: true });
@@ -147,7 +154,13 @@ afterAll(async () => {
   for (const name of [mutable, multi, copied]) {
     await tryImp(['image', 'rm', name]);
   }
-});
+
+  if (process.env['IMP_BUILD_ISOLATION'] === 'host') {
+    delete process.env['IMP_BUILD_ISOLATION'];
+
+    await runDevScript('reboot');
+  }
+}, 600_000);
 
 // a context directory with this Dockerfile and a file v holding value
 function writeContext(name: string, dockerfile: string, value: string): string {

@@ -2,7 +2,7 @@ import { EVENT_VERSION, impContract, isImpAllowed } from '@imp/api';
 import type { Image, ImageBuildPhase, Imp, ImpEvent, Scope, SystemInfo } from '@imp/api';
 import { implement } from '@orpc/server';
 import packageJson from '../package.json' with { type: 'json' };
-import { buildForbiddenError } from './api-errors';
+import { buildBuilderError, buildForbiddenError } from './api-errors';
 import { readImpName } from './audit/api-audit';
 import type { ApiAudit } from './audit/api-audit';
 import {
@@ -13,6 +13,7 @@ import {
   isAuditedProcedure,
   isRefusalAudited,
 } from './auth/access-policy';
+import { readChangedImps } from './auth/builder-calls';
 import { formatCaller, isCallerAllowed, toIdentity } from './auth/caller';
 import type { Caller } from './auth/caller';
 import {
@@ -32,7 +33,7 @@ import type { Config } from './config';
 import { listApiCalls } from './db/api-audit';
 import { writeDatabaseCopy } from './db/database-copy';
 import type { ImageRecord } from './db/images';
-import { listImps } from './db/imps';
+import { findImpByName, listImps } from './db/imps';
 import type { ImpRecord } from './db/imps';
 import type { ImpDatabase } from './db/open-database';
 import { findSecret } from './db/secrets';
@@ -156,10 +157,20 @@ export function buildRouter(deps: RouterDeps) {
       const caller = options.context.caller;
 
       const requireAccess = async (): Promise<void> => {
-        const refusal = await checkAccess(findAccess(procedure), caller, input, readGeneration);
+        const access = findAccess(procedure);
+
+        const refusal = await checkAccess(access, caller, input, readGeneration);
 
         if (refusal !== null) {
           throw buildForbiddenError(refusal.message, refusal.reason);
+        }
+
+        for (const name of readChangedImps(procedure, access, input)) {
+          const imp = await findImpByName(deps.db, name);
+
+          if (imp?.kind === 'builder') {
+            throw buildBuilderError(name);
+          }
         }
       };
 
@@ -310,10 +321,14 @@ export function buildRouter(deps: RouterDeps) {
       }),
       list: os.imps.list.handler(async (context) => {
         const caller = context.context.caller;
+        const builders = context.input?.builders === true;
 
         const imps = await listCallerImps(caller);
 
-        return toCallerImps(caller, imps);
+        return toCallerImps(
+          caller,
+          imps.filter((imp) => builders || imp.kind !== 'builder'),
+        );
       }),
       get: os.imps.get.handler((context) =>
         toCallerImp(context.context.caller, deps.imps.getImp(context.input.name)),

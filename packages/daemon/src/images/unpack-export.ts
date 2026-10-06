@@ -8,10 +8,19 @@ const CAP_SETFCAP_BIT = 31n;
 const SETFCAP_HELP = 'imp-host needs CAP_SETFCAP (docs/architecture/host-contract.md#privileges)';
 
 // GNU tar's `--xattrs` alone restores only `user.*`; docker export writes
-// file capabilities as `security.capability`. LC_ALL=C keeps tar's warnings
-// in the English that findXattrFailure reads.
-const UNPACK_SCRIPT =
-  'docker export "$1" | LC_ALL=C tar --numeric-owner --xattrs --xattrs-include=security.capability --xattrs-include="user.*" -xpf - -C "$2"';
+// file capabilities as `security.capability`. Run with LC_ALL=C, which keeps
+// tar's warnings in the English that findXattrFailure reads.
+export const UNPACK_TAR_ARGS = [
+  'tar',
+  '--numeric-owner',
+  '--xattrs',
+  '--xattrs-include=security.capability',
+  '--xattrs-include=user.*',
+  '-xpf',
+  '-',
+] as const;
+
+const UNPACK_SCRIPT = `docker export "$1" | LC_ALL=C ${UNPACK_TAR_ARGS.map((arg) => `'${arg}'`).join(' ')} -C "$2"`;
 
 // Unpacks a container's filesystem into root, as root, so tar keeps numeric
 // owners, modes and file capabilities as they are in the image.

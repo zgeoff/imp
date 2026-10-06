@@ -67,6 +67,20 @@ const EnvSchema = z.object({
   IMP_DISK_RESERVE_GIB: CountSchema.optional(),
   IMP_BUILD_CONTEXT_MAX_MIB: CountSchema.default(1024),
 
+  // where an image build runs (docs/guides/images.md#isolated-builds): in a
+  // builder imp, or on the host's engine, for one release only
+  IMP_BUILD_ISOLATION: z.enum(['imp', 'host']).default('imp'),
+  IMP_BUILD_MEMORY_MIB: CountSchema.default(2048),
+  IMP_BUILD_DISK_GIB: CountSchema.default(20),
+  IMP_BUILD_IMAGE_MAX_MIB: CountSchema.default(8192),
+  IMP_BUILD_IMAGE_MAX_FILES: CountSchema.default(1_000_000),
+  IMP_BUILD_IMAGE: z
+    .string()
+    .regex(/^[\w.\/:\-]+@sha256:[a-f0-9]{64}$/v, 'must name an image by digest, <ref>@sha256:<hex>')
+    .default(
+      'ghcr.io/zgeoff/imp-base:0.29.0@sha256:1851f631ea77f3a99b6f1f9af8ca8868434f4cd066158bcf9def8678c29b0c21',
+    ),
+
   // session logs (docs/guides/session-logs.md): per generation, per imp,
   // and how long an ended generation's log stays
   IMP_SESSION_LOG_MAX_MIB: CountSchema.default(16),
@@ -108,6 +122,25 @@ const EnvSchema = z.object({
   ...TailnetNamesEnvSchema.shape,
   ...PublicMcpEnvSchema.shape,
 });
+
+// image builds (docs/guides/images.md#isolated-builds)
+interface BuildConfig {
+  // `host` builds on the host's engine, which the build can reach the
+  // host from; impd warns at start and at each build
+  readonly isolation: 'imp' | 'host';
+
+  // each builder imp's memory and disk
+  readonly memoryMib: number;
+  readonly diskBytes: number;
+
+  // the largest filesystem a build's export may stream out, and the most
+  // entries it may hold
+  readonly imageMaxBytes: number;
+  readonly imageMaxFiles: number;
+
+  // the builders' image, by digest
+  readonly image: string;
+}
 
 export interface Config {
   readonly dataDir: string;
@@ -175,6 +208,7 @@ export interface Config {
 
   // the largest build context a client may upload to IMAGE_BUILD_PATH
   readonly buildContextMaxBytes: number;
+  readonly build: BuildConfig;
 
   // the bounds of session logs (docs/guides/session-logs.md)
   readonly sessionLog: SessionLogLimits;
@@ -437,6 +471,14 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): C
     diskReserveBytes:
       parsed.IMP_DISK_RESERVE_GIB === undefined ? null : parsed.IMP_DISK_RESERVE_GIB * 1024 ** 3,
     buildContextMaxBytes: parsed.IMP_BUILD_CONTEXT_MAX_MIB * 1024 ** 2,
+    build: {
+      isolation: parsed.IMP_BUILD_ISOLATION,
+      memoryMib: parsed.IMP_BUILD_MEMORY_MIB,
+      diskBytes: parsed.IMP_BUILD_DISK_GIB * 1024 ** 3,
+      imageMaxBytes: parsed.IMP_BUILD_IMAGE_MAX_MIB * 1024 ** 2,
+      imageMaxFiles: parsed.IMP_BUILD_IMAGE_MAX_FILES,
+      image: parsed.IMP_BUILD_IMAGE,
+    },
     sessionLog: {
       generationMaxBytes: parsed.IMP_SESSION_LOG_MAX_MIB * 1024 ** 2,
       impMaxBytes: parsed.IMP_SESSION_LOG_IMP_MAX_MIB * 1024 ** 2,

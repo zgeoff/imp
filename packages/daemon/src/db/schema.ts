@@ -1,4 +1,12 @@
-import type { ApiActor, ColdBootCause, ImageSource, ImpState, MoveState, Scope } from '@imp/api';
+import type {
+  ApiActor,
+  ColdBootCause,
+  ImageSource,
+  ImpKind,
+  ImpState,
+  MoveState,
+  Scope,
+} from '@imp/api';
 import type { Generated } from 'kysely';
 
 // Timestamps are integer milliseconds since the epoch.
@@ -23,6 +31,7 @@ interface ImpsTable {
   name: string;
   image_id: string;
   state: ImpState;
+  kind: Generated<ImpKind>;
   vcpus: number;
   memory_mib: number;
   slot: number;

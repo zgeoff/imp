@@ -714,6 +714,15 @@ the image the host Docker has, and pulls it when it is missing. Then it exports 
 writes the image config for the agent. When no image exists, it adds `ubuntu:24.04` as `ubuntu`.
 [Storage](./storage.md#images-any-oci-image) covers the pipeline.
 
+By default the build runs in a builder imp instead
+([isolated builds](../guides/images.md#isolated-builds)). `images/build-engine.ts` is the seam: the
+pins and the frontend pull run as docker CLI commands on the host's engine or, through
+`images/guest-exec.ts`, on the builder's. `images/builder-imps.ts` makes the builder (kind
+`builder`, the `public` policy) and destroys it in `finally` and at start. `images/guest-build.ts`
+runs the build with the context on the builder's stdin, then streams `docker export` into the host's
+`tar` and hashes it for the image's digest. The router (`auth/builder-calls.ts`) and the runtime
+refuse a builder every call and stream but rm and reads.
+
 The template service (`images/template-service.ts`) makes an image from an imp's disk instead, for
 `images.add` with an imp as the source: it clones the disk under the imp's lock, frozen as for a
 checkpoint, into `images/imp-<uuidv7>` ([templates](../guides/templates.md)).
