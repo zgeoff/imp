@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.37.0](https://github.com/zgeoff/imp/compare/v0.36.0...v0.37.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **images:** under the default IMP_BUILD_ISOLATION=imp, imp image add pulls in a builder imp from a public registry, so an image that only the host's Docker engine has (such as one from a plain docker build) no longer adds; build it with imp image build, or set IMP_BUILD_ISOLATION=host for this release. Private registries do not pull in a builder.
+
+### Bug Fixes
+
+* **images:** drop a build's rootfs when its row fails or is cancelled ([#203](https://github.com/zgeoff/imp/issues/203)) ([3bddbac](https://github.com/zgeoff/imp/commit/3bddbacb2afd2f5623947452cb977aa2eec60e6b))
+
 ## [0.36.0](https://github.com/zgeoff/imp/compare/v0.35.0...v0.36.0) (2026-10-06)
 
 ### ⚠ BREAKING CHANGES

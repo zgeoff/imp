@@ -44,8 +44,8 @@ release, so pick the release in the image you take it from:
 <!-- x-release-please-start-version -->
 
 ```sh
-docker pull ghcr.io/zgeoff/imp-host:0.36.0
-docker run --rm ghcr.io/zgeoff/imp-host:0.36.0 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
+docker pull ghcr.io/zgeoff/imp-host:0.37.0
+docker run --rm ghcr.io/zgeoff/imp-host:0.37.0 cat /usr/local/share/imp/deploy/upgrade.sh >upgrade.sh
 bash upgrade.sh
 ```
 
