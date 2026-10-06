@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.34.0](https://github.com/zgeoff/imp/compare/v0.33.0...v0.34.0) (2026-10-06)
+
+### Features
+
+- **tokens:** change a token's grantable list without a new secret
+  ([#221](https://github.com/zgeoff/imp/issues/221))
+  ([da3b8a0](https://github.com/zgeoff/imp/commit/da3b8a001bb91f824365ba190cf197956165b72e))
+
 ## [0.33.0](https://github.com/zgeoff/imp/compare/v0.32.2...v0.33.0) (2026-10-06)
 
 ### Features
