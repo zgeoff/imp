@@ -77,11 +77,19 @@ export async function readUplinks(procNet = '/proc/sys/net/ipv6'): Promise<Uplin
   return { ipv4: parseUplinks(ipv4), ipv6: parseUplinks(ipv6) };
 }
 
+// A multipath route names its interfaces on the indented `nexthop` lines
+// under it, not on its own line.
 export function parseUplinks(routes: string): readonly string[] {
+  let isDefault = false;
+
   const devs = routes.split('\n').flatMap((line) => {
+    if (!/^\s/v.test(line)) {
+      isDefault = line.startsWith('default');
+    }
+
     const dev = /\bdev (?<dev>\S+)/v.exec(line)?.groups?.['dev'];
 
-    return line.startsWith('default') && dev !== undefined && !dev.startsWith('imp') ? [dev] : [];
+    return isDefault && dev !== undefined && !dev.startsWith('imp') ? [dev] : [];
   });
 
   return [...new Set(devs)];

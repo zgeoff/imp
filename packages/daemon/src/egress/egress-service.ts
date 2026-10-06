@@ -18,7 +18,7 @@ import type { Uplinks } from '../net/host-routes';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
-import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6 } from '../net/ranges6';
+import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, RESERVED_RANGES6 } from '../net/ranges6';
 import { runCommand } from '../process/run-command';
 import { readErrorMessage } from '../read-error-message';
 import { createDnsForward } from './dns-upstream';
@@ -191,7 +191,11 @@ export function createEgressService(deps: EgressDeps): EgressService {
     unenforced: null,
     server: null,
     sweep: null,
-    isScreened: createRangeChecker(privateRanges, [...BLOCKED_RANGES6, ...DOCUMENTATION_RANGES6]),
+    isScreened: createRangeChecker(privateRanges, [
+      ...BLOCKED_RANGES6,
+      ...DOCUMENTATION_RANGES6,
+      ...RESERVED_RANGES6,
+    ]),
     publicUnenforced: null,
     denyListMissing: false,
   };
@@ -213,7 +217,7 @@ export function createEgressService(deps: EgressDeps): EgressService {
   // and IMP_EGRESS_DENY, in each family
   const listPublicRanges = (host: HostNetwork): readonly [string[], string[]] => [
     [...privateRanges, ...host.connected4, ...deny4],
-    [...listBlocked6(host), ...DOCUMENTATION_RANGES6, ...deny6],
+    [...listBlocked6(host), ...DOCUMENTATION_RANGES6, ...RESERVED_RANGES6, ...deny6],
   ];
 
   const buildScript = (
