@@ -59,7 +59,7 @@ health=http://127.0.0.1:7070/health
 compose_file=
 # The image of this script's release, as its units name it; release-please
 # bumps it.
-readonly release_image=ghcr.io/zgeoff/imp-host:0.32.2 # x-release-please-version
+readonly release_image=ghcr.io/zgeoff/imp-host:0.33.0 # x-release-please-version
 # The image line every env file had before the units named their release.
 readonly legacy_image_line=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest
 
