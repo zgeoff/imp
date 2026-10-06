@@ -372,8 +372,9 @@ test('an isolated build holds disk as its export grows, not the image cap, and s
 
   expect(failure).toMatchObject({ code: 'DISK_FULL' });
 
-  // the fake builder sends its export as one chunk
-  expect(big.grows).toEqual([512 * 1024 ** 2]);
+  // the fake builder sends its export as one chunk: twice 200 MiB and the
+  // rootfs's journal, in 256 MiB steps
+  expect(big.grows).toEqual([768 * 1024 ** 2]);
   expect(big.guest.runs.at(-1)).toMatchObject({ closed: true });
 });
 
@@ -710,7 +711,10 @@ interface DiskTrial {
   // the last hold the build asked for
   readonly hold: number;
 
-  // the most the filesystem's use rose over the build, and the least it had free
+  // what the build took once its tree and rootfs were both written and
+  // synced; the most statfs showed it take, which on XFS adds blocks held for
+  // writes not yet flushed, and the least it showed free
+  readonly settledBytes: number;
   readonly peakBytes: number;
   readonly lowestFree: number;
 
@@ -727,7 +731,7 @@ async function runDiskTrial(
   roomBytes?: number,
 ): Promise<DiskTrial> {
   const filler = join(mount, `filler-${Bun.randomUUIDv7()}`);
-  const seen = { lowestFree: Number.POSITIVE_INFINITY, highestUsed: 0, split: '' };
+  const seen = { lowestFree: Number.POSITIVE_INFINITY, highestUsed: 0, settledUsed: 0, split: '' };
   const where = { dataDir: '' };
 
   const readDisk = () => {
@@ -743,10 +747,30 @@ async function runDiskTrial(
     seen.highestUsed = Math.max(seen.highestUsed, disk.used);
   };
 
+  // XFS frees a removed file's blocks in the background: wait until free
+  // space holds still
+  const waitForSettledDisk = () => {
+    Bun.spawnSync(['sync', '-f', mount]);
+
+    for (let tries = 0; tries < 50; tries += 1) {
+      const before = readDisk().free;
+
+      Bun.sleepSync(200);
+
+      if (readDisk().free === before) {
+        return;
+      }
+    }
+  };
+
+  waitForSettledDisk();
+
   if (roomBytes !== undefined) {
     const fill = readDisk().free - RESERVE_BYTES - roomBytes;
 
     Bun.spawnSync(['fallocate', '-l', String(fill), filler]);
+
+    waitForSettledDisk();
   }
 
   const baseUsed = readDisk().used;
@@ -781,6 +805,11 @@ async function runDiskTrial(
     disk: { mount, reserveBytes: RESERVE_BYTES },
     onRootfsWritten: () => {
       updateSeen();
+
+      Bun.spawnSync(['sync', '-f', mount]);
+
+      seen.settledUsed = readDisk().used;
+
       readSplit();
     },
   });
@@ -802,6 +831,7 @@ async function runDiskTrial(
 
     const trial = {
       hold: ctx.grows.at(-1) ?? 0,
+      settledBytes: seen.settledUsed === 0 ? 0 : seen.settledUsed - baseUsed,
       peakBytes: seen.highestUsed - baseUsed,
       lowestFree: seen.lowestFree,
       outcome,
@@ -810,7 +840,7 @@ async function runDiskTrial(
     const formatMib = (bytes: number) => `${(bytes / MIB).toFixed(1)} MiB`;
 
     console.log(
-      `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome} (${seen.split})`,
+      `disk trial: ${String(exported.byteLength)} B export, hold ${formatMib(trial.hold)}, settled use ${formatMib(trial.settledBytes)}, peak use ${formatMib(trial.peakBytes)}, lowest free ${formatMib(trial.lowestFree)}, ${outcome} (${seen.split})`,
     );
 
     return trial;
@@ -818,6 +848,7 @@ async function runDiskTrial(
     clearInterval(timer);
     rmSync(ctx.dataDir, { recursive: true, force: true });
     rmSync(filler, { force: true });
+    waitForSettledDisk();
   }
 }
 
@@ -829,7 +860,7 @@ function registerSmallFsTest(name: string, run: () => Promise<void>) {
 // what it took fits in what it held, and free space never went under the reserve
 function assertWithinHold(trial: DiskTrial) {
   expect(trial.outcome).toBe('built');
-  expect(trial.peakBytes).toBeLessThanOrEqual(trial.hold);
+  expect(trial.settledBytes).toBeLessThanOrEqual(trial.hold);
   expect(trial.lowestFree).toBeGreaterThanOrEqual(RESERVE_BYTES);
 }
 
@@ -920,9 +951,9 @@ registerSmallFsTest('on a small filesystem, random data takes no more than its h
   assertWithinHold(trial);
 });
 
-// twice the archive just under a 256 MiB step, so the step's round-up
-// leaves no slack: 58 000 blocks of random data, a header each
-registerSmallFsTest('on a small filesystem, an export just under a hold step fits it', async () => {
+// twice the archive just under a 256 MiB step: 58 000 blocks of random data.
+// Held at twice the archive alone, it held 512 MiB and took 536 on XFS.
+registerSmallFsTest('on a small filesystem, the rootfs journal is in the hold', async () => {
   const exported = buildTreeTar((tree) => {
     for (let d = 0; d < 58; d += 1) {
       const sub = join(tree, `d${String(d)}`);

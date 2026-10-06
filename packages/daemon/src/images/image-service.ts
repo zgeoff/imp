@@ -47,20 +47,12 @@ import type { GuestExec } from './guest-exec';
 import { buildImageRuntimeConfig, deriveImageName } from './image-naming';
 import { formatPinFailure, formatPlatform, pickRepoDigest, readImageStore } from './image-pin';
 import type { ImageStore, Pin, PinInspect } from './image-pin';
+import { planRootfs, planRootfsOverhead } from './rootfs-plan';
 import { runDocker, runDockerChecked } from './run-docker';
 import { writeExportedTree } from './unpack-export';
 import { writeContextTar } from './write-context-tar';
 import { writeImageConfig } from './write-image-config';
 
-const GIB = 1024 ** 3;
-
-// An image's ext4 holds its files and room to spare; each imp disk grows past
-// it (docs/architecture/storage.md#disk-sizes)
-const ROOTFS_MIN_BYTES = 4 * GIB;
-const ROOTFS_SPARE_BYTES = 2 * GIB;
-
-// mkfs.ext4's default: one inode per 16 KiB
-const BYTES_PER_INODE = 16_384;
 const FALLBACK_DEFAULT_IMAGE = 'ubuntu';
 
 // the largest Dockerfile impd reads for its FROM lines
@@ -526,8 +518,9 @@ export function createImageService(deps: ImageServiceDeps): ImageService {
     // the unpack is shared with any add of the same image: no client stops it
     options.setPhase?.('unpack');
 
-    // the tree unpacked, and the ext4 file written from it
-    const buildBytes = 2 * (inspect.Size ?? 0);
+    // the tree unpacked, and the ext4 file written from it with its journal
+    const treeBytes = inspect.Size ?? 0;
+    const buildBytes = 2 * treeBytes + planRootfsOverhead(treeBytes);
     const withRoom = deps.diskBudget.withRoom;
 
     return withRoom(buildBytes, () =>
@@ -1188,24 +1181,6 @@ interface GuestRootfs {
   readonly imageName: string;
   readonly ref: string;
   readonly signal: AbortSignal;
-}
-
-interface RootfsPlan {
-  readonly bytes: number;
-
-  // null leaves mkfs.ext4 its default count
-  readonly inodes: number | null;
-}
-
-// The rootfs size for a tree: its bytes and a fifth more, plus 2 GiB, in
-// whole GiB and at least 4 GiB. A tree of many small files gets twice its
-// inode count, since a grow adds inodes only in proportion to the size.
-export function planRootfs(tree: Readonly<{ bytes: number; inodes: number }>): RootfsPlan {
-  const wanted = Math.ceil((tree.bytes * 1.2 + ROOTFS_SPARE_BYTES) / GIB) * GIB;
-  const bytes = Math.max(ROOTFS_MIN_BYTES, wanted);
-  const inodes = tree.inodes * 2;
-
-  return { bytes, inodes: inodes > bytes / BYTES_PER_INODE ? inodes : null };
 }
 
 // bytes on disk and files in the unpacked image
