@@ -198,7 +198,7 @@ test('a public imp leaves only by the uplinks, and is refused the private ranges
 
   // the host's own LAN /64 too, not only its address
   expect(table).toMatch(
-    /set public6 \{[^\}]*2001:db8::\/32, 3fff::\/20, 2a01:4f8::7\/128, 2a01:4f8:1::\/64 \}/v,
+    /set public6 \{[^\}]*2001:db8::\/32, 3fff::\/20, 2001::\/31, [^\}]*2001:100::\/24, 2a01:4f8::7\/128, 2a01:4f8:1::\/64 \}/v,
   );
 
   expect(table).toMatch(/set dns_taps \{\n {4}type ifname\n {4}elements = \{ "imp0" \}/v);

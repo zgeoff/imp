@@ -48,6 +48,7 @@ function buildRpcError(code: string, status: number, message: string) {
 function startImpd(host: FakeHost) {
   const creates: unknown[] = [];
   const exposes: unknown[] = [];
+  const lists: string[] = [];
 
   const answers: Readonly<Record<string, unknown>> = {
     'imps/list': host.imps,
@@ -79,6 +80,12 @@ function startImpd(host: FakeHost) {
       }
 
       const path = new URL(request.url).pathname.replace(/^\/rpc\//u, '');
+
+      if (path === 'imps/list') {
+        const body = await request.text();
+
+        lists.push(body);
+      }
 
       if (path === 'imps/expose') {
         const body: unknown = await request.json();
@@ -114,7 +121,7 @@ function startImpd(host: FakeHost) {
     },
   });
 
-  return { url: `http://localhost:${String(server.port)}`, server, creates, exposes };
+  return { url: `http://localhost:${String(server.port)}`, server, creates, exposes, lists };
 }
 
 // a host that takes the connection and never answers, as a sleeping laptop's
@@ -251,6 +258,19 @@ test('ls --all --json always writes the imps and the errors', async () => {
   expect(JSON.parse(none.stdout)).toMatchObject({ imps: [] });
   expect(none.stderr.trimEnd().split('\n')).toHaveLength(3);
   expect(none.code).toBe(1);
+});
+
+test('ls --all --builders asks every host for its builders too', async () => {
+  await using ctx = setupTest(TWO_HOSTS);
+
+  await ctx.run(['ls', '--all', '--builders']);
+  await ctx.run(['ls', '--all']);
+
+  for (const impd of Object.values(ctx.impds)) {
+    expect(impd.lists).toHaveLength(2);
+    expect(impd.lists[0]).toContain('"builders":true');
+    expect(impd.lists[1]).not.toContain('builders');
+  }
 });
 
 test('--all and --place with --host are usage errors, and plain ls stays one host', async () => {

@@ -119,7 +119,7 @@ export interface RouterDeps {
 
 // what a streamed image call's options are made from
 interface ImageOpCall {
-  readonly context: RpcContext;
+  readonly context: RpcContext & { readonly auditDetail: Readonly<AuditDetail> };
   readonly input: unknown;
   readonly signal?: AbortSignal | undefined;
 }
@@ -251,7 +251,16 @@ export function buildRouter(deps: RouterDeps) {
       record: (failure) => {
         const impName = readImpName(procedure, call.input, null);
 
-        deps.audit.record({ procedure, actor: call.context.caller, impName, startedAt }, failure);
+        deps.audit.record(
+          {
+            procedure,
+            actor: call.context.caller,
+            impName,
+            startedAt,
+            detail: call.context.auditDetail.value,
+          },
+          failure,
+        );
       },
     };
   };
@@ -561,6 +570,11 @@ export function buildRouter(deps: RouterDeps) {
         const input = context.input;
         const firstPhase = 'imp' in input ? 'copy' : 'pull';
 
+        // the reference the pull resolved goes in the audit row, as for add
+        const onResolved = (reference: string): void => {
+          context.context.auditDetail.value = reference;
+        };
+
         return runImageOp(
           async (signal, setPhase) => {
             // a template copies an imp's disk under its lock: no client
@@ -568,7 +582,11 @@ export function buildRouter(deps: RouterDeps) {
             const image =
               'imp' in input
                 ? await deps.templates.createTemplate(input.imp, input.name)
-                : await deps.images.addImage(input.ref, input.name, { signal, setPhase });
+                : await deps.images.addImage(input.ref, input.name, {
+                    signal,
+                    setPhase,
+                    onResolved,
+                  });
 
             return toApiImage(image);
           },
@@ -879,6 +897,21 @@ export function buildRouter(deps: RouterDeps) {
           grantable: context.input.grantable ?? [],
         }),
       ),
+
+      // a secret taken off the list ends its grants on the token's imps, so
+      // the broker drops what no grant covers any more
+      update: os.tokens.update.handler(async (context) => {
+        const updated = await deps.tokens.updateGrantable(
+          context.input.name,
+          context.input.grantable,
+        );
+
+        if (updated.droppedGrants > 0) {
+          await deps.broker.applyGrants();
+        }
+
+        return updated.token;
+      }),
       delete: os.tokens.delete.handler(async (context) => {
         await deps.tokens.remove(context.input.name);
 
@@ -903,6 +936,7 @@ const SYSTEM_FEATURES = {
   sessionOffsets: true,
   leases: true,
   grantableTokens: true,
+  tokenUpdate: true,
   secretRebind: true,
   databaseCopy: true,
   imageBuildStream: true,

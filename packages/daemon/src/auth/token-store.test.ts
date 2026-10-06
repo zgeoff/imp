@@ -290,17 +290,23 @@ test('removing a key or its token reports the ids, and the key binds again with 
   expect(missing).toMatchObject({ code: 'NOT_FOUND' });
 });
 
-// An ssh login checks its token once, at login (ssh-gateway.ts checkLogin).
-// A procedure that changes a token, such as a tokens.update, must revoke its
-// live connections, as delete does; add it here only with that.
-test('no token procedure changes a token in place', () => {
+// An ssh login checks its token once (ssh-gateway.ts checkLogin), so a
+// change to scope or imps must end live connections, as delete does.
+// tokens.update sets only the list, which a grant reads in its transaction.
+test('no token procedure changes a token’s scope or imps in place', () => {
   expect(Object.keys(impContract.tokens).toSorted()).toEqual([
     'addKey',
     'create',
     'delete',
     'list',
     'removeKey',
+    'update',
     'whoami',
+  ]);
+
+  expect(Object.keys(impContract.tokens.update['~orpc'].inputSchema?.shape ?? {})).toEqual([
+    'name',
+    'grantable',
   ]);
 });
 

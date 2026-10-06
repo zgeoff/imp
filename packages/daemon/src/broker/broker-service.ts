@@ -53,7 +53,12 @@ import type { Uplinks } from '../net/host-routes';
 import { readConnectedPrefixes6 } from '../net/ipv6-plan';
 import type { Ipv6Plan } from '../net/ipv6-plan';
 import { createRangeChecker } from '../net/range-checker';
-import { BLOCKED_RANGES6, DOCUMENTATION_RANGES6, createRangeChecker6 } from '../net/ranges6';
+import {
+  BLOCKED_RANGES6,
+  DOCUMENTATION_RANGES6,
+  RESERVED_RANGES6,
+  createRangeChecker6,
+} from '../net/ranges6';
 import { readErrorMessage } from '../read-error-message';
 import { loadOrCreateBrokerCa } from './broker-ca';
 import { startBrokerFront } from './broker-front';
@@ -224,8 +229,8 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
   };
 
   // what a public imp's tunnel may not dial beyond every tunnel's ranges,
-  // as its firewall refuses it: the container's IPv4 networks, which can be
-  // public ones, IMP_EGRESS_DENY and the IPv6 documentation ranges
+  // as its firewall refuses it: the container's IPv4 networks (can be
+  // public), IMP_EGRESS_DENY and the IPv6 ranges refused to public only
   const readPublicRefused = async (): Promise<(address: string) => boolean> => {
     if (publicRefused.readAt === 0 || Date.now() - publicRefused.readAt > CONNECTED_CACHE_MS) {
       const connected = await readConnectedPrefixes4();
@@ -236,7 +241,11 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
 
       publicRefused.check = createRangeChecker(
         [...connected, ...deny.filter((cidr) => !cidr.includes(':'))],
-        [...DOCUMENTATION_RANGES6, ...deny.filter((cidr) => cidr.includes(':'))],
+        [
+          ...DOCUMENTATION_RANGES6,
+          ...RESERVED_RANGES6,
+          ...deny.filter((cidr) => cidr.includes(':')),
+        ],
       );
 
       publicRefused.readAt = Date.now();

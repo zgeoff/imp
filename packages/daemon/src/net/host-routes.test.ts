@@ -46,6 +46,19 @@ test('the uplinks are the default routes’ interfaces, in each family, never a 
   expect(parseUplinks('')).toEqual([]);
 });
 
+test('a multipath default route’s uplinks are on its nexthop lines', () => {
+  const routes = [
+    'default proto ra metric 1024 expires 1797sec pref medium',
+    '\tnexthop via fe80::1 dev eth0 weight 1',
+    '\tnexthop via fe80::2 dev eth1 weight 1',
+    '\tnexthop via fe80::3 dev imp4 weight 1',
+    '2001:db8:1::/64 proto static metric 1024 pref medium',
+    '\tnexthop via fe80::9 dev wg0 weight 1',
+  ].join('\n');
+
+  expect(parseUplinks(routes)).toEqual(['eth0', 'eth1']);
+});
+
 test('the interface a route leaves by, and an error for a route with none', () => {
   expect(
     parseRouteDevice(

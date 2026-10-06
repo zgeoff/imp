@@ -6,6 +6,7 @@ import * as z from 'zod';
 import { parseStoredPolicy } from './egress';
 import type { ImpDatabase } from './open-database';
 import type { DatabaseSchema } from './schema';
+import { readTokenGrantable } from './tokens';
 import type { GrantableSecret } from './tokens';
 
 // Secrets and grants: what the credential broker may add, and for which
@@ -52,7 +53,8 @@ export interface GrantClash {
 }
 
 // A grant or revoke through a token's grantable list: the token must still
-// exist, and the secret must still be the one its list named
+// exist, its list must still name the secret, and the secret must still be
+// the one its list named
 export interface GrantAuthority {
   readonly tokenId: string;
   readonly generation: string;
@@ -339,11 +341,12 @@ export function createForkGrants(
 
     // an empty list copies nothing whatever the token, so it needs no read
     // and never reports no-token: each grant is not-grantable instead
-    if (
-      authority !== null &&
-      authority.grantable.length > 0 &&
-      (authority.tokenId === null || !(await hasToken(trx, authority.tokenId)))
-    ) {
+    const current =
+      authority === null || authority.grantable.length === 0 || authority.tokenId === null
+        ? null
+        : await readTokenGrantable(trx, authority.tokenId);
+
+    if (authority !== null && authority.grantable.length > 0 && current === null) {
       return { kind: 'no-token' };
     }
 
@@ -352,7 +355,13 @@ export function createForkGrants(
     for (const name of names) {
       const secret = await findSecret(trx, name);
 
-      const entry = authority?.grantable.find((each) => each.name === name);
+      // on the caller's list and on the token's now: a tokens.update since
+      // the call began may have taken it off
+      const entry = authority?.grantable.find(
+        (each) =>
+          each.name === name &&
+          current?.some((now) => now.name === name && now.generation === each.generation) === true,
+      );
 
       if (authority !== null && (entry === undefined || secret?.generation !== entry.generation)) {
         notCopied.push({ secret: name, reason: 'not-grantable' });
@@ -459,21 +468,19 @@ async function checkAuthority(
     return null;
   }
 
-  if (!(await hasToken(db, authority.tokenId))) {
+  const grantable = await readTokenGrantable(db, authority.tokenId);
+
+  if (grantable === null) {
     return 'no-token';
   }
 
-  return secret?.generation === authority.generation ? null : 'not-grantable';
-}
+  // a tokens.update may have taken the secret off the list, or named it
+  // again at another generation, since the access check
+  const listed = grantable.some(
+    (entry) => entry.name === secret?.name && entry.generation === authority.generation,
+  );
 
-async function hasToken(db: ImpDatabase, tokenId: string): Promise<boolean> {
-  const token = await db
-    .selectFrom('tokens')
-    .select('id')
-    .where('id', '=', tokenId)
-    .executeTakeFirst();
-
-  return token !== undefined;
+  return listed && secret?.generation === authority.generation ? null : 'not-grantable';
 }
 
 // a grant made again takes the secret's generation now
