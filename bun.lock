@@ -55,6 +55,12 @@
         "tar-stream": "catalog:",
         "zod": "catalog:",
       },
+      "devDependencies": {
+        "@faker-js/faker": "catalog:",
+        "@imp/daemon": "workspace:*",
+        "@imp/test-utils": "workspace:*",
+        "@orpc/contract": "catalog:",
+      },
     },
     "packages/client": {
       "name": "@zgeoff/imp-client",
