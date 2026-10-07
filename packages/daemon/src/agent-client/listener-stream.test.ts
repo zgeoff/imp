@@ -3,18 +3,18 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
-import { startFakeAgent } from './fake-agent';
-import type { FakeAgentHandler } from './fake-agent';
+import { startStubAgent } from '../test-utils/start-stub-agent';
+import type { StubAgentHandler } from '../test-utils/start-stub-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from './frame-codec';
 import { openAccept, openListener } from './listener-stream';
 
 const LISTENING = { ok: true, path: '/run/imp/ssh-agent/ab/agent.sock', listener: 'ab' };
 
-async function setupFakeVsock(agent: FakeAgentHandler) {
+async function setupFakeVsock(agent: StubAgentHandler) {
   const dir = mkdtempSync(join(tmpdir(), 'imp-agentfwd-'));
   const path = join(dir, 'vsock.sock');
 
-  const fake = await startFakeAgent(path, agent);
+  const fake = await startStubAgent(path, agent);
 
   return {
     path,

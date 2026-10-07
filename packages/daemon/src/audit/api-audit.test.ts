@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { ORPCError } from '@orpc/server';
 import { listApiCalls } from '../db/api-audit';
-import { setupTestDatabase } from '../db/test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createApiAudit, readImpName, withAuditedOpen } from './api-audit';
 
 test('the imp is an imp namespace’s input name, or the created imp’s', () => {
@@ -12,7 +12,7 @@ test('the imp is an imp namespace’s input name, or the created imp’s', () =>
 });
 
 test('an open is audited with its outcome, and a failed write is logged', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
   const logs: string[] = [];
 

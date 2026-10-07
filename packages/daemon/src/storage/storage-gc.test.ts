@@ -13,11 +13,11 @@ import { join } from 'node:path';
 import { createSecretFiles } from '../broker/secret-files';
 import { openDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { buildStubZfs } from '../test-utils/build-stub-zfs';
 import { buildImpPaths } from './data-layout';
 import { readLiveStorage } from './read-live-storage';
 import { createStorageGate } from './storage-gate';
 import { createStorageGc } from './storage-gc';
-import { createFakeZfs } from './zfs/fake-zfs';
 import { createZfsBackend } from './zfs/zfs-backend';
 
 // a clone that waits on `gate` when its target matches `held`
@@ -143,7 +143,7 @@ test('start, the hourly pass and imp gc keep every orphan of a lost database, lo
 
 test('the hourly pass and imp gc on ZFS keep what a lost database leaves', async () => {
   const dataDir = mkdtempSync(`${tmpdir()}/impd-gc-zfs-`);
-  const fake = createFakeZfs({ root: 'tank/imp', rootDir: dataDir });
+  const fake = buildStubZfs({ root: 'tank/imp', rootDir: dataDir });
   const logs: string[] = [];
 
   const backend = createZfsBackend({

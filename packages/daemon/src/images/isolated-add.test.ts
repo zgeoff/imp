@@ -14,12 +14,12 @@ import { listImps } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { buildImagePaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
+import { buildQueryGate } from '../test-utils/build-query-gate';
+import { buildStubGuest } from '../test-utils/build-stub-guest';
+import type { StubAnswer, StubRun } from '../test-utils/build-stub-guest';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
-import { createQueryGate } from './query-gate';
 
 const CONTAINER_ID = 'e'.repeat(64);
 const CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';
@@ -29,7 +29,7 @@ interface AddTestOptions {
   readonly env?: Readonly<Record<string, string>>;
 
   // what the builder answers a pull, by default an image for linux/amd64
-  readonly onPull?: (run: FakeRun) => Promise<FakeAnswer> | FakeAnswer;
+  readonly onPull?: (run: StubRun) => Promise<StubAnswer> | StubAnswer;
 
   // what the builder exports, from a scratch directory; by default a small tree
   readonly buildExport?: (dir: string) => readonly Uint8Array[];
@@ -90,7 +90,7 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     buildTar(ctx.dataDir, { hello: 'pulled\n' }),
   ];
 
-  const runFakeStep = async (run: FakeRun): Promise<FakeAnswer> => {
+  const runFakeStep = async (run: StubRun): Promise<StubAnswer> => {
     const argv = run.argv.slice(1).join(' ');
 
     if (argv.startsWith('info ')) {
@@ -154,7 +154,7 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     return { code: 1, stderr: `the fake builder has no ${argv}` };
   };
 
-  const guest = createFakeGuest(runFakeStep);
+  const guest = buildStubGuest(runFakeStep);
   const logs: string[] = [];
   const bin = join(ctx.dataDir, 'fake-bin');
   const hostLog = join(ctx.dataDir, 'host-docker.log');
@@ -194,7 +194,7 @@ async function setupAdd(options: Readonly<AddTestOptions> = {}) {
     writeFileSync(mkfsReleased, '');
   };
 
-  const gate = createQueryGate(options.gatedName ?? '');
+  const gate = buildQueryGate(options.gatedName ?? '');
 
   const storage: StorageBackend =
     options.isRemoveFailing === true
@@ -406,7 +406,7 @@ test("an added image's image.json link changes no host file", async () => {
 
 test('a client that goes ends the pull in the builder, and the builder with it', async () => {
   const pulling = Promise.withResolvers<null>();
-  const never = Promise.withResolvers<FakeAnswer>();
+  const never = Promise.withResolvers<StubAnswer>();
 
   await using ctx = await setupAdd({
     onPull: () => {

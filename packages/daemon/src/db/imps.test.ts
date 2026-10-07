@@ -1,4 +1,6 @@
 import { expect, test } from 'bun:test';
+import { createTestDatabase } from '../test-utils/create-test-database';
+import { createImage } from './images';
 import { subscribeImpWrites } from './imp-write-feed';
 import {
   JAIL_UIDS,
@@ -16,7 +18,6 @@ import {
 } from './imps';
 import type { ImpRecord, NewImp } from './imps';
 import type { ImpDatabase } from './open-database';
-import { readRejectionMessage, setupTestDatabase } from './test-database';
 
 function buildNewImp(imageId: string, name: string, slot: number): NewImp {
   return { name, imageId, vcpus: 2, memoryMib: 2048, slot, ip: `10.66.0.${String(slot * 4 + 2)}` };
@@ -31,9 +32,17 @@ function createWithSlot(db: ImpDatabase, imageId: string, name: string): Promise
 }
 
 test('it creates an imp in the creating state and finds it by name and id', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
 
   expect(imp).toMatchObject({ name: 'dev', state: 'creating', slot: 0, sleptAt: null, pid: null });
   expect(imp.createdAt).toBeInstanceOf(Date);
@@ -48,7 +57,15 @@ test('it creates an imp in the creating state and finds it by name and id', asyn
 });
 
 test('a create in a free slot emits one ImpAdded, once it commits', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
+
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
   const writes: string[] = [];
 
@@ -58,7 +75,7 @@ test('a create in a free slot emits one ImpAdded, once it commits', async () => 
 
   await createImpInFreeSlot(
     ctx.db,
-    { name: 'dev', imageId: ctx.image.id, vcpus: 2, memoryMib: 2048 },
+    { name: 'dev', imageId: image.id, vcpus: 2, memoryMib: 2048 },
     { count: 16, findIp: (slot) => `10.66.0.${String(slot * 4 + 2)}` },
   );
 
@@ -66,53 +83,86 @@ test('a create in a free slot emits one ImpAdded, once it commits', async () => 
 });
 
 test('it allocates the lowest free slot, reusing a gap', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const a = await createWithSlot(ctx.db, ctx.image.id, 'a');
-  const b = await createWithSlot(ctx.db, ctx.image.id, 'b');
-  const c = await createWithSlot(ctx.db, ctx.image.id, 'c');
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const a = await createWithSlot(ctx.db, image.id, 'a');
+  const b = await createWithSlot(ctx.db, image.id, 'b');
+  const c = await createWithSlot(ctx.db, image.id, 'c');
 
   expect([a.slot, b.slot, c.slot]).toEqual([0, 1, 2]);
 
   await removeImp(ctx.db, b.id);
 
-  const d = await createWithSlot(ctx.db, ctx.image.id, 'd');
+  const d = await createWithSlot(ctx.db, image.id, 'd');
 
   expect(d.slot).toBe(1);
 });
 
 test('it gives concurrent creates distinct slots', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
+
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
   const imps = await Promise.all(
-    ['a', 'b', 'c', 'd'].map((name) => createWithSlot(ctx.db, ctx.image.id, name)),
+    ['a', 'b', 'c', 'd'].map((name) => createWithSlot(ctx.db, image.id, name)),
   );
 
   expect(imps.map((imp) => imp.slot).toSorted((x, y) => x - y)).toEqual([0, 1, 2, 3]);
 });
 
 test('it throws when every slot is taken', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  await createImp(ctx.db, buildNewImp(ctx.image.id, 'a', 0));
-  await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 1));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
-  const message = await readRejectionMessage(allocateSlot(ctx.db, 2));
+  await createImp(ctx.db, buildNewImp(image.id, 'a', 0));
+  await createImp(ctx.db, buildNewImp(image.id, 'b', 1));
 
-  expect(message).toBe('every one of the 2 slots is taken');
+  expect(allocateSlot(ctx.db, 2)).rejects.toThrowWithMessage(
+    Error,
+    'every one of the 2 slots is taken',
+  );
 });
 
 test('each imp gets its own jail uid, the lowest free one', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const a = await createImp(ctx.db, buildNewImp(ctx.image.id, 'a', 0));
-  const b = await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 1));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const a = await createImp(ctx.db, buildNewImp(image.id, 'a', 0));
+  const b = await createImp(ctx.db, buildNewImp(image.id, 'b', 1));
 
   expect([a.jailUid, b.jailUid]).toEqual([JAIL_UIDS.first, JAIL_UIDS.first + 1]);
 
   await removeImp(ctx.db, a.id);
 
-  const c = await createImp(ctx.db, buildNewImp(ctx.image.id, 'c', 2));
+  const c = await createImp(ctx.db, buildNewImp(image.id, 'c', 2));
   const found = await findImpById(ctx.db, c.id);
 
   expect(c.jailUid).toBe(JAIL_UIDS.first);
@@ -120,10 +170,18 @@ test('each imp gets its own jail uid, the lowest free one', async () => {
 });
 
 test('a live ticket keeps its slot from a new imp until the commit', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
+
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
   const slots = { count: 4, findIp: (slot: number) => `10.66.0.${String(slot * 4 + 2)}` };
-  const imp = { imageId: ctx.image.id, vcpus: 2, memoryMib: 2048 };
+  const imp = { imageId: image.id, vcpus: 2, memoryMib: 2048 };
 
   await ctx.db
     .insertInto('move_tickets')
@@ -149,57 +207,80 @@ test('a live ticket keeps its slot from a new imp until the commit', async () =>
   const late = await allocateSlot(ctx.db, 4, Date.now() + 120_000);
   const moved = await createImpInFreeSlot(ctx.db, { ...imp, name: 'moved' }, { ...slots, slot: 0 });
 
-  const clash = await readRejectionMessage(
-    createImpInFreeSlot(ctx.db, { ...imp, name: 'again' }, { ...slots, slot: 1 }),
-  );
-
-  const outside = await readRejectionMessage(
-    createImpInFreeSlot(ctx.db, { ...imp, name: 'far' }, { ...slots, slot: 4 }),
-  );
-
   expect(other.slot).toBe(1);
   expect(late).toBe(0);
   expect(moved.slot).toBe(0);
-  expect(clash).toBe('slot 1 is taken on this host');
-  expect(outside).toBe('slot 4 is taken on this host');
+
+  expect(
+    createImpInFreeSlot(ctx.db, { ...imp, name: 'again' }, { ...slots, slot: 1 }),
+  ).rejects.toThrowWithMessage(Error, 'slot 1 is taken on this host');
+
+  expect(
+    createImpInFreeSlot(ctx.db, { ...imp, name: 'far' }, { ...slots, slot: 4 }),
+  ).rejects.toThrowWithMessage(Error, 'slot 4 is taken on this host');
 });
 
 test('it rejects a duplicate name', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
-  const message = await readRejectionMessage(
-    createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 1)),
+  await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
+
+  expect(createImp(ctx.db, buildNewImp(image.id, 'dev', 1))).rejects.toThrowWithMessage(
+    Error,
+    /UNIQUE constraint failed: imps\.name/u,
   );
-
-  expect(message).toContain('imps.name');
 });
 
 test('it rejects a duplicate slot', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
-  const duplicate = { ...buildNewImp(ctx.image.id, 'other', 0), ip: '10.66.9.9' };
+  await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
 
-  const message = await readRejectionMessage(createImp(ctx.db, duplicate));
+  const duplicate = { ...buildNewImp(image.id, 'other', 0), ip: '10.66.9.9' };
 
-  expect(message).toContain('imps.slot');
+  expect(createImp(ctx.db, duplicate)).rejects.toThrowWithMessage(
+    Error,
+    /UNIQUE constraint failed: imps\.slot/u,
+  );
 });
 
 test('it rejects an imp whose image does not exist', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const message = await readRejectionMessage(createImp(ctx.db, buildNewImp('missing', 'dev', 0)));
-
-  expect(message).toContain('FOREIGN KEY');
+  expect(createImp(ctx.db, buildNewImp('missing', 'dev', 0))).rejects.toThrowWithMessage(
+    Error,
+    /FOREIGN KEY constraint failed/u,
+  );
 });
 
 test('it updates the state and only the fields the change names', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
 
   const running = await updateImpState(ctx.db, imp.id, {
     reason: 'booted',
@@ -236,9 +317,17 @@ test('it updates the state and only the fields the change names', async () => {
 });
 
 test('it records activity', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
 
   const at = new Date('2026-10-02T01:00:00Z');
 
@@ -250,11 +339,19 @@ test('it records activity', async () => {
 });
 
 test('it lists imps by name', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const b = await createImp(ctx.db, buildNewImp(ctx.image.id, 'b', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
 
-  await createImp(ctx.db, buildNewImp(ctx.image.id, 'a', 1));
+  const b = await createImp(ctx.db, buildNewImp(image.id, 'b', 0));
+
+  await createImp(ctx.db, buildNewImp(image.id, 'a', 1));
   await updateImpState(ctx.db, b.id, { reason: 'booted', state: 'running' });
 
   const imps = await listImps(ctx.db);
@@ -266,9 +363,17 @@ test('it lists imps by name', async () => {
 });
 
 test('it applies a compare-and-set change only while the row matches', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const imp = await createImp(ctx.db, buildNewImp(ctx.image.id, 'dev', 0));
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createImp(ctx.db, buildNewImp(image.id, 'dev', 0));
 
   await updateImpState(ctx.db, imp.id, { reason: 'booted', state: 'running', pid: 42 });
 
@@ -291,9 +396,17 @@ test('it applies a compare-and-set change only while the row matches', async () 
 });
 
 test('a new disk size emits ImpChanged resized; a pending grow alone does not', async () => {
-  await using ctx = await setupTestDatabase();
+  await using ctx = await createTestDatabase();
 
-  const imp = await createWithSlot(ctx.db, ctx.image.id, 'dev');
+  // the image every imp row here refers to
+  const image = await createImage(ctx.db, {
+    name: 'base',
+    ref: 'imp/base:latest',
+    digest: 'sha256:0000',
+    sizeBytes: 1024,
+  });
+
+  const imp = await createWithSlot(ctx.db, image.id, 'dev');
 
   const reasons: string[] = [];
 

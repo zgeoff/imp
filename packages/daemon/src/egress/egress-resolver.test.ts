@@ -3,7 +3,7 @@ import { connect } from 'node:net';
 import * as dnsPacket from 'dns-packet';
 import type { Answer, DecodedPacket } from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
-import { findFreePorts } from '../net/test-free-ports';
+import { findFreePorts } from '../test-utils/find-free-ports';
 import { createDnsForward } from './dns-upstream';
 import {
   createQueryHandler,

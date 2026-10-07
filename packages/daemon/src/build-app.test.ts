@@ -6,7 +6,7 @@ import packageJson from '../package.json' with { type: 'json' };
 import { listApiCalls } from './db/api-audit';
 import { findImpByName } from './db/imps';
 import { TEST_SYSTEM_FILES, TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
-import { tryExecSocket, tryTunnelSocket } from './test-sockets';
+import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 
 async function setupTest(token: string, env: Readonly<Record<string, string>> = {}) {
   const harness = await setupImpTest({ env });

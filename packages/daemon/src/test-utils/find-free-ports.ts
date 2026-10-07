@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { faker } from '@faker-js/faker';
 
 // How many ports below the kernel's ephemeral range a test picks from
 const PICK_SPAN = 4000;
@@ -22,13 +23,13 @@ function openPortProbe(port: number) {
 
 // `count` free ports from just below the ephemeral range, held open together
 // so they differ; take them in turn. In that range, no port-0 bind elsewhere
-// can take one between this probe and the test's own bind.
+// can take one between this probe and the test's own bind. The seeded faker picks.
 export function findFreePorts(count: number) {
   const top = readEphemeralStart();
   const probes: NonNullable<ReturnType<typeof openPortProbe>>[] = [];
 
   while (probes.length < count) {
-    const probe = openPortProbe(top - 1 - Math.floor(Math.random() * PICK_SPAN));
+    const probe = openPortProbe(faker.number.int({ min: top - PICK_SPAN, max: top - 1 }));
 
     if (probe !== null) {
       probes.push(probe);

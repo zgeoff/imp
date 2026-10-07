@@ -4,13 +4,13 @@ import type { Socket } from 'node:net';
 import { NoSessionDataSchema } from '@imp/api';
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { listColdBoots, writeColdBoot } from '../db/cold-boots';
 import { findImpByName } from '../db/imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildFakeBootId } from './fake-vmm';
+import { buildStubBootId } from '../test-utils/build-stub-vmm';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import { buildTestApp, setupImpTest } from './test-imps';
 
 // Each cold boot records its cause, and an attach to a session names them
@@ -48,7 +48,7 @@ async function setupColdBootTest() {
 
 // an agent whose session.attach answers `reply`, and whose ping reports `bootId`
 function startSessionAgent(path: string, reply: (socket: Socket) => void, bootId = 'boot-old') {
-  return startFakeAgent(path, (socket, request, frames) => {
+  return startStubAgent(path, (socket, request, frames) => {
     if (frames.length !== 1) {
       return;
     }
@@ -106,7 +106,7 @@ test('a create, a stop and start, and a wake that falls back each record their c
   const imp = await findImpByName(ctx.db, 'dev');
 
   expect(boots.map((boot) => boot.cause)).toEqual(['wake_fallback', 'start', 'start']);
-  expect(boots[0]?.bootId).toBe(buildFakeBootId(imp?.pid ?? 0));
+  expect(boots[0]?.bootId).toBe(buildStubBootId(imp?.pid ?? 0));
   expect(new Set(boots.map((boot) => boot.bootId)).size).toBe(3);
 });
 

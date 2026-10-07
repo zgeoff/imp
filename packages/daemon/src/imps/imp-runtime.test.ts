@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test';
 import { existsSync, rmSync } from 'node:fs';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName, updateImpActivity } from '../db/imps';
 import { writeLease } from '../db/leases';
 import type { ImpDatabase } from '../db/open-database';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import { setupImpTest, waitForOutcome } from './test-imps';
 
 // these tests wait up to 10 s for held calls to settle; a loaded host is slow
@@ -416,7 +416,7 @@ test('an outer exec to an older agent is refused before it is sent', async () =>
     throw new Error('no vm identity');
   }
 
-  const agent = await startFakeAgent(paths.vsockSocket, (socket) => {
+  const agent = await startStubAgent(paths.vsockSocket, (socket) => {
     socket.write(encodeJsonFrame(FRAME_TYPES.started, { pid: 9 }));
   });
 
@@ -503,7 +503,7 @@ test('an imp destroyed and made again under its id, as on a move home, logs agai
 
     writeVmIdentity(paths, { ...identity, agentVersion: '0.18.0' });
 
-    return startFakeAgent(buildImpPaths(ctx.dataDir, id).vsockSocket, (socket, request, frames) => {
+    return startStubAgent(buildImpPaths(ctx.dataDir, id).vsockSocket, (socket, request, frames) => {
       if (frames.length === 1) {
         const isTap = JSON.stringify(decodeJsonPayload(request)).includes('"session.tap"');
 

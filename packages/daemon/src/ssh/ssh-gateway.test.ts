@@ -12,8 +12,8 @@ import { buildMovingError } from '../api-errors';
 import { createRevocations } from '../auth/revocations';
 import { loadTokenStore } from '../auth/token-store';
 import type { TokenStore } from '../auth/token-store';
-import { setupTestDatabase } from '../db/test-database';
 import { readRejection } from '../read-rejection';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { MAX_AGENT_CHANNELS } from './agent-forwarding';
 import { createAuthorizedKeys } from './authorized-keys';
 import { FAKE_IMP, createFakeSshBackend } from './fake-ssh-backend';
@@ -61,7 +61,7 @@ async function startTestGateway(keysText = `${USER_KEY.public}\n`, options: Gate
 
   const parts = createFakeSshBackend();
 
-  const database = await setupTestDatabase();
+  const database = await createTestDatabase();
 
   const authorizedKeys = createAuthorizedKeys(keysPath, writeLog);
   const revocations = createRevocations();

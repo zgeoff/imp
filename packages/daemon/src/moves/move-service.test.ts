@@ -7,9 +7,9 @@ import type { ImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImagePaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
-import { createFakeZfs } from '../storage/zfs/fake-zfs';
-import type { FakeZfs } from '../storage/zfs/fake-zfs';
 import { createZfsBackend } from '../storage/zfs/zfs-backend';
+import { buildStubZfs } from '../test-utils/build-stub-zfs';
+import type { StubZfs } from '../test-utils/build-stub-zfs';
 import { MOVE_PART_HEADER, MOVE_PATHS, MoveOfferReplySchema } from './move-header';
 import { ReceiptSchema, buildTicketHeader } from './move-tickets';
 import { SOURCE_PEER, TARGET_URL, createUbuntuImage, setupMoveHosts } from './test-moves';
@@ -658,10 +658,10 @@ const ZFS_ROOT = 'tank/imp';
 
 // an impd's storage on a fake ZFS pool, and the pool once it is made
 function buildFakeZfsHost() {
-  const pool: { zfs: FakeZfs | null } = { zfs: null };
+  const pool: { zfs: StubZfs | null } = { zfs: null };
 
   const createStorage = (dataDir: string): StorageBackend => {
-    const zfs = createFakeZfs({ root: ZFS_ROOT, rootDir: dataDir });
+    const zfs = buildStubZfs({ root: ZFS_ROOT, rootDir: dataDir });
 
     pool.zfs = zfs;
 

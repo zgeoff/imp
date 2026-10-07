@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { buildStubGuest } from '../test-utils/build-stub-guest';
+import type { StubAnswer, StubRun } from '../test-utils/build-stub-guest';
 import { DockerBuildError } from './docker-build';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { runGuestBuild, writeGuestTree } from './guest-build';
 import type { ExportLimits } from './guest-build';
 import { GuestOutputError, createGuestExec } from './guest-exec';
@@ -44,7 +44,7 @@ function buildExport(content: string): Uint8Array[] {
 
 // a builder whose engine has built imp-build:latest, and exports `exported`
 function createExportAnswer(exported: readonly Uint8Array[]) {
-  return (run: FakeRun): FakeAnswer => {
+  return (run: StubRun): StubAnswer => {
     const command = run.argv.slice(1, 3).join(' ');
 
     if (command === 'image inspect') {
@@ -65,7 +65,7 @@ function createExportAnswer(exported: readonly Uint8Array[]) {
 
 test('the export unpacks into root, and its digest is of the config and the stream', async () => {
   const exported = buildExport('hi\n'.repeat(100_000));
-  const guest = createFakeGuest(createExportAnswer(exported));
+  const guest = buildStubGuest(createExportAnswer(exported));
   const root = join(dir, 'root');
 
   mkdirSync(root);
@@ -106,7 +106,7 @@ test('the export unpacks into root, and its digest is of the config and the stre
 
 test('an export past the cap stops at the cap, and its exec is ended', async () => {
   const exported = buildExport('x'.repeat(4 * CHUNK_BYTES));
-  const guest = createFakeGuest(createExportAnswer(exported));
+  const guest = buildStubGuest(createExportAnswer(exported));
   const root = join(dir, 'root');
 
   mkdirSync(root);
@@ -133,7 +133,7 @@ test('an export of more entries than the file cap is refused as tar counts them'
   }
 
   const exported = [Bun.spawnSync(['tar', '-C', tree, '-c', '.']).stdout];
-  const guest = createFakeGuest(createExportAnswer(exported));
+  const guest = buildStubGuest(createExportAnswer(exported));
   const root = join(dir, 'root');
 
   mkdirSync(root);
@@ -152,7 +152,7 @@ test('an export of more entries than the file cap is refused as tar counts them'
 // the export of a tree, refused under a 1 MiB cap its archive is well inside
 async function readMiBRefusal(tree: string, tarArgs: readonly string[]): Promise<unknown> {
   const exported = [Bun.spawnSync(['tar', ...tarArgs, '-C', tree, '-c', '.']).stdout];
-  const guest = createFakeGuest(createExportAnswer(exported));
+  const guest = buildStubGuest(createExportAnswer(exported));
   const root = join(dir, 'root');
 
   expect(exported[0]?.byteLength).toBeLessThan(1024 ** 2 / 2);
@@ -221,7 +221,7 @@ async function readExportEnd(
 ): Promise<{ failure: unknown; closed: boolean | undefined }> {
   const answer = createExportAnswer(exported);
 
-  const guest = createFakeGuest((run) => {
+  const guest = buildStubGuest((run) => {
     const answered = answer(run);
 
     return stall && run.argv[1] === 'export' ? { ...answered, stall } : answered;
@@ -265,7 +265,7 @@ test('a limit ends an export that stalls, and so does one that sends nothing', a
 });
 
 test("a builder's config that is not one JSON object is refused", async () => {
-  const guest = createFakeGuest(() => ({ stdout: '["not", "a", "config"]\n' }));
+  const guest = buildStubGuest(() => ({ stdout: '["not", "a", "config"]\n' }));
 
   const failure = await writeGuestTree(
     createGuestExec(guest.open),
@@ -284,7 +284,7 @@ test('the build reads its context from stdin, and a failed one returns its log, 
 
   writeFileSync(contextPath, 'the context');
 
-  const guest = createFakeGuest(async (run) => {
+  const guest = buildStubGuest(async (run) => {
     const stdin = await run.readStdin();
 
     stdins.push(new TextDecoder().decode(stdin));
@@ -322,7 +322,7 @@ test('the build reads its context from stdin, and a failed one returns its log, 
 });
 
 test('a step that writes past what impd keeps is refused, and one that hangs is killed', async () => {
-  const big = createFakeGuest(() => ({
+  const big = buildStubGuest(() => ({
     stdout: ['x'.repeat(1024 ** 2), 'y'].map((text) => new TextEncoder().encode(text)),
   }));
 
@@ -332,7 +332,7 @@ test('a step that writes past what impd keeps is refused, and one that hangs is 
 
   expect(tooBig).toBeInstanceOf(GuestOutputError);
 
-  const hanging = createFakeGuest(() => new Promise<FakeAnswer>(() => {}));
+  const hanging = buildStubGuest(() => new Promise<StubAnswer>(() => {}));
 
   const timedOut = await createGuestExec(hanging.open)(['sleep', 'inf'], {
     signal: new AbortController().signal,

@@ -11,11 +11,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { readErrorMessage } from '../read-error-message';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
+import { startStubAgent } from '../test-utils/start-stub-agent';
 import type { Jails } from './jail';
 import { buildTemplateVm, loadTemplateVm } from './template-vm';
 import type { TemplateBuildPlan, TemplateRestorePlan } from './template-vm';
@@ -110,7 +110,7 @@ function setupTemplateTest(apiSocket: (dir: string) => string, status: 'ok' | 'f
 function startParkedAgent(vsockSocket: string) {
   const claimed = { isClaimed: false };
 
-  return startFakeAgent(vsockSocket, (socket, request) => {
+  return startStubAgent(vsockSocket, (socket, request) => {
     const isClaim = JSON.stringify(decodeJsonPayload(request)).includes('"op":"claim"');
 
     claimed.isClaimed ||= isClaim;

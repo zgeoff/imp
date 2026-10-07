@@ -4,7 +4,7 @@ import { createImp, findImpByName, updateImpState } from '../db/imps';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath } from '../storage/data-layout';
-import { FAKE_AGENT_VERSION } from './fake-vmm';
+import { STUB_AGENT_VERSION } from '../test-utils/build-stub-vmm';
 import { removeUnusedDrives } from './remove-unused-drives';
 import { buildTestApp, findBrokenInvariants, setupImpTest, waitForOutcome } from './test-imps';
 
@@ -325,7 +325,7 @@ test('a woken agent that is not the one the snapshot recorded boots cold', async
 
   expect(woken).toMatchObject({
     state: 'running',
-    coldBootReason: `the agent answered as ${FAKE_AGENT_VERSION}, not 0.0.9`,
+    coldBootReason: `the agent answered as ${STUB_AGENT_VERSION}, not 0.0.9`,
   });
 
   expect(ctx.fake.wakes).toHaveLength(1);

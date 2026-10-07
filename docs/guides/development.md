@@ -196,10 +196,10 @@ An `imp-host:dev` image from before the per-checkout tags has no label, so remov
 ## Daemon tests
 
 The daemon's tests need no VM. `packages/daemon/src/imps/test-imps.ts` runs the governed imp service
-over an in-memory database and a fake VMM (`fake-vmm.ts`). A test scripts what the next boot, wake,
-sleep, stop or agent check does (succeed, fail, die or hang), holds a step until it releases it, and
-restarts impd over the same database and VMs. `findBrokenInvariants` reads the raw records, because
-a read through the service repairs what it finds.
+over an in-memory database and a stub VMM (`test-utils/build-stub-vmm.ts`). A test scripts what the
+next boot, wake, sleep, stop or agent check does (succeed, fail, die or hang), holds a step until it
+releases it, and restarts impd over the same database and VMs. `findBrokenInvariants` reads the raw
+records, because a read through the service repairs what it finds.
 
 The property tests (`*.property.test.ts`) use fast-check. On a failure it prints the seed and the
 path of the shrunk case. Pass both to `fc.assert` as `{ seed, path, endOnFailure: true }` to replay

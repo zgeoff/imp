@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiAudit } from '../audit/api-audit';
 import { createRevocations } from '../auth/revocations';
-import { setupTestDatabase } from '../db/test-database';
+import { createTestDatabase } from '../test-utils/create-test-database';
 import { createAuthorizedKeys } from './authorized-keys';
 import { createFakeSshBackend } from './fake-ssh-backend';
 import { startSsh } from './start-ssh';
@@ -15,7 +15,7 @@ async function startWithSshDir(setup: (sshDir: string) => void) {
   const sshDir = join(dataDir, 'ssh');
   const logs: string[] = [];
 
-  await using database = await setupTestDatabase();
+  await using database = await createTestDatabase();
 
   mkdirSync(sshDir, { mode: 0o700 });
   setup(sshDir);

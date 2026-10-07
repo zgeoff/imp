@@ -1,7 +1,8 @@
 // WebSocket clients for impd's /exec and /tunnel, for tests
 
 // opens /exec with `query` and reports whether the upgrade succeeded; a
-// session it opens sends `start` for `name` and reports the first message
+// session it opens sends `start` for `name` and reports the first message, or
+// 'closed' when the server closes it before sending one
 export async function tryExecSocket(
   port: string,
   query: string,
@@ -24,6 +25,11 @@ export async function tryExecSocket(
     outcome.resolve('rejected');
   });
 
+  // a refused upgrade fires error before close, so it stays 'rejected'
+  socket.addEventListener('close', () => {
+    outcome.resolve('closed');
+  });
+
   try {
     return await outcome.promise;
   } finally {
@@ -31,7 +37,8 @@ export async function tryExecSocket(
   }
 }
 
-// opens /tunnel and reports the first message for `open`, or 'rejected'
+// opens /tunnel and reports the first message for `open`, 'rejected', or
+// 'closed' when the server closes it before sending one
 export async function tryTunnelSocket(
   port: string,
   query: string,
@@ -52,6 +59,11 @@ export async function tryTunnelSocket(
 
   socket.addEventListener('error', () => {
     outcome.resolve('rejected');
+  });
+
+  // a refused upgrade fires error before close, so it stays 'rejected'
+  socket.addEventListener('close', () => {
+    outcome.resolve('closed');
   });
 
   try {
