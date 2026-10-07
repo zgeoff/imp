@@ -24,16 +24,21 @@
     "react-dom": "catalog:"
   },
   "devDependencies": {
-    "@happy-dom/global-registrator": "catalog:",
+    "@faker-js/faker": "catalog:",
     "@imp/api": "workspace:*",
+    "@imp/daemon": "workspace:*",
+    "@imp/test-utils": "workspace:*",
+    "@msw/data": "catalog:",
     "@orpc/server": "catalog:",
     "@playwright/test": "catalog:",
-    "@testing-library/jest-dom": "catalog:",
     "@testing-library/react": "catalog:",
     "@testing-library/user-event": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "vite": "catalog:"
+    "@zgeoff/bun-test-react": "catalog:",
+    "msw": "catalog:",
+    "vite": "catalog:",
+    "zod": "catalog:"
   }
 }

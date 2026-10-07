@@ -101,8 +101,8 @@
           { "from": "file", "name": ["RouterDeps", "AppDeps"] },
           // the dashboard's provider props carry the live SDK client
           { "from": "file", "name": "ImpdProviderProps" },
-          // the dashboard's fake impd and the router's history hold live state
-          { "from": "file", "name": "FakeImpd" },
+          // the dashboard's stub impd and the router's history hold live state
+          { "from": "file", "name": "StubImpd" },
           { "from": "package", "name": "RouterHistory", "package": "@tanstack/history" },
           // already the readonly form, or a value type with no readonly form,
           // that the rule doesn't recognize as such

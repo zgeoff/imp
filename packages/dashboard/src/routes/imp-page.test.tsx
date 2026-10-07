@@ -1,164 +1,196 @@
 import { expect, test } from 'bun:test';
-import { screen, waitFor, within } from '@testing-library/react';
+import { waitFor } from '@imp/test-utils/wait-for';
+import { within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { buildImp, createFakeImpd } from '../test-utils/fake-impd';
+import { buildMockCheckpoint } from '../test-utils/build-mock-checkpoint';
+import { buildMockDiskUsage } from '../test-utils/build-mock-disk-usage';
+import { buildMockImp } from '../test-utils/build-mock-imp';
+import { buildMockImpResources } from '../test-utils/build-mock-imp-resources';
+import { buildStubImpd } from '../test-utils/build-stub-impd';
 import { renderApp } from '../test-utils/render-app';
 
-function setupTest() {
-  const fake = createFakeImpd();
+test('it shows the RAM and disk use of the imp', async () => {
+  const stub = buildStubImpd();
 
-  fake.state.imps.push(
-    buildImp({
+  stub.state.imps.push(
+    buildMockImp({
       name: 'web',
       ramMib: 300,
       rssMib: 340,
-      diskUsage: {
+      diskMib: 32_768,
+      diskUsage: buildMockDiskUsage({
         exclusiveBytes: 1024 * 1024 * 1024,
         sharedBytes: 512 * 1024 * 1024,
-        measuredAt: new Date(),
         isPartial: false,
         isUpperBound: false,
-      },
+      }),
     }),
   );
 
-  fake.state.checkpoints.set('web', [
-    { id: 'cp1', label: 'before-upgrade', createdAt: new Date(), sizeBytes: 2048, diskMib: 32_768 },
-  ]);
+  const rendered = renderApp(stub, '/imps/web');
 
-  return { fake, user: userEvent.setup() };
-}
+  await rendered.findByRole('heading', { name: 'web' });
 
-test('it shows the imp with its RAM, disk use and checkpoints', async () => {
-  const ctx = setupTest();
+  expect(rendered.getByText('300 MiB owned, 340 MiB resident')).toBeInTheDocument();
+  expect(rendered.getByText('1.0 GiB / 32.0 GiB, 512 MiB shared')).toBeInTheDocument();
+});
 
-  renderApp(ctx.fake, '/imps/web');
+test('it lists the checkpoints of the imp', async () => {
+  const stub = buildStubImpd();
 
-  await screen.findByRole('heading', { name: 'web' });
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  stub.state.checkpoints.set('web', [buildMockCheckpoint({ label: 'before-upgrade' })]);
 
-  expect(screen.getByText('300 MiB owned, 340 MiB resident')).toBeInTheDocument();
-  expect(screen.getByText('1.0 GiB / 32.0 GiB, 512 MiB shared')).toBeInTheDocument();
+  const rendered = renderApp(stub, '/imps/web');
 
-  await screen.findByRole('row', { name: /before-upgrade/ });
+  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
+
+  expect(row).toBeInTheDocument();
 });
 
 test('it takes a checkpoint with a label', async () => {
-  const ctx = setupTest();
+  const stub = buildStubImpd();
+  const user = userEvent.setup();
 
-  renderApp(ctx.fake, '/imps/web');
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
 
-  const field = await screen.findByLabelText('Label');
+  const rendered = renderApp(stub, '/imps/web');
 
-  await ctx.user.type(field, 'v2');
-  await ctx.user.click(screen.getByRole('button', { name: 'Checkpoint now' }));
-  await screen.findByRole('row', { name: /v2/ });
+  const field = await rendered.findByLabelText('Label');
 
-  expect(ctx.fake.state.calls).toEqual([
+  await user.type(field, 'v2');
+  await user.click(rendered.getByRole('button', { name: 'Checkpoint now' }));
+  await rendered.findByRole('row', { name: /v2/ });
+
+  expect(stub.state.calls).toStrictEqual([
     { path: 'checkpoints.create', input: { name: 'web', label: 'v2' } },
   ]);
 });
 
-test('a restore asks first and names the checkpoint', async () => {
-  const ctx = setupTest();
+test('it restores the named checkpoint after a confirm', async () => {
+  const stub = buildStubImpd();
+  const user = userEvent.setup();
 
-  renderApp(ctx.fake, '/imps/web');
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  stub.state.checkpoints.set('web', [buildMockCheckpoint({ id: 'cp1', label: 'before-upgrade' })]);
 
-  const row = await screen.findByRole('row', { name: /before-upgrade/ });
+  const rendered = renderApp(stub, '/imps/web');
 
-  await ctx.user.click(within(row).getByRole('button', { name: 'Restore' }));
+  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
 
-  const dialog = await screen.findByRole('dialog', { name: 'Restore web?' });
+  await user.click(within(row).getByRole('button', { name: 'Restore' }));
 
-  await ctx.user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+  const dialog = await rendered.findByRole('dialog', { name: 'Restore web?' });
+
+  await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
 
   await waitFor(() => {
-    expect(ctx.fake.state.calls).toEqual([
+    expect(stub.state.calls).toStrictEqual([
       { path: 'checkpoints.restore', input: { name: 'web', checkpoint: 'cp1' } },
     ]);
   });
 });
 
-test('a fork from a checkpoint opens the new imp', async () => {
-  const ctx = setupTest();
-  const rendered = renderApp(ctx.fake, '/imps/web');
+test('it opens the new imp after a fork from a checkpoint', async () => {
+  const stub = buildStubImpd();
+  const user = userEvent.setup();
 
-  const row = await screen.findByRole('row', { name: /before-upgrade/ });
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
+  stub.state.checkpoints.set('web', [buildMockCheckpoint({ id: 'cp1', label: 'before-upgrade' })]);
 
-  await ctx.user.click(within(row).getByRole('button', { name: 'Fork' }));
+  const rendered = renderApp(stub, '/imps/web');
 
-  const dialog = await screen.findByRole('dialog', { name: 'Fork web' });
+  const row = await rendered.findByRole('row', { name: /before-upgrade/ });
 
-  await ctx.user.type(within(dialog).getByLabelText('New name'), 'web2');
-  await ctx.user.click(within(dialog).getByRole('button', { name: 'Fork' }));
-  await screen.findByRole('heading', { name: 'web2' });
+  await user.click(within(row).getByRole('button', { name: 'Fork' }));
+
+  const dialog = await rendered.findByRole('dialog', { name: 'Fork web' });
+
+  await user.type(within(dialog).getByLabelText('New name'), 'web2');
+  await user.click(within(dialog).getByRole('button', { name: 'Fork' }));
+  await rendered.findByRole('heading', { name: 'web2' });
 
   expect(rendered.router.state.location.pathname).toBe('/imps/web2');
 
-  expect(ctx.fake.state.calls).toEqual([
+  expect(stub.state.calls).toStrictEqual([
     { path: 'imps.fork', input: { source: 'web', name: 'web2', checkpoint: 'cp1' } },
   ]);
 });
 
 test('it says so when the imp does not exist', async () => {
-  const ctx = setupTest();
+  const rendered = renderApp(buildStubImpd(), '/imps/gone');
 
-  renderApp(ctx.fake, '/imps/gone');
+  const alert = await rendered.findByRole('alert');
 
-  const alert = await screen.findByRole('alert');
-
-  expect(alert).toHaveTextContent('there is no imp named gone');
+  expect(alert).toHaveTextContent('imp gone not found');
 });
 
-test('destroying the imp goes back to the list without an error', async () => {
-  const ctx = setupTest();
-  const rendered = renderApp(ctx.fake, '/imps/web');
+test('it goes back to the list without asking for the imp it destroyed', async () => {
+  const stub = buildStubImpd();
+  const user = userEvent.setup();
 
-  const destroy = await screen.findByRole('button', { name: 'Destroy' });
+  stub.state.imps.push(buildMockImp({ name: 'web' }));
 
-  await ctx.user.click(destroy);
+  const rendered = renderApp(stub, '/imps/web');
 
-  const dialog = await screen.findByRole('dialog', { name: 'Destroy web?' });
+  const button = await rendered.findByRole('button', { name: 'Destroy' });
 
-  await ctx.user.click(within(dialog).getByRole('button', { name: 'Destroy' }));
-  await screen.findByRole('heading', { name: 'Imps' });
+  await user.click(button);
+
+  const dialog = await rendered.findByRole('dialog', { name: 'Destroy web?' });
+
+  await user.click(within(dialog).getByRole('button', { name: 'Destroy' }));
+  await rendered.findByRole('heading', { name: 'Imps' });
 
   expect(rendered.router.state.location.pathname).toBe('/');
-
-  // the page never asked for the imp it had just destroyed
-  expect(ctx.fake.state.notFound).toBe(0);
+  expect(stub.state.notFound).toBe(0);
 });
 
-test('it shows the CPU sample and sets a limit on the running imp', async () => {
-  const ctx = setupTest();
+test('it shows the network use and awake time of the running imp', async () => {
+  const stub = buildStubImpd();
 
-  ctx.fake.state.imps[0] = buildImp({
-    name: 'web',
-    cpu: { limit: null, weight: 100 },
-    resources: {
-      wakeCount: 3,
-      awakeMs: 200 * 60_000,
-      sample: {
-        measuredAt: new Date(),
-        since: new Date(),
-        cpuPercent: 45,
-        cpuThrottledMs: 1500,
-        netRxBytes: 2048,
-        netTxBytes: 512,
-      },
-    },
-  });
+  stub.state.imps.push(
+    buildMockImp({
+      name: 'web',
+      resources: buildMockImpResources({
+        awakeMs: 200 * 60_000,
+        sample: { netRxBytes: 2048, netTxBytes: 512 },
+      }),
+    }),
+  );
 
-  renderApp(ctx.fake, '/imps/web');
+  const rendered = renderApp(stub, '/imps/web');
 
-  await screen.findByText('2.0 KiB in, 512 B out');
+  const network = await rendered.findByText('2.0 KiB in, 512 B out');
 
-  expect(screen.getByText('3h 20m')).toBeInTheDocument();
+  expect(network).toBeInTheDocument();
+  expect(rendered.getByText('3h 20m')).toBeInTheDocument();
+});
 
-  await ctx.user.type(screen.getByLabelText('Limit (CPUs)'), '0.5');
-  await ctx.user.click(screen.getByRole('button', { name: 'Save' }));
-  await screen.findByText('45% / 0.5');
+test('it sets a CPU limit on the running imp', async () => {
+  const stub = buildStubImpd();
+  const user = userEvent.setup();
 
-  expect(ctx.fake.state.calls).toEqual([
+  stub.state.imps.push(
+    buildMockImp({
+      name: 'web',
+      cpu: { limit: null, weight: 100 },
+      resources: buildMockImpResources({ sample: { cpuPercent: 45 } }),
+    }),
+  );
+
+  const rendered = renderApp(stub, '/imps/web');
+
+  const field = await rendered.findByLabelText('Limit (CPUs)');
+
+  await user.type(field, '0.5');
+  await user.click(rendered.getByRole('button', { name: 'Save' }));
+
+  const cpu = await rendered.findByText('45% / 0.5');
+
+  expect(cpu).toBeInTheDocument();
+
+  expect(stub.state.calls).toStrictEqual([
     { path: 'imps.update', input: { name: 'web', cpuLimit: 0.5, cpuWeight: 100 } },
   ]);
 });

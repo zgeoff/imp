@@ -1,32 +1,38 @@
-import { afterEach, expect } from 'bun:test';
-import { GlobalRegistrator } from '@happy-dom/global-registrator';
-import * as jestDOMMatchers from '@testing-library/jest-dom/matchers';
+import { afterAll, afterEach, beforeAll, mock } from 'bun:test';
+import { registerRunHooks } from '@imp/test-utils/register-run-hooks';
+import { IMPD_ORIGIN, knownTokens } from './src/mocks/handlers';
+import { server } from './src/mocks/node';
+import { buildStubBrowserFetch } from './src/test-utils/build-stub-browser-fetch';
 
-// Bun's own fetch stack survives happy-dom: the client's Request and
-// AbortSignal must come from one implementation
-const nativeFetchStack = {
-  AbortController: globalThis.AbortController,
-  AbortSignal: globalThis.AbortSignal,
-  Blob: globalThis.Blob,
-  fetch: globalThis.fetch,
-  Headers: globalThis.Headers,
-  ReadableStream: globalThis.ReadableStream,
-  Request: globalThis.Request,
-  Response: globalThis.Response,
-  TextDecoder: globalThis.TextDecoder,
-  TextEncoder: globalThis.TextEncoder,
-  TransformStream: globalThis.TransformStream,
-  WritableStream: globalThis.WritableStream,
-};
+const bunFetch = globalThis.fetch;
 
-GlobalRegistrator.register({ url: 'http://impd.test/ui/' });
-Object.assign(globalThis, nativeFetchStack);
+declare global {
+  // happy-dom's own API on the window that @zgeoff/bun-test-react registers
+  var happyDOM: { readonly setURL: (url: string) => void };
+}
 
-expect.extend(jestDOMMatchers);
+// a seeded faker, and every env override put back after each test
+registerRunHooks();
 
-// imported after the DOM exists: Testing Library reads `document` on import
-const reactTestingLibrary = await import('@testing-library/react');
+// the page's own origin, as impd serves the dashboard
+globalThis.happyDOM.setURL(`${IMPD_ORIGIN}/ui/`);
+
+// a browser marks the page's own requests with Sec-Fetch-Site, which impd's
+// session routes need; wrapped around MSW's fetch, so MSW sees the header
+beforeAll(() => {
+  server.listen({ onUnhandledRequest: 'error' });
+
+  globalThis.fetch = buildStubBrowserFetch(globalThis.fetch, `${IMPD_ORIGIN}/ui/`);
+});
 
 afterEach(() => {
-  reactTestingLibrary.cleanup();
+  server.resetHandlers();
+  knownTokens.clear();
+  mock.restore();
+});
+
+afterAll(() => {
+  server.close();
+
+  globalThis.fetch = bunFetch;
 });
