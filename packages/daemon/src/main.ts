@@ -1,82 +1,27 @@
-import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { release } from 'node:os';
 import { join } from 'node:path';
 import packageJson from '../package.json' with { type: 'json' };
-import { createApiAudit } from './audit/api-audit';
-import { createKnownHosts } from './auth/ambient-request';
-import { createRevocations } from './auth/revocations';
-import { createTailnetIdentities, runWhois } from './auth/tailnet-identity';
-import { loadTokenStore } from './auth/token-store';
-import { createBackupService } from './backup/backup-service';
-import { createBroker } from './broker/broker-service';
-import { createSecretFiles } from './broker/secret-files';
-import { buildApp } from './build-app';
-import { createCheckpointService } from './checkpoints/checkpoint-service';
 import { loadConfig } from './config';
-import type { Config } from './config';
-import { subscribeImpWrites } from './db/imp-write-feed';
-import { countImpsByState } from './db/imps';
-import { isImpSetWrite } from './db/is-imp-set-write';
+import { createImpd } from './create-impd';
 import { openDatabase } from './db/open-database';
-import { runNft } from './egress/egress-firewall';
-import { createEgressService } from './egress/egress-service';
-import { createGovernedImps } from './governor/create-governed-imps';
 import { ENFORCE_INTERVAL_MS } from './governor/ram-governor';
 import { buildHttpsService } from './https/build-https-service';
-import { createDnsToken } from './https/dns/dns-token';
-import { createPublicRecordsLink } from './https/public-records-link';
 import { createIdleLoop } from './idle/idle-loop';
-import { createBuildContextRoute } from './images/build-context-route';
-import { BUILD_KEEPALIVE_MS } from './images/build-event-stream';
-import { createBuilders } from './images/builder-imps';
-import type { Builders } from './images/builder-imps';
-import { HOST_ADD_WARNING, HOST_BUILD_WARNING, createImageService } from './images/image-service';
-import { createTemplateService } from './images/template-service';
 import { readSetfcapWarning } from './images/unpack-export';
-import { removeUnusedDrives } from './imps/remove-unused-drives';
 import { MOVE_PART_BYTES } from './moves/move-parts';
-import { createMoveService } from './moves/move-service';
-import {
-  checkHostRules6,
-  readIpv6DefaultRoute,
-  readOrCreateUlaPrefix,
-  resolveIpv6Plan,
-} from './net/ipv6-plan';
-import { createStatusCache, readTailscaleStatus } from './net/tailscale-status';
-import type { TailscaleStatus } from './net/tailscale-status';
-import { createTapDevices } from './net/tap-devices';
-import { createNetworkService } from './networks/network-service';
-import { createOAuthService } from './oauth/oauth-service';
 import { startPublicListener } from './oauth/public-listener';
 import { printLog } from './process/print-log';
-import { runCommand } from './process/run-command';
 import { startTicker } from './process/ticker';
 import { waitWithin } from './process/wait-within';
-import { createForwardedPeers } from './proxy/forwarded-peers';
 import { startWakeProxy } from './proxy/wake-proxy';
-import type { WakeProxy } from './proxy/wake-proxy';
 import { readErrorMessage } from './read-error-message';
-import { UNKNOWN_VERSION, readHostIdentity } from './sleep/vm-identity';
-import { createAuthorizedKeys } from './ssh/authorized-keys';
-import { setupSshDir } from './ssh/host-key';
 import { startSsh } from './ssh/start-ssh';
 import { createStorageBackend } from './storage/create-storage-backend';
-import { createDiskBudget } from './storage/disk-budget';
-import { CHANGES_USAGE, createDiskUsageCache } from './storage/disk-usage-cache';
-import { readLiveStorage } from './storage/read-live-storage';
 import { setupSystemFiles } from './storage/setup-system-files';
-import { createStorageGate } from './storage/storage-gate';
-import { createStorageGc } from './storage/storage-gc';
-import { buildTailnetNames } from './tailnet-names/build-tailnet-names';
-import type { TailnetNames } from './tailnet-names/tailnet-names';
-import { startImpTelemetry } from './telemetry/imp-telemetry';
 import { startOtlpExport } from './telemetry/start-otlp-export';
 import { loadOrCreateToken } from './token';
-import { createCpuCgroups } from './vmm/cpu-cgroups';
-import { createJails } from './vmm/jail';
 import { checkKsmHost, readKsmHostStats } from './vmm/ksm';
-import { createVmRunner } from './vmm/vm-runner';
 
 // the whole stop, within the 120 s that scripts/dev.sh gives `docker stop`
 const STOP_DEADLINE_MS = 100_000;
@@ -109,29 +54,6 @@ async function runStopStep(
 
     return true;
   }
-}
-
-// tailnet identity, when IMP_TAILNET_IDENTITIES has rules; both ask about
-// the node on every request, so they share one cached status
-function buildTailnetAccess(config: Config, readStatus: () => Promise<TailscaleStatus>) {
-  if (config.tailnetRules === null) {
-    return null;
-  }
-
-  const readTailscale = createStatusCache(readStatus, Date.now);
-
-  return {
-    identities: createTailnetIdentities({
-      rules: config.tailnetRules,
-      whois: runWhois,
-      readTailscale,
-      now: Date.now,
-    }),
-    knownHosts: createKnownHosts({
-      readTailscale,
-      domain: config.https?.domain ?? null,
-    }),
-  };
 }
 
 async function main(): Promise<void> {
@@ -173,329 +95,11 @@ async function main(): Promise<void> {
   const token = loadOrCreateToken(config.dataDir);
   const storage = createStorageBackend(config);
 
-  // before any VM is re-adopted or woken: on ZFS the disks are mounted here
-  const live = await readLiveStorage(db);
-
-  await storage.start(live);
-
-  // every operation that makes storage before its row joins it; the GC waits
-  const storageGate = createStorageGate();
-  const zfsCommitDelayMs = config.storageBackend === 'zfs' ? 20_000 : 0;
-
-  const diskBudget = createDiskBudget({
-    storage,
-    reserveBytes: config.diskReserveBytes,
-    releaseDelayMs: zfsCommitDelayMs,
-    log: printLog,
-  });
-
-  // the image builders need the imps, which need the images
-  const buildersHolder: { builders: Builders | null } = { builders: null };
-
-  const images = createImageService({
-    config,
-    db,
-    storage,
-    storageGate,
-    diskBudget,
-    readBuilders: () => buildersHolder.builders,
-    log: printLog,
-  });
-
-  if (config.build.isolation === 'host') {
-    printLog(HOST_BUILD_WARNING);
-    printLog(HOST_ADD_WARNING);
-  }
-
-  const diskUsage = createDiskUsageCache({ db, storage, log: printLog });
-
-  const ipv6 = await resolveIpv6Plan(config.ipv6, {
-    readDefaultRoute: readIpv6DefaultRoute,
-    readUlaPrefix: () => readOrCreateUlaPrefix(join(config.dataDir, 'net', 'ipv6-ula')),
-    checkHostRules: () => checkHostRules6(),
-    runNft,
-    log: printLog,
-  });
-
-  // the broker's and the GC's: the GC lists and removes what the broker kept aside
-  const secretFiles = createSecretFiles(config.dataDir);
-
-  const broker = await createBroker({ config, db, log: printLog, ipv6, secretFiles });
-
-  // the firewall and its resolver, before any VM is adopted, booted or woken
-  const egress = createEgressService({
-    config,
-    db,
-    ipv6,
-    log: printLog,
-    isGranted: broker.isGranted,
-    closeTunnels: broker.closeTunnels,
-  });
-
-  await egress.start();
-
-  const proxyHolder: { proxy: WakeProxy | null } = { proxy: null };
-  const publicRecords = createPublicRecordsLink();
-  const dnsTokenSource = config.https?.dns.token ?? null;
-  const dnsToken = dnsTokenSource === null ? null : createDnsToken(dnsTokenSource, Date.now);
-  const namesHolder: { names: TailnetNames | null } = { names: null };
-  const readTailscale = () => readTailscaleStatus(config.tailscaleEnabled);
-  const cgroups = createCpuCgroups({ root: '/sys/fs/cgroup', log: printLog });
-
-  if (!cgroups.isEnforced) {
-    const effect =
-      config.jailerBin === null
-        ? 'CPU limits are kept, not applied'
-        : 'no jailed VM can start (IMP_JAILER=false runs them unjailed, with no limits)';
-
-    printLog(`impd: no cpu controller under /sys/fs/cgroup/imps; ${effect}`);
-  }
-
-  // spawns Firecracker once per version flag; system.info reuses it
-  const identity = readHostIdentity(config.firecrackerBin, systemFiles, ipv6?.prefix.text ?? null);
-
-  // even with the jailer off, impd cleans up after jailed VMs it adopted
-  const jails = createJails({
-    jailerBin: config.jailerBin ?? 'jailer',
-    firecrackerBin: Bun.which(config.firecrackerBin) ?? config.firecrackerBin,
-    chrootBase: config.jailDir,
-    run: runCommand,
-    log: printLog,
-    killCgroup: cgroups.kill,
-  });
-
-  const governed = createGovernedImps({
-    cgroups,
-
-    // each VM's memory.max follows what its elastic guest holds
-    memoryLimit: cgroups,
-    config,
-    db,
-    images,
-    taps: createTapDevices(),
-    vms: createVmRunner(jails, config.ksm?.execBin ?? null),
-    storage,
-    identity,
-    ipv6,
-    log: printLog,
-    readExecEnv: broker.readExecEnv,
-    storageGate,
-    diskBudget,
-    readDiskUsage: diskUsage.read,
-    egress,
-    readServiceUrl: (name) => namesHolder.names?.readUrl(name) ?? null,
-    readTailnetHostname: async () => {
-      const status = await readTailscale();
-
-      return status.hostname;
-    },
-  });
-
-  const imps = governed.imps;
-  const governor = governed.governor;
-
-  startImpTelemetry({
-    bus: imps.events,
-    subscribeResources: imps.subscribeResources,
-    readDiskUsedBytes: diskUsage.readExclusiveTotal,
-    readStateCounts: () => countImpsByState(db),
-    readRam: async () => {
-      const usage = await governor.readUsage();
-
-      return { usedMib: usage.usedMib, budgetMib: config.ramBudgetMib };
-    },
-  });
-
-  // an imp that comes or goes opens or closes its proxy port and its grants
-  subscribeImpWrites(db, (write) => {
-    // storage comes or goes with an imp or a checkpoint, and changes when
-    // its disk grows or a stop or sleep writes it out
-    if (write.kind !== 'changed' || CHANGES_USAGE.has(write.reason)) {
-      diskUsage.requestRefresh();
-    }
-
-    if (isImpSetWrite(write)) {
-      void proxyHolder.proxy?.syncListeners();
-      void broker.applyGrants();
-      void namesHolder.names?.runSync();
-    }
-  });
-
-  await imps.reconcileImps();
-
-  buildersHolder.builders = createBuilders({
-    config,
-    db,
-    imps,
-    ensureImage: images.ensureBuilderImage,
-    log: printLog,
-  });
-
-  // a build that a stop cut short left its builder
-  await buildersHolder.builders.removeLeftovers();
-
-  // templates this host no longer boots go first, so their drives can too
-  for (const key of imps.bootTemplates?.removeStale() ?? []) {
-    printLog(`impd: removed boot template ${key.slice(0, 12)}: this host boots something else`);
-  }
-
-  // before anything can boot or sleep an imp, so the set of drives in use holds
-  const removed = await removeUnusedDrives(
-    db,
-    config.dataDir,
-    storage.resolveImpPaths,
-    systemFiles.systemDrivePath,
-    imps.bootTemplates?.listDrivePaths() ?? [],
-  );
-
-  for (const name of removed) {
-    printLog(`impd: removed system drive ${name}: no imp uses it`);
-  }
-
-  const checkpoints = createCheckpointService({ config, db, imps, storage, diskBudget });
-  const templates = createTemplateService({ config, db, imps, storage, storageGate, diskBudget });
-  const networks = createNetworkService({ db, egress, imps });
-
-  const backups =
-    config.backup === null
-      ? null
-      : createBackupService({
-          dataDir: config.dataDir,
-          backup: config.backup,
-          db,
-          imps,
-          storage,
-          grants: broker,
-          networks,
-          storageGate,
-          diskBudget,
-        });
-
-  const gc = createStorageGc({ db, storage, storageGate, log: printLog, secretFiles });
-  const state = { ready: false };
-  const audit = createApiAudit({ db, now: Date.now, log: printLog });
-  const revocations = createRevocations();
-
-  // a key in this file cannot be bound to a token, so the gateway and the
-  // token store read the same one
-  const authorizedKeys = createAuthorizedKeys(
-    join(setupSshDir(config.dataDir), 'authorized_keys'),
-    printLog,
-  );
-
-  const tokens = await loadTokenStore({
-    db,
-    rootToken: token,
-    now: Date.now,
-    onRemove: revocations.revoke,
-    isFileKey: authorizedKeys.isListed,
-  });
-
-  const oauth = createOAuthService({
-    db,
-    tokens,
-    revocations,
-    config: config.publicMcp,
-    now: Date.now,
-    log: printLog,
-    key: randomBytes(32),
-  });
-
-  const peers = createForwardedPeers(Date.now);
-
-  const tailnetNames =
-    config.tailnetNames === null
-      ? null
-      : buildTailnetNames({
-          names: config.tailnetNames,
-          config,
-          db,
-          imps,
-          readTailscale,
-          log: printLog,
-        });
-
-  namesHolder.names = tailnetNames;
-
-  const moves = createMoveService({
-    audit,
-    config,
-    db,
-    dataDir: config.dataDir,
-    storage,
-    storageGate,
-    diskBudget,
-    imps,
-    grants: broker,
-    egress,
-    readIdentity: () => identity,
-    readTailnetIp: async () => {
-      const status = await readTailscale();
-
-      return status.ip;
-    },
-    releaseName: async () => {
-      await tailnetNames?.runSync();
-    },
-
-    // the received disk counts here now; the source's ImpRemoved counts there
-    onCommitted: () => {
-      diskUsage.requestRefresh();
-      void tailnetNames?.runSync();
-    },
-    now: Date.now,
-    log: printLog,
-  });
-
-  await moves.recover();
-
-  const api = buildApp({
-    config,
-    db,
-    rootToken: token,
-    tokens,
-    revocations,
-    oauth,
-    peers,
-    tailnet: buildTailnetAccess(config, readTailscale),
-    imps,
-    images,
-    governor,
-    checkpoints,
-    templates,
-    backups,
-    broker,
-    egress,
-    networks,
-    firecrackerVersion:
-      identity.firecrackerVersion === UNKNOWN_VERSION ? null : identity.firecrackerVersion,
-    systemFiles: systemFiles.info,
-    storage,
-    diskBudget,
-    gc,
-    readTailscale,
-    readTailnetNames: tailnetNames === null ? null : tailnetNames.readStatus,
-    publicRecords,
-    checkDnsToken: dnsToken?.check ?? null,
-    isReady: () => state.ready,
-    now: Date.now,
-    log: printLog,
-    audit,
-    buildContexts: createBuildContextRoute({
-      config,
-      images,
-      diskBudget,
-      audit,
-      now: Date.now,
-      keepaliveMs: BUILD_KEEPALIVE_MS,
-    }),
-    imageKeepaliveMs: BUILD_KEEPALIVE_MS,
-    moves,
-  });
+  const impd = await createImpd(config, { db, rootToken: token, storage, systemFiles });
 
   // Bun refuses a larger body before any route sees it; the slack leaves the
   // build route room to answer 413 itself
-  const app = api.app.listen({
+  const app = impd.api.app.listen({
     port: config.apiPort,
     maxRequestBodySize: Math.max(config.buildContextMaxBytes, MOVE_PART_BYTES) + BODY_SLACK_BYTES,
   });
@@ -506,11 +110,14 @@ async function main(): Promise<void> {
   const publicMcp =
     config.publicMcp === null
       ? null
-      : startPublicListener({ config: config.publicMcp, oauth, mcp: api.publicMcp }, printLog);
+      : startPublicListener(
+          { config: config.publicMcp, oauth: impd.oauth, mcp: impd.api.publicMcp },
+          printLog,
+        );
 
-  const proxy = startWakeProxy({ config, db, imps, log: printLog, peers });
+  const proxy = startWakeProxy({ config, db, imps: impd.imps, log: printLog, peers: impd.peers });
 
-  proxyHolder.proxy = proxy;
+  impd.proxyHolder.proxy = proxy;
 
   await proxy.syncListeners();
 
@@ -522,66 +129,66 @@ async function main(): Promise<void> {
           dataDir: config.dataDir,
           db,
           proxy,
-          readTailscale: config.tailscaleEnabled ? readTailscale : null,
-          dnsToken,
+          readTailscale: config.tailscaleEnabled ? impd.readTailscale : null,
+          dnsToken: impd.dnsToken,
           log: printLog,
         });
 
   if (https !== null) {
-    publicRecords.attach(https);
+    impd.publicRecords.attach(https);
     https.start();
   }
 
   // in the background: an API or tailscaled outage never holds up impd
-  void tailnetNames?.runSync();
+  void impd.tailnetNames?.runSync();
 
-  const brokerPort = await broker.listen(config.brokerPort);
+  const brokerPort = await impd.broker.listen(config.brokerPort);
 
   console.log(`impd: credential broker on :${String(brokerPort)} of every imp's gateway`);
 
   const ssh = await startSsh({
     config,
     db,
-    imps,
-    authorizedKeys,
-    tokens,
-    revocations,
+    imps: impd.imps,
+    authorizedKeys: impd.authorizedKeys,
+    tokens: impd.tokens,
+    revocations: impd.revocations,
     log: printLog,
-    audit,
+    audit: impd.audit,
     now: Date.now,
   });
 
-  const idle = createIdleLoop({ config, db, imps, log: printLog });
+  const idle = createIdleLoop({ config, db, imps: impd.imps, log: printLog });
 
   const tickers = [
     startTicker('idle', 2000, idle.runCheck, printLog),
-    startTicker('oauth-expiry', 3_600_000, oauth.removeExpired, printLog),
-    startTicker('governor', ENFORCE_INTERVAL_MS, governor.enforce, printLog),
-    startTicker('resources', 5000, imps.sampleResources, printLog),
-    startTicker('session-logs', 60_000, imps.sweepSessionLogs, printLog),
+    startTicker('oauth-expiry', 3_600_000, impd.oauth.removeExpired, printLog),
+    startTicker('governor', ENFORCE_INTERVAL_MS, impd.governor.enforce, printLog),
+    startTicker('resources', 5000, impd.imps.sampleResources, printLog),
+    startTicker('session-logs', 60_000, impd.imps.sweepSessionLogs, printLog),
 
     // elastic guests grow within a second of running low
-    startTicker('memory', 500, governed.memory.runTick, printLog),
+    startTicker('memory', 500, impd.governed.memory.runTick, printLog),
 
     // listeners follow creates and destroys; this catches anything missed
     startTicker('proxy', 30_000, proxy.syncListeners, printLog),
 
-    ...(tailnetNames === null
+    ...(impd.tailnetNames === null
       ? []
       : [
           // names follow creates and destroys; this repairs what failed
-          startTicker('tailnet-names', 600_000, tailnetNames.runSync, printLog),
+          startTicker('tailnet-names', 600_000, impd.tailnetNames.runSync, printLog),
         ]),
 
     // terminators follow grants; this also renews leaves near their end
-    startTicker('broker', 60_000, broker.applyGrants, printLog),
+    startTicker('broker', 60_000, impd.broker.applyGrants, printLog),
 
     // what a crash or a failed removal left; start sweeps the same way
-    startTicker('gc', 3_600_000, gc.runScheduled, printLog),
+    startTicker('gc', 3_600_000, impd.gc.runScheduled, printLog),
 
     // FIEMAP over every file on XFS: often enough for `imp ls`
-    startTicker('disk-usage', 300_000, diskUsage.runPass, printLog),
-    ...(backups === null
+    startTicker('disk-usage', 300_000, impd.diskUsage.runPass, printLog),
+    ...(impd.backups === null
       ? []
       : [
           startTicker(
@@ -590,21 +197,21 @@ async function main(): Promise<void> {
             // a run is due by the time since the last one, so a restart
             // never puts it off by a whole interval
             Math.min(config.backup?.intervalS ?? 0, 300) * 1000,
-            backups.runScheduled,
+            impd.backups.runScheduled,
             printLog,
           ),
         ]),
   ];
 
   // the first usage numbers soon after start, not a ticker interval later
-  diskUsage.requestRefresh();
+  impd.diskUsage.requestRefresh();
 
   // ready either way: a failed seed leaves `imp image add` to the user
   const setupDefaultImage = async (): Promise<void> => {
     try {
-      await images.seedDefaultImage();
+      await impd.images.seedDefaultImage();
 
-      const existing = await images.listImages();
+      const existing = await impd.images.listImages();
 
       if (!existing.some((image) => image.name === config.defaultImage)) {
         printLog(
@@ -614,7 +221,7 @@ async function main(): Promise<void> {
     } catch (error) {
       console.error('impd: could not add the default image:', error);
     } finally {
-      state.ready = true;
+      impd.state.ready = true;
     }
   };
 
@@ -628,7 +235,7 @@ async function main(): Promise<void> {
     const readLeftMs = () => Math.max(0, STOP_DEADLINE_MS - (performance.now() - started));
     const readStepMs = () => Math.min(STOP_STEP_MAX_MS, readLeftMs());
 
-    diskUsage.stop();
+    impd.diskUsage.stop();
 
     await runStopStep('tickers', readStepMs(), () =>
       Promise.all(tickers.map((ticker) => ticker.stop())),
@@ -639,15 +246,18 @@ async function main(): Promise<void> {
     }
 
     await runStopStep('proxy', readStepMs(), () => proxy.stop());
-    await runStopStep('broker', Math.min(STOP_BROKER_MAX_MS, readLeftMs()), () => broker.stop());
 
-    egress.stop();
+    await runStopStep('broker', Math.min(STOP_BROKER_MAX_MS, readLeftMs()), () =>
+      impd.broker.stop(),
+    );
+
+    impd.egress.stop();
 
     // before the sleep pass, as exec sessions are: a client sees its
     // connection end instead of hanging while its imp sleeps
     await runStopStep('ssh', readStepMs(), () => ssh?.stop() ?? Promise.resolve());
 
-    api.closeExecSessions();
+    impd.api.closeExecSessions();
 
     if (publicMcp !== null) {
       await runStopStep('public-mcp', readStepMs(), () => publicMcp.stop());
@@ -658,14 +268,14 @@ async function main(): Promise<void> {
     // either way, a wake or boot under way finishes first: one cut short
     // leaves a Firecracker that no record knows
     const settled = sleepImps
-      ? await runStopStep('sleep', readLeftMs(), () => imps.sleepAllImps())
-      : await runStopStep('lifecycle', readLeftMs(), () => imps.waitForLifecycle());
+      ? await runStopStep('sleep', readLeftMs(), () => impd.imps.sleepAllImps())
+      : await runStopStep('lifecycle', readLeftMs(), () => impd.imps.waitForLifecycle());
 
     // a build cut short leaves a Firecracker no record knows
     await runStopStep(
       'templates',
       readStepMs(),
-      () => imps.bootTemplates?.stop() ?? Promise.resolve(),
+      () => impd.imps.bootTemplates?.stop() ?? Promise.resolve(),
     );
 
     if (sleepImps) {
