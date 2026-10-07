@@ -15,6 +15,7 @@ interface CustomRuleArgs {
   readonly header?: string | undefined;
   readonly scheme?: string | undefined;
   readonly user?: string | undefined;
+  readonly upstream?: string | undefined;
 }
 
 interface OAuthArgs {
@@ -27,6 +28,10 @@ interface OAuthArgs {
 // rule per host, all with the same header; kinds custom and oauth
 function buildCustomRules(kind: SecretKind, args: CustomRuleArgs): BrokerRule[] | undefined {
   const given = [args.hosts, args.header, args.scheme, args.user].some((arg) => arg !== undefined);
+
+  if (args.upstream !== undefined && kind !== 'custom') {
+    throw new UsageError('--upstream is for --kind custom');
+  }
 
   if (kind !== 'custom' && kind !== 'oauth') {
     if (given) {
@@ -42,12 +47,19 @@ function buildCustomRules(kind: SecretKind, args: CustomRuleArgs): BrokerRule[] 
     throw new UsageError(`--kind ${kind} needs --hosts`);
   }
 
-  return args.hosts.split(',').map((host) => {
+  const hosts = args.hosts.split(',');
+
+  if (args.upstream !== undefined && hosts.length !== 1) {
+    throw new UsageError('--upstream needs exactly one host in --hosts');
+  }
+
+  return hosts.map((host) => {
     const parsed = BrokerRuleSchema.safeParse({
       host: host.trim(),
       header: (args.header ?? 'authorization').toLowerCase(),
       scheme: args.scheme ?? 'bearer',
       ...(args.user !== undefined && { user: args.user }),
+      ...(args.upstream !== undefined && { upstream: args.upstream }),
     });
 
     if (!parsed.success) {
@@ -158,6 +170,11 @@ const addCommand = defineCommand({
     },
     scheme: { type: 'string', description: 'custom, oauth: bearer (default), basic or raw' },
     user: { type: 'string', description: 'custom, oauth: the user name for basic' },
+    upstream: {
+      type: 'string',
+      description:
+        'custom, one host: send its requests here (http or https origin) instead of the host; the credential goes there',
+    },
     'token-url': { type: 'string', description: 'oauth: the https token endpoint' },
     'client-id': { type: 'string', description: 'oauth: the client the refresh token is for' },
     'token-format': {
@@ -193,6 +210,12 @@ const addCommand = defineCommand({
           'secretRebind',
           'let --replace change the hosts and keep every grant',
         );
+      }
+
+      // an older impd would drop the upstream unread and send the credential
+      // to the host
+      if (context.args.upstream !== undefined) {
+        await requireFeature(client, 'secretUpstream', 'send the credential to the host itself');
       }
 
       // an older impd would refuse the kind, or drop the config unread

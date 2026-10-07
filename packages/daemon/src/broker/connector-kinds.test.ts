@@ -56,3 +56,16 @@ test('oauth takes its rules from the caller like custom, and the presets refuse 
   expect(() => resolveRules('github', [rule])).toThrow('rules are for kinds custom and oauth');
   expect(listPlaceholderEnv(['oauth', 'npm'])).toEqual(['NPM_TOKEN']);
 });
+
+test('only a custom secret may have an upstream', () => {
+  const rule = {
+    host: 'svc.imp.internal',
+    header: 'authorization',
+    scheme: 'bearer' as const,
+    upstream: 'http://172.17.0.1:18081',
+  };
+
+  expect(resolveRules('custom', [rule])).toEqual([rule]);
+  expect(() => resolveRules('oauth', [rule])).toThrow('cannot have an upstream');
+  expect(() => resolveRules('github', [rule])).toThrow(SecretRulesError);
+});

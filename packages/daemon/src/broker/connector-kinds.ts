@@ -57,6 +57,10 @@ export function resolveRules(
     throw new SecretRulesError(`kind ${kind} needs at least one host`);
   }
 
+  if (kind !== 'custom' && given.some((rule) => rule.upstream !== undefined)) {
+    throw new SecretRulesError(`kind ${kind} cannot have an upstream; it is for kind custom`);
+  }
+
   const hosts = given.map((rule) => rule.host);
   const repeated = hosts.find((host, index) => hosts.indexOf(host) !== index);
 

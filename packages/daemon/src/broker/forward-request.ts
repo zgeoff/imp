@@ -7,10 +7,14 @@ export interface Credential {
   readonly secretName: string;
   readonly header: string;
   readonly value: string;
+
+  // the rule's own origin (http or https), or null for https://<host>
+  readonly upstream: string | null;
 }
 
-// where requests for a host go: https://<host> unless a test upstream
-// stands in (test-upstreams.ts), with the extra CA it is signed by
+// where requests for a host go: the rule's upstream, else a test upstream
+// (test-upstreams.ts), else https://<host>; with the extra CA a test
+// upstream is signed by
 export interface Upstream {
   readonly origin: string;
   readonly ca: readonly string[] | null;
@@ -56,9 +60,9 @@ const HOP_HEADERS = [
 
 const MAX_AUDIT_PATH = 512;
 
-// The handler for a terminator bound to one imp and one host. The upstream
-// URL is that host plus the request's path: neither the Host header nor an
-// absolute-form target can send a request, and its credential, elsewhere.
+// The handler for a terminator bound to one imp and one host. The URL is the
+// upstream's origin plus the request's path: neither the Host header nor an
+// absolute-form target can send the credential elsewhere.
 export function createForwarder(deps: ForwardDeps): (request: Request) => Promise<Response> {
   const fetchUpstream = deps.fetch ?? sendUpstream;
 
@@ -102,7 +106,14 @@ export function createForwarder(deps: ForwardDeps): (request: Request) => Promis
       });
     };
 
-    const upstream = deps.resolveUpstream(deps.host);
+    // The rule's upstream wins, and it came with the credential, so a rebind
+    // or a revoke applies to the next request. It is verified against the
+    // system roots when https, and sent with no TLS when http.
+    const upstream: Upstream =
+      credential.upstream === null
+        ? deps.resolveUpstream(deps.host)
+        : { origin: credential.upstream, ca: null };
+
     const headers = buildEndToEndHeaders(request.headers);
 
     headers.delete('host');

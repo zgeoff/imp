@@ -424,7 +424,11 @@ export function formatSecrets(secrets: readonly Secret[]): string {
       secret.name,
       secret.kind,
       formatSecretState(secret),
-      secret.rules.map((rule) => rule.host).join(','),
+      secret.rules
+        .map((rule) =>
+          rule.upstream === undefined ? rule.host : `${rule.host} -> ${rule.upstream}`,
+        )
+        .join(','),
       secret.imps.length === 0 ? '-' : secret.imps.join(','),
     ]),
   );

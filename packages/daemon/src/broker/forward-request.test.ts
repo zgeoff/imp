@@ -16,6 +16,7 @@ function setupForwarder(overrides: Partial<ForwardDeps> = {}) {
     secretName: 'gh',
     header: 'authorization',
     value: 'Bearer real',
+    upstream: null,
   };
 
   const forward = createForwarder({
@@ -197,4 +198,34 @@ test('another upgrade protocol is not answered 426', async () => {
   );
 
   expect(response.status).toBe(201);
+});
+
+test('a rule’s upstream takes the request, over a test upstream; the guest Host and the audit host stay the guest’s', async () => {
+  const ctx = setupForwarder({
+    host: 'svc.imp.internal',
+    findCredential: () =>
+      Promise.resolve({
+        secretName: 'op',
+        header: 'authorization',
+        value: 'Bearer real',
+        upstream: 'http://172.17.0.1:18081',
+      }),
+    resolveUpstream: () => ({ origin: 'https://test.invalid', ca: ['test-ca'] }),
+  });
+
+  const response = await ctx.forward(
+    new Request('https://svc.imp.internal/v1/vaults?x=1', {
+      headers: { host: 'svc.imp.internal', authorization: 'Bearer imp-broker-placeholder' },
+    }),
+  );
+
+  await response.text();
+
+  const headers = readHeaders(ctx.sent[0]);
+
+  expect(ctx.sent[0]?.url).toBe('http://172.17.0.1:18081/v1/vaults?x=1');
+  expect(ctx.sent[0]?.init.tls).toBeUndefined();
+  expect(headers.get('authorization')).toBe('Bearer real');
+  expect(headers.get('host')).toBeNull();
+  expect(ctx.audits).toMatchObject([{ host: 'svc.imp.internal', path: '/v1/vaults' }]);
 });

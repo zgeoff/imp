@@ -348,6 +348,7 @@ export async function createBroker(deps: BrokerDeps): Promise<Broker> {
       secretName: granted.secretName,
       header: granted.rule.header,
       value: renderCredential(granted.rule, value),
+      upstream: granted.rule.upstream ?? null,
     };
   };
 
