@@ -10,7 +10,7 @@ import { UsageError } from './usage-error';
 const HOST_TIMEOUT_MS = 5000;
 
 // starts a timer that fires once after `ms`, and returns its cancel
-type StartTimer = (ms: number, fire: () => void) => () => void;
+export type StartTimer = (ms: number, fire: () => void) => () => void;
 
 // a saved host, as loadCliConfig would give it for `--host <name>`
 export interface SavedTarget {
