@@ -139,14 +139,20 @@ func TestNoStopLeavesGroup(t *testing.T) {
 // TestSIGUSR1DoesNotArm: a leader that exits on SIGUSR1 leaves its child,
 // which ignores it, alive.
 func TestSIGUSR1DoesNotArm(t *testing.T) {
-	pidFile := filepath.Join(t.TempDir(), "pid")
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	// the leader writes its pid once its trap is set: a SIGUSR1 before that
+	// would end it by the signal's default action
+	leaderFile := filepath.Join(dir, "leader")
+	leader := fmt.Sprintf(`trap "exit 0" USR1; echo $$ > %s; while :; do sleep 0.05; done`, leaderFile)
 	h := startExec(t, newManager(), proto.Request{
-		Argv:        []string{"sh", "-c", childScript(pidFile, `trap "exit 0" USR1; while :; do sleep 0.05; done`)},
+		Argv:        []string{"sh", "-c", childScript(pidFile, leader)},
 		KillGraceMs: 50,
 	})
 	h.started(t)
 	child := readPid(t, pidFile)
 	killAfter(t, child)
+	readPid(t, leaderFile)
 
 	signal(t, h, syscall.SIGUSR1)
 	if _, exit := h.wait(t, 5*time.Second); exit.Code != 0 {
