@@ -1141,3 +1141,151 @@ test.each([['unit_imp_host'], ['unit_imp_docker_proxy'], ['env_template']])(
     expect(installed).toInclude(`ghcr.io/zgeoff/imp-host:${version}`);
   },
 );
+
+test.each([
+  ['6.10', '6.10', 0],
+  ['6.10.1', '6.10', 0],
+  ['6.13.0', '6.6.0', 0],
+  ['6.9.12', '6.10', 1],
+  ['5.15.0', '6.6.0', 1],
+])('#version_ge answers whether %s is at least %s with exit %d', (version, least, exitCode) => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(runSourcedFunction({ script, fn: 'version_ge', args: [version, least] })).toStrictEqual({
+    exitCode,
+    stdout: '',
+    stderr: '',
+  });
+});
+
+test.each([
+  ['100', '30\n'],
+  ['220', '33\n'],
+])('#loop_reserve_gib keeps the larger of 30 GiB and 15 percent of %s GiB, %p', (freeGib, keep) => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(runSourcedFunction({ script, fn: 'loop_reserve_gib', args: [freeGib] }).stdout).toBe(keep);
+});
+
+test.each([
+  ['fd12::1', 'fd12:0:0:0:0:0:0:1\n'],
+  ['::', '0:0:0:0:0:0:0:0\n'],
+  ['FD12:0034::', 'fd12:34:0:0:0:0:0:0\n'],
+  ['1:2:3:4:5:6:7:8', '1:2:3:4:5:6:7:8\n'],
+])('#ipv6_expand writes the eight groups of %s, %p', (address, groups) => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(runSourcedFunction({ script, fn: 'ipv6_expand', args: [address] })).toStrictEqual({
+    exitCode: 0,
+    stdout: groups,
+    stderr: '',
+  });
+});
+
+test.each([
+  ['fd12::1::2'],
+  ['1:2:3:4:5:6:7'],
+  ['1:2:3:4:5:6:7:8:9'],
+  ['fd12::12345'],
+  ['10.0.0.1'],
+])('#ipv6_expand refuses %p, which is no IPv6 address', (address) => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(runSourcedFunction({ script, fn: 'ipv6_expand', args: [address] })).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: '',
+  });
+});
+
+test('#parse_args reads the mode and the flags', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [
+        'parse_args --dry-run --storage zfs --image imp-host:1 --ksm && echo "$mode $storage $image $image_set $ksm"',
+      ],
+    }),
+  ).toStrictEqual({ exitCode: 0, stdout: 'dry-run zfs imp-host:1 1 on\n', stderr: '' });
+});
+
+test('#parse_args refuses more than one mode', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({ script, fn: 'parse_args', args: ['--yes', '--check'] }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: 'bootstrap: give one of --yes, --dry-run and --check\n',
+  });
+});
+
+test('#parse_args refuses an unknown argument', () => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  const result = runSourcedFunction({ script, fn: 'parse_args', args: ['--frobnicate'] });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toEndWith('bootstrap: unknown argument: --frobnicate\n');
+});
+
+test('#parse_args refuses a Tailscale key file it cannot read', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'parse_args',
+      args: ['--tailscale-authkey-file', join(ctx.dir, 'no-key')],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `bootstrap: --tailscale-authkey-file: cannot read ${join(ctx.dir, 'no-key')}\n`,
+  });
+});
+
+test('#parse_args reads the Tailscale key from its file without blanks', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  writeFileSync(join(ctx.dir, 'key'), ' fake-key-for-tests \n');
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [
+        `parse_args --yes --tailscale-authkey-file '${join(ctx.dir, 'key')}' && echo "$authkey"`,
+      ],
+    }).stdout,
+  ).toBe('fake-key-for-tests\n');
+});
+
+test.each([
+  ['--storage zfs', 'give one of --yes, --dry-run and --check'],
+  [
+    '--yes --data-device /dev/sdb --loop-file /srv/imp.xfs',
+    'give --data-device or --loop-file, not both',
+  ],
+  ['--yes --loop-size 0', '--loop-size must be a whole number of GiB, or auto'],
+  ['--yes --storage btrfs', '--storage must be xfs or zfs'],
+  ['--yes --host-firewall ufw', '--host-firewall must be own or none'],
+  ['--yes --ipv6 maybe', '--ipv6 must be auto, on or off'],
+  ['--yes --zfs-pool 1tank', '--zfs-pool must be a pool name: 1tank'],
+  ['--yes --ssh-port ssh', '--ssh-port must be a port number: ssh'],
+])('#parse_args refuses %p, saying %p', (args, message) => {
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  const result = runSourcedFunction({ script, fn: 'parse_args', args: args.split(' ') });
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr).toEndWith(`bootstrap: ${message}\n`);
+});

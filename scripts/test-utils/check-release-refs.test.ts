@@ -63,8 +63,8 @@ test('it lets the definition of the old template line name latest', () => {
 test('it reports a deploy file fetched from main', () => {
   const text = 'curl https://raw.githubusercontent.com/zgeoff/imp/main/deploy/bootstrap.sh\n';
 
-  expect(checkReleaseRefs('install.md', text, '1.2.3')).toStrictEqual({
-    problems: ['install.md:1: fetches from main, not this release'],
+  expect(checkReleaseRefs('guide.md', text, '1.2.3')).toStrictEqual({
+    problems: ['guide.md:1: fetches from main, not this release'],
     defaults: 0,
   });
 });

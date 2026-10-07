@@ -12,6 +12,10 @@ interface StubHostDocker {
   // the pulled image is the one the container runs already
   readonly pulledIsRunning?: boolean;
 
+  // the imps `imp ls` lists as running, and the one of them that `imp sleep` fails for
+  readonly awakeImps?: readonly string[];
+  readonly sleeplessImp?: string;
+
   // the end of the deploy file whose `docker run ... cat` fails, such as .service
   readonly unreadableFile?: string;
 
@@ -34,6 +38,8 @@ export function buildStubHostDocker(stub: StubHostDocker): string {
       ? `printf '%s' ${buildShellWord(stub.composeConfigError ?? '')}; printf '%s' ${buildShellWord(stub.composeConfigError ?? '')} >&2; exit 1`
       : `printf '%s' ${buildShellWord(stub.composeConfig)}`;
 
+  const imps = JSON.stringify((stub.awakeImps ?? []).map((name) => ({ name, state: 'running' })));
+
   return `case "$*" in
   "inspect -f {{.Image}} imp-host") echo sha256:old ;;
   "inspect imp-host" | "pull -q "${buildShellWord(stub.image)}) ;;
@@ -43,7 +49,9 @@ export function buildStubHostDocker(stub: StubHostDocker): string {
   "run --rm "${buildShellWord(stub.image)}" cat "*${buildShellWord(stub.unreadableFile ?? 'none')}) exit 1 ;;
   "run --rm "${buildShellWord(stub.image)}" cat "*.service) printf '%s' ${buildShellWord(stub.pulledUnit)} ;;
   "run --rm "${buildShellWord(stub.image)}" cat "*.json) echo '{}' ;;
-  "exec imp-host imp ls --json") echo '[]' ;;
+  "exec imp-host imp ls --json") echo ${buildShellWord(imps)} ;;
+  "exec imp-host imp sleep "${buildShellWord(stub.sleeplessImp ?? '')}) exit 1 ;;
+  "exec imp-host imp sleep "*) ;;
   "exec imp-host imp info --json") echo '{}' ;;
   "compose -f "*" config --environment")
     echo "compose config, IMP_HOST_IMAGE \${IMP_HOST_IMAGE-unset}, IMP_DOCKER_GID \${IMP_DOCKER_GID-unset}" >>"$STUB_CALLS"

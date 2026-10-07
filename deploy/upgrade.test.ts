@@ -7,6 +7,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1710,4 +1711,250 @@ test('it never prints what a failing compose config prints, and reads the .env i
   expect(result.exitCode).toBe(0);
   expect(calls).toInclude('docker pull -q imp-host:pinned\n');
   expect(output).not.toInclude('hunter2');
+});
+
+test('it refuses --compose without a file, with its usage', () => {
+  using ctx = setupTest();
+
+  const result = Bun.spawnSync(
+    ['bash', new URL('upgrade.sh', import.meta.url).pathname, '--compose'],
+    {
+      env: { PATH: `${join(ctx.dir, 'bin')}:${process.env['PATH'] ?? ''}` },
+    },
+  );
+
+  expect(result.exitCode).toBe(2);
+  expect(result.stderr.toString()).toEndWith(' [--compose <file>]\n');
+});
+
+test('it refuses to run on a host without jq', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(ctx.dir, 'docker');
+
+  const result = Bun.spawnSync(
+    [Bun.which('bash') ?? 'bash', new URL('upgrade.sh', import.meta.url).pathname],
+    {
+      env: { PATH: docker.bin },
+    },
+  );
+
+  expect(result.exitCode).toBe(1);
+  expect(result.stderr.toString()).toBe('upgrade: jq is not installed\n');
+  expect(readFileSync(docker.calls, 'utf8')).toBe('');
+});
+
+test('it refuses a host with no imp-host container, before any pull', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(ctx.dir, 'docker', 'exit 1');
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toBe(
+    'upgrade: no imp-host container; start the host first (docs/guides/install.md)\n',
+  );
+
+  expect(readFileSync(docker.calls, 'utf8')).toBe('docker inspect imp-host\n');
+});
+
+test('it sleeps each awake imp before the restart', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      awakeImps: ['web', 'db'],
+    }),
+  );
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  const calls = readFileSync(docker.calls, 'utf8');
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toInclude('upgrade: web asleep\nupgrade: db asleep\n');
+
+  expect(
+    calls
+      .split('\n')
+      .filter((call) => /^(?:docker exec imp-host imp sleep|systemctl restart) /v.test(call)),
+  ).toStrictEqual([
+    'docker exec imp-host imp sleep web',
+    'docker exec imp-host imp sleep db',
+    'systemctl restart imp-docker-proxy',
+    'systemctl restart imp-host',
+  ]);
+});
+
+test('it stops before anything restarts when an imp does not sleep', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      awakeImps: ['web', 'db'],
+      sleeplessImp: 'db',
+    }),
+  );
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  const calls = readFileSync(docker.calls, 'utf8');
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toInclude(
+    'upgrade: db did not sleep; the host still runs sha256:old\n',
+  );
+
+  expect(calls).not.toInclude('systemctl');
+  expect(existsSync(join(ctx.dir, 'imp-docker-proxy.service'))).toBeFalse();
+});
+
+test('it fails the upgrade when impd is not ready in time after the restart', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":false}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+      IMP_READY_TIMEOUT_S: '0',
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toInclude(
+    'upgrade: impd is not ready after 0 s; see: docker logs imp-host\n',
+  );
+
+  expect(readFileSync(docker.calls, 'utf8')).toInclude('systemctl restart imp-host\n');
+});
+
+test('it stops before anything restarts when it cannot rewrite the env file', () => {
+  using ctx = setupTest();
+
+  const pkgText = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  const version = z.object({ version: z.string() }).parse(JSON.parse(pkgText)).version;
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: `ghcr.io/zgeoff/imp-host:${version}`,
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        `Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:${version}\n` +
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+    }),
+  );
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest\n', {
+    mode: 0o600,
+  });
+
+  // a dangling symlink where the rewrite writes the new file, which cp will not write through
+  symlinkSync(join(ctx.dir, 'missing', 'imp-host.env'), join(ctx.dir, 'imp-host.env.new'));
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: '',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+
+  expect(result.stderr.toString()).toInclude(
+    `upgrade: cannot rewrite ${join(ctx.dir, 'imp-host.env')}; nothing restarted, the host still runs sha256:old\n`,
+  );
+
+  expect(readFileSync(join(ctx.dir, 'imp-host.env'), 'utf8')).toBe(
+    'IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:latest\n',
+  );
+
+  expect(readFileSync(docker.calls, 'utf8')).not.toInclude('systemctl');
 });

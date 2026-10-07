@@ -206,3 +206,55 @@ test('it fails a call that upgrade.sh does not make', () => {
     stderr: 'unexpected: docker system prune\n',
   });
 });
+
+test('it lists the awake imps as running, and sleeps each but the sleepless one', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+      awakeImps: ['web', 'db'],
+      sleeplessImp: 'db',
+    }),
+  );
+
+  const result = Bun.spawnSync(
+    [
+      'bash',
+      '-c',
+      'docker exec imp-host imp ls --json; docker exec imp-host imp sleep web; echo "web $?"; ' +
+        'docker exec imp-host imp sleep db; echo "db $?"',
+    ],
+    { env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` } },
+  );
+
+  expect(result.stdout.toString()).toBe(
+    '[{"name":"web","state":"running"},{"name":"db","state":"running"}]\nweb 0\ndb 1\n',
+  );
+});
+
+test('it lists no imps when none are awake', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit: 'unit',
+    }),
+  );
+
+  const result = Bun.spawnSync(['docker', 'exec', 'imp-host', 'imp', 'ls', '--json'], {
+    env: { PATH: `${docker.bin}:${process.env['PATH'] ?? ''}` },
+  });
+
+  expect(result.stdout.toString()).toBe('[]\n');
+});

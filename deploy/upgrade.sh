@@ -47,6 +47,7 @@
 #      IMP_DOCKER_PROXY_UNIT_FILE to /etc/systemd/system/imp-docker-proxy.service,
 #      IMP_HOST_SECCOMP_FILE to /etc/imp/imp-host.seccomp.json. With
 #      --compose, IMP_DOCKER_GID defaults to the group of /var/run/docker.sock.
+#      IMP_READY_TIMEOUT_S (default 120) is how long impd gets to answer ready.
 set -euo pipefail
 
 container=imp-host
@@ -54,6 +55,7 @@ env_file=${IMP_HOST_ENV_FILE:-/etc/imp/imp-host.env}
 unit_file=${IMP_HOST_UNIT_FILE:-/etc/systemd/system/imp-host.service}
 proxy_unit_file=${IMP_DOCKER_PROXY_UNIT_FILE:-/etc/systemd/system/imp-docker-proxy.service}
 seccomp_file=${IMP_HOST_SECCOMP_FILE:-/etc/imp/imp-host.seccomp.json}
+ready_timeout_s=${IMP_READY_TIMEOUT_S:-120}
 image_deploy=/usr/local/share/imp/deploy
 health=http://127.0.0.1:7070/health
 compose_file=
@@ -356,10 +358,10 @@ restart_host() {
 }
 
 wait_ready() {
-  local deadline=$((SECONDS + 120))
+  local deadline=$((SECONDS + ready_timeout_s))
   until curl -fsS "$health" 2>/dev/null | grep -q '"ready":true'; do
     if [ $SECONDS -ge $deadline ]; then
-      echo "upgrade: impd is not ready after 120 s; see: docker logs $container" >&2
+      echo "upgrade: impd is not ready after $ready_timeout_s s; see: docker logs $container" >&2
       exit 1
     fi
     sleep 1
