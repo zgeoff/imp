@@ -1,696 +1,820 @@
-import { expect, test } from 'bun:test';
+import { expect, onTestFinished, test } from 'bun:test';
 import { connect } from 'node:net';
+import { waitFor } from '@imp/test-utils/wait-for';
 import * as dnsPacket from 'dns-packet';
-import type { Answer, DecodedPacket } from 'dns-packet';
 import { parseSubnet } from '../net/addressing';
+import { buildMockDnsQuery, buildMockDnsReply } from '../test-utils/build-mock-dns-message';
+import { buildMockNetworkMember } from '../test-utils/build-mock-network-member';
+import { buildStubEgressService } from '../test-utils/build-stub-egress-service';
 import { findFreePorts } from '../test-utils/find-free-ports';
+import { startStubDnsUpstream } from '../test-utils/start-stub-dns-upstream';
 import { createDnsForward } from './dns-upstream';
 import {
   createQueryHandler,
   createSocketErrorReport,
   startResolverServer,
 } from './egress-resolver';
-import type { QueryHandler, QueryVerdict, ResolverDeps } from './egress-resolver';
-import type { AddressAnswer } from './egress-sets';
-import { resolveNetworkName } from './network-names';
 
-// slot 1's guest is 10.66.0.6; 10.66.0.7 is the same /30's broadcast
-const GUEST = '10.66.0.6';
-const SUBNET = parseSubnet('10.66.0.0/16');
+// In 10.66.0.0/16, slot 0's guest is 10.66.0.2 and slot 1's 10.66.0.6.
 
-// slot 1 shares lab with web in slot 0; slot 2 is on no network
-const MEMBERS = [
-  { network: 'lab', impId: 'b', name: 'box', slot: 1, guestIp: GUEST },
-  { network: 'lab', impId: 'w', name: 'web', slot: 0, guestIp: '10.66.0.2' },
-];
-
-const VIEW = { names: new Set(['lab']), members: MEMBERS };
-
-function buildQuery(name: string, type: 'A' | 'AAAA' = 'A', edns = true): Uint8Array {
-  return dnsPacket.encode({
-    type: 'query',
-    id: 4242,
-    flags: dnsPacket.RECURSION_DESIRED,
-    questions: [{ name, type }],
-    ...(edns && {
-      additionals: [
-        {
-          type: 'OPT',
-          name: '.',
-          udpPayloadSize: 1232,
-          extendedRcode: 0,
-          ednsVersion: 0,
-          flags: 0,
-          flag_do: false,
-          options: [],
-        },
-      ],
-    }),
-  });
-}
-
-function buildAnswer(query: Uint8Array, answers: readonly Answer[]): Uint8Array {
-  const decoded = dnsPacket.decode(Buffer.from(query));
-
-  return dnsPacket.encode({
-    type: 'response',
-    id: decoded.id ?? 0,
-    flags: dnsPacket.RECURSION_DESIRED | dnsPacket.RECURSION_AVAILABLE,
-    questions: decoded.questions ?? [],
-    answers: [...answers],
-  });
-}
-
-function readReply(reply: Uint8Array): DecodedPacket & { readonly rcode?: string } {
-  return dnsPacket.decode(Buffer.from(reply));
-}
-
-// RFC 8914 option 15, the last six bytes of the reply's OPT record, as its
-// info code; dns-packet's types know no such option
-function readEde(reply: Uint8Array): number | null {
-  const opt = readReply(reply).additionals?.find((record) => record.type === 'OPT');
-  const tail = Buffer.from(reply.subarray(-6));
-
-  return opt === undefined || tail.readUInt16BE(0) !== 15 ? null : tail.readUInt16BE(4);
-}
-
-const NPM_ANSWERS: readonly Answer[] = [
-  { type: 'CNAME', name: 'registry.npmjs.org', ttl: 300, data: 'npm.cdn.test' },
-  { type: 'A', name: 'npm.cdn.test', ttl: 200_000, data: '104.16.0.1' },
-  { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.2' },
-  { type: 'A', name: 'smuggled.test', ttl: 60, data: '6.6.6.6' },
-];
-
-function setupHandler(overrides: Partial<ResolverDeps> = {}) {
-  const forwarded: string[] = [];
-  const admitted: { names: readonly string[]; answers: readonly AddressAnswer[] }[] = [];
-
-  const verdicts: Readonly<Record<string, QueryVerdict>> = {
-    'registry.npmjs.org': 'admit',
-    'api.github.com': 'answer',
-  };
-
-  const deps: ResolverDeps = {
-    subnet: SUBNET,
-    resolveLocal: (slot, query) => resolveNetworkName(VIEW, SUBNET, { slot, ...query }),
-    checkName: (slot, name) => {
-      const verdict = slot === 1 ? (verdicts[name] ?? 'refuse') : null;
-
-      return Promise.resolve(verdict);
-    },
-    writeAnswers: (_slot, names, answers) => {
-      admitted.push({ names, answers });
-
-      return Promise.resolve();
-    },
-    forward: (query) => {
-      forwarded.push(readReply(query).questions?.[0]?.name ?? '');
-
-      return Promise.resolve(buildAnswer(query, NPM_ANSWERS));
-    },
-    isScreened: () => false,
-    maxTtlS: 86_400,
-    readRate: () => ({ burst: 100, perSecond: 10 }),
-    now: () => 0,
-    log: () => {},
-    ...overrides,
-  };
-
-  const handle = createQueryHandler(deps);
-
-  // the decoded reply to one query for `name` from `source`
-  const sendQuery = async (name: string, source = GUEST, type: 'A' | 'AAAA' = 'A') => {
-    const reply = await handle(source, buildQuery(name, type));
-
-    return readReply(reply);
-  };
-
-  return { handle, sendQuery, forwarded, admitted };
-}
-
-test('an allowed name: the CNAME chain and its A records go in, and the TTLs drop', async () => {
-  const ctx = setupHandler();
-
-  const reply = await ctx.sendQuery('Registry.NPMJS.org.');
-
-  const ttls = reply.answers?.map((record) => ('ttl' in record ? record.ttl : null));
-
-  expect(ctx.admitted).toEqual([
-    {
-      names: ['registry.npmjs.org', 'npm.cdn.test'],
-      answers: [
-        { address: '104.16.0.1', ttlS: 200_000 },
-        { address: '104.16.0.2', ttlS: 60 },
+test('#createQueryHandler admits the CNAME chain and its A records, and caps the TTLs', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'registry.npmjs.org': 'admit' } },
+    upstream: {
+      'registry.npmjs.org': [
+        { type: 'CNAME', name: 'registry.npmjs.org', ttl: 300, data: 'npm.cdn.test' },
+        { type: 'A', name: 'npm.cdn.test', ttl: 200_000, data: '104.16.0.1' },
+        { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.2' },
+        { type: 'A', name: 'smuggled.test', ttl: 60, data: '6.6.6.6' },
       ],
     },
-  ]);
+  });
 
-  expect(ttls).toEqual([300, 86_400, 60, 60]);
+  const handle = createQueryHandler(egress.deps);
+
+  const reply = await handle(
+    '10.66.0.6',
+    buildMockDnsQuery({ name: 'Registry.NPMJS.org.', type: 'A' }),
+  );
+
+  expect({ admitted: egress.admitted, reply: dnsPacket.decode(Buffer.from(reply)) }).toMatchObject({
+    admitted: [
+      {
+        slot: 1,
+        names: ['registry.npmjs.org', 'npm.cdn.test'],
+        answers: [
+          { address: '104.16.0.1', ttlS: 200_000 },
+          { address: '104.16.0.2', ttlS: 60 },
+        ],
+      },
+    ],
+    reply: { answers: [{ ttl: 300 }, { ttl: 86_400 }, { ttl: 60 }, { ttl: 60 }] },
+  });
 });
 
-test('a screened name drops the addresses a public imp may not reach, and adds nothing', async () => {
-  const answers: readonly Answer[] = [
-    { type: 'CNAME', name: 'rebind.test', ttl: 300, data: 'inside.test' },
-    { type: 'A', name: 'inside.test', ttl: 60, data: '10.250.77.1' },
-    { type: 'A', name: 'inside.test', ttl: 60, data: '93.184.215.14' },
-    { type: 'AAAA', name: 'inside.test', ttl: 60, data: '::ffff:a00:1' },
-    { type: 'AAAA', name: 'inside.test', ttl: 60, data: '2606:2800:21f:cb07::1' },
-  ];
-
-  const screened = new Set(['10.250.77.1', '::ffff:a00:1']);
-
-  const ctx = setupHandler({
-    checkName: () => Promise.resolve('screen'),
-    forward: (query) => Promise.resolve(buildAnswer(query, answers)),
-    isScreened: (address) => screened.has(address),
+test('#createQueryHandler caps each TTL of a reply at maxTtlS', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'registry.npmjs.org': 'admit' } },
+    upstream: {
+      'registry.npmjs.org': [
+        { type: 'CNAME', name: 'registry.npmjs.org', ttl: 600, data: 'npm.cdn.test' },
+        { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.1' },
+      ],
+    },
   });
 
-  const reply = await ctx.sendQuery('rebind.test');
+  const handle = createQueryHandler({ ...egress.deps, maxTtlS: 300 });
+
+  const reply = await handle(
+    '10.66.0.6',
+    buildMockDnsQuery({ name: 'registry.npmjs.org', type: 'A' }),
+  );
+
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({
+    answers: [{ ttl: 300 }, { ttl: 60 }],
+  });
+});
+
+test('#createQueryHandler stops at a CNAME loop, and admits only the records on the chain', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'a.test': 'admit' } },
+    upstream: {
+      'a.test': [
+        { type: 'CNAME', name: 'a.test', ttl: 300, data: 'b.test' },
+        { type: 'CNAME', name: 'b.test', ttl: 300, data: 'a.test' },
+        { type: 'A', name: 'b.test', ttl: 300, data: '192.0.2.1' },
+      ],
+    },
+  });
+
+  const handle = createQueryHandler(egress.deps);
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'a.test', type: 'A' }));
+
+  expect(egress.admitted).toStrictEqual([
+    { slot: 1, names: ['a.test', 'b.test'], answers: [{ address: '192.0.2.1', ttlS: 300 }] },
+  ]);
+});
+
+test('#createQueryHandler forwards an admitted query of another type without a set write', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
+  const handle = createQueryHandler(egress.deps);
+  const query = buildMockDnsQuery({ name: 'github.com', type: 'MX' });
+
+  const reply = await handle('10.66.0.6', query);
+
+  expect({ reply, forwarded: egress.forwarded, admitted: egress.admitted }).toStrictEqual({
+    reply: buildMockDnsReply(query),
+    forwarded: ['github.com'],
+    admitted: [],
+  });
+});
+
+test('#createQueryHandler drops the addresses a public imp may not reach from every section of a screened reply', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'rebind.test': 'screen' } },
+    screened: ['10.250.77.1', '::ffff:a00:1', '10.0.0.53', '10.0.0.54'],
+  });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
+    forward: (query) =>
+      Promise.resolve(
+        buildMockDnsReply(query, {
+          answers: [
+            { type: 'CNAME', name: 'rebind.test', ttl: 300, data: 'inside.test' },
+            { type: 'A', name: 'inside.test', ttl: 60, data: '10.250.77.1' },
+            { type: 'A', name: 'inside.test', ttl: 60, data: '93.184.215.14' },
+            { type: 'AAAA', name: 'inside.test', ttl: 60, data: '::ffff:a00:1' },
+            { type: 'AAAA', name: 'inside.test', ttl: 60, data: '2606:2800:21f:cb07::1' },
+          ],
+          authorities: [
+            { type: 'A', name: 'ns.inside.test', ttl: 60, data: '10.0.0.53' },
+            { type: 'A', name: 'ns2.inside.test', ttl: 60, data: '93.184.215.53' },
+          ],
+          additionals: [{ type: 'A', name: 'ns.inside.test', ttl: 60, data: '10.0.0.54' }],
+        }),
+      ),
+  });
+
+  const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'rebind.test', type: 'A' }));
 
   // the chain stays, TTLs as they came: no set holds a public imp's answers
-  expect(reply.answers).toEqual([
-    expect.objectContaining({ type: 'CNAME', data: 'inside.test', ttl: 300 }),
-    expect.objectContaining({ type: 'A', data: '93.184.215.14', ttl: 60 }),
-    expect.objectContaining({ type: 'AAAA', data: '2606:2800:21f:cb07::1' }),
-  ]);
-
-  expect(ctx.admitted).toEqual([]);
+  expect({ reply: dnsPacket.decode(Buffer.from(reply)), admitted: egress.admitted }).toMatchObject({
+    reply: {
+      answers: [
+        { type: 'CNAME', data: 'inside.test', ttl: 300 },
+        { type: 'A', data: '93.184.215.14', ttl: 60 },
+        { type: 'AAAA', data: '2606:2800:21f:cb07::1', ttl: 60 },
+      ],
+      authorities: [{ type: 'A', data: '93.184.215.53' }],
+      additionals: [],
+    },
+    admitted: [],
+  });
 });
 
-test('the reply waits for the addresses to be in nft', async () => {
-  const gate = Promise.withResolvers<void>();
-  const ctx = setupHandler({ writeAnswers: () => gate.promise });
+test('#createQueryHandler replies only once the addresses are in nft', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'github.com': 'admit' } },
+    upstream: { 'github.com': [{ type: 'A', name: 'github.com', ttl: 60, data: '140.82.112.3' }] },
+  });
+
+  const reached = Promise.withResolvers<void>();
+  const written = Promise.withResolvers<void>();
   const state = { replied: false };
 
-  const runQuery = async () => {
-    await ctx.sendQuery('registry.npmjs.org');
+  const handle = createQueryHandler({
+    ...egress.deps,
+    writeAnswers: () => {
+      reached.resolve();
+
+      return written.promise;
+    },
+  });
+
+  const reply = (async () => {
+    await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
 
     state.replied = true;
-  };
+  })();
 
-  const reply = runQuery();
+  await reached.promise;
 
-  await Bun.sleep(20);
+  const beforeWritten = state.replied;
 
-  expect(state.replied).toBeFalse();
-
-  gate.resolve();
+  written.resolve();
 
   await reply;
 
-  expect(state.replied).toBeTrue();
+  expect({ beforeWritten, after: state.replied }).toStrictEqual({
+    beforeWritten: false,
+    after: true,
+  });
 });
 
-test('a refused name never goes upstream, and gets REFUSED with EDE 18', async () => {
-  const ctx = setupHandler();
+test('#createQueryHandler refuses a denied name with EDE 18, and never sends it upstream', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: {} } });
+  const handle = createQueryHandler(egress.deps);
 
-  const reply = await ctx.handle(GUEST, buildQuery('example.org'));
+  const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'example.org', type: 'A' }));
 
-  const decoded = readReply(reply);
+  expect({
+    reply: dnsPacket.decode(Buffer.from(reply)),
+    ede: Buffer.from(reply.subarray(-6)).toString('hex'),
+    forwarded: egress.forwarded,
+  }).toMatchObject({
+    reply: { rcode: 'REFUSED', questions: [{ name: 'example.org', type: 'A', class: 'IN' }] },
 
-  expect(decoded.rcode).toBe('REFUSED');
-  expect(readEde(reply)).toBe(18);
-  expect(decoded.questions).toEqual([{ name: 'example.org', type: 'A', class: 'IN' }]);
-  expect(ctx.forwarded).toEqual([]);
-
-  // without EDNS in the query, no OPT record in the reply
-  const query = buildQuery('example.org', 'A', false);
-
-  const plain = await ctx.handle(GUEST, query);
-
-  const plainDecoded = readReply(plain);
-
-  expect(plainDecoded.rcode).toBe('REFUSED');
-  expect(readEde(plain)).toBeNull();
+    // option 15, two bytes long, info code 18
+    ede: '000f00020012',
+    forwarded: [],
+  });
 });
 
-test('another address of the slot, or a slot that is not filtered, is refused', async () => {
-  const ctx = setupHandler();
+test('#createQueryHandler refuses a denied name with no OPT record when the query had none', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: {} } });
+  const handle = createQueryHandler(egress.deps);
 
-  for (const source of ['10.66.0.7', '10.66.0.5', '10.66.0.2', '192.0.2.1']) {
-    const reply = await ctx.sendQuery('registry.npmjs.org', source);
+  const reply = await handle(
+    '10.66.0.6',
+    buildMockDnsQuery({ name: 'example.org', type: 'A', edns: false }),
+  );
 
-    expect({ source, rcode: reply.rcode }).toEqual({ source, rcode: 'REFUSED' });
+  expect(dnsPacket.decode(Buffer.from(reply))).toMatchObject({
+    rcode: 'REFUSED',
+    additionals: [],
+  });
+});
+
+// slot 1's /30 holds 10.66.0.5 and 10.66.0.7 too; slot 0 holds no imp
+test.each(['10.66.0.7', '10.66.0.5', '10.66.0.2', '192.0.2.1'])(
+  'it refuses a query from %p, which is no guest with an imp',
+  async (source) => {
+    const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
+    const handle = createQueryHandler(egress.deps);
+
+    const reply = await handle(source, buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+    expect({
+      reply: dnsPacket.decode(Buffer.from(reply)),
+      forwarded: egress.forwarded,
+    }).toMatchObject({ reply: { rcode: 'REFUSED' }, forwarded: [] });
+  },
+);
+
+test('#createQueryHandler refuses a query with two questions, and never sends it upstream', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
+  const handle = createQueryHandler(egress.deps);
+  const single = buildMockDnsQuery({ name: 'github.com', type: 'A', edns: false });
+  const twice = Uint8Array.from([...single, ...single.subarray(12)]);
+
+  twice[5] = 2;
+
+  const reply = await handle('10.66.0.6', twice);
+
+  expect({
+    reply: dnsPacket.decode(Buffer.from(reply)),
+    forwarded: egress.forwarded,
+  }).toMatchObject({ reply: { rcode: 'REFUSED' }, forwarded: [] });
+});
+
+test('#createQueryHandler answers AAAA with no data and never sends it upstream when imps have no IPv6', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
+  const handle = createQueryHandler(egress.deps);
+
+  const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'AAAA' }));
+
+  expect({
+    reply: dnsPacket.decode(Buffer.from(reply)),
+    forwarded: egress.forwarded,
+    admitted: egress.admitted,
+  }).toMatchObject({ reply: { rcode: 'NOERROR', answers: [] }, forwarded: [], admitted: [] });
+});
+
+test('#createQueryHandler admits an allowed AAAA answer as it does an A one when imps have IPv6', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'registry.npmjs.org': 'admit' } },
+    upstream: {
+      'registry.npmjs.org': [
+        { type: 'CNAME', name: 'registry.npmjs.org', ttl: 300, data: 'npm.cdn.test' },
+        { type: 'AAAA', name: 'npm.cdn.test', ttl: 60, data: '2606:4700::6810:1' },
+        { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.1' },
+      ],
+    },
+  });
+
+  const handle = createQueryHandler({ ...egress.deps, ipv6: true });
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'registry.npmjs.org', type: 'AAAA' }));
+
+  expect(egress.admitted).toStrictEqual([
+    {
+      slot: 1,
+      names: ['registry.npmjs.org', 'npm.cdn.test'],
+      answers: [{ address: '2606:4700::6810:1', ttlS: 60 }],
+    },
+  ]);
+});
+
+test('#createQueryHandler forwards the name of a host the broker serves, and adds nothing', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'api.github.com': 'answer' } },
+    upstream: {
+      'api.github.com': [{ type: 'A', name: 'api.github.com', ttl: 60, data: '140.82.112.6' }],
+    },
+  });
+
+  const handle = createQueryHandler(egress.deps);
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'api.github.com', type: 'A' }));
+
+  expect({ forwarded: egress.forwarded, admitted: egress.admitted }).toStrictEqual({
+    forwarded: ['api.github.com'],
+    admitted: [],
+  });
+});
+
+test('#createQueryHandler refuses a slot past its burst until its bucket refills', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'answer' } } });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
+    readRate: () => ({ burst: 2, perSecond: 1 }),
+  });
+
+  const replies: Uint8Array[] = [];
+
+  for (let count = 0; count < 3; count += 1) {
+    const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+    replies.push(reply);
   }
 
-  expect(ctx.forwarded).toEqual([]);
+  egress.advance(1000);
+
+  const refilled = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  replies.push(refilled);
+
+  expect(replies.map((reply) => dnsPacket.decode(Buffer.from(reply)))).toMatchObject([
+    { rcode: 'NOERROR' },
+    { rcode: 'NOERROR' },
+    { rcode: 'REFUSED' },
+    { rcode: 'NOERROR' },
+  ]);
 });
 
-test('a query with two questions is refused', async () => {
-  const ctx = setupHandler();
+test('#createQueryHandler refuses a rate-limited query plainly, with no EDE 18', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'answer' } } });
 
-  const twice = dnsPacket.encode({
-    type: 'query',
-    id: 1,
-    questions: [
-      { name: 'registry.npmjs.org', type: 'A' },
-      { name: 'example.org', type: 'A' },
+  const handle = createQueryHandler({
+    ...egress.deps,
+    readRate: () => ({ burst: 1, perSecond: 1 }),
+  });
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  const limited = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  expect(dnsPacket.decode(Buffer.from(limited))).toMatchObject({
+    rcode: 'REFUSED',
+    additionals: [],
+  });
+});
+
+test("#createQueryHandler keeps each slot's rate its own", async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 0: { 'github.com': 'answer' }, 1: { 'github.com': 'answer' } },
+  });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
+    readRate: () => ({ burst: 1, perSecond: 0 }),
+  });
+
+  await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  const other = await handle('10.66.0.2', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  expect(dnsPacket.decode(Buffer.from(other))).toMatchObject({ rcode: 'NOERROR' });
+});
+
+test("#createQueryHandler answers a peer's name itself, with authority, whatever the policy refuses", async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: {} },
+    networks: ['lab'],
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'box', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
     ],
   });
 
-  const reply = await ctx.handle(GUEST, twice);
+  const handle = createQueryHandler(egress.deps);
 
-  expect(readReply(reply).rcode).toBe('REFUSED');
-  expect(ctx.forwarded).toEqual([]);
+  const reply = await handle(
+    '10.66.0.6',
+    buildMockDnsQuery({ name: 'Web.Lab.Internal.', type: 'A' }),
+  );
+
+  expect({
+    reply: dnsPacket.decode(Buffer.from(reply)),
+    forwarded: egress.forwarded,
+  }).toMatchObject({
+    reply: {
+      rcode: 'NOERROR',
+      flag_aa: true,
+      answers: [{ type: 'A', name: 'web.lab.internal', data: '10.66.0.2' }],
+    },
+    forwarded: [],
+  });
 });
 
-test('AAAA gets an empty answer, and a host the broker serves adds nothing', async () => {
-  const ctx = setupHandler();
-
-  const v6 = await ctx.sendQuery('registry.npmjs.org', GUEST, 'AAAA');
-
-  expect(v6.rcode).toBe('NOERROR');
-  expect(v6.answers).toEqual([]);
-
-  await ctx.sendQuery('api.github.com');
-
-  expect(ctx.forwarded).toEqual(['api.github.com']);
-  expect(ctx.admitted).toEqual([]);
-});
-
-test('past the burst a slot is refused until its bucket refills', async () => {
-  const clock = { now: 0 };
-  const ctx = setupHandler({ readRate: () => ({ burst: 2, perSecond: 1 }), now: () => clock.now });
-  const rcodes = [];
-
-  for (let query = 0; query < 3; query += 1) {
-    const reply = await ctx.sendQuery('registry.npmjs.org');
-
-    rcodes.push(reply.rcode);
-  }
-
-  clock.now = 1000;
-
-  const refilled = await ctx.sendQuery('registry.npmjs.org');
-
-  rcodes.push(refilled.rcode);
-
-  expect(rcodes).toEqual(['NOERROR', 'NOERROR', 'REFUSED', 'NOERROR']);
-});
-
-test('a rate-limited query is plain REFUSED, with no EDE 18', async () => {
-  const ctx = setupHandler({ readRate: () => ({ burst: 1, perSecond: 1 }) });
-
-  await ctx.handle(GUEST, buildQuery('registry.npmjs.org'));
-
-  const limited = await ctx.handle(GUEST, buildQuery('registry.npmjs.org'));
-  const denied = await setupHandler().handle(GUEST, buildQuery('denied.test'));
-
-  expect(readReply(limited).rcode).toBe('REFUSED');
-  expect(readEde(limited)).toBeNull();
-  expect(readEde(denied)).toBe(18);
-});
-
-test("a peer's name is impd's to answer, whatever the policy refuses", async () => {
-  const ctx = setupHandler();
-
-  const raw = await ctx.handle(GUEST, buildQuery('Web.Lab.Internal.'));
-
-  const reply = readReply(raw);
-
-  expect(reply.rcode).toBe('NOERROR');
-  expect(reply.flag_aa).toBe(true);
-
-  expect(reply.answers).toEqual([
-    expect.objectContaining({ type: 'A', name: 'web.lab.internal', data: '10.66.0.2' }),
-  ]);
-
-  expect(ctx.forwarded).toEqual([]);
-});
-
-test("with IPv6 on, AAAA for a peer's name is no data and never goes upstream", async () => {
-  const ctx = setupHandler({ ipv6: true });
-
-  const reply = await ctx.sendQuery('web.lab.internal', GUEST, 'AAAA');
-
-  expect(reply.rcode).toBe('NOERROR');
-  expect(reply.answers).toEqual([]);
-  expect(ctx.forwarded).toEqual([]);
-});
-
-test('a network name the guest may not see is NXDOMAIN, and never goes upstream', async () => {
-  const ctx = setupHandler();
-
-  // slot 2 is on no network; slot 1 asks for a peer that does not exist
-  const outsider = await ctx.sendQuery('web.lab.internal', '10.66.0.10');
-  const missing = await ctx.sendQuery('nobody.lab.internal');
-
-  expect([outsider.rcode, missing.rcode]).toEqual(['NXDOMAIN', 'NXDOMAIN']);
-  expect(ctx.forwarded).toEqual([]);
-  expect(ctx.admitted).toEqual([]);
-});
-
-test("each slot's rate is its own", async () => {
-  const ctx = setupHandler({
-    readRate: (slot) => (slot === 1 ? { burst: 1, perSecond: 0 } : { burst: 5, perSecond: 0 }),
+test("#createQueryHandler answers AAAA for a peer's name with no data, and never sends it upstream, with IPv6", async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: {} },
+    networks: ['lab'],
+    members: [
+      buildMockNetworkMember({ network: 'lab', name: 'box', slot: 1, guestIp: '10.66.0.6' }),
+      buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+    ],
   });
 
-  const rcodes = [];
+  const handle = createQueryHandler({ ...egress.deps, ipv6: true });
 
-  for (const source of [GUEST, GUEST, '10.66.0.10', '10.66.0.10']) {
-    const reply = await ctx.sendQuery('web.lab.internal', source);
+  const reply = await handle(
+    '10.66.0.6',
+    buildMockDnsQuery({ name: 'web.lab.internal', type: 'AAAA' }),
+  );
 
-    rcodes.push(reply.rcode);
-  }
-
-  expect(rcodes).toEqual(['NOERROR', 'REFUSED', 'NXDOMAIN', 'NXDOMAIN']);
+  expect({
+    reply: dnsPacket.decode(Buffer.from(reply)),
+    forwarded: egress.forwarded,
+  }).toMatchObject({ reply: { rcode: 'NOERROR', answers: [] }, forwarded: [] });
 });
 
-test('replies carry at most maxTtlS', async () => {
-  const ctx = setupHandler({ maxTtlS: 300 });
+// slot 2 (10.66.0.10) is on no network; nobody is no peer on lab
+test.each([
+  ['10.66.0.10', 'web.lab.internal'],
+  ['10.66.0.6', 'nobody.lab.internal'],
+])(
+  'it answers %p NXDOMAIN for %p, a network name it may not see, and never sends it upstream',
+  async (source, name) => {
+    const egress = buildStubEgressService({
+      verdicts: { 1: {}, 2: {} },
+      networks: ['lab'],
+      members: [
+        buildMockNetworkMember({ network: 'lab', name: 'box', slot: 1, guestIp: '10.66.0.6' }),
+        buildMockNetworkMember({ network: 'lab', name: 'web', slot: 0, guestIp: '10.66.0.2' }),
+      ],
+    });
 
-  const reply = await ctx.sendQuery('registry.npmjs.org');
+    const handle = createQueryHandler(egress.deps);
 
-  expect(reply.answers?.map((record) => (record.type === 'OPT' ? null : record.ttl))).toEqual([
-    300, 300, 60, 60,
-  ]);
-});
+    const reply = await handle(source, buildMockDnsQuery({ name, type: 'A' }));
 
-test('an upstream that fails, or a set that cannot take the answer, is SERVFAIL', async () => {
-  const down = setupHandler({ forward: () => Promise.reject(new Error('no upstream answered')) });
+    expect({
+      reply: dnsPacket.decode(Buffer.from(reply)),
+      forwarded: egress.forwarded,
+    }).toMatchObject({ reply: { rcode: 'NXDOMAIN' }, forwarded: [] });
+  },
+);
 
-  const noUpstream = await down.sendQuery('registry.npmjs.org');
-
-  expect(noUpstream.rcode).toBe('SERVFAIL');
-
-  const full = setupHandler({ writeAnswers: () => Promise.reject(new Error('nft exited 1')) });
-
-  const noSet = await full.sendQuery('registry.npmjs.org');
-
-  expect(noSet.rcode).toBe('SERVFAIL');
-});
-
-// a fake upstream on loopback: UDP replies truncated, TCP replies whole. It
-// takes a picked port: UDP on port 0 and then TCP on the same number races
-// any TCP socket that already holds it.
-async function startFakeUpstream(listenPort: number) {
-  const udp = await Bun.udpSocket({
-    hostname: '127.0.0.1',
-    port: listenPort,
-    socket: {
-      data: (socket, data, port, address) => {
-        const query = new Uint8Array(data);
-
-        const decoded = dnsPacket.decode(Buffer.from(query));
-
-        const truncated = dnsPacket.encode({
-          type: 'response',
-          id: decoded.id ?? 0,
-          flags: dnsPacket.TRUNCATED_RESPONSE,
-          questions: decoded.questions ?? [],
-        });
-
-        socket.send(truncated, port, address);
-      },
-    },
-  });
-
-  const tcp = Bun.listen({
-    hostname: '127.0.0.1',
-    port: udp.port,
-    socket: {
-      data: (socket, chunk) => {
-        const query = new Uint8Array(chunk.subarray(2));
-
-        const reply = buildAnswer(query, NPM_ANSWERS);
-        const framed = Buffer.alloc(2 + reply.byteLength);
-
-        framed.writeUInt16BE(reply.byteLength, 0);
-        framed.set(reply, 2);
-        socket.write(framed);
-      },
-    },
-  });
-
-  return {
-    port: udp.port,
-    [Symbol.dispose]: () => {
-      udp.close();
-      tcp.stop(true);
-    },
-  };
-}
-
-test('over UDP and TCP on loopback, with a truncated upstream reply retried over TCP', async () => {
-  const ports = findFreePorts(2);
-
-  using upstream = await startFakeUpstream(ports.take());
+test('#createQueryHandler answers SERVFAIL and logs why when no upstream answers', async () => {
+  const egress = buildStubEgressService({ verdicts: { 1: { 'github.com': 'admit' } } });
 
   const handle = createQueryHandler({
-    subnet: parseSubnet('127.0.0.0/16'),
-    resolveLocal: () => null,
-    checkName: () => Promise.resolve('admit'),
-    writeAnswers: () => Promise.resolve(),
+    ...egress.deps,
+    forward: () => Promise.reject(new Error('no upstream resolver answered')),
+  });
+
+  const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  expect({ reply: dnsPacket.decode(Buffer.from(reply)), logs: egress.logs }).toMatchObject({
+    reply: { rcode: 'SERVFAIL' },
+    logs: ['impd: egress: github.com for slot 1: no upstream resolver answered'],
+  });
+});
+
+test('#createQueryHandler answers SERVFAIL and logs why when the set cannot take the answer', async () => {
+  const egress = buildStubEgressService({
+    verdicts: { 1: { 'github.com': 'admit' } },
+    upstream: { 'github.com': [{ type: 'A', name: 'github.com', ttl: 60, data: '140.82.112.3' }] },
+  });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
+    writeAnswers: () => Promise.reject(new Error('nft exited 1: set is full')),
+  });
+
+  const reply = await handle('10.66.0.6', buildMockDnsQuery({ name: 'github.com', type: 'A' }));
+
+  expect({ reply: dnsPacket.decode(Buffer.from(reply)), logs: egress.logs }).toMatchObject({
+    reply: { rcode: 'SERVFAIL' },
+    logs: ['impd: egress: github.com for slot 1: nft exited 1: set is full'],
+  });
+});
+
+test('#startResolverServer answers over UDP, through an upstream whose truncated reply goes again over TCP', async () => {
+  const ports = findFreePorts(2);
+
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'registry.npmjs.org': 'admit' } },
+  });
+
+  using upstream = await startStubDnsUpstream({
+    port: ports.take(),
+    answers: [{ type: 'A', name: 'registry.npmjs.org', ttl: 60, data: '104.16.0.1' }],
+    udp: 'truncate',
+  });
+
+  const handle = createQueryHandler({
+    ...egress.deps,
     forward: createDnsForward(['127.0.0.1'], upstream.port),
-    isScreened: () => false,
-    maxTtlS: 86_400,
-    readRate: () => ({ burst: 100, perSecond: 100 }),
-    now: Date.now,
-    log: () => {},
   });
 
   const server = await startResolverServer(ports.take(), parseSubnet('127.0.0.0/16'), handle, {
     log: () => {},
   });
 
-  try {
-    // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
-    const reply = Promise.withResolvers<Uint8Array>();
-
-    const client = await Bun.udpSocket({
-      hostname: '127.0.0.2',
-      socket: {
-        data: (_socket, data) => {
-          reply.resolve(new Uint8Array(data));
-        },
-      },
-    });
-
-    client.send(buildQuery('registry.npmjs.org'), server.port, '127.0.0.1');
-
-    const udpBytes = await reply.promise;
-
-    const udpReply = readReply(udpBytes);
-
-    client.close();
-
-    expect(udpReply.answers?.filter((record) => record.type === 'A')).toHaveLength(3);
-
-    // the same over TCP, in two writes
-    const framed = Promise.withResolvers<Buffer>();
-    const query = buildQuery('registry.npmjs.org');
-    const length = Buffer.alloc(2);
-
-    length.writeUInt16BE(query.byteLength, 0);
-
-    const socket = connect(
-      { host: '127.0.0.1', port: server.port, localAddress: '127.0.0.2' },
-      () => {
-        socket.write(length);
-        socket.write(query);
-      },
-    );
-
-    socket.on('data', (chunk: Buffer) => {
-      framed.resolve(chunk);
-      socket.end();
-    });
-
-    const tcpBytes = await framed.promise;
-
-    const tcpReply = readReply(tcpBytes.subarray(2));
-
-    expect(tcpReply.answers?.filter((record) => record.type === 'A')).toHaveLength(3);
-  } finally {
+  onTestFinished(() => {
     server.stop();
-  }
-});
+  });
 
-test('upstream queries carry a fresh id, and the guest gets its own back', async () => {
-  const seenIds: number[] = [];
+  // 127.0.0.2 is slot 0's guest in 127.0.0.0/16
+  const reply = Promise.withResolvers<Uint8Array>();
 
-  const upstream = await Bun.udpSocket({
-    hostname: '127.0.0.1',
-    port: 0,
+  const client = await Bun.udpSocket({
+    hostname: '127.0.0.2',
     socket: {
-      data: (socket, data, port, address) => {
-        const query = new Uint8Array(data);
-
-        seenIds.push(dnsPacket.decode(Buffer.from(query)).id ?? 0);
-        socket.send(buildAnswer(query, NPM_ANSWERS), port, address);
+      data: (_socket, data) => {
+        reply.resolve(new Uint8Array(data));
       },
     },
   });
 
-  try {
-    const forward = createDnsForward(['127.0.0.1'], upstream.port);
+  onTestFinished(() => {
+    client.close();
+  });
 
-    const first = await forward(buildQuery('registry.npmjs.org'));
-    const second = await forward(buildQuery('registry.npmjs.org'));
+  client.send(
+    buildMockDnsQuery({ name: 'registry.npmjs.org', type: 'A', id: 7 }),
+    server.port,
+    '127.0.0.1',
+  );
 
-    expect(readReply(first).id).toBe(4242);
-    expect(readReply(second).id).toBe(4242);
-    expect(seenIds).toHaveLength(2);
-    expect(seenIds[0]).not.toBe(seenIds[1]);
-  } finally {
-    upstream.close();
-  }
+  const received = await reply.promise;
+
+  expect({
+    reply: dnsPacket.decode(Buffer.from(received)),
+    asked: upstream.queries.map((query) => query.transport),
+  }).toMatchObject({
+    reply: { id: 7, answers: [{ type: 'A', data: '104.16.0.1' }] },
+    asked: ['udp', 'tcp'],
+  });
 });
 
-// a TCP client from `from` that resolves `closed` when the resolver ends it
-function openTcpClient(port: number, from: string) {
-  const closed = Promise.withResolvers<void>();
-  const connected = Promise.withResolvers<void>();
-  const socket = connect({ host: '127.0.0.1', port, localAddress: from }, connected.resolve);
-
-  socket.on('error', () => {});
-
-  socket.once('close', () => {
-    closed.resolve();
+test('#startResolverServer answers a TCP query that comes in two writes', async () => {
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'github.com': 'answer' } },
+    upstream: { 'github.com': [{ type: 'A', name: 'github.com', ttl: 60, data: '140.82.112.3' }] },
   });
 
-  return { socket, connected: connected.promise, closed: closed.promise };
-}
-
-test('the TCP side closes an idle client and caps the clients of one slot', async () => {
-  const handle = createQueryHandler({
-    subnet: parseSubnet('127.0.0.0/16'),
-    resolveLocal: () => null,
-    checkName: () => Promise.resolve('refuse'),
-    writeAnswers: () => Promise.resolve(),
-    forward: () => Promise.reject(new Error('no upstream')),
-    isScreened: () => false,
-    maxTtlS: 300,
-    readRate: () => ({ burst: 100, perSecond: 100 }),
-    now: Date.now,
-    log: () => {},
-  });
-
-  // UDP and TCP on one number: a picked port, not 0 (see startFakeUpstream)
   const server = await startResolverServer(
     findFreePorts(1).take(),
     parseSubnet('127.0.0.0/16'),
-    handle,
+    createQueryHandler(egress.deps),
+    { log: () => {} },
+  );
+
+  onTestFinished(() => {
+    server.stop();
+  });
+
+  const query = buildMockDnsQuery({ name: 'github.com', type: 'A', id: 7 });
+  const length = Buffer.alloc(2);
+  const framed = Promise.withResolvers<Buffer>();
+
+  length.writeUInt16BE(query.byteLength, 0);
+
+  const socket = connect(
+    { host: '127.0.0.1', port: server.port, localAddress: '127.0.0.2' },
+    () => {
+      socket.write(length);
+      socket.write(query);
+    },
+  );
+
+  onTestFinished(() => {
+    socket.destroy();
+  });
+
+  socket.on('data', (chunk: Buffer) => {
+    framed.resolve(chunk);
+  });
+
+  const received = await framed.promise;
+
+  expect({
+    length: received.readUInt16BE(0),
+    reply: dnsPacket.decode(received.subarray(2)),
+  }).toMatchObject({
+    length: received.byteLength - 2,
+    reply: { id: 7, answers: [{ type: 'A', data: '140.82.112.3' }] },
+  });
+});
+
+test('#startResolverServer answers each of several TCP queries that share one write', async () => {
+  const egress = buildStubEgressService({
+    subnet: '127.0.0.0/16',
+    verdicts: { 0: { 'a.test': 'answer', 'b.test': 'answer' } },
+  });
+
+  const server = await startResolverServer(
+    findFreePorts(1).take(),
+    parseSubnet('127.0.0.0/16'),
+    createQueryHandler(egress.deps),
+    { log: () => {} },
+  );
+
+  onTestFinished(() => {
+    server.stop();
+  });
+
+  const queries = [
+    buildMockDnsQuery({ name: 'a.test', type: 'A', id: 1 }),
+    buildMockDnsQuery({ name: 'b.test', type: 'A', id: 2 }),
+  ];
+
+  const framed = Buffer.concat(
+    queries.map((query) => {
+      const message = Buffer.alloc(2 + query.byteLength);
+
+      message.writeUInt16BE(query.byteLength, 0);
+      message.set(query, 2);
+
+      return message;
+    }),
+  );
+
+  const socket = connect(
+    { host: '127.0.0.1', port: server.port, localAddress: '127.0.0.2' },
+    () => {
+      socket.write(framed);
+    },
+  );
+
+  onTestFinished(() => {
+    socket.destroy();
+  });
+
+  await waitFor(() => {
+    expect(egress.forwarded).toHaveLength(2);
+  });
+
+  expect(egress.forwarded.toSorted()).toStrictEqual(['a.test', 'b.test']);
+});
+
+test('#startResolverServer closes a TCP client idle past idleS, and caps the clients of one slot', async () => {
+  const egress = buildStubEgressService({ subnet: '127.0.0.0/16' });
+
+  // UDP and TCP on one number: a picked port, not 0
+  const server = await startResolverServer(
+    findFreePorts(1).take(),
+    parseSubnet('127.0.0.0/16'),
+    createQueryHandler(egress.deps),
     { log: () => {}, limits: { idleS: 1, maxPerSlot: 2 } },
   );
 
-  try {
-    const first = openTcpClient(server.port, '127.0.0.2');
-    const second = openTcpClient(server.port, '127.0.0.2');
-
-    await Promise.all([first.connected, second.connected]);
-
-    // slot 0 is full; slot 1's guest still gets in
-    const third = openTcpClient(server.port, '127.0.0.2');
-    const other = openTcpClient(server.port, '127.0.0.6');
-
-    await third.closed;
-
-    expect(other.socket.destroyed).toBeFalse();
-
-    // the idle clients go
-    await Promise.all([first.closed, second.closed, other.closed]);
-  } finally {
+  onTestFinished(() => {
     server.stop();
-  }
-}, 15_000);
-
-test('with IPv6, an allowed AAAA goes in as an A does; without, it gets an empty answer', async () => {
-  const answers6: readonly Answer[] = [
-    { type: 'CNAME', name: 'registry.npmjs.org', ttl: 300, data: 'npm.cdn.test' },
-    { type: 'AAAA', name: 'npm.cdn.test', ttl: 60, data: '2606:4700::6810:1' },
-    { type: 'A', name: 'npm.cdn.test', ttl: 60, data: '104.16.0.1' },
-  ];
-
-  const ctx = setupHandler({
-    ipv6: true,
-    forward: (query) => Promise.resolve(buildAnswer(query, answers6)),
   });
 
-  const reply = await ctx.sendQuery('registry.npmjs.org', GUEST, 'AAAA');
+  // slot 0's guest is 127.0.0.2, slot 1's 127.0.0.6
+  const sockets = ['127.0.0.2', '127.0.0.2', '127.0.0.2', '127.0.0.6'].map((from) => {
+    const socket = connect({ host: '127.0.0.1', port: server.port, localAddress: from });
 
-  expect(reply.rcode).toBe('NOERROR');
+    socket.on('error', () => {});
 
-  expect(ctx.admitted).toEqual([
-    {
-      names: ['registry.npmjs.org', 'npm.cdn.test'],
-      answers: [{ address: '2606:4700::6810:1', ttlS: 60 }],
-    },
-  ]);
+    onTestFinished(() => {
+      socket.destroy();
+    });
 
-  const without = setupHandler();
+    return socket;
+  });
 
-  const empty = await without.sendQuery('registry.npmjs.org', GUEST, 'AAAA');
+  const closes = sockets.map(
+    (socket) =>
+      new Promise<void>((resolve) => {
+        socket.once('close', () => {
+          resolve();
+        });
+      }),
+  );
 
-  expect(empty.answers).toEqual([]);
-  expect(without.admitted).toEqual([]);
+  await Promise.race(closes);
+
+  // one of slot 0's three went at once; the rest, slot 1's too, stay to idle
+  const openAtCap = sockets.map((socket) => !socket.destroyed);
+
+  await Promise.all(closes);
+
+  expect({ open: openAtCap.filter(Boolean).length, otherSlot: openAtCap[3] }).toStrictEqual({
+    open: 3,
+    otherSlot: true,
+  });
 });
 
-test('a guest that goes before its reply leaves the resolver up: the ICMP error is not a crash', async () => {
+test('#startResolverServer stays up when a guest goes before its reply, and logs nothing of the ICMP error', async () => {
   const ports = findFreePorts(1);
-  const replied: string[] = [];
   const logs: string[] = [];
+  const errors: unknown[] = [];
+  const reached = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
 
-  // slow enough that the first client has closed its port by the reply
-  const writeSlowReply: QueryHandler = async (_source, message) => {
-    await Bun.sleep(50);
+  const report = createSocketErrorReport((message) => {
+    logs.push(message);
+  }, Date.now);
 
-    replied.push('reply');
-
-    return message;
-  };
-
+  // holds the first reply until its guest has closed its port
   const server = await startResolverServer(
     ports.take(),
     parseSubnet('127.0.0.0/16'),
-    writeSlowReply,
+    async (_source, message) => {
+      reached.resolve();
+
+      await released.promise;
+
+      return message;
+    },
     {
       log: (message) => {
         logs.push(message);
       },
+      reportError: (...args) => {
+        errors.push(args.at(-1));
+
+        report(...args);
+      },
     },
   );
 
-  try {
-    const gone = await Bun.udpSocket({ hostname: '127.0.0.2' });
-
-    gone.send(buildQuery('a.example'), server.port, '127.0.0.1');
-    gone.close();
-
-    while (replied.length === 0) {
-      await Bun.sleep(5);
-    }
-
-    // the ICMP port unreachable comes back to the resolver's socket now
-    await Bun.sleep(50);
-
-    const reply = Promise.withResolvers<Uint8Array>();
-
-    const client = await Bun.udpSocket({
-      hostname: '127.0.0.2',
-      socket: {
-        data: (_socket, data) => {
-          reply.resolve(new Uint8Array(data));
-        },
-      },
-    });
-
-    client.send(buildQuery('b.example'), server.port, '127.0.0.1');
-
-    const answered = await reply.promise;
-
-    client.close();
-
-    expect(answered.byteLength).toBeGreaterThan(0);
-
-    // routine: nothing logged
-    expect(logs).toEqual([]);
-  } finally {
+  onTestFinished(() => {
     server.stop();
-  }
+  });
+
+  const gone = await Bun.udpSocket({ hostname: '127.0.0.2' });
+
+  gone.send(buildMockDnsQuery({ name: 'a.example', type: 'A' }), server.port, '127.0.0.1');
+
+  await reached.promise;
+
+  gone.close();
+  released.resolve();
+
+  await waitFor(() => {
+    expect(errors).not.toBeEmpty();
+  });
+
+  const reply = Promise.withResolvers<Uint8Array>();
+
+  const client = await Bun.udpSocket({
+    hostname: '127.0.0.2',
+    socket: {
+      data: (_socket, data) => {
+        reply.resolve(new Uint8Array(data));
+      },
+    },
+  });
+
+  onTestFinished(() => {
+    client.close();
+  });
+
+  const query = buildMockDnsQuery({ name: 'b.example', type: 'A' });
+
+  client.send(query, server.port, '127.0.0.1');
+
+  const answered = await reply.promise;
+
+  expect({ answered, logs }).toStrictEqual({ answered: query, logs: [] });
 });
 
-test('a resolver socket error that is not an ICMP refusal is logged, once a minute at most', () => {
+test('#createSocketErrorReport logs nothing of an ICMP error or an unreachable guest', () => {
+  const logs: string[] = [];
+
+  const report = createSocketErrorReport(
+    (message) => {
+      logs.push(message);
+    },
+    () => 0,
+  );
+
+  report(
+    Object.assign(new Error('EHOSTDOWN: host is down, recv'), {
+      code: 'EHOSTDOWN',
+      errqueue: true,
+    }),
+  );
+
+  report(
+    Object.assign(new Error('ECONNREFUSED: connection refused, recv'), { code: 'ECONNREFUSED' }),
+  );
+
+  report(
+    Object.assign(new Error('EHOSTUNREACH: no route to host, send'), { code: 'EHOSTUNREACH' }),
+  );
+
+  report(
+    Object.assign(new Error('ENETUNREACH: network is unreachable, send'), { code: 'ENETUNREACH' }),
+  );
+
+  expect(logs).toStrictEqual([]);
+});
+
+test('#createSocketErrorReport logs another socket error once a minute at most, with a count of the rest', () => {
   const logs: string[] = [];
   const clock = { now: 0 };
 
@@ -701,23 +825,9 @@ test('a resolver socket error that is not an ICMP refusal is logged, once a minu
     () => clock.now,
   );
 
-  const queued = Object.assign(new Error('EHOSTDOWN: host is down, recv'), {
-    code: 'EHOSTDOWN',
-    errqueue: true,
-  });
-
-  const unreachable = Object.assign(new Error('ENETUNREACH: network is unreachable, send'), {
-    code: 'ENETUNREACH',
-  });
-
   const other = Object.assign(new Error('ENOBUFS: no buffer space available, send'), {
     code: 'ENOBUFS',
   });
-
-  report(queued);
-  report(unreachable);
-
-  expect(logs).toEqual([]);
 
   report(other);
 
@@ -726,26 +836,27 @@ test('a resolver socket error that is not an ICMP refusal is logged, once a minu
   report(other);
   report(other);
 
-  expect(logs).toEqual(['impd: egress: resolver socket: ENOBUFS: no buffer space available, send']);
-
   clock.now = 60_000;
 
   report(other);
 
-  expect(logs.at(-1)).toBe(
+  expect(logs).toStrictEqual([
+    'impd: egress: resolver socket: ENOBUFS: no buffer space available, send',
     'impd: egress: resolver socket: ENOBUFS: no buffer space available, send (2 more since the last)',
-  );
+  ]);
 });
 
-test('an upstream that refuses with ICMP fails over at once, and ends nothing', async () => {
-  const forward = createDnsForward(['127.0.0.1'], findFreePorts(1).take());
-  const started = Date.now();
+test('#createSocketErrorReport logs an error that carries no code', () => {
+  const logs: string[] = [];
 
-  const failure = await forward(buildQuery('a.example')).catch((error: unknown) => error);
-
-  expect(String(failure)).toContain(
-    'no upstream resolver answered (127.0.0.1: ECONNREFUSED: connection refused, recv)',
+  const report = createSocketErrorReport(
+    (message) => {
+      logs.push(message);
+    },
+    () => 0,
   );
 
-  expect(Date.now() - started).toBeLessThan(1000);
+  report('socket closed');
+
+  expect(logs).toStrictEqual(['impd: egress: resolver socket: socket closed']);
 });
