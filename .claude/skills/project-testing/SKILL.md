@@ -171,7 +171,7 @@ Paths are under `packages/daemon/src/` unless they start with `test/` or `script
 | zfs                 | `storage/zfs/fake-zfs.ts` (`createFakeZfs`)                  | `zfs`, send and receive, and the mount table              |
 | Docker engine       | A unix-socket server (4)                                     | The engine API                                            |
 | Docker CLI          | A `docker` script on `PATH` in the images tests              | The `docker` binary                                       |
-| CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                  | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`           |
+| CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                  | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`   |
 | Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`               | The docker that `deploy/upgrade.sh` drives on a host      |
 | nft                 | `setupImpTest`'s default `runNft`, which records scripts     | `nft` from the egress service                             |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                   | `ip` and `sysctl -n`, as `createTapDevices`'s `run`       |

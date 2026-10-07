@@ -47,7 +47,7 @@ test('it throws on a workflow without the base job', () => {
     '    steps: []',
   ].join('\n');
 
-  expect(() => parseReleaseWorkflow(yaml)).toThrow();
+  expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"base"/u);
 });
 
 test('it throws on a job without needs', () => {
@@ -63,7 +63,7 @@ test('it throws on a job without needs', () => {
     '    steps: []',
   ].join('\n');
 
-  expect(() => parseReleaseWorkflow(yaml)).toThrow(/"needs"/u);
+  expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"needs"/u);
 });
 
 test('it throws on a job without steps', () => {
@@ -79,5 +79,5 @@ test('it throws on a job without steps', () => {
     '    steps: []',
   ].join('\n');
 
-  expect(() => parseReleaseWorkflow(yaml)).toThrow(/"steps"/u);
+  expect(() => parseReleaseWorkflow(yaml)).toThrowWithMessage(Error, /"steps"/u);
 });

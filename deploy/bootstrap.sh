@@ -908,20 +908,21 @@ preflight() {
   fi
 }
 
-# resolve_storage: the backend and the ZFS dataset, from the flags, else
-# the env file, so a later run without --storage keeps what the first chose.
+# resolve_storage [ENV_FILE]: the backend and the ZFS dataset, from the
+# flags, else the env file (default $ENV_FILE), so a later run without
+# --storage keeps what the first chose.
 resolve_storage() {
-  local env_storage="" env_root=""
-  if [ -f "$ENV_FILE" ]; then
-    env_storage=$(sed -n 's/^IMP_STORAGE_BACKEND=//p' "$ENV_FILE" | tail -n 1)
-    env_root=$(sed -n 's/^IMP_ZFS_ROOT=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${1:-$ENV_FILE} env_storage="" env_root=""
+  if [ -f "$env_file" ]; then
+    env_storage=$(sed -n 's/^IMP_STORAGE_BACKEND=//p' "$env_file" | tail -n 1)
+    env_root=$(sed -n 's/^IMP_ZFS_ROOT=//p' "$env_file" | tail -n 1)
   fi
   storage=${storage:-${env_storage:-xfs}}
   # The template says xfs, so an env file copied from it says nothing about
   # where imps live. XFS imps live on the /var/lib/imp mount, which ZFS
   # refuses below; ZFS imps live in IMP_ZFS_ROOT.
   if [ "$env_storage" = zfs ] && [ -n "$env_root" ] && [ "$storage" = xfs ]; then
-    die "$ENV_FILE says IMP_STORAGE_BACKEND=zfs on $env_root; switching backends would leave every imp behind"
+    die "$env_file says IMP_STORAGE_BACKEND=zfs on $env_root; switching backends would leave every imp behind"
   fi
   log "storage: $storage"
   [ "$storage" = zfs ] || return 0
@@ -933,7 +934,7 @@ resolve_storage() {
     zfs_pool=${zfs_root%%/*}
   fi
   if [ -n "$env_root" ] && [ "$zfs_root" != "$env_root" ]; then
-    die "$ENV_FILE says IMP_ZFS_ROOT=$env_root, not $zfs_root"
+    die "$env_file says IMP_ZFS_ROOT=$env_root, not $zfs_root"
   fi
   if mountpoint -q "$DATA_DIR"; then
     die "$DATA_DIR is a mount on the host; with ZFS the container mounts $zfs_root there itself"
@@ -1535,14 +1536,14 @@ ensure_ipv6() {
   change "recreate the $HOST_NETWORK network ($drift): stop imp-host, then create it with $ipv6_subnet" recreate_host_network
 }
 
-# resolve_subnet6 INSPECT: the env file's IMP_HOST_SUBNET6, else the
-# subnet of a network that is already right but for the env file, else a
-# new random one.
+# resolve_subnet6 INSPECT [ENV_FILE]: the env file's (default $ENV_FILE)
+# IMP_HOST_SUBNET6, else the subnet of a network that is already right but
+# for the env file, else a new random one.
 resolve_subnet6() {
-  local env_value=""
-  [ -f "$ENV_FILE" ] && env_value=$(sed -n 's/^IMP_HOST_SUBNET6=//p' "$ENV_FILE" | tail -n 1)
+  local env_file=${2:-$ENV_FILE} env_value=""
+  [ -f "$env_file" ] && env_value=$(sed -n 's/^IMP_HOST_SUBNET6=//p' "$env_file" | tail -n 1)
   if [ -n "$env_value" ]; then
-    ipv6_subnet=$(subnet6 "$env_value") || die "$ENV_FILE says IMP_HOST_SUBNET6=$env_value; want an IPv6 /64"
+    ipv6_subnet=$(subnet6 "$env_value") || die "$env_file says IMP_HOST_SUBNET6=$env_value; want an IPv6 /64"
     return
   fi
   ipv6_subnet=$(network_subnet6 "$1")

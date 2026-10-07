@@ -2128,3 +2128,123 @@ test('it warns, and still upgrades, when it cannot read imp info', () => {
     'upgrade: could not read imp info; see the NOTE column below\n',
   );
 });
+
+test('it says when impd does not count cold boots', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      impInfo: '{}',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(result.stdout.toString()).toInclude(
+    'upgrade: this impd does not count cold boots; see the NOTE column below\n',
+  );
+});
+
+test('it reports the cold boots and the outdated parts that impd counts', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      impInfo: '{"bootStatus":{"coldBoots":3,"outdated":{"kernel":2,"agent":0,"rootfs":1}}}',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+
+  expect(result.stdout.toString()).toInclude(
+    'upgrade: 3 imps will boot cold; outdated: 2 kernel, 1 rootfs\n',
+  );
+});
+
+test('it reports no outdated parts when impd counts none', () => {
+  using ctx = setupTest();
+
+  const docker = createStubBin(
+    ctx.dir,
+    'docker',
+    buildStubHostDocker({
+      image: 'ghcr.io/zgeoff/imp-host:next',
+      runningLabel: 'socket-proxy',
+      pulledLabel: 'socket-proxy',
+      pulledUnit:
+        'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+      impInfo: '{"bootStatus":{"coldBoots":0,"outdated":{"kernel":0}}}',
+    }),
+  );
+
+  createStubBin(ctx.dir, 'curl', `echo '{"ready":true}'`);
+
+  writeFileSync(
+    join(ctx.dir, 'imp-host.service'),
+    'ExecStart=/usr/bin/docker run --cap-drop ALL -e DOCKER_HOST=unix:///run/imp-docker/docker.sock imp-host\n',
+  );
+
+  const result = Bun.spawnSync(['bash', new URL('upgrade.sh', import.meta.url).pathname], {
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      IMP_HOST_IMAGE: 'ghcr.io/zgeoff/imp-host:next',
+      IMP_HOST_ENV_FILE: join(ctx.dir, 'imp-host.env'),
+      IMP_HOST_UNIT_FILE: join(ctx.dir, 'imp-host.service'),
+      IMP_DOCKER_PROXY_UNIT_FILE: join(ctx.dir, 'imp-docker-proxy.service'),
+      IMP_HOST_SECCOMP_FILE: join(ctx.dir, 'imp-host.seccomp.json'),
+    },
+  });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.stdout.toString()).toInclude('upgrade: 0 imps will boot cold; outdated: none\n');
+});

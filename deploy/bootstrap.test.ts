@@ -1342,3 +1342,97 @@ test('#resolve_ipv6 keeps on', () => {
     runSourcedFunction({ script, fn: 'eval', args: ['ipv6=on; resolve_ipv6; echo "$ipv6"'] }),
   ).toStrictEqual({ exitCode: 0, stdout: 'bootstrap: ipv6: on\non\n', stderr: '' });
 });
+
+test('#resolve_storage refuses to switch a zfs host to xfs, naming the env file', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_STORAGE_BACKEND=zfs\nIMP_ZFS_ROOT=tank/imp\n');
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [`storage=xfs; resolve_storage '${join(ctx.dir, 'imp-host.env')}'`],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `bootstrap: ${join(ctx.dir, 'imp-host.env')} says IMP_STORAGE_BACKEND=zfs on tank/imp; switching backends would leave every imp behind\n`,
+  });
+});
+
+test('#resolve_storage refuses a ZFS pool whose dataset is not the env file one', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_STORAGE_BACKEND=zfs\nIMP_ZFS_ROOT=tank/imp\n');
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [`zfs_pool=other; resolve_storage '${join(ctx.dir, 'imp-host.env')}'`],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: 'bootstrap: storage: zfs\n',
+    stderr: `bootstrap: ${join(ctx.dir, 'imp-host.env')} says IMP_ZFS_ROOT=tank/imp, not other/imp\n`,
+  });
+});
+
+test('#resolve_storage refuses --loop-file with zfs', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [`storage=zfs; loop_file=/srv/imp.xfs; resolve_storage '${join(ctx.dir, 'no-env')}'`],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: 'bootstrap: storage: zfs\n',
+    stderr: 'bootstrap: --loop-file is XFS only; ZFS needs --data-device or an existing pool\n',
+  });
+});
+
+test('#resolve_subnet6 refuses an env file IMP_HOST_SUBNET6 that is no IPv6 /64', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_SUBNET6=fd12::/56\n');
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'resolve_subnet6',
+      args: ['', join(ctx.dir, 'imp-host.env')],
+    }),
+  ).toStrictEqual({
+    exitCode: 1,
+    stdout: '',
+    stderr: `bootstrap: ${join(ctx.dir, 'imp-host.env')} says IMP_HOST_SUBNET6=fd12::/56; want an IPv6 /64\n`,
+  });
+});
+
+test('#resolve_subnet6 takes the env file IMP_HOST_SUBNET6 as Docker prints it', () => {
+  using ctx = setupTest();
+
+  const script = new URL('bootstrap.sh', import.meta.url).pathname;
+
+  writeFileSync(join(ctx.dir, 'imp-host.env'), 'IMP_HOST_SUBNET6=FD12:0:0:1::/64\n');
+
+  expect(
+    runSourcedFunction({
+      script,
+      fn: 'eval',
+      args: [`resolve_subnet6 '' '${join(ctx.dir, 'imp-host.env')}'; echo "$ipv6_subnet"`],
+    }).stdout,
+  ).toBe('fd12:0:0:1::/64\n');
+});
