@@ -20,17 +20,16 @@ export interface ReverseIo {
   readonly writeNotice: (text: string) => void;
 
   // the imp's state now, then each change; throws once the imp is gone.
-  // Reading it never wakes the imp.
-  readonly watchImp: (
+  // Reading it never wakes the imp. impd's event stream by default.
+  readonly watchImp?: (
     config: CliConfig,
     name: string,
     signal: AbortSignal,
   ) => AsyncIterable<ImpState>;
 
-  // how long a lost forward waits to see the imp sleep before it listens
-  // again on an imp that stayed awake
-  readonly lostGraceMs?: number;
-  readonly retryMs?: number;
+  // resolves after `ms`, or at once when the signal aborts; a timer by
+  // default
+  readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
 
 export interface ReverseForwarding {
@@ -56,8 +55,25 @@ const PROCESS_IO: ReverseIo = {
   writeNotice: (text) => {
     console.error(`imp: ${text}`);
   },
-  watchImp: (config, name, signal) => readImpStates(config, name, signal),
 };
+
+// a timer that an abort clears, so a wait left behind keeps no process alive
+function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  const waited = Promise.withResolvers<void>();
+  const timer = setTimeout(waited.resolve, ms);
+
+  signal.addEventListener(
+    'abort',
+    () => {
+      clearTimeout(timer);
+
+      waited.resolve();
+    },
+    { once: true },
+  );
+
+  return waited.promise;
+}
 
 // The imp's state from the event stream, which opens with every imp. The
 // stream ends when impd restarts; it opens again after RETRY_MS.
@@ -65,6 +81,7 @@ async function* readImpStates(
   config: CliConfig,
   name: string,
   signal: AbortSignal,
+  wait: (ms: number, signal: AbortSignal) => Promise<void>,
 ): AsyncGenerator<ImpState> {
   const client = createImpClient(config);
   const state = { removed: false };
@@ -100,7 +117,7 @@ async function* readImpStates(
       throw new Error(`${name} was destroyed`);
     }
 
-    await Bun.sleep(RETRY_MS);
+    await wait(RETRY_MS, signal);
   }
 }
 
@@ -186,10 +203,10 @@ function formatEnd(end: ReverseForwardEnd): string {
   return `its listener in the imp ended`;
 }
 
-// the next value, or null once `ms` passed first; a read the timeout left
-// open waits for the next call, and its failure waits with it
+// the next value, or null once `timeout` settled first; a read the timeout
+// left open waits for the next call, and its failure waits with it
 interface StateReader {
-  readonly read: (ms: number | null) => Promise<IteratorResult<ImpState> | null>;
+  readonly read: (timeout: Promise<void> | null) => Promise<IteratorResult<ImpState> | null>;
 }
 
 type StateRead = IteratorResult<ImpState> | { readonly failure: unknown };
@@ -216,47 +233,38 @@ function createStateReader(next: () => Promise<IteratorResult<ImpState>>): State
   };
 
   return {
-    read: async (ms) => {
+    read: async (timeout) => {
       pending ??= readNext();
 
       const reading = pending;
 
-      if (ms === null) {
+      if (timeout === null) {
         const result = await reading;
 
         return readResult(result);
       }
 
-      // cleared, so a timer left behind keeps no process alive
-      const timeout = Promise.withResolvers<null>();
-      const timer = setTimeout(timeout.resolve, ms, null);
+      const result = await Promise.race([reading, timeout.then(() => null)]);
 
-      try {
-        const result = await Promise.race([reading, timeout.promise]);
-
-        return result === null ? null : readResult(result);
-      } finally {
-        clearTimeout(timer);
-      }
+      return result === null ? null : readResult(result);
     },
   };
 }
 
 // Resolves once the imp runs again. After a lost listener it first waits for
 // the imp to leave `running`, so a forward never wakes the imp it slept: an
-// imp still running after `graceMs` lost only its listener.
+// imp still running once `grace` settles lost only its listener.
 async function waitForWake(
   next: () => Promise<IteratorResult<ImpState>>,
-  graceMs: number | null,
+  grace: Promise<void> | null,
 ): Promise<void> {
   const reader = createStateReader(next);
-  const deadline = graceMs === null ? null : Date.now() + graceMs;
-  let left = deadline === null;
+  let left = grace === null;
 
   for (;;) {
-    const wait = left || deadline === null ? null : Math.max(0, deadline - Date.now());
+    const timeout = left ? null : grace;
 
-    const result = await reader.read(wait);
+    const result = await reader.read(timeout);
 
     if (result === null) {
       return;
@@ -285,6 +293,13 @@ export async function startReverseForward(
 ): Promise<ReverseForwarding> {
   const watching = new AbortController();
 
+  const wait = io.wait ?? waitOrAbort;
+
+  const watchImp =
+    io.watchImp ??
+    ((watched: CliConfig, impName: string, signal: AbortSignal) =>
+      readImpStates(watched, impName, signal, wait));
+
   const failed = Promise.withResolvers<Error>();
   const state: { forward: ReverseForward | null } = { forward: null };
   const local = formatLocal(spec.local);
@@ -308,19 +323,18 @@ export async function startReverseForward(
 
   const waitAndListen = async (end: ReverseForwardEnd): Promise<ReverseForward> => {
     if (end.kind === 'closed') {
-      await Bun.sleep(io.retryMs ?? RETRY_MS);
+      await wait(RETRY_MS, watching.signal);
     }
 
-    const graceMs = end.kind === 'lost' ? (io.lostGraceMs ?? LOST_GRACE_MS) : null;
-
-    // each wait has its own stream, closed once the wait is over
+    // each wait has its own stream and grace, ended once the wait is over
     const waiting = new AbortController();
 
     const signal = AbortSignal.any([watching.signal, waiting.signal]);
-    const states = io.watchImp(config, name, signal)[Symbol.asyncIterator]();
+    const grace = end.kind === 'lost' ? wait(LOST_GRACE_MS, signal) : null;
+    const states = watchImp(config, name, signal)[Symbol.asyncIterator]();
 
     try {
-      await waitForWake(() => states.next(), graceMs);
+      await waitForWake(() => states.next(), grace);
     } finally {
       waiting.abort();
       void states.return?.();

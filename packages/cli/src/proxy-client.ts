@@ -28,8 +28,9 @@ export interface ProxyIo {
   // a line for the user on stderr, after `imp: `
   readonly writeNotice: (text: string) => void;
 
-  // throws when the imp does not exist; it must not wake the imp
-  readonly checkImp: (config: CliConfig, name: string) => Promise<void>;
+  // the clock the quiet time between unreachable notices runs on; Date.now
+  // by default
+  readonly now?: () => number;
 
   // for `--reverse`; undefined for the process's own
   readonly reverse?: ReverseIo;
@@ -54,12 +55,14 @@ const FREE_PORT_TRIES = 5;
 // a busy port fails the command; a machine with no IPv6 loopback serves IPv4
 const NO_IPV6_CODES = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT']);
 
+// throws when the imp does not exist; imps.get never wakes the imp
+async function checkImpExists(config: CliConfig, name: string): Promise<void> {
+  await createImpClient(config).imps.get({ name });
+}
+
 const PROCESS_IO: ProxyIo = {
   writeNotice: (text) => {
     console.error(`imp: ${text}`);
-  },
-  checkImp: async (config, name) => {
-    await createImpClient(config).imps.get({ name });
   },
 };
 
@@ -326,18 +329,21 @@ export async function startProxy(
   const tunnels = new Set<() => void>();
 
   const ports: number[] = [];
-  const state = { ready: false, unreachableAt: 0 };
+  const now = io.now ?? Date.now;
+
+  // a first failure always prints, however the clock reads
+  const state = { ready: false, unreachableAt: Number.NEGATIVE_INFINITY };
 
   const notices: TunnelNotices = {
     writeNotice: io.writeNotice,
     writeUnreachable: () => {
-      const now = Date.now();
+      const failedAt = now();
 
-      if (now - state.unreachableAt > UNREACHABLE_QUIET_MS) {
+      if (failedAt - state.unreachableAt > UNREACHABLE_QUIET_MS) {
         io.writeNotice(`could not reach impd at ${config.url}`);
       }
 
-      state.unreachableAt = now;
+      state.unreachableAt = failedAt;
     },
   };
 
@@ -382,7 +388,7 @@ export async function startProxy(
       ports.push(started.port);
     }
 
-    await io.checkImp(config, name);
+    await checkImpExists(config, name);
   } catch (error) {
     stop();
     throw error;
