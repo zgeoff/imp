@@ -36,7 +36,6 @@
       },
       "devDependencies": {
         "@faker-js/faker": "catalog:",
-        "@imp/test-utils": "workspace:*",
       },
     },
     "packages/cli": {
