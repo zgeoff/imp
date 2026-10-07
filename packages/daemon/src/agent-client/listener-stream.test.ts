@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
-import { startFakeAgent } from './fake-agent';
-import type { FakeAgentHandler } from './fake-agent';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
+import type { FakeAgentHandler } from '../test-utils/start-stub-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from './frame-codec';
 import { openAccept, openListener } from './listener-stream';
 

@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test';
 import { impContract } from '@imp/api';
 import { utils } from 'ssh2';
 import { createSecret, findSecret } from '../db/secrets';
-import { setupTestDatabase } from '../db/test-database';
 import { readRejection } from '../read-rejection';
 import { formatKeyFingerprint } from '../ssh/authorized-keys';
 import { createEd25519Key } from '../ssh/host-key';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { ROOT_TOKEN_ID, loadTokenStore, readBearer } from './token-store';
 
 const NOW = 1_800_000_000_000;

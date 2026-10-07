@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
+import { readRejectionMessage, setupTestDatabase } from '../test-utils/create-test-database';
 import { createImage, findImageById, findImageByName, listImages, removeImage } from './images';
 import { createImp } from './imps';
-import { readRejectionMessage, setupTestDatabase } from './test-database';
 
 test('it creates, finds and lists images by name', async () => {
   await using ctx = await setupTestDatabase();

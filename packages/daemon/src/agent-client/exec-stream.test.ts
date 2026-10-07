@@ -4,11 +4,11 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
+import type { FakeAgentHandler } from '../test-utils/start-stub-agent';
 import { sendActivity, sendPing, sendSessionKill } from './agent-requests';
 import { openAttachStream, openExecStream, openTapStream } from './exec-stream';
 import type { ExecEvent, ExecStream } from './exec-stream';
-import { startFakeAgent } from './fake-agent';
-import type { FakeAgentHandler } from './fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 import { HOSTILE_BOOT_IDS, HOSTILE_GENERATIONS, HOSTILE_SESSION_NAMES } from './test-agent-ids';
 

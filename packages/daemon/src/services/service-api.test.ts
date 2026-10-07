@@ -5,7 +5,6 @@ import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 import type { ContractRouterClient } from '@orpc/contract';
 import * as z from 'zod';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -18,6 +17,7 @@ import { updateImpActivity } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
 
 const IMAGE_USER = 'dev';
 const LOG_INODE = 7;

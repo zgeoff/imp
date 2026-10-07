@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
 import { removeImp, updateImpMove } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
-import { findFreePorts } from '../net/test-free-ports';
 import { readRejection } from '../read-rejection';
+import { findFreePorts } from '../test-utils/find-free-ports';
 import { PEER_HEADER, createForwardedPeers } from './forwarded-peers';
 import { startWakeProxy } from './wake-proxy';
 

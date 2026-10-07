@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test';
 import { randomBytes } from 'node:crypto';
 import type { Socket } from 'node:net';
 import * as z from 'zod';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import {
   FRAME_TYPES,
   decodeJsonPayload,
@@ -12,6 +11,7 @@ import {
 import type { InstallBundle } from '../broker/guest-trust';
 import { readVmIdentity, writeVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths } from '../storage/data-layout';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
 import { setupImpTest } from './test-imps';
 
 // An exec with `require: ['broker']` starts only once impd set the broker's

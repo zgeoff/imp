@@ -13,11 +13,11 @@ import { join } from 'node:path';
 import { createSecretFiles } from '../broker/secret-files';
 import { openDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
+import { createFakeZfs } from '../test-utils/build-stub-zfs';
 import { buildImpPaths } from './data-layout';
 import { readLiveStorage } from './read-live-storage';
 import { createStorageGate } from './storage-gate';
 import { createStorageGc } from './storage-gc';
-import { createFakeZfs } from './zfs/fake-zfs';
 import { createZfsBackend } from './zfs/zfs-backend';
 
 // a clone that waits on `gate` when its target matches `held`

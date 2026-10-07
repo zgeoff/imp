@@ -4,7 +4,7 @@ import { createImp, findImpByName, updateImpState } from '../db/imps';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { readVmIdentity } from '../sleep/vm-identity';
 import { buildImpPaths, buildSystemDrivePath } from '../storage/data-layout';
-import { FAKE_AGENT_VERSION } from './fake-vmm';
+import { FAKE_AGENT_VERSION } from '../test-utils/build-stub-vmm';
 import { removeUnusedDrives } from './remove-unused-drives';
 import { buildTestApp, findBrokenInvariants, setupImpTest, waitForOutcome } from './test-imps';
 

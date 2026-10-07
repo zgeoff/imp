@@ -4,8 +4,8 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { readSnapshotMeta, writeSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
-import { FakeVmError } from './fake-vmm';
-import type { VmOutcome, VmStep } from './fake-vmm';
+import { FakeVmError } from '../test-utils/build-stub-vmm';
+import type { VmOutcome, VmStep } from '../test-utils/build-stub-vmm';
 import { buildTestApp, findBrokenInvariants, setupImpTest } from './test-imps';
 
 const NAMES = ['a', 'b', 'c', 'd'] as const;

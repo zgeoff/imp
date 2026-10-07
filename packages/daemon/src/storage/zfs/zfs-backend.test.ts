@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { waitWithin } from '../../process/wait-within';
+import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from '../../test-utils/build-stub-zfs';
 import { buildWatchdogSlot } from '../data-layout';
 import { CheckpointIdTakenError } from '../storage-backend';
 import type { LiveStorage, MoveSource, StorageBackend } from '../storage-backend';
-import { FAKE_EPOCH_S, FakeZfsCrashError, createFakeZfs } from './fake-zfs';
 import { createZfsBackend } from './zfs-backend';
 
 type FakeZfs = ReturnType<typeof createFakeZfs>;

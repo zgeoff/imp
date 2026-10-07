@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { createImp, removeImp } from './imps';
 import {
   listNetworkMembers,
@@ -8,7 +9,6 @@ import {
   writeMember,
   writeNetwork,
 } from './networks';
-import { setupTestDatabase } from './test-database';
 
 async function setupNetwork() {
   const ctx = await setupTestDatabase();

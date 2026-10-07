@@ -21,13 +21,13 @@ import { createDiskBudget } from '../storage/disk-budget';
 import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { createQueryGate } from '../test-utils/build-query-gate';
+import { createFakeGuest } from '../test-utils/build-stub-guest';
+import type { FakeAnswer, FakeRun } from '../test-utils/build-stub-guest';
 import type { Builders } from './builder-imps';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { createGuestExec } from './guest-exec';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import { createImageService } from './image-service';
-import { createQueryGate } from './query-gate';
 
 let dir = '';
 

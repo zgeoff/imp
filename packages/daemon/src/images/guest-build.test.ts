@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DOCKERFILE_FRONTEND } from '../docker-proxy/dockerfile-frontend';
+import { createFakeGuest } from '../test-utils/build-stub-guest';
+import type { FakeAnswer, FakeRun } from '../test-utils/build-stub-guest';
 import { DockerBuildError } from './docker-build';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { runGuestBuild, writeGuestTree } from './guest-build';
 import type { ExportLimits } from './guest-build';
 import { GuestOutputError, createGuestExec } from './guest-exec';

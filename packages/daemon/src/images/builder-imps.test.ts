@@ -6,9 +6,9 @@ import { findImpByName, listImps } from '../db/imps';
 import type { ImpDatabase } from '../db/open-database';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
+import { createFakeGuest } from '../test-utils/build-stub-guest';
+import type { FakeAnswer, FakeRun } from '../test-utils/build-stub-guest';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { writeGuestTree } from './guest-build';
 
 // failedDestroys: how many destroyImpId calls fail; the ones after wait for

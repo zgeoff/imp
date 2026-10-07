@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiAudit } from '../audit/api-audit';
 import { createRevocations } from '../auth/revocations';
-import { setupTestDatabase } from '../db/test-database';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { createAuthorizedKeys } from './authorized-keys';
 import { createFakeSshBackend } from './fake-ssh-backend';
 import { startSsh } from './start-ssh';

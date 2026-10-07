@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { API_AUDIT_ROWS, listApiCalls, writeApiCall } from './api-audit';
-import { setupTestDatabase } from './test-database';
 
 // the most rows one insert may bind: sqlite allows 32766 variables, 6 a row
 const INSERT_BATCH = 5000;

@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readRejection } from '../read-rejection';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
+import type { FakeAgentHandler } from '../test-utils/start-stub-agent';
 import { openDialStream } from './dial-stream';
 import type { DialEvent, DialStream } from './dial-stream';
-import { startFakeAgent } from './fake-agent';
-import type { FakeAgentHandler } from './fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeFrame, encodeJsonFrame } from './frame-codec';
 
 const TARGET = { network: 'tcp', address: '127.0.0.1:8080' } as const;

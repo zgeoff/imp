@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { readRejectionMessage, setupTestDatabase } from '../test-utils/create-test-database';
 import { subscribeImpWrites } from './imp-write-feed';
 import {
   JAIL_UIDS,
@@ -16,7 +17,6 @@ import {
 } from './imps';
 import type { ImpRecord, NewImp } from './imps';
 import type { ImpDatabase } from './open-database';
-import { readRejectionMessage, setupTestDatabase } from './test-database';
 
 function buildNewImp(imageId: string, name: string, slot: number): NewImp {
   return { name, imageId, vcpus: 2, memoryMib: 2048, slot, ip: `10.66.0.${String(slot * 4 + 2)}` };

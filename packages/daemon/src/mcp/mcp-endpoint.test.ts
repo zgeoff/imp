@@ -6,9 +6,9 @@ import { createTailnetIdentities } from '../auth/tailnet-identity';
 import type { TailnetPeer } from '../auth/tailnet-identity';
 import { listApiCalls } from '../db/api-audit';
 import type { TailscaleStatus } from '../net/tailscale-status';
-import { findFreePorts } from '../net/test-free-ports';
 import { PEER_HEADER } from '../proxy/forwarded-peers';
 import { startWakeProxy } from '../proxy/wake-proxy';
+import { findFreePorts } from '../test-utils/find-free-ports';
 import { setupImpdTest } from './test-mcp';
 
 const TAILNET_PEER = '100.101.102.103';

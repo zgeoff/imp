@@ -1,6 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { BunSqliteDriver } from './bun-sqlite-driver';
 import { subscribeImpWrites } from './imp-write-feed';
 import type { ImpWrite } from './imp-write-feed';
@@ -9,7 +10,6 @@ import { isBlockingLease, listLeases, removeLeases, writeLease } from './leases'
 import type { LeaseRecord } from './leases';
 import { runMigrations, runMigrationsTo } from './run-migrations';
 import type { DatabaseSchema } from './schema';
-import { setupTestDatabase } from './test-database';
 
 const AT = 1_800_000_000_000;
 

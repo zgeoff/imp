@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { utils } from 'ssh2';
-import { setupTestDatabase } from '../db/test-database';
 import { createEd25519Key } from '../ssh/host-key';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { createKnownHosts } from './ambient-request';
 import { isSameOrigin, resolveCaller } from './authenticate';
 import type { CallerSources } from './authenticate';

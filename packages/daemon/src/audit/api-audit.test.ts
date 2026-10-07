@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { ORPCError } from '@orpc/server';
 import { listApiCalls } from '../db/api-audit';
-import { setupTestDatabase } from '../db/test-database';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { createApiAudit, readImpName, withAuditedOpen } from './api-audit';
 
 test('the imp is an imp namespace’s input name, or the created imp’s', () => {

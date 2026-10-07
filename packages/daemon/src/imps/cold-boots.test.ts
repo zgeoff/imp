@@ -4,13 +4,13 @@ import type { Socket } from 'node:net';
 import { NoSessionDataSchema } from '@imp/api';
 import * as z from 'zod';
 import { AgentError } from '../agent-client/agent-connection';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { listColdBoots, writeColdBoot } from '../db/cold-boots';
 import { findImpByName } from '../db/imps';
 import { readRejection } from '../read-rejection';
 import { buildImpPaths } from '../storage/data-layout';
-import { buildFakeBootId } from './fake-vmm';
+import { buildFakeBootId } from '../test-utils/build-stub-vmm';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
 import { buildTestApp, setupImpTest } from './test-imps';
 
 // Each cold boot records its cause, and an attach to a session names them

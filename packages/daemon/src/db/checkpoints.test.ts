@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
+import { readRejectionMessage, setupTestDatabase } from '../test-utils/create-test-database';
 import { createCheckpoint, findCheckpoint, listCheckpoints, removeCheckpoint } from './checkpoints';
 import { createImp, removeImp } from './imps';
-import { readRejectionMessage, setupTestDatabase } from './test-database';
 
 async function setupImp() {
   const ctx = await setupTestDatabase();

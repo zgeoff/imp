@@ -50,9 +50,9 @@ import type { StorageBackend } from '../storage/storage-backend';
 import { createStorageGate } from '../storage/storage-gate';
 import { createStorageGc } from '../storage/storage-gc';
 import { createXfsBackend } from '../storage/xfs-backend';
+import { buildFakeVmm } from '../test-utils/build-stub-vmm';
 import type { CpuCgroups } from '../vmm/cpu-cgroups';
 import type { KsmHostStats } from '../vmm/ksm';
-import { buildFakeVmm } from './fake-vmm';
 import type { ImpService } from './imp-service';
 
 export const TEST_TOKEN = 'test-token';

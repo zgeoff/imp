@@ -1,8 +1,8 @@
+import { createImage } from '../db/images';
+import type { ImageRecord } from '../db/images';
+import { openDatabase } from '../db/open-database';
+import type { ImpDatabase } from '../db/open-database';
 import { readErrorMessage } from '../read-error-message';
-import { createImage } from './images';
-import type { ImageRecord } from './images';
-import { openDatabase } from './open-database';
-import type { ImpDatabase } from './open-database';
 
 interface TestDatabase {
   readonly db: ImpDatabase;

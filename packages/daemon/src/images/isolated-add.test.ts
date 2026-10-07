@@ -14,12 +14,12 @@ import { listImps } from '../db/imps';
 import { setupImpTest } from '../imps/test-imps';
 import { buildImagePaths } from '../storage/data-layout';
 import type { StorageBackend } from '../storage/storage-backend';
+import { createQueryGate } from '../test-utils/build-query-gate';
+import { createFakeGuest } from '../test-utils/build-stub-guest';
+import type { FakeAnswer, FakeRun } from '../test-utils/build-stub-guest';
 import { BUILDER_IMAGE, createBuilders } from './builder-imps';
-import { createFakeGuest } from './fake-guest';
-import type { FakeAnswer, FakeRun } from './fake-guest';
 import { PIN_INSPECT_FORMAT } from './image-pin';
 import { HOST_ADD_WARNING, createImageService } from './image-service';
-import { createQueryGate } from './query-gate';
 
 const CONTAINER_ID = 'e'.repeat(64);
 const CONFIG = '{"Cmd":["/bin/sh"],"Env":["PATH=/bin"]}';

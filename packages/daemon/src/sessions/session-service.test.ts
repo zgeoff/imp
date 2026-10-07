@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test';
 import type { Socket } from 'node:net';
 import * as z from 'zod';
 import type { AgentSession } from '../agent-client/agent-requests';
-import { startFakeAgent } from '../agent-client/fake-agent';
 import { FRAME_TYPES, decodeJsonPayload, encodeJsonFrame } from '../agent-client/frame-codec';
 import { findImpByName } from '../db/imps';
 import { buildTestApp, setupImpTest } from '../imps/test-imps';
 import { readRejection } from '../read-rejection';
 import { readSnapshotMeta } from '../sleep/snapshot-meta';
 import { buildImpPaths } from '../storage/data-layout';
+import { startFakeAgent } from '../test-utils/start-stub-agent';
 
 const STARTED_AT = Date.UTC(2026, 9, 2, 12, 0, 0);
 

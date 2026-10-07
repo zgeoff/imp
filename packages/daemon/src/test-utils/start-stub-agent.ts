@@ -2,8 +2,8 @@ import { mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { Socket } from 'node:net';
 import { dirname } from 'node:path';
-import { createFrameDecoder } from './frame-codec';
-import type { AgentFrame } from './frame-codec';
+import { createFrameDecoder } from '../agent-client/frame-codec';
+import type { AgentFrame } from '../agent-client/frame-codec';
 
 // gets every frame of a connection in turn: the first is the request
 export type FakeAgentHandler = (

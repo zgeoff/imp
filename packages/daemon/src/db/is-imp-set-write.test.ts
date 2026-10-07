@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
+import { setupTestDatabase } from '../test-utils/create-test-database';
 import { createImp } from './imps';
 import { isImpSetWrite } from './is-imp-set-write';
-import { setupTestDatabase } from './test-database';
 
 test('a create, a destroy and a stop resync the proxy and the grants; a sleep does not', async () => {
   await using ctx = await setupTestDatabase();

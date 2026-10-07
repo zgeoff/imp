@@ -1,6 +1,6 @@
 import * as z from 'zod';
-import type { CommandResult } from '../../process/run-command';
-import type { StreamRunner } from '../../process/run-stream';
+import type { CommandResult } from '../process/run-command';
+import type { StreamRunner } from '../process/run-stream';
 
 // the `creation` of txg 0: 2026-10-03T00:00:00Z
 export const FAKE_EPOCH_S = 1_790_985_600;

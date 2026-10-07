@@ -12,7 +12,7 @@ import { TEST_TOKEN, buildTestApp, setupImpTest } from './imps/test-imps';
 import type { ImpTest } from './imps/test-imps';
 import type { TailscaleStatus } from './net/tailscale-status';
 import { PEER_HEADER } from './proxy/forwarded-peers';
-import { tryExecSocket, tryTunnelSocket } from './test-sockets';
+import { tryExecSocket, tryTunnelSocket } from './test-utils/try-impd-sockets';
 
 const SCOPES: readonly Scope[] = ['read', 'exec', 'manage'];
 const TAILNET_PEER = '100.101.102.103';
