@@ -91,6 +91,7 @@
   },
   "devDependencies": {
     "@commitlint/cli": "catalog:",
+    "@imp/test-utils": "workspace:*",
     "@stylistic/eslint-plugin": "catalog:",
     "@tsconfig/strictest": "catalog:",
     "@types/bun": "catalog:",

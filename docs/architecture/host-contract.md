@@ -129,7 +129,7 @@ The rest of the list:
   `/etc/imp`. It is Docker's default profile with one rule added: `pivot_root` with `SYS_ADMIN`,
   which the jailer needs and the default denies. When Docker's default changes, copy it again from
   [moby/profiles](https://github.com/moby/profiles/blob/main/seccomp/default.json), append the rule,
-  and update the commit and hash in `scripts/imp-host-seccomp.test.ts`. The image ships the profile,
+  and update the commit and hash in `deploy/imp-host.seccomp.test.ts`. The image ships the profile,
   and `bootstrap.sh` and `upgrade.sh` install it from the image they run.
 
 **CAUTION:** The container is not a security boundary. Root in it can become root on the host by

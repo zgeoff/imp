@@ -8,7 +8,9 @@
     "packages/client/smoke/*.ts",
     "test/**/*.ts",
     "scripts/**/*.ts",
-    "deploy/**/*.ts"
+    "deploy/**/*.ts",
+    "images/**/*.ts",
+    "*.test.ts"
   ],
   // a browser app with its own tsconfig (DOM, JSX)
   "exclude": ["node_modules", "tmp", "packages/dashboard"]

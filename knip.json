@@ -9,7 +9,13 @@
         "test/integration/*.pebble.ts",
         "test/integration/*.slow.ts"
       ],
-      "project": ["test/**/*.ts", "scripts/**/*.ts"]
+      "project": [
+        "test/**/*.ts",
+        "scripts/**/*.ts",
+        "deploy/**/*.ts",
+        "images/**/*.ts",
+        "*.test.ts"
+      ]
     },
     "packages/*": {
       "project": ["src/**/*.ts"]
