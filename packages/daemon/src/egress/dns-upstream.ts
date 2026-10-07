@@ -11,7 +11,11 @@ export type DnsForward = (query: Uint8Array) => Promise<Uint8Array>;
 // The upstreams in order (IMP_DNS, port 53 unless given), over UDP, then TCP
 // for a truncated reply. A fresh random id per upstream query keeps a guest
 // from choosing the id a forger must guess; the guest gets its own back.
-export function createDnsForward(servers: readonly string[], port = 53): DnsForward {
+export function createDnsForward(
+  servers: readonly string[],
+  port = 53,
+  timeoutMs = UPSTREAM_TIMEOUT_MS,
+): DnsForward {
   return async (guestQuery) => {
     const failures: string[] = [];
 
@@ -19,11 +23,11 @@ export function createDnsForward(servers: readonly string[], port = 53): DnsForw
       try {
         const query = toFreshId(guestQuery);
 
-        const udpReply = await sendUdp(server, port, query);
+        const udpReply = await sendUdp({ server, port, timeoutMs }, query);
 
         const reply =
           ((udpReply[2] ?? 0) * 256 + (udpReply[3] ?? 0)) & TC
-            ? await sendTcp(server, port, query)
+            ? await sendTcp({ server, port, timeoutMs }, query)
             : udpReply;
 
         if (reply[0] !== query[0] || reply[1] !== query[1]) {
@@ -56,7 +60,14 @@ function toGuestId(reply: Uint8Array, guestQuery: Uint8Array): Uint8Array {
   return copy;
 }
 
-async function sendUdp(server: string, port: number, query: Uint8Array): Promise<Uint8Array> {
+interface Upstream {
+  readonly server: string;
+  readonly port: number;
+  readonly timeoutMs: number;
+}
+
+async function sendUdp(upstream: Upstream, query: Uint8Array): Promise<Uint8Array> {
+  const server = upstream.server;
   const reply = Promise.withResolvers<Uint8Array>();
 
   const socket = await Bun.udpSocket({
@@ -80,10 +91,10 @@ async function sendUdp(server: string, port: number, query: Uint8Array): Promise
 
   const timer = setTimeout(() => {
     reply.reject(new Error('timed out'));
-  }, UPSTREAM_TIMEOUT_MS);
+  }, upstream.timeoutMs);
 
   try {
-    socket.send(query, port, server);
+    socket.send(query, upstream.port, server);
 
     return await reply.promise;
   } finally {
@@ -94,11 +105,11 @@ async function sendUdp(server: string, port: number, query: Uint8Array): Promise
 }
 
 // RFC 1035 4.2.2: each message has a two-byte length in front
-function sendTcp(server: string, port: number, query: Uint8Array): Promise<Uint8Array> {
+function sendTcp(upstream: Upstream, query: Uint8Array): Promise<Uint8Array> {
   const reply = Promise.withResolvers<Uint8Array>();
   const chunks: Buffer[] = [];
 
-  const socket = connect({ host: server, port }, () => {
+  const socket = connect({ host: upstream.server, port: upstream.port }, () => {
     const framed = Buffer.alloc(2 + query.byteLength);
 
     framed.writeUInt16BE(query.byteLength, 0);
@@ -106,7 +117,7 @@ function sendTcp(server: string, port: number, query: Uint8Array): Promise<Uint8
     socket.write(framed);
   });
 
-  socket.setTimeout(UPSTREAM_TIMEOUT_MS, () => {
+  socket.setTimeout(upstream.timeoutMs, () => {
     socket.destroy(new Error('timed out'));
   });
 

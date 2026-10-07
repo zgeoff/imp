@@ -61,19 +61,24 @@ export function createNftWriter(run: NftRunner = runNft): (script: string) => Pr
   };
 }
 
-export async function runNft(script: string): Promise<void> {
-  const child = Bun.spawn(['nft', '-f', '-'], {
-    stdin: new TextEncoder().encode(script),
-    stdout: 'ignore',
-    stderr: 'pipe',
-  });
+// `nft -f -` from `nftBin`, which is found on PATH unless it is a path
+export function createNftRunner(nftBin = 'nft'): NftRunner {
+  return async (script) => {
+    const child = Bun.spawn([nftBin, '-f', '-'], {
+      stdin: new TextEncoder().encode(script),
+      stdout: 'ignore',
+      stderr: 'pipe',
+    });
 
-  const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    const [stderr, exitCode] = await Promise.all([new Response(child.stderr).text(), child.exited]);
 
-  if (exitCode !== 0) {
-    throw new Error(`nft exited ${String(exitCode)}: ${stderr.trim().split('\n')[0] ?? ''}`);
-  }
+    if (exitCode !== 0) {
+      throw new Error(`nft exited ${String(exitCode)}: ${stderr.trim().split('\n')[0] ?? ''}`);
+    }
+  };
 }
+
+export const runNft: NftRunner = createNftRunner();
 
 // `nft` itself failed to start: a missing binary reads better this way
 export function formatNftError(error: unknown): string {

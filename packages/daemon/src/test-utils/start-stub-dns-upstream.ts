@@ -16,6 +16,9 @@ interface StubDnsUpstreamOptions {
   // UDP bind to 0 and then TCP on its number can meet a TCP socket there
   readonly port: number;
 
+  // the loopback address it listens on; 127.0.0.1 by default
+  readonly hostname?: string;
+
   // the records every answer carries
   readonly answers?: readonly MockDnsRecord[];
   readonly udp?: StubDnsUdpMode;
@@ -31,7 +34,7 @@ function readId(query: Uint8Array): number {
   return ((query[0] ?? 0) << 8) | (query[1] ?? 0);
 }
 
-// An upstream DNS server on 127.0.0.1, over UDP and over TCP with RFC 1035's
+// An upstream DNS server on loopback, over UDP and over TCP with RFC 1035's
 // two-byte length in front of each message. `queries` holds each query it
 // read, in order. A test picks each side's behaviour itself.
 export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOptions>) {
@@ -48,7 +51,7 @@ export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOpti
     });
 
   const udp = await Bun.udpSocket({
-    hostname: '127.0.0.1',
+    hostname: options.hostname ?? '127.0.0.1',
     port: options.port,
     socket: {
       data: (socket, data, port, address) => {
@@ -65,7 +68,7 @@ export async function startStubDnsUpstream(options: Readonly<StubDnsUpstreamOpti
   });
 
   const tcp = Bun.listen<{ buffered: Buffer }>({
-    hostname: '127.0.0.1',
+    hostname: options.hostname ?? '127.0.0.1',
     port: options.port,
     socket: {
       open: (socket) => {

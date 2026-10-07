@@ -269,3 +269,32 @@ test('it answers a TCP query with the next id when told to', async () => {
 
   expect(received.subarray(2)).toStrictEqual(Buffer.from(buildMockDnsReply(query, { id: 8 })));
 });
+
+test('it listens on the loopback address it is given', async () => {
+  using upstream = await startStubDnsUpstream({
+    port: findFreePorts(1).take(),
+    hostname: '127.0.0.2',
+  });
+
+  const query = buildMockDnsQuery({ name: 'example.com', type: 'A', id: 7 });
+  const reply = Promise.withResolvers<string>();
+
+  const client = await Bun.udpSocket({
+    hostname: '127.0.0.1',
+    socket: {
+      data: (_socket, _data, _port, address) => {
+        reply.resolve(address);
+      },
+    },
+  });
+
+  onTestFinished(() => {
+    client.close();
+  });
+
+  client.send(query, upstream.port, '127.0.0.2');
+
+  const from = await reply.promise;
+
+  expect(from).toBe('127.0.0.2');
+});

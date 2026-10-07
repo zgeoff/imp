@@ -1,56 +1,109 @@
 import { expect, test } from 'bun:test';
-import { createNftWriter } from './egress-firewall';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildStubNft } from '../test-utils/build-stub-nft';
+import { createNftRunner, createNftWriter, formatNftError } from './egress-firewall';
 
-test('scripts that wait while one runs go together, in order', async () => {
-  const runs: string[] = [];
-  const gate = Promise.withResolvers<void>();
+async function setupTest() {
+  await using stack = new AsyncDisposableStack();
 
-  const write = createNftWriter(async (script) => {
-    runs.push(script);
+  const dir = await mkdtemp(join(tmpdir(), 'egress-firewall-'));
 
-    if (runs.length === 1) {
-      await gate.promise;
-    }
-  });
+  stack.defer(() => rm(dir, { recursive: true, force: true }));
 
-  const first = write('a\n');
-  const second = write('b\n');
-  const third = write('c\n');
+  const owned = stack.move();
 
-  gate.resolve();
+  return { dir, [Symbol.asyncDispose]: () => owned.disposeAsync() };
+}
 
-  await Promise.all([first, second, third]);
+test('#createNftWriter runs the scripts that wait while one runs as one script, in order', async () => {
+  const nft = buildStubNft();
+  const held = nft.hold((script) => script === 'a\n');
+  const write = createNftWriter(nft.runNft);
+  const writes = [write('a\n'), write('b\n'), write('c\n')];
 
-  expect(runs).toEqual(['a\n', 'b\nc\n']);
+  await held.reached;
+
+  held.release();
+
+  await Promise.all(writes);
+
+  expect(nft.scripts).toStrictEqual(['a\n', 'b\nc\n']);
 });
 
-test('a failed batch runs again one script at a time, and fails only the bad one', async () => {
-  const runs: string[] = [];
-  const gate = Promise.withResolvers<void>();
+test('#createNftWriter runs a refused batch again one script at a time, so only the bad one fails', async () => {
+  const nft = buildStubNft();
+  const held = nft.hold((script) => script === 'a\n');
+  const write = createNftWriter(nft.runNft);
 
-  const write = createNftWriter(async (script) => {
-    runs.push(script);
+  nft.refuse({ reason: 'syntax error', match: (script) => script.includes('bad') });
 
-    if (runs.length === 1) {
-      await gate.promise;
-    }
+  const writes = Promise.allSettled([write('a\n'), write('b\n'), write('bad\n')]);
 
-    if (script.includes('bad')) {
-      throw new Error('nft exited 1: syntax error');
-    }
+  await held.reached;
+
+  held.release();
+
+  const results = await writes;
+
+  expect({ results, scripts: nft.scripts }).toStrictEqual({
+    results: [
+      { status: 'fulfilled', value: undefined },
+      { status: 'fulfilled', value: undefined },
+      { status: 'rejected', reason: new Error('nft exited 1: syntax error') },
+    ],
+    scripts: ['a\n', 'b\n'],
   });
+});
 
-  const first = write('a\n');
-  const good = write('b\n');
-  const bad = write('bad\n');
+test('#createNftRunner hands the script to nft -f - on its stdin', async () => {
+  await using ctx = await setupTest();
 
-  gate.resolve();
+  const nftBin = join(ctx.dir, 'nft');
 
-  await first;
-  await good;
+  await writeFile(nftBin, `#!/bin/sh\necho "$@" > ${ctx.dir}/argv\ncat > ${ctx.dir}/stdin\n`);
+  await chmod(nftBin, 0o755);
+  await createNftRunner(nftBin)('table inet imp_egress {}\n');
 
-  const error = await bad.catch(String);
+  const seen = {
+    argv: await readFile(join(ctx.dir, 'argv'), 'utf8'),
+    stdin: await readFile(join(ctx.dir, 'stdin'), 'utf8'),
+  };
 
-  expect(error).toContain('syntax error');
-  expect(runs).toEqual(['a\n', 'b\nbad\n', 'b\n', 'bad\n']);
+  expect(seen).toStrictEqual({ argv: '-f -\n', stdin: 'table inet imp_egress {}\n' });
+});
+
+test('#createNftRunner rejects with the exit code and the first line nft printed', async () => {
+  await using ctx = await setupTest();
+
+  const nftBin = join(ctx.dir, 'nft');
+
+  await writeFile(
+    nftBin,
+    '#!/bin/sh\ncat > /dev/null\necho "Error: syntax error, unexpected newline" >&2\necho "garbage" >&2\nexit 3\n',
+  );
+
+  await chmod(nftBin, 0o755);
+
+  expect(createNftRunner(nftBin)('garbage\n')).rejects.toThrow(
+    new Error('nft exited 3: Error: syntax error, unexpected newline'),
+  );
+});
+
+test('#formatNftError says nft is not installed when its binary is missing', async () => {
+  await using ctx = await setupTest();
+
+  const failure = await createNftRunner(join(ctx.dir, 'nft'))('table inet imp_egress {}\n').then(
+    () => null,
+    (error: unknown) => error,
+  );
+
+  expect(formatNftError(failure)).toBe('nft is not installed');
+});
+
+test('#formatNftError keeps the message of any other failure', () => {
+  expect(formatNftError(new Error('nft exited 1: Operation not permitted'))).toBe(
+    'nft exited 1: Operation not permitted',
+  );
 });
