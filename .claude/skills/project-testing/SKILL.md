@@ -17,7 +17,7 @@ the rules for writing tests live in the testing skill.
 
 | Run                     | Command                                                             | Needs                                              |
 | ----------------------- | ------------------------------------------------------------------- | -------------------------------------------------- |
-| Unit and package tests  | `bun test` at the root                                              | Nothing beyond Bun; the gated files below skip     |
+| Unit and package tests  | `bun test` at the root                                              | Bun, bash, git, jq; the gated files below skip     |
 | Dashboard components    | `bun run test:dashboard`                                            | Nothing beyond Bun                                 |
 | End to end              | `scripts/test-e2e.sh`                                               | KVM, Docker; some suites need more (below)         |
 | Host networking         | `sudo env "PATH=$PATH" IMP_HOST_TESTS=required bun test test/host/` | Root or unprivileged namespaces, `nft`, `iptables` |
@@ -26,6 +26,9 @@ the rules for writing tests live in the testing skill.
 | Build disk hold         | `IMP_TEST_SMALL_FS=<dir> bun test <file> -t 'small filesystem'`     | A small filesystem mounted at `<dir>`              |
 | ACME issuer             | `bun run test:pebble`                                               | Docker                                             |
 | Docker idle             | `bun run test:slow`                                                 | Nothing beyond Bun; about 6.5 minutes              |
+
+Plain `bun test` runs the shell scripts in `scripts/` and `deploy/` with bash, `deploy/upgrade.sh`'s
+tests need `jq`, and `release-please-config.test.ts` and `scripts/check-doc-refs.ts` run `git`.
 
 The build disk hold's `<file>` is `packages/daemon/src/images/isolated-build.test.ts`; its
 small-filesystem tests skip unless `IMP_TEST_SMALL_FS` names a directory.
@@ -155,7 +158,7 @@ The `test/e2e/lib/*.test.ts` unit tests run in plain `bun test` and boot nothing
 
 ## Stand-ins by boundary
 
-Paths are under `packages/daemon/src/` unless they start with `test/`.
+Paths are under `packages/daemon/src/` unless they start with `test/` or `scripts/`.
 
 | Boundary            | Stand-in                                                     | What it replaces                                          |
 | ------------------- | ------------------------------------------------------------ | --------------------------------------------------------- |
@@ -169,6 +172,8 @@ Paths are under `packages/daemon/src/` unless they start with `test/`.
 | zfs                 | `test-utils/build-stub-zfs.ts` (`buildStubZfs`)              | `zfs`, send and receive, and the mount table              |
 | Docker engine       | A unix-socket server (4)                                     | The engine API                                            |
 | Docker CLI          | A `docker` script on `PATH` in the images tests              | The `docker` binary                                       |
+| CLIs a script calls | `scripts/test-utils/create-stub-bin.ts` (7)                  | `docker`, `gh`, `systemctl`, `curl`, `ip`, `mv`, `stat`   |
+| Docker for upgrade  | `scripts/test-utils/build-stub-host-docker.ts`               | The docker that `deploy/upgrade.sh` drives on a host      |
 | nft                 | `setupImpTest`'s default `runNft`, which records scripts     | `nft` from the egress service                             |
 | ip and sysctl       | `buildFakeIp` in `net/tap-devices.test.ts`                   | `ip` and `sysctl -n`, as `createTapDevices`'s `run`       |
 | mount               | A `run` with a mount table in `vmm/jail.test.ts`             | `mount` and `umount` for the jailer                       |
@@ -185,6 +190,9 @@ Paths are under `packages/daemon/src/` unless they start with `test/`.
    `node:net` server in `test/integration/docker-idle.slow.ts`.
 5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`.
 6. `broker/broker.test.ts`, `broker/broker-oauth.test.ts`.
+7. The shell tests in `scripts/` and `deploy/`: a stub on a temp `PATH` logs each call to one file
+   and answers from a bash script the test gives it. `run-sourced-function.ts` beside it calls a
+   function of a sourced script with only `PATH` and the variables a test passes.
 
 The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
 `packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
@@ -266,8 +274,10 @@ file leaves every host on its real origin.
    `docker buildx` and skips when it is missing.
 
 - `IMP_HOST_TESTS=required` makes the `canUnshare` probe in each `test/host/` file true, so a
-  missing tool or namespace fails the tests instead of skipping them. `test/host/unshare.ts` adds a
-  user namespace (`-r`) only when the uid is not 0.
+  missing tool or namespace fails the tests instead of skipping them. `deploy/bootstrap.test.ts`'s
+  `nft -c` check of the rendered firewall reads it too; plain `bun test` skips that check where
+  `unshare -rn nft` fails. `test/host/unshare.ts` adds a user namespace (`-r`) only when the uid is
+  not 0.
 - `scripts/check-kvm.sh` checks for `vmx` or `svm` and that `/dev/kvm` opens for read and write. The
   dev container gets `/dev/kvm` and `/dev/net/tun` from `deploy/imp-host.args.json`, plus
   `/dev/loop-control` and loop devices for its XFS file.

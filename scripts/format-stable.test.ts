@@ -1,33 +1,29 @@
 import { expect, test } from 'bun:test';
-import { join } from 'node:path';
 
-// The release job formats a release pull request once more at most
-// (ci.yml). oxfmt 0.57.0 needed a second pass for this 0.29.0 entry, with
-// a `($)` and a `${BASE}` in one paragraph
-const REPO_ROOT = join(import.meta.dir, '..');
+// The release job formats a release pull request once more at most (ci.yml). oxfmt 0.57.0
+// needed a second pass for this 0.29.0 entry, with a `($)` and a `${BASE}` in one paragraph.
+test('it settles a release changelog in one oxfmt pass', () => {
+  const oxfmt = [
+    new URL('../node_modules/.bin/oxfmt', import.meta.url).pathname,
+    '--stdin-filepath=CHANGELOG.md',
+  ];
 
-const CHANGELOG = `# Changelog
+  const cwd = new URL('..', import.meta.url).pathname;
 
-## [0.29.0](https://github.com/zgeoff/imp/compare/v0.28.1...v0.29.0) (2026-10-03)
+  const once = Bun.spawnSync(oxfmt, {
+    cwd,
+    stdin: Buffer.from(
+      '# Changelog\n\n' +
+        '## [0.29.0](https://github.com/zgeoff/imp/compare/v0.28.1...v0.29.0) (2026-10-03)\n\n' +
+        '### ⚠ BREAKING CHANGES\n\n' +
+        '* **images:** imp image build refuses a Dockerfile with a variable ($) in FROM, ' +
+        `such as FROM \${BASE}; write the base image literally.\n`,
+    ),
+  });
 
-### ⚠ BREAKING CHANGES
+  const twice = Bun.spawnSync(oxfmt, { cwd, stdin: once.stdout });
 
-* **images:** imp image build refuses a Dockerfile with a variable ($) in FROM, such as FROM \${BASE}; write the base image literally.
-`;
-
-function format(source: string): string {
-  const result = Bun.spawnSync(
-    [join(REPO_ROOT, 'node_modules/.bin/oxfmt'), '--stdin-filepath=CHANGELOG.md'],
-    { cwd: REPO_ROOT, stdin: Buffer.from(source) },
-  );
-
-  expect(result.exitCode).toBe(0);
-
-  return result.stdout.toString();
-}
-
-test('one oxfmt pass settles a release changelog', () => {
-  const once = format(CHANGELOG);
-
-  expect(format(once)).toBe(once);
+  expect(once.exitCode).toBe(0);
+  expect(twice.exitCode).toBe(0);
+  expect(twice.stdout.toString()).toBe(once.stdout.toString());
 });

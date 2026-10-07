@@ -1,230 +1,331 @@
-import { afterAll, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import * as z from 'zod';
+import { invariant } from '@imp/test-utils/invariant';
+import { createStubBin } from './test-utils/create-stub-bin';
+import { parseReleaseWorkflow } from './test-utils/parse-release-workflow';
 
-// The base job publishes imp-base, which other images pin by digest, so a
-// published tag must never move (RELEASING.md).
-const StepSchema = z.looseObject({
-  name: z.string(),
-  id: z.string().optional(),
-  if: z.string().optional(),
-  run: z.string().optional(),
-  uses: z.string().optional(),
-  with: z.record(z.string(), z.unknown()).optional(),
-});
+// The base job publishes imp-base, which other images pin by digest, so a published tag must
+// never move (RELEASING.md). The Plan step's tests run its shell as Actions does (bash -eo
+// pipefail), with a stub docker and gh on PATH and a checked-out tree in a scratch directory.
+function setupTest() {
+  using stack = new DisposableStack();
 
-const JobSchema = z.looseObject({
-  needs: z.array(z.string()),
-  permissions: z.record(z.string(), z.string()).optional(),
-  steps: z.array(StepSchema),
-});
+  const dir = mkdtempSync(join(tmpdir(), 'imp-release-workflow-'));
 
-const WorkflowSchema = z.looseObject({
-  jobs: z.looseObject({ base: JobSchema, image: JobSchema, publish: JobSchema }),
-});
+  stack.defer(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-const text = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
-const jobs = WorkflowSchema.parse(Bun.YAML.parse(text)).jobs;
-const base = jobs.base;
-const IMAGE = 'ghcr.io/zgeoff/imp-base';
-const TAG = '1.2.3';
-const DIGEST = 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
-const PUSH_ONLY = "steps.plan.outputs.action == 'push'";
-const root = mkdtempSync(join(process.env['TMPDIR'] ?? '/tmp', 'imp-release-workflow-'));
-
-afterAll(() => {
-  rmSync(root, { recursive: true, force: true });
-});
-
-function findStep(needle: string): number {
-  return base.steps.findIndex((step) => step.run !== undefined && step.run.includes(needle));
-}
-
-const planIndex = base.steps.findIndex((step) => step.id === 'plan');
-const planRun = base.steps[planIndex]?.run ?? '';
-
-// what the fake registry answers for the tag
-type Registry = 'found' | 'missing' | 'denied' | 'blob-missing' | 'bad-digest';
-
-const REGISTRY_ANSWERS: Record<Registry, string> = {
-  found: `echo ${DIGEST}`,
-  missing: 'echo "ERROR: $4: not found" >&2; exit 1',
-  denied: 'echo "ERROR: failed to authorize: 403 Forbidden" >&2; exit 1',
-  'blob-missing': 'echo "ERROR: blob sha256:abc not found" >&2; exit 1',
-  'bad-digest': 'echo "WARN: something"; echo sha256:abc',
-};
-
-interface Run {
-  readonly registry: Registry;
-  readonly attested?: boolean;
-
-  // the checked-out tree is a release from before imp-base: no check script
-  readonly oldTree?: boolean;
-}
-
-interface Result {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly outputs: Record<string, string>;
-  readonly dockerCalls: string;
-}
-
-function writeTool(path: string, body: string): void {
-  writeFileSync(path, `#!/bin/bash\n${body}\n`);
-  chmodSync(path, 0o755);
-}
-
-// Runs the Plan step's shell as Actions does (bash -eo pipefail), with a fake
-// docker and gh on PATH and a checked-out tree in a scratch directory.
-function runPlan(run: Run): Result {
-  const dir = mkdtempSync(join(root, 'run-'));
-  const bin = join(dir, 'bin');
-  const tree = join(dir, 'tree');
-
-  mkdirSync(bin);
-  mkdirSync(join(tree, 'images/base'), { recursive: true });
-  mkdirSync(join(tree, 'host'));
-
-  writeTool(
-    join(bin, 'docker'),
-    `echo "$*" >> ${dir}/docker-calls\n${REGISTRY_ANSWERS[run.registry]}`,
-  );
-
-  writeTool(join(bin, 'gh'), `exit ${run.attested === true ? 0 : 1}`);
-  writeFileSync(join(dir, 'docker-calls'), '');
+  // the checked-out tree the Plan step reads, and the file Actions collects its outputs from
+  mkdirSync(join(dir, 'tree', 'images', 'base'), { recursive: true });
+  mkdirSync(join(dir, 'tree', 'host'));
   writeFileSync(join(dir, 'outputs'), '');
 
-  if (run.oldTree === true) {
-    writeFileSync(join(tree, 'images/base/Dockerfile'), 'FROM ubuntu:24.04\n');
-  } else {
-    writeFileSync(join(tree, 'host/check-base-image.sh'), '');
+  const owned = stack.move();
 
-    writeFileSync(
-      join(tree, 'images/base/Dockerfile'),
-      'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
-    );
-  }
+  return {
+    dir,
+    tree: join(dir, 'tree'),
+    outputs: join(dir, 'outputs'),
+    [Symbol.dispose]: () => {
+      owned.dispose();
+    },
+  };
+}
 
-  const proc = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', planRun], {
-    cwd: tree,
+test('it runs the base job after the smoke checks, with the image job permissions', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  expect(jobs.base.needs).toContain('smoke');
+  expect(jobs.base.permissions).toStrictEqual(jobs.image.permissions);
+});
+
+test('it checks out the tag being built in the base job', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const checkout = jobs.base.steps.find(
+    (step) => step.uses?.startsWith('actions/checkout@') === true,
+  );
+
+  // an Actions expression, not a template placeholder
+  expect(checkout?.with).toContainEntry(['ref', `\${{ inputs.tag || github.sha }}`]);
+});
+
+test('it labels the base image with the commit it builds', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
+
+  expect(build?.run).toInclude('git rev-parse HEAD');
+});
+
+test('it builds the base image for linux/amd64 only', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const build = jobs.base.steps.find((step) => step.run?.includes('docker buildx build') === true);
+  const platforms = [...(build?.run ?? '').matchAll(/--platform[ =](?<list>\S+)/gv)];
+
+  expect(platforms.map((match) => match.groups?.['list'])).toStrictEqual(['linux/amd64']);
+});
+
+test('it plans before any build, and builds, checks, pushes and attests only on push', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
+
+  const after = jobs.base.steps.slice(jobs.base.steps.findIndex((step) => step.id === 'plan') + 1);
+
+  expect(after.map((step) => [step.name, step.if])).toStrictEqual([
+    ['Build image', "steps.plan.outputs.action == 'push'"],
+    ['Check image', "steps.plan.outputs.action == 'push'"],
+    ['Push image', "steps.plan.outputs.action == 'push'"],
+    ['Attest image', "steps.plan.outputs.action == 'push'"],
+  ]);
+});
+
+test('it pushes a tag the registry does not have', () => {
+  using ctx = setupTest();
+
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const docker = createStubBin(ctx.dir, 'docker', 'echo "ERROR: $4: not found" >&2; exit 1');
+
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
     env: {
-      PATH: `${bin}:${process.env['PATH'] ?? ''}`,
-      BASE_IMAGE: IMAGE,
-      PUSH_TAG: TAG,
-      GITHUB_OUTPUT: join(dir, 'outputs'),
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
       GITHUB_REPOSITORY: 'zgeoff/imp',
     },
   });
 
-  const outputs: Record<string, string> = {};
-
-  for (const line of readFileSync(join(dir, 'outputs'), 'utf8').split('\n')) {
-    const at = line.indexOf('=');
-
-    if (at > 0) {
-      outputs[line.slice(0, at)] = line.slice(at + 1);
-    }
-  }
-
-  return {
-    exitCode: proc.exitCode,
-    stdout: proc.stdout.toString(),
-    outputs,
-    dockerCalls: readFileSync(join(dir, 'docker-calls'), 'utf8'),
-  };
-}
-
-test('the base job runs after the smoke checks, with the image job permissions', () => {
-  expect(base.needs).toContain('smoke');
-  expect(base.permissions).toEqual(jobs.image.permissions);
+  expect(result.exitCode).toBe(0);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('action=push\n');
 });
 
-test('the base job builds the checked-out tag and labels its commit', () => {
-  const checkout = base.steps.find((step) => step.uses?.startsWith('actions/checkout@') === true);
+test('it leaves an attested existing tag alone, with a notice', () => {
+  using ctx = setupTest();
 
-  // an Actions expression, not a template placeholder
-  expect(checkout?.with?.['ref']).toBe(`\${{ inputs.tag || github.sha }}`);
-  expect(base.steps[findStep('docker buildx build')]?.run).toContain('git rev-parse HEAD');
-});
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
 
-test('the plan comes before any build, and only push builds or pushes', () => {
-  const after = base.steps.slice(planIndex + 1);
+  const digest = `sha256:${'0123456789abcdef'.repeat(4)}`;
+  const docker = createStubBin(ctx.dir, 'docker', `echo ${digest}`);
+  const gh = createStubBin(ctx.dir, 'gh', 'exit 0');
 
-  expect(planIndex).toBeGreaterThanOrEqual(0);
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
 
-  expect(after.map((step) => step.name)).toEqual([
-    'Build image',
-    'Check image',
-    'Push image',
-    'Attest image',
-  ]);
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
 
-  expect(after.map((step) => step.if)).toEqual([PUSH_ONLY, PUSH_ONLY, PUSH_ONLY, PUSH_ONLY]);
-});
-
-test('a missing tag is pushed', () => {
-  const result = runPlan({ registry: 'missing' });
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
 
   expect(result.exitCode).toBe(0);
-  expect(result.outputs).toEqual({ action: 'push' });
-});
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('action=skip\n');
 
-test('an attested existing tag is left alone, with a notice', () => {
-  const result = runPlan({ registry: 'found', attested: true });
+  expect(result.stdout.toString()).toInclude(
+    `::notice::ghcr.io/zgeoff/imp-base:1.2.3 exists already at ${digest}`,
+  );
 
-  expect(result.exitCode).toBe(0);
-  expect(result.outputs).toEqual({ action: 'skip' });
-  expect(result.stdout).toContain(`::notice::${IMAGE}:${TAG} exists already at ${DIGEST}`);
-});
-
-test('an existing tag without an attestation fails the job, and is neither pushed nor attested', () => {
-  const result = runPlan({ registry: 'found', attested: false });
-
-  expect(result.exitCode).not.toBe(0);
-  expect(result.outputs).toEqual({});
-
-  expect(result.stdout).toContain(
-    `::error::${IMAGE}:${TAG} exists at ${DIGEST} with no attestation`,
+  expect(readFileSync(gh.calls, 'utf8')).toInclude(
+    `gh attestation verify oci://ghcr.io/zgeoff/imp-base@${digest} --repo zgeoff/imp\n`,
   );
 });
 
-test('an existing tag whose digest is not a sha256 fails the job', () => {
-  const result = runPlan({ registry: 'bad-digest', attested: true });
+test('it fails the job on an existing tag without an attestation, and plans nothing', () => {
+  using ctx = setupTest();
 
-  expect(result.exitCode).not.toBe(0);
-  expect(result.outputs).toEqual({});
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const digest = `sha256:${'0123456789abcdef'.repeat(4)}`;
+  const docker = createStubBin(ctx.dir, 'docker', `echo ${digest}`);
+
+  createStubBin(ctx.dir, 'gh', 'exit 1');
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('');
+
+  expect(result.stdout.toString()).toInclude(
+    `::error::ghcr.io/zgeoff/imp-base:1.2.3 exists at ${digest} with no attestation`,
+  );
 });
 
-test('any registry error other than the tag not found fails closed', () => {
-  for (const registry of ['denied', 'blob-missing'] as const) {
-    const result = runPlan({ registry });
+test('it fails the job on an existing tag whose digest is not a sha256', () => {
+  using ctx = setupTest();
 
-    expect(result.exitCode).not.toBe(0);
-    expect(result.outputs).toEqual({});
-  }
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const docker = createStubBin(ctx.dir, 'docker', 'echo "WARN: something"; echo sha256:abc');
+
+  createStubBin(ctx.dir, 'gh', 'exit 0');
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('');
+  expect(result.stdout.toString()).toInclude('exists, but the registry gave no valid digest');
 });
 
-test('a release from before imp-base is skipped without asking the registry', () => {
-  const result = runPlan({ registry: 'missing', oldTree: true });
+test.each([
+  ['a denied request', 'ERROR: failed to authorize: 403 Forbidden'],
+  ['a missing blob', 'ERROR: blob sha256:abc not found'],
+])('it fails the job, planning nothing, on %s from the registry', (_reason, error) => {
+  using ctx = setupTest();
+
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const docker = createStubBin(ctx.dir, 'docker', `echo '${error}' >&2; exit 1`);
+
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'host/check-base-image.sh'), '');
+
+  writeFileSync(
+    join(ctx.tree, 'images/base/Dockerfile'),
+    'FROM ubuntu\nARG DOCKER_CE_VERSION=5:29.8.2-1~ubuntu.24.04~noble\n',
+  );
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
+
+  expect(result.exitCode).toBe(1);
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('');
+
+  expect(result.stderr.toString()).toBe(
+    `cannot tell whether ghcr.io/zgeoff/imp-base:1.2.3 exists:\n${error}\n`,
+  );
+});
+
+test('it skips a release from before imp-base without asking the registry', () => {
+  using ctx = setupTest();
+
+  const plan = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  ).base.steps.find((step) => step.id === 'plan')?.run;
+
+  const docker = createStubBin(ctx.dir, 'docker', 'echo "ERROR: $4: not found" >&2; exit 1');
+
+  invariant(plan);
+  writeFileSync(join(ctx.tree, 'images/base/Dockerfile'), 'FROM ubuntu:24.04\n');
+
+  const result = Bun.spawnSync(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', plan], {
+    cwd: ctx.tree,
+    env: {
+      PATH: `${docker.bin}:${process.env['PATH'] ?? ''}`,
+      BASE_IMAGE: 'ghcr.io/zgeoff/imp-base',
+      PUSH_TAG: '1.2.3',
+      GITHUB_OUTPUT: ctx.outputs,
+      GITHUB_REPOSITORY: 'zgeoff/imp',
+    },
+  });
 
   expect(result.exitCode).toBe(0);
-  expect(result.outputs).toEqual({ action: 'skip' });
-  expect(result.stdout).toContain('::notice::');
-  expect(result.dockerCalls).toBe('');
+  expect(readFileSync(ctx.outputs, 'utf8')).toBe('action=skip\n');
+
+  expect(result.stdout.toString()).toStartWith(
+    '::notice::this tree predates the published imp-base',
+  );
+
+  expect(readFileSync(docker.calls, 'utf8')).toBe('');
 });
 
-test('the base job builds linux/amd64 only', () => {
-  expect(base.steps[findStep('docker buildx build')]?.run).toContain('--platform linux/amd64');
+test('it tags imp-base latest nowhere in the workflow', () => {
+  const text = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+
+  expect(
+    text
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('#'))
+      .filter((line) => /BASE_IMAGE|imp-base/v.test(line) && line.includes('latest')),
+  ).toStrictEqual([]);
 });
 
-test('nothing in the workflow tags imp-base latest', () => {
-  const code = text.split('\n').filter((line) => !line.trim().startsWith('#'));
-  const latest = code.filter((line) => /BASE_IMAGE|imp-base/.test(line) && line.includes('latest'));
+test('it never holds a release up on the base job', () => {
+  const jobs = parseReleaseWorkflow(
+    readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8'),
+  );
 
-  expect(latest).toEqual([]);
-});
-
-test('publish does not wait for the base job, so a base failure never holds up a release', () => {
   expect(jobs.publish.needs).not.toContain('base');
 });
