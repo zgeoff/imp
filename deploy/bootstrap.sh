@@ -85,7 +85,7 @@ readonly SECCOMP_IN_IMAGE=/usr/local/share/imp/deploy/imp-host.seccomp.json
 readonly DATA_DIR=/var/lib/imp
 # The image of this script's release, as the units name it; release-please
 # bumps it.
-readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:0.38.1 # x-release-please-version
+readonly DEFAULT_IMAGE=ghcr.io/zgeoff/imp-host:0.39.0 # x-release-please-version
 # The image line every env file had before the units named their release.
 # A file still holding it gets the commented pin; any other value is the
 # operator's pin and stays.
@@ -556,7 +556,7 @@ Type=exec
 # The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
 # read after it, pins another. release-please bumps the version.
 # x-release-please-start-version
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.38.1
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.39.0
 # x-release-please-end
 EnvironmentFile=/etc/imp/imp-host.env
 # A container left over from a crash would hold the name.
@@ -636,7 +636,7 @@ Type=exec
 # The image of this unit's own release; an IMP_HOST_IMAGE in the env file,
 # read after it, pins another. release-please bumps the version.
 # x-release-please-start-version
-Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.38.1
+Environment=IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.39.0
 # x-release-please-end
 # IMP_HOST_IMAGE, whose repository a pull may not move,
 # IMP_BUILD_CONTEXT_MAX_MIB, and IMP_BUILD_ISOLATION and IMP_BUILD_IMAGE, the
@@ -696,7 +696,7 @@ env_template() {
 # another; to follow latest, leave the tag off: ghcr.io/zgeoff/imp-host.
 # Compose reads it from the shell or a .env next to compose.yaml instead.
 # x-release-please-start-version
-# IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.38.1
+# IMP_HOST_IMAGE=ghcr.io/zgeoff/imp-host:0.39.0
 # x-release-please-end
 
 # A tagged, non-ephemeral auth key (docs/guides/tailscale.md). Without one
