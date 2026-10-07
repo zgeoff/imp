@@ -67,9 +67,9 @@ terminator between the revoke and its stop finds no grant and gets a 403
 
 ### Rotate or rebind
 
-A secret's binding is its kind and its rules: hosts, headers, schemes and users, and for an
-[oauth secret](#oauth-secrets) its token URL, client id and token format. impd compares the rules in
-host order, so the same rules in another order are the same binding.
+A secret's binding is its kind and its rules: hosts, headers, schemes, users and upstreams, and for
+an [oauth secret](#oauth-secrets) its token URL, client id and token format. impd compares the rules
+in host order, so the same rules in another order are the same binding.
 
 - `--replace` with the same binding is a rotation. Only the value changes; grants and the
   [grantable lists](./tokens.md#granting-secrets) of tokens keep working.
@@ -132,17 +132,54 @@ undone ([storage cleanup](./operations.md#storage-cleanup)).
 
 ### Kinds
 
-| Kind        | Hosts and headers                                                                                                            | Placeholder variables      |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `github`    | `github.com`: `Authorization: Basic` for `x-access-token` (git over HTTPS); `api.github.com`, `uploads.github.com`: `Bearer` | `GH_TOKEN`, `GITHUB_TOKEN` |
-| `anthropic` | `api.anthropic.com`: `x-api-key`                                                                                             | `ANTHROPIC_API_KEY`        |
-| `npm`       | `registry.npmjs.org`: `Bearer`                                                                                               | `NPM_TOKEN`                |
-| `custom`    | `--hosts a.example.com,b.example.com`, with `--header` (default `authorization`), `--scheme bearer\|basic\|raw` and `--user` | none                       |
-| `oauth`     | As `custom`, and the value is a refresh token ([oauth secrets](#oauth-secrets))                                              | none                       |
+| Kind        | Hosts and headers                                                                                                                                                                                           | Placeholder variables      |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `github`    | `github.com`: `Authorization: Basic` for `x-access-token` (git over HTTPS); `api.github.com`, `uploads.github.com`: `Bearer`                                                                                | `GH_TOKEN`, `GITHUB_TOKEN` |
+| `anthropic` | `api.anthropic.com`: `x-api-key`                                                                                                                                                                            | `ANTHROPIC_API_KEY`        |
+| `npm`       | `registry.npmjs.org`: `Bearer`                                                                                                                                                                              | `NPM_TOKEN`                |
+| `custom`    | `--hosts a.example.com,b.example.com`, with `--header` (default `authorization`), `--scheme bearer\|basic\|raw`, `--user` and, for one host, `--upstream` ([no public name](#services-with-no-public-name)) | none                       |
+| `oauth`     | As `custom`, and the value is a refresh token ([oauth secrets](#oauth-secrets))                                                                                                                             | none                       |
 
 Some tools refuse to run without a token: `gh` with none stops at `gh auth login`. So the guest gets
 the placeholder variables, set to `imp-broker-placeholder`. The broker drops whatever the guest
 sends in the header and sets the real value.
+
+## Services with no public name
+
+A `custom` secret with `--upstream <origin>` sends its host's requests to that origin instead of
+`https://<host>`. The host is only the name the guest uses, so it needs no DNS record: the broker
+matches it from the `CONNECT`, gives it a leaf certificate from the host CA and swaps the credential
+as for any granted host. The origin is `http` or `https` with an optional port, and no user name,
+path, query or fragment; `https` is verified against the system roots.
+
+1Password Connect runs on the host's machine behind a relay on the docker bridge. Add it, and grant
+it:
+
+```sh
+imp secret add op-connect --kind custom --hosts op-connect.imp.internal \
+  --upstream http://172.17.0.1:18081
+imp grant dev op-connect
+```
+
+In the guest, the tool names the made-up host and holds a placeholder:
+
+```sh
+OP_CONNECT_HOST=https://op-connect.imp.internal
+OP_CONNECT_TOKEN=imp-broker-placeholder
+```
+
+- `--upstream` needs `--kind custom` and exactly one host.
+- The credential goes to the upstream, so it must be an address the operator trusts. impd does not
+  range-check it; the operator may point it at a service on the host on purpose. Only a caller that
+  may add or replace secrets can set one.
+- The `Host` header the upstream sees is its own authority, never the guest's. The audit row keeps
+  the guest-facing host.
+- The upstream is part of the binding ([rotate or rebind](#rotate-or-rebind)): changing, adding or
+  removing it with `--replace` fails with `binding_changed` unless `--rebind`. A rebind or a revoke
+  applies to the next request.
+- `imp secret ls` shows `host -> upstream`. An impd without `system.info().features.secretUpstream`
+  would drop the field and send the credential to `https://<host>`, so the CLI checks first and
+  fails before it stores anything.
 
 ## OAuth secrets
 
@@ -233,10 +270,10 @@ token expires.
    stops a guest from sending with another imp's address.
 2. **Granted hosts.** A `CONNECT` to port 443 of a host that a grant covers goes to a TLS terminator
    for that imp and that host. It is a Bun server on a unix socket in `<data>/broker/run`, with a
-   leaf certificate for the host. The terminator sends the request to `https://<host>` plus the
-   request's path. It never takes the host from the `Host` header or from the request line, and it
-   refuses a `Host` header for another name. Responses come back as they are, compressed or not, and
-   a redirect goes back to the guest.
+   leaf certificate for the host. The terminator sends the request to `https://<host>` (or the
+   rule's [upstream](#services-with-no-public-name)) plus the request's path. It never takes the
+   host from the `Host` header or from the request line, and it refuses a `Host` header for another
+   name. Responses come back as they are, compressed or not, and a redirect goes back to the guest.
 3. **Other hosts.** A `CONNECT` to any other host is a plain TCP tunnel, with no TLS termination and
    no credential. The broker resolves the name once, checks every answer, and dials the address it
    checked, so a DNS rebind cannot swap it. It refuses loopback, private, shared (`100.64/10`, which
