@@ -1,7 +1,6 @@
 import type { ImpClient } from '@zgeoff/imp-client';
 
-// The part of the SDK client the tools call: an ImpClient, or a fake of just
-// this in a test
+// The part of the SDK client the tools call
 export interface ToolClient {
   readonly imps: Pick<ImpClient['imps'], 'list' | 'create' | 'destroy' | 'sleep' | 'url' | 'fork'>;
   readonly images: Pick<ImpClient['images'], 'list'>;

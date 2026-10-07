@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import {
   chmodSync,
   lstatSync,
@@ -15,82 +15,118 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WRITE_SCRIPT } from './file-tools';
 
-// the write script under this host's /bin/sh, as a guest's runs it; the e2e
-// suite runs it in BusyBox and in impd's default image
-let dir = '';
+// The write script runs under this host's /bin/sh, as a guest's runs it; the
+// e2e suite runs it in BusyBox and in impd's default image.
+function setupTest() {
+  using stack = new DisposableStack();
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'imp-write-'));
-});
+  const dir = mkdtempSync(join(tmpdir(), 'imp-write-'));
 
-afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
-});
+  stack.defer(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 
-async function runWrite(path: string, content: string) {
+  const owned = stack.move();
+
+  return {
+    dir,
+    [Symbol.dispose]: () => {
+      owned.dispose();
+    },
+  };
+}
+
+test('it creates the parent directories and leaves no temp file', async () => {
+  using ctx = setupTest();
+
+  const path = join(ctx.dir, '-a b', '$(x)', 'f.txt');
+
   const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
-    stdin: new TextEncoder().encode(content),
+    stdin: new TextEncoder().encode('hello'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const code = await proc.exited;
+
+  expect(code).toBe(0);
+  expect(readFileSync(path, 'utf8')).toBe('hello');
+  expect(readdirSync(join(ctx.dir, '-a b', '$(x)'))).toStrictEqual(['f.txt']);
+});
+
+test('it keeps the mode of a file that exists', async () => {
+  using ctx = setupTest();
+
+  const path = join(ctx.dir, 'f');
+
+  writeFileSync(path, 'old');
+  chmodSync(path, 0o600);
+
+  const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
+    stdin: new TextEncoder().encode('new'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const code = await proc.exited;
+
+  expect(code).toBe(0);
+  expect(readFileSync(path, 'utf8')).toBe('new');
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+});
+
+test('it writes through a symlink without replacing it', async () => {
+  using ctx = setupTest();
+
+  const target = join(ctx.dir, 'real');
+  const link = join(ctx.dir, 'link');
+
+  writeFileSync(target, 'old');
+  symlinkSync(target, link);
+
+  const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', link], {
+    stdin: new TextEncoder().encode('new'),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const code = await proc.exited;
+
+  expect(code).toBe(0);
+  expect(lstatSync(link).isSymbolicLink()).toBeTrue();
+  expect(readFileSync(target, 'utf8')).toBe('new');
+});
+
+test('it refuses a directory and leaves it as it was', async () => {
+  using ctx = setupTest();
+
+  const path = join(ctx.dir, 'sub');
+
+  mkdirSync(path);
+  writeFileSync(join(path, 'keep'), 'x');
+
+  const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
+    stdin: new TextEncoder().encode('new'),
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
   const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
-  return { code, stderr };
-}
-
-test('it creates the parent directories and leaves no temp file', async () => {
-  const path = join(dir, '-a b', '$(x)', 'f.txt');
-
-  const result = await runWrite(path, 'hello');
-
-  expect(result.code).toBe(0);
-  expect(readFileSync(path, 'utf8')).toBe('hello');
-  expect(readdirSync(join(dir, '-a b', '$(x)'))).toEqual(['f.txt']);
+  expect({ code, stderr }).toStrictEqual({ code: 1, stderr: `${path} is a directory\n` });
+  expect(readdirSync(path)).toStrictEqual(['keep']);
 });
 
-test('a file that exists keeps its mode', async () => {
-  const path = join(dir, 'f');
+// Content past a pipe buffer, written as the agent writes it while the script
+// refuses: the script must read it all, or the write fails with EPIPE and the
+// refusal is lost (#185).
+test('it reads all the content of a write it refuses for a directory', async () => {
+  using ctx = setupTest();
 
-  writeFileSync(path, 'old');
-  chmodSync(path, 0o600);
-
-  await runWrite(path, 'new');
-
-  expect(readFileSync(path, 'utf8')).toBe('new');
-  expect(statSync(path).mode & 0o777).toBe(0o600);
-});
-
-test('a symlink is written through, not replaced', async () => {
-  const target = join(dir, 'real');
-  const link = join(dir, 'link');
-
-  writeFileSync(target, 'old');
-  symlinkSync(target, link);
-
-  const result = await runWrite(link, 'new');
-
-  expect(result.code).toBe(0);
-  expect(lstatSync(link).isSymbolicLink()).toBe(true);
-  expect(readFileSync(target, 'utf8')).toBe('new');
-});
-
-test('a directory is refused and stays as it was', async () => {
-  const path = join(dir, 'sub');
+  const path = join(ctx.dir, 'sub');
 
   mkdirSync(path);
-  writeFileSync(join(path, 'keep'), 'x');
 
-  const result = await runWrite(path, 'new');
-
-  expect(result).toEqual({ code: 1, stderr: `${path} is a directory\n` });
-  expect(readdirSync(path)).toEqual(['keep']);
-});
-
-// Content past a pipe buffer, written as the agent writes it while the
-// script refuses: it must read it all, or the write fails with EPIPE and
-// the refusal is lost (#185)
-async function runWriteThroughPipe(path: string, bytes: number) {
   const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', path], {
     stdin: 'pipe',
     stdout: 'pipe',
@@ -98,40 +134,43 @@ async function runWriteThroughPipe(path: string, bytes: number) {
   });
 
   const written = (async () => {
-    try {
-      await proc.stdin.write(new Uint8Array(bytes).fill(120));
-      await proc.stdin.end();
-
-      return 'ok';
-    } catch (error) {
-      return String(error);
-    }
+    await proc.stdin.write(new Uint8Array(4 << 20).fill(120));
+    await proc.stdin.end();
   })();
 
-  const [code, stderr, write] = await Promise.all([
-    proc.exited,
-    new Response(proc.stderr).text(),
-    written,
-  ]);
+  const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
 
-  return { code, stderr, write };
-}
+  await expect(written).toResolve();
 
-test('a refused write still reads all its content, so the refusal is what comes back', async () => {
-  const directory = join(dir, 'sub');
-  const link = join(dir, 'dangling');
+  expect({ code, stderr }).toStrictEqual({ code: 1, stderr: `${path} is a directory\n` });
+});
 
-  mkdirSync(directory);
-  symlinkSync(join(dir, 'loop'), join(dir, 'loop'));
-  symlinkSync(join(dir, 'loop'), link);
+test('it reads all the content of a write it refuses for a symlink it cannot resolve', async () => {
+  using ctx = setupTest();
 
-  const outcomes = await Promise.all([
-    runWriteThroughPipe(directory, 4 << 20),
-    runWriteThroughPipe(link, 4 << 20),
-  ]);
+  const loop = join(ctx.dir, 'loop');
+  const link = join(ctx.dir, 'dangling');
 
-  expect(outcomes).toEqual([
-    { code: 1, stderr: `${directory} is a directory\n`, write: 'ok' },
-    { code: 1, stderr: `cannot resolve the symlink ${link}\n`, write: 'ok' },
-  ]);
+  symlinkSync(loop, loop);
+  symlinkSync(loop, link);
+
+  const proc = Bun.spawn(['/bin/sh', '-c', WRITE_SCRIPT, 'sh', link], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const written = (async () => {
+    await proc.stdin.write(new Uint8Array(4 << 20).fill(120));
+    await proc.stdin.end();
+  })();
+
+  const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+
+  await expect(written).toResolve();
+
+  expect({ code, stderr }).toStrictEqual({
+    code: 1,
+    stderr: `cannot resolve the symlink ${link}\n`,
+  });
 });

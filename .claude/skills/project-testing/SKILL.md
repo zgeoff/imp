@@ -183,6 +183,13 @@ Paths are under `packages/daemon/src/` unless they start with `test/`.
 5. Options of `vmm/cpu-cgroups.ts`, and the `procRoot` parameter of `vmm/process-owner.ts`.
 6. `broker/broker.test.ts`, `broker/broker-oauth.test.ts`.
 
+The mcp package's tests reach impd through the real `@zgeoff/imp-client` and
+`packages/mcp/src/test-utils/build-stub-impd.ts` (`buildStubImpd`): an MSW handler that answers the
+procedures a test implements with `implement(impContract)` through oRPC's own fetch handler. The
+progress and keepalive timers of `createMcpServer` and `createHttpTransport` take a `repeat`, and
+the tests pass `packages/mcp/src/test-utils/build-stub-repeat.ts` (`buildStubRepeat`), which ticks
+only when the test says so.
+
 Host networking runs the real tools: `test/host/setup-net.test.ts` runs `host/scripts/setup-net.sh`
 with `iptables`, and `test/host/egress-ruleset.test.ts` applies impd's ruleset with `nft`, each in a
 fresh network namespace.

@@ -1,43 +1,97 @@
 import { expect, test } from 'bun:test';
-import type { Imp } from '@imp/api';
-import * as z from 'zod';
-import { buildFakeClient, setupServerTest } from '../test-server';
+import { impContract } from '@imp/api';
+import { buildMockImp } from '@imp/api/test-utils/build-mock-imp';
+import { server } from '@imp/test-utils/mock-server';
+import { implement } from '@orpc/server';
+import { createImpClient } from '@zgeoff/imp-client';
+import { createImpGuard } from '../imp-guard';
+import { createMcpServer } from '../mcp-server';
+import { buildStubImpd } from '../test-utils/build-stub-impd';
 
-const ResultSchema = z.object({ structuredContent: z.record(z.string(), z.unknown()) });
+test('it leaves the grant report out of a fork from an impd that sends none', async () => {
+  const impd = implement(impContract);
+  const mcp = createMcpServer({ version: '1.2.3' });
+  const sent: unknown[] = [];
 
-// what an impd from before the grants report answers a fork with
-const OLD_FORK: Imp = {
-  id: 'imp-1',
-  name: 'dev-b',
-  image: 'base',
-  state: 'running',
-  vcpus: 1,
-  memoryMib: 512,
-  diskMib: 1024,
-  ip: '10.0.0.2',
-  slot: 1,
-  port: 7001,
-  httpPort: 8080,
-  url: 'http://dev-b.example.com',
-  createdAt: new Date(0),
-  lastActiveAt: new Date(0),
-};
+  server.use(
+    buildStubImpd('http://impd.test', {
+      imps: { fork: impd.imps.fork.handler(() => buildMockImp({ name: 'dev-b' })) },
+    }),
+  );
 
-test('imp_fork against an impd before the report leaves grantsNotCopied out, never empty', async () => {
-  const fake = buildFakeClient();
+  await mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_fork', arguments: { source: 'dev-a', name: 'dev-b' } },
+    }),
+    {
+      reply: (message) => {
+        sent.push(JSON.parse(message));
+      },
+      client: createImpClient({ url: 'http://impd.test' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
 
-  const ctx = setupServerTest({
-    client: { ...fake, imps: { ...fake.imps, fork: () => Promise.resolve(OLD_FORK) } },
-  });
+  expect(sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: expect.objectContaining({
+        isError: false,
+        structuredContent: { imp: expect.objectContaining({ name: 'dev-b' }) as unknown },
+      }) as unknown,
+    },
+  ]);
+});
 
-  const response = await ctx.sendRequest('tools/call', {
-    name: 'imp_fork',
-    arguments: { source: 'dev-a', name: 'dev-b' },
-  });
+test('it reports beside the fork why it got none of the grants', async () => {
+  const impd = implement(impContract);
+  const mcp = createMcpServer({ version: '1.2.3' });
+  const sent: unknown[] = [];
 
-  const result = ResultSchema.parse(response?.result);
+  server.use(
+    buildStubImpd('http://impd.test', {
+      imps: {
+        fork: impd.imps.fork.handler(() => ({
+          ...buildMockImp({ name: 'dev-b' }),
+          grantsError: 'the grant copy failed',
+        })),
+      },
+    }),
+  );
 
-  expect(result.structuredContent).toMatchObject({ imp: { name: 'dev-b' } });
-  expect(result.structuredContent).not.toHaveProperty('grantsNotCopied');
-  expect(result.structuredContent).not.toHaveProperty('grantsError');
+  await mcp.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_fork', arguments: { source: 'dev-a', name: 'dev-b' } },
+    }),
+    {
+      reply: (message) => {
+        sent.push(JSON.parse(message));
+      },
+      client: createImpClient({ url: 'http://impd.test' }),
+      guard: createImpGuard({ all: true }),
+      scope: 'manage',
+    },
+  );
+
+  expect(sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: expect.objectContaining({
+        isError: false,
+        structuredContent: {
+          imp: expect.objectContaining({ name: 'dev-b' }) as unknown,
+          grantsError: 'the grant copy failed',
+        },
+      }) as unknown,
+    },
+  ]);
 });

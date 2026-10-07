@@ -1,56 +1,137 @@
 import { expect, test } from 'bun:test';
+import { createImpClient } from '@zgeoff/imp-client';
 import * as z from 'zod';
+import { createImpGuard } from './imp-guard';
 import { INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR } from './json-rpc';
-import { PROTOCOL_VERSIONS } from './mcp-server';
-import { setupServerTest } from './test-server';
+import { createMcpServer } from './mcp-server';
 
-const InitializeResultSchema = z.looseObject({ instructions: z.string() });
-const AnnotationsSchema = z.object({ destructiveHint: z.boolean().optional() });
-const PropertySchema = z.object({ description: z.string().optional() });
+// The server's replies, parsed. The context needs a client, though no test
+// here makes a call that reaches impd.
+function setupTest() {
+  const sent: unknown[] = [];
 
-const InputSchemaSchema = z.object({
-  type: z.string(),
-  properties: z.record(z.string(), PropertySchema).optional(),
+  return {
+    sent,
+    reply: (message: string) => {
+      sent.push(JSON.parse(message));
+    },
+    client: createImpClient({ url: 'http://impd.test' }),
+  };
+}
+
+test.each([['2025-11-25'], ['2025-06-18'], ['2025-03-26']])(
+  'it agrees on the protocol version %s',
+  async (version) => {
+    const ctx = setupTest();
+    const server = createMcpServer({ version: '1.2.3' });
+
+    await server.receive(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: version },
+      }),
+      {
+        reply: ctx.reply,
+        client: ctx.client,
+        guard: createImpGuard({ all: true }),
+        scope: 'manage',
+      },
+    );
+
+    expect(ctx.sent).toStrictEqual([
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          protocolVersion: version,
+          capabilities: { tools: { listChanged: false } },
+          serverInfo: { name: 'imp', title: 'imp', version: '1.2.3' },
+          instructions: expect.any(String) as unknown,
+        },
+      },
+    ]);
+  },
+);
+
+test('it offers the newest protocol version for one it does not support', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2024-11-05' },
+    }),
+    { reply: ctx.reply, client: ctx.client, guard: createImpGuard({ all: true }), scope: 'manage' },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        protocolVersion: '2025-11-25',
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: 'imp', title: 'imp', version: '1.2.3' },
+        instructions: expect.any(String) as unknown,
+      },
+    },
+  ]);
 });
 
-const ToolSchema = z.object({
-  name: z.string(),
-  annotations: AnnotationsSchema,
-  inputSchema: InputSchemaSchema,
+test('it names the guard in the instructions it gives at initialize', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25' },
+    }),
+    {
+      reply: ctx.reply,
+      client: ctx.client,
+      guard: createImpGuard({ prefix: 'agent-' }),
+      scope: 'manage',
+    },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: expect.objectContaining({
+        instructions: expect.stringContaining(
+          'This server may touch imps named agent-*.',
+        ) as unknown,
+      }) as unknown,
+    },
+  ]);
 });
 
-const ToolsListSchema = z.object({ tools: z.array(ToolSchema) });
+test('it lists every tool to a manage caller', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
 
-test('initialize agrees on a version the server supports, else offers the newest', async () => {
-  const ctx = setupServerTest({ guard: { prefix: 'agent-' } });
-
-  for (const version of PROTOCOL_VERSIONS) {
-    const response = await ctx.sendRequest('initialize', { protocolVersion: version });
-
-    expect(response?.result).toMatchObject({ protocolVersion: version });
-  }
-
-  const unknown = await ctx.sendRequest('initialize', { protocolVersion: '2024-11-05' });
-
-  const result = InitializeResultSchema.parse(unknown?.result);
-
-  expect(result).toMatchObject({
-    protocolVersion: '2025-11-25',
-    capabilities: { tools: { listChanged: false } },
-    serverInfo: { name: 'imp', title: 'imp', version: '1.2.3' },
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
   });
 
-  expect(result.instructions).toContain('This server may touch imps named agent-*.');
-});
+  const Tool = z.object({ name: z.string() });
 
-test('tools/list describes every tool, every field and the destructive ones', async () => {
-  const ctx = setupServerTest();
+  const tools = z.object({ result: z.object({ tools: z.array(Tool) }) }).parse(ctx.sent[0])
+    .result.tools;
 
-  const response = await ctx.sendRequest('tools/list');
-
-  const tools = ToolsListSchema.parse(response?.result).tools;
-
-  expect(tools.map((tool) => tool.name)).toEqual([
+  expect(tools.map((tool) => tool.name)).toStrictEqual([
     'imp_list',
     'imp_create',
     'imp_destroy',
@@ -66,74 +147,188 @@ test('tools/list describes every tool, every field and the destructive ones', as
     'imp_restore',
     'imp_checkpoint_delete',
   ]);
+});
 
-  const destructive = tools
-    .filter((tool) => tool.annotations.destructiveHint === true)
-    .map((tool) => tool.name);
+test('it marks the destructive tools with a destructive hint', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
 
-  expect(destructive).toEqual([
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  const Annotations = z.object({ destructiveHint: z.boolean().optional() });
+  const Tool = z.object({ name: z.string(), annotations: Annotations });
+
+  const tools = z.object({ result: z.object({ tools: z.array(Tool) }) }).parse(ctx.sent[0])
+    .result.tools;
+
+  expect(
+    tools.filter((tool) => tool.annotations.destructiveHint === true).map((tool) => tool.name),
+  ).toStrictEqual([
     'imp_destroy',
     'imp_exec',
     'imp_write_file',
     'imp_restore',
     'imp_checkpoint_delete',
   ]);
-
-  for (const tool of tools) {
-    const schema = tool.inputSchema;
-
-    expect(schema.type).toBe('object');
-
-    for (const [field, property] of Object.entries(schema.properties ?? {})) {
-      expect({ tool: tool.name, field, described: typeof property.description }).toEqual({
-        tool: tool.name,
-        field,
-        described: 'string',
-      });
-    }
-  }
 });
 
-test('ping answers with an empty result', async () => {
-  const ctx = setupServerTest();
+test('it gives every tool an object input schema', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
 
-  const response = await ctx.sendRequest('ping');
-
-  expect(response?.result).toEqual({});
-});
-
-test('an unknown method and an unknown tool are protocol errors', async () => {
-  const ctx = setupServerTest();
-
-  const method = await ctx.sendRequest('resources/list');
-  const tool = await ctx.sendRequest('tools/call', { name: 'imp_teleport', arguments: {} });
-
-  expect(method?.error).toMatchObject({ code: METHOD_NOT_FOUND });
-
-  expect(tool?.error).toMatchObject({
-    code: INVALID_PARAMS,
-    message: 'unknown tool: imp_teleport',
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
   });
+
+  const Tool = z.object({ inputSchema: z.object({ type: z.string() }) });
+
+  const tools = z.object({ result: z.object({ tools: z.array(Tool) }) }).parse(ctx.sent[0])
+    .result.tools;
+
+  expect(tools).toSatisfyAll((tool: (typeof tools)[number]) => tool.inputSchema.type === 'object');
 });
 
-test('broken messages get an error with a null id, and notifications get nothing', async () => {
-  const ctx = setupServerTest();
+test('it describes every input field of every tool', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
 
-  for (const line of [
-    'not json',
-    '[{"jsonrpc":"2.0","id":1,"method":"ping"}]',
-    '{"jsonrpc":"1.0","id":1,"method":"ping"}',
-    '{"jsonrpc":"2.0","id":1}',
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
-    '{"jsonrpc":"2.0","id":5,"result":{}}',
-  ]) {
-    await ctx.receive(line);
-  }
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
 
-  expect(ctx.sent).toEqual([
+  const Property = z.object({ description: z.string().optional() });
+  const InputSchema = z.object({ properties: z.record(z.string(), Property).optional() });
+  const Tool = z.object({ name: z.string(), inputSchema: InputSchema });
+
+  const tools = z.object({ result: z.object({ tools: z.array(Tool) }) }).parse(ctx.sent[0])
+    .result.tools;
+
+  const undescribed = tools.flatMap((tool) =>
+    Object.entries(tool.inputSchema.properties ?? {})
+      .filter(([, property]) => property.description === undefined)
+      .map(([field]) => `${tool.name}.${field}`),
+  );
+
+  expect(undescribed).toBeEmpty();
+});
+
+test('it answers ping with an empty result', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  expect(ctx.sent).toStrictEqual([{ jsonrpc: '2.0', id: 1, result: {} }]);
+});
+
+test('it answers an unknown method with a method-not-found error', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'resources/list' }), {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: METHOD_NOT_FOUND, message: 'unknown method: resources/list' },
+    },
+  ]);
+});
+
+test('it answers a call of an unknown tool with an invalid-params error', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'imp_teleport', arguments: {} },
+    }),
+    { reply: ctx.reply, client: ctx.client, guard: createImpGuard({ all: true }), scope: 'manage' },
+  );
+
+  expect(ctx.sent).toStrictEqual([
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      error: { code: INVALID_PARAMS, message: 'unknown tool: imp_teleport' },
+    },
+  ]);
+});
+
+test('it answers a line that is not JSON with a parse error and a null id', async () => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive('not json', {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  expect(ctx.sent).toStrictEqual([
     { jsonrpc: '2.0', id: null, error: { code: PARSE_ERROR, message: 'parse error: not JSON' } },
-    { jsonrpc: '2.0', id: null, error: { code: INVALID_REQUEST, message: 'invalid request' } },
-    { jsonrpc: '2.0', id: null, error: { code: INVALID_REQUEST, message: 'invalid request' } },
+  ]);
+});
+
+test.each([
+  ['[{"jsonrpc":"2.0","id":1,"method":"ping"}]'],
+  ['{"jsonrpc":"1.0","id":1,"method":"ping"}'],
+  ['{"jsonrpc":"2.0","id":1}'],
+])('it answers the invalid request %s with an error and a null id', async (line) => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(line, {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  expect(ctx.sent).toStrictEqual([
     { jsonrpc: '2.0', id: null, error: { code: INVALID_REQUEST, message: 'invalid request' } },
   ]);
+});
+
+test.each([
+  ['{"jsonrpc":"2.0","method":"notifications/initialized"}'],
+  ['{"jsonrpc":"2.0","id":5,"result":{}}'],
+])('it sends nothing for the message %s', async (line) => {
+  const ctx = setupTest();
+  const server = createMcpServer({ version: '1.2.3' });
+
+  await server.receive(line, {
+    reply: ctx.reply,
+    client: ctx.client,
+    guard: createImpGuard({ all: true }),
+    scope: 'manage',
+  });
+
+  expect(ctx.sent).toBeEmpty();
 });

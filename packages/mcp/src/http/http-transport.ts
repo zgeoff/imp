@@ -3,6 +3,7 @@ import type { ImpGuard } from '../imp-guard';
 import { formatError, parseMessage } from '../json-rpc';
 import { PROTOCOL_VERSIONS, createMcpServer } from '../mcp-server';
 import type { McpServer, McpServerOptions, MessageContext } from '../mcp-server';
+import { runOnInterval } from '../repeat';
 import type { ToolClient } from '../tools/tool-client';
 import { createSessionStore } from './session-store';
 import type { McpSession } from './session-store';
@@ -58,6 +59,7 @@ const DEFAULT_LIMITS = { perCaller: 16, total: 256, idleMs: 3_600_000 };
 export function createHttpTransport(options: Readonly<HttpTransportOptions>): HttpTransport {
   const now = options.now ?? Date.now;
   const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
+  const repeat = options.repeat ?? runOnInterval;
   const challenge = options.challenge ?? 'Bearer';
 
   // each streamed call's end, by its response
@@ -183,9 +185,9 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
           }
         };
 
-        const keepalive = setInterval(() => {
+        const stopKeepalive = repeat(keepaliveMs, () => {
           write(': keepalive\n\n');
-        }, keepaliveMs);
+        });
 
         const context = buildContext(principal, (message) => {
           write(`event: message\ndata: ${message}\n\n`);
@@ -195,7 +197,7 @@ export function createHttpTransport(options: Readonly<HttpTransportOptions>): Ht
           try {
             await sessions.track(session, () => session.server.receive(body, context));
           } finally {
-            clearInterval(keepalive);
+            stopKeepalive();
 
             ended.resolve();
 

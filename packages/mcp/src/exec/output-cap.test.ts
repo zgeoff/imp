@@ -1,60 +1,82 @@
 import { expect, test } from 'bun:test';
 import { createOutputCollector, formatCappedText } from './output-cap';
 
-const encoder = new TextEncoder();
+test('it returns the output whole within the cap', () => {
+  const collector = createOutputCollector(10, 4);
 
-function collect(chunks: readonly string[], maxBytes: number, headBytes: number) {
-  const collector = createOutputCollector(maxBytes, headBytes);
-
-  for (const chunk of chunks) {
-    collector.push(encoder.encode(chunk));
+  for (const chunk of ['abc', 'def']) {
+    collector.push(new TextEncoder().encode(chunk));
   }
 
-  return collector.finish();
-}
-
-test('output within the cap comes back whole', () => {
-  const output = collect(['abc', 'def'], 10, 4);
+  const output = collector.finish();
 
   expect(output.droppedBytes).toBe(0);
   expect(formatCappedText(output)).toBe('abcdef');
 });
 
-test('past the cap, the head and the tail stay and the middle is counted', () => {
-  const output = collect(['0123', '4567', '89ab', 'cdef'], 8, 3);
+test('it keeps the head and the tail and counts the middle past the cap', () => {
+  const collector = createOutputCollector(8, 3);
+
+  for (const chunk of ['0123', '4567', '89ab', 'cdef']) {
+    collector.push(new TextEncoder().encode(chunk));
+  }
+
+  const output = collector.finish();
 
   expect(output.droppedBytes).toBe(8);
   expect(formatCappedText(output)).toBe('012\n[... 8 bytes dropped ...]\nbcdef');
 });
 
-test('a single chunk larger than the cap is split between head and tail', () => {
-  const output = collect(['abcdefghijklmnopqrstuvwxyz'], 6, 2);
+test('it splits a single chunk larger than the cap between head and tail', () => {
+  const collector = createOutputCollector(6, 2);
+
+  collector.push(new TextEncoder().encode('abcdefghijklmnopqrstuvwxyz'));
+
+  const output = collector.finish();
 
   expect(formatCappedText(output)).toBe('ab\n[... 20 bytes dropped ...]\nwxyz');
 });
 
-test('a head as large as the cap keeps only the start', () => {
-  const output = collect(['abcdef', 'ghij'], 4, 4);
+test('it keeps only the start when the head is as large as the cap', () => {
+  const collector = createOutputCollector(4, 4);
+
+  for (const chunk of ['abcdef', 'ghij']) {
+    collector.push(new TextEncoder().encode(chunk));
+  }
+
+  const output = collector.finish();
 
   expect(formatCappedText(output)).toBe('abcd\n[... 6 bytes dropped ...]\n');
 });
 
-test('invalid UTF-8 becomes the replacement character', () => {
+test('it decodes invalid UTF-8 as the replacement character', () => {
   const collector = createOutputCollector(10, 10);
 
   collector.push(new Uint8Array([104, 255, 105]));
 
-  expect(formatCappedText(collector.finish())).toBe('h�i');
+  const output = collector.finish();
+
+  expect(formatCappedText(output)).toBe('h�i');
 });
 
-test('a character split between head and tail decodes whole when nothing is dropped', () => {
-  const output = collect(['abé'], 10, 3);
+test('it decodes a character split between head and tail whole when nothing is dropped', () => {
+  const collector = createOutputCollector(10, 3);
+
+  collector.push(new TextEncoder().encode('abé'));
+
+  const output = collector.finish();
 
   expect(formatCappedText(output)).toBe('abé');
 });
 
-test('a cut never splits a character; its bytes count as dropped', () => {
-  const output = collect(['😀😀', 'x'.repeat(10), '😀😀'], 10, 5);
+test('it never splits a character at a cut and counts its bytes as dropped', () => {
+  const collector = createOutputCollector(10, 5);
+
+  for (const chunk of ['😀😀', 'xxxxxxxxxx', '😀😀']) {
+    collector.push(new TextEncoder().encode(chunk));
+  }
+
+  const output = collector.finish();
 
   expect(output.droppedBytes).toBe(16);
   expect(formatCappedText(output)).toBe('😀\n[... 18 bytes dropped ...]\n😀');
