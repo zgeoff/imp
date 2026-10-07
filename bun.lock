@@ -34,6 +34,10 @@
         "@orpc/contract": "catalog:",
         "zod": "catalog:",
       },
+      "devDependencies": {
+        "@faker-js/faker": "catalog:",
+        "@imp/test-utils": "workspace:*",
+      },
     },
     "packages/cli": {
       "name": "@imp/cli",
@@ -141,6 +145,9 @@
         "@balena/dockerignore": "catalog:",
         "tar-stream": "catalog:",
       },
+      "devDependencies": {
+        "@imp/test-utils": "workspace:*",
+      },
     },
     "packages/mcp": {
       "name": "@imp/mcp",
@@ -149,6 +156,11 @@
         "@imp/api": "workspace:*",
         "@zgeoff/imp-client": "workspace:*",
         "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@imp/test-utils": "workspace:*",
+        "@orpc/server": "catalog:",
+        "msw": "catalog:",
       },
     },
     "packages/test-utils": {

@@ -11,5 +11,10 @@
     "@imp/api": "workspace:*",
     "@zgeoff/imp-client": "workspace:*",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@imp/test-utils": "workspace:*",
+    "@orpc/server": "catalog:",
+    "msw": "catalog:"
   }
 }

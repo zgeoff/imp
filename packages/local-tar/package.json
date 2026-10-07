@@ -10,5 +10,8 @@
   "dependencies": {
     "@balena/dockerignore": "catalog:",
     "tar-stream": "catalog:"
+  },
+  "devDependencies": {
+    "@imp/test-utils": "workspace:*"
   }
 }
